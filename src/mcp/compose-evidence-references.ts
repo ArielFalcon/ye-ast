@@ -93,9 +93,27 @@ export function partReferences(part: Part): Reference[] {
     case "trace-totals":
     case "impact-context":
       return [ref("read", "owner", part.owner)];
+    case "consequence-use":
+      return [
+        ref("evidence", "place", part.place), ...linkReferences(part.link), ...many("evidence", "chain.evidence", part.chain.map((hop) => hop.evidence)),
+        ...(part.verdict.kind === "admits" ? many("evidence", "verdict.guards.evidence", part.verdict.guards.map((guard) => guard.evidence)) : []),
+      ];
+    case "consequence-producer":
+      return [
+        ref("evidence", "place", part.place), ...linkReferences(part.link), ...many("evidence", "chain.evidence", part.chain.map((hop) => hop.evidence)),
+        ...(part.verdict.kind === "incompatible"
+          ? [ref("evidence", "verdict.witness.at", part.verdict.witness.at), ...many("evidence", "verdict.witness.conditions.at", part.verdict.witness.conditions.map((condition) => condition.at))]
+          : []),
+      ];
+    case "derived-contract-change":
+      return [ref("evidence", "places.base", part.places.base), ref("evidence", "places.head", part.places.head), ...many("anchor", "handlers", part.handlers)];
     default:
       return unreachable(part);
   }
+}
+
+function linkReferences(link: Extract<Part, { kind: "consequence-use" }>["link"]): Reference[] {
+  return [ref("file", "link.call.file", link.call.file), ref("anchor", "link.handler", link.handler)];
 }
 
 function comparisonReferences(comparison: Extract<Part, { kind: "entrypoint-change" }>["comparison"]): Reference[] {

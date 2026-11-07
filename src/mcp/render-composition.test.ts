@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { callersValue, entrypointsValue, factOf, importersValue, inputsOf, liveRef, outlineValue, shaRef, SHA_A, SHA_B, sourceFixture, workspaceImpactValue, workspaceValue } from "./composition-fixtures.testing.ts";
 import { normalizeSource } from "./composition-normalize.ts";
+import { consequencesSource, FRONTIER_PLACE, TEMPLATE_FILE } from "./composition-consequences-fixture.testing.ts";
 import { mergeEvidence, materializeEvidence } from "./compose-evidence.ts";
 import { compositionIdentity } from "./composition-identity.ts";
 import { readFileSync, readdirSync } from "node:fs";
@@ -485,4 +486,14 @@ test("composition text retains dependency selection diagnostics next to their cu
 test("details states a trace step's effects with their targets and lines", () => {
   const text = renderComposition(resultOf([sourceFixture("trace")]), "details");
   assert.match(text, /trace step #1 .*; effects http GET \/stock\/\{\} at line 34; message kafka orders\.found at line 36/);
+});
+
+test("consequences: an unknown finding is named a consequence finding, and a use and a derived change state their place and handler", () => {
+  const result = resultOf([consequencesSource()]);
+  const summary = renderComposition(result, "summary");
+  assert.match(summary, new RegExp(`unknown consequence finding \\(unresolved\\), evidence ${FRONTIER_PLACE.path.replaceAll(".", "\\.")}:${FRONTIER_PLACE.line}`));
+  assert.doesNotMatch(summary, /unknown entrypoint finding/);
+  const details = renderComposition(result, "details");
+  assert.match(details, new RegExp(`consequence use GET /api/orders/\\{id\\} response customer: incompatible in web at evidence ${TEMPLATE_FILE.replaceAll(".", "\\.")}:1`));
+  assert.match(details, /derived from the contract change GET \/api\/orders\/\{id\} customer/);
 });

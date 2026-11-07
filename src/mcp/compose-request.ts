@@ -249,7 +249,7 @@ function contributionOf(source: ExecutedSource, set: EvidenceSet): Contribution 
 const unavailable = (reason: UnavailableReason): RepeatRequest => ({ status: "unavailable", reason });
 
 /**
- * The recoverable three repeat their pinned `mcp-r1` recipe; the other four repeat the validated original request, never
+ * The recoverable three repeat their pinned `mcp-r1` recipe; the other six repeat the validated original request, never
  * a recipe with redacted or replaced arguments. Every query is validated by the compose schema before it is offered.
  */
 function repeatRequestOf(source: ExecutedSource): RepeatRequest {
@@ -268,7 +268,8 @@ function repeatRequestOf(source: ExecutedSource): RepeatRequest {
     case "outline":
     case "trace":
     case "workspace":
-    case "decisions": {
+    case "decisions":
+    case "contract_consequences": {
       if (source.identityGuard.changedArguments) return unavailable("redacted-context");
       const query = COMPOSE_QUERY.safeParse({ name: source.query.name, arguments: source.query.arguments });
       return query.success ? { status: "available", query: query.data, strategy: "fresh-read" } : unavailable("unresolved-context");

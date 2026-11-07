@@ -57,7 +57,7 @@ export function snapshotId(digest: Digest, snapshot: SnapshotRef, occurrence?: O
 }
 
 /**
- * The context half of a source identity. Families with recovery reuse the `mcp-r1` context exactly; the other four use
+ * The context half of a source identity. Families with recovery reuse the `mcp-r1` context exactly; the other six use
  * the same fields, normalized from the public fact, plus the offline policy their read applied.
  */
 export type SourceContext =

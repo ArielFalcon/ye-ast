@@ -1,5 +1,5 @@
 /**
- * Normalization of one executed source into its evidence set: seven exhaustive adapters over the public,
+ * Normalization of one executed source into its evidence set: one exhaustive adapter per family over the public,
  * redacted `SourcePayload`, by typed fields only. Every public appearance becomes a support (source, owning read, RFC
  * 6901 pointer into `read.fact`); identical objects share one record and keep every support, so original order and
  * multiplicity are recovered by position. No relation is inferred, no text is parsed and no coordinate is invented: a
@@ -18,6 +18,7 @@ import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { CallSite } from "../core/domain/topology/call-site.ts";
 import type { Link } from "../core/domain/topology/link.ts";
 import type { Decision } from "../core/domain/decisions/decision.ts";
+import type { ConsequencesValue, HypothesisAnswer, LocatedHop, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
@@ -26,8 +27,8 @@ import { analysis } from "./select-evidence.ts";
 import type { ExecutedSource, PublicWorkspaceValue } from "./query-runner.ts";
 import { recoveryContext, type RecoveryContext } from "./recovery.ts";
 import type {
-  AnchorId, AnchorRecord, ComparisonRef, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceRecord,
-  EvidenceSet, FileCategory, FileDependencyCategory, FileId, FileRecord, LinkData, LinkReference, OriginReference, OutlineImportRecord, OutlineUseRecord, Part, PartId,
+  AnchorId, AnchorRecord, ComparisonRef, ConsequenceHopData, ConsequenceLinkData, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceRecord,
+  EvidenceSet, FileCategory, FileDependencyCategory, FileId, FileRecord, GuardData, HypothesisIdentity, LinkData, LinkReference, OriginReference, OutlineImportRecord, OutlineUseRecord, Part, PartId,
   PartPayload, ReadAnalysis, ReadId, ReadOwner, ReadRecord, RedactionRecord, RecordedCollectionState, SnapshotId, SnapshotRecord,
   SnapshotVectorEntry, SourceFamilyRef, SourceId, Support,
 } from "./composition-contract.ts";
@@ -42,9 +43,14 @@ export function normalizeSource(source: ExecutedSource, digest: Digest, options?
   if (options !== undefined && (!Number.isSafeInteger(options.discriminator) || options.discriminator < 0)) throw new Error("Invalid normalization discriminator");
   const id = sourceId(digest, { ...family, context: contextOf(source), fact: source.read.fact, ...(options === undefined ? {} : { discriminator: options.discriminator }) });
   const builder = new Builder(digest, id, source.identityGuard.changedIdentityPointers);
-  const root = builder.read({ kind: "fact" }, "", source.read.fact);
+  const root = builder.read({ kind: "fact" }, "", source.read.fact, source.family === "contract_consequences" ? located(source.read.fact as Fact<ConsequencesValue>) : undefined);
   const vector = adapt(source, builder, root);
   return builder.finish({ ...family, id, rootRead: root.id, snapshotVector: vector, analysis: analysis(source.read.fact) });
+}
+
+/** A composite that places its own evidence by repository: the vector it declares, read before its evidence is. */
+function located(fact: Fact<ConsequencesValue>): { field: string; entries: readonly { repo: string; snapshot: SnapshotRef }[] } {
+  return { field: "repositorySnapshots", entries: fact.status === "unknown" ? [] : fact.value.repositorySnapshots };
 }
 
 function familyRef(source: ExecutedSource): SourceFamilyRef {
@@ -52,7 +58,7 @@ function familyRef(source: ExecutedSource): SourceFamilyRef {
 }
 
 /**
- * The context half of the source identity. The three recoverable families reuse the `mcp-r1` context; the other four
+ * The context half of the source identity. The three recoverable families reuse the `mcp-r1` context; the other six
  * take the same fields from the public fact, with the effective offline policy where the family has one.
  */
 function contextOf(source: ExecutedSource): SourceContext {
@@ -77,6 +83,7 @@ function contextOf(source: ExecutedSource): SourceContext {
     case "importers":
     case "outline":
     case "trace":
+    case "contract_consequences":
       return fresh(recoveryContext(fact, selected));
     case "workspace":
     case "decisions":
@@ -145,15 +152,23 @@ class Builder {
     return id;
   }
 
-  /** A read of the given owner at `pointer`, with its snapshot and its own evidence in order. */
-  read(owner: ReadOwner, pointer: string, fact: FactProvenance): ReadContext {
+  /**
+   * A read of the given owner at `pointer`, with its snapshot and its own evidence in order. A read whose evidence names
+   * its repositories (`located`) resolves each through the vector it declares, which is set before the evidence is.
+   */
+  read(owner: ReadOwner, pointer: string, fact: FactProvenance, located?: { field: string; entries: readonly { repo: string; snapshot: SnapshotRef }[] }): ReadContext {
     const id = readId(this.digest, this.source, owner);
     const snapshot = this.snapshot(fact.snapshot, id, `${pointer}/snapshot`);
     const here: Place = { origin: { kind: "snapshot", snapshot }, repo: fact.snapshot.repo };
-    const evidence = fact.evidence.map((value, index) => this.evidence(here, value, id, `${pointer}/evidence/${index}`));
+    const context: ReadContext = { id, pointer, here, snapshot };
+    if (located !== undefined) vectorOf(this, context, located.entries, located.field);
+    const evidence = fact.evidence.map((value, index) => {
+      const at = `${pointer}/evidence/${index}`;
+      return located === undefined ? this.evidence(here, value, id, at) : this.repositoryEvidence(value as RepositoryEvidence, id, at, false);
+    });
     this.reads.set(id, { id, source: this.source, owner, schema: fact.schema, producer: fact.producer, inputs: fact.inputs, snapshot, evidence, analysis: readAnalysisOf(fact) });
     this.readPointers.push({ id, pointer });
-    return { id, pointer, here, snapshot };
+    return context;
   }
 
   /** The place of a repository: its vector snapshot, or a coordinate local to the read when the vector lacks it. */
@@ -262,6 +277,8 @@ function adapt(source: ExecutedSource, b: Builder, root: ReadContext): readonly 
       return workspace(b, root, source.read.fact);
     case "decisions":
       return decisions(b, root, source.read.fact);
+    case "contract_consequences":
+      return consequences(b, root, source.read.fact);
     default:
       return unreachable(source);
   }
@@ -650,4 +667,100 @@ function decisions(b: Builder, root: ReadContext, fact: Fact<DecisionValue>): re
     }, root.id, [at]);
   });
   return sorted;
+}
+
+/**
+ * Every finding of every answer, placed in the repositories it names, and the derivation's frontiers. A use and a
+ * producer anchor their place, their call site and their handler; a derived answer anchors the contract at the commit
+ * the change was read from and in the head snapshot; an unknown finding or frontier keeps its reason and its places.
+ */
+function consequences(b: Builder, root: ReadContext, fact: Fact<ConsequencesValue>): readonly SnapshotVectorEntry[] {
+  if (fact.status === "unknown") return local(b, root, fact, () => undefined);
+  const value = fact.value;
+  const { sorted } = vectorOf(b, root, value.repositorySnapshots, "repositorySnapshots");
+  value.answers.forEach((answer, index) => answerParts(b, root, answer, `/value/answers/${index}`, value.change?.snapshots.base));
+  const derivation = value.change?.derivation;
+  if (derivation !== undefined && derivation.status !== "unknown") {
+    derivation.value.frontiers.forEach((frontier, index) => {
+      const pointer = `/value/change/derivation/value/frontiers/${index}`;
+      b.part({ kind: "unknown-finding", reason: frontier.reason, evidence: placed(b, root, frontier.evidence, `${pointer}/evidence`) }, root.id, [pointer]);
+    });
+  }
+  return sorted;
+}
+
+/** Evidence that names its repository, resolved through the vector. */
+function placed(b: Builder, root: ReadContext, items: readonly RepositoryEvidence[], pointer: string): EvidenceId[] {
+  return items.map((item, index) => b.repositoryEvidence(item, root.id, `${pointer}/${index}`, false));
+}
+
+function hopsOf(b: Builder, root: ReadContext, hops: readonly LocatedHop[], pointer: string): ConsequenceHopData[] {
+  return hops.map(({ evidence, ...rest }, index) => ({ ...rest, evidence: b.repositoryEvidence(evidence, root.id, `${pointer}/${index}/evidence`, false) }));
+}
+
+function linkOf(b: Builder, root: ReadContext, repo: string, link: UseConsequence["link"], pointer: string): ConsequenceLinkData {
+  const { handler } = link;
+  const at = { path: handler.path, symbol: handler.symbol, line: handler.line, ...(handler.endLine === undefined ? {} : { endLine: handler.endLine }) };
+  return {
+    id: link.id,
+    basis: link.basis,
+    call: { file: b.file(b.placeOf(repo, root.id), link.call.file, root.id, `${pointer}/call/file`), line: link.call.line, symbol: link.call.symbol },
+    handler: b.anchor(b.placeOf(handler.repo, root.id), at, root.id, `${pointer}/handler`, `${pointer}/handler/path`),
+  };
+}
+
+function answerParts(b: Builder, root: ReadContext, answer: HypothesisAnswer, prefix: string, baseCommit: string | undefined): void {
+  const { method, path, target, property } = answer.hypothesis;
+  const hypothesis: HypothesisIdentity = { method, path, target, property };
+  const handlers: AnchorId[] = [];
+  answer.findings.forEach((finding, index) => {
+    const pointer = `${prefix}/findings/${index}`;
+    if (finding.status === "unknown") {
+      b.part({ kind: "unknown-finding", reason: finding.reason, evidence: placed(b, root, finding.evidence, `${pointer}/evidence`) }, root.id, [pointer]);
+      return;
+    }
+    const at = `${pointer}/value`;
+    const found = finding.value;
+    const [site] = finding.evidence;
+    const place = b.repositoryEvidence(site!, root.id, `${pointer}/evidence/0`, false);
+    const link = linkOf(b, root, found.repo, found.link, `${at}/link`);
+    const here = b.placeOf(found.repo, root.id);
+    if (!handlers.includes(link.handler)) handlers.push(link.handler);
+    const chain = hopsOf(b, root, found.chain, `${at}/chain`);
+    if ("operation" in found) b.part({ kind: "consequence-use", repo: found.repo, hypothesis, place, link, verdict: useVerdict(b, here, root, found, at), operation: found.operation, path: found.path, changed: found.changed, chain }, root.id, [pointer]);
+    else b.part({ kind: "consequence-producer", repo: found.repo, hypothesis, place, link, verdict: producerVerdict(b, here, root, found, at), path: found.path, chain }, root.id, [pointer]);
+  });
+  const derived = answer.derivedFrom;
+  if (derived === undefined) return;
+  const pointer = `${prefix}/derivedFrom`;
+  const { repo, ...contract } = derived.places.base;
+  const base: Place = baseCommit === undefined
+    ? { origin: { kind: "query-context", read: root.id }, repo }
+    : { origin: { kind: "snapshot", snapshot: b.snapshot({ repo, kind: "sha", sha: baseCommit }, root.id, "/value/change/snapshots/base") }, repo };
+  b.part({
+    kind: "derived-contract-change", hypothesis, operation: derived.operation, property: derived.property,
+    places: { base: b.evidence(base, contract, root.id, `${pointer}/places/base`), head: b.repositoryEvidence(derived.places.head, root.id, `${pointer}/places/head`, false) },
+    handlers,
+  }, root.id, [pointer]);
+}
+
+function useVerdict(b: Builder, here: Place, root: ReadContext, found: UseConsequence, pointer: string): Extract<Part, { kind: "consequence-use" }>["verdict"] {
+  const { verdict } = found;
+  if (verdict.kind !== "admits") return verdict;
+  return { kind: "admits", guards: verdict.guards.map(({ evidence, ...guard }, index) => ({ ...guard, evidence: b.evidence(here, evidence, root.id, `${pointer}/verdict/guards/${index}/evidence`) }) as GuardData) };
+}
+
+function producerVerdict(b: Builder, here: Place, root: ReadContext, found: ProducerConsequence, pointer: string): Extract<Part, { kind: "consequence-producer" }>["verdict"] {
+  const { verdict } = found;
+  if (verdict.kind !== "incompatible") return verdict;
+  const { value, at, conditions } = verdict.witness;
+  const witness = `${pointer}/verdict/witness`;
+  return {
+    kind: "incompatible",
+    witness: {
+      value,
+      at: b.evidence(here, at, root.id, `${witness}/at`),
+      conditions: conditions.map((condition, index) => ({ ...condition, at: b.evidence(here, condition.at, root.id, `${witness}/conditions/${index}/at`) })),
+    },
+  };
 }

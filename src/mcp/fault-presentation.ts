@@ -1,7 +1,7 @@
 import { unknownTargetKey } from "../core/ports/impact-queries.port.ts";
 import type { ToolFamily } from "./presentation.ts";
 import type { QueryFault } from "./query-runner.ts";
-import { familyOf, type ToolQuery } from "./query-schema.ts";
+import { familyOf, type SemanticQuery } from "./query-schema.ts";
 import type { ComposeFault, SourceIdentityCause, UnavailableReason } from "./composition-contract.ts";
 import type { SelectionFault } from "./select-evidence.ts";
 import type { SourceVerificationFault } from "./evidence-cursor.ts";
@@ -36,7 +36,7 @@ export type FaultQueryContext = {
 
 export type FaultControls = { select?: unknown; page?: { cursor?: string | undefined } | undefined; expect?: unknown };
 
-export function faultContext(query: ToolQuery, controls: FaultControls = {}): FaultQueryContext {
+export function faultContext(query: SemanticQuery, controls: FaultControls = {}): FaultQueryContext {
   const args: { live?: boolean | undefined; workspace?: { repos?: unknown } | undefined; repos?: unknown; replay?: unknown; focus?: unknown; base?: unknown; hypotheses?: unknown } = query.arguments;
   const family = familyOf(query.name);
   return {

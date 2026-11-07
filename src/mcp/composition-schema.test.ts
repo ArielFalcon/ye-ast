@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import { createHash } from "node:crypto";
 import { sourceFixture } from "./composition-fixtures.testing.ts";
+import { consequencesSource } from "./composition-consequences-fixture.testing.ts";
 import { normalizeSource } from "./composition-normalize.ts";
 import { mergeEvidence, materializeEvidence } from "./compose-evidence.ts";
 import { compositionIdentity } from "./composition-identity.ts";
@@ -16,7 +17,7 @@ const digest = { of: (text: string) => createHash("sha256").update(text).digest(
 const ALL = [
   sourceFixture("entrypoints"), sourceFixture("impact-local"), sourceFixture("callers-local"), sourceFixture("importers"),
   sourceFixture("outline"), sourceFixture("workspace"), sourceFixture("decisions"), sourceFixture("impact-workspace"),
-  sourceFixture("callers-workspace"), sourceFixture("trace"),
+  sourceFixture("callers-workspace"), sourceFixture("trace"), consequencesSource(),
 ];
 
 const ownerOf = (owner: ReadOwner): CutOwner => (owner.kind === "read" ? { kind: "read", repo: owner.repo, index: owner.index } : owner);
@@ -66,12 +67,12 @@ test("full and receipt of every family and workspace branch pass the runtime sch
   for (const source of ALL) assert.equal(runtime(composeFull(resultOf([source]))), true, source.family);
 });
 
-test("full keeps every table and all 28 part kinds; graph.sources appears once with request indices", () => {
+test("full keeps every table and all 31 part kinds; graph.sources appears once with request indices", () => {
   const kinds: readonly PartKind[] = [
     "entrypoint", "unknown-finding", "seed", "symbol-reach", "entrypoint-reach", "entrypoint-change", "contract-change", "module-origin", "module-reach",
     "file-dependency", "file-query", "outline-declaration", "outline-file", "unheld-file", "outward-name", "name-candidate", "call-site",
     "unresolved-call-site", "unlinked-call-site", "workspace-link", "workspace-context", "decision", "impact-context", "walk-cost",
-    "trace-step", "trace-root", "reading-range", "trace-totals",
+    "trace-step", "trace-root", "reading-range", "trace-totals", "consequence-use", "consequence-producer", "derived-contract-change",
   ];
   const parsed = COMPOSE_OUTPUT.parse(full);
   assert.equal(parsed.kind, "composition");

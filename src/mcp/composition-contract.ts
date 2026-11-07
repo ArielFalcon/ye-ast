@@ -19,6 +19,10 @@ import type { CallSite, EventTarget, HttpTarget, UnresolvedCallSite } from "../c
 import type { ImpactedLink, Link, LinkBasis, UnlinkedCallSite } from "../core/domain/topology/link.ts";
 import type { NameCandidate, OutwardKind } from "../core/domain/topology/outward-name.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
+import type { AnswerBody } from "../core/domain/contracts/consequence-fact.ts";
+import type { Hop } from "../core/domain/contracts/consumer-flow.ts";
+import type { BranchCondition, ProducerVerdict } from "../core/domain/contracts/request-origin.ts";
+import type { Guard, UseOperation, Verdict } from "../core/domain/contracts/verdict.ts";
 import type { Cut, Evidence, FactInputs, Producer, SchemaVersion, SnapshotRef, UnknownReason } from "../core/domain/shared/fact.ts";
 import type { LiveStaleNotice, WorkspaceLiveNotice } from "../core/ports/live-queries.port.ts";
 import type { FactRead, WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
@@ -64,7 +68,7 @@ export type SourceBranch = "local" | "workspace";
 /** The family of a source, with `branch` only for impact and callers. */
 export type SourceFamilyRef =
   | { family: "impact" | "callers"; branch: SourceBranch }
-  | { family: Exclude<ToolFamily, "impact" | "callers" | "contract_consequences"> }; // compose joins contract_consequences in U3 (RFC-0023 Delivery 3)
+  | { family: Exclude<ToolFamily, "impact" | "callers"> };
 
 /**
  * A source as the evidence set holds it. `snapshotVector` is the complete current vector sorted by repo; `analysis` is
@@ -171,6 +175,20 @@ export type ContractChangeData = Omit<ChangedContract, "handlers"> & { handlers?
 
 export type DecisionOptionData = Omit<DecisionOption, "evidence"> & { evidence: readonly EvidenceId[] };
 
+/** What tells two hypotheses apart in a part: the operation and the property, not how the change is written. */
+export type HypothesisIdentity = Pick<AnswerBody["hypothesis"], "method" | "path" | "target" | "property">;
+/** A step of a chain: its place is evidence of the repository that holds it. */
+export type ConsequenceHopData = Omit<Hop, "evidence"> & { evidence: EvidenceId };
+type PlacedGuard<G> = G extends Guard ? Omit<G, "evidence"> & { evidence: EvidenceId } : never;
+export type GuardData = PlacedGuard<Guard>;
+export type UseVerdictData = Exclude<Verdict, { kind: "admits" }> | { kind: "admits"; guards: readonly GuardData[] };
+/** The witness of an `incompatible` producer keeps its place and conditions; its hops are the tail of the part's chain. */
+export type ProducerVerdictData =
+  | Exclude<ProducerVerdict, { kind: "incompatible" }>
+  | { kind: "incompatible"; witness: { value: string; at: EvidenceId; conditions: readonly (Omit<BranchCondition, "at"> & { at: EvidenceId })[] } };
+/** The link a consequence came through: the call site in the consumer's repository, and the handler it reaches in the server's. */
+export type ConsequenceLinkData = { id: string; basis: LinkBasis; call: CallLocation & { symbol: string }; handler: AnchorId };
+
 /** The context a workspace-capable read declares; no member holds the private repositories. */
 export type WorkspaceContextData =
   | { family: "workspace"; workspace: WorkspaceValue["workspace"]; repositorySnapshots: readonly SnapshotVectorEntry[] }
@@ -216,7 +234,11 @@ export type PartPayload =
   | { kind: "decision"; context: ReadId; decisionId: Decision["id"]; kindName: DecisionKind; subject: string; outwardKinds?: readonly OutwardKind[]; allowsFreeText: boolean; required: boolean; evidence: readonly EvidenceId[]; options: readonly DecisionOptionData[] }
   | { kind: "impact-context"; owner: ReadId; mergeBase?: string; changedEntrypoints: RecordedCollectionState; changedContracts: RecordedCollectionState }
   | { kind: "walk-cost"; owner: ReadId; walk: "symbols" | "modules"; expansionsUsed: number }
-  | { kind: "trace-totals"; owner: ReadId; lines: number; expanded: number };
+  | { kind: "trace-totals"; owner: ReadId; lines: number; expanded: number }
+  | { kind: "consequence-use"; repo: string; hypothesis: HypothesisIdentity; place: EvidenceId; link: ConsequenceLinkData; verdict: UseVerdictData; operation: UseOperation; path: string; changed: string; chain: readonly ConsequenceHopData[] }
+  | { kind: "consequence-producer"; repo: string; hypothesis: HypothesisIdentity; place: EvidenceId; link: ConsequenceLinkData; verdict: ProducerVerdictData; path: string; chain: readonly ConsequenceHopData[] }
+  /** `places.base` is at the commit the change was read from, `places.head` in the head snapshot; `handlers` are the ones the answer's findings reach. */
+  | { kind: "derived-contract-change"; hypothesis: HypothesisIdentity; operation: string; property: string; places: { base: EvidenceId; head: EvidenceId }; handlers: readonly AnchorId[] };
 
 // Payload fields never reuse a record metadata key.
 type UnionKeys<T> = T extends T ? keyof T : never;

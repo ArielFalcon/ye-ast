@@ -210,10 +210,71 @@ const outlineImport = z.strictObject({
   })),
 });
 
+// The consequence parts: the verdicts and use operations of the analysis as it records them, with every place an evidence id.
+
+const absence = z.enum(["null", "undefined"]);
+const literal = z.union([z.string(), z.number(), z.boolean()]);
+const equalityOperator = z.enum(["===", "!==", "==", "!="]);
+const predicate = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("truthy") }),
+  z.strictObject({ kind: z.literal("absence"), operator: equalityOperator, absence }),
+  z.strictObject({ kind: z.literal("literal"), operator: equalityOperator, literal }),
+  z.strictObject({ kind: z.literal("typeof"), operator: equalityOperator, type: z.string() }),
+  z.strictObject({ kind: z.literal("array") }),
+  z.strictObject({ kind: z.literal("one-of"), literals: z.array(literal), absences: z.array(absence) }),
+]);
+/** One access step or one way a use ends: the kinds never overlap, so one union serves `operation` and a verdict's `failing`. */
+const accessStep = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("member"), name: z.string(), optional: z.boolean() }),
+  z.strictObject({ kind: z.literal("keyed"), key: z.union([z.string(), z.number()]).exactOptional(), optional: z.boolean() }),
+  z.strictObject({ kind: z.literal("call"), optional: z.boolean() }),
+]);
+const useEnd = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("none") }),
+  z.strictObject({ kind: z.literal("iterate"), tolerates: z.array(absence) }),
+  z.strictObject({ kind: z.literal("destructure"), shape: z.enum(["object", "array"]) }),
+  z.strictObject({ kind: z.literal("compare"), operator: z.string(), literal: literal.exactOptional() }),
+  z.strictObject({ kind: z.literal("coerce"), operator: z.string() }),
+  z.strictObject({ kind: z.literal("consume"), as: z.enum(["shown", "handed-on"]), detail: z.string().exactOptional() }),
+  z.strictObject({ kind: z.literal("unmodelled"), detail: z.string() }),
+]);
+const failing = z.discriminatedUnion("kind", [...accessStep.options, ...useEnd.options]);
+const placedGuard = { covers: strings, evidence: ids.evidence };
+const guard = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.enum(["condition", "early-exit", "optional-chain"]), test: predicate, holds: z.boolean(), ...placedGuard }),
+  z.strictObject({
+    kind: z.literal("fallback"), test: predicate, holds: z.boolean(), ...placedGuard,
+    replacement: z.discriminatedUnion("kind", [z.strictObject({ kind: z.literal("literal"), value: z.json() }), z.strictObject({ kind: z.literal("opaque") })]),
+  }),
+  z.strictObject({ kind: z.enum(["non-null-assertion", "type-guard", "assertion", "instanceof", "case", "reassigned"]), ...placedGuard }),
+]);
+const useVerdict = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("incompatible"), witness: z.string(), at: int, failing, capability: z.enum(["readable", "function", "iterable"]), replacement: z.json().exactOptional() }),
+  z.strictObject({ kind: z.literal("admits"), guards: z.array(guard) }),
+  z.strictObject({ kind: z.literal("review"), reason: z.enum(["consumed", "unmodelled-sink", "removed-behind-guard", "opaque-guard", "unknown-value", "opaque-replacement", "retired-literal", "meaning"]) }),
+]);
+const producerVerdict = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("incompatible"),
+    witness: z.strictObject({ value: z.string(), at: ids.evidence, conditions: z.array(z.strictObject({ expression: z.string(), holds: z.boolean(), at: ids.evidence })) }),
+  }),
+  z.strictObject({ kind: z.literal("admits") }),
+  z.strictObject({ kind: z.literal("review"), reason: z.enum(["frontier", "approximate", "no-origin"]) }),
+]);
+const flowStep = z.enum([
+  "http-call", "response-body", "return", "caller", "pipe", "map", "subscribe", "await", "to-signal", "assign", "fallback", "argument", "resource",
+  "iterate", "resolver-input", "input", "route-data", "template-binding", "template-read",
+]);
+const hop = z.strictObject({ step: flowStep, evidence: ids.evidence, rewrite: z.array(z.strictObject({ from: strings, to: strings })).exactOptional() });
+const hypothesisIdentity = z.strictObject({ method: z.string(), path: z.string(), target: z.string(), property: z.string() });
+const consequenceLink = z.strictObject({
+  id: z.string(), basis: linkBasis, call: z.strictObject({ ...callLocation.shape, symbol: z.string() }), handler: ids.anchor,
+});
+
 const part = <K extends string, S extends z.ZodRawShape>(kind: K, shape: S) =>
   z.strictObject({ kind: z.literal(kind), id: ids.part, supports, ...shape });
 
-/** Every one of the 24 `Part` variants, discriminated by `kind`. */
+/** Every `Part` variant, discriminated by `kind`. */
 export const partSchema = z.discriminatedUnion("kind", [
   part("entrypoint", { entry: entryData, evidence: evidenceList }),
   part("unknown-finding", { reason: unknownReason, evidence: evidenceList }),
@@ -291,6 +352,14 @@ export const partSchema = z.discriminatedUnion("kind", [
   part("impact-context", { owner: ids.read, mergeBase: z.string().exactOptional(), changedEntrypoints: recordedCollectionState, changedContracts: recordedCollectionState }),
   part("walk-cost", { owner: ids.read, walk: z.enum(["symbols", "modules"]), expansionsUsed: count }),
   part("trace-totals", { owner: ids.read, lines: count, expanded: count }),
+  part("consequence-use", {
+    repo: z.string(), hypothesis: hypothesisIdentity, place: ids.evidence, link: consequenceLink, verdict: useVerdict,
+    operation: z.strictObject({ steps: z.array(accessStep), end: useEnd }), path: z.string(), changed: z.string(), chain: z.array(hop),
+  }),
+  part("consequence-producer", { repo: z.string(), hypothesis: hypothesisIdentity, place: ids.evidence, link: consequenceLink, verdict: producerVerdict, path: z.string(), chain: z.array(hop) }),
+  part("derived-contract-change", {
+    hypothesis: hypothesisIdentity, operation: z.string(), property: z.string(), places: z.strictObject({ base: ids.evidence, head: ids.evidence }), handlers: z.array(ids.anchor),
+  }),
 ]);
 
 /** Compile-time guard: whatever a schema accepts is its contract shape. */

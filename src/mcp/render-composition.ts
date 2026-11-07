@@ -71,6 +71,7 @@ const PART_ORDER: readonly PartKind[] = [
   "entrypoint", "unknown-finding", "entrypoint-change", "contract-change", "seed", "symbol-reach", "entrypoint-reach", "module-origin", "module-reach",
   "file-dependency", "call-site", "unresolved-call-site", "unlinked-call-site", "workspace-link", "outward-name", "name-candidate", "unheld-file",
   "outline-declaration", "outline-file", "file-query", "trace-root", "trace-step", "reading-range",
+  "consequence-use", "consequence-producer", "derived-contract-change",
 ];
 /** Kinds summary counts instead of listing: bulk observations already represented by subjects, relations or coverage. */
 const SUMMARY_COUNTED: ReadonlySet<PartKind> = new Set(["outline-declaration", "outline-file", "file-query", "trace-step", "reading-range"]);
@@ -464,7 +465,7 @@ class CompactView {
   private describe(part: Part, short = false): string {
     switch (part.kind) {
       case "entrypoint": return short ? `entrypoint ${part.entry.name}` : `entrypoint ${entryName(part.entry)}${this.entry(part.entry)}; route ${this.routeEvidence(part)}`;
-      case "unknown-finding": return `unknown entrypoint finding (${part.reason}), ${this.evidenceList(part.evidence, true)}`;
+      case "unknown-finding": return `unknown ${this.ofConsequences(part) ? "consequence" : "entrypoint"} finding (${part.reason}), ${this.evidenceList(part.evidence, true)}`;
       case "seed": return `${part.basis === "requested" ? "requested target (not a change)" : `seed basis ${part.basis}`} ${this.anchor(part.anchor)}${short ? "" : this.comparison(part.comparison)}`;
       case "symbol-reach": return short ? `reached ${this.anchor(part.anchor)}` : `reached ${this.anchor(part.anchor)} ${part.kindName} depth ${part.depth} confidence ${part.confidence} fan-in ${part.fanIn}${part.via === undefined ? "" : `; via ${part.via.target.symbol} in ${this.file(part.via.target.file)} basis ${part.via.basis}${part.via.lines === undefined ? "" : ` lines ${part.via.lines.join(",")}`}`}`;
       case "entrypoint-reach": return short ? `reach of ${part.kindName} ${part.name ?? "(unnamed)"} handler ${this.anchor(part.handler)}` : `reached entrypoint ${part.kindName} ${part.name ?? "(unnamed)"} handler ${this.anchor(part.handler)} depth ${part.depth} confidence ${part.confidence}; seed indexes ${this.origins(part.seeds) || "none"}`;
@@ -513,7 +514,27 @@ class CompactView {
       case "impact-context": return `impact context ${this.readLabel(part.owner)}`;
       case "walk-cost": return `${part.walk} walk used ${part.expansionsUsed} expansions (${this.readLabel(part.owner)})`;
       case "trace-totals": return `trace read ${part.expanded} bodies; reading plan ${part.lines} lines (${this.readLabel(part.owner)})`;
+      case "consequence-use": return `consequence use ${this.hypothesis(part.hypothesis)}: ${part.verdict.kind === "review" ? `review (${part.verdict.reason})` : part.verdict.kind} in ${part.repo} at ${this.evidenceList([part.place], true)}; ${this.link(part.link)}${short ? "" : `; reads ${part.path}, changed ${part.changed}${this.hops(part.chain)}`}`;
+      case "consequence-producer": return `consequence producer ${this.hypothesis(part.hypothesis)}: ${part.verdict.kind === "review" ? `review (${part.verdict.reason})` : part.verdict.kind} in ${part.repo} at ${this.evidenceList([part.place], true)}${part.verdict.kind === "incompatible" ? `, witness ${quoted(part.verdict.witness.value)} at ${this.evidenceList([part.verdict.witness.at], true)}` : ""}; ${this.link(part.link)}${short ? "" : `; property ${part.path}${this.hops(part.chain)}`}`;
+      case "derived-contract-change": return `derived from the contract change ${part.operation} ${part.property}: ${this.hypothesis(part.hypothesis)}; contract ${this.evidenceList([part.places.base], true)} → ${this.evidenceList([part.places.head], true)}${part.handlers.length === 0 ? "" : `; handlers ${part.handlers.map((handler) => this.anchor(handler)).join(", ")}`}`;
     }
+  }
+
+  /** Whether every source that observed this part is a contract consequences read. */
+  private ofConsequences(part: Part): boolean {
+    return part.supports.length > 0 && part.supports.every((support) => this.sources.get(support.source)?.family === "contract_consequences");
+  }
+
+  private hypothesis(hypothesis: PartOf<"consequence-use">["hypothesis"]): string {
+    return `${hypothesis.method} ${hypothesis.path} ${hypothesis.target} ${hypothesis.property}`;
+  }
+
+  private link(link: PartOf<"consequence-use">["link"]): string {
+    return `call ${this.file(link.call.file)}:${link.call.line} ${link.call.symbol} → handler ${this.anchor(link.handler)} basis ${link.basis}`;
+  }
+
+  private hops(chain: PartOf<"consequence-use">["chain"]): string {
+    return chain.length === 0 ? "" : `; chain ${chain.map((hop) => `${hop.step} ${this.evidenceList([hop.evidence], true).replace(/^evidence /, "")}`).join(" → ")}`;
   }
 
   private partRef(id: PartId): string {

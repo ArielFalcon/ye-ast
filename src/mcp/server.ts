@@ -13,8 +13,8 @@ import type { ResponseMode, ResponseRenderer, ToolFamily } from "./presentation.
 import { TRUST_MODES } from "../core/domain/shared/fact.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import type { Fact } from "../core/domain/shared/fact.ts";
-import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type ComposeQuery, type ToolArguments, type ToolQuery } from "./query-schema.ts";
-import { executeQuery, type ConsequencesExecutionDeps, type PresentedSource, type PublicRead } from "./query-runner.ts";
+import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type ComposeQuery, type SemanticQuery, type ToolArguments } from "./query-schema.ts";
+import { executeQuery, type ExecutedSource, type PublicRead, type QueryExecutionDeps } from "./query-runner.ts";
 import { COMPOSE_INPUT, COMPOSE_OUTPUT } from "./composition-schema.ts";
 import { runComposition } from "./compose-request.ts";
 import { composeFull, composeReceipt, renderComposition } from "./render-composition.ts";
@@ -39,7 +39,7 @@ function delivered(text: string, fields: Record<string, unknown>, meta: Record<s
   };
 }
 
-export interface McpDeps extends ConsequencesExecutionDeps {
+export interface McpDeps extends QueryExecutionDeps {
   version: string;
   /** Default repository binding, plus additional host-declared targets. */
   repository: RepositoryBinding;
@@ -360,7 +360,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
    * summary/details carry a minimal receipt and convey response-level limits in their text. Every success is validated
    * before delivery in content.
    */
-  async function answer(query: ToolQuery, mode: ResponseMode, signal: AbortSignal, controls?: Controls): Promise<CallToolResult> {
+  async function answer(query: SemanticQuery, mode: ResponseMode, signal: AbortSignal, controls?: Controls): Promise<CallToolResult> {
     const context = faultContext(query, controls);
     const selectionFailure = (fault: CodedFault): CallToolResult => failure(controlFault(fault), context);
     try {
@@ -384,7 +384,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
   }
 
   /** The renderer and selection source of each public payload; the dispatch itself lives in the runner. */
-  function present(source: PresentedSource, mode: ResponseMode, controls: Controls | undefined, cursor: CursorV1 | undefined, selectionFailure: Refusal): CallToolResult {
+  function present(source: ExecutedSource, mode: ResponseMode, controls: Controls | undefined, cursor: CursorV1 | undefined, selectionFailure: Refusal): CallToolResult {
     switch (source.family) {
       case "entrypoints":
         return respond(source, source.read, true, renderEntrypointMap, mode, controls, cursor, selectionFailure, (fact) => ({ kind: "entrypoints", fact }));
@@ -409,7 +409,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
   }
 
   function respond<V>(
-    source: PresentedSource,
+    source: ExecutedSource,
     read: PublicRead<V>,
     local: boolean,
     render: ResponseRenderer<V>,

@@ -24,7 +24,7 @@ import type { ConsequencesFault, ContractConsequencesQueries } from "../core/por
 import type { DecisionQueries, DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { repositoryCatalog, RepositoryBinding, RepositoryTargetFault } from "./repository-targeting.ts";
 import { callersRecovery, entrypointRecovery, impactRecovery, type Recovery } from "./recovery.ts";
-import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type ConsequencesQuery, type SemanticArguments, type SemanticQuery, type SemanticQueryOf, type ToolQuery } from "./query-schema.ts";
+import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type SemanticArguments, type SemanticQuery, type SemanticQueryOf } from "./query-schema.ts";
 import type { ToolFamily } from "./presentation.ts";
 
 /** The read ports and the public-boundary services a query needs; `McpDeps` extends it with version and bindings. */
@@ -37,13 +37,9 @@ export interface QueryExecutionDeps {
   workspace: WorkspaceQueries;
   workspaceImpact: WorkspaceImpactQueries;
   decisions: DecisionQueries;
+  contractConsequences: ContractConsequencesQueries;
   redaction: Redaction;
   digest: Digest;
-}
-
-/** What `contract_consequences` also needs; compose does not run it until U3 (RFC-0023 Delivery 3), so `QueryExecutionDeps` stays as it was. */
-export interface ConsequencesExecutionDeps extends QueryExecutionDeps {
-  contractConsequences: ContractConsequencesQueries;
 }
 
 export type QueryExecutionContext<D extends QueryExecutionDeps = QueryExecutionDeps> = {
@@ -65,9 +61,8 @@ export type SourcePayload =
   | { family: "outline"; read: PublicRead<OutlineValue> }
   | { family: "trace"; read: PublicRead<TraceValue> }
   | { family: "workspace"; read: PublicRead<PublicWorkspaceValue> }
-  | { family: "decisions"; read: PublicRead<DecisionValue> };
-
-type ConsequencesPayload = { family: "contract_consequences"; read: PublicRead<ConsequencesValue> };
+  | { family: "decisions"; read: PublicRead<DecisionValue> }
+  | { family: "contract_consequences"; read: PublicRead<ConsequencesValue> };
 
 /**
  * What redaction changed, by public position only, compared inside the runner before the original is discarded.
@@ -95,9 +90,6 @@ type Executed<P> = WithQuery<P> & {
   live?: LiveStaleNotice;
 };
 export type ExecutedSource = Executed<SourcePayload>;
-export type ExecutedConsequences = Executed<ConsequencesPayload>;
-/** Every executed source a tool presents. */
-export type PresentedSource = ExecutedSource | ExecutedConsequences;
 
 /** A workspace replay that no longer matches is reported as a changed result of the original query. */
 export type ReplayChangedFault = { kind: "result-changed"; detail: string; stage: "workspace-replay" };
@@ -107,10 +99,7 @@ export type QueryFault = VcsFault | LiveFault | ImpactFault | OutlineFault | Wor
 type Run<S = ExecutedSource> = Promise<Result<S, QueryFault>>;
 
 /** The single semantic dispatch, shared by the original tools and composition. */
-export function executeQuery(query: SemanticQuery, ctx: QueryExecutionContext): Run;
-export function executeQuery(query: ConsequencesQuery, ctx: QueryExecutionContext<ConsequencesExecutionDeps>): Run<ExecutedConsequences>;
-export function executeQuery(query: ToolQuery, ctx: QueryExecutionContext<ConsequencesExecutionDeps>): Run<PresentedSource>;
-export async function executeQuery(query: ToolQuery, ctx: QueryExecutionContext): Run<PresentedSource> {
+export async function executeQuery(query: SemanticQuery, ctx: QueryExecutionContext): Run {
   try {
     const target = ctx.catalog.resolve(query.arguments.repo);
     if (!target.ok) return target;
@@ -120,7 +109,7 @@ export async function executeQuery(query: ToolQuery, ctx: QueryExecutionContext)
   }
 }
 
-async function dispatch(query: ToolQuery, repository: RepositoryBinding, ctx: QueryExecutionContext): Run<PresentedSource> {
+async function dispatch(query: SemanticQuery, repository: RepositoryBinding, ctx: QueryExecutionContext): Run {
   const { deps } = ctx;
   const signal = ctx.signal === undefined ? {} : { signal: ctx.signal };
   let moved: LiveStaleNotice | undefined;
@@ -225,7 +214,7 @@ async function dispatch(query: ToolQuery, repository: RepositoryBinding, ctx: Qu
         ...scopeOf(a.scope),
         ...signal,
       };
-      const { contractConsequences } = deps as ConsequencesExecutionDeps; // the overload that takes this query requires them
+      const { contractConsequences } = deps;
       const result = a.hypotheses === undefined
         ? await contractConsequences.ofChange({ ...request, base: a.base ?? "", head: a.head ?? DEFAULT_REVISION })
         : await contractConsequences.ofHypotheses({ ...request, hypotheses: a.hypotheses });
@@ -248,9 +237,9 @@ type Rest = { recovery?: Recovery; identityGuard: RedactionIdentityGuard; live?:
  * redacted; recovery compares the public fact with the original; sidecars are redacted. Local families report the
  * selected binding as their repository root.
  */
-function finish<V, S extends PresentedSource>(
+function finish<V, S extends ExecutedSource>(
   read: FactRead<V>,
-  query: ToolQuery,
+  query: SemanticQuery,
   repository: RepositoryBinding,
   local: boolean,
   moved: LiveStaleNotice | undefined,

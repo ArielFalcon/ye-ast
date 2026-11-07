@@ -10,6 +10,7 @@ const R1 = `mcp-r1:${"a".repeat(64)}`;
 const C1 = `mcp-c1:${"b".repeat(64)}`;
 const outline = { name: "ye_ast_outline", arguments: { repo: "shop", revision: SHA, files: ["src/A.java"] } };
 const entrypoints = { name: "ye_ast_entrypoints", arguments: { repo: "shop", revision: SHA } };
+const consequences = { name: "ye_ast_contract_consequences", arguments: { repo: "shop", base: "main" } };
 
 // The inferred output is the contract type: a schema drifting from ComposeInput/ComposeQuery fails to compile.
 const asInput = (value: z.output<typeof COMPOSE_INPUT>): ComposeInput => value;
@@ -20,7 +21,7 @@ void asQuery;
 const accepts = (value: unknown) => assert.equal(COMPOSE_INPUT.safeParse(value).success, true, JSON.stringify(value));
 const rejects = (value: unknown) => assert.equal(COMPOSE_INPUT.safeParse(value).success, false, JSON.stringify(value));
 
-test("accepts the closed union of the seven families and defaults mode to summary", () => {
+test("accepts the closed union of the eight query families and defaults mode to summary", () => {
   const queries = [
     { ...entrypoints, expect: R1 },
     { name: "ye_ast_impact", arguments: { repo: "shop", base: "main", head: SHA }, expect: R1 },
@@ -29,6 +30,7 @@ test("accepts the closed union of the seven families and defaults mode to summar
     outline,
     { name: "ye_ast_workspace", arguments: { offline: true } },
     { name: "ye_ast_decisions", arguments: {} },
+    { name: "ye_ast_contract_consequences", arguments: { repo: "shop", base: "main", head: SHA } },
   ];
   const parsed = COMPOSE_INPUT.parse({ queries });
   assert.equal(parsed.mode, "summary");
@@ -50,6 +52,7 @@ test("rejects unknown families, recursive compose and every nested control", () 
   rejects({ queries: [{ name: "ye_ast_outline" }] });
   for (const control of [{ mode: "full" }, { select: { kind: "entrypoint-evidence", findingIndex: 0 } }, { page: { limit: 1 } }, { expect: R1 }]) {
     rejects({ queries: [{ ...entrypoints, arguments: { ...entrypoints.arguments, ...control } }] });
+    rejects({ queries: [{ ...consequences, arguments: { ...consequences.arguments, ...control } }] });
   }
   rejects({ queries: [{ ...entrypoints, mode: "full" }] });
   rejects({ queries: [{ ...entrypoints, select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } }] });
@@ -62,6 +65,7 @@ test("source expectations only on the three recoverable families, as mcp-r1", ()
   for (const name of ["ye_ast_importers", "ye_ast_outline", "ye_ast_workspace", "ye_ast_decisions"]) {
     rejects({ queries: [{ name, arguments: name === "ye_ast_importers" || name === "ye_ast_outline" ? { files: ["a"] } : {}, expect: R1 }] });
   }
+  rejects({ queries: [{ ...consequences, expect: R1 }] });
   rejects({ queries: [{ ...entrypoints, expect: C1 }] });
   rejects({ queries: [{ ...entrypoints, expect: `mcp-r1:${"A".repeat(64)}` }] });
   rejects({ queries: [{ ...entrypoints, expect: `mcp-r1:${"a".repeat(63)}` }] });
@@ -82,4 +86,9 @@ test("the original semantic refinements apply inside compose", () => {
   rejects({ queries: [{ name: "ye_ast_outline", arguments: { files: [] } }] });
   rejects({ queries: [{ name: "ye_ast_outline", arguments: { files: ["a"], scope: { include: ["../x"] } } }] });
   rejects({ queries: [{ name: "ye_ast_entrypoints", arguments: { live: true, offline: true } }] });
+  const hypothesis = { method: "GET", path: "/orders/{id}", target: "response", property: "customer", change: "removed" };
+  accepts({ queries: [{ name: "ye_ast_contract_consequences", arguments: { hypotheses: [hypothesis], live: true } }] });
+  rejects({ queries: [{ name: "ye_ast_contract_consequences", arguments: { hypotheses: [hypothesis], base: "main" } }] });
+  rejects({ queries: [{ name: "ye_ast_contract_consequences", arguments: { hypotheses: [] } }] });
+  rejects({ queries: [{ name: "ye_ast_contract_consequences", arguments: { base: "main", live: true } }] });
 });

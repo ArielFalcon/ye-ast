@@ -76,7 +76,7 @@ test("catalogue advertises useful guides within budget", async () => {
       assert.equal(tool.inputSchema.type, "object");
       assert.ok(Object.keys(tool.inputSchema.properties ?? {}).length > 0);
       new AjvJsonSchemaValidator().getValidator(tool.inputSchema);
-      assert.equal(createHash("sha256").update(JSON.stringify(canonicalConstraints(tool.inputSchema))).digest("hex"), { ...INPUT_CONSTRAINTS, ...CONSEQUENCES_CONSTRAINTS }[tool.name], `${tool.name}: argument contract`);
+      assert.equal(createHash("sha256").update(JSON.stringify(canonicalConstraints(tool.inputSchema))).digest("hex"), INPUT_CONSTRAINTS[tool.name], `${tool.name}: argument contract`);
       for (const key of ["allOf", "anyOf", "oneOf"]) {
         assert.equal(key in tool.inputSchema, false, `${tool.name}: ${key}`);
       }
@@ -169,10 +169,9 @@ const INPUT_CONSTRAINTS: Record<string, string> = {
   ye_ast_trace: "2de47807688347b35b5176925c11d8c6edc791e9c2d4be4bc5e817fa9c14024a",
   ye_ast_workspace: "a3eb1c0ee1dbf6c86080e0215b48283bcd1d26de492fbd78d558ba49b2ee7cda",
   ye_ast_decisions: "a3eb1c0ee1dbf6c86080e0215b48283bcd1d26de492fbd78d558ba49b2ee7cda",
+  ye_ast_contract_consequences: "6e05e8d94599268d755e79a4df04adfc3340e1140c84f0b32b31d968a93baf4d",
 };
-/** Compose does not run contract_consequences until U3, so its contract is pinned apart from the composed families. */
-const CONSEQUENCES_CONSTRAINTS: Record<string, string> = { ye_ast_contract_consequences: "6e05e8d94599268d755e79a4df04adfc3340e1140c84f0b32b31d968a93baf4d" };
-const COMPOSE_CONSTRAINTS = "75fcd7d1645e4da54259244b4fbf1755f06fcf59fb07d1bb9dc4e4281d8e66e5";
+const COMPOSE_CONSTRAINTS = "cf30af8869c71cce82a747af796866e15b0fdc365b5abf678ef8c5a63831fc06";
 function canonicalConstraints(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalConstraints);
   if (value === null || typeof value !== "object") return value;

@@ -87,6 +87,7 @@ function spies(overrides: Overrides = {}): { deps: QueryExecutionDeps; calls: Ca
       ofChange: async (r: WorkspaceOfChangeRequest) => (calls.workspaceOfChange.push(r), { ok: true, value: workspaceImpactRead(r.repo.id!) }),
     },
     decisions: { decisions: async (r: DecisionsRequest) => (calls.decisions.push(r), { ok: true, value: decisionRead(r.repo.id!) }) },
+    contractConsequences: { ofHypotheses: async () => assert.fail("consequences not expected"), ofChange: async () => assert.fail("consequences not expected") },
     redaction,
     digest,
   };

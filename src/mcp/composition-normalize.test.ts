@@ -13,7 +13,7 @@ import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { CallSite } from "../core/domain/topology/call-site.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
 import type {
-  AnchorId, EvidenceFinding, EvidenceId, EvidenceSet, FileCategory, FileId, Part, PartId, PartKind, PartOf, ReadRecord,
+  AnchorId, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceSet, FileCategory, FileId, Part, PartId, PartKind, PartOf, ReadRecord,
   SnapshotId, SourceId,
 } from "./composition-contract.ts";
 import { isCompositionId, jsonPointer } from "./composition-identity.ts";
@@ -22,6 +22,10 @@ import {
   type FixtureKind,
 } from "./composition-fixtures.testing.ts";
 import { normalizeSource } from "./composition-normalize.ts";
+import {
+  API, CONTRACT_BASE, CONTRACT_HEAD, CREATE_HANDLER, DERIVATION_FRONTIER_PLACE, FIND_HANDLER, FRONTIER_PLACE, GUARD_PLACE, PRODUCER_CALL, SERVICE_FILE, USE_PLACE, WEB, WITNESS_PLACE,
+  consequencesSource, consequencesValue, frontierOnlyValue,
+} from "./composition-consequences-fixture.testing.ts";
 import type { ExecutedSource } from "./query-runner.ts";
 
 const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
@@ -716,4 +720,107 @@ test("optional collection presence cannot be mistaken for a nonempty result", ()
     const context = set.parts.find(part => part.kind === "impact-context");
     assert.deepEqual(context?.kind === "impact-context" && context.changedEntrypoints, expected);
   }
+});
+
+// contract_consequences: a multi-repository adapter over `repositorySnapshots` (RFC-0023 "Compose").
+
+/** The snapshot a record's origin names; a coordinate left local to the read has none, which fails the test. */
+function snapshotAt(t: Tables, origin: EvidenceOrigin) {
+  assert.equal(origin.kind, "snapshot", "placed at a snapshot of the vector, not left local to the read");
+  return t.snapshot((origin as { snapshot: SnapshotId }).snapshot);
+}
+
+test("consequences: the source vector is the repositories the answer read, each at its own snapshot, sorted by repository", () => {
+  const set = normalizeSource(consequencesSource(), digest);
+  const t = new Tables(set);
+  const vector = set.sources[0]!.snapshotVector.map(({ repo, snapshot }) => ({ repo, snapshot: t.snapshot(snapshot) }));
+  assert.deepEqual(vector, consequencesValue().repositorySnapshots);
+  // The evidence the root fact lists is located by its own repository through that vector, not in the bound repository.
+  const root = set.evidence.filter((record) => record.supports.some((support) => support.pointer.startsWith("/evidence/")));
+  assert.deepEqual(root.map((record) => ({ ...record.value, repo: record.repo })).sort((a, b) => a.line - b.line), [USE_PLACE, PRODUCER_CALL]);
+  for (const record of root) assert.deepEqual(snapshotAt(t, record.origin), shaRef(WEB, SHA_B));
+});
+
+test("consequences: a use anchors its place, its call site and its handler in the repositories that hold them", () => {
+  const set = normalizeSource(consequencesSource(), digest);
+  const t = new Tables(set);
+  const use = found(t.one("/value/answers/0/findings/0", "consequence-use"), "use");
+  const place = t.evidenceRecord(use.place);
+  assert.deepEqual({ ...place.value, repo: place.repo }, USE_PLACE);
+  assert.deepEqual(snapshotAt(t, place.origin), shaRef(WEB, SHA_B));
+  const call = use.link.call;
+  assert.equal(t.path(call.file), SERVICE_FILE);
+  assert.equal(t.file(call.file).repo, WEB);
+  assert.deepEqual({ line: call.line, symbol: call.symbol }, { line: 16, symbol: "OrderService.find" });
+  assert.deepEqual(t.handler(use.link.handler), FIND_HANDLER);
+  const handlerFile = t.file(t.anchor(use.link.handler).file);
+  assert.equal(handlerFile.repo, API, "the handler is in the repository that serves it, not in the consumer's");
+  assert.deepEqual(snapshotAt(t, handlerFile.origin), shaRef(API, SHA_A));
+  assert.deepEqual(use.chain.map((item) => [item.step, t.repoEvidence([item.evidence])[0]!.line]), [["http-call", 16], ["response-body", 17]]);
+  assert.equal(use.verdict.kind, "incompatible");
+});
+
+test("consequences: the guards of an admitting use are places in the consumer, equal to the evidence the finding lists", () => {
+  const set = normalizeSource(consequencesSource(), digest);
+  const t = new Tables(set);
+  const use = found(t.one("/value/answers/0/findings/1", "consequence-use"), "guarded use");
+  assert.equal(use.verdict.kind, "admits");
+  const [guard] = use.verdict.kind === "admits" ? use.verdict.guards : [];
+  assert.ok(guard);
+  const place = t.evidenceRecord(guard.evidence);
+  assert.deepEqual({ ...place.value, repo: place.repo }, GUARD_PLACE);
+  assert.equal(set.evidence.filter((record) => record.repo === WEB && record.value.path === GUARD_PLACE.path && record.value.line === GUARD_PLACE.line).length, 1, "the plain guard place and the located one are one evidence");
+});
+
+test("consequences: a producer anchors its body call site, its witness place and its handler", () => {
+  const set = normalizeSource(consequencesSource(), digest);
+  const t = new Tables(set);
+  const producer = found(t.one("/value/answers/1/findings/0", "consequence-producer"), "producer");
+  assert.deepEqual({ ...t.evidenceRecord(producer.place).value, repo: t.evidenceRecord(producer.place).repo }, PRODUCER_CALL);
+  assert.equal(producer.verdict.kind, "incompatible");
+  if (producer.verdict.kind !== "incompatible") return;
+  const witness = t.evidenceRecord(producer.verdict.witness.at);
+  assert.deepEqual({ ...witness.value, repo: witness.repo }, WITNESS_PLACE);
+  assert.equal(t.repoEvidence([producer.verdict.witness.conditions[0]!.at])[0]!.line, WITNESS_PLACE.line);
+  assert.deepEqual(t.handler(producer.link.handler), CREATE_HANDLER);
+  assert.equal(t.file(t.anchor(producer.link.handler).file).repo, API);
+});
+
+test("consequences: a derived answer anchors the contract at the base commit and at the head snapshot, and the handlers its findings reach", () => {
+  const set = normalizeSource(consequencesSource(), digest);
+  const t = new Tables(set);
+  const derived = found(t.one("/value/answers/0/derivedFrom", "derived-contract-change"), "derived");
+  const base = t.evidenceRecord(derived.places.base);
+  const head = t.evidenceRecord(derived.places.head);
+  assert.deepEqual([{ ...base.value, repo: base.repo }, { ...head.value, repo: head.repo }], [CONTRACT_BASE, CONTRACT_HEAD]);
+  assert.deepEqual(snapshotAt(t, base.origin), shaRef(API, consequencesValue().change!.snapshots.base));
+  assert.deepEqual(snapshotAt(t, head.origin), shaRef(API, SHA_A));
+  assert.deepEqual(derived.handlers.map((anchor) => t.handler(anchor)), [FIND_HANDLER], "both complete findings reach one handler; it is listed once");
+  assert.equal(t.at("/value/answers/1/derivedFrom").length, 0, "an answer that was asked for derives nothing");
+});
+
+test("consequences: an unknown finding and a derivation frontier are unknown parts located where they were found", () => {
+  const set = normalizeSource(consequencesSource(), digest);
+  const t = new Tables(set);
+  const answered = found(t.one("/value/answers/0/findings/2", "unknown-finding"), "answer frontier");
+  assert.equal(answered.reason, "unresolved");
+  assert.deepEqual(t.repoEvidence(answered.evidence), [FRONTIER_PLACE]);
+  const derived = found(t.one("/value/change/derivation/value/frontiers/0", "unknown-finding"), "derivation frontier");
+  assert.deepEqual(t.repoEvidence(derived.evidence), [DERIVATION_FRONTIER_PLACE]);
+  assert.deepEqual(snapshotAt(t, t.evidenceRecord(derived.evidence[0]!).origin), shaRef(API, SHA_A));
+});
+
+test("consequences: a change whose derivation recorded a frontier and no hypothesis still yields the frontier part", () => {
+  const set = normalizeSource(consequencesSource(frontierOnlyValue()), digest);
+  assert.deepEqual(set.parts.map((part) => part.kind), ["unknown-finding"]);
+  assert.deepEqual(set.parts[0]!.supports.map((support) => support.pointer), ["/value/change/derivation/value/frontiers/0"]);
+});
+
+test("consequences: an unknown derivation has no frontiers to place, and an unknown answer yields no part of its own", () => {
+  const value = consequencesValue();
+  const derivation = { ...value.change!.derivation, status: "unknown" as const, reason: "source-unreadable" as const };
+  delete (derivation as { value?: unknown }).value;
+  const unknownAnswer = { ...value.answers[1]!, status: "unknown" as const, reason: "no-project" as const, detail: "nothing serves it", findings: [] };
+  const set = normalizeSource(consequencesSource({ ...value, answers: [unknownAnswer], change: { ...value.change!, derivation } }), digest);
+  assert.deepEqual(set.parts, []);
 });

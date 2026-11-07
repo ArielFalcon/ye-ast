@@ -26,7 +26,7 @@ const analysis = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("unknown"), reason: unknownReason }),
 ]);
 const sourceCommon = { id: ids.source, rootRead: ids.read, snapshotVector: z.array(snapshotVectorEntry), analysis, requestIndex: count };
-const toolFamily = z.enum(["entrypoints", "importers", "outline", "trace", "workspace", "decisions"]);
+const toolFamily = z.enum(["entrypoints", "importers", "outline", "trace", "workspace", "decisions", "contract_consequences"]);
 /** A wire source: `branch` exists exactly for impact and callers. */
 const sourceDescriptor = z.union([
   z.strictObject({ family: z.enum(["impact", "callers"]), branch: z.enum(["local", "workspace"]), ...sourceCommon }),

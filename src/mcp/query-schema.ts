@@ -9,7 +9,7 @@ import { isValidGlob } from "../core/domain/shared/scope.ts";
 import { ENTRYPOINT_KINDS, mixesTargetKinds, type TRACE_BOUND_FIELDS, type TraceTarget } from "../core/ports/trace-queries.port.ts";
 
 /**
- * The input contracts of the eight query families. Each family has a semantic schema, which carries only the fields that
+ * The input contracts of the nine query families. Each family has a semantic schema, which carries only the fields that
  * decide what is analysed, and the full schema its tool publishes, built from the same fields plus the presentation and
  * recovery controls. Both share the same refinements, so a semantic query is valid exactly when the original tool would
  * accept it without controls.
@@ -309,13 +309,8 @@ export const TOOL_INPUTS = {
 export type QueryName = `ye_ast_${ToolFamily}`;
 export type SemanticArguments<F extends ToolFamily> = z.infer<(typeof SEMANTIC_INPUTS)[F]>;
 export type ToolArguments<F extends ToolFamily> = z.infer<(typeof TOOL_INPUTS)[F]>;
-type AnySemanticQuery = { [F in ToolFamily]: { name: `ye_ast_${F}`; arguments: SemanticArguments<F> } }[ToolFamily];
-/** The queries compose runs; contract_consequences joins in U3 (RFC-0023 Delivery 3). */
-export type SemanticQuery = Exclude<AnySemanticQuery, { name: "ye_ast_contract_consequences" }>;
-export type ConsequencesQuery = Extract<AnySemanticQuery, { name: "ye_ast_contract_consequences" }>;
-/** Every query a tool answers: the composed ones and contract_consequences. */
-export type ToolQuery = SemanticQuery | ConsequencesQuery;
-export type SemanticQueryOf<F extends ToolFamily> = Extract<AnySemanticQuery, { name: `ye_ast_${F}` }>;
+export type SemanticQuery = { [F in ToolFamily]: { name: `ye_ast_${F}`; arguments: SemanticArguments<F> } }[ToolFamily];
+export type SemanticQueryOf<F extends ToolFamily> = Extract<SemanticQuery, { name: `ye_ast_${F}` }>;
 
 /** The family a query name addresses. */
 export function familyOf(name: QueryName): ToolFamily {
@@ -329,5 +324,5 @@ export type RecoverableFamily = "entrypoints" | "impact" | "callers";
  * The runtime schema of `ye_ast_compose` (composition-schema.ts) must accept exactly these shapes.
  */
 export type ComposeQuery = {
-  [F in Exclude<ToolFamily, "contract_consequences">]: { name: `ye_ast_${F}`; arguments: SemanticArguments<F> } & (F extends RecoverableFamily ? { expect?: `mcp-r1:${string}` } : { expect?: never });
-}[Exclude<ToolFamily, "contract_consequences">]; // compose joins contract_consequences in U3 (RFC-0023 Delivery 3)
+  [F in ToolFamily]: { name: `ye_ast_${F}`; arguments: SemanticArguments<F> } & (F extends RecoverableFamily ? { expect?: `mcp-r1:${string}` } : { expect?: never });
+}[ToolFamily];

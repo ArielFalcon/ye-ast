@@ -16,6 +16,7 @@ const IMPORTERS: SourceFamilyRef = { family: "importers" };
 const WORKSPACE_IMPACT: SourceFamilyRef = { family: "impact", branch: "workspace" };
 const WORKSPACE: SourceFamilyRef = { family: "workspace" };
 const DECISIONS: SourceFamilyRef = { family: "decisions" };
+const CONSEQUENCES: SourceFamilyRef = { family: "contract_consequences" };
 const PATH = "src/OrderController.java";
 const HANDLER = "com.shop.OrderController.create";
 
@@ -615,4 +616,49 @@ test("a connection proven by several compatible read combinations is one connect
   const declarations = connections(compose(wide.build(), scoped.build(), outline.build()).graph, "handler-declaration");
   assert.equal(declarations.length, 1);
   assert.deepEqual(new Set(declarations[0]?.supports.map((support) => support.read)), new Set([wide.read, scoped.read, outline.read]));
+});
+
+// contract_consequences parts join through the relations that already exist (RFC-0023 "Compose"): no rule of their own.
+
+type ConsequenceKind = "consequence-use" | "consequence-producer" | "derived-contract-change";
+const HYPOTHESIS = { method: "GET", path: "/orders/{id}", target: "response", property: "customer", change: "removed" } as const;
+
+/** The three part kinds over the same handler and the given places, each citing one place of its own. */
+function consequenceParts(builder: SetBuilder, handler: AnchorId, places: Record<ConsequenceKind, ReturnType<SetBuilder["evidence"]>>) {
+  const call = { file: builder.file("src/app/order.service.ts", { snapshot: sha("web"), repo: "web" }), line: 3, symbol: "OrderService.find" };
+  const link = { id: "link", basis: "exact" as const, call, handler };
+  const use = builder.part({ kind: "consequence-use", repo: "web", hypothesis: HYPOTHESIS, place: places["consequence-use"], link, verdict: { kind: "review", reason: "consumed" }, operation: { steps: [], end: { kind: "none" } }, path: "customer", changed: "customer", chain: [] });
+  const producer = builder.part({ kind: "consequence-producer", repo: "web", hypothesis: HYPOTHESIS, place: builder.evidence({ path: "src/app/order.service.ts", line: 40 }, { snapshot: sha("web"), repo: "web" }), link, verdict: { kind: "incompatible", witness: { value: "absent", at: places["consequence-producer"], conditions: [] } }, path: "customer", chain: [] });
+  const derived = builder.part({ kind: "derived-contract-change", hypothesis: HYPOTHESIS, operation: "GET /orders/{id}", property: "customer", places: { base: places["derived-contract-change"], head: builder.evidence({ path: "api/openapi.yaml", line: 12 }, { snapshot: sha("shop"), repo: "shop" }) }, handlers: [handler] });
+  return { "consequence-use": use, "consequence-producer": producer, "derived-contract-change": derived };
+}
+
+test("every consequence part kind joins any other part that cites an equal place, through shares-evidence alone", () => {
+  const consequences = new SetBuilder("consequences", CONSEQUENCES, sha("shop"));
+  const other = new SetBuilder("other", WORKSPACE, sha("web"));
+  const kinds: ConsequenceKind[] = ["consequence-use", "consequence-producer", "derived-contract-change"];
+  const wherever = { "consequence-use": { path: "src/app/a.ts", line: 5 }, "consequence-producer": { path: "src/app/b.ts", line: 6 }, "derived-contract-change": { path: "api/openapi.yaml", line: 10 } };
+  const repoOf = { "consequence-use": "web", "consequence-producer": "web", "derived-contract-change": "shop" };
+  const places = Object.fromEntries(kinds.map((kind) => [kind, consequences.evidence(wherever[kind], { snapshot: sha(repoOf[kind]), repo: repoOf[kind] })])) as Record<ConsequenceKind, ReturnType<SetBuilder["evidence"]>>;
+  const handler = consequences.anchor(consequences.file(PATH, { snapshot: sha("shop") }), HANDLER, 10, 20);
+  const own = consequenceParts(consequences, handler, places);
+  const cited = Object.fromEntries(kinds.map((kind) => [kind, other.part({ kind: "outward-name", origin: other.origin(sha(repoOf[kind])), name: kind, kindName: "dependency", evidence: [other.evidence(wherever[kind], { snapshot: sha(repoOf[kind]), repo: repoOf[kind] })], disposition: "unserved" })]));
+  const { graph } = compose(consequences.build(), other.build());
+  const shared = relations(graph, "shares-evidence").map((relation) => (relation.value.kind === "shares-evidence" ? relation.value.parts : []));
+  for (const kind of kinds) assert.ok(shared.some((parts) => parts.length === 2 && parts.includes(own[kind]) && parts.includes(cited[kind]!)), `${kind} joins through its place`);
+  assert.ok(graph.relations.every((relation) => relation.value.kind === "shares-evidence"), "no relation of their own");
+});
+
+test("a consequence part whose handler or place is local to its read is reported as missing provenance", () => {
+  const consequences = new SetBuilder("consequences", CONSEQUENCES, sha("shop"));
+  const handler = consequences.anchor(consequences.file(PATH, { snapshot: "query-context" }), HANDLER, 10, 20);
+  const own = consequenceParts(consequences, handler, {
+    "consequence-use": consequences.evidence({ path: "src/app/a.ts", line: 5 }, { snapshot: "query-context", repo: "elsewhere" }),
+    "consequence-producer": consequences.evidence({ path: "src/app/b.ts", line: 6 }, { snapshot: sha("web"), repo: "web" }),
+    "derived-contract-change": consequences.evidence({ path: "api/openapi.yaml", line: 10 }, { snapshot: sha("shop"), repo: "shop" }),
+  });
+  const missing = issues(compose(consequences.build()), "missing-provenance").flatMap((issue) => (issue.kind === "missing-provenance" ? [issue.part] : []));
+  assert.ok(missing.includes(own["consequence-use"]), "a use with a handler and a place outside any snapshot");
+  assert.ok(missing.includes(own["derived-contract-change"]), "a derived change that names that handler");
+  assert.ok(missing.includes(own["consequence-producer"]), "a producer that names that handler");
 });
