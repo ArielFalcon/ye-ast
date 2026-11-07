@@ -292,6 +292,7 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
   }
 
   function resolveSimple(head: string, scope: Scope, strict: boolean): TypeLookup | "unsettled" | LocalType {
+    if (strict && scope.file.conflictingSingleImports.has(head)) return "unsettled";
     const lexical = lexicalType(head, scope, strict);
     if (lexical !== undefined) return lexical;
     const { file } = scope;

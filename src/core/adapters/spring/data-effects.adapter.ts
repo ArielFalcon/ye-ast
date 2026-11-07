@@ -3,9 +3,14 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import type { DataEffectReader, PlacedDataEffect } from "../../domain/trace/data-effect-site.ts";
 import type { DataEffect } from "../../domain/trace/trace-fact.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
-import { argumentsOf, fieldBindings, typeNameOf } from "./java-members.ts";
-import { invocationsOf, receiverOf, type Invocation, type Receiver, type Resolved } from "./java-invocations.ts";
-import { createJavaProject, describeFile, qualifiedTypeName, scopeOf, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import type { Node } from "web-tree-sitter";
+import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
+import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
+import { annotationAt, resolve } from "./java-declared-types.ts";
+import { enclosingType } from "./java-root-bindings.ts";
+import { argumentsOf, typeNameOf } from "./java-members.ts";
+import { invocationsOf, type Invocation } from "./java-invocations.ts";
+import { createJavaProject, describeFile, readSignature, sameSignature, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 import { DATA_CLIENTS, ENTITY_OPERATIONS, QUERY_CONFIGURATION, QUERY_FACTORIES, QUERY_OPERATIONS, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
 
 export function createJavaDataEffects(parser: JavaParser): DataEffectReader {
@@ -23,9 +28,10 @@ export function createJavaDataEffects(parser: JavaParser): DataEffectReader {
         return [describeFile(path, parsed.value.root)];
       });
       const project = createJavaProject(files);
+      const bindings = new Map(files.map((file) => [file, new Map(javaReceiverBindings(file.root, true).map((binding) => [`${binding.line}:${binding.column}:${binding.member}`, binding]))]));
       for (const type of project.types) for (const call of invocationsOf(type)) {
-        const effect = effectAt(call, project);
-        if (effect !== undefined) sites.push({ site: { file: type.file.path, line: effect.line, effect }, column: call.node.startPosition.column });
+        const effect = effectAt(call, project, bindings.get(type.file)!);
+        if (effect !== undefined) sites.push({ site: { file: type.file.path, line: call.node.startPosition.row + 1, effect: effect === false ? undefined : effect }, column: call.node.startPosition.column });
       }
       return sites.sort((a, b) => compareText(a.site.file, b.site.file) || a.site.line - b.site.line || (a.column ?? 0) - (b.column ?? 0));
     } finally {
@@ -34,72 +40,89 @@ export function createJavaDataEffects(parser: JavaParser): DataEffectReader {
   } };
 }
 
-function effectAt(call: Invocation, project: JavaProject): DataEffect | undefined {
+function effectAt(call: Invocation, project: JavaProject, bindings: ReadonlyMap<string, ReceiverBinding>): DataEffect | false | undefined {
   const object = call.node.childForFieldName("object");
   const operation = call.node.childForFieldName("name")?.text ?? "";
   if (object === null) return undefined;
-  const fields = { fieldOf: (type: TypeDecl, name: string) => {
-    for (const owner of project.classChain(type)) {
-      const binding = fieldBindings(owner).get(name);
-      if (binding !== undefined) return { binding, owner };
-    }
-    return undefined;
-  } };
+  const candidate = REPOSITORY_OPERATIONS.has(operation) || [...DATA_CLIENTS.values()].some((row) => row.has(operation));
+  const receiverAt = (invocation: Node) => {
+    const binding = bindings.get(`${invocation.startPosition.row + 1}:${invocation.startPosition.column + 1}:${invocation.childForFieldName("name")?.text ?? ""}`);
+    if (binding?.holds.kind !== "annotated") return undefined;
+    let node = annotationAt(call.type.file.root, binding.holds.line, binding.holds.column, binding.holds.type);
+    if (node === undefined) return undefined;
+    while (node.parent !== null && ["scoped_type_identifier", "generic_type"].includes(node.parent.type)) node = node.parent;
+    return { node, unproven: binding.unproven === true, resolved: resolve(node, call.type.file, project, enclosingType(node, call.type.file, project), node, true) };
+  };
   let query = object;
+  let receiverCall = call.node;
   let configured = false;
   while (query.type === "method_invocation" && QUERY_CONFIGURATION.has(query.childForFieldName("name")?.text ?? "")) {
     const previous = query.childForFieldName("object");
-    if (previous === null) return undefined;
+    if (previous === null) return candidate ? false : undefined;
+    receiverCall = query;
     query = previous;
     configured = true;
   }
-  const receiver = receiverOf(query, call, project, fields);
-  if (receiver !== undefined && !unambiguous(receiver, call)) return undefined;
-  let resolved: Resolved | undefined = receiver?.resolved;
-  if (resolved === undefined && query.type === "method_invocation" && QUERY_FACTORIES.has(query.childForFieldName("name")?.text ?? "")) {
-    const root = query.childForFieldName("object");
-    const held = root === null ? undefined : receiverOf(root, call, project, fields);
-    const factory = held === undefined || !unambiguous(held, call) ? undefined : held.resolved;
-    if (factory !== undefined && "fqn" in factory && DATA_CLIENTS.get(factory.fqn) === ENTITY_OPERATIONS) resolved = { fqn: factory.fqn.replace(/EntityManager$/, "Query") };
+  let receiver = receiverAt(receiverCall);
+  let resolved = receiver?.resolved;
+  if (query.type === "method_invocation" && QUERY_FACTORIES.has(query.childForFieldName("name")?.text ?? "")) {
+    receiver = receiverAt(query);
+    const factory = receiver?.resolved;
+    resolved = factory?.kind === "platform" && DATA_CLIENTS.get(factory.fqn) === ENTITY_OPERATIONS ? { kind: "platform", fqn: factory.fqn.replace(/EntityManager$/, "Query") } : undefined;
   }
-  if (resolved === undefined || (configured && (!("fqn" in resolved) || DATA_CLIENTS.get(resolved.fqn) !== QUERY_OPERATIONS))) return undefined;
-  const variables = call.type.methods.find((method) => method.node.id === call.member?.id)?.typeVariables ?? call.type.typeVariables;
-  const actuals = receiver?.binding.node.childForFieldName("type")?.namedChildren.find((node) => node.type === "type_arguments")?.namedChildren ?? [];
-  const entityOf = (node: (typeof actuals)[number]) => variables.has(node.text) || node.type === "wildcard" ? undefined : qualifiedTypeName(typeNameOf(node), scopeOf(receiver?.owner ?? call.type), project);
-  if (receiver?.binding.node.type === "local_variable_declaration") {
-    const block = receiver.binding.node.parent;
-    if (block === null || call.node.startIndex < receiver.binding.node.startIndex || call.node.startIndex > block.endIndex || call.node.startIndex < block.startIndex) return undefined;
+  if (resolved === undefined) {
+    if (receiver === undefined) return undefined;
+    const identity = project.typeIdentity(typeNameOf(receiver.node), { file: call.type.file, type: enclosingType(receiver.node, call.type.file, project), at: receiver.node });
+    if (identity !== undefined && !identity.startsWith("context:") && !DATA_CLIENTS.has(identity) && !REPOSITORY_TYPES.has(identity)) return undefined;
+    return candidate ? false : undefined;
   }
-  if ("decl" in resolved) {
-    const hierarchy = project.hierarchy(resolved.decl).types;
-    const methods = hierarchy.flatMap((owner) => owner.methods.filter((method) => method.name === operation));
-    if (methods.some((method) => method.hasBody)) return undefined;
-    const entities = repositoryEntities(resolved.decl, project, new Map([...resolved.decl.typeVariables].map((variable, index) => [variable, actuals[index] === undefined ? undefined : entityOf(actuals[index])])));
+  if (resolved.kind === "library") return undefined;
+  if (configured && (resolved.kind !== "platform" || DATA_CLIENTS.get(resolved.fqn) !== QUERY_OPERATIONS)) return undefined;
+  const actuals = receiver?.node.namedChildren.find((node) => node.type === "type_arguments")?.namedChildren ?? [];
+  if (resolved.kind === "repository") {
+    if (resolved.type === undefined) return undefined;
+    const type = resolved.type;
+    const entities = repositoryEntities(type, project, new Map([...type.typeVariables].map((variable, index) => [variable, actuals[index] === undefined ? undefined : entityName(actuals[index], call.type, project)])));
     if (entities.length === 0) return undefined;
+    if (receiver?.unproven === true) return false;
+    const named = project.hierarchy(type).types.flatMap((owner) => owner.methods.filter((method) => method.name === operation));
+    const methods = named.filter((method) => method.parameterTypes.length === argumentsOf(call.node).length);
+    if (named.some((method) => method.node.childForFieldName("parameters")?.namedChildren.some((node) => node.type === "spread_parameter"))) return false;
+    const signatures = methods.map((method) => readSignature(method, project));
+    if (methods.length > 1 || (methods.length > 0 && signatures.some((signature) => signature === undefined || !sameSignature(signatures[0]!, signature)))) return false;
+    if (named.length > 0 && methods.length === 0) return false;
+    if (methods.some((method) => method.hasBody)) return undefined;
     const annotations = queryAnnotations(methods, project);
+    if (annotations.has(undefined)) return false;
     let access = annotations.has("org.springframework.data.jpa.repository.Modifying") ? "write" as const : annotations.has("org.springframework.data.jpa.repository.Query") ? "read" as const : REPOSITORY_OPERATIONS.get(operation);
     if (access === undefined && methods.length > 0) {
       if (/^(?:find|read|get|query|search|stream|count|exists)(?:By|AllBy|First|Top)/.test(operation)) access = "read";
       else if (/^(?:delete|remove)(?:By|AllBy)/.test(operation)) access = "write";
     }
-    if (access === undefined) return undefined;
+    if (access === undefined) return methods.length > 0 ? false : undefined;
     const distinct = [...new Set(entities)];
     const entity = distinct.length === 1 ? distinct[0] : undefined;
     return { kind: "data", line: call.node.startPosition.row + 1, operation, access, ...(entity === undefined ? {} : { target: { kind: "entity", name: entity } }) };
   }
+  if (receiver?.unproven === true && candidate && (REPOSITORY_TYPES.has(resolved.fqn) || DATA_CLIENTS.has(resolved.fqn))) return false;
   if (REPOSITORY_TYPES.has(resolved.fqn)) {
     const access = REPOSITORY_OPERATIONS.get(operation);
     if (access === undefined) return undefined;
-    const first = actuals[0];
-    const entity = first === undefined ? undefined : entityOf(first);
+    const entity = actuals[0] === undefined ? undefined : entityName(actuals[0], call.type, project);
     return { kind: "data", line: call.node.startPosition.row + 1, operation, access, ...(entity === undefined ? {} : { target: { kind: "entity", name: entity } }) };
   }
   const vocabulary = DATA_CLIENTS.get(resolved.fqn);
   const access = vocabulary?.get(operation);
   if (access === undefined) return undefined;
   const first = argumentsOf(call.node)[0];
-  const entity = vocabulary === ENTITY_OPERATIONS && operation === "find" && first?.type === "class_literal" ? qualifiedTypeName(typeNameOf(first.namedChildren[0]), scopeOf(call.type), project) : undefined;
+  const entity = vocabulary === ENTITY_OPERATIONS && operation === "find" && first?.type === "class_literal" && first.namedChildren[0] !== undefined ? entityName(first.namedChildren[0], call.type, project) : undefined;
   return { kind: "data", line: call.node.startPosition.row + 1, operation, access, ...(entity === undefined ? {} : { target: { kind: "entity", name: entity } }) };
+}
+
+function entityName(node: Node, type: TypeDecl, project: JavaProject, scope = { type: enclosingType(node, type.file, project) }): string | undefined {
+  const found = resolve(node, type.file, project, scope.type, node);
+  if (found?.kind !== "repository" || found.type === undefined) return undefined;
+  return project.typeIdentity(typeNameOf(node), { file: type.file, type: scope.type, at: node }) === found.type.fqn ? found.type.fqn : undefined;
 }
 
 /** Undefined entries retain proven repository membership without inventing an entity for a raw or open generic. */
@@ -109,14 +132,12 @@ function repositoryEntities(type: TypeDecl, project: JavaProject, env: ReadonlyM
   const clause = type.kind === "interface" ? type.node.namedChildren.find((child) => child.type === "extends_interfaces") : type.node.childForFieldName("interfaces");
   const parents = [...(clause?.namedChildren.find((child) => child.type === "type_list")?.namedChildren ?? []), ...(type.node.childForFieldName("superclass")?.namedChildren ?? [])];
   return parents.flatMap((parent) => {
-    const name = typeNameOf(parent);
-    if (type.file.conflictingSingleImports.has(name.split(".")[0] ?? "")) return [];
     const args = parent.namedChildren.find((child) => child.type === "type_arguments")?.namedChildren ?? [];
-    const values = args.map((arg) => env.has(arg.text) ? env.get(arg.text) : type.typeVariables.has(arg.text) || arg.type === "wildcard" ? undefined : qualifiedTypeName(typeNameOf(arg), scopeOf(type), project));
-    const declared = project.lookupType(name, scopeOf(type));
-    if (declared === "ambiguous") return [];
+    const values = args.map((arg) => env.has(arg.text) ? env.get(arg.text) : type.typeVariables.has(arg.text) || arg.type === "wildcard" ? undefined : entityName(arg, type, project, { type: type.outer }));
+    const parentType = resolve(parent, type.file, project, type.outer, parent);
+    const declared = parentType?.kind === "repository" ? parentType.type : undefined;
     if (declared !== undefined) return repositoryEntities(declared, project, new Map([...declared.typeVariables].map((variable, index) => [variable, values[index]])), next);
-    const fqn = qualifiedTypeName(name, scopeOf(type), project);
+    const fqn = parentType?.kind === "platform" ? parentType.fqn : undefined;
     return fqn !== undefined && REPOSITORY_TYPES.has(fqn) ? [values[0]] : [];
   });
 }
@@ -126,13 +147,12 @@ function queryAnnotations(methods: readonly MethodDecl[], project: JavaProject):
   for (const method of methods) {
     const modifiers = method.node.namedChildren.find((child) => child.type === "modifiers");
     for (const node of modifiers?.namedChildren ?? []) {
-      if (node.type === "annotation" || node.type === "marker_annotation") found.add(qualifiedTypeName(node.childForFieldName("name")?.text ?? "", scopeOf(method.owner), project));
+      if (node.type === "annotation" || node.type === "marker_annotation") {
+        const name = node.childForFieldName("name");
+        const annotation = name === null ? undefined : resolve(name, method.owner.file, project, method.owner, name);
+        found.add(annotation?.kind === "platform" ? annotation.fqn : undefined);
+      }
     }
   }
   return found;
-}
-
-function unambiguous(receiver: Receiver, call: Invocation): boolean {
-  const file = receiver.owner?.file ?? call.type.file;
-  return !file.conflictingSingleImports.has(receiver.binding.typeName.split(".")[0] ?? "");
 }

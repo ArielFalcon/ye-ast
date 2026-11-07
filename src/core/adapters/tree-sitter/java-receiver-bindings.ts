@@ -17,8 +17,9 @@ const REFLECTIVE = /Field|VarHandle|Getter|Setter/;
  * the name is declared in the type body, to a field; `this.r` to a field. A field counts only when the enclosing type
  * body declares it once and `private`, and the file names it through no receiver but `this` and reads no field by
  * reflection. The binding holds the type where it is written, by its first name (ADR-0029 decision 9).
+ * `includeUnproven` also retains annotation candidates marked unproven; they prove no receiver value.
  */
-export function javaReceiverBindings(root: Node): ReceiverBinding[] {
+export function javaReceiverBindings(root: Node, includeUnproven = false): ReceiverBinding[] {
   const invocations: Node[] = [];
   const otherReceivers = new Set<string>();
   let reflects = false;
@@ -32,12 +33,15 @@ export function javaReceiverBindings(root: Node): ReceiverBinding[] {
   };
   visit(root);
 
-  const fieldType = (at: Node, name: string): Node | undefined => {
+  const fieldType = (at: Node, name: string): { node: Node; unproven: boolean } | undefined => {
     const body = enclosingBody(at);
     const declared = body === undefined ? [] : fieldsOf(body).filter((declarator) => declarator.childForFieldName("name")?.text === name);
     const field = declared.length === 1 ? declared[0]!.parent : undefined;
-    if (field?.type !== "field_declaration" || reflects || otherReceivers.has(name) || !isPrivate(field)) return undefined;
-    return field.childForFieldName("type") ?? undefined;
+    if (field?.type !== "field_declaration") return undefined;
+    const unproven = reflects || otherReceivers.has(name) || !isPrivate(field);
+    if (unproven && !includeUnproven) return undefined;
+    const node = field.childForFieldName("type");
+    return node === null ? undefined : { node, unproven };
   };
 
   return invocations.flatMap((invocation): ReceiverBinding[] => {
@@ -45,18 +49,31 @@ export function javaReceiverBindings(root: Node): ReceiverBinding[] {
     const member = invocation.childForFieldName("name")?.text;
     let receiver: string | undefined;
     let type: Node | undefined;
+    let unproven = false;
+    const fieldAt = (at: Node, name: string) => {
+      const held = fieldType(at, name);
+      unproven = held?.unproven ?? false;
+      return held?.node;
+    };
     const field = thisField(object);
     if (field !== undefined) {
       receiver = field;
-      type = fieldType(object, field);
+      type = fieldAt(object, field);
     } else if (object.type === "identifier") {
       receiver = object.text;
       const local = localBinding(object);
-      type = local !== undefined ? statedType(local) : declaresVariable(enclosingBody(object), receiver) ? undefined : fieldType(object, receiver);
+      if (local !== undefined) type = statedType(local);
+      else {
+        const shadowed = declaresVariable(enclosingBody(object), receiver);
+        if (!shadowed || includeUnproven) {
+          type = fieldAt(object, receiver);
+          unproven ||= shadowed;
+        }
+      }
     }
     const head = type === undefined ? undefined : headOf(type);
     if (receiver === undefined || member === undefined || head === undefined) return [];
-    return [{ line: invocation.startPosition.row + 1, column: invocation.startPosition.column + 1, receiver, member, holds: { kind: "annotated", type: head.text, line: head.startPosition.row + 1, column: head.startPosition.column + 1 } }];
+    return [{ line: invocation.startPosition.row + 1, column: invocation.startPosition.column + 1, receiver, member, ...(unproven ? { unproven: true } : {}), holds: { kind: "annotated", type: head.text, line: head.startPosition.row + 1, column: head.startPosition.column + 1 } }];
   });
 }
 

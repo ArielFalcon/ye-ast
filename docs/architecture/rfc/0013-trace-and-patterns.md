@@ -755,3 +755,22 @@ equal; roots, steps, existing HTTP/message effects, cuts and reading plans are u
 Conformance fixtures were RED first, GREEN, then mutation-checked, including generic substitution, override bodies,
 query annotation precedence, exact ownership, function values and fluent JPA query execution.
 `npm run check`: 3714 tests, 3714 pass, 0 fail; typecheck and arch:check pass. MCP catalogue: 36,100 bytes; SCHEMA 0.21.0 unchanged.
+
+
+### Data effects: identity correction (independent review B1–B3)
+
+Receiver annotations are read at the call's exact lexical binding by the same `javaReceiverBindings` reader trace uses,
+then resolved by the shared strict Java resolver (`resolve` / `JavaProject.bindName`). A local or project type is never
+classified as a framework from its spelling. The syntax reader may supply an explicitly unproven annotation candidate
+for a field whose value ownership it cannot prove; only data reads these candidates, and they can produce cuts only.
+Other trace readers retain the existing default, proven bindings. A resolved non-data repository or library type is
+not a data site. No fallback to a same-named field is allowed under a local, parameter, loop, lambda or catch binding.
+Entity arguments and JPA class literals use the same lexical resolver and `typeIdentity`; an unplaced local type or
+unproven identity yields no target.
+
+For a project-declared repository method, access and body semantics require exactly one applicable declaration with
+one signature proved by `readSignature` / `sameSignature`. Arity filters candidates but never proves type identity.
+Overloads, multiple inherited declarations, varargs, open type parameters or unproved parameter/annotation identities
+produce a data-effect cut when owned by an expanded body, never read/write or combined annotations. Fixed framework
+API rows retain the access their vocabulary declares for the overloads they cover. The baseline local-class false
+`complete` is outside this correction; wildcard-import coverage remains advisory. SCHEMA is unchanged.
