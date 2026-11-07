@@ -13,7 +13,10 @@ export interface DeclaredMemberNames {
 }
 
 /**
- * A member call `r.m(...)` or `this.r.m(...)` whose receiver the source binds to one kind of value. A bare `r` is bound
+ * A member call `r.m(...)` or `this.r.m(...)` whose receiver the source binds to one kind of value, or a member call
+ * whose receiver is no name: a call result (`returned`) or another expression (`computed`), with `receiver` empty. The
+ * rules see a receiver through parentheses, a non-null `!` and `satisfies` only; one they see through a wrapper and do
+ * not bind, a type assertion, and any receiver of an optional call is `computed`. A bare `r` is bound
  * when every store into the binding (each initializer and each assignment) stores one kind: a literal of a library type,
  * an instance of one class the file names in `new`, or an instance of a class the file declares; failing that, when its
  * one declaration, a parameter or a variable, is annotated with one type. `this.r` is bound when the enclosing class
@@ -40,6 +43,10 @@ export interface ReceiverBinding {
  */
 export type ReceiverValue =
   | { kind: "literal"; type: "RegExp" | "Array" | "String" }
+  /** The value a call returns, `name` the last name of its callee, at the place the call starts. */
+  | { kind: "returned"; name: string; line: number; column: number }
+  /** An expression no rule binds: an element access, an `await`, a conditional, a `new` of no plain name. */
+  | { kind: "computed" }
   | { kind: "constructed"; name: string; line: number; column: number }
   | { kind: "declared"; name: string; line: number }
   | { kind: "annotated"; type: string; line: number; column: number };
@@ -69,6 +76,8 @@ export interface DeclaredCallable {
   body: boolean;
   /** Neither static, private nor final, nor a function outside a type. */
   overridable: boolean;
+  /** The type its declaration states it returns, as an annotation states a receiver's (`ReceiverValue` `annotated`). */
+  returns?: Extract<ReceiverValue, { kind: "annotated" }>;
 }
 
 /**

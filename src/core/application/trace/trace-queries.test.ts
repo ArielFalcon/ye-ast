@@ -3,7 +3,7 @@ import test from "node:test";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Fact, Finding } from "../../domain/shared/fact.ts";
 import type { TraceStep, TraceValue } from "../../domain/trace/trace-fact.ts";
-import type { DeclaredType, DispatchSite, DispatchTargets, ImportOriginSite, ReceiverCallSite, ReceiverMethod, ReplacedRoots, ResolvedNameSite, UseSite } from "../../ports/import-origins.port.ts";
+import type { DeclaredType, DispatchSite, DispatchTargets, ImportOriginSite, ReceiverCallSite, ReceiverMethod, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget, TraceRequest, TraceTarget } from "../../ports/trace-queries.port.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
@@ -52,12 +52,14 @@ interface Options {
   receiverBindings?: Readonly<Record<string, readonly ReceiverBinding[]>>;
   /** The roots the snapshot replaces; none by default. */
   replaced?: ReplacedRoots;
+  /** What binds the root of a resolved call's receiver, by the name the edge reaches; unknown by default. */
+  receiverRoots?: Readonly<Record<string, RootBinding>>;
+  /** The callables each source's syntax states, by path. */
+  callables?: Readonly<Record<string, readonly DeclaredCallable[]>>;
   /** The type each annotation names, by the name it is spelled with; unknown by default. */
   declared?: Readonly<Record<string, DeclaredType>>;
   /** The member calls the relations prove. */
   proofs?: Pick<RelationExtraction, "memberUses" | "externalUses">;
-  /** The callables each source's syntax states, by path. */
-  callables?: Readonly<Record<string, readonly DeclaredCallable[]>>;
   /** The bodies the declared hierarchy proves a body-less method runs, by its name; unknown by default. */
   dispatch?: Readonly<Record<string, DispatchTargets>>;
   /** The template relations, each component's template and the template calls they prove, as the relations read them; none by default. */
@@ -101,6 +103,7 @@ function setup(options: Options) {
     memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: options.callables?.[file.path] ?? [], receiverBindings: options.receiverBindings?.[file.path] ?? [] }) },
     importOrigins: () => ({
       replacedRoots: async () => options.replaced ?? written(),
+      rootBindings: async (sites: readonly UseSite[]) => sites.map((site) => options.receiverRoots?.[site.spelled] ?? { kind: "unknown" }),
       declaredTypes: async (sites: readonly UseSite[]) => sites.map((site) => options.declared?.[site.spelled] ?? { kind: "unknown" }),
       dispatchTargets: async (sites: readonly DispatchSite[]) => sites.map((site) => options.dispatch?.[site.name] ?? { kind: "unknown" }),
       receiverMethods: async (sites: readonly ReceiverCallSite[]) => (options.onReceivers?.(sites.map((site) => site.member)), sites.map((site) => options.receivers?.[site.member] ?? { kind: "unknown" })),
@@ -973,4 +976,145 @@ test("a page's template children run in the order the template first uses them, 
   };
   const fact = await factOf({ nodes: [...PAGE_NODES, ...used], edges: PAGE_EDGES, unresolved: [...PAGE_OUTWARD, OUTWARD_CALL("Mark", B, 31), OUTWARD_CALL("Fmt", B, 43)], relations, findings: [page("/p", handlerAt(A, "Page", 1))] }, [{ kind: "ui-route", name: "/p" }]);
   assert.deepEqual(valueOf(fact).steps.filter((step) => step.via === "template").map((step) => step.symbol), ["Mark", "Fmt", "Child"]);
+});
+
+/**
+ * A call `store.save()` at line 9, column 5 of `run` that the index resolved to `Repo.save`, whose receiver `store` is a
+ * parameter of `run` the source binds as `holds` says, if at all.
+ */
+const resolvedOnParameter = (holds?: ReceiverBinding["holds"]): Options => ({
+  nodes: [SVC, RUN, REPO, REPO_SAVE, fakeNode("Twin", "class", A, 22, 28), fakeNode("Twin.save", "method", A, 24, 26, "save")],
+  edges: [...CONTAINS, { from: "Repo", to: "Repo.save", kind: "contains" }, { from: "Twin", to: "Twin.save", kind: "contains" }, call("run", "Repo.save", 9, 4)],
+  unresolved: [OUTWARD_CALL("Repo.save", B, 4), OUTWARD_CALL("Twin.save", A, 25)],
+  receiverRoots: { save: { kind: "local", root: "store" } },
+  receiverBindings: holds === undefined ? {} : { [A]: [{ line: 9, column: 5, receiver: "store", member: "save", holds }] },
+  sources: [{ path: A, content: "" }],
+});
+const PARAMETER_CUT = [["unresolved-link", ["src/a.ts:9 save", "src/a.ts::Twin.save", "src/b.ts::Repo.save"]]];
+
+test("a call the index resolved on a parameter or a variable nothing proves, or a method passed from one, is a cut listing the declarations of its name, never a step", async () => {
+  const parameter = await factOf(resolvedOnParameter());
+  const moduleVariable = await factOf({ ...resolvedOnParameter(), receiverRoots: { save: { kind: "declared", root: "store", lines: [2], captured: false } }, nodes: [...resolvedOnParameter().nodes, fakeNode("store", "constant", A, 2)] });
+  const passed = await factOf({ ...resolvedOnParameter(), edges: [...resolvedOnParameter().edges!.slice(0, -1), { from: "run", to: "Repo.save", kind: "references", line: 9, column: 4 }] });
+
+  for (const fact of [parameter, moduleVariable, passed]) {
+    assert.deepEqual(cutsOf(fact), PARAMETER_CUT);
+    assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["run"]);
+  }
+});
+
+test("a call the index resolved on a class, an import, this or a root nothing binds stays a step", async () => {
+  for (const binding of [
+    { kind: "declared", root: "Repo", lines: [1], captured: false },
+    { kind: "import", root: "store", origin: { kind: "repository", file: B } },
+    { kind: "this", member: "save" },
+    { kind: "unknown" },
+  ] satisfies RootBinding[]) {
+    const fact = await factOf({ ...resolvedOnParameter(), nodes: [...resolvedOnParameter().nodes, fakeNode("Repo", "class", A, 1, 3)], receiverRoots: { save: binding } });
+    assert.equal(fact.status, "complete", binding.kind);
+    assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["run", "save"], binding.kind);
+  }
+});
+
+test("a call the index resolved on a variable into an interface keeps its dispatch cut", async () => {
+  const nodes = [SVC, RUN, fakeNode("Port", "interface", B, 1, 3), fakeNode("Port.send", "method", B, 2, 2, "send")];
+  const edges: FakeEdge[] = [...CONTAINS, { from: "Port", to: "Port.send", kind: "contains" }, call("run", "Port.send", 8, 4)];
+
+  const fact = await factOf({ nodes, edges, receiverRoots: { send: { kind: "local", root: "port" } } });
+
+  assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/b.ts:2 send"]]]);
+});
+
+test("a call the index resolved on a variable the source binds to a constructed class, or one the relations prove, is a step at the proven method", async () => {
+  const constructed = await factOf({ ...resolvedOnParameter({ kind: "constructed", name: "Twin", line: 8, column: 17 }), roots: { Twin: { kind: "repository", file: A, bare: true } } });
+  const proven = await factOf({ ...resolvedOnParameter(), proofs: { memberUses: [{ ...SAVE_PROOF, reference: { ...SAVE_PROOF.reference, name: "store.save" } }], externalUses: [] } });
+
+  assert.deepEqual(valueOf(constructed).steps.slice(1).map(({ symbol, file, at }) => [symbol, file, at]), [["save", A, { line: 9, column: 5 }]]);
+  assert.deepEqual(valueOf(proven).steps.slice(1).map(({ symbol, file, at }) => [symbol, file, at]), [["save", B, { line: 9, column: 5 }]]);
+  for (const fact of [constructed, proven]) assert.equal(fact.status, "complete");
+});
+
+/** `resolvedOnParameter` annotated with `Repo`, which the import origins name nominal, and a class `Sub` below it that may override `save`. */
+const nominalCall = (extra: { nodes?: FakeNode[]; edges?: FakeEdge[]; unresolved?: FakeUnresolved[] } = {}): Options => {
+  const base = resolvedOnParameter({ kind: "annotated", type: "Repo", line: 8, column: 20 });
+  return {
+    ...base,
+    nodes: [...base.nodes, ...(extra.nodes ?? [])],
+    edges: [...base.edges!, ...(extra.edges ?? [])],
+    unresolved: [...base.unresolved!, ...(extra.unresolved ?? [])],
+    declared: { Repo: { kind: "nominal", file: B, name: "Repo", line: 1 } },
+    callables: { [B]: [{ name: "save", start: 3, nameLine: 3, body: true, overridable: true }] },
+    sources: [{ path: A, content: "" }, { path: B, content: "" }],
+  };
+};
+const SUB = fakeNode("Sub", "class", "src/c.ts", 1, 5);
+const SUB_SAVE = fakeNode("Sub.save", "method", "src/c.ts", 2, 4, "save");
+
+test("a call on a receiver annotated with a nominal class is a step at the class's method, with a dispatch cut when a subclass overrides it", async () => {
+  const alone = await factOf(nominalCall());
+  const overridden = await factOf(nominalCall({ nodes: [SUB, SUB_SAVE], edges: [{ from: "Sub", to: "Sub.save", kind: "contains" }, { from: "Sub", to: "Repo", kind: "extends" }] }));
+
+  assert.equal(alone.status, "complete");
+  for (const fact of [alone, overridden]) assert.deepEqual(valueOf(fact).steps.slice(1).map(({ symbol, file }) => [symbol, file]), [["save", B]]);
+  assert.deepEqual(cutsOf(overridden), [["unresolved-link", ["src/b.ts:3 save", "src/c.ts::Sub.save"]]]);
+});
+
+test("a nominal class's inherited method is the step, and a class the index does not place, or a declaration of the name under heritage the index leaves unresolved, keeps the cut", async () => {
+  const inherited = await factOf({
+    ...nominalCall(),
+    nodes: [SVC, RUN, REPO, fakeNode("Base", "class", "src/c.ts", 1, 9), fakeNode("Base.save", "method", "src/c.ts", 2, 4, "save")],
+    edges: [...CONTAINS, { from: "Base", to: "Base.save", kind: "contains" }, { from: "Repo", to: "Base", kind: "extends" }, call("run", "Base.save", 9, 4)],
+    unresolved: [OUTWARD_CALL("Base.save", "src/c.ts", 3)],
+  });
+  const unplaced = await factOf({ ...nominalCall(), declared: { Repo: { kind: "nominal", file: B, name: "Store", line: 1 } } });
+  const unresolvedHeritage = await factOf(nominalCall({ nodes: [SUB, SUB_SAVE], edges: [{ from: "Sub", to: "Sub.save", kind: "contains" }], unresolved: [{ from: "Sub", name: "Alias", kind: "extends", file: "src/c.ts", line: 1, column: 18 }] }));
+  const heritageOnValue = await factOf(nominalCall({ nodes: [SUB, SUB_SAVE, fakeNode("Alias", "constant", "src/c.ts", 7)], edges: [{ from: "Sub", to: "Sub.save", kind: "contains" }, { from: "Sub", to: "Alias", kind: "extends" }] }));
+
+  assert.deepEqual(valueOf(inherited).steps.slice(1).map(({ symbol, file }) => [symbol, file]), [["save", "src/c.ts"]]);
+  for (const fact of [unplaced, unresolvedHeritage, heritageOnValue]) assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["run"]);
+});
+
+test("a call the index resolved on a field of this is a step only at what the relations or the field's binding prove, otherwise a cut", async () => {
+  const onField: Options = { ...resolvedOnParameter(), receiverRoots: { save: { kind: "this", member: "store" } } };
+  const unproven = await factOf(onField);
+  const proven = await factOf({ ...onField, proofs: { memberUses: [{ ...SAVE_PROOF, reference: { ...SAVE_PROOF.reference, name: "this.store.save" } }], externalUses: [] } });
+  const external = await factOf({ ...onField, proofs: { memberUses: [], externalUses: [{ owner: SAVE_PROOF.owner, field: "store", holds: "@ngrx/store#Store", reference: { ...SAVE_PROOF.reference, name: "this.store.save" } }] } });
+  const nominal = await factOf({ ...nominalCall(), receiverRoots: { save: { kind: "this", member: "store" } } });
+
+  assert.deepEqual(cutsOf(unproven), PARAMETER_CUT);
+  assert.deepEqual(valueOf(unproven).steps.map((step) => step.symbol), ["run"]);
+  for (const fact of [proven, nominal]) assert.deepEqual(valueOf(fact).steps.slice(1).map(({ symbol, file }) => [symbol, file]), [["save", B]]);
+  assert.deepEqual(valueOf(external).steps.map(({ symbol, external }) => [symbol, external]), [["run", [{ kind: "import", module: "@ngrx/store", names: ["save"] }]]]);
+});
+
+/** `this.make().save()` at line 9 of `run`: the index resolved both links, `make` to `Svc.make` and `save` to `Repo.save`. */
+const resultCall = (holds: ReceiverBinding["holds"], returns?: string): Options => {
+  const base = nominalCall();
+  return {
+    ...base,
+    nodes: [...base.nodes, fakeNode("make", "method", A, 34, 36)],
+    edges: [...base.edges!, { from: "Svc", to: "make", kind: "contains" }, call("run", "make", 9, 4)],
+    unresolved: [...base.unresolved!, OUTWARD_CALL("make", A, 35)],
+    receiverRoots: { save: { kind: "this", member: "make" }, make: { kind: "this", member: "make" } },
+    receiverBindings: { [A]: [{ line: 9, column: 5, receiver: "", member: "save", holds }] },
+    callables: { ...base.callables, [A]: [{ name: "make", start: 34, nameLine: 34, body: true, overridable: false, ...(returns === undefined ? {} : { returns: { kind: "annotated", type: returns, line: 34, column: 30 } }) }] },
+  };
+};
+const MADE: ReceiverBinding["holds"] = { kind: "returned", name: "make", line: 9, column: 5 };
+
+test("a call the index resolved on a call result is a step only when the call's declaration returns a nominal class, otherwise a cut", async () => {
+  const nominal = await factOf(resultCall(MADE, "Repo"));
+  const unstated = await factOf(resultCall(MADE));
+  const other = await factOf(resultCall(MADE, "Promise"));
+  const computed = await factOf(resultCall({ kind: "computed" }, "Repo"));
+
+  assert.deepEqual(valueOf(nominal).steps.slice(1).map(({ symbol, file }) => [symbol, file]), [["make", A], ["save", B]]);
+  for (const fact of [unstated, other, computed]) assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["run", "make"]);
+});
+
+test("a call result proves nothing when its call is itself unproven, or when two calls under the member's name start at its place", async () => {
+  const unprovenHead = await factOf({ ...resultCall(MADE, "Repo"), receiverRoots: { save: { kind: "this", member: "make" }, make: { kind: "local", root: "factory" } } });
+  const twice = await factOf({ ...resultCall(MADE, "Repo"), receiverBindings: { [A]: [{ line: 9, column: 5, receiver: "", member: "save", holds: MADE }, { line: 9, column: 5, receiver: "", member: "save", holds: MADE }] } });
+
+  for (const fact of [unprovenHead, twice]) assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol).filter((symbol) => symbol === "save"), []);
 });

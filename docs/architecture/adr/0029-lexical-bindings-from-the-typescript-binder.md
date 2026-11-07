@@ -143,6 +143,28 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    same body after its advice, which is framework code, or repository code only through an aspect (an R7 guard); a JDK
    proxy implements only interfaces (an R7 guard). Outside the promise: a write through `sun.misc.Unsafe` or JNI, and an
    annotation processor this decision does not name that adds an overload to a class.
+11. A call the index resolved into a method of a repository class is not proof that the method runs when its receiver is
+   a value (a parameter or a variable, by the binder's scoping), a field read through `this` (`this.f.m`) or any other
+   expression: the index matched the call by name, and TypeScript types structurally, so any object with that member may
+   stand there (trace slice 3, S6). The receiver is read through parentheses, a non-null `!` and `satisfies` only. The
+   only receivers left to the index's edge are a plain chain of names rooted at a class, a function, an import or a
+   namespace, `this` itself (`this.m()`), and a plain chain whose root no binding proves. Every other receiver, a type
+   assertion (`as`, `<T>x`), an optional call, an element access, a comma, a condition, an `await` or a call result
+   included, needs a proof, and is a cut listing the declarations of its name without one. Trace takes it as a step
+   only when the receiver's origin proves the class (a store-bound local of decision 7, or a member proof of the
+   relations, such as an `inject(T)` local or a field's `FieldOrigin`), or when the receiver's one annotation (for a
+   field, a `#` or `private` one decision 9 admits; for a local every store fills with one such field read, `const h =
+   this.handler`, that field's, the copy counting as no escape of the field while the local itself stays in the file's
+   sight) names a nominal class: a repository class that itself declares a `private`, `protected` or `#` instance
+   member, which TypeScript compares by declaration, so only an instance of it or of a subclass fits. A brand the class
+   inherits proves nothing: every class below the one that declares it fits, the annotated class's siblings included.
+   The step is the method the class or its nearest ancestor declares; a subclass that overrides it is the step's
+   dispatch cut (RFC-0013 R7). The rule holds only while every heritage of the snapshot is proven (decision 9) and the
+   index resolves the heritage of every class that declares the member, so no subclass is unseen. A call result is
+   proven only when the call is itself an edge of the body whose receiver needs no proof and its declaration states a
+   nominal class as its return type (RFC-0013 R5); two calls of one member name starting at one place prove nothing. A
+   field the relations prove holds a package or global type makes the call a leaf under it. A call into an interface
+   keeps its dispatch cut. Impact, callers, importers and outline still read such an edge as a possible dependence.
 
 ## Consequences
 
@@ -157,8 +179,9 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
   members of a library type can be passed where that type is declared without extending or implementing it, and an
   `any` or a cast can put any value there. A receiver declared as such a type is reported external although it may run
   repository code; the guards of decision 9 only catch the nominal cases. The same holds for a TypeScript `private` field
-  written from outside its class through an `any` or a cast (`(page as any).cache.get = f`). The owner accepted this
-  limitation with the decision.
+  written from outside its class through an `any` or a cast (`(page as any).cache.get = f`), and for a nominal class of
+  decision 11 (`const s: Store = { save() {} } as any`): trace reports a step at the class's method. The owner accepted
+  this limitation with decision 9, and decision 11 inherits it.
 
 ## Not decided here
 

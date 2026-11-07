@@ -227,15 +227,34 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
       if (parsed === undefined) continue;
       for (const { site, index } of group) {
         const type = await annotatedTypeAt(file, parsed.index, parsed.text, site);
-        const subtypes = type.kind === "unknown" ? undefined : await subtypedTypes();
-        results[index] = type.kind === "unknown" || subtypes === undefined || subtypes.has(typeKey(type)) ? UNKNOWN_TYPE : type;
+        const subtypes = await subtypedTypes();
+        if (subtypes === undefined) continue;
+        results[index] = type.kind === "unknown" ? await nominalAt(file, parsed.index, parsed.text, site) : subtypes.has(typeKey(type)) ? UNKNOWN_TYPE : type;
       }
     }
     return results;
   } };
 
+  /**
+   * The repository class an annotation names alone, when it is nominal: its one declaration itself declares a `private`,
+   * `protected` or `#` instance member, so only an instance of it or of a subclass fits. An inherited one proves nothing:
+   * every class below the one that declares it fits, siblings of the annotated class included.
+   */
+  async function nominalAt(file: string, tree: FileIndex, text: string, site: UseSite): Promise<DeclaredType> {
+    const head = nodesAt(tree, text, site).find((node): node is ts.Identifier => ts.isIdentifier(node) && node.text === site.spelled && isTypeName(node));
+    if (head === undefined || ts.isQualifiedName(head.parent)) return UNKNOWN_TYPE;
+    const bound = new Map<string, BoundFile>();
+    const boundOf = (path: string): BoundFile => {
+      if (!bound.has(path)) bound.set(path, bindFile(path, texts.get(path)!));
+      return bound.get(path)!;
+    };
+    const named = classOf(await heritageOf(file, head, boundOf, 0));
+    if (named === undefined || !ts.isClassDeclaration(named.declaration) || named.declaration.name === undefined || !declaresRestricted(named.declaration)) return UNKNOWN_TYPE;
+    return { kind: "nominal", file: named.file, name: named.declaration.name.text, line: lineOf(named.declaration.getSourceFile(), named.declaration.name) };
+  }
+
   /** The library or package type an annotation's first name, keyword or array syntax names at the site. */
-  async function annotatedTypeAt(file: string, tree: FileIndex, text: string, site: UseSite): Promise<DeclaredType> {
+  async function annotatedTypeAt(file: string, tree: FileIndex, text: string, site: UseSite): Promise<ExternalType> {
     const nodes = nodesAt(tree, text, site);
     const keyword = nodes.find((node) => KEYWORD_TYPES.has(node.kind) && node.getText(tree.source) === site.spelled);
     if (keyword !== undefined) return { kind: "global", name: KEYWORD_TYPES.get(keyword.kind)! };
@@ -247,7 +266,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
   }
 
   /** A root binding as a type from outside the repository: a library global named alone, or a package's export by its exported name. */
-  function typeOf(file: string, binding: RootBinding): DeclaredType {
+  function typeOf(file: string, binding: RootBinding): ExternalType {
     if (binding.kind === "ambient") return { kind: "global", name: binding.root };
     if (binding.kind !== "import" || binding.origin.kind !== "external") return UNKNOWN_TYPE;
     const imported = moduleShapeOf(file)?.imports.get(binding.root)?.imported;
@@ -287,7 +306,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
           subtyped = UNPROVEN;
           return undefined;
         }
-        if (proven !== REPOSITORY_TYPE) keys.add(proven);
+        if (typeof proven === "string") keys.add(proven);
       }
     }
     subtyped = keys;
@@ -299,10 +318,10 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
    * or package type, a repository class or interface (whose own heritage is read where it is declared), or `undefined`
    * when nothing proves either.
    */
-  async function heritageOf(file: string, node: ts.Node, boundOf: (path: string) => BoundFile, depth: number): Promise<string | undefined> {
+  async function heritageOf(file: string, node: ts.Node, boundOf: (path: string) => BoundFile, depth: number): Promise<Heritage | undefined> {
     const parsed = indexOf(file);
     const written = ts.isTypeReferenceNode(node) ? node.typeName : node;
-    if (ts.isClassExpression(written)) return REPOSITORY_TYPE;
+    if (ts.isClassExpression(written)) return { file, declarations: [written] };
     const [root, member, ...rest] = chainNames(written);
     const head = headOf(written);
     if (parsed === undefined || depth >= ALIAS_DEPTH || root === undefined || rest.length > 0 || !ts.isIdentifier(head) || !isPlainChain(written)) return undefined;
@@ -325,7 +344,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
   }
 
   /** What a top-level declaration of a repository file stands for as heritage. */
-  function exportedOf(file: string, name: string, boundOf: (path: string) => BoundFile, depth: number): Promise<string | undefined> | undefined {
+  function exportedOf(file: string, name: string, boundOf: (path: string) => BoundFile, depth: number): Promise<Heritage | undefined> | undefined {
     const parsed = indexOf(file);
     if (parsed === undefined) return undefined;
     const declarations = parsed.index.source.statements.flatMap((statement): ts.Node[] =>
@@ -334,12 +353,12 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
   }
 
   /** Classes, interfaces and type literals are the repository's own; a constant or a type alias stands for the name it holds. */
-  async function declarationsOf(file: string, declarations: readonly ts.Node[], boundOf: (path: string) => BoundFile, depth: number): Promise<string | undefined> {
-    if (declarations.length > 0 && declarations.every((declaration) => ts.isClassLike(declaration) || ts.isInterfaceDeclaration(declaration))) return REPOSITORY_TYPE;
+  async function declarationsOf(file: string, declarations: readonly ts.Node[], boundOf: (path: string) => BoundFile, depth: number): Promise<Heritage | undefined> {
+    if (declarations.length > 0 && declarations.every((declaration) => ts.isClassLike(declaration) || ts.isInterfaceDeclaration(declaration))) return { file, declarations };
     const [only, ...others] = declarations;
     if (only === undefined || others.length > 0) return undefined;
     if (ts.isVariableDeclaration(only) && only.initializer !== undefined && (ts.getCombinedNodeFlags(only) & ts.NodeFlags.Const) !== 0) return heritageOf(file, unwrappedValue(only.initializer), boundOf, depth + 1);
-    if (ts.isTypeAliasDeclaration(only) && ts.isTypeLiteralNode(only.type)) return REPOSITORY_TYPE;
+    if (ts.isTypeAliasDeclaration(only) && ts.isTypeLiteralNode(only.type)) return { file, declarations };
     if (ts.isTypeAliasDeclaration(only) && ts.isTypeReferenceNode(only.type)) return heritageOf(file, only.type, boundOf, depth + 1);
     return undefined;
   }
@@ -382,15 +401,21 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
 }
 
 const UNKNOWN_BINDING: RootBinding = { kind: "unknown" };
-const UNKNOWN_TYPE: DeclaredType = { kind: "unknown" };
+const UNKNOWN_TYPE = { kind: "unknown" } as const;
+
+/** A type from outside the repository, or none proven. */
+type ExternalType = Extract<DeclaredType, { kind: "global" | "package" | "unknown" }>;
 
 /** No declaration owns a heritage clause's name: it is bound at the file's level. */
 const NO_OWNER: UseSite["owner"] = { name: "", line: 0, endLine: 0 };
 
 const HERITAGE = /\b(extends|implements)\b/;
 
-/** Heritage that names a repository class or interface. */
-const REPOSITORY_TYPE = "";
+/**
+ * What a heritage name stands for: the key of a library or package type, or the repository class, interface or type
+ * literal declarations of one file it names.
+ */
+type Heritage = string | { file: string; declarations: readonly ts.Node[] };
 
 /** Some heritage names nothing the sources prove. */
 const UNPROVEN = Symbol("unproven");
@@ -437,7 +462,7 @@ const KEYWORD_TYPES: ReadonlyMap<ts.SyntaxKind, string> = new Map([
   [ts.SyntaxKind.SymbolKeyword, "Symbol"],
 ]);
 
-function typeKey(type: Exclude<DeclaredType, { kind: "unknown" }>): string {
+function typeKey(type: Exclude<ExternalType, { kind: "unknown" }>): string {
   return type.kind === "global" ? type.name : `${type.module}#${type.name}`;
 }
 
@@ -504,6 +529,25 @@ function chainNames(node: ts.Node): string[] {
   if (ts.isPropertyAccessExpression(node)) return [...chainNames(node.expression), node.name.text];
   if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isNonNullExpression(node) || ts.isElementAccessExpression(node)) return chainNames(node.expression);
   return [];
+}
+
+/** The one repository class a heritage proof names, with its file. */
+function classOf(heritage: Heritage | undefined): { file: string; declaration: ts.ClassLikeDeclaration } | undefined {
+  const only = heritage === undefined || typeof heritage === "string" || heritage.declarations.length !== 1 ? undefined : heritage.declarations[0]!;
+  return only !== undefined && ts.isClassLike(only) ? { file: (heritage as Exclude<Heritage, string>).file, declaration: only } : undefined;
+}
+
+/**
+ * Whether a class declares an instance member only it and its subclasses can hold: a `#` name, or a `private` or
+ * `protected` one, a constructor's parameter properties included. Such a member makes TypeScript compare its type by
+ * declaration, so no other value fits it without an `any` or a cast.
+ */
+function declaresRestricted(declaration: ts.ClassLikeDeclaration): boolean {
+  const restricted = (member: ts.Declaration): boolean => {
+    const flags = ts.getCombinedModifierFlags(member);
+    return (flags & ts.ModifierFlags.Static) === 0 && ((flags & (ts.ModifierFlags.Private | ts.ModifierFlags.Protected)) !== 0 || ts.isPrivateIdentifier(ts.getNameOfDeclaration(member) ?? member));
+  };
+  return declaration.members.some((member) => (ts.isConstructorDeclaration(member) ? member.parameters.some(restricted) : restricted(member)));
 }
 
 /** The `extends` expression of the class whose code holds `keyword`. */

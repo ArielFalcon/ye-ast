@@ -102,7 +102,7 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
       if (stored.has(identifier) || (ts.isVariableDeclaration(parent) && parent.name === identifier)) return true;
       const target = bindingOf(identifier);
       if (target?.kind !== "declared" || target.symbol !== binding.symbol) return target?.kind !== "dynamic";
-      return ts.isPropertyAccessExpression(parent) && parent.expression === identifier && !isWritten(parent);
+      return readsMember(identifier);
     });
   };
   const fileIsModule = ts.isExternalModule(tree);
@@ -116,6 +116,12 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
       ...assignments.map((store) => (store.operator === undefined || !ASSIGNMENTS.includes(store.operator) ? undefined : store.value)),
     ];
     if (values.length === 0 || values.some((value) => value === undefined)) return undefined;
+    const reads = values.map((value) => unwrapped(value!));
+    const [read] = reads;
+    if (read !== undefined && isThisMember(read)) {
+      const same = reads.every((other) => isThisMember(other) && other.name.text === read.name.text && thisClassOf(other) === thisClassOf(read));
+      return same ? fieldAnnotationOf(read, new Set(reads)) : undefined;
+    }
     const kinds = values.map((value) => storedValue(value!, bindingOf, tree));
     const first = kinds[0];
     return first !== undefined && kinds.every((kind) => kind !== undefined && sameValue(kind, first)) ? first : undefined;
@@ -148,8 +154,12 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
     if (evals.some((call) => isInside(call, scope)) || storesOf(binding, name) === undefined || !staysLocal(binding, name)) return undefined;
     return annotated(declaration.type, tree);
   };
-  /** The type the enclosing class states for `this.<name>`, when it declares the name once, as an instance field or a constructor property. */
-  const fieldAnnotationOf = (access: ts.PropertyAccessExpression): ReceiverValue | undefined => {
+  /**
+   * The type the enclosing class states for `this.<name>`, when it declares the name once, as an instance field or a
+   * constructor property. `copies` are reads of the field that every store into a local binding stores, a local that
+   * itself stays in the file's sight, so the field's value reaches nothing else through them.
+   */
+  const fieldAnnotationOf = (access: ts.PropertyAccessExpression, copies: ReadonlySet<ts.Node> = new Set()): ReceiverValue | undefined => {
     const owner = thisClassOf(access);
     if (owner === undefined || evals.some((call) => isInside(call, owner))) return undefined;
     const name = access.name.text;
@@ -158,23 +168,26 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
       return member.name !== undefined && !ts.isComputedPropertyName(member.name) && member.name.text === name ? [member] : [];
     });
     const [field, ...others] = declared;
-    if (field === undefined || others.length > 0 || !isClassPrivate(field) || !fieldStaysLocal(owner, name)) return undefined;
+    if (field === undefined || others.length > 0 || !isClassPrivate(field) || !fieldStaysLocal(owner, name, copies)) return undefined;
     if (ts.isParameter(field)) return annotated(field.type, tree);
     const isStatic = ts.isPropertyDeclaration(field) && field.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword);
     return ts.isPropertyDeclaration(field) && !isStatic ? annotated(field.type, tree) : undefined;
   };
   const receiverBindings = accesses.flatMap((access): ReceiverBinding[] => {
-    const receiver = access.expression;
-    if (access.questionDotToken !== undefined) return [];
+    const receiver = seenThrough(access.expression);
+    /** A receiver the rules see only through a wrapper binds nothing else they could leave to its root. */
+    const wrapped = receiver !== access.expression ? COMPUTED : undefined;
     let holds: ReceiverValue | undefined;
-    if (isThisMember(receiver)) holds = fieldAnnotationOf(receiver);
+    if (access.questionDotToken !== undefined) holds = COMPUTED;
+    else if (isThisMember(receiver)) holds = fieldAnnotationOf(receiver) ?? wrapped;
     else if (ts.isIdentifier(receiver)) {
       const binding = bindingOf(receiver);
-      holds = binding?.kind === "declared" ? (valueOf(binding, receiver.text) ?? annotationOf(binding, receiver.text)) : undefined;
-    }
+      holds = (binding?.kind === "declared" ? (valueOf(binding, receiver.text) ?? annotationOf(binding, receiver.text)) : undefined) ?? wrapped;
+    } else if (isNameChain(receiver)) holds = wrapped;
+    else holds = ts.isAsExpression(receiver) || ts.isTypeAssertionExpression(receiver) ? COMPUTED : (storedValue(receiver, bindingOf, tree) ?? returnedValue(receiver, tree));
     if (holds === undefined) return [];
     const at = tree.getLineAndCharacterOfPosition(access.parent.getStart(tree));
-    const name = isThisMember(receiver) ? receiver.name.text : (receiver as ts.Identifier).text;
+    const name = holds.kind === "computed" ? "" : isThisMember(receiver) ? receiver.name.text : ts.isIdentifier(receiver) ? receiver.text : "";
     return [{ line: at.line + 1, column: at.character + 1, receiver: name, member: access.name.text, holds }];
   });
   return { functionValueCalls, receiverBindings };
@@ -199,10 +212,11 @@ function isInside(node: ts.Node, scope: ts.Node): boolean {
 
 /**
  * Whether every `this` the class writes for its own instance names one member, the class names the field through no
- * other receiver, and every `this.<name>` only reads one of the field's members or stores a value into the field: an
- * instance or a field passed, returned, copied, indexed or written through could have its members replaced.
+ * other receiver, and every `this.<name>` only reads one of the field's members, stores a value into the field or is one
+ * of `copies`: an instance or a field passed, returned, copied elsewhere, indexed or written through could have its
+ * members replaced.
  */
-function fieldStaysLocal(owner: ts.ClassLikeDeclaration, name: string): boolean {
+function fieldStaysLocal(owner: ts.ClassLikeDeclaration, name: string, copies: ReadonlySet<ts.Node>): boolean {
   let stays = true;
   const visit = (node: ts.Node): void => {
     if (!stays) return;
@@ -210,14 +224,22 @@ function fieldStaysLocal(owner: ts.ClassLikeDeclaration, name: string): boolean 
     else if (namesMember(node, name) && !(isThisMember(node) && thisClassOf(node) === owner)) stays = false;
     else if (isThisMember(node) && node.name.text === name && thisClassOf(node) === owner) {
       const parent = node.parent;
-      const read = ts.isPropertyAccessExpression(parent) && parent.expression === node && !isWritten(parent);
+      const read = readsMember(node);
       const stored = ts.isBinaryExpression(parent) && parent.left === node && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken;
-      if (!read && !stored) stays = false;
+      if (!read && !stored && !copies.has(node)) stays = false;
     }
     node.forEachChild(visit);
   };
   visit(owner);
   return stays;
+}
+
+/** Whether a value, seen through the wrappers a receiver is seen through, only has one of its members read. */
+function readsMember(value: ts.Expression): boolean {
+  let at: ts.Expression = value;
+  while ((ts.isParenthesizedExpression(at.parent) || ts.isNonNullExpression(at.parent) || ts.isSatisfiesExpression(at.parent)) && at.parent.expression === at) at = at.parent;
+  const parent = at.parent;
+  return ts.isPropertyAccessExpression(parent) && parent.expression === at && !isWritten(parent);
 }
 
 /** Whether an access is the target of an assignment, an update, a `delete` or a destructuring or iteration store. */
@@ -328,6 +350,34 @@ function storedValue(value: ts.Expression, bindingOf: (identifier: ts.Identifier
   return undefined;
 }
 
+/** `a`, `this` and a chain of plain names after either: what the receiver rules above, or a root's binding, settle. */
+function isNameChain(node: ts.Expression): boolean {
+  if (ts.isIdentifier(node) || node.kind === ts.SyntaxKind.ThisKeyword || node.kind === ts.SyntaxKind.SuperKeyword) return true;
+  return ts.isPropertyAccessExpression(node) && node.questionDotToken === undefined && isNameChain(node.expression);
+}
+
+const COMPUTED: ReceiverValue = { kind: "computed" };
+
+/**
+ * A receiver through the wrappers that keep its value and its type: parentheses, a non-null `!` and `satisfies`. A type
+ * assertion is not seen through, since it states a type the value need not have.
+ */
+function seenThrough(expression: ts.Expression): ts.Expression {
+  let inner = expression;
+  while (ts.isParenthesizedExpression(inner) || ts.isNonNullExpression(inner) || ts.isSatisfiesExpression(inner)) inner = inner.expression;
+  return inner;
+}
+
+/** What a receiver that is no name holds: the result of a call whose callee ends in a name, or an expression no rule binds. */
+function returnedValue(inner: ts.Expression, tree: ts.SourceFile): ReceiverValue {
+  if (!ts.isCallExpression(inner) || inner.questionDotToken !== undefined) return COMPUTED;
+  const callee = unwrapped(inner.expression);
+  const name = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : undefined;
+  if (name === undefined) return COMPUTED;
+  const at = tree.getLineAndCharacterOfPosition(inner.getStart(tree));
+  return { kind: "returned", name, line: at.line + 1, column: at.character + 1 };
+}
+
 /** Two stores agree when they store one library type, or instances of one class under one name. */
 function sameValue(a: ReceiverValue, b: ReceiverValue): boolean {
   if (a.kind === "literal") return b.kind === "literal" && a.type === b.type;
@@ -342,7 +392,7 @@ const KEYWORD_TYPES: ReadonlySet<ts.SyntaxKind> = new Set([ts.SyntaxKind.StringK
  * place it is written: a primitive keyword, an array type as `Array`, or a type reference by its first name. None for
  * any other type, or no annotation.
  */
-function annotated(type: ts.TypeNode | undefined, tree: ts.SourceFile): ReceiverValue | undefined {
+export function annotated(type: ts.TypeNode | undefined, tree: ts.SourceFile): Extract<ReceiverValue, { kind: "annotated" }> | undefined {
   let inner = type;
   for (;;) {
     if (inner !== undefined && ts.isParenthesizedTypeNode(inner)) inner = inner.type;
@@ -353,7 +403,7 @@ function annotated(type: ts.TypeNode | undefined, tree: ts.SourceFile): Receiver
     } else break;
   }
   if (inner === undefined) return undefined;
-  const placed = (node: ts.Node, name: string): ReceiverValue => {
+  const placed = (node: ts.Node, name: string): Extract<ReceiverValue, { kind: "annotated" }> => {
     const at = tree.getLineAndCharacterOfPosition(node.getStart());
     return { kind: "annotated", type: name, line: at.line + 1, column: at.character + 1 };
   };
