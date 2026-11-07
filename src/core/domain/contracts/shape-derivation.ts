@@ -129,7 +129,7 @@ export function deriveChanges(base: Shape, head: Shape): Derivation {
   };
 }
 
-/** The differences a delta a hypothesis is built from names: one per introduced class, and one per direction of its literals. */
+/** The differences a hypothesis's delta names: one per introduced class, and one per direction of its literals. */
 function differencesOf({ introduced, added, retired, alwaysAbsent }: ValueDelta): Omit<ShapeDifference, "path">[] {
   if (alwaysAbsent) return [{ delta: "removed" }];
   const named = introduced.map((value): Omit<ShapeDifference, "path"> => (value === "null" ? { delta: "introduced-null" } : value === "undefined" ? { delta: "introduced-absence" } : { delta: "introduced-class", subject: value }));
@@ -230,12 +230,12 @@ const DEFAULTS: Readonly<Record<string, unknown>> = { uniqueItems: false, deprec
 
 /** What a change did to the keywords of one place: a bound, a narrowing keyword or an annotation is a difference, any other keyword a frontier. */
 function compareKeywords(base: Readonly<Record<string, unknown>>, head: Readonly<Record<string, unknown>>): Entry[] {
-  const meaningful = (keyword: string, value: unknown) => (value === undefined || canonicalJson(value) === canonicalJson(DEFAULTS[keyword]) ? undefined : value);
+  const meaningful = (keyword: string, value: unknown) => (value === DEFAULTS[keyword] ? undefined : value);
   const entries: Entry[] = [];
   for (const keyword of [...new Set([...Object.keys(base), ...Object.keys(head)])].sort(compareText)) {
     const was = meaningful(keyword, base[keyword]);
     const now = meaningful(keyword, head[keyword]);
-    if (canonicalJson(was ?? null) === canonicalJson(now ?? null)) continue;
+    if (was === undefined ? now === undefined : now !== undefined && canonicalJson(was) === canonicalJson(now)) continue;
     const delta = keywordDelta(keyword, was, now);
     if (delta === undefined) entries.push({ kind: "frontier", path: [], frontier: { kind: "unclassified-difference", detail: keyword } });
     else entries.push({ kind: "difference", path: [], difference: { delta, subject: keyword, ...(was === undefined ? {} : { base: was }), ...(now === undefined ? {} : { head: now }) } });

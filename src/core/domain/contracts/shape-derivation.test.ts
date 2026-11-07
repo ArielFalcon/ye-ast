@@ -95,9 +95,9 @@ test("a pattern, format, multiple or uniqueness added narrows the place, dropped
 });
 
 test("a default, a deprecation, a read-only mark or an XML name that changed is an annotation change, and equal keywords derive nothing", () => {
-  const base = object([property("a", keyed(TEXT, { default: "x", maxLength: 3 })), property("b", TEXT), property("c", keyed(TEXT, { readOnly: true }))]);
-  const head = object([property("a", keyed(TEXT, { default: "y", maxLength: 3 })), property("b", keyed(TEXT, { deprecated: true })), property("c", TEXT)]);
-  assert.deepEqual(differences(base, head), [["a", "annotation-changed", "default"], ["b", "annotation-changed", "deprecated"], ["c", "annotation-changed", "readOnly"]]);
+  const base = object([property("a", keyed(TEXT, { default: "x", maxLength: 3 })), property("b", TEXT), property("c", keyed(TEXT, { readOnly: true })), property("d", TEXT)]);
+  const head = object([property("a", keyed(TEXT, { default: "y", maxLength: 3 })), property("b", keyed(TEXT, { deprecated: true })), property("c", TEXT), property("d", keyed(TEXT, { default: null }))]);
+  assert.deepEqual(differences(base, head), [["a", "annotation-changed", "default"], ["b", "annotation-changed", "deprecated"], ["c", "annotation-changed", "readOnly"], ["d", "annotation-changed", "default"]]);
 });
 
 test("a keyword the derivation does not classify that changed is an unclassified difference at its place, never silence", () => {
