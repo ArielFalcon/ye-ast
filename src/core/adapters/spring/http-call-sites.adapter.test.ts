@@ -618,6 +618,17 @@ test("an unreadable library is reported as context without claiming it declares 
   assert.deepEqual(site?.diagnostic?.unreadableSources?.map(e => e.path), ["(library)/lib/src/Broken.java"]);
 });
 
+test("a client base the snapshot does not decide keeps the request the code writes, with the base's own cause", async () => {
+  const source = java("Reports", `@Service class Reports {
+      private final RestClient rest;
+      Reports(RestClient.Builder builder) { this.rest = builder.baseUrl(loop()).build(); }
+      String loop() { return loop(); }
+      void load() { rest.get().uri("/reports/daily").retrieve().body(String.class); }
+    }`);
+  const [site] = await reader.of([source], "app");
+  assert.deepEqual([site?.target.status, site?.stated, site?.diagnostic?.cause], ["unknown", { method: "GET", path: "/reports/daily" }, "recursive"]);
+});
+
 test("URL value diagnostics retain recursion and disagreement inside source return methods", async () => {
   const source = java("Values", `interface Base { String url(); }
     class First implements Base { public String url() { return "http://one/items"; } }

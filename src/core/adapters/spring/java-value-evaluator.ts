@@ -1,8 +1,8 @@
 import type { Evidence } from "../../domain/shared/fact.ts";
 import { spanOf } from "./findings.ts";
 import { LOMBOK_VALUE, LOMBOK_BUILDER, LOMBOK_GETTERS, LOMBOK_CONSTRUCTORS } from "./java-value-vocabulary.ts";
-import type { Closure, FlowCause, ObjectValue, UrlScope } from "./java-values.ts";
-import { compareText } from "../../domain/shared/code-node.ts";
+import type { Closure, ObjectValue, UrlScope } from "./java-values.ts";
+import { known, prevailingCause, undecided, type Evaluated, type UndecidedCause } from "../../domain/topology/evaluated.ts";
 import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 import { bindMethod, methodsOf } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
@@ -49,15 +49,20 @@ function isFinal(binding: Binding): boolean {
  * Runtime text uses `{}`; values the snapshot cannot decide, including exhausted evaluation stacks, are undefined.
  */
 export class JavaValueEvaluator {
-  private diagnostics: { cause?: FlowCause; evidence: Evidence[]; alternatives: Set<string> } | undefined;
+  private diagnostics: { cause?: UndecidedCause; evidence: Evidence[]; alternatives: Set<string> } | undefined;
 
-  trace<T>(evaluate: () => T): { value: T; cause?: FlowCause; evidence: Evidence[]; alternatives: string[] } {
+  /**
+   * What an evaluation written in a scope comes to: its value, or why the snapshot does not decide it. A scope method
+   * flow left undecided keeps the flow's cause; otherwise the cause, the places and the alternatives the evaluation met.
+   */
+  evaluated<T>(scope: UrlScope, evaluate: () => T | undefined): Evaluated<T> {
+    if (scope.undecided !== undefined) return undecided(scope.undecided);
     const previous = this.diagnostics;
     const trace: NonNullable<JavaValueEvaluator["diagnostics"]> = { evidence: [], alternatives: new Set() };
     this.diagnostics = trace;
     try {
       const value = evaluate();
-      return { value, ...(trace.cause === undefined ? {} : { cause: trace.cause }), evidence: trace.evidence, alternatives: [...trace.alternatives].sort(compareText) };
+      return value === undefined ? undecided(trace.cause ?? "destination-undecidable", trace.evidence, [...trace.alternatives]) : known(value);
     } finally {
       this.diagnostics = previous;
     }
@@ -77,9 +82,9 @@ export class JavaValueEvaluator {
     return undefined;
   }
 
-  private record(cause: FlowCause, file: JavaFile, node: Node): void {
+  private record(cause: UndecidedCause, file: JavaFile, node: Node): void {
     if (this.diagnostics === undefined) return;
-    if (this.diagnostics.cause !== "recursive") this.diagnostics.cause = cause;
+    this.diagnostics.cause = prevailingCause([this.diagnostics.cause, cause]) ?? cause;
     this.diagnostics.evidence.push(spanOf(file.path, node));
   }
 

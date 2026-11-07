@@ -1,9 +1,9 @@
 import type { UrlScope } from "./java-values.ts";
-import { agreed, JavaMethodFlow, reachedDiagnostic } from "./java-method-flow.ts";
+import { JavaMethodFlow, reachedTarget, type Reading } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
-import { compareCallSites, type CallSite, type CallSiteDiagnostic, type HttpTarget, type StatedRequest } from "../../domain/topology/call-site.ts";
+import { compareCallSites, type CallSite, type HttpTarget } from "../../domain/topology/call-site.ts";
 import type { Configuration } from "./application-config.ts";
 import { complete, placed, spanOf, unknown, unknownAtNode, withEvidence } from "./findings.ts";
 import {
@@ -26,10 +26,10 @@ import { stringLiteralValue } from "./java-literals.ts";
 import { isAnnotation, annotationUses, createSpringAnnotations, pathExpressions, type SpringAnnotations } from "./request-mapping.ts";
 import { JavaValueEvaluator } from "./java-value-evaluator.ts";
 import { callUrl, joinedCallUrl, RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
+import { known, undecided, undecidedTarget, type Evaluated } from "../../domain/topology/evaluated.ts";
 
-const UNDECIDED = Symbol("undecided");
-
-type Declared = string | typeof UNDECIDED | undefined;
+/** The base URL a client declares: undefined when it declares none. */
+type Declared = Evaluated<string> | undefined;
 
 /** A call of a standard client: the method and URL expressions it is given and the base URL its client declares. */
 interface Request {
@@ -40,11 +40,7 @@ interface Request {
 }
 
 /** A request's target and, when the snapshot decides everything about it but its base, the request the code writes. */
-interface ReadTarget {
-  target: Finding<HttpTarget>;
-  stated?: StatedRequest;
-  diagnostic?: CallSiteDiagnostic;
-}
+type ReadTarget = Reading<HttpTarget>;
 
 
 /** The HTTP requests a Java snapshot makes: one call site per request of a client the vocabulary knows. */
@@ -74,18 +70,7 @@ export class JavaHttpReader {
       }
       const expanded = flow.expand(invocation, scope);
       if (expanded !== undefined) {
-        const targets = expanded.map((group): ReadTarget => {
-          const alternatives = group.map(({ leaf, scope }) => this.target(leaf, scope));
-          const agreedTarget = agreed(alternatives, (value) => value.target.status === "unknown" ? value.target.status : value.target.value);
-          if (agreedTarget !== undefined && agreedTarget.target.status !== "unknown") return agreedTarget;
-          const library = group.find(({ leaf }) => !this.owned.has(leaf.invocation.type.file))?.leaf.invocation.type.fqn;
-          const span = spanOf(invocation.type.file.path, invocation.node);
-          return {
-            ...agreedTarget,
-            target: unknown(agreedTarget?.target.status === "unknown" ? agreedTarget.target.reason : "unresolved", [library === undefined ? span : { ...span, via: library }, ...alternatives.flatMap(({ target }) => target.evidence), ...group.map(({ leaf }) => spanOf(leaf.invocation.type.file.path, leaf.invocation.node))]),
-            diagnostic: reachedDiagnostic(alternatives.map(({ diagnostic }) => diagnostic), agreedTarget !== undefined, library !== undefined),
-          };
-        });
+        const targets = expanded.map((group) => reachedTarget(invocation, group, group.map(({ leaf, scope }) => this.target(leaf, scope)), this.owned));
         for (const target of targets) {
           const site = this.siteOf(repo, invocation, target);
           if (site.target.status !== "unknown") site.target = { ...site.target, evidence: [...site.target.evidence, ...expanded.flat().map(({ leaf }) => spanOf(leaf.invocation.type.file.path, leaf.invocation.node))] };
@@ -187,23 +172,23 @@ export class JavaHttpReader {
     const argument = argumentsOf(call)[0];
     const sets = name === "baseUrl" || name === "rootUri" || (name === "create" && object?.type === "identifier" && externalNames(object.text, invocation.type.file, false).some((candidate) => FLUENT_CLIENT_TYPES.has(candidate)));
     if (!sets || argument === undefined) return undefined;
-    return this.text.of(argument, this.scopeOf(invocation, new Map())) ?? UNDECIDED;
+    const scope = this.scopeOf(invocation, new Map());
+    return this.text.evaluated(scope, () => this.text.of(argument, scope));
   }
 
   /** The base URL the expressions a client field or variable is set from declare; two different ones are not decided. */
   private declaredBase(binding: Binding, owner: TypeDecl | undefined, invocation: Invocation): Declared {
     const assigned = owner === undefined ? [] : (assignmentsOf(owner).get(binding.name) ?? []);
     const sources = [...(binding.initializer === undefined ? [] : [{ node: binding.initializer, scope: this.scopeOf(invocation, new Map()) }]), ...assigned.map(({ value, member }) => ({ node: value, scope: { type: owner as TypeDecl, locals: localBindings(member), env: new Map() } }))];
-    const bases = sources.flatMap(({ node, scope }): Declared[] => {
+    const bases = sources.flatMap(({ node, scope }): Evaluated<string>[] => {
       for (let current: Node | null = node; current?.type === "method_invocation"; current = current.childForFieldName("object")) {
         const set = this.baseCall(current, { ...invocation, type: scope.type, locals: scope.locals });
         if (set !== undefined) return [set];
       }
       return [];
     });
-    const distinct = new Set(bases);
-    const [only] = distinct;
-    return distinct.size > 1 ? UNDECIDED : only;
+    const decided = new Set(bases.map((base) => (base.status === "known" ? base.value : undefined)));
+    return decided.size > 1 ? undecided("destination-undecidable") : bases[0];
   }
 
   /** The library a call goes through when the sources of its client type are not read to the request. */
@@ -216,24 +201,22 @@ export class JavaHttpReader {
     return !this.project.isPlatformName(resolved.fqn) && HTTP_CLIENT_NAME.test(resolved.fqn) ? { via: resolved.fqn, source: "not-read", evidence: [] } : undefined;
   }
 
+  /** A request's target; an undecided base keeps the request the code writes, with the base's own cause. */
   private target(request: Request, scope: UrlScope): ReadTarget {
-    const evaluated = this.text.trace(() => this.readTarget(request, scope));
-    const { value, alternatives } = evaluated;
-    if (value.target.status !== "unknown" || (evaluated.cause === undefined && alternatives.length === 0)) return value;
-    const cause = evaluated.cause ?? value.diagnostic?.cause ?? "destination-undecidable";
-    return { ...value, target: unknown(value.target.reason, [...value.target.evidence, ...evaluated.evidence]), diagnostic: { cause, ...(alternatives.length === 0 ? {} : { alternatives }) } };
+    const at = spanOf(request.invocation.type.file.path, request.invocation.node);
+    const read = this.text.evaluated(scope, () => this.requested(request, scope));
+    if (read.status === "undecided") return undecidedTarget(read, at);
+    const { method, base, path } = read.value;
+    if (base?.status === "undecided") return { ...undecidedTarget(base, at), stated: { method, path } };
+    return { target: complete({ method, ...(base === undefined ? {} : { base: base.value }), path }) };
   }
 
-  private readTarget(request: Request, scope: UrlScope): ReadTarget {
-    if (scope.undecided === true) return { target: unknownAtNode(request.invocation.type.file.path, request.invocation.node), diagnostic: { cause: scope.undecidedCause ?? "dispatch-disagreement" } };
+  /** The method and path a request writes, and the base it reaches; undefined when the snapshot does not decide the method or the path. */
+  private requested(request: Request, scope: UrlScope): { method: HttpMethod; base?: Evaluated<string>; path: string } | undefined {
     const method = typeof request.method === "string" ? request.method : request.method === undefined ? undefined : this.methodOf(request.method, scope);
     const text = request.url === undefined ? undefined : this.text.of(request.url, scope);
     const resolved = text === undefined || method === undefined ? undefined : targetOf(text, request.base);
-    const unknown = unknownAtNode(request.invocation.type.file.path, request.invocation.node);
-    if (resolved === undefined || method === undefined) return { target: unknown, diagnostic: { cause: "destination-undecidable" } };
-    const { base, path } = resolved;
-    if (base === UNDECIDED) return { target: unknown, stated: { method, path }, diagnostic: { cause: "destination-undecidable" } };
-    return { target: complete({ method, ...(base === undefined ? {} : { base }), path }) };
+    return resolved === undefined || method === undefined ? undefined : { method, ...resolved };
   }
 
   /** The HTTP method an expression names: `HttpMethod.GET`, `RequestMethod.GET`, `HttpMethod.valueOf("get")` or a string. */
@@ -330,13 +313,14 @@ function methodCall(node: Node): string | undefined {
 
 /**
  * The base and path a URL text comes down to; a path that only the code fills at run time is not decided. A relative
- * path under a client base the snapshot does not decide keeps its path, with the base `UNDECIDED`.
+ * path under a client base the snapshot does not decide keeps its path, with that base undecided.
  */
-function targetOf(text: string, client: Declared): { base?: string | typeof UNDECIDED; path: string } | undefined {
+function targetOf(text: string, client: Declared): { base?: Evaluated<string>; path: string } | undefined {
   if (text.startsWith(RUN_TIME_HOLE)) return undefined;
   const absolute = callUrl(text);
-  const declared = typeof client === "string" ? callUrl(client) : { path: "/" };
-  const base = absolute.origin ?? declared.origin ?? client;
+  const declared = client?.status === "known" ? callUrl(client.value) : { path: "/" };
+  const origin = absolute.origin ?? declared.origin;
+  const base = origin === undefined ? client : known(origin);
   const path = absolute.origin === undefined ? joinedCallUrl(declared.path, text).path : absolute.path;
   const segments = path.split("/").filter((segment) => segment !== "");
   return segments.length > 0 && segments.every((segment) => segment === RUN_TIME_HOLE) ? undefined : { ...(base === undefined ? {} : { base }), path };
