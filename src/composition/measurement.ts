@@ -6,6 +6,7 @@ import type { Result } from "../core/domain/shared/result.ts";
 import { INDEX_STORE_DIRECTORY, type CodeGraph } from "../core/ports/code-graph.port.ts";
 import type { ContractConsequencesQueries } from "../core/ports/contract-consequences-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
+import type { DerivedFacts } from "../core/ports/derived-facts.port.ts";
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
 import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
@@ -118,6 +119,26 @@ export function measuredIndexDiscard(deps: MeasurementDeps): (discard: IndexDisc
  * A port whose named methods each write one stage line: the readers a request runs over the whole snapshot, so a host
  * can tell which of them its time went to. Lines carry no request id; under concurrent requests they interleave.
  */
+/** One `derived-facts` line per call of `reader` that found or derived a fact (ADR-0035): what it kept, and what the cache holds after. */
+export function measuredDerivedFacts<T extends object>(port: T, facts: DerivedFacts, reader: string, deps: MeasurementDeps): T {
+  const measuredPort: T = Object.create(port);
+  for (const method of Object.keys(port) as (keyof T & string)[]) {
+    const call = port[method];
+    if (typeof call !== "function") continue;
+    Object.defineProperty(measuredPort, method, {
+      value: async (...args: unknown[]) => {
+        try {
+          return await call.apply(port, args);
+        } finally {
+          const tally = facts.drain();
+          if (tally.hits + tally.misses > 0) reportBestEffort({ event: "derived-facts", reader, hits: tally.hits, misses: tally.misses, admitted: tally.admitted, admitted_bytes: tally.admittedBytes, evicted: tally.evicted, skipped: tally.skipped, fact_bytes: tally.factBytes, retained_bytes: tally.retainedBytes }, deps);
+        }
+      },
+    });
+  }
+  return measuredPort;
+}
+
 export function measuredStages<T extends object>(port: T, stages: { readonly [K in keyof T]?: string }, deps: MeasurementDeps): T {
   const measuredPort: T = Object.create(port);
   for (const [method, stage] of Object.entries(stages) as [keyof T & string, string][]) {

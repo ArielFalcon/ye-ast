@@ -3,6 +3,8 @@ import { isBuiltin } from "node:module";
 import ts from "typescript";
 import { isPackageManifest, isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 
 export type SourceReader = (file: string) => Promise<string | undefined>;
 
@@ -197,4 +199,30 @@ export function moduleResolverOf(sources: readonly SourceFile[], options?: { jso
     byOption.set(jsonModules, resolver);
   }
   return resolver;
+}
+
+/**
+ * The resolver of a source list whose answers are kept as derived facts (ADR-0035). A resolution reads the importing
+ * file, the specifier, which paths the snapshot holds and the contents of its JSON files (configurations and manifests),
+ * nothing else: an edit to any other file keeps every resolution.
+ */
+export function rememberedModuleResolver(sources: readonly SourceFile[], facts: DerivedFacts): ModuleResolver {
+  const resolver = moduleResolverOf(sources);
+  let snapshot: string | undefined;
+  const asked = new Map<string, Promise<ModuleResolution>>();
+  return {
+    resolve(from, specifier) {
+      const key = JSON.stringify([from, specifier]);
+      let held = asked.get(key);
+      if (held === undefined) {
+        snapshot ??= facts.fingerprint({
+          paths: sources.map(({ path }) => path).toSorted(compareText),
+          json: sources.filter(({ path }) => path.endsWith(".json")).map(({ path, content }) => [path, content]).toSorted(([a], [b]) => compareText(a!, b!)),
+        });
+        held = facts.ofInputs("ts-module-resolution", { snapshot, from, specifier }, () => resolver.resolve(from, specifier));
+        asked.set(key, held);
+      }
+      return held;
+    },
+  };
 }

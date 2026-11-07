@@ -93,7 +93,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             if (indexed !== "unavailable" && "fault" in indexed) return { ok: false, fault: indexed.fault };
             if (indexed !== "unavailable") stores.push(indexed.store);
             const origins = indexed === "unavailable" ? undefined : await deps.relations.extract(sources, { memberProofs: memberProofContextOf(loaded.value, context.scope) });
-            const proofs = indexed === "unavailable" ? undefined : await referenceProofsOf(deps.importOrigins?.(loaded.value.sources), indexed.store, loaded.value, context.signal);
+            const proofs = indexed === "unavailable" ? undefined : await referenceProofsOf(deps.importOrigins?.(loaded.value.sources, undefined, prepared.value.facts), indexed.store, loaded.value, context.signal);
             return {
               ok: true,
               value: {

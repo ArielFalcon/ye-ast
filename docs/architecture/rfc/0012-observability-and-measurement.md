@@ -253,6 +253,20 @@ A live query writes the same lines: its lookups run after the capture is reconci
 ([ADR-0030](../adr/0030-live-captures-use-the-snapshot-data-cache.md)), so a `hit` in a live request means the tree's
 content did not change since an earlier call, and a `miss` that it did or that nothing was retained.
 
+A **derived-facts line**, one per call of a reader that found or derived a fact kept by content
+([ADR-0035](../adr/0035-derived-facts-are-retained-by-content.md)), when measurement is configured; derived facts write
+no `cache` line each:
+
+```json
+{"ye_ast":{"event":"derived-facts","reader":"import-origins","hits":1180,"misses":4,"admitted":4,"admitted_bytes":2210,"evicted":0,"skipped":0,"fact_bytes":1835008,"retained_bytes":9437184}}
+```
+
+`hits` and `misses` count the facts the call found kept and the ones it derived, `admitted` and `admitted_bytes` the
+derived ones the cache kept and their charge, `evicted` the entries of any kind those admissions displaced, and
+`skipped` the facts larger than the whole budget. The counts are those of the snapshot's view since its previous line,
+so concurrent readers of one snapshot share them. `fact_bytes` and `retained_bytes` are what the cache holds after the
+call: its derived facts, and every entry.
+
 An **index-cache line**, one per kept index the cache's retention removes
 ([ADR-0027](../adr/0027-retention-of-immutable-index-entries.md)), when measurement is configured:
 
