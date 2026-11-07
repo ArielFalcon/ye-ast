@@ -11,6 +11,8 @@ export interface TemplateUnit {
   text: string;
   /** The line of the file the first line of the text sits on. */
   firstLine: number;
+  /** Where the text starts in its file, for the sites that name a place in the file: the start of its first line; absent for a file of its own. */
+  offset?: number;
   scope: readonly ScopeMember[];
 }
 
