@@ -5,7 +5,7 @@ import type { CallSite, HttpTarget, StatedRequest } from "../../domain/topology/
 import type { CallSiteReader } from "../../domain/topology/call-site.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import { manifestPackages, createModuleResolver, type ModuleResolver } from "./module-resolver.ts";
+import { moduleResolverOf, type ModuleResolver } from "./module-resolver.ts";
 import { buildDefines, type BuildDefines } from "./url-define.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 
@@ -110,10 +110,8 @@ export function createHttpCallSites(): CallSiteReader {
 }
 
 function readerOf(files: readonly SourceFile[]): { shapes: ReadonlyMap<string, FileShape>; reader: Reader } {
-  /* The module resolver reads the config files of the snapshot too, so the map holds every source it was given. */
-  const texts = new Map(files.map((file) => [file.path, file.content]));
   const shapes = new Map(files.filter((file) => isTypeScriptSource(file.path)).map((file) => [file.path, describe(file)]));
-  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(files));
+  const modules = moduleResolverOf(files);
   const wrappers = wrapperMethods(shapes);
   return { shapes, reader: new Reader(shapes, modules, wrappers, buildDefines(files)) };
 }

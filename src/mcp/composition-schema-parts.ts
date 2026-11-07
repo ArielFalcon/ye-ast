@@ -234,13 +234,14 @@ export const partSchema = z.discriminatedUnion("kind", [
   part("trace-step", {
     anchor: ids.anchor, kindName: z.string(), step: count, depth: count, parent: count.exactOptional(), seen: count.exactOptional(),
     at: z.strictObject({ line: count, column: count.exactOptional() }).exactOptional(),
-    via: z.enum(["call", "own-member", "reference", "member"]).exactOptional(),
+    via: z.enum(["call", "own-member", "reference", "member", "dispatch", "template"]).exactOptional(),
     deferred: z.literal(true).exactOptional(),
     leaves: z.array(z.strictObject({ anchor: ids.anchor, deferred: z.literal(true).exactOptional() })).exactOptional(),
     external: z.array(z.discriminatedUnion("kind", [
       z.strictObject({ kind: z.literal("import"), module: z.string(), names: strings }),
       z.strictObject({ kind: z.enum(["global", "unnamed"]), names: strings }),
     ])).exactOptional(),
+    alternatives: z.array(ids.anchor).exactOptional(),
   }),
   part("trace-root", { target: z.string(), steps: z.array(count) }),
   part("reading-range", { file: ids.file, start: count, end: count, steps: z.array(count) }),

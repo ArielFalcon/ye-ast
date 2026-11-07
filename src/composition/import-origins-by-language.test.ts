@@ -19,6 +19,8 @@ function reader(extension: string, module: string, binding: RootBinding = { kind
     rootOrigins: async (sites) => answer(sites),
     rootBindings: async (sites) => sites.map((site): RootBinding => (site.file.endsWith(extension) ? binding : { kind: "unknown" })),
     declaredTypes: async (sites) => sites.map(() => ({ kind: "unknown" as const })),
+    dispatchTargets: async (sites) => sites.map(() => ({ kind: "unknown" as const })),
+    receiverMethods: async (sites) => sites.map(() => ({ kind: "unknown" as const })),
     replacedRoots: async () => NO_REPLACED,
   };
 }

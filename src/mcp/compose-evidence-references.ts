@@ -55,7 +55,7 @@ export function partReferences(part: Part): Reference[] {
     case "outline-declaration":
       return [ref("anchor", "anchor", part.anchor), ...many("part", "children", part.children ?? [])];
     case "trace-step":
-      return [ref("anchor", "anchor", part.anchor), ...many("anchor", "leaves.anchor", (part.leaves ?? []).map((leaf) => leaf.anchor))];
+      return [ref("anchor", "anchor", part.anchor), ...many("anchor", "leaves.anchor", (part.leaves ?? []).map((leaf) => leaf.anchor)), ...many("anchor", "alternatives", part.alternatives ?? [])];
     case "reading-range":
       return [ref("file", "file", part.file)];
     case "trace-root":

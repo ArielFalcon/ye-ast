@@ -63,13 +63,17 @@ export function controlFault(fault: CodedFault): ControlFault {
 
 /** The text of a fault: its kind first, its detail and entries, and a next step only where an argument can correct it. */
 export function renderFault(fault: RenderedFault, query?: FaultQueryContext): string {
-  const entries = "entries" in fault ? fault.entries.map((entry) => `\n  - ${"line" in entry ? `${entry.file}:${entry.line}` : unknownTargetKey(entry)}: ${declarationText(entry)}`).join("") : "";
+  const entries = "entries" in fault ? fault.entries.map((entry) => `\n  - ${"kind" in entry ? entrypointText(entry) : `${"line" in entry ? `${entry.file}:${entry.line}` : unknownTargetKey(entry)}: ${declarationText(entry)}`}`).join("") : "";
   const head = `fault: ${fault.kind}\n${displayDetail(fault).trim()}${entries}`;
   if (fault.kind === "composition-source-fault") {
     return `${head}\nThe composition returned nothing: queries[${fault.requestIndices.join(", ")}] (${fault.family}) failed. Correct them as below and resend the whole composition.\n${renderFault(fault.cause, query)}`;
   }
   const step = nextStep(fault, query);
   return step === undefined ? head : `${head}\nNext step: ${step}`;
+}
+
+function entrypointText(entry: { kind: string; name: string; candidates: readonly string[] }): string {
+  return `${entry.kind} ${entry.name}: ${entry.candidates.length === 0 ? `the map holds no ${entry.kind}` : `the map's ${entry.kind} names: ${entry.candidates.join(", ")}`}`;
 }
 
 function displayDetail(fault: RenderedFault): string {
@@ -153,6 +157,8 @@ function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-faul
       return query?.family === "outline"
         ? "Use a listed dotted path as focus[].symbol, or a line inside a declaration as focus[].line; files lists the file whole. Candidates are alternatives, not substitutions."
         : `Use a listed candidate as targets[].symbol, or an inclusive line range {file, start, end}. A line range listed here covers no declaration and no code: call ye_ast_outline for these files at the same ${query?.live ? "live state" : "revision"} and pick a range inside a declaration's span. Candidates are alternatives, not substitutions.`;
+    case "unknown-entrypoint":
+      return "Use a listed name of that kind as targets[].name, spelled as ye_ast_entrypoints lists it at the same revision; an empty list means the map holds no entrypoint of that kind. Candidates are alternatives, not substitutions.";
     case "top-level-line":
       return "The line lies outside every declaration: focus on a line inside one, or on a listed dotted path as focus[].symbol; files lists the file whole.";
     case "unknown-change-path":

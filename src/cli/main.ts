@@ -10,7 +10,7 @@ import { isPositiveCount } from "../core/domain/shared/count.ts";
 import { WALK_BOUND_FIELDS, type WalkBoundsField } from "../core/domain/shared/fact.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineFault, OutlineQueries, OutlineRequest, OutlineSelector } from "../core/ports/outline-queries.port.ts";
-import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
+import { ENTRYPOINT_KINDS, type EntrypointTarget, type TraceFault, type TraceQueries, type TraceRequest } from "../core/ports/trace-queries.port.ts";
 import type { WorkspaceQueries, WorkspaceRequest } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import type { DecisionQueries, DecisionsRequest } from "../core/ports/decision-queries.port.ts";
@@ -65,7 +65,7 @@ const USAGE = [
   "       ye-ast importers [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
   "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
   "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] --focus <file>:<symbol> | --focus <file>:<line> ... <repo>",
-  "       ye-ast trace [--revision <rev> | --live] [--repo-id <id>] [scope] [--depth <n>] [--expansions <n>] <repo> <file>:<symbol> | <file>:<start>-<end> ...   (what the declarations execute, in source order, with a reading plan)",
+  "       ye-ast trace [--revision <rev> | --live] [--repo-id <id>] [scope] [--depth <n>] [--expansions <n>] [--entrypoint <kind>:<name>]... <repo> [<file>:<symbol> | <file>:<start>-<end>] ...   (declarations or entrypoints, not both: what they execute, in source order, with a reading plan)",
   "       ye-ast workspace [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast decisions [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast init --trust trusted|untrusted [--workspace <file>] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration)",
@@ -75,6 +75,7 @@ const USAGE = [
   "--repo-id: the name every fact carries; the directory name of the repository's main worktree when omitted, so every worktree of one repository answers the same name",
   "--live: reads the working tree of a repository declared trusted (ye-ast init --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr and as a live sibling of the fact in the JSON",
   "--focus: outline only, repeatable, instead of files: <file>:<symbol> selects the declarations whose dotted containment path ends with it at whole names (Class.member, or a bare name at any depth); <file>:<line> the innermost declaration holding that line. Each match comes with its containers, how many of the file's declarations were left out, and what its own body uses outside itself (a declaration, a package or a global, with the lines of each use; an unproved use is a cut), without imports",
+  "--entrypoint: trace only, repeatable, instead of declarations: an entrypoint of the map at the same revision, by its kind (http-route, ui-route, listener, job) and its name as the map prints it, split at the first colon (http-route:POST /orders, ui-route:/orders/:id); it starts at the handler of every entrypoint of that kind and name, a UI route at its component, and a name the map does not hold is the unknown-entrypoint fault listing the names of that kind",
   "--offline: reads every repository from its own clone and refreshes no declared remote, as under untrusted; only workspace and decisions take it",
   "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers, importers, outline, trace, workspace and decisions; without --include every path is included; --exclude wins)",
   "changed: [--changed <glob>]...   (impact only: globs over the changed paths; only the change's paths they select seed the walk, while the repository is read whole, so callers outside them are known; a glob that selects no changed path is an error)",
@@ -83,7 +84,7 @@ const USAGE = [
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
 ].join("\n");
 
-type Query = () => Promise<Result<unknown, ImpactFault | OutlineFault | WorkspaceFault>>;
+type Query = () => Promise<Result<unknown, ImpactFault | OutlineFault | WorkspaceFault | TraceFault>>;
 
 /** The stale notice a live query reports once its answer is built, when the working tree moved. */
 interface StaleWatch {
@@ -129,10 +130,11 @@ export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Pr
 }
 
 /** Every line a fault prints: the kind and detail, then the symbol each entry named and what its file declares. */
-function faultText(fault: ImpactFault | OutlineFault | WorkspaceFault, redaction: Redaction): string[] {
+function faultText(fault: ImpactFault | OutlineFault | WorkspaceFault | TraceFault, redaction: Redaction): string[] {
   const entries =
     fault.kind === "unknown-symbol" ? fault.entries.map((entry) => `  - ${unknownTargetKey(entry)}: ${declarationText(entry)}`)
     : fault.kind === "top-level-line" ? fault.entries.map((entry) => `  - ${entry.file}:${entry.line}: ${declarationText(entry)}`)
+    : fault.kind === "unknown-entrypoint" ? fault.entries.map((entry) => `  - ${entry.kind}:${entry.name}: ${entry.candidates.length === 0 ? `the map holds no ${entry.kind}` : `the map's ${entry.kind} names: ${entry.candidates.join(", ")}`}`)
     : [];
   return [`ye-ast: ${fault.kind}: ${redaction.redact(fault.detail.trim())}`, ...entries.map((line) => redaction.redact(line))];
 }
@@ -323,7 +325,7 @@ async function queryOf(command: string | undefined, args: readonly string[], dep
       return request && (() => deps.outline.outline({ ...request, signal, ...(request.live && { onStale }) }));
     }
     case "trace": {
-      const request = await parseCallersRequest(args, deps, TRACE_BUDGET_OPTIONS);
+      const request = await parseTraceRequest(args, deps);
       return request && (() => deps.trace.walk({ ...request, signal, ...(request.live && { onStale }) }));
     }
     case "workspace": {
@@ -486,6 +488,34 @@ async function parseCallersRequest(args: readonly string[], deps: RepositoryNami
   } catch {
     return undefined;
   }
+}
+
+async function parseTraceRequest(args: readonly string[], deps: RepositoryNaming): Promise<TraceRequest | undefined> {
+  try {
+    const { values, positionals } = parseArgs({
+      args: [...args],
+      options: { revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, entrypoint: { type: "string", multiple: true }, ...SCOPE_OPTIONS, ...TRACE_BUDGET_OPTIONS },
+      allowPositionals: true,
+    });
+    const [path, ...specs] = positionals;
+    const budget = parseBudget(values);
+    const targets = [...specs.map(parseTarget), ...(values.entrypoint ?? []).map(parseEntrypoint)];
+    if (specs.length > 0 && values.entrypoint !== undefined) return undefined;
+    const scope = parseScope(values);
+    const at = atRevision(values);
+    if (path === undefined || targets.length === 0 || budget === undefined || scope === undefined || at === undefined || targets.some((target) => target === undefined)) return undefined;
+    return { ...(await repositoryOf(deps, path, values["repo-id"])), ...at, targets: targets as TraceRequest["targets"], ...scope, ...withBudget(budget) };
+  } catch {
+    return undefined;
+  }
+}
+
+/** `<kind>:<name>`, split at the first colon, since a kind holds none and a name may (`ui-route:/orders/:id`). */
+function parseEntrypoint(spec: string): EntrypointTarget | undefined {
+  const colon = spec.indexOf(":");
+  const kind = ENTRYPOINT_KINDS.find((known) => known === spec.slice(0, colon));
+  const name = spec.slice(colon + 1);
+  return colon > 0 && kind !== undefined && name !== "" ? { kind, name } : undefined;
 }
 
 async function parseOutlineRequest(args: readonly string[], deps: RepositoryNaming): Promise<OutlineRequest | undefined> {

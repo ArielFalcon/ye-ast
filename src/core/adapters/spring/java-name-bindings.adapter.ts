@@ -7,6 +7,8 @@ import { readsPastRoot, type RootOrigin } from "../../domain/impact/edge-policy.
 import type { ImportOrigins, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import { createJavaRootBindings } from "./java-root-bindings.ts";
 import { createJavaDeclaredTypes } from "./java-declared-types.ts";
+import { createJavaDispatchTargets } from "./java-dispatch-targets.ts";
+import { createJavaReceiverMethods } from "./java-receiver-methods.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaProject, describeFile, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
@@ -38,6 +40,8 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
     origins: async (sites) => sites.map((site) => unresolved(site)),
     rootBindings: (sites, signal) => createJavaRootBindings(parser(), sources)(sites, signal),
     declaredTypes: createJavaDeclaredTypes(parser, sources, paths),
+    dispatchTargets: createJavaDispatchTargets(parser, sources, paths),
+    receiverMethods: createJavaReceiverMethods(parser, sources, paths),
     replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),
     rootOrigins: async (sites, signal) => {
       const results: RootOrigin[] = sites.map((site) => unresolved(site));
@@ -140,13 +144,13 @@ function typeAt(leaf: Node): Spelled | undefined {
 
 /**
  * The declared types around a node, innermost first; `undefined` when a class around it is one the reader does not
- * place (anonymous, or declared inside a method), since its members are then not known.
+ * place (declared inside a method), since its members are then not known. An anonymous class body is a scope the
+ * resolver reads at the node's place.
  */
 function enclosingTypes(node: Node, file: JavaFile, project: JavaProject): TypeDecl[] | undefined {
   const declared = project.types.filter((type) => type.file === file);
   const around: TypeDecl[] = [];
   for (let parent = node.parent; parent !== null; parent = parent.parent) {
-    if (parent.type === "class_body" && parent.parent?.type === "object_creation_expression") return undefined;
     if (!TYPE_DECLARATIONS.has(parent.type)) continue;
     const type = declared.find((candidate) => candidate.node.id === parent.id);
     if (type === undefined) return undefined;

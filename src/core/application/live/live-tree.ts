@@ -271,7 +271,8 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
     const synced = await graph.syncMirror(indexRoot, behind, signal);
     if (!synced.ok && synced.fault.kind === "aborted") return unavailable(synced.fault.detail);
     unparsed = synced.ok ? sorted([...new Set([...current.unparsedSinceBuild, ...synced.value.filesUnparsed])]) : [];
-    if (synced.ok && !(request.synthesized === true && unparsed.length > 0)) {
+    const staleForAnswer = request.synthesized === true && unparsed.length > 0;
+    if (synced.ok && !staleForAnswer) {
       notHeld = sorted([...synced.value.filesNotIndexed, ...synced.value.filesFailed]);
     } else {
       const rebuilt = await graph.buildMirror(indexRoot, signal);

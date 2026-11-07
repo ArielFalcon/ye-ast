@@ -4,12 +4,12 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredType, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, typeVariableAround } from "./java-root-bindings.ts";
-import { createJavaProject, describeFile, qualifiedTypeName, type JavaFile, type JavaProject } from "./java-symbols.ts";
+import { createJavaProject, describeFile, qualifiedTypeName, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: DeclaredType = { kind: "unknown" };
-const TYPE_DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration", "interface_declaration", "enum_declaration", "record_declaration"]);
+export const TYPE_DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration", "interface_declaration", "enum_declaration", "record_declaration"]);
 /** Values whose class is one no declaration names: an implementation of an interface the sources do not state. */
-const FUNCTION_VALUES: ReadonlySet<string> = new Set(["lambda_expression", "method_reference"]);
+export const FUNCTION_VALUES: ReadonlySet<string> = new Set(["lambda_expression", "method_reference"]);
 const QUALIFIED = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
 /** Nodes a qualified name is written as, whose last named child is its last segment. */
 const QUALIFIED_LINKS: ReadonlySet<string> = new Set(["scoped_identifier", "scoped_type_identifier", "field_access"]);
@@ -23,12 +23,12 @@ const DYNAMIC_IMPLEMENTATIONS: ReadonlyMap<string, string> = new Map([
   ["LambdaMetafactory", "java.lang.invoke.LambdaMetafactory"],
 ]);
 /** Sources of JVM languages no extractor reads: their classes may implement any platform type. */
-const UNREAD_JVM_SOURCE = /\.(kt|kts|groovy|scala)$/;
+export const UNREAD_JVM_SOURCE = /\.(kt|kts|groovy|scala)$/;
 /** The supertypes every repository class, enum and record has without writing them (JLS 8.1.4, 8.9, 8.10). */
 const IMPLICIT_SUPERTYPES: readonly string[] = ["java.lang.Object", "java.lang.Enum", "java.lang.Comparable", "java.io.Serializable", "java.lang.constant.Constable", "java.lang.Record"];
 
 /** Where a type name written in a Java source leads: a type of the repository, a platform type by its qualified name, or nothing proven. */
-type Resolved = { kind: "repository" } | { kind: "platform"; fqn: string } | undefined;
+export type Resolved = { kind: "repository"; type?: TypeDecl } | { kind: "platform"; fqn: string } | undefined;
 
 /**
  * `ImportOrigins.declaredTypes` for Java sources: a platform type (`JavaProject.isPlatformName`) the annotation names
@@ -95,7 +95,7 @@ function subtypedTypes(files: readonly JavaFile[], project: JavaProject): Readon
 }
 
 /** The supertypes a declaration writes: a class's superclass and interfaces, an interface's, and an anonymous class's type. */
-function supertypesOf(node: Node): Node[] {
+export function supertypesOf(node: Node): Node[] {
   if (isAnonymous(node)) return [node.childForFieldName("type")!];
   if (!TYPE_DECLARATIONS.has(node.type)) return [];
   const superclass = node.childForFieldName("superclass")?.namedChildren[0];
@@ -109,7 +109,7 @@ function supertypesOf(node: Node): Node[] {
  * resolver does not prove it a repository type or another platform type; an import, a qualified name and a name no
  * import settles all count.
  */
-function namesDynamicImplementation(node: Node, file: JavaFile, project: JavaProject): boolean {
+export function namesDynamicImplementation(node: Node, file: JavaFile, project: JavaProject): boolean {
   if (node.type !== "identifier" && node.type !== "type_identifier") return false;
   const fqn = DYNAMIC_IMPLEMENTATIONS.get(node.text);
   if (fqn === undefined) return false;
@@ -119,16 +119,16 @@ function namesDynamicImplementation(node: Node, file: JavaFile, project: JavaPro
   return resolved === undefined || (resolved.kind === "platform" && resolved.fqn === fqn);
 }
 
-function isAnonymous(node: Node): boolean {
+export function isAnonymous(node: Node): boolean {
   return node.type === "object_creation_expression" && node.namedChildren.some((child) => child?.type === "class_body");
 }
 
-function isAspect(node: Node): boolean {
+export function isAspect(node: Node): boolean {
   return (node.type === "marker_annotation" || node.type === "annotation") && node.childForFieldName("name")?.text.split(".").at(-1) === "Aspect";
 }
 
 /** The whole type name an annotation's first name `spelled` begins at the 1-based place. */
-function annotationAt(root: Node, line: number, column: number, spelled: string): Node | undefined {
+export function annotationAt(root: Node, line: number, column: number, spelled: string): Node | undefined {
   const leaf = root.descendantForPosition({ row: line - 1, column: column - 1 });
   if (leaf === null || leaf.type !== "type_identifier" || leaf.text !== spelled || leaf.startPosition.column !== column - 1) return undefined;
   let name: Node = leaf;
@@ -137,7 +137,7 @@ function annotationAt(root: Node, line: number, column: number, spelled: string)
 }
 
 /** Where a type name leads, read through the project's one resolver in its strict reading. */
-function resolve(type: Node, file: JavaFile, project: JavaProject, scope: ReturnType<typeof enclosingType>, at: Node): Resolved {
+export function resolve(type: Node, file: JavaFile, project: JavaProject, scope: ReturnType<typeof enclosingType>, at: Node): Resolved {
   return resolveName((type.type === "generic_type" ? type.namedChildren[0] : type)?.text.replace(/\s+/g, "") ?? "", file, project, scope, at);
 }
 
@@ -147,7 +147,7 @@ function resolveName(name: string, file: JavaFile, project: JavaProject, scope: 
   const where = { file, type: scope };
   if (rest.length > 0 && PACKAGE_SEGMENT.test(head)) {
     const declared = project.lookupType(name, where);
-    if (declared !== undefined) return declared === "ambiguous" ? undefined : { kind: "repository" };
+    if (declared !== undefined) return declared === "ambiguous" ? undefined : { kind: "repository", type: declared };
     return project.isPlatformName(name) ? { kind: "platform", fqn: name } : undefined;
   }
   if (typeVariableAround(at)?.namedChildren[0]?.text === head) return undefined;
@@ -155,7 +155,8 @@ function resolveName(name: string, file: JavaFile, project: JavaProject, scope: 
   if (bound === "ambiguous" || bound === "unsettled") return undefined;
   if (bound !== undefined) {
     if ("local" in bound) return rest.length === 0 ? { kind: "repository" } : undefined;
-    return typeof project.lookupType(name, where) === "object" ? { kind: "repository" } : undefined;
+    const declared = project.lookupType(name, where);
+    return typeof declared === "object" ? { kind: "repository", type: declared } : undefined;
   }
   const fqn = qualifiedTypeName(name, where, project);
   return fqn !== undefined && project.isPlatformName(fqn) ? { kind: "platform", fqn } : undefined;

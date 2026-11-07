@@ -2,7 +2,7 @@ import ts from "typescript";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
-import { localReceivers } from "./function-value-calls.ts";
+import { annotated, localReceivers } from "./function-value-calls.ts";
 import { isStatic } from "./syntax-names.ts";
 import { sourceTree } from "./source-tree.ts";
 
@@ -27,7 +27,8 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
       const callable = (node: ts.FunctionDeclaration | ts.MethodDeclaration | ts.MethodSignature, overridable: boolean): void => {
         if (node.name === undefined) return;
         const body = !ts.isMethodSignature(node) && node.body !== undefined;
-        callables.push({ name: node.name.getText(tree), start: lineOf(node), nameLine: lineOf(node.name), body, overridable });
+        const returns = annotated(node.type, tree);
+        callables.push({ name: node.name.getText(tree), start: lineOf(node), nameLine: lineOf(node.name), body, overridable, ...(returns === undefined ? {} : { returns }) });
       };
       const add = (name: ts.PropertyName | ts.BindingName | undefined): void => {
         if (name === undefined || ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) return;

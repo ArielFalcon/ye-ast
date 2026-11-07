@@ -1,8 +1,9 @@
 /**
  * How a step was reached from its parent: a resolved call or instantiation, `this.<member>`, a function passed as a
- * value, or a member of a class root that has a body or an initializer that makes calls.
+ * value, a member of a class root that has a body or an initializer that makes calls, or the one body a body-less
+ * method dispatches to.
  */
-export type TraceVia = "call" | "own-member" | "reference" | "member";
+export type TraceVia = "call" | "own-member" | "reference" | "member" | "dispatch" | "template";
 
 /** A proven terminal declaration folded under the step that calls or passes it: expanded, with no call, external call or cut. */
 export interface TraceLeaf {
@@ -38,6 +39,8 @@ export interface TraceStep {
   seen?: number;
   leaves?: readonly TraceLeaf[];
   external?: readonly ExternalCalls[];
+  /** Every body a call to this body-less method may run, when the declared hierarchy names them all (R7); one is expanded below it `via: "dispatch"`. */
+  alternatives?: readonly Omit<TraceLeaf, "deferred">[];
 }
 
 /** One range of a file to read, with the steps whose declarations it covers. */

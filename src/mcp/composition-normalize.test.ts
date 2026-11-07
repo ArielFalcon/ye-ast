@@ -210,6 +210,12 @@ function rebuildTrace(t: Tables): TraceValue {
         }),
       }),
       ...(step.external === undefined ? {} : { external: step.external }),
+      ...(step.alternatives === undefined ? {} : {
+        alternatives: step.alternatives.map((alternative) => {
+          const { file, symbol, line, endLine } = declaration(alternative);
+          return { symbol, file, start: line, end: endLine ?? line };
+        }),
+      }),
     })),
     readingPlan: { ranges: t.list("/value/readingPlan/ranges", "reading-range").map((range) => ({ file: t.path(range.file), start: range.start, end: range.end, steps: range.steps })), lines: totals.lines },
     cost: { expanded: totals.expanded },
@@ -484,6 +490,7 @@ test("a trace anchors each step and each leaf at its declaration, on the anchor 
   assert.deepEqual(steps.map((s) => [s.step, s.parent, t.handler(s.anchor).symbol]), [[0, undefined, "one"], [1, 0, "find"], [2, 0, "audit"], [3, 0, "find"], [4, undefined, "drop"], [5, 4, "one"]]);
   assert.equal(steps[3]!.anchor, steps[1]!.anchor, "a seen step anchors where its first occurrence does");
   assert.deepEqual(steps[1]!.leaves?.map((leaf) => [leaf.anchor === steps[1]!.leaves![0]!.anchor, leaf.deferred]), [[true, undefined], [true, true], [false, undefined]]);
+  assert.deepEqual(steps[1]!.alternatives?.map((alternative) => t.handler(alternative)), [{ path: "src/OrderServiceImpl.java", symbol: "find", line: 12, endLine: 20 }]);
   const outline = new Tables(normalizeSource(sourceFixture("outline"), digest));
   assert.equal(outline.partOf(outline.list("/value/files", "outline-file")[0]!.declarations[1]!, "outline-declaration").anchor, steps[0]!.anchor);
 });

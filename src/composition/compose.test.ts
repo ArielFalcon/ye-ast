@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, test } from "node:test";
+import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { EXIT_CODE } from "../cli/main.ts";
 import { REDACTED } from "../core/ports/redaction.port.ts";
@@ -737,6 +738,70 @@ test("a trace over a real index leaves a library global's member call as a globa
   assert.deepEqual(shadowed.value.status === "partial" && shadowed.value.cuts.map((cut) => cut.at[0]), ["src/shadow.ts:4 Math.max"]);
 });
 
+/** Whether a trace answered steps or folded leaves at a declaration named `symbol`. */
+function reaches(fact: Awaited<ReturnType<TraceQueries["walk"]>>, symbol: string): boolean {
+  if (!fact.ok || fact.value.status === "unknown") return true;
+  return fact.value.value.steps.some((step) => step.symbol === symbol || (step.leaves ?? []).some((leaf) => leaf.symbol === symbol));
+}
+
+test("a trace over a real index never takes a class's method as what runs on a type a sibling also fits through a brand both inherit", async () => {
+  writeFileSync(join(repo, "src", "kinds.ts"), ["export abstract class Base { protected brand = 0; }", "export class Plain extends Base { save(): number { return 1; } }", "export class Twin extends Base { save(): number { return 2; } }", "export function use(p: Plain): number { return p.save(); }", "use(new Twin());", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "siblings");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const fact = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/kinds.ts", symbol: "use" }] });
+
+  assert.ok(fact.ok);
+  assert.equal(fact.value.status, "partial");
+  assert.equal(reaches(fact, "save"), false);
+});
+
+test("a trace over a real index takes no method as what runs on a receiver it sees only through a wrapper, a cast, an index, an optional chain, a comma, a condition or a call", async () => {
+  const forms: Record<string, string> = {
+    paren: "(p).save()",
+    bang: "p!.save()",
+    satisfied: "(p satisfies Plain).save()",
+    cast: "(p as Plain).save()",
+    angle: "(<Plain>p).save()",
+    element: "[p][0].save()",
+    optional: "p?.save()",
+    comma: "(0, p).save()",
+    conditional: "(p ? p : p).save()",
+    called: "(() => p)().save()",
+  };
+  writeFileSync(join(repo, "src", "forms.ts"), [
+    "export class Plain { save(): number { return 1; } }",
+    "export class Twin { save(): number { return 2; } }",
+    ...Object.entries(forms).map(([name, call]) => `export function ${name}(p: Plain): number { return ${call}; }`),
+    "export class Holder { field: Plain = new Plain(); run(): number { return (this.field).save(); } }",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "forms");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const indexed = ["paren", "bang", "satisfied", "cast", "angle", "optional", "Holder.run"];
+  for (const name of [...Object.keys(forms), "Holder.run"]) {
+    const fact = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/forms.ts", symbol: name }] });
+    assert.equal(reaches(fact, "save"), false, name);
+    if (indexed.includes(name)) assert.ok(fact.ok && fact.value.status === "partial", name);
+  }
+  const proven: Record<string, boolean> = { paren: true, bang: true, satisfied: true, cast: false, angle: false, optional: false, constructedCast: false, constructedAngle: false };
+  writeFileSync(join(repo, "src", "branded.ts"), [
+    "export class Branded { private id = 0; save(): number { return this.id; } }",
+    "export class Twin { save(): number { return 2; } }",
+    ...Object.keys(proven).map((name) => `export function ${name}(p: Branded): number { return ${{ ...forms, constructedCast: "(new Branded() as Branded).save()", constructedAngle: "(<Branded>new Branded()).save()" }[name]}; }`),
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "branded");
+  for (const [name, step] of Object.entries(proven)) {
+    const fact = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/branded.ts", symbol: name }] });
+    assert.equal(reaches(fact, "save"), step, `branded ${name}`);
+  }
+});
+
 const JAVA_ORDERS = [
   "package shop;",
   "",
@@ -816,7 +881,10 @@ function committedRepository(name: string, files: Readonly<Record<string, string
   mkdirSync(root);
   const run = (...args: string[]): string => execFileSync("git", args, { cwd: root, env: GIT_ENV, encoding: "utf8" }).trim();
   run("init", "-q");
-  for (const [file, content] of Object.entries(files)) writeFileSync(join(root, file), content);
+  for (const [file, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, file)), { recursive: true });
+    writeFileSync(join(root, file), content);
+  }
   run("add", "-A");
   run("commit", "-q", "-m", name);
   return root;
@@ -847,6 +915,104 @@ test("a Java trace never settles a call by a root it reads past, whether the gra
   assert.deepEqual(await traceOf("qualified", { "Use.java": qualified }), { status: "partial", cuts: [["unresolved-link", "Use.java:11 System.err.println", "Use.java::RepoStream.println"]], steps: [["entry", null], ["println", null]] });
   assert.deepEqual(await traceOf("qualifiedfield", { "Use.java": field }), { status: "complete", cuts: [], steps: [["entry", null]] });
   assert.deepEqual(await traceOf("varalias", { "Use.java": alias }), { status: "complete", cuts: [], steps: [["entry", null], ["println", null], ["println", null]] });
+});
+
+/** The status, cuts and steps (symbol, place, parent, via, the step it repeats and its leaves) of a trace of `Use.entry` over a fresh repository holding `files`. */
+async function javaTrace(name: string, files: Readonly<Record<string, readonly string[]>>) {
+  const answer = await composeQueries({ scratchRoot }).trace.walk({
+    repo: committedRepository(name, Object.fromEntries(Object.entries(files).map(([file, lines]) => [file, [...lines, ""].join("\n")]))),
+    repoId: name,
+    revision: "HEAD",
+    targets: [{ file: "Use.java", symbol: "Use.entry" }],
+  });
+  assert.ok(answer.ok);
+  const { status } = answer.value;
+  return {
+    status,
+    cuts: status === "partial" ? answer.value.cuts.map((cut) => [cut.kind, ...cut.at]) : [],
+    steps: status === "unknown" ? [] : answer.value.value.steps.map((step) => [`${step.file}:${step.line} ${step.symbol}`, step.parent ?? null, step.via ?? null, step.seen ?? null, step.leaves?.map((leaf) => `${leaf.file}:${leaf.start} ${leaf.symbol}`) ?? null]),
+  };
+}
+
+/** A port with one implementation, and a homonym of each of its methods, so a call settled by its name is a cut. */
+const REPO_PORT: Readonly<Record<string, readonly string[]>> = {
+  "Repo.java": ["public interface Repo {", "  void save(String value);", "  Repo find();", "}"],
+  "JdbcRepo.java": ["public class JdbcRepo implements Repo {", "  public void save(String value) {}", "  public Repo find() { return this; }", "}"],
+  "Other.java": ["class Other {", "  void save(String value) {}", "  Repo find() { return null; }", "}"],
+};
+
+test("a Java call on what a repository method declares it returns steps at the method of that declared type, and dispatch expands the one body below it", async () => {
+  const use = ["public class Use {", "  public void entry(Repo param) {", "    param.find().save(\"c\");", "  }", "}"];
+
+  assert.deepEqual(await javaTrace("chained", { ...REPO_PORT, "Use.java": use }), {
+    status: "complete",
+    cuts: [],
+    steps: [
+      ["Use.java:2 entry", null, null, null, null],
+      ["Repo.java:3 find", 0, "call", null, ["JdbcRepo.java:3 find"]],
+      ["Repo.java:2 save", 0, "call", null, ["JdbcRepo.java:2 save"]],
+    ],
+  });
+});
+
+test("a Java call the index resolved on a parameter steps at the method the parameter's declared type names, with a cut at a subclass that overrides it, and is a cut when the declared hierarchy proves nothing", async () => {
+  const use = ["public class Use {", "  public void entry(Plain p) {", "    p.save();", "  }", "}"];
+  const plain = ["class Plain {", "  void save() {}", "}"];
+  const twin = ["class Twin extends Plain {", "  void save() {}", "}"];
+
+  assert.deepEqual(await javaTrace("overridden", { "Use.java": use, "Plain.java": plain, "Twin.java": twin }), {
+    status: "partial",
+    cuts: [["unresolved-link", "Plain.java:2 save", "Twin.java::Twin.save"]],
+    steps: [
+      ["Use.java:2 entry", null, null, null, null],
+      ["Plain.java:2 save", 0, "call", null, null],
+    ],
+  });
+  const kotlin = "class Twin : Plain() { override fun save() { System.exit(1) } }\n";
+  assert.deepEqual(await javaTrace("kotlin", { "Use.java": use, "Plain.java": plain, "Twin.kt": [kotlin] }), {
+    status: "partial",
+    cuts: [["unresolved-link", "Use.java:3 save", "Plain.java::Plain.save"], ["no-extractor", "Twin.kt"]],
+    steps: [["Use.java:2 entry", null, null, null, null]],
+  });
+});
+
+test("a Java call on a parameter whose declared type is a record steps at the record's method, which the index holds as a function of no container", async () => {
+  const use = ["public class Use {", "  public void entry(Order order) {", "    order.total();", "  }", "}"];
+  const order = ["public record Order(int amount) {", "  public int total() { return amount; }", "}"];
+  const other = ["class Other {", "  int total() { return 0; }", "}"];
+
+  assert.deepEqual(await javaTrace("record", { "Use.java": use, "Order.java": order, "Other.java": other }), {
+    status: "complete",
+    cuts: [],
+    steps: [["Use.java:2 entry", null, null, null, ["Order.java:2 total"]]],
+  });
+});
+
+test("a Java method that names a parameter type like an inherited one's, from another package, is an overload: the call through the declared type is not proven to run it", async () => {
+  const files = {
+    "Use.java": ["class Factory {", " b.Sub get() { return new b.Sub(); }", "}", "class Use {", " void entry(Factory f, a.X x) { f.get().save(x); }", "}"],
+    "a/Base.java": ["package a;", "public class Base {", " public void save(X arg) { baseBody(); }", " void baseBody() {}", "}"],
+    "a/X.java": ["package a;", "public class X {}"],
+    "b/Sub.java": ["package b;", "public class Sub extends a.Base {", " public void save(X arg) { subBody(); }", " void subBody() {}", "}"],
+    "b/X.java": ["package b;", "public class X {}"],
+  };
+
+  const answer = await javaTrace("homonym-signature", files);
+
+  assert.equal(answer.status, "partial");
+  assert.ok(!answer.steps.some(([place]) => place === "b/Sub.java:3 save"));
+});
+
+test("a Java call the index resolved on a non-private field or a var local stays a step under an aspect, since nothing falsifies the declared type", async () => {
+  const use = ["public class Use {", "  Plain field;", "  public void entry() {", "    field.save();", "    var local = new Plain();", "    local.save();", "  }", "}"];
+  const plain = ["class Plain {", "  void save() {}", "}"];
+  const aspect = ["@org.aspectj.lang.annotation.Aspect", "class Logging {}"];
+
+  assert.deepEqual(await javaTrace("aspect", { "Use.java": use, "Plain.java": plain, "Logging.java": aspect }), {
+    status: "complete",
+    cuts: [],
+    steps: [["Use.java:3 entry", null, null, null, ["Plain.java:2 save", "Plain.java:1 Plain"]]],
+  });
 });
 
 test("a TypeScript trace settles a call by its package or global root only when the call reads one member below it", async () => {
@@ -1189,7 +1355,7 @@ test("a trace over a real index expands a class root into its members even when 
   assert.deepEqual(answer.value.cuts.map((cut) => cut.at[0]), ["src/make.ts:2 unknown"]);
 });
 
-test("a trace over a real index reads dispatch from syntax: a body expands, static or unoverridden ones settle, a body-less method is a step with a cut listing its implementations", async () => {
+test("a trace over a real index reads dispatch from syntax: a body expands, static or unoverridden ones settle, a body-less method expands the one body its declared hierarchy proves", async () => {
   const files: Record<string, string[]> = {
     "Defaults.java": ["public interface Defaults {", "  default void run() { helper(); }", "  static void helper() {}", "}"],
     "Base.java": ["public abstract class Base {", "  @Deprecated", "  abstract void area();", "  final void fixed() { area(); }", "}"],
@@ -1206,12 +1372,11 @@ test("a trace over a real index reads dispatch from syntax: a body expands, stat
   assert.ok(helper.ok && helper.value.status === "complete");
   assert.ok(run.ok && run.value.status === "complete");
   assert.deepEqual(run.value.value.steps.map(({ symbol, leaves }) => ({ symbol, leaves: leaves?.map((leaf) => leaf.symbol) })), [{ symbol: "run", leaves: ["helper"] }]);
-  assert.ok(fixed.ok && fixed.value.status === "partial");
-  assert.deepEqual(fixed.value.value.steps.map(({ symbol, parent, leaves }) => ({ symbol, parent, leaves })), [
-    { symbol: "fixed", parent: undefined, leaves: undefined },
-    { symbol: "area", parent: 0, leaves: undefined },
+  assert.ok(fixed.ok && fixed.value.status === "complete");
+  assert.deepEqual(fixed.value.value.steps.map(({ symbol, parent, leaves, alternatives }) => ({ symbol, parent, leaves: leaves?.map((leaf) => `${leaf.file}:${leaf.start}`), alternatives })), [
+    { symbol: "fixed", parent: undefined, leaves: undefined, alternatives: undefined },
+    { symbol: "area", parent: 0, leaves: ["src/Sq.java:2"], alternatives: [{ symbol: "area", file: "src/Sq.java", start: 2, end: 2 }] },
   ]);
-  assert.deepEqual(fixed.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/Base.java:2 area", "src/Sq.java::Sq.area"]]);
 });
 
 test("a trace over a real index expands an overridable method with a body and cuts it at the overriders below its owner", async () => {
@@ -1253,12 +1418,13 @@ test("a trace over a real index matches a decorated method to its syntax from th
   assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/deco.ts:4 run", "src/deco.ts::Child.run"]]);
 });
 
-test("a trace over a real index lists an implementation below a parameterized supertype the index left unresolved", async () => {
+test("a trace over a real index lists an implementation below a parameterized supertype the index left unresolved when a lambda may implement the functional owner", async () => {
   writeFileSync(join(repo, "src", "Generic.java"), [
     "interface GPort<T> { void send(T x); }",
     "interface GSub extends GPort<String> { void send(String x); }",
     "class GImpl implements GSub { public void send(String x) {} }",
     "class GUse { void go(GPort<String> p) { p.send(\"x\"); } }",
+    "class GLambda { Runnable task = () -> {}; }",
     "",
   ].join("\n"));
   git("add", "-A");

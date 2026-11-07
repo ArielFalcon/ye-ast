@@ -1,4 +1,5 @@
 import { isSeedable } from "../../domain/change/seeds.ts";
+import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { CALL_EDGE_KINDS, FIELD_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor, placeAt } from "../../domain/impact/impact-cuts.ts";
 import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-fact.ts";
@@ -11,12 +12,12 @@ import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/tr
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import type { ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { DeclaredType, DispatchTargets, ImportOriginSite, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
 import type { RelationExtraction } from "../relations/relation-extractor.ts";
-import type { EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
+import type { EdgeTarget, EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
 import { createDeclarationUses, unsettledBy, type UnresolvedIn } from "../navigation/declaration-uses.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
@@ -30,6 +31,9 @@ const TYPE_KINDS: readonly string[] = ["class", "interface", "component"];
 
 /** Declarations whose syntax says whether they have a body and whether a subtype can override them. */
 const CALLABLE_KINDS: readonly string[] = ["method", "function"];
+
+/** Declarations that hold a value, which a call may find any object in. */
+const VALUE_KINDS: readonly string[] = ["constant", "variable"];
 
 /** Types whose methods have bodies, so a root of one of them runs what its members run. */
 const CLASS_KINDS: readonly string[] = ["class", "component"];
@@ -69,7 +73,20 @@ export interface TraceWalkInput {
   /** The relations impact reads, for the member calls they prove; read when a member call first needs them. */
   memberProofs: () => Promise<Pick<RelationExtraction, "memberUses" | "externalUses">>;
   budget: TraceBudget;
+  /** The roots an entrypoint starts at, of which a class (a UI route's component) runs as a page (R9), and what a component runs as one; absent without such a root. */
+  pages?: { roots: ReadonlySet<GraphNodeId>; of: (component: GraphSymbol) => Promise<PagePlan | undefined> };
   signal?: AbortSignal;
+}
+
+/** What a component runs as a page, beside its constructor and field initializers. */
+export interface PagePlan {
+  /** The members the framework calls itself, in the order it calls them. */
+  lifecycle: readonly string[];
+  /** What its template's event bindings call, in template text order: an own method by name, or the method a proof names. */
+  handlers: readonly ({ file: string; line: number; column: number } & ({ member: string } | { runs: GraphSymbol }))[];
+  /** The declarations its template uses, in template order. */
+  children: readonly GraphSymbol[];
+  cuts: readonly Cut[];
 }
 
 export interface TraceWalk {
@@ -87,7 +104,7 @@ type ProvenCall = { kind: "member"; receiver: SymbolRef; member: SymbolRef } | {
 
 const provenKey = (file: string, line: number, column: number, name: string): string => JSON.stringify([file, line, column, name]);
 
-const placeKey = (line: number, column: number): string => `${line}:${column}`;
+const bindingKey = (line: number, column: number, member: string): string => `${line}:${column}:${member}`;
 
 /**
  * What an external leaf names: a module, or the member path it calls from a global (none for a call nothing roots) and
@@ -145,7 +162,7 @@ interface Body {
  * cut that leaves it free to expand at a later, shallower one. Every read is cached for this walk only.
  */
 export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkInput): Promise<TraceWalk | "aborted"> {
-  const { store, unresolvedIn, origins, targets, inScope, memberDeclarations, syntaxOf, memberProofs, budget, signal } = input;
+  const { store, unresolvedIn, origins, targets, inScope, memberDeclarations, syntaxOf, memberProofs, budget, pages, signal } = input;
   const navigation = createGraphNavigation(store, () => false);
   const uses = createDeclarationUses(store, navigation, unresolvedIn);
   const callsFrom = (node: GraphSymbol): readonly GraphUnresolvedReference[] => uses.referencesFrom(node, CALL_EDGE_KINDS);
@@ -185,27 +202,34 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const { callables, functionValueCalls, receiverBindings } = await syntaxOf(file);
     const byName = new Map<string, DeclaredCallable[]>();
     for (const callable of callables) byName.set(callable.name, [...(byName.get(callable.name) ?? []), callable]);
-    return { callables: byName, functionValueCalls: new Set(functionValueCalls.map(functionValueKey)), receiverBindings: new Map(receiverBindings.map((binding) => [placeKey(binding.line, binding.column), binding])) };
+    const bindings = new Map<string, ReceiverBinding | "ambiguous">();
+    for (const binding of receiverBindings) {
+      const key = bindingKey(binding.line, binding.column, binding.member);
+      bindings.set(key, bindings.has(key) ? "ambiguous" : binding);
+    }
+    return { callables: byName, functionValueCalls: new Set(functionValueCalls.map(functionValueKey)), receiverBindings: bindings };
   });
   /**
    * What the relations prove a member call runs, by its place: a repository method of the class a field or local holds
    * (RFC-0013 R3), or a type from outside the repository a field holds. A place two proofs name, a template's call and a
    * receiver a provider may replace prove nothing here.
    */
-  let provenByPlace: Promise<ReadonlyMap<string, ProvenCall>> | undefined;
-  const provenAt = async (reference: GraphUnresolvedReference): Promise<ProvenCall | undefined> => {
-    provenByPlace ??= memberProofs().then(({ memberUses, externalUses }) => {
-      const byPlace = new Map<string, ProvenCall[]>();
+  let provenByPlace: Promise<{ bySpelling: ReadonlyMap<string, ProvenCall>; byMember: ReadonlyMap<string, ProvenCall> }> | undefined;
+  const provenProofs = () =>
+    (provenByPlace ??= memberProofs().then(({ memberUses, externalUses }) => {
+      const bySpelling = new Map<string, ProvenCall[]>();
+      const byMember = new Map<string, ProvenCall[]>();
       const add = (site: { file: string; line: number; column: number; name: string }, call: ProvenCall): void => {
-        const key = provenKey(site.file, site.line, site.column, site.name);
-        byPlace.set(key, [...(byPlace.get(key) ?? []), call]);
+        for (const [byPlace, key] of [[bySpelling, provenKey(site.file, site.line, site.column, site.name)], [byMember, provenKey(site.file, site.line, site.column, site.name.slice(site.name.lastIndexOf(".") + 1))]] as const) byPlace.set(key, [...(byPlace.get(key) ?? []), call]);
       };
       for (const use of memberUses ?? []) if (use.template !== true) add(use.reference, use.substitutes === undefined ? { kind: "member", receiver: use.receiver, member: use.member } : { kind: "replaceable" });
       for (const use of externalUses ?? []) add(use.reference, { kind: "external", holds: use.holds });
-      return new Map([...byPlace].flatMap(([key, calls]) => (calls.length === 1 ? [[key, calls[0]!]] : [])));
-    });
-    return (await provenByPlace).get(provenKey(reference.file, reference.line, reference.column + 1, reference.name));
-  };
+      const unique = (byPlace: Map<string, ProvenCall[]>) => new Map([...byPlace].flatMap(([key, calls]) => (calls.length === 1 ? [[key, calls[0]!]] : [])));
+      return { bySpelling: unique(bySpelling), byMember: unique(byMember) };
+    }));
+  const provenAt = async (reference: GraphUnresolvedReference): Promise<ProvenCall | undefined> => (await provenProofs()).bySpelling.get(provenKey(reference.file, reference.line, reference.column + 1, reference.name));
+  /** What the relations prove the call that starts at an edge's place runs, by the member the edge reaches. */
+  const provenAtEdge = async (file: string, edge: GraphEdge, member: string): Promise<ProvenCall | undefined> => (await provenProofs()).byMember.get(provenKey(file, edge.line!, edge.column! + 1, member));
   /** The one method a member proof names, declared by the one class it names; none when the index does not place it so. */
   const provenMember = (call: Extract<ProvenCall, { kind: "member" }>): GraphSymbol | undefined => {
     const members = store.symbolsInFiles([call.member.path]).filter((symbol) => symbol.kind === "method" && joinsFact(symbol, call.member));
@@ -225,9 +249,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     return paths.some((written) => (path.length > 0 && covers(written, path, root.open)) || onPrototype(written));
   };
   /** The receiver binding the call's own source proves at the place the call starts, for the member and receiver it spells. */
-  const boundAt = async (reference: GraphUnresolvedReference, member: string): Promise<ReceiverBinding["holds"] | undefined> => {
-    const binding = (await syntaxIndexOf(reference.file)).receiverBindings.get(placeKey(reference.line, reference.column + 1));
-    return binding !== undefined && binding.member === member && binding.receiver === receiverOf(reference.name) ? binding.holds : undefined;
+  const boundAt = async (reference: GraphUnresolvedReference, member: string, receiver = receiverOf(reference.name)): Promise<ReceiverBinding["holds"] | undefined> => {
+    const binding = (await syntaxIndexOf(reference.file)).receiverBindings.get(bindingKey(reference.line, reference.column + 1, member));
+    return binding !== undefined && binding !== "ambiguous" && binding.receiver === receiver ? binding.holds : undefined;
   };
   /** The one method named `member` the one class of `name` in `file` (at `line`, when given) declares itself; none otherwise. */
   const ownMethodOf = (file: string, name: string, member: string, line?: number): GraphSymbol | undefined => {
@@ -275,25 +299,74 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     kind: "unresolved-link",
     at: [placeAt(symbol.file, symbol.startLine, symbol.name), ...sortedUnique(implementations.map(candidateOf))],
   });
+  /** Whether the index resolves every supertype of `type` and of each type above it to a type declaration. */
+  const heritageResolved = (type: GraphSymbol): boolean =>
+    [type, ...[...ancestorsOf(type)].flatMap((id) => navigation.symbolOf(id) ?? [])].every(
+      (above) =>
+        !unresolvedIn(above.file).some((reference) => reference.from === above.id && SUPERTYPE_EDGES.includes(reference.kind) && !reference.name.includes("<")) &&
+        store.outgoingEdges([above.id], SUPERTYPE_EDGES).every((edge) => TYPE_KINDS.includes(navigation.symbolOf(edge.target)?.kind ?? "")),
+    );
+  /**
+   * The method named `member` an instance of the nominal class `type` runs, unless a subclass replaces it (the step's
+   * dispatch cut): the one the class or the nearest class it extends declares. None when the index does not place the
+   * class, a class on the way extends no single class, or a class outside that line declares `member` with heritage the
+   * index does not resolve, since it may extend the class unseen.
+   */
+  const nominalMethod = (type: Extract<DeclaredType, { kind: "nominal" }>, member: string): GraphSymbol | undefined => {
+    const classes = store.symbolsInFiles([type.file]).filter((symbol) => symbol.kind === "class" && joinsFact(symbol, { path: type.file, line: type.line, symbol: type.name }));
+    const line = new Set<GraphNodeId>();
+    let method: GraphSymbol | undefined;
+    for (let declaring = classes.length === 1 ? classes[0] : undefined; declaring !== undefined && method === undefined && !line.has(declaring.id); ) {
+      line.add(declaring.id);
+      const own = navigation.methodsOf(declaring).filter((candidate) => candidate.name === member);
+      if (own.length > 1) return undefined;
+      const above = supertypesOf(declaring).filter((supertype) => CLASS_KINDS.includes(supertype.kind));
+      [method, declaring] = [own[0], above.length === 1 ? above[0] : undefined];
+    }
+    const hidden = store.declarationsNamed([member]).some((declared) => declared.kind === "method" && navigation.ownersOf(declared).some((owner) => !line.has(owner.id) && !heritageResolved(owner)));
+    return hidden ? undefined : method;
+  };
+  /**
+   * The method bodies the proof names, each the one method the index places there; none when one is not placed so.
+   */
+  const placedBodies = (targets: DispatchTargets): GraphSymbol[] | undefined => {
+    if (targets.kind === "unknown") return undefined;
+    const placed = targets.bodies.map((body) => placedMethod(body));
+    return placed.every((symbol) => symbol !== undefined) ? placed : undefined;
+  };
+  /**
+   * The one declaration of `kinds` the index places between a declaration's first token and its name. The index holds a
+   * record's methods as functions of no container, so a proof of the method a call names accepts either kind.
+   */
+  const placedMethod = ({ file, start, nameLine }: Omit<Extract<ReceiverMethod, { kind: "method" }>, "kind">, kinds: readonly string[] = ["method"]): GraphSymbol | undefined => {
+    const placed = store.symbolsInFiles([file]).filter((symbol) => kinds.includes(symbol.kind) && start <= symbol.startLine && symbol.startLine <= nameLine);
+    return placed.length === 1 ? placed[0] : undefined;
+  };
   /**
    * What dispatch may run instead of the body the walk reads, from the declaration's own syntax: a body-less callable
-   * runs whatever implements it, so it is a cut listing every declaration of its name below its owners, or none; a
-   * static, private or final one with a body runs it; an overridable one with a body is a cut only when a type below its
-   * owner declares its name, listing those declarations. A declaration its syntax does not state is a cut when an
-   * interface owns it.
+   * runs whatever implements it, so the sources' declared hierarchy names every body it may run (R7): one is expanded in
+   * place, several are a cut listing them, and without that proof, or with no body, it is a cut listing every declaration
+   * of its name below its owners, or none; a static, private or final one with a body runs it; an overridable one with a body is a cut
+   * only when a type below its owner declares its name, listing those declarations. A declaration its syntax does not
+   * state is a cut when an interface owns it.
    */
-  const unboundDispatch = async (symbol: GraphSymbol): Promise<Cut | undefined> => {
+  const unboundDispatch = async (symbol: GraphSymbol): Promise<Dispatch | undefined> => {
     if (!CALLABLE_KINDS.includes(symbol.kind)) return undefined;
     const declared = (await syntaxIndexOf(symbol.file)).callables.get(symbol.name)?.find(({ start, nameLine }) => start <= symbol.startLine && symbol.startLine <= nameLine);
     const owners = navigation.ownersOf(symbol);
     if (declared === undefined) {
       const interfaces = owners.filter((owner) => owner.kind === "interface");
-      return interfaces.length === 0 ? undefined : dispatchCut(symbol, implementationsBelow(symbol, interfaces));
+      return interfaces.length === 0 ? undefined : { cut: dispatchCut(symbol, implementationsBelow(symbol, interfaces)) };
     }
-    if (!declared.body) return dispatchCut(symbol, implementationsBelow(symbol, owners));
+    if (!declared.body) {
+      const [targets] = await origins.dispatchTargets([{ file: symbol.file, line: symbol.startLine, name: symbol.name }], signal);
+      const bodies = targets === undefined ? undefined : placedBodies(targets);
+      if (bodies === undefined || bodies.length === 0) return { cut: dispatchCut(symbol, implementationsBelow(symbol, owners)) };
+      return bodies.length === 1 ? { to: bodies[0]!, alternatives: bodies } : { cut: dispatchCut(symbol, bodies), alternatives: bodies };
+    }
     if (!declared.overridable) return undefined;
     const overriders = implementationsBelow(symbol, owners);
-    return overriders.length === 0 ? undefined : dispatchCut(symbol, overriders);
+    return overriders.length === 0 ? undefined : { cut: dispatchCut(symbol, overriders) };
   };
   /** Whether the call's own source binds its receiver to a function value, which a library member such as `call` runs. */
   const holdsFunctionValue = async (reference: GraphUnresolvedReference, receiver: string, member: string): Promise<boolean> =>
@@ -314,12 +387,45 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       .map((member) => childAt(member, member.startLine, null, member.name, "member"));
   };
 
+  /**
+   * By the index of each kept edge of a TypeScript source into a member of a class, the receiver it is called on when
+   * that receiver is a value (a parameter or a variable, by the binder's scoping, ADR-0029), a field read through
+   * `this` (`this.f.m`) or no name at all (a call result, `f().m`, empty), rather than a class, a function, an import or
+   * `this` itself: the index matched such a call by
+   * name, and TypeScript types structurally, so another object may stand there (ADR-0029 decision 11).
+   */
+  async function valueReceivers(node: GraphSymbol, edges: readonly FollowedEdge[], verdicts: readonly EdgeTarget[]): Promise<ReadonlyMap<number, string>> {
+    if (!isTypeScriptFile(node.file)) return new Map();
+    const kept = edges.flatMap(({ edge, target }, index) => (verdicts[index]!.kind === "keep" && edge.line !== null && edge.column !== null && navigation.ownersOf(target).some((owner) => CLASS_KINDS.includes(owner.kind)) ? [{ index, edge, target }] : []));
+    if (kept.length === 0) return new Map();
+    const syntax = (await syntaxIndexOf(node.file)).receiverBindings;
+    /** The receiver the source's syntax binds at the call, whatever it holds: its rules decide, never the root alone. */
+    const boundReceiver = (edge: GraphEdge, target: GraphSymbol): string | undefined => {
+      const binding = syntax.get(bindingKey(edge.line!, edge.column! + 1, target.name));
+      return binding === "ambiguous" ? "" : binding?.receiver;
+    };
+    const owner = { name: node.name, line: node.startLine, endLine: node.endLine };
+    const bindings = await origins.rootBindings(kept.map(({ edge, target }): UseSite => ({ file: node.file, line: edge.line!, column: edge.column! + 1, spelled: target.name, owner })), signal);
+    /** The body's own binding, or a declaration of the file the index holds as no class, function or other non-value node. */
+    const isValue = (binding: RootBinding | undefined): binding is Extract<RootBinding, { kind: "local" | "declared" }> =>
+      binding?.kind === "local" ||
+      (binding?.kind === "declared" && !navigation.symbolsInFile(node.file).some((symbol) => symbol.name === binding.root && !VALUE_KINDS.includes(symbol.kind) && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
+    return new Map(kept.flatMap(({ index }, k) => {
+      const binding = bindings[k];
+      const receiver = boundReceiver(kept[k]!.edge, kept[k]!.target);
+      if (receiver !== undefined) return [[index, receiver] as const];
+      if (binding?.kind === "this") return binding.member === undefined || binding.member === kept[k]!.target.name ? [] : [[index, binding.member] as const];
+      return isValue(binding) ? [[index, binding.root] as const] : [];
+    }));
+  }
+
   async function bodyOf(node: GraphSymbol, root: boolean): Promise<Body> {
     const calls = callEdgesOf(store, node);
     const values = store.outgoingEdges([node.id], ["references"]);
     const called = uses.followed(node, calls);
     const passed = uses.followed(node, values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));
     const verdicts = await targets.verdictsOf([...called, ...passed], signal);
+    const valueRoots = await valueReceivers(node, [...called, ...passed], verdicts);
     const external: ExternalCall[] = [];
     const children: Child[] = root ? membersOf(node) : [];
     const cuts: Cut[] = [];
@@ -328,19 +434,11 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       if (await isReplaced(root)) await replaced();
       else external.push(call);
     };
+    /** The kept edges whose receiver a value holds (ADR-0029 decision 11), settled below by what proves it. */
+    const unproven: { edge: GraphEdge; target: GraphSymbol; receiver: string }[] = [];
     for (const [index, { edge, target }] of [...called, ...passed].entries()) {
-      const verdict = verdicts[index]!;
-      const value = index >= called.length;
-      if (verdict.kind === "keep" || verdict.kind === "redirect") {
-        const reached = verdict.kind === "redirect" ? verdict.to : target;
-        children.push(value ? childAt(reached, edge.line, edge.column, target.name, "reference", true) : childAt(reached, edge.line, edge.column, target.name, "call"));
-      } else if (verdict.root.kind === "local-parameter") {
-        cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name).map(candidateOf))] });
-      } else {
-        const dropped = verdict.root;
-        const place: Cut = { kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name).map(candidateOf))] };
-        await leafUnlessReplaced(dropped.kind === "external" ? { kind: "import", module: dropped.module, name: target.name } : { kind: "global", name: target.name }, dropped.kind === "external" ? { module: dropped.module } : { path: ["name" in dropped ? dropped.name : target.name], member: target.name, open: true }, () => cuts.push(place));
-      }
+      const receiver = valueRoots.get(index);
+      if (receiver !== undefined) unproven.push({ edge, target, receiver });
     }
     /**
      * A member call nothing settled by its receiver: a cut listing the declarations of its name, or, when no declaration and
@@ -361,6 +459,52 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const rooted: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[] }[] = [];
     const constructed: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; holds: Extract<ReceiverBinding["holds"], { kind: "constructed" }> }[] = [];
     const annotated: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; holds: Extract<ReceiverBinding["holds"], { kind: "annotated" }> }[] = [];
+    /** Member calls no other proof settles, which the type the sources declare the receiver to hold may (R3, R5). */
+    const typed: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[] }[] = [];
+    /** A member call on a receiver its source binds, settled by what the binding holds. */
+    const settleBound = async (reference: GraphUnresolvedReference, name: string, named: readonly GraphSymbol[], bound: ReceiverBinding["holds"]): Promise<void> => {
+      const declared = bound.kind === "declared" ? ownMethodOf(reference.file, bound.name, name, bound.line) : undefined;
+      if (bound.kind === "literal") await leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(bound.type, name), () => settleByName(reference, name, named, true));
+      else if (bound.kind === "constructed") constructed.push({ reference, name, named, holds: bound });
+      else if (bound.kind === "annotated") annotated.push({ reference, name, named, holds: bound });
+      else if (declared !== undefined) children.push(childAt(declared, reference.line, reference.column, reference.name, "call"));
+      else await settleByName(reference, name, named);
+    };
+    /**
+     * The method `member` names on what a call returns, when the call is a resolved edge of this body whose own receiver
+     * needs no proof and whose declaration states a nominal class as its return type (RFC-0013 R5).
+     */
+    const returnedMethod = async (head: Extract<ReceiverBinding["holds"], { kind: "returned" }>, member: string): Promise<GraphSymbol | undefined> => {
+      const placed = called.flatMap(({ edge, target }, index) => {
+        const verdict = verdicts[index]!;
+        const at = edge.line === head.line && edge.column !== null && edge.column + 1 === head.column && target.name === head.name;
+        return at && !valueRoots.has(index) && verdict.kind !== "drop" ? [verdict.kind === "redirect" ? verdict.to : target] : [];
+      });
+      const callee = placed.length === 1 ? placed[0]! : undefined;
+      const returns = callee === undefined ? undefined : (await syntaxIndexOf(callee.file)).callables.get(callee.name)?.find(({ start, nameLine }) => start <= callee.startLine && callee.startLine <= nameLine)?.returns;
+      if (callee === undefined || returns === undefined) return undefined;
+      const [type] = await origins.declaredTypes([{ file: callee.file, line: returns.line, column: returns.column, spelled: returns.type, owner: { name: callee.name, line: callee.startLine, endLine: callee.endLine } }], signal);
+      return type?.kind === "nominal" ? nominalMethod(type, member) : undefined;
+    };
+    /**
+     * A resolved call whose receiver is a value or a field the walk has not proven: settled by what the relations or the
+     * source's binding prove the receiver holds, otherwise a cut listing the declarations of its name.
+     */
+    for (const { edge, target, receiver } of unproven) {
+      const reference: GraphUnresolvedReference = { from: node.id, file: node.file, line: edge.line!, column: edge.column!, kind: edge.kind, name: target.name, candidates: [] };
+      const named = membersNamed(target.name).length > 0 ? membersNamed(target.name) : [target];
+      const proven = await provenAtEdge(node.file, edge, target.name);
+      const member = proven?.kind === "member" ? provenMember(proven) : undefined;
+      const bound = await boundAt(reference, target.name, receiver);
+      if (member !== undefined) children.push(childAt(member, edge.line, edge.column, target.name, "call"));
+      else if (proven?.kind === "external") await leafUnlessReplaced(externalOf(proven.holds, target.name), rootOfHolds(proven.holds, target.name), () => cuts.push(unresolvedAt(reference, named)));
+      else if (bound?.kind === "returned") {
+        const method = await returnedMethod(bound, target.name);
+        if (method !== undefined) children.push(childAt(method, edge.line, edge.column, target.name, "call"));
+        else cuts.push(unresolvedAt(reference, named));
+      } else if (bound !== undefined) await settleBound(reference, target.name, named, bound);
+      else cuts.push(unresolvedAt(reference, named));
+    }
     for (const reference of unsettledBy(callsFrom(node), called)) {
       const own = ownMemberOf(reference.name);
       const members = own === undefined ? [] : uses.ownMembers(node, own, ["method"]);
@@ -377,15 +521,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
           const named = membersNamed(callee.name);
           if (member !== undefined) children.push(childAt(member, reference.line, reference.column, reference.name, "call"));
           else if (proven?.kind === "external") await leafUnlessReplaced(externalOf(proven.holds, reference.name), rootOfHolds(proven.holds, callee.name), () => settleByName(reference, callee.name, named, true));
-          else if ((bound = await boundAt(reference, callee.name)) !== undefined) {
-            const declared = bound.kind === "declared" ? ownMethodOf(reference.file, bound.name, callee.name, bound.line) : undefined;
-            if (bound.kind === "literal") await leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(bound.type, callee.name), () => settleByName(reference, callee.name, named, true));
-            else if (bound.kind === "constructed") constructed.push({ reference, name: callee.name, named, holds: bound });
-            else if (bound.kind === "annotated") annotated.push({ reference, name: callee.name, named, holds: bound });
-            else if (declared !== undefined) children.push(childAt(declared, reference.line, reference.column, reference.name, "call"));
-            else await settleByName(reference, callee.name, named);
-          } else if (PLAIN_CHAIN.test(reference.name) && !reference.name.startsWith("this.")) rooted.push({ reference, name: callee.name, named });
-          else await settleByName(reference, callee.name, named);
+          else if ((bound = await boundAt(reference, callee.name)) !== undefined) await settleBound(reference, callee.name, named, bound);
+          else if (PLAIN_CHAIN.test(reference.name) && !reference.name.startsWith("this.")) rooted.push({ reference, name: callee.name, named });
+          else typed.push({ reference, name: callee.name, named });
         }
       }
     }
@@ -406,9 +544,11 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       const types = await origins.declaredTypes(annotated.map(({ reference, holds }) => ({ file: reference.file, line: holds.line, column: holds.column, spelled: holds.type, owner })), signal);
       for (const [index, { reference, name, named }] of annotated.entries()) {
         const type = types[index];
-        if (type?.kind === "global") await leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(type.name, name), () => settleByName(reference, name, named, true));
+        const nominal = type?.kind === "nominal" ? nominalMethod(type, name) : undefined;
+        if (nominal !== undefined) children.push(childAt(nominal, reference.line, reference.column, reference.name, "call"));
+        else if (type?.kind === "global") await leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(type.name, name), () => settleByName(reference, name, named, true));
         else if (type?.kind === "package") await leafUnlessReplaced({ kind: "import", module: type.module, name: reference.name }, { module: type.module }, () => settleByName(reference, name, named, true));
-        else await settleByName(reference, name, named);
+        else typed.push({ reference, name, named });
       }
     }
     if (rooted.length > 0) {
@@ -421,6 +561,43 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         else if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, { path: reference.name.split("."), member: name }, () => settleByName(reference, name, named, true));
         else await settleByName(reference, name, named);
       }
+    }
+    /**
+     * One read of the receivers' declared types for the body: a call the index resolved on a receiver the call reads is a
+     * step only at the method that type names, and a cut when the sources may falsify any declared type (R3, R5); a call
+     * no other proof settles is a step at the method it names.
+     */
+    const placedCalls = called.filter(({ edge }) => edge.line !== null && edge.column !== null);
+    const receiverSites = [
+      ...placedCalls.map(({ edge, target }) => ({ file: node.file, line: edge.line!, column: edge.column! + 1, member: target.name })),
+      ...typed.map(({ reference, name }) => ({ file: reference.file, line: reference.line, column: reference.column + 1, member: name })),
+    ];
+    const found = receiverSites.length === 0 ? [] : await origins.receiverMethods(receiverSites, signal);
+    const receivers = new Map(placedCalls.map((followed, index): [FollowedEdge, ReceiverMethod] => [followed, found[index] ?? { kind: "unknown" }]));
+    for (const [index, followed] of [...called, ...passed].entries()) {
+      if (valueRoots.has(index)) continue;
+      const { edge, target } = followed;
+      const verdict = verdicts[index]!;
+      const value = index >= called.length;
+      if (verdict.kind === "keep" || verdict.kind === "redirect") {
+        const receiver = value ? undefined : receivers.get(followed);
+        const proven = receiver?.kind === "method" ? placedMethod(receiver, CALLABLE_KINDS) : undefined;
+        const reached = proven ?? (verdict.kind === "redirect" ? verdict.to : target);
+        if (receiver !== undefined && receiver.kind !== "unknown" && proven === undefined) cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique([candidateOf(target), ...declarationsNamed(target.name).map(candidateOf)])] });
+        else children.push(value ? childAt(reached, edge.line, edge.column, target.name, "reference", true) : childAt(reached, edge.line, edge.column, target.name, "call"));
+      } else if (verdict.root.kind === "local-parameter") {
+        cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name).map(candidateOf))] });
+      } else {
+        const dropped = verdict.root;
+        const place: Cut = { kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name).map(candidateOf))] };
+        await leafUnlessReplaced(dropped.kind === "external" ? { kind: "import", module: dropped.module, name: target.name } : { kind: "global", name: target.name }, dropped.kind === "external" ? { module: dropped.module } : { path: ["name" in dropped ? dropped.name : target.name], member: target.name, open: true }, () => cuts.push(place));
+      }
+    }
+    for (const [index, { reference, name, named }] of typed.entries()) {
+      const receiver = found[placedCalls.length + index];
+      const method = receiver?.kind === "method" ? placedMethod(receiver, CALLABLE_KINDS) : undefined;
+      if (method !== undefined) children.push(childAt(method, reference.line, reference.column, reference.name, "call"));
+      else await settleByName(reference, name, named);
     }
     if (bare.length > 0) {
       const sites = bare.map(({ reference, name }): ImportOriginSite => ({ file: reference.file, line: reference.line, column: reference.column + 1, name, fullName: reference.name, kind: reference.kind }));
@@ -451,8 +628,11 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       return;
     }
     const first = expandedAt.get(symbol.id);
-    /** A class root also owes its members, which no expansion below a root made. */
-    const owesMembers = depth === 0 && CLASS_KINDS.includes(symbol.kind) && (first === undefined || !rootExpansions.has(first));
+    /** A class root, and a declaration a page's template uses, run their members. */
+    const ownsMembers = depth === 0 || step.via === "template";
+    const page = ownsMembers && pages !== undefined && CLASS_KINDS.includes(symbol.kind) && (step.via === "template" || pages.roots.has(symbol.id));
+    /** Such a class also owes its members, which no expansion below a root made. */
+    const owesMembers = ownsMembers && CLASS_KINDS.includes(symbol.kind) && (first === undefined || !rootExpansions.has(first));
     if (first !== undefined && !owesMembers) {
       step.seen = first;
       return;
@@ -467,18 +647,26 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     }
     expansions += 1;
     if (first === undefined) expandedAt.set(symbol.id, step);
-    if (depth === 0) rootExpansions.add(step);
+    if (ownsMembers) rootExpansions.add(step);
     step.expanded = true;
-    const body = await bodyOf(symbol, depth === 0);
+    const body = await bodyOf(symbol, ownsMembers);
+    if (page) {
+      const plan = await pages!.of(symbol);
+      if (plan === undefined) {
+        if (depth === 0) body.cuts.push({ kind: "unresolved-link", at: [placeAt(symbol.file, symbol.startLine, symbol.name)] });
+      } else body.children = pageOrder(body.children, plan, body.cuts);
+    }
     const dispatch = await unboundDispatch(symbol);
-    if (dispatch !== undefined) body.cuts.push(dispatch);
+    if (dispatch?.cut !== undefined) body.cuts.push(dispatch.cut);
+    if (dispatch?.alternatives !== undefined) step.alternatives = dispatch.alternatives.map(declarationOf);
+    if (dispatch?.to !== undefined) body.children.push(childAt(dispatch.to, null, null, dispatch.to.name, "dispatch"));
     step.external = body.external;
     step.unsettled = body.cuts.length > 0;
     cuts.push(...body.cuts);
     for (const child of body.children) {
       const { line, column } = child.place;
       const walked = stepOf(child.symbol, {
-        ...(line === null || child.via === "member" ? {} : { at: { line, ...(column === null ? {} : { column: column + 1 }) } }),
+        ...(line === null || child.via === "member" || child.via === "dispatch" || child.via === "template" ? {} : { at: { line, ...(column === null ? {} : { column: column + 1 }) } }),
         via: child.via,
         ...(child.deferred === undefined ? {} : { deferred: child.deferred }),
       });
@@ -502,12 +690,47 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   };
 }
 
-/** `Port` for `Port<T>` and for `pkg.Port<T>`. */
+/**
+ * A page's children in the order it runs them (R9): its constructor, its field initializers and what its class body
+ * calls, in source order; its lifecycle hooks in the framework's order; the handlers its template binds to events, in
+ * template order; the declarations its template uses; then its other members, in source order. A handler the class
+ * runs no member of is a cut at the binding.
+ */
+function pageOrder(children: readonly Child[], plan: PagePlan, cuts: Cut[]): Child[] {
+  const handlerRank = new Map<string, number>();
+  const runs: { child: Child; rank: readonly [number, number] }[] = [];
+  const members = new Set(children.filter(({ via }) => via === "member").map(({ symbol }) => symbol.name));
+  for (const [index, handler] of plan.handlers.entries()) {
+    if ("runs" in handler) runs.push({ child: { symbol: handler.runs, place: { line: null, column: null, spelling: handler.runs.name, target: handler.runs.id }, via: "template" }, rank: [2, index] });
+    else if (!members.has(handler.member)) cuts.push({ kind: "unresolved-link", at: [placeAt(handler.file, handler.line, handler.member)] });
+    else if (!handlerRank.has(handler.member)) handlerRank.set(handler.member, index);
+  }
+  cuts.push(...plan.cuts);
+  const rankOf = ({ symbol, via, place }: Child): readonly [number, number] => {
+    const line = place.line ?? symbol.startLine;
+    if (via !== "member" || symbol.name === "constructor" || (FIELD_KINDS as readonly string[]).includes(symbol.kind)) return [0, line];
+    const hook = plan.lifecycle.indexOf(symbol.name);
+    if (hook >= 0) return [1, hook];
+    const handler = handlerRank.get(symbol.name);
+    return handler === undefined ? [4, line] : [2, handler];
+  };
+  const ranked = children.map((child) => ({ child, rank: rankOf(child) }));
+  const used = plan.children.map((symbol, index) => ({ child: { symbol, place: { line: null, column: null, spelling: symbol.name, target: symbol.id }, via: "template" as const }, rank: [3, index] as const }));
+  return [...ranked, ...runs, ...used].sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1]).map(({ child }) => child);
+}
+
+/**
+ * What dispatch decides for a body-less or overridable callable: the one body it runs, or a cut; `alternatives` when the
+ * declared hierarchy names every body it may run.
+ */
+type Dispatch = { to: GraphSymbol; alternatives: readonly GraphSymbol[]; cut?: undefined } | { to?: undefined; cut: Cut; alternatives?: readonly GraphSymbol[] };
+
 interface SyntaxIndex {
   callables: ReadonlyMap<string, readonly DeclaredCallable[]>;
   functionValueCalls: ReadonlySet<string>;
   /** By the place the call starts. */
-  receiverBindings: ReadonlyMap<string, ReceiverBinding>;
+  /** By the place the call starts and the member it calls; `ambiguous` when two calls start there under one member name. */
+  receiverBindings: ReadonlyMap<string, ReceiverBinding | "ambiguous">;
 }
 
 function functionValueKey({ line, receiver, member }: FunctionValueCall): string {

@@ -69,12 +69,33 @@ export interface ImportOrigins {
    * its first name spelled as `spelled` (a primitive keyword, `Array` for an array type, or a type name). A keyword is
    * its library type (`string` is `String`); a name the type scopes and the file leave unbound is a global of the
    * language's libraries, and an import of a package the repository depends on is that package's export by its exported
-   * name. `unknown` when the repository declares the type, the name binds nothing (generated code), the package is one
+   * name. `unknown` when the repository declares the type (save a `nominal` class, below), the name binds nothing (generated code), the package is one
    * the repository declares itself, or an in-scope repository type extends or implements the same type, so a value of
    * it may run repository code; every site is `unknown` when some heritage reaches no repository class, interface or type
-   * literal and no library or package type (ADR-0029 decision 9).
+   * literal and no library or package type (ADR-0029 decision 9). A repository class is `nominal` only under that same
+   * heritage proof, when its one declaration itself declares a `private`, `protected` or `#` instance member; one it
+   * inherits proves nothing, since siblings below the declaring class fit too (ADR-0029 decision 11).
    */
   declaredTypes(sites: readonly UseSite[], signal?: AbortSignal): Promise<readonly DeclaredType[]>;
+  /**
+   * One entry per site, in the order received: every method body a call to the body-less method declared at the site
+   * runs, read from the sources' declared hierarchy (RFC-0013 R7). `unknown` when a value the sources do not place may
+   * run another body: the language types structurally (TypeScript), a supertype or a class chain the strict reading
+   * does not settle, an anonymous or local class, a lambda where the owner is functional, a generator or a proxy that may
+   * implement the owner, or a class that inherits the method from outside the repository.
+   */
+  dispatchTargets(sites: readonly DispatchSite[], signal?: AbortSignal): Promise<readonly DispatchTargets[]>;
+  /**
+   * One entry per site, in the order received: the method a member call names by the type the sources declare its
+   * receiver to hold (RFC-0013 R3, R5), the declaration a call on a value of that type is resolved to at compile time,
+   * below which dispatch decides the body. The type is a repository type stated by the receiver's parameter, local or
+   * private field, or the declared return type of the repository method a receiver call names in the same way (`f().m()`).
+   * `unknown` when the language types structurally (TypeScript), when nothing states the type, when it is a type variable,
+   * when the type's hierarchy reaches a type outside the repository, when its members of the name are not one signature of
+   * the call's arity (an overload, a varargs, a private or an `Object` method), or when the declared hierarchy does not
+   * prove the bodies a value of the type may run for it (`dispatchTargets`).
+   */
+  receiverMethods(sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ReceiverMethod[]>;
   /**
    * Where the repository may run its own code where a library's is expected: the path of every global the snapshot
    * declares, every member path a source writes from a global (`Math.max = f`, `Array.prototype[k] = f`,
@@ -98,8 +119,38 @@ export interface ReplacedRoots {
   packages: ReadonlySet<string>;
 }
 
-/** A type from outside the repository: a global of the language's libraries, or a package's export. */
-export type DeclaredType = { kind: "global"; name: string } | { kind: "package"; module: string; name: string } | { kind: "unknown" };
+/**
+ * A type from outside the repository: a global of the language's libraries, or a package's export. `nominal`: a
+ * repository class that itself declares a `private`, `protected` or `#` instance member, so only an instance of it or of
+ * a subclass fits the annotation (an `any` or a cast aside), at the line of its name.
+ */
+export type DeclaredType = { kind: "global"; name: string } | { kind: "package"; module: string; name: string } | { kind: "nominal"; file: string; name: string; line: number } | { kind: "unknown" };
+
+/** A body-less method by its file, a 1-based line from its declaration's first token to its name, and its name. */
+export interface DispatchSite {
+  file: string;
+  line: number;
+  name: string;
+}
+
+/** The method bodies a call to a body-less method may run, each by its file and the 1-based lines from its first token to its name, sorted. */
+export type DispatchTargets = { kind: "bodies"; bodies: readonly { file: string; start: number; nameLine: number }[] } | { kind: "unknown" };
+
+/** A member call by the place it starts, repository-relative and 1-based with a UTF-16 column, and the member it calls. */
+export interface ReceiverCallSite {
+  file: string;
+  line: number;
+  column: number;
+  member: string;
+}
+
+/**
+ * The method declaration a call names, by its file and the 1-based lines from its first token to its name; `unproven`
+ * when the call's receiver is a value it reads (a parameter, a local, a field, a member of another value or what another
+ * call returns) and the sources may make a value of any declared type run code they do not show, so no index edge from
+ * the call proves what it runs either.
+ */
+export type ReceiverMethod = { kind: "method"; file: string; start: number; nameLine: number } | { kind: "unproven" } | { kind: "unknown" };
 
 /** A place a declaration uses a name, where the index places the use: repository-relative and 1-based. */
 export interface UseSite {

@@ -44,6 +44,7 @@ export const ERROR_CODE = {
   "unsupported-object-format": -32020,
   "live-mirror-failed": -32021,
   "top-level-line": -32022,
+  "unknown-entrypoint": -32023,
 } as const;
 
 export type ErrorKind = keyof typeof ERROR_CODE;
