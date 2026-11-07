@@ -258,3 +258,8 @@ Main integration (`273871bd`, then test pruning `2f3569b8`) retires the separate
 
 
 Final merged closure check: Node v24.22.2 foreground `npm run check` exited 0; typecheck, architecture and all 3,699 tests pass (0 failed/cancelled/skipped). Own diff passes global/repo cleanup and whitespace checks. The final source is shared with main; no further implementation change followed verification.
+
+
+Owner correction after c6003d08 rejection: only additional syntactic inventory excludes unindexed function values. The indexed walk's callback contents are handled exactly as on main, preserving original edges/references before reconciliation rather than discarding pending obligations. This supersedes the earlier missing-call/pending-reference exclusion statement above; effects remain unchanged. Public cb/forEach and subscribe forEach/filter repros were RED then GREEN, and dropping retained references is caught by a type-correct mutation. Fresh paired92: steps9088→9161, cuts4839→5133, complete3→3; zero complete-status changes. Shopizer probe58 remains partial with both original cuts exactly equal. Differential17/17 identical. RFC-0013 records evidence and final verification.
+
+Final bounded-round verification: Node v24.22.2 foreground `npm run check` exited0; typecheck, architecture and all3,700 tests pass, none failed/cancelled/skipped. Global/repo cleanup reviewed only this correction and reused existing range/settlement components; no other production rule changed. `git diff --check` passes. No source implementation changed after this check.

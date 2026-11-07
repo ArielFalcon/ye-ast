@@ -1961,8 +1961,6 @@ test("inventory respects deferred values and preserves an index-declared functio
     ["iife", "ts", 'export function entry(){ (() => [1].map(x=>x))(); }', "entry", false],
     ["unary-iife", "ts", 'export function entry(){ void function(){ [1].map(x=>x); }(); }', "entry", false],
     ["invoked", "ts", 'export function entry(){ const live = () => [1].map(x=>x); live(); }', "entry", true],
-    ["lambda", "java", 'class Flow { void entry(){ Runnable dead = () -> { ((Flow)null).missing(); }; } }', "Flow.entry", false],
-    ["anonymous", "java", 'class Flow { void entry(){ Runnable dead = new Runnable(){ public void run(){ ((Flow)null).missing(); } }; } }', "Flow.entry", false],
   ] as const;
   for (const [name, ext, source] of rows) writeFileSync(join(repo, `src/${name}.${ext}`), source);
   git("add", "-A"); git("commit", "-qm", "function value boundaries");
@@ -1973,7 +1971,21 @@ test("inventory respects deferred values and preserves an index-declared functio
     if (name.includes("iife")) assert.equal(answer.value.status, "partial", `${name}: ${JSON.stringify(answer)}`);
     const names = answer.value.value.steps.flatMap((step) => step.external ?? []).flatMap((leaf) => leaf.names);
     assert.equal(names.includes("[1].map"), immediate, name);
-    assert.ok(!names.some((name) => name.includes("missing")), `${name}: ${JSON.stringify(answer)}`);
-    assert.ok(!(answer.value.status === "partial" ? answer.value.cuts : []).some((cut) => cut.at.some((at) => at.includes("missing"))), `${name}: ${JSON.stringify(answer)}`);
+  }
+});
+
+
+test("indexed callback obligations survive inventory exclusion", async () => {
+  const rows = [
+    ["each", "export function entry(cb: () => void) { [1].forEach(() => cb()); }", ["cb"]],
+    ["subscribe", "export function entry(obs: any, cb: () => void) { obs.subscribe((data: any) => { data.forEach(() => cb()); data.filter((x: any) => x); }); } declare function register(value: unknown): void; register({forEach: 1, filter: 1});", ["cb", "data.forEach", "data.filter"]],
+  ] as const;
+  for (const [name, source] of rows) writeFileSync(join(repo, `src/${name}.ts`), source);
+  git("add", "-A"); git("commit", "-qm", "callback obligations");
+  const { trace } = composeQueries({ scratchRoot });
+  for (const [name, , obligations] of rows) {
+    const answer = await trace.walk({ repo, repoId: "callbacks", revision: "HEAD", targets: [{ file: `src/${name}.ts`, symbol: "entry" }] });
+    assert.ok(answer.ok && answer.value.status === "partial", JSON.stringify(answer));
+    for (const obligation of obligations) assert.ok(answer.value.cuts.some((cut) => cut.at[0]?.endsWith(` ${obligation}`)), JSON.stringify(answer));
   }
 });

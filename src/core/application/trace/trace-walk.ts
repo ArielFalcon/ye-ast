@@ -1,4 +1,4 @@
-import { declarationSpan, owningBody } from "../../domain/trace/owning-body.ts";
+import { declarationSpan, executesInBody, owningBody } from "../../domain/trace/owning-body.ts";
 import { callsByOwner, matchOwnedCall, positionedBodies, type OwnedCall } from "./syntax-calls.ts";
 import { isSeedable } from "../../domain/change/seeds.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
@@ -443,8 +443,12 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       const owner = line === null || column === null || !Number.isFinite(column) ? undefined : owningBody(rawBodies, { line, column });
       return owner !== undefined && owner.id !== node.id ? undefined : matchOwnedCall(owned, line, column, name);
     };
+    const insideValue = (line: number | null, column: number | null, name: string): boolean => {
+      const site = matchOwnedCall(owned, line, column, name);
+      return site !== undefined ? site.deferred === true : line !== null && column !== null && !executesInBody(declarationSpan(node), syntax.functionValues, { line, column });
+    };
     const called = uses.followed(node, calls).flatMap((followed) => {
-      if (syntax.calls === undefined) return [followed];
+      if (syntax.calls === undefined || insideValue(followed.edge.line, followed.edge.column, followed.target.name)) return [followed];
       const site = matched(followed.edge.line, followed.edge.column, followed.target.name);
       if (site === undefined) {
         unplaced.push({ from: node.id, file: node.file, line: followed.edge.line ?? node.startLine, column: followed.edge.column ?? 0, name: followed.target.name, kind: followed.edge.kind, candidates: [] });
@@ -454,10 +458,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       return [{ ...followed, edge: { ...followed.edge, line: site.line, column: site.column - 1 } }];
     });
     const indexed = callsFrom(node).flatMap((reference) => {
-      if (syntax.calls === undefined) return [reference];
+      if (syntax.calls === undefined || insideValue(reference.line, reference.column, reference.name)) return [reference];
       const site = matched(reference.line, reference.column, reference.name);
       if (site === undefined) { unplaced.push(reference); return []; }
-      if (site.deferred) return [];
       accounted.add(site);
       return [{ ...reference, line: site.line, column: site.column - 1 }];
     });
