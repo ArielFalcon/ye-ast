@@ -4,7 +4,7 @@ import type { ChangedContract } from "../impact/changed-contracts.ts";
 import { compareText } from "../shared/code-node.ts";
 
 /** How a call site was matched to the entrypoint it reaches. */
-export type LinkBasis = "exact" | "base-path" | "suffix" | "operation-id" | "event-destination" | "gateway-prefix" | "route-overlap";
+export type LinkBasis = "exact" | "base-path" | "suffix" | "event-destination" | "gateway-prefix" | "route-overlap";
 
 /** A call site of one repository joined to an entrypoint of another, or of its own when the transport stays inside it. */
 export interface Link {

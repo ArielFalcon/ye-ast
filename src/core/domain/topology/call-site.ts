@@ -45,8 +45,6 @@ export interface HttpTarget {
   method: HttpMethod;
   path: string;
   base?: string;
-  /** The contract operation a generated client names, when the call is made through one. */
-  operationId?: string;
 }
 
 export function httpTargetOf(site: CallSite): HttpTarget | undefined {

@@ -41,7 +41,7 @@ interface CallSite {              // a fact of one repository at one snapshot; c
   transport: "http" | "event";
   target: Finding<HttpTarget | EventTarget>;
 }
-interface HttpTarget { method: HttpMethod; path: string; base?: Finding<string>; operationId?: string }
+interface HttpTarget { method: HttpMethod; path: string; base?: Finding<string> }
 interface EventTarget { protocol: "kafka" | "rabbit" | "jms" | "event"; destination: string }  // role: publish
 
 interface Link {
@@ -49,7 +49,7 @@ interface Link {
   from: { repo: string; file: string; line: number; symbol: string };
   to: { repo: string; kind: Entrypoint["kind"]; name: string; handler: Handler };
   transport: "http" | "event";
-  basis: "exact" | "base-path" | "suffix" | "operation-id" | "event-destination";
+  basis: "exact" | "base-path" | "suffix" | "event-destination";
   profiles?: string[];            // base-path: the profile expressions under which the match holds; absent: default
   confidence: number;
 }
@@ -143,7 +143,6 @@ project root above it. A build plugin that rewrites defines is not read.
 | Transport | Call-site side | Entrypoint side | Matched by | Confidence |
 |---|---|---|---|---|
 | http | `CallSite` with `HttpTarget` | `HttpRoute` (`http-route.ts:33-43`) | verb equal or route `ANY`; the two paths unify as typed templates (below), then the base-path ladder below | 1.0; 0.6 when a value the call fills at run time took a parameter of the route (parity, `openapi-http-resolver.adapter.ts:334-336`) |
-| http by contract | generated client call naming an `operationId` | the `HttpRoute` whose handler implements that `operationId` (RFC-0007 row S5) | `operationId` equal | 1.0; no path involved |
 | event | publish `CallSite` with `EventTarget` | `Listener` (`entrypoint.ts:5-12`) | same `protocol` and `destination` | 1.0 |
 | Spring in-process event | `publishEvent(new X())`, protocol `event`, destination the qualified type | `@EventListener` listener, destination the qualified type (RFC-0007 row S7) | as event; `from.repo` equals `to.repo` | 1.0 |
 
@@ -357,7 +356,7 @@ is linked, or its absence is explained by a row of this RFC, and each extra link
 
 | Slice | Delivers | Depends on | Accepted by |
 |---|---|---|---|
-| 1 | `CallSite` and `Link` types; HTTP join (exact, base-path, suffix, operation-id); upstream, one hop; two-repository workspace; envelope with sections, repository snapshots, cuts; the snapshot rule and the refresh of ADR-0016 | RFC-0010 slice 2 (`impact.callers`); call sites from RFC-0007 row A3, or qayaba's extracted call sites as test input for parity | a fixture per basis and per cut; byte-identical output twice; join parity on a real FE and BE pair: every link `openapi-http-resolver` and `http-backend-resolver` make is made |
+| 1 | `CallSite` and `Link` types; HTTP join (exact, base-path, suffix); upstream, one hop; two-repository workspace; envelope with sections, repository snapshots, cuts; the snapshot rule and the refresh of ADR-0016 | RFC-0010 slice 2 (`impact.callers`); call sites from RFC-0007 row A3, or qayaba's extracted call sites as test input for parity | a fixture per basis and per cut; byte-identical output twice; join parity on a real FE and BE pair: every link `openapi-http-resolver` and `http-backend-resolver` make is made |
 | 2 | the fixpoint: chains FE to BE to BE; downstream; `reach`; egress table | slice 1 | chain fixtures with a cycle; parity with `resolveUpstreamHop` and `resolveDownstream*` (`use-case:150-233`) |
 | 3 | events: listeners (RFC-0007 row S7), publish call sites, Spring in-process events | the events protocol plugin | a fixture per protocol; parity with `event-resolver` on exact matches |
 | 4 | contract tier: operation diff seeds; per-pair join cache if measurements justify it; protocol and MCP methods | RFC-0005 first protocol slice | operation-diff fixtures; parity with the `contract-file` tier |
@@ -373,7 +372,8 @@ What moves from qayaba, and what is rewritten:
 Deferred until the base is measured: stem matching of events; a cut for name-matched links that point at the wrong
 service; gRPC, GraphQL and `rpc` links (qayaba's `transport` admits `"rpc"` with no producer); gateway routes and
 `spring.application.name` as service identity (RFC-0007 row S6 "Not built"); client base URLs of `@HttpExchange` groups;
-interceptors that rewrite URLs; field-level contract drift; a per-pair link cache; a live tree as a consumer.
+interceptors that rewrite URLs; field-level contract drift; a per-pair link cache; a live tree as a consumer; a generated
+client call joined by the `operationId` it names (no extractor produces one, so neither the basis nor the field exists).
 
 ## Decisions
 
