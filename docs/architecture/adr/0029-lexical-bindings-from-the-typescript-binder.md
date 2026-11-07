@@ -79,7 +79,17 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    parameter property, while the class's `this` never escapes and the class names the field through no other receiver
    (a key no literal states, a rest or a reflecting call on another receiver may name every field, and is not resolved);
    a `protected`, `public` or unmodified field stays unknown, since a subclass, a superclass method or another module
-   could write it, and no class hierarchy is read across files. The leaf's evidence is the module or the global it is rooted at, as for every other
+   could write it, and no class hierarchy is read across files. In Java (trace slice 2, S6) the same proof reads the
+   project's one name resolver (`JavaProject.bindName`, strict): a receiver whose one declaration (a parameter, a typed
+   lambda parameter, a local or loop variable, or a `private` field the file names only through `this` and never by
+   reflection) states a type a single import names under a platform package is a leaf under that package. A repository
+   type, a type variable, a type outside the platform packages (a dependency or generated code) and a name the strict
+   reading leaves unsettled stay unknown. Java needs no record of replaced roots, since source cannot rebind a class's
+   methods; repository code reaches a platform type only by subtyping, so every annotation stays unknown when a
+   repository type names a supertype outside the repository (its own supertypes are not in the sources), or the sources
+   hold an anonymous class, a lambda or a method reference (an implementation of an interface they do not state), an
+   aspect, or a Java source that does not parse. The implicit supertypes of classes, enums and records
+   (`java.lang.Object`, `Enum` and the interfaces it implements, `Record`) stay unknown. The leaf's evidence is the module or the global it is rooted at, as for every other
    leaf; the answer gains no field, so the declared type itself is not written.
 
 ## Consequences

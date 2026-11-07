@@ -122,3 +122,64 @@ test("a receiver bound to a non-function value, or shadowed by a parameter or a 
     "}",
   ])).functionValueCalls, []);
 });
+
+/** The 1-based place of the `occurrence`-th `needle` in `lines`. */
+function placeOf(lines: readonly string[], needle: string, occurrence = 1): { line: number; column: number } {
+  let seen = 0;
+  for (const [index, text] of lines.entries()) {
+    for (let column = text.indexOf(needle); column >= 0; column = text.indexOf(needle, column + 1)) if (++seen === occurrence) return { line: index + 1, column: column + 1 };
+  }
+  throw new Error(`${needle} is not written`);
+}
+
+test("a member call on a parameter, a local, a typed lambda parameter or a private field of the enclosing class is held by the type its one declaration states", async () => {
+  const lines = [
+    "package app;",
+    "import java.util.List;",
+    "import java.util.Map;",
+    "import org.springframework.web.client.RestTemplate;",
+    "class Orders {",
+    "  private final RestTemplate rest;",
+    "  private Map.Entry<String, String> entry;",
+    "  Orders(RestTemplate rest) { this.rest = rest; }",
+    "  void run(List<String> items) {",
+    "    items.add(\"a\");",
+    "    this.rest.getForObject(\"/x\", String.class);",
+    "    entry.getKey();",
+    "    String label = \"x\";",
+    "    label.trim();",
+    "    for (String each : items) each.strip();",
+    "    items.forEach((String item) -> item.length());",
+    "  }",
+    "}",
+  ];
+  const annotated = (call: string, receiver: string, member: string, type: string, declared: string, occurrence = 1) => {
+    const at = placeOf(lines, call);
+    const head = placeOf(lines, declared, occurrence);
+    return { ...at, receiver, member, holds: { kind: "annotated", type, ...head } };
+  };
+  assert.deepEqual((await read(lines)).receiverBindings, [
+    annotated("items.add", "items", "add", "List", "List<String> items"),
+    annotated("this.rest.getForObject", "rest", "getForObject", "RestTemplate", "RestTemplate rest;"),
+    annotated("entry.getKey", "entry", "getKey", "Map", "Map.Entry"),
+    annotated("label.trim", "label", "trim", "String", "String label"),
+    annotated("each.strip", "each", "strip", "String", "String each"),
+    annotated("items.forEach", "items", "forEach", "List", "List<String> items"),
+    annotated("item.length", "item", "length", "String", "String item"),
+  ]);
+});
+
+test("a call on a var, varargs, untyped lambda, pattern or resource variable, or on a field that is not private, is declared twice, is named through another receiver or reflection, or is shadowed, is held by no annotation", async () => {
+  const header = ["package app;", "import java.util.Map;", "import org.springframework.web.client.RestTemplate;"];
+  for (const body of [
+    ["class A { void run(String... names) { var built = new StringBuilder(); built.append(\"a\"); names.clone(); } }"],
+    ["class A { void run() { java.util.List.of(\"a\").forEach(name -> name.trim()); } }"],
+    ["class A { RestTemplate shared; void run() { shared.getForObject(\"/y\", String.class); } }"],
+    ["class A { private Map<String, String> other; void run() { this.other.get(\"k\"); } static void copy(A from) { from.other.clear(); } }"],
+    ["class A { private Map<String, String> patterned; void run(Object value) { if (value instanceof Map patterned) patterned.size(); } }"],
+    ["class A { private Map<String, String> held; void run() throws Exception { try (java.io.StringReader held = new java.io.StringReader(\"\")) { held.read(); } } }"],
+    ["class A { private Map<String, String> cache; void run() throws Exception { cache.get(\"k\"); getClass().getDeclaredField(\"x\"); } }"],
+    ["class A { private Map<String, String> cache, cache; void run() { cache.get(\"k\"); } }"],
+    ["class A { int[] counts; private int size; void run() { counts.clone(); } }"],
+  ]) assert.deepEqual((await read([...header, ...body])).receiverBindings, [], body[0]);
+});

@@ -737,6 +737,52 @@ test("a trace over a real index leaves a library global's member call as a globa
   assert.deepEqual(shadowed.value.status === "partial" && shadowed.value.cuts.map((cut) => cut.at[0]), ["src/shadow.ts:4 Math.max"]);
 });
 
+const JAVA_ORDERS = [
+  "package shop;",
+  "",
+  "import java.util.Collections;",
+  "import java.util.List;",
+  "import org.springframework.web.client.RestTemplate;",
+  "",
+  "class Orders {",
+  "  private final RestTemplate rest;",
+  "  Orders(RestTemplate rest) { this.rest = rest; }",
+  "  List<String> run(List<String> items) {",
+  "    items.add(\"a\");",
+  "    this.rest.getForObject(\"/x\", String.class);",
+  "    return Collections.emptyList();",
+  "  }",
+  "}",
+  "",
+].join("\n");
+
+/** Repository methods named like the platform members `Orders.run` calls, so a call settled by its name alone is a cut. */
+const JAVA_HOMONYMS = ["package shop;", "", "class Store {", "  void add(String value) {}", "  String getForObject(String url, Class<?> type) { return \"\"; }", "  java.util.List<String> emptyList() { return null; }", "}", ""];
+
+test("a Java trace over a real index leaves a call on a platform-typed parameter or private field, or on a platform class, as a leaf under its package, and keeps the typed calls cuts once a lambda may implement any platform type", async () => {
+  writeFileSync(join(repo, "src", "Orders.java"), JAVA_ORDERS);
+  writeFileSync(join(repo, "src", "Store.java"), JAVA_HOMONYMS.join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "orders");
+  const { trace } = composeQueries({ scratchRoot });
+  const target = { file: "src/Orders.java", symbol: "Orders.run" };
+
+  const typed = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [target] });
+  writeFileSync(join(repo, "src", "Store.java"), JAVA_HOMONYMS.join("\n").replace("class Store {", "class Store {\n  Runnable task = () -> {};"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "lambda");
+  const lambda = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [target] });
+
+  assert.ok(typed.ok && lambda.ok);
+  assert.equal(typed.value.status, "complete");
+  assert.deepEqual(typed.value.status === "complete" && typed.value.value.steps[0]?.external, [
+    { kind: "import", module: "java.util", names: ["Collections.emptyList", "items.add"] },
+    { kind: "import", module: "org.springframework.web.client", names: ["rest.getForObject"] },
+  ]);
+  assert.equal(lambda.value.status, "partial");
+  assert.deepEqual(lambda.value.status === "partial" && lambda.value.cuts.map((cut) => cut.at[0]), ["src/Orders.java:11 items.add", "src/Orders.java:12 rest.getForObject"]);
+});
+
 /** Repository functions named like library members, so a member call settled by its name alone is a cut. */
 const HOMONYMS = ["export function push(): void {}", "export function test(): void {}", "export function set(): void {}", "export function save(): void {}", "export class Other {", "  save(): void {}", "}", ""].join("\n");
 

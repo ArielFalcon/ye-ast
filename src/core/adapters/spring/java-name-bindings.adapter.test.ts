@@ -171,3 +171,64 @@ test("a site that spells another name, a bare call, or a file the parser rejects
 
   assert.deepEqual(await createJavaNameBindings(createJavaParser, [LIMITS, use, broken]).rootOrigins(sites), sites.map(unknownAt));
 });
+
+const ORDERS = java("src/main/java/app/service/Orders.java", [
+  "package app.service;",
+  "",
+  "import java.util.List;",
+  "import java.util.Map;",
+  "import org.springframework.web.client.RestTemplate;",
+  "import com.fasterxml.jackson.databind.ObjectMapper;",
+  "import app.domain.User;",
+  "",
+  "class Orders<T> {",
+  "  void run(List<String> items, RestTemplate rest, String label, Map.Entry<String, String> entry, ObjectMapper mapper, User user, T held, Generated made, Object any) {}",
+  "}",
+]);
+
+/** The type `declaredTypes` answers for the annotation `needle` starts in the orders source, among the given sources. */
+async function declaredIn(sources: readonly SourceFile[], needle: string, spelled = needle) {
+  const { line, column } = at(ORDERS, needle, "references", spelled);
+  const [type] = await createJavaNameBindings(createJavaParser, [ORDERS, USER, ...sources]).declaredTypes([{ file: ORDERS.path, line, column, spelled, owner: { name: "run", line: 1, endLine: 20 } }]);
+  return type;
+}
+
+test("an annotation a single import names under a platform package is that package's type, by its name below the package", async () => {
+  assert.deepEqual(await declaredIn([], "List<String> items", "List"), { kind: "package", module: "java.util", name: "List" });
+  assert.deepEqual(await declaredIn([], "RestTemplate rest", "RestTemplate"), { kind: "package", module: "org.springframework.web.client", name: "RestTemplate" });
+  assert.deepEqual(await declaredIn([], "Map.Entry", "Map"), { kind: "package", module: "java.util", name: "Map.Entry" });
+});
+
+test("an annotation the repository declares, a type variable, a type outside the platform packages or the resolver does not name, and Object are unknown", async () => {
+  for (const [needle, spelled] of [["ObjectMapper mapper", "ObjectMapper"], ["User user", "User"], ["T held", "T"], ["Generated", "Generated"], ["Object any", "Object"], ["String label", "String"]] as const) {
+    assert.deepEqual(await declaredIn([], needle, spelled), { kind: "unknown" }, needle);
+  }
+  const shadowing = { ...ORDERS, content: ORDERS.content.replace("class Orders<T> {", "class Orders<List> {") };
+  const shadowed = at(shadowing, "List<String> items", "references", "List");
+  const [variable] = await createJavaNameBindings(createJavaParser, [shadowing]).declaredTypes([{ file: shadowing.path, line: shadowed.line, column: shadowed.column, spelled: "List", owner: { name: "run", line: 1, endLine: 20 } }]);
+  assert.deepEqual(variable, { kind: "unknown" });
+  const wildcard = { ...ORDERS, content: ORDERS.content.replace("import java.util.List;", "import java.util.*;") };
+  const { line, column } = at(wildcard, "List<String> items", "references", "List");
+  const [type] = await createJavaNameBindings(createJavaParser, [wildcard]).declaredTypes([{ file: wildcard.path, line, column, spelled: "List", owner: { name: "run", line: 1, endLine: 20 } }]);
+  assert.deepEqual(type, { kind: "unknown" });
+});
+
+test("heritage between repository types, and the implicit supertypes of an enum, leave a platform annotation its type", async () => {
+  const local = java("src/main/java/app/domain/Admin.java", ["package app.domain;", "", "public class Admin extends User implements Named {", "  public String name() { return \"\"; }", "}", "interface Named { String name(); }", "enum Level { LOW }"]);
+  assert.deepEqual(await declaredIn([local], "List<String> items", "List"), { kind: "package", module: "java.util", name: "List" });
+});
+
+test("an annotation is unknown when the repository may run its code behind a platform type: a platform or unresolved supertype, an anonymous class, a lambda, a method reference, an aspect, or a source that does not parse", async () => {
+  for (const lines of [
+    ["package app.domain;", "public class Fault extends RuntimeException {}"],
+    ["package app.domain;", "public class Rows implements java.util.Iterator<String> { public boolean hasNext() { return false; } public String next() { return null; } }"],
+    ["package app.domain;", "public class Made extends Generated {}"],
+    ["package app.domain;", "class Run { Object task = new Thread() { public void run() {} }; }"],
+    ["package app.domain;", "class Run { Runnable task = () -> {}; }"],
+    ["package app.domain;", "class Run { java.util.function.Supplier<String> task = String::new; }"],
+    ["package app.domain;", "@org.aspectj.lang.annotation.Aspect", "class Watch {}"],
+    ["package app.domain;", "class Broken {"],
+  ]) {
+    assert.deepEqual(await declaredIn([java("src/main/java/app/domain/Extra.java", lines)], "List<String> items", "List"), { kind: "unknown" }, lines.slice(1).join(" "));
+  }
+});
