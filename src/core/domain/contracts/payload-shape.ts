@@ -51,5 +51,11 @@ export interface ReadShape {
   files: readonly string[];
 }
 
+/** A place that may hold any value: what an undeclared property of an open object holds. */
+export const ANYTHING: KnownShape = Object.freeze({
+  kind: "known",
+  values: Object.freeze({ literals: Object.freeze({ boolean: "every", number: "every", string: "every" } as const), array: true, object: true, null: true, absent: false }),
+});
+
 /** The shape of the success response of one operation. */
 export type OperationShape = Pick<ContractOperation, "operationId" | "method" | "path" | "basePath"> & ReadShape;

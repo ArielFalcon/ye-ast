@@ -2,6 +2,7 @@ import { STRICT_OPERATORS, evaluate, literalRepresentatives, representatives, su
 import type { Evidence } from "../shared/fact.ts";
 import { relatePaths, type AccessPath } from "./access-path.ts";
 import type { Change, ValueLiterals } from "./change.ts";
+import { LITERAL_CLASSES } from "./payload-shape.ts";
 import type { AccessStep, JsonValue, Literal, Predicate, Replacement, UseEnd, UseOperation } from "./use-operation.ts";
 
 export type { Absence, UseOperation } from "./use-operation.ts";
@@ -85,7 +86,8 @@ export function decideUse(use: UseSite, change: Change): Decision | undefined {
   const reaching = use.guards.filter((guard) => guard.kind !== "non-null-assertion" && establishes(guard, use.changed));
   const { added, removed } = change.values ?? { added: NONE, removed: NONE };
   const named = literalsNamed(use);
-  const classOutcomes = change.introduced.length === 0 ? [] : representatives(change.introduced, named, [...named, ...added, ...removed], removed).map((value) => outcomeOf(value, use, reaching));
+  const known = listedBefore(change);
+  const classOutcomes = change.introduced.length === 0 ? [] : representatives(change.introduced, named, [...named, ...added, ...removed, ...known], [...removed, ...known]).map((value) => outcomeOf(value, use, reaching));
   const literalOutcomes = literalRepresentatives(added).map((value) => outcomeOf(value, use, reaching));
   const outcomes = [...classOutcomes, ...literalOutcomes];
   const thrown = outcomes.find((outcome) => outcome.kind === "throws");
@@ -98,6 +100,15 @@ export function decideUse(use: UseSite, change: Change): Decision | undefined {
   if (unknown !== undefined) return { kind: "review", reason: unknown.reason };
   if (change.alwaysAbsent) return { kind: "review", reason: "removed-behind-guard" };
   return { kind: "admits", guards: [...new Set(outcomes.flatMap((outcome) => (outcome.kind === "handled" ? [outcome.guard] : [])))] };
+}
+
+/** The literals the old contract listed in the classes the change opens: values already allowed are not introduced, so no representative equals one. */
+function listedBefore({ introduced, oldGuarantee }: Change): readonly Literal[] {
+  if (oldGuarantee === undefined) return NONE;
+  return LITERAL_CLASSES.filter((valueClass) => introduced.includes(valueClass)).flatMap((valueClass) => {
+    const values = oldGuarantee.literals[valueClass];
+    return values === "every" ? NONE : values;
+  });
 }
 
 /** The use is the branch of a strict equality with a retired literal: it compares the value with one directly, or runs only where it equals one. */

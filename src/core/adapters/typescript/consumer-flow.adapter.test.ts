@@ -238,6 +238,87 @@ test("a write to a member is not a read of it", async () => {
   assert.deepEqual(uses(result), ["3 owner.name|owner []"]);
 });
 
+const SERVICE_FILE = source("svc.ts", ["export class Svc {", "  order = signal<Order>(null)", "  plain: Order", "}"]);
+const memberRead = (file: string, line: number, member = "order"): CarrierSite => ({ kind: "member-read", repo: "repo", file, line: at(line), column: 1, owner: "Svc", member });
+const reader = (lines: readonly string[], imports = "import { Svc } from './svc'\nimport { inject } from '@angular/core'\n") => ({ path: "page.ts", content: COMMON + imports + lines.join("\n") });
+const IMPORT_LINES = 2;
+
+test("a member read through an injected instance of its owner is followed from the place the graph reported", async () => {
+  const injected = reader(["class Page {", "  svc = inject(Svc)", "  show() { show(this.svc.order().owner.name) }", "}"]);
+  const parameter = reader(["@Component({})", "class Card {", "  constructor(private svc: Svc) {}", "  show() { show(this.svc.order().owner.name) }", "}"]);
+  const local = reader(["function view() {", "  const svc = inject(Svc)", "  show(svc.order().owner.name)", "}"]);
+
+  assert.deepEqual(uses(await follow([SERVICE_FILE, injected], memberRead("page.ts", IMPORT_LINES + 3), "owner")), [`${IMPORT_LINES + 3} owner.name|owner []`]);
+  assert.deepEqual(uses(await follow([SERVICE_FILE, parameter], memberRead("page.ts", IMPORT_LINES + 4), "owner")), [`${IMPORT_LINES + 4} owner.name|owner []`]);
+  assert.deepEqual(uses(await follow([SERVICE_FILE, local], memberRead("page.ts", IMPORT_LINES + 3), "owner")), [`${IMPORT_LINES + 3} owner.name|owner []`]);
+});
+
+test("the subclass of the owner reads the member through this; a subclass that redeclares it is a frontier at the declaration", async () => {
+  const sub = reader(["class Sub extends Svc {", "  show() { show(this.order().owner.name) }", "}"]);
+  const redeclared = reader(["class Sub extends Svc {", "  order = signal<Order>(null)", "  show() { show(this.order().owner.name) }", "}"]);
+
+  assert.deepEqual(uses(await follow([SERVICE_FILE, sub], memberRead("page.ts", IMPORT_LINES + 2), "owner")), [`${IMPORT_LINES + 2} owner.name|owner []`]);
+  const result = await follow([SERVICE_FILE, redeclared], memberRead("page.ts", IMPORT_LINES + 3), "owner");
+  assert.deepEqual([uses(result), frontiers(result)], [[], [`${IMPORT_LINES + 2} unmodelled-flow:member redeclared`]]);
+});
+
+test("a read through a receiver that does not denote the written instance is a frontier at the read", async () => {
+  const fresh = reader(["class Page {", "  other = new Svc()", "  untyped: Svc", "  show(svc: Svc) {", "    show(new Svc().order().owner.name)", "    show(this.other.order().owner.name)", "    show(this.untyped.order().owner.name)", "    show(svc.order().owner.name)", "  }", "}"]);
+
+  for (const line of [5, 6, 7, 8]) {
+    const result = await follow([SERVICE_FILE, fresh], memberRead("page.ts", IMPORT_LINES + line), "owner");
+    assert.deepEqual([uses(result), frontiers(result)], [[], [`${IMPORT_LINES + line} unmodelled-flow:member receiver`]], `line ${line}`);
+  }
+});
+
+test("a member of a class provably unrelated to the owner is skipped, and one whose bases are unknown is a frontier", async () => {
+  const other = { path: "other.ts", content: COMMON + ["export class Other {", "  order: Order", "}"].join("\n") };
+  const unrelated = reader(["class Page {", "  other = inject(Other)", "  show() { show(this.other.order.owner.name) }", "}"], "import { Other } from './other'\nimport { inject } from '@angular/core'\n");
+  const unknownBase = reader(["class Page {", "  other = inject(Other)", "  show() { show(this.other.order.owner.name) }", "}"], "import { Other } from './gone'\nimport { inject } from '@angular/core'\n");
+  const opaque = { path: "other.ts", content: COMMON + ["export class Other extends Mixin(Base) {", "}"].join("\n") };
+
+  const skipped = await follow([SERVICE_FILE, other, unrelated], memberRead("page.ts", IMPORT_LINES + 3, "order"), "owner");
+  assert.deepEqual([uses(skipped), frontiers(skipped)], [[], []]);
+  const lost = await follow([SERVICE_FILE, opaque, unrelated], memberRead("page.ts", IMPORT_LINES + 3, "order"), "owner");
+  assert.deepEqual(frontiers(lost), [`${IMPORT_LINES + 3} unmodelled-flow:member receiver`]);
+  const unresolved = await follow([SERVICE_FILE, unknownBase], memberRead("page.ts", IMPORT_LINES + 3, "order"), "owner");
+  assert.deepEqual(frontiers(unresolved), [`${IMPORT_LINES + 3} unmodelled-flow:member receiver`]);
+});
+
+test("a place with no read of the member is a frontier, and a write or the owner's own this read is not a read to follow", async () => {
+  const page = reader(["class Page {", "  svc = inject(Svc)", "  reset() { this.svc.order = null }", "  none() { return 1 }", "  drop() { delete this.svc.order }", "}"]);
+  const own = { path: "svc.ts", content: COMMON + ["export class Svc {", "  order = signal<Order>(null)", "  show() { show(this.order().owner.name) }", "}"].join("\n") };
+
+  const written = await follow([SERVICE_FILE, page], memberRead("page.ts", IMPORT_LINES + 3), "owner");
+  assert.deepEqual([uses(written), frontiers(written)], [[], []]);
+  const deleted = await follow([SERVICE_FILE, page], memberRead("page.ts", IMPORT_LINES + 5), "owner");
+  assert.deepEqual([uses(deleted), frontiers(deleted)], [[], []]);
+  const absent = await follow([SERVICE_FILE, page], memberRead("page.ts", IMPORT_LINES + 4), "owner");
+  assert.deepEqual(frontiers(absent), [`${IMPORT_LINES + 4} unmodelled-flow:no read of the member at the reported place`]);
+  const inside = await follow([own], memberRead("svc.ts", 3), "owner");
+  assert.deepEqual([uses(inside), frontiers(inside)], [[], []]);
+});
+
+const labelOf = (lines: readonly string[]) => source("page.ts", lines);
+
+test("a template call enters the component method at its parameter, found on the class or on a base in another file", async () => {
+  const base = source("base.ts", ["export class Base {", "  label(order: Order) { return order.owner.name }", "}"]);
+  const page = reader(["class Page extends Base {", "  other(order: Order) { show(order.owner.name) }", "}"], "import { Base } from './base'\n");
+  const site = (method: string): CarrierSite => ({ kind: "method-parameter", repo: "repo", file: "page.ts", owner: "Page", method, index: 0 });
+
+  assert.deepEqual(uses(await follow([base, page], site("other"), "owner")), ["3 owner.name|owner []"]);
+  assert.deepEqual(uses(await follow([base, page], site("label"), "owner")), ["2 owner.name|owner []"]);
+  const missing = await follow([base, page], site("gone"), "owner");
+  assert.deepEqual(frontiers(missing), ["2 unmodelled-flow:component method not found"]);
+});
+
+test("the return of a component method called from a template is handed back as a return carrier", async () => {
+  const page = labelOf(["class Page {", "  label(order: Order) { return order.owner }", "}"]);
+  const result = await follow([page], { kind: "method-parameter", repo: "repo", file: "page.ts", owner: "Page", method: "label", index: 0 }, "owner");
+
+  assert.deepEqual(next(result), ["return label@2 []"]);
+});
+
 function guarded(lines: readonly string[]) {
   return source("g.ts", ["class Page {", "  use(order: Order) {", ...lines.map((line) => `    ${line}`), "  }", "}"]);
 }
@@ -456,13 +537,13 @@ test("iterating a value whose changed path does not continue through its element
 test("a value that contains the changed property reaching code outside the repository is a frontier", async () => {
   const file = guarded([
     "this.form.patchValue(order)",
-    "order.items.map((i) => i.owner.name)",
-    "const copy = { ...order }",
+    "order.items.reduce((total, i) => total + i.owner.id, 0)",
+    "const copy = { ...order, ...extra }",
     "Library.use(order)",
     "this.dyn[order.key]",
   ]);
   const result = await follow([file], parameterOrder, "items[].owner");
-  assert.deepEqual(frontiers(result), ["3 unmodelled-sink:this.form.patchValue", "4 unmodelled-flow:method:map", "5 unmodelled-flow:object spread", "6 unmodelled-sink:Library.use"]);
+  assert.deepEqual(frontiers(result), ["3 unmodelled-sink:this.form.patchValue", "4 unmodelled-flow:method:reduce", "5 unmodelled-flow:later spread", "6 unmodelled-sink:Library.use"]);
 });
 
 test("an operator the slice does not model is a frontier at the operator", async () => {
@@ -490,11 +571,7 @@ test("a carrier the reader cannot place is a frontier, never an empty result", a
 
 test("a site kind this reader does not follow yet is a frontier at its place, never an empty result nor a walk as another kind", async () => {
   const file = source("a.ts", ["class Page {", "  load() { return 1 }", "}"]);
-  const sites: CarrierSite[] = [
-    { kind: "member-read", repo: "repo", file: "a.ts", line: at(2), column: 3, owner: "Page", member: "load" },
-    { kind: "method-parameter", repo: "repo", file: "a.ts", owner: "Page", method: "load", index: 0 },
-    { kind: "template-call-result", repo: "repo", resource: "a.html", start: 0, end: 4, callee: "load", argument: 0 },
-  ];
+  const sites: CarrierSite[] = [{ kind: "template-call-result", repo: "repo", resource: "a.html", start: 0, end: 4, callee: "load", argument: 0 }];
   for (const site of sites) {
     const result = await follow([file], site, "owner");
     assert.deepEqual([result.uses, result.next], [[], []], site.kind);
@@ -622,11 +699,75 @@ function plain(lines: readonly string[]) {
 
 const paramO = { kind: "parameter" as const, repo: "repo", file: "p.ts", symbol: "use", line: at(1), index: 0 };
 
-test("a method called on a container of the changed property is a frontier, whatever its argument count", async () => {
-  const file = plain(["const copy = o.items.slice()", "show(copy[0].owner.name)", "o.items.map((i) => i.owner.name)"]);
+test("a method of the language's arrays called on the carried array is read from the callee table: the element reaches the callback, the result is the same array, an element, the callback's returns or nothing", async () => {
+  const file = plain([
+    "o.items.forEach((i) => show(i.owner.name))",
+    "const kept = o.items.filter((i) => i.active)",
+    "show(kept[0].owner.id)",
+    "const first = o.items.find((i) => i.id === 1)",
+    "show(first.owner.title)",
+    "const owners = o.items.map((i) => i.owner)",
+    "show(owners[0].street)",
+    "const flat = o.items.flatMap((i) => [i.owner, i.owner])",
+    "show(flat[0].city)",
+    "const copy = o.items.slice().sort((a, b) => a.owner.rank - b.owner.rank)",
+    "show(copy[0].owner.zip)",
+    "o.items.includes(x)",
+    "o.items.push(y)",
+  ]);
   const result = await follow([file], paramO, "items[].owner");
-  assert.deepEqual(frontiers(result), ["2 unmodelled-flow:method:slice", "4 unmodelled-flow:method:map"]);
-  assert.deepEqual(uses(result), []);
+
+  assert.deepEqual(uses(result), ["2 owner.name|owner []", "4 [].owner.id|[].owner []", "6 owner.title|owner []", "8 [].street|[] []", "10 [].city|[] []", "11 owner.rank|owner []", "11 owner.rank|owner []", "12 [].owner.zip|[].owner []"]);
+  assert.deepEqual(frontiers(result), []);
+});
+
+test("a method of the callee table that holds no row for the carried value stays a frontier: an accumulator, an in-place replacement, a method the language's arrays do not hold", async () => {
+  const file = plain(["o.items.reduce((a, i) => a, 0)", "o.items.fill(null)", "o.items.customMethod()", "o.name.map((i) => i.owner)"]);
+  const result = await follow([file], paramO, "items[].owner");
+
+  assert.deepEqual(frontiers(result), ["2 unmodelled-flow:method:reduce", "3 unmodelled-flow:method:fill", "4 unmodelled-flow:method:customMethod"]);
+});
+
+test("an object spread carries the properties of its source in order: a later member of that name replaces the property, a later spread the reader cannot read loses every following one", async () => {
+  const file = plain([
+    "const copy = { ...o, extra: 1 }",
+    "show(copy.owner.name)",
+    "const replaced = { ...o, owner: other }",
+    "show(replaced.owner.name)",
+    "const unknown = { ...o, ...rest }",
+    "show(unknown.owner.name)",
+    "const computed = { ...o, [key]: 1 }",
+    "const same = { ...o, id: 4, ...{ title: 'x' } }",
+    "show(same.owner.name)",
+  ]);
+  const result = await follow([file], paramO, "owner");
+
+  assert.deepEqual(uses(result), ["3 owner.name|owner []", "10 owner.name|owner []"]);
+  assert.deepEqual(frontiers(result), ["6 unmodelled-flow:later spread", "8 unmodelled-flow:computed member"]);
+});
+
+test("spreading the changed value itself is an iteration of an array and unmodelled for an object", async () => {
+  const file = plain(["const list = [...o.items]", "const copy = { ...o.owner }", "show(f(...o.items))"]);
+  const result = await follow([file], paramO, "items");
+  const owned = await follow([file], paramO, "owner");
+
+  assert.deepEqual(result.uses.map((use) => use.operation.end.kind), ["iterate", "iterate"]);
+  assert.deepEqual(owned.uses.map((use) => [use.site.line - HEADER_LINES, use.operation.end]), [[3, { kind: "unmodelled", detail: "spread" }]]);
+});
+
+test("Object.assign follows its sources onto a fresh object literal only, in order", async () => {
+  const file = plain([
+    "const merged = Object.assign({}, o, { id: 1 })",
+    "show(merged.owner.name)",
+    "const over = Object.assign({}, o, { owner: other })",
+    "show(over.owner.name)",
+    "Object.assign(target, o)",
+    "const later = Object.assign({}, o, rest)",
+  ]);
+  const result = await follow([file], paramO, "owner");
+
+  assert.deepEqual(uses(result), ["3 owner.name|owner []"]);
+  assert.deepEqual(frontiers(result), ["6 unmodelled-flow:Object.assign target", "7 unmodelled-flow:later source"]);
 });
 
 test("calling the changed value is a dereference, optional call included", async () => {
@@ -645,14 +786,14 @@ test("a read after a write to the guarded path reads the written value: no use, 
   const file = plain(["if (o.owner) {", "  o.owner = make()", "  show(o.owner.name)", "}"]);
   const result = await follow([file], paramO, "owner");
   assert.deepEqual(uses(result), []);
-  assert.deepEqual(frontiers(result), ["3 unmodelled-flow:write after guard"]);
+  assert.deepEqual(frontiers(result), ["3 unmodelled-flow:write to a member", "3 unmodelled-flow:write after guard"]);
 });
 
 test("a guard outside a closure is not proven where the closure runs: the read is reported, neither guarded nor unguarded", async () => {
   const file = plain(["if (o.owner) {", "  const f = () => o.owner.name", "  o.owner = null", "  f()", "}", "list.map(() => o.owner.id)"]);
   const result = await follow([file], paramO, "owner");
-  assert.deepEqual(uses(result), ["7 owner.id|owner []"]);
-  assert.deepEqual(frontiers(result), ["3 unmodelled-flow:guard across closure"]);
+  assert.deepEqual(uses(result), ["7 owner.id|owner [reassigned]"]);
+  assert.deepEqual(frontiers(result), ["3 unmodelled-flow:guard across closure", "4 unmodelled-flow:write to a member"]);
 });
 
 test("a call that only reports a resource's state is no loss of its value; a call that may read the value still is", async () => {
@@ -675,11 +816,68 @@ test("reads of a name before it is assigned the followed value are not the follo
   assert.deepEqual(frontiers(result), []);
 });
 
-test("an assignment that may or may not run keeps the later reads and reports the conditional write", async () => {
-  const file = plain(["let x = o", "if (flag) { x = other }", "show(x.owner.name)"]);
+test("an assignment that may or may not run keeps the later reads under an untested reassigned guard and reports the conditional write", async () => {
+  const file = plain(["let x = o", "show(x.owner.id)", "if (flag) { x = other }", "show(x.owner.name)"]);
   const result = await follow([file], paramO, "owner");
-  assert.deepEqual(uses(result), ["4 owner.name|owner []"]);
-  assert.deepEqual(frontiers(result), ["3 unmodelled-flow:conditional reassignment"]);
+  assert.deepEqual(uses(result), ["3 owner.id|owner []", "5 owner.name|owner [reassigned]"]);
+  assert.deepEqual(frontiers(result), ["4 unmodelled-flow:conditional reassignment"]);
+  assert.deepEqual(result.uses[1]!.guards.map((guard) => [guard.kind, formatAccessPath(guard.covers)]), [["reassigned", "owner"]]);
+});
+
+test("a write a dynamic scope may make keeps the later reads under the reassigned guard too", async () => {
+  const file = { path: "p.ts", content: "function use(o: Order) {\n  let x = o\n  with (scope) { x = other }\n  show(x.owner.id)\n}" };
+
+  assert.deepEqual(uses(await follow([file], dynamicUse, "owner")).map((use) => use.slice(use.indexOf("["))), ["[reassigned]"]);
+});
+
+test("two trails that reach one read with different guards are both kept, so a guard on one never hides the other's failure", async () => {
+  const file = plain(["const v = c ? (o.owner ? o : other) : o", "show(v.owner.name)"]);
+  const result = await follow([file], paramO, "owner");
+  assert.deepEqual(uses(result), ["3 owner.name|owner [condition]", "3 owner.name|owner []"]);
+});
+
+test("a write to a member of the carried value ends the chain with a frontier at the write; the reads after it are not proven", async () => {
+  const written = plain(["o.owner = make()", "show(o.owner.name)"]);
+  const result = await follow([written], paramO, "owner");
+  assert.deepEqual(frontiers(result), ["2 unmodelled-flow:write to a member"]);
+  assert.deepEqual(uses(result), ["3 owner.name|owner [reassigned]"]);
+
+  const inside = await follow([plain(["o.owner.name = 'x'"])], paramO, "owner");
+  assert.deepEqual(frontiers(inside), ["2 unmodelled-flow:write to a member"]);
+  assert.deepEqual(uses(inside), []);
+});
+
+test("a write that cannot alter the changed path or a built-in method is no loss; one that can patch a built-in is", async () => {
+  const other = await follow([plain(["o.id = 4", "show(o.owner.name)"])], paramO, "owner");
+  assert.deepEqual(frontiers(other), []);
+  assert.deepEqual(uses(other), ["3 owner.name|owner []"]);
+
+  const patched = await follow([plain(["o.items.map = make()", "o.items.map((i) => i.owner.name)"])], paramO, "items[].owner");
+  assert.ok(frontiers(patched).includes("2 unmodelled-flow:write to a member"), frontiers(patched).join(", "));
+});
+
+test("Object.assign or Object.defineProperty with the carried value as target ends the chain with a frontier", async () => {
+  const assigned = await follow([plain(["Object.assign(o, patch)", "show(o.owner.name)"])], paramO, "owner");
+  const defined = await follow([plain(["Object.defineProperty(o, 'owner', { value: null })"])], paramO, "owner");
+
+  assert.deepEqual(frontiers(assigned), ["2 unmodelled-flow:write to a member"]);
+  assert.deepEqual(frontiers(defined), ["2 unmodelled-flow:write to a member"]);
+});
+
+test("a function reference given to tap receives the value; it is not dropped", async () => {
+  const file = source("a.ts", [
+    "class Page {",
+    "  constructor(private http: HttpClient) {}",
+    "  log(o: Order) {}",
+    "  load() {",
+    "    this.http.get<Order>('/orders/1').pipe(tap(this.log), tap(isReady)).subscribe()",
+    "  }",
+    "}",
+  ]);
+  const result = await follow([file], callSite("a.ts", 5, "Page.load"), "owner");
+
+  assert.deepEqual(next(result), ["parameter log#0@3 owner"]);
+  assert.deepEqual(frontiers(result), ["5 unmodelled-sink:isReady"]);
 });
 
 test("a parameter that shadows a top-level function is not that function", async () => {
