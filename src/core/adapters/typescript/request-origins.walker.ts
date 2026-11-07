@@ -15,18 +15,16 @@ import {
   isNullishLiteral,
   isUndeclaredName,
   literalOf,
-  mutationsWithin,
   namedFunction,
   propertyNameText,
   receiptOf,
   referencesOf,
   searchRoot,
   unwrap,
-  writesWithin,
   type FunctionNode,
 } from "./consumer-flow.syntax.ts";
 import { lineOf, type RequestBody } from "./http-call-sites.adapter.ts";
-import { createEscapes } from "./request-escapes.ts";
+import { createEscapes, isRewritten } from "./request-escapes.ts";
 
 /** A call to a wrapper method: inside the wrapper's body its parameters hold the arguments of that call, which are written in the caller. */
 interface Frame {
@@ -51,7 +49,7 @@ const ABSENT: OriginValue = { kind: "absent" };
 const placeOf = (node: ts.Node) => ({ path: node.getSourceFile().fileName, line: lineOf(node.getSourceFile(), node) });
 const trailOf = (node: ts.Node): OriginTrail => ({ at: placeOf(node), hops: [], conditions: [] });
 const exact = (node: ts.Node, value: OriginValue): Origin => ({ kind: "exact", value, ...trailOf(node) });
-const frontier = (node: ts.Node, reason: OriginFrontierReason, detail?: string): Origin => ({ kind: "frontier", reason, ...(detail === undefined ? {} : { detail }), ...trailOf(node) });
+export const frontier = (node: ts.Node, reason: OriginFrontierReason, detail?: string): Origin => ({ kind: "frontier", reason, ...(detail === undefined ? {} : { detail }), ...trailOf(node) });
 const lacks = (node: ts.Node): Lacks => ({ kind: "lacks", ...trailOf(node) });
 const dropped = (node: ts.Node): Dropped => ({ kind: "dropped", ...trailOf(node) });
 const SERIALIZER = "toJSON";
@@ -294,7 +292,7 @@ export class OriginWalker {
     const root = searchRoot(binding);
     const { reads, dynamic } = referencesOf(binding);
     const primitive = initializer !== undefined && ts.isIdentifier(declaration.name) && writtenValue(unwrap(initializer)) !== undefined;
-    if (writesWithin(root, binding, 0, Infinity).length > 0 || mutationsWithin(root, binding, 0, () => true).length > 0) return [frontier(read, "mutated", "written")];
+    if (isRewritten(root, binding)) return [frontier(read, "mutated", "written")];
     if (dynamic.length > 0 || (!primitive && reads.some((other) => other !== read && this.escapes(other)))) return [frontier(read, "mutated", "escapes")];
     if (initializer === undefined) return [frontier(read, "untracked", "no initializer")];
     return extend(this.walk(initializer, path, frame, body), { hop: { step: "assign", evidence: placeOf(declaration) } });
@@ -306,7 +304,7 @@ export class OriginWalker {
     const index = fn.parameters.indexOf(declaration);
     if (receiptOf(fn, index).hidden) return [frontier(read, "untracked", "arguments")];
     const binding = declaredBinding(declaration.name, fn);
-    if (writesWithin(fn, binding, 0, Infinity).length > 0 || mutationsWithin(fn, binding, 0, () => true).length > 0) return [frontier(read, "mutated", "written")];
+    if (isRewritten(fn, binding)) return [frontier(read, "mutated", "written")];
     if (referencesOf(binding).reads.some((other) => other !== read && this.escapes(other))) return [frontier(read, "mutated", "escapes")];
     for (let held = frame; held !== undefined; held = held.parent) {
       if (held.function === fn) return this.bound(held, declaration, index, path, body);

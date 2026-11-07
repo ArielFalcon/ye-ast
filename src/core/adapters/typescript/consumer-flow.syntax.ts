@@ -90,6 +90,11 @@ export function unwrap(expression: ts.Expression): ts.Expression {
   return current;
 }
 
+export function calleeName(call: ts.CallExpression): string | undefined {
+  const callee = unwrap(call.expression);
+  return ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : undefined;
+}
+
 export function isTransparent(node: ts.Node): boolean {
   return ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isTypeAssertionExpression(node);
 }

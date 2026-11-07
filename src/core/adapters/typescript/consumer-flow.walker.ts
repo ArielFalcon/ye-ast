@@ -7,6 +7,7 @@ import type { Evidence, UnknownReason } from "../../domain/shared/fact.ts";
 import type { Program, Unit } from "./consumer-flow.index.ts";
 import {
   assignedBinding,
+  calleeName,
   chainPath,
   declaredBinding,
   declaredScope,
@@ -1124,11 +1125,6 @@ function accessStep(access: ts.PropertyAccessExpression | ts.ElementAccessExpres
   if (ts.isStringLiteralLike(key)) return { kind: "keyed", key: key.text, optional };
   if (ts.isNumericLiteral(key)) return { kind: "keyed", key: Number(key.text), optional };
   return { kind: "keyed", optional };
-}
-
-function calleeName(call: ts.CallExpression): string | undefined {
-  const callee = unwrap(call.expression);
-  return ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : undefined;
 }
 
 function isPipe(call: ts.CallExpression): boolean {

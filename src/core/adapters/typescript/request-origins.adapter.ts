@@ -3,7 +3,7 @@ import type { Origin } from "../../domain/contracts/request-origin.ts";
 import type { ArgumentOrigins, RequestOriginReader } from "../../ports/request-origins.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { buildProgram } from "./consumer-flow.index.ts";
-import { unwrap } from "./consumer-flow.syntax.ts";
+import { calleeName } from "./consumer-flow.syntax.ts";
 import { createRequestBodies, lineOf, symbolOf, VERBS } from "./http-call-sites.adapter.ts";
 import { bodyReplacements } from "./request-interceptors.ts";
 import { OriginWalker } from "./request-origins.walker.ts";
@@ -62,9 +62,4 @@ function namesRequest(call: ts.CallExpression): boolean {
   const callee = call.expression;
   if (ts.isIdentifier(callee)) return callee.text === "fetch" || callee.text === "httpResource";
   return ts.isPropertyAccessExpression(callee) && (VERBS.has(callee.name.text) || callee.name.text === "fetch");
-}
-
-function calleeName(call: ts.CallExpression): string | undefined {
-  const callee = unwrap(call.expression);
-  return ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : undefined;
 }

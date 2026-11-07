@@ -1,9 +1,14 @@
 import ts from "typescript";
 import type { Program } from "./consumer-flow.index.ts";
 import { resolveFunction } from "./consumer-flow.resolution.ts";
-import { declaredBinding, enclosingFunction, isFunctionNode, mutationsWithin, receiptOf, referencesOf, writesWithin, type FunctionNode } from "./consumer-flow.syntax.ts";
+import { declaredBinding, enclosingFunction, isFunctionNode, mutationsWithin, receiptOf, referencesOf, writesWithin, type Binding, type FunctionNode } from "./consumer-flow.syntax.ts";
 
 const FLOWING_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set([ts.SyntaxKind.EqualsToken, ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken]);
+
+/** Whether anything in `scope` writes the binding or mutates the value it holds. */
+export function isRewritten(scope: ts.Node, binding: Binding): boolean {
+  return writesWithin(scope, binding, 0, Infinity).length > 0 || mutationsWithin(scope, binding, 0, () => true).length > 0;
+}
 
 /** Whether a read hands the variable's value, or a part of it, on: to a call, an alias, a result. */
 function flowsOut(read: ts.Expression): boolean {
@@ -32,10 +37,12 @@ function reachedBy(read: ts.Node): ts.Node {
   for (;;) {
     const parent = top.parent;
     const reachesInto = (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === top;
-    if (!reachesInto && !ts.isParenthesizedExpression(parent) && !ts.isNonNullExpression(parent) && !ts.isAsExpression(parent) && !ts.isSatisfiesExpression(parent)) return top;
+    if (!reachesInto && !isTypeWrapper(parent)) return top;
     top = parent;
   }
 }
+
+const isTypeWrapper = (node: ts.Node): boolean => ts.isParenthesizedExpression(node) || ts.isNonNullExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node);
 
 /**
  * Whether the function only creates `nested` for its caller: it is what the function returns, so nothing in it runs
@@ -43,7 +50,7 @@ function reachedBy(read: ts.Node): ts.Node {
  */
 function isReturned(nested: FunctionNode, fn: FunctionNode): boolean {
   let top: ts.Node = nested;
-  while (ts.isParenthesizedExpression(top.parent) || ts.isAsExpression(top.parent) || ts.isSatisfiesExpression(top.parent) || ts.isNonNullExpression(top.parent)) top = top.parent;
+  while (isTypeWrapper(top.parent)) top = top.parent;
   const parent = top.parent;
   return (ts.isReturnStatement(parent) && enclosingFunction(parent) === fn) || (parent === fn && ts.isArrowFunction(fn) && fn.body === top);
 }
@@ -92,7 +99,7 @@ export function createEscapes(program: Program): (read: ts.Expression) => boolea
     const { parameter, hidden } = receiptOf(fn, index);
     if (hidden || parameter === undefined || !ts.isIdentifier(parameter.name)) return false;
     const binding = declaredBinding(parameter.name, fn);
-    if (writesWithin(fn, binding, 0, Infinity).length > 0 || mutationsWithin(fn, binding, 0, () => true).length > 0) return false;
+    if (isRewritten(fn, binding)) return false;
     const { reads, dynamic } = referencesOf(binding);
     return dynamic.length === 0 && reads.every((read) => runsAfter(read, fn) || !escapes(read));
   };

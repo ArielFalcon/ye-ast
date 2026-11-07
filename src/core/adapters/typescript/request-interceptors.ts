@@ -3,17 +3,10 @@ import type { Origin } from "../../domain/contracts/request-origin.ts";
 import { classNamed, methodDeclared } from "./consumer-flow.classes.ts";
 import type { Program, Unit } from "./consumer-flow.index.ts";
 import { resolveFunction } from "./consumer-flow.resolution.ts";
-import { isFunctionNode, propertyNameText, unwrap, type FunctionNode } from "./consumer-flow.syntax.ts";
-import { lineOf } from "./http-call-sites.adapter.ts";
+import { calleeName, isFunctionNode, propertyNameText, unwrap } from ".\/consumer-flow.syntax.ts";
+import { frontier } from "./request-origins.walker.ts";
 
-const frontierAt = (node: ts.Node, detail: string): Origin => ({
-  kind: "frontier",
-  reason: "untracked",
-  detail,
-  at: { path: node.getSourceFile().fileName, line: lineOf(node.getSourceFile(), node) },
-  hops: [],
-  conditions: [],
-});
+const frontierAt = (node: ts.Node, detail: string): Origin => frontier(node, "untracked", detail);
 
 /**
  * The places where an HTTP interceptor registered by the application may replace the body of a request, each a frontier:
@@ -111,9 +104,4 @@ function keepsBody(argument: ts.Expression): boolean {
 
 function provides(registration: ts.ObjectLiteralExpression, token: string): boolean {
   return registration.properties.some((member) => ts.isPropertyAssignment(member) && ts.isIdentifier(member.name) && member.name.text === "provide" && ts.isIdentifier(member.initializer) && member.initializer.text === token);
-}
-
-function calleeName(call: ts.CallExpression): string | undefined {
-  const callee = unwrap(call.expression);
-  return ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : undefined;
 }

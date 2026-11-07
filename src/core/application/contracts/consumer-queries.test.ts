@@ -691,7 +691,6 @@ const POST = "POST /vets";
 const SERVICE = "src/vet.service.ts";
 
 const literalOrigin = (value: string | number | boolean | null, line: number, overrides: Partial<Origin> = {}): Origin => ({ kind: "exact", value: { kind: "literal", value }, at: { path: SERVICE, line }, hops: [], conditions: [], ...overrides }) as Origin;
-const absentOrigin = (line: number): Origin => ({ kind: "exact", value: { kind: "absent" }, at: { path: SERVICE, line }, hops: [], conditions: [] });
 const frontierOrigin = (reason: Extract<Origin, { kind: "frontier" }>["reason"], line: number): Origin => ({ kind: "frontier", reason, at: { path: SERVICE, line }, hops: [], conditions: [] });
 const parameterOrigin = (symbol: string, line: number, omitted: readonly Origin[] = []): Origin => ({ kind: "parameter", at: { path: SERVICE, line }, hops: [], conditions: [], parameter: { file: SERVICE, symbol, line, index: 0, path: [], body: true, omitted } });
 
