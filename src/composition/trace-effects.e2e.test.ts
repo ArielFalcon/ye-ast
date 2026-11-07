@@ -249,3 +249,30 @@ class Flow {
   const result = await trace("src/Flow.java:Flow.run");
   assert.equal(result.value.steps.find((step) => step.symbol === "run")?.effects?.length, 1);
 });
+
+test("Java overloads select the sole signature of the call arity and cut unresolved signatures", async () => {
+  commit({
+    "src/Flow.java": `class Facade {
+  void process(String a, String b, String c, String d) { }
+  void process(String a, String b, String c, String d, String e) { }
+  void ambiguous(String value) { }
+  void ambiguous(Integer value) { }
+}
+class Flow {
+  private Facade facade;
+  void run() { facade.process(null, null, null, null, null); }
+  void unsettled() { facade.ambiguous((String) null); }
+}
+`,
+  });
+  const run = await trace("src/Flow.java:Flow.run");
+  const reached = run.value.steps.flatMap((step) => [
+    { symbol: step.symbol, line: step.line },
+    ...(step.leaves ?? []).map((leaf) => ({ symbol: leaf.symbol, line: leaf.start })),
+  ]).filter(({ symbol }) => symbol === "process");
+  assert.deepEqual(reached, [{ symbol: "process", line: 3 }]);
+  const unsettled = await trace("src/Flow.java:Flow.unsettled");
+  assert.deepEqual(unsettled.value.steps.map((step) => step.symbol), ["unsettled"]);
+  assert.equal(unsettled.status, "partial");
+  assert.ok(unsettled.cuts?.some((cut) => cut.at.includes("src/Flow.java:4 Facade.ambiguous") && cut.at.includes("src/Flow.java:5 Facade.ambiguous")));
+});

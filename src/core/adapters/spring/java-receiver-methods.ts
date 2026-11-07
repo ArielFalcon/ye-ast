@@ -8,7 +8,7 @@ import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adap
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import { enclosingType } from "./java-root-bindings.ts";
-import { ancestorsOf, hierarchyOf, targetsOf, type Hierarchy, type Superclass } from "./java-dispatch-targets.ts";
+import { ancestorsOf, hierarchyOf, type Hierarchy, type Superclass } from "./java-dispatch-targets.ts";
 import { createJavaProject, describeFile, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
@@ -43,8 +43,7 @@ interface ReadFile {
  * sources do not state; when its members of the name, its own and inherited, are not exactly one signature of the call's
  * arity with no varargs and no private declaration, or the name is one of `Object`'s methods; when the call sits in an
  * anonymous or a local class; when a source holds an annotation by which a processor adds overloads or rewrites calls
- * (`CALL_REWRITING_ANNOTATIONS`); and when the declared hierarchy does not prove every body a value of the type may run
- * for the method. `unproven` only when a source may make a value of a declared type run code no source shows (a source
+ * (`CALL_REWRITING_ANNOTATIONS`); and when the declared hierarchy does not settle the member. Dispatch is a separate trace obligation. `unproven` only when a source may make a value of a declared type run code no source shows (a source
  * that does not parse, a JVM language no extractor reads, a JDK API that implements an interface at run time) and the
  * call's receiver is a value it reads; otherwise the call is `unknown`.
  */
@@ -93,7 +92,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         const method = proves ? resolver.methodOf(invocations[0]!, source) : undefined;
         if (method !== undefined) {
           results[index] = { kind: "method", file: method.owner.file.path, start: method.node.startPosition.row + 1, nameLine: (method.node.childForFieldName("name") ?? method.node).startPosition.row + 1 };
-        } else if (falsified && resolver.holdsValue(invocations[0]!, source.file)) results[index] = UNPROVEN;
+        } else if (resolver.hasDeclaredReceiver(invocations[0]!, source) || (falsified && resolver.holdsValue(invocations[0]!, source.file))) results[index] = UNPROVEN;
       }
       return results;
     } finally {
@@ -153,10 +152,12 @@ function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) 
     if (hierarchy === undefined || OBJECT_METHODS.has(name)) return undefined;
     const above = ancestorsOf(type, hierarchy);
     if (above.some((ancestor) => hierarchy.outside.has(ancestor))) return undefined;
-    const candidates = above.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
+    const named = above.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
+    if (named.some(hasVarargs)) return undefined;
+    const candidates = named.filter((method) => method.parameterTypes.length === arity);
     const [first] = candidates;
-    if (first === undefined || first.parameterTypes.length !== arity) return undefined;
-    if (candidates.some((method) => method.modifiers.includes("private") || hasVarargs(method) || (method !== first && !sameStatedSignature(method, first)))) return undefined;
+    if (first === undefined) return undefined;
+    if (candidates.some((method) => (method.modifiers.includes("private") && method.owner !== type) || hasVarargs(method) || (method !== first && !sameStatedSignature(method, first)))) return undefined;
     for (let current: Superclass = type; typeof current === "object"; current = hierarchy.superclasses.get(current) ?? "outside") {
       const own = candidates.find((method) => method.owner === current);
       if (own !== undefined) return own;
@@ -172,12 +173,13 @@ function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) 
   };
 
   return {
-    /** The method the call names, when its receiver's declared type names one and the declared hierarchy proves what a value of that type may run for it. */
+    hasDeclaredReceiver: (invocation: Node, source: ReadFile): boolean => receiverOf(invocation, source) !== undefined,
+    /** The method the call names through its declared receiver and one settled signature; dispatch decides its body separately. */
     methodOf: (invocation: Node, source: ReadFile): MethodDecl | undefined => {
       const type = receiverOf(invocation, source);
       const name = invocation.childForFieldName("name")?.text;
       const method = type === undefined || name === undefined ? undefined : memberOf(type, name, argumentCount(invocation));
-      return method !== undefined && hierarchy !== undefined && targetsOf(method, hierarchy, type).kind === "bodies" ? method : undefined;
+      return method;
     },
     /**
      * Whether the call's receiver is a value the call reads, whose class the call's own place does not state: a variable

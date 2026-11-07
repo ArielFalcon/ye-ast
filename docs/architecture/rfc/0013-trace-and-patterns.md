@@ -740,3 +740,13 @@ A Java call site derived through other methods carries its extraction bodies and
 occurrences pass the existing function-value execution boundary. Otherwise it remains an effect cut at the caller.
 The same rule applies to HTTP and messages. Identical effects at the same step and line are reported once.
 This adds no public call-site fields and changes no stored schema.
+
+
+### Java call signature selection (2026-11-07)
+
+Receiver-method resolution filters the declared hierarchy's named members by argument count before comparing their
+parameter identities with the shared `readSignature` / `sameSignature` reading. Different arities do not create an
+ambiguity; distinct or unsettled signatures at the same arity, and varargs, retain a call-site cut listing candidates.
+A known repository receiver whose signature cannot be selected never falls back to the index's guessed target.
+Selecting a declared method and proving its runtime implementation are separate obligations: R7/R10 still decide
+whether the selected declaration's body may expand.

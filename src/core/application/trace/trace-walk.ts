@@ -194,7 +194,10 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       paths = new Map(branchesOf(containmentTree(store, store.symbolsInFiles([symbol.file]))).map((branch) => [branch.declaration.id, declarationPath(branch)]));
       pathsByFile.set(symbol.file, paths);
     }
-    return declarationAnchor(symbol.file, paths.get(symbol.id) ?? symbol.name);
+    const path = paths.get(symbol.id) ?? symbol.name;
+    return [...paths.values()].filter((candidate) => candidate === path).length > 1
+      ? placeAt(symbol.file, symbol.startLine, path)
+      : declarationAnchor(symbol.file, path);
   };
   /**
    * The place reads `<path>:<line> <spelling>`: the path is repository-relative and the line digits, so the first
