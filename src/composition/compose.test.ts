@@ -1628,12 +1628,14 @@ test("a trace over a real index never follows an edge whose name a package binds
 
   const [make, pass, real] = await Promise.all([walk("make", "src/uses-package.ts"), walk("pass", "src/uses-package.ts"), walk("real", "src/uses-repo.ts")]);
 
-  const shape = (answer: typeof make) => {
-    assert.ok(answer.ok && answer.value.status === "complete", JSON.stringify(answer));
+  const shape = (answer: typeof make, status: "complete" | "partial" = "complete") => {
+    assert.ok(answer.ok && answer.value.status === status, JSON.stringify(answer));
     return answer.value.value.steps.map(({ symbol, leaves, external }) => ({ symbol, leaves: leaves?.map((leaf) => leaf.file), external }));
   };
   assert.deepEqual(shape(make), [{ symbol: "make", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["Base"] }] }]);
-  assert.deepEqual(shape(pass), [{ symbol: "pass", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["evaluate"] }] }]);
+  assert.ok(pass.ok && pass.value.status === "partial");
+  assert.deepEqual(pass.value.cuts.map((cut) => cut.at), [["src/uses-package.ts:7 [1].map"]]);
+  assert.deepEqual(shape(pass, "partial"), [{ symbol: "pass", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["evaluate"] }] }]);
   assert.deepEqual(shape(real), [{ symbol: "real", leaves: ["src/model.ts", "src/model.ts"], external: undefined }]);
 });
 
@@ -1735,7 +1737,7 @@ test("a trace over a real index cuts a call through a parameter of a function ar
     const answer = answers[index]!;
     assert.ok(answer.ok && answer.value.status === "partial", JSON.stringify(answer));
     assert.deepEqual(answer.value.value.steps.flatMap(({ leaves }) => leaves ?? []), []);
-    assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", `src/runners.ts:${line} callback`, "src/callback.ts::callback"]]);
+    assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [...(line === 8 ? [["unresolved-link", "src/runners.ts:8 [1].map"]] : []), ["unresolved-link", `src/runners.ts:${line} callback`, "src/callback.ts::callback"]]);
   }
 });
 
@@ -1858,4 +1860,37 @@ test("a trace over a real index keeps a call to a Java record accessor a cut, an
   assert.ok(answer.ok && answer.value.status === "partial");
   assert.equal(answer.value.value.steps[0]?.external, undefined);
   assert.deepEqual(answer.value.cuts.map((entry) => entry.at), [["src/Shapes.java:7 p.coordinate", "src/Point.java::coordinate"]]);
+});
+
+test("trace accounts for every syntactic call even when the index omits its receiver shape", async () => {
+  const shapes = ["(p ? p : p).save()", "[p][0].save()", "(0, p).save()", "p[key]()", "p.save()", "p?.save()", "p[key]`value`"];
+  for (const [index, shape] of shapes.entries()) {
+    const file = `src/inventory${index}.ts`;
+    writeFileSync(join(repo, file), `interface Port { save(): void; [key: string]: () => void }
+export function run(p: Port, key: string) { ${shape}; }
+export class Page { p!: Port; key!: string; field = ${shape.replaceAll("p", "this.p").replaceAll("key", "this.key")}; }`);
+  }
+  const javaShapes = ["(p == null ? p : p).save()", "new Port[]{p}[0].save()", "p.save()"];
+  for (const [index, shape] of javaShapes.entries()) {
+    writeFileSync(join(repo, `src/Inventory${index}.java`), `interface Port { void save(); }
+class Inventory${index} { void run(Port p) { ${shape}; } }`);
+  }
+  git("add", ".");
+  git("commit", "-qm", "call inventory");
+  const { trace } = composeQueries({ scratchRoot });
+  for (const index of shapes.keys()) {
+    const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: `src/inventory${index}.ts`, symbol: "run" }] });
+    assert.ok(answer.ok);
+    assert.equal(answer.value.status, "partial", shapes[index]);
+    if (index < 3) assert.ok(answer.value.cuts.some((cut) => cut.at[0] === `src/inventory${index}.ts:2 ${shapes[index]!.slice(0, -2)}`));
+    for (const symbol of ["Page", "Page.field"]) {
+      const field = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: `src/inventory${index}.ts`, symbol }] });
+      assert.ok(field.ok && field.value.status === "partial", JSON.stringify(field));
+    }
+  }
+  for (const index of javaShapes.keys()) {
+    const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: `src/Inventory${index}.java`, symbol: `Inventory${index}.run` }] });
+    assert.ok(answer.ok);
+    assert.equal(answer.value.status, "partial", javaShapes[index]);
+  }
 });

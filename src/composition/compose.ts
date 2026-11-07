@@ -181,6 +181,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
         functionValueCalls: [...typescript.functionValueCalls, ...java.functionValueCalls],
         callables: [...typescript.callables, ...java.callables],
         receiverBindings: [...typescript.receiverBindings, ...java.receiverBindings],
+        calls: [...typescript.calls ?? [], ...java.calls ?? []],
       };
     },
   };

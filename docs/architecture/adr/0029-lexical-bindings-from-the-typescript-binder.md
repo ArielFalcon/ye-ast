@@ -190,3 +190,7 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
   (RFC-0013 R5), beyond the nominal classes of decision 11: structural typing lets a compatible object of another
   class stand where the type is declared (trace slice 3, S4b, research).
 - Java bindings, which have their own reader.
+
+## Trace call inventory (2026-11-07)
+
+The existing member readers also supply every written call's place, callee name and syntax owners. Trace reconciles these with its indexed calls and pending references before declaring a body complete. Missing sites remain unresolved-link cuts. Syntax ownership includes field initializers and keeps a member's calls out of its class body; an anonymous callback remains with its encloser. This adds no lexical resolver, binding proof, type checker or stored schema. Other query families retain their existing dependency semantics: an unaccounted execution site alone proves no dependency edge.

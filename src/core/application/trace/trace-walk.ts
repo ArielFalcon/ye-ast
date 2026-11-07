@@ -1,3 +1,4 @@
+import { callsByOwner } from "./syntax-calls.ts";
 import { isSeedable } from "../../domain/change/seeds.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { CALL_EDGE_KINDS, FIELD_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
@@ -39,11 +40,11 @@ const VALUE_KINDS: readonly string[] = ["constant", "variable"];
 const CLASS_KINDS: readonly string[] = ["class", "component"];
 
 /** What a trace can start from: what an impact walk seeds, or a property or field whose initializer makes calls. */
-export function isTraceRoot(store: CodeGraphReader, unresolvedIn: UnresolvedIn): (symbol: GraphSymbol) => boolean {
+export function isTraceRoot(store: CodeGraphReader, unresolvedIn: UnresolvedIn, syntaxCalls: ReadonlySet<GraphNodeId> = new Set()): (symbol: GraphSymbol) => boolean {
   return (symbol) =>
     isSeedable(symbol) ||
     ((FIELD_KINDS as readonly string[]).includes(symbol.kind) &&
-      (callEdgesOf(store, symbol).length > 0 || unresolvedIn(symbol.file).some((reference) => reference.from === symbol.id && CALL_EDGE_KINDS.includes(reference.kind))));
+      (syntaxCalls.has(symbol.id) || callEdgesOf(store, symbol).length > 0 || unresolvedIn(symbol.file).some((reference) => reference.from === symbol.id && CALL_EDGE_KINDS.includes(reference.kind))));
 }
 
 function callEdgesOf(store: CodeGraphReader, symbol: GraphSymbol) {
@@ -379,11 +380,14 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   });
 
   /** The members of a class root that run code, by their declaration: methods, and properties or fields whose initializer makes calls. */
-  const membersOf = (node: GraphSymbol): Child[] => {
+  const syntaxCallsIn = memoizedBy((file: string) => file, async (file) => callsByOwner((await syntaxOf(file)).calls ?? [], store.symbolsInFiles([file])));
+
+  const membersOf = async (node: GraphSymbol): Promise<Child[]> => {
     if (!CLASS_KINDS.includes(node.kind)) return [];
+    const syntax = await syntaxCallsIn(node.file);
     return navigation
       .membersOf(node)
-      .filter((member) => member.kind === "method" || ((FIELD_KINDS as readonly string[]).includes(member.kind) && (callEdgesOf(store, member).length > 0 || callsFrom(member).length > 0)))
+      .filter((member) => member.kind === "method" || ((FIELD_KINDS as readonly string[]).includes(member.kind) && (syntax.has(member.id) || callEdgesOf(store, member).length > 0 || callsFrom(member).length > 0)))
       .map((member) => childAt(member, member.startLine, null, member.name, "member"));
   };
 
@@ -427,7 +431,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const verdicts = await targets.verdictsOf([...called, ...passed], signal);
     const valueRoots = await valueReceivers(node, [...called, ...passed], verdicts);
     const external: ExternalCall[] = [];
-    const children: Child[] = root ? membersOf(node) : [];
+    const children: Child[] = root ? await membersOf(node) : [];
     const cuts: Cut[] = [];
     /** An external call is a leaf only while the repository writes nothing over what it names; otherwise `replaced` decides. */
     const leafUnlessReplaced = async (call: ExternalCall, root: LeafRoot, replaced: () => unknown): Promise<void> => {
@@ -504,6 +508,19 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         else cuts.push(unresolvedAt(reference, named));
       } else if (bound !== undefined) await settleBound(reference, target.name, named, bound);
       else cuts.push(unresolvedAt(reference, named));
+    }
+    const indexed = callsFrom(node);
+    for (const call of (await syntaxCallsIn(node.file)).get(node.id) ?? []) {
+      const column = call.column - 1;
+      const callee = calleeOf(call.name);
+      const matchesName = (name: string): boolean => {
+        if (name === call.name) return true;
+        const indexedName = calleeOf(name);
+        return indexedName.form !== "computed" && (call.callee ?? (callee.form === "computed" ? undefined : callee.name)) === indexedName.name;
+      };
+      if (indexed.some((reference) => reference.line === call.line && reference.column === column && matchesName(reference.name)) ||
+        called.some(({ edge, target }) => edge.line === call.line && edge.column === column && matchesName(target.name))) continue;
+      cuts.push(unresolvedAt({ from: node.id, file: node.file, line: call.line, column, name: call.name, kind: "calls", candidates: [] }, []));
     }
     for (const reference of unsettledBy(callsFrom(node), called)) {
       const own = ownMemberOf(reference.name);

@@ -461,3 +461,17 @@ Accepted by the owner on 2026-11-01: "Acepto las recomendaciones". Question 5 la
 | 3 | Is a data-access API a plugin row (RFC-0007) or configuration? | A plugin row per framework, under ADR-0013; a project's own data layer is reached as code and ends at its framework call |
 | 4 | Should `patterns` read history under `untrusted`? | Yes: `git log` of the exported snapshot's repository is a read of git, not of repository code, and needs no network |
 | 5 | Does the architecture map (no target) replace a separate `modules` subdomain (RFC-0009)? | It covers orientation; module dependency direction (which role imports which) is added to the map in slice 3 as counts between roles |
+
+### Syntax call inventory (2026-11-07)
+
+R1/R10: before a body can be complete or folded, every call written in that body must be represented by a call edge, a pending reference, or an unresolved-link cut. The existing TypeScript and Java readers enumerate calls and constructions (TypeScript tags included) in their existing parse. Syntax owner chains assign calls to declarations, including field initializers; anonymous callbacks remain with their enclosing body. This avoids treating a method already included under a class as an unaccounted class call, including when both declarations share a line. A field with only unindexed calls is still a trace root and a class member to expand.
+
+Reconciliation uses the occurrence's line, UTF-16 column and syntactic callee name. Argument text in a receiver is not identity; Java constructions name their type rather than the `new` keyword. Computed callees without a name reconcile by exact spelling only. A site with neither edge nor pending reference is a cut at its written place, never a guessed step or external. No schema change, checker, second binder or shared navigation change is needed. The other families still consume their existing indexed dependency inventory: a missing execution site does not prove an inbound dependency on a declaration, so these trace cuts are not manufactured dependency edges.
+
+Existing-test classification:
+
+- **(a) silent drops:** package/repository homonym test (`pass`) and enclosing-parameter callback test (`nested`) omitted `[1].map`. Expectations now include that call's cut; the package callback and parameter cut remain as before.
+- **(b) matching errors:** the object-literal call test duplicated `price.toFixed().format` because syntax includes argument text; the Java non-private-field/var/aspect test duplicated a construction named `new Plain`; the class-reexpansion test charged `work`'s call to `Page` as well. Callee identity and syntax ownership fix these without expectation changes.
+- Earlier ENOSPC failures in Java platform/root/record tests were not reproduced after recovery. Function-value/wrapper tests and the package/global-root test pass with the name-based reconciliation; their existing pending references account for the calls.
+
+The public table covers TS conditional, indexed and comma receivers, computed callees, plain and optional member calls, tags, and Java conditional, indexed and plain receivers. Its TS expressions also run as field and class roots. The first three assert the cut's exact place. RED reproduced the false complete; removing the inventory loop with a type-correct empty slice made the test fail again. Probe and differential results are recorded below after the measurement completes.

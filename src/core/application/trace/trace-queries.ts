@@ -1,3 +1,4 @@
+import { callsByOwner } from "./syntax-calls.ts";
 import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
@@ -80,7 +81,23 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         try {
           const trivia = triviaOncePerFile(deps.sourceTrivia);
           const unresolvedIn = unresolvedOncePerFile(store);
-          const isRoot = isTraceRoot(store, unresolvedIn);
+          const declaredIn = declarationsOncePerFile(deps.memberNames);
+          const sources = new Map(head.tree.sources.map((file) => [file.path, file]));
+          let declared: Promise<ReadonlyMap<string, readonly string[]>> | undefined;
+          const memberDeclarations = () => (declared ??= declaringFiles(head.tree.sources.filter((file) => head.selected(file.path)), declaredIn));
+          const syntaxOf = async (path: string): Promise<DeclaredMemberNames> => {
+            const file = sources.get(path);
+            return file === undefined ? NOTHING_DECLARED : declaredIn(file);
+          };
+          const rootFiles = [...new Set(declarations.map((target) => target.file))];
+          const syntaxCalls = new Set<GraphNodeId>();
+          for (const file of rootFiles) {
+            const symbols = store.symbolsInFiles([file]);
+            if (symbols.some((symbol) => symbol.kind === "property" || symbol.kind === "field")) {
+              for (const id of callsByOwner((await syntaxOf(file)).calls ?? [], symbols).keys()) syntaxCalls.add(id);
+            }
+          }
+          const isRoot = isTraceRoot(store, unresolvedIn, syntaxCalls);
           const selections = await Promise.all(targets.map(async (target): Promise<{ target: TraceTarget; selection: Pick<RootSelection, "seeds" | "missing" | "withoutSymbols"> }> => ({
             target,
             selection: isEntrypointTarget(target)
@@ -93,14 +110,6 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           if (missing.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${missing.map(unknownTargetKey).join(", ")}`, entries: missing } };
 
           const roots = [...new Map(selections.flatMap(({ selection }) => selection.seeds.map(({ symbol }): [GraphNodeId, GraphSymbol] => [symbol.id, symbol]))).values()].sort(comparePosition);
-          const declaredIn = declarationsOncePerFile(deps.memberNames);
-          const sources = new Map(head.tree.sources.map((file) => [file.path, file]));
-          let declared: Promise<ReadonlyMap<string, readonly string[]>> | undefined;
-          const memberDeclarations = () => (declared ??= declaringFiles(head.tree.sources.filter((file) => head.selected(file.path)), declaredIn));
-          const syntaxOf = async (path: string): Promise<DeclaredMemberNames> => {
-            const file = sources.get(path);
-            return file === undefined ? NOTHING_DECLARED : declaredIn(file);
-          };
           const origins = deps.importOrigins(head.tree.sources, head.tree.export.files.map(({ path }) => path).filter(head.selected));
           const edgeTargets = createEdgeTargets({ origins, store, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: head.tree.sources } });
           let proven: ReturnType<typeof retainedRelations> | undefined;
