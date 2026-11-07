@@ -53,6 +53,11 @@ export function joinedCallUrl(...parts: readonly string[]): CallUrl {
   return urlOf(origin, segments);
 }
 
+/** What a URL writes after the origin it starts with; the whole text when it names none. */
+export function afterOrigin(text: string): string {
+  return splitOrigin(text).rest;
+}
+
 /** A URL as the one text a call target states: its origin, then its path. */
 export function urlText(url: CallUrl): string {
   return `${url.origin ?? ""}${url.path}`;

@@ -6,6 +6,7 @@ import { isContractDocument } from "../../domain/languages/openapi.ts";
 import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
+import { afterOrigin } from "../../domain/topology/path-template.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { ContractOperation, ContractRoutes } from "../../ports/contract-routes.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -78,7 +79,7 @@ export function parseContract(file: SourceFile): ParsedContract | Finding<never>
 function basePathOf(content: ContractContent): string | undefined {
   if (content.swagger !== undefined) return typeof content.basePath === "string" ? normalized(content.basePath) : "";
   const urls = Array.isArray(content.servers) ? content.servers.flatMap((server: { url?: unknown } | null) => (typeof server?.url === "string" ? [server.url] : [])) : [];
-  const paths = new Set(urls.map((url) => normalized(url.replace(/^([a-z][a-z0-9+.-]*:)?\/\/[^/?#]*/i, ""))));
+  const paths = new Set(urls.map((url) => normalized(afterOrigin(url))));
   return paths.size > 1 ? undefined : (paths.values().next().value ?? "");
 }
 
