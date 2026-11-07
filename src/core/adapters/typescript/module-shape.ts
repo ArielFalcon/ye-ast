@@ -27,7 +27,6 @@ export interface ModuleShape {
   reimported: ReadonlySet<string>;
   /** The names this file declares at its top level, with the span of each. */
   declared: Map<string, RawSpan>;
-  /** The declared names that are classes. */
   classes: Set<string>;
   /** What the file exports, by exported name, and the modules it re-exports whole (`export * from`). */
   exports: Map<string, RawExport>;
