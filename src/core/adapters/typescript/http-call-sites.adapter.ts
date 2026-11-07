@@ -118,10 +118,16 @@ function readerOf(files: readonly SourceFile[]): { shapes: ReadonlyMap<string, F
   return { shapes, reader: new Reader(shapes, modules, wrappers, buildDefines(files)) };
 }
 
-/** The expression a request carries as its body and, when the call is to a wrapper method, the function it forwards through. */
+/** A call to a wrapper method, and the method it enters. */
+export interface WrapperCall {
+  function: ts.MethodDeclaration | ts.ArrowFunction | ts.FunctionExpression;
+  call: ts.CallExpression;
+}
+
+/** The expression a request carries as its body and the wrapper methods the call enters before it, outermost first. */
 export interface RequestBody {
   expression: ts.Expression | undefined;
-  wrapper?: ts.MethodDeclaration | ts.ArrowFunction | ts.FunctionExpression;
+  wrappers: readonly WrapperCall[];
 }
 
 /** Where the body of the HTTP request a call makes is written, read through the same owner and wrapper resolution as the call sites; undefined for a call that is no request of the project. */
@@ -598,13 +604,22 @@ class Reader {
     if (!ts.isPropertyAccessExpression(callee) || !VERBS.has(callee.name.text)) return undefined;
     const owner = await this.ownerClass(shape, callee.expression);
     if (owner === undefined) return undefined;
-    if (isAngularHttpClientName(owner.shape, owner.name)) return { expression: bodyArgument(callee.name.text, call) };
+    if (isAngularHttpClientName(owner.shape, owner.name)) return { expression: bodyArgument(callee.name.text, call), wrappers: [] };
     const held = await this.classOf(owner.shape, owner.name);
-    const member = held === undefined ? undefined : memberNamed(held.declaration, callee.name.text);
-    const forwarded = member === undefined ? undefined : FORWARDING_CALLS.get(member);
-    const wrapper = member === undefined ? undefined : functionOf(member);
-    if (forwarded === undefined || wrapper === undefined || !ts.isPropertyAccessExpression(forwarded.expression)) return undefined;
-    return { expression: bodyArgument(forwarded.expression.name.text, forwarded), wrapper };
+    const wrappers: WrapperCall[] = [];
+    let entering = call;
+    let name = callee.name.text;
+    while (held !== undefined) {
+      const member = memberNamed(held.declaration, name);
+      const forwarded = member === undefined ? undefined : FORWARDING_CALLS.get(member);
+      const entered = member === undefined ? undefined : functionOf(member);
+      if (forwarded === undefined || entered === undefined || !ts.isPropertyAccessExpression(forwarded.expression) || wrappers.some((wrapper) => wrapper.function === entered)) return undefined;
+      wrappers.push({ function: entered, call: entering });
+      if (forwarded.expression.expression.kind !== ts.SyntaxKind.ThisKeyword) return { expression: bodyArgument(forwarded.expression.name.text, forwarded), wrappers };
+      entering = forwarded;
+      name = forwarded.expression.name.text;
+    }
+    return undefined;
   }
 
   /**

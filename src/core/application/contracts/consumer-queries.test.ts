@@ -795,14 +795,40 @@ test("a function with no callers, unresolved callers or an unproven caller is a 
   assert.deepEqual(producers(unproven), ["unknown unresolved-callers:ambiguous-caller@7", "review@10"]);
 });
 
-test("functions that call each other through their parameters end instead of looping", async () => {
+test("a recursion through a parameter ends in a located frontier, not in silence", async () => {
   const callers: ConsumerCallers = { kind: "found", callers: [{ file: "src/page.ts", line: 5, at: 7, kind: "call", provenance: "resolved", confidence: 1, proven: true }] };
   const { reader, asked } = readerFor({ 10: [parameterOrigin("add", 9)] }, { 7: { kind: "passed", origins: [parameterOrigin("add", 9)] } });
 
   const fact = await requestSetup({ reader, callers: { add: callers } }).ask();
 
   assert.deepEqual(asked, ["body 10", "argument 7"]);
-  assert.deepEqual(producers(fact), ["review@10"]);
+  assert.deepEqual(producers(fact), ["unknown unresolved-callers:recursion@9", "review@10"]);
+});
+
+test("another caller of a recursive function cannot make the producer admit", async () => {
+  const callers: ConsumerCallers = {
+    kind: "found",
+    callers: [
+      { file: "src/page.ts", line: 5, at: 7, kind: "call", provenance: "resolved", confidence: 1, proven: true },
+      { file: "src/other.ts", line: 3, at: 4, kind: "call", provenance: "resolved", confidence: 1, proven: true },
+    ],
+  };
+  const { reader } = readerFor({ 10: [parameterOrigin("add", 9)] }, { 7: { kind: "passed", origins: [parameterOrigin("add", 9)] }, 4: { kind: "passed", origins: [literalOrigin(1, 4)] } });
+
+  const fact = await requestSetup({ reader, callers: { add: callers } }).ask();
+
+  assert.deepEqual(producers(fact), ["unknown unresolved-callers:recursion@9", "review@10"]);
+});
+
+test("a function reached twice through different callers is resolved each time, not dropped the second time", async () => {
+  const callers: ConsumerCallers = { kind: "found", callers: [{ file: "src/page.ts", line: 5, at: 7, kind: "call", provenance: "resolved", confidence: 1, proven: true }] };
+  const { reader } = readerFor({ 10: [parameterOrigin("add", 9), parameterOrigin("add", 9)] }, { 7: { kind: "passed", origins: [literalOrigin(null, 7)] } });
+
+  const fact = await requestSetup({ reader, callers: { add: callers } }).ask();
+
+  assert.deepEqual(producers(fact), ["incompatible@10"]);
+  const [producer] = fact.value.findings;
+  assert.ok(producer?.status === "complete" && producer.value.verdict.kind === "incompatible");
 });
 
 test("a call site whose link is not qualified is reported with its basis and never followed, and the answer names every call site searched", async () => {

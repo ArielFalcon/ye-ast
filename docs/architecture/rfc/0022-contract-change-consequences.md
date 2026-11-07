@@ -442,27 +442,33 @@ literal with a substitution) or a frontier with its reason. Only an exact origin
 | a literal; a template literal whose substitutions are literals | that value |
 | a template literal with any other substitution | approximate: some string |
 | an array or object literal at the end of the path | its class (the path ends there) |
-| an object literal | its own writes in source order: a later definite write replaces earlier ones (a written `undefined` included); a spread proven to lack the property keeps the earlier writes; a spread whose presence is unknown, a non-literal computed key, a getter or `__proto__` makes the property uncertain; no write and no uncertain member is absence |
+| an object literal | its own writes in source order: a later definite write replaces earlier ones (a written `undefined` included); an uncertain later write (a spread whose presence is unknown, a spread of a parameter, a non-literal computed key, a getter or `__proto__`) may overwrite the earlier writes, so they stop being exact; they stay exact only past a spread proven to lack the property; no write and no uncertain member is absence |
 | `a.b` | `a` at `b` followed by the rest of the path |
 | `c ? a : b` | each branch, under its condition |
 | `a ?? b`, `a \|\| b` | the left values that pass the operator's test, and the right only when the left can fail it; a left side whose test is undecidable keeps the uncertainty and proves nothing about the right |
 | a parenthesis, `as`, `!`, `satisfies` | the operand |
 | a local binding, or a name destructured from an object (`const { a } = x`, no default, rest or nested pattern, read as `x.a`) | its initializer, only when it reaches the read unchanged: no reassignment between them and, for an object, no write to it, no alias, and no call or closure it escapes to; otherwise a frontier |
-| a parameter | the argument of each proven call, in that call's context; its default when the argument is omitted or `undefined` (never `null`); missing or unresolved callers are a frontier, and no caller is never "no origin"; destructuring, spread arguments, rest parameters and `arguments` are a frontier |
-| a call through a wrapper method (the P1.5 fixpoint) | the wrapped call's body inside the wrapper, its parameters bound to this call's arguments, each call kept apart |
+| a parameter | the argument of each proven call, in that call's context; its default when the argument is omitted or `undefined` (never `null`); missing or unresolved callers are a frontier, and no caller is never "no origin"; destructuring, spread arguments, rest parameters and `arguments` are a frontier; a parameter written, aliased or handed to a call that may run before the request is serialized is `mutated`; a parameter met again on its own path is a located `recursion` frontier |
+| a call through a wrapper method (the P1.5 fixpoint) | the forwarding chain the fixpoint records, followed through every wrapper method down to the `HttpClient` body, arguments bound at each hop, each call kept apart |
 | `JSON.stringify(x)` without replacer or indent arguments | `x`, serialized |
 
 Anything else ends the origin with a frontier naming its reason: `form-value`, `call-result`, `member`, `construction`,
-`mutated`, `unresolved-callers`, `untracked`.
+`mutated`, `recursion`, `unresolved-callers`, `untracked`.
 
 **Transport.** The body's serialization is a step, not an assumption: Angular's `HttpClient` serializes a plain object
 or array as JSON, passes a string through, and sends `FormData`, `Blob`, `ArrayBuffer` and `HttpParams` in another
-format. A string body is followed only when it is a `JSON.stringify` of a followed value; any other format, or an
-interceptor that replaces the body, is a frontier. Under JSON serialization an `undefined`, a function or a symbol drops
+format. A string body is followed only when it is a `JSON.stringify` of a followed value; any other format is a
+frontier. An interceptor registered through `withInterceptors` or `HTTP_INTERCEPTORS` that clones the request with a
+`body`, a spread or a computed key, or builds a new `HttpRequest`, makes every body of the application a frontier at
+that place; one that clones other fields keeps the body; one the reader cannot read is a frontier. Values are selected
+with JavaScript semantics and serialized only at the end (`NaN ?? 1` selects `NaN`, which the wire writes as `null`).
+Under JSON serialization an `undefined`, a function or a symbol drops
 an object property and becomes `null` in an array slot, and a non-finite number becomes `null`; a `toJSON` on the value
 or an ancestor is a frontier. `JSON.stringify(x)` is the body's own serialization only along the chain that is the body
 itself (bindings, parameters, conditionals, `??`); inside an object property it is a string, so a deeper path is a
-frontier.
+frontier. Angular serializes the body when the request is subscribed, so an escape counts only when it can run before
+that; a call in the same statement after the request is built (`pipe(catchError(handle(vet)))`) is taken not to
+mutate the body, a limit syntax cannot prove.
 
 **Verdict per producer** (domain, pure). `incompatible` when an exact origin on a modelled branch writes a rejected wire
 value, with the value, its place, the chain from the call site and the branch conditions it holds under. `admits` when

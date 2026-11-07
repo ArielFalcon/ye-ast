@@ -217,12 +217,12 @@ async function producerOf(session: ConsumerSession, link: Link, hypothesis: Requ
   const repo = from.repo;
   const call: Hop = { step: "http-call", evidence: { path: from.file, line: from.line, via: `basis:${basis}` } };
   const unreadable: Origin = { kind: "frontier", reason: "untracked", detail: "no-origin-reader", at: { path: from.file, line: from.line }, hops: [], conditions: [] };
-  const work: Origin[] = reader === undefined ? [unreadable] : [...(await reader.ofBody({ file: from.file, line: from.line, symbol: from.symbol }, hypothesis.property))];
+  const start: Origin[] = reader === undefined ? [unreadable] : [...(await reader.ofBody({ file: from.file, line: from.line, symbol: from.symbol }, hypothesis.property))];
+  const work: OriginStep[] = start.map((origin) => ({ origin, through: [] }));
   const settled: SettledOrigin[] = [];
-  const visited = new Set<string>();
   for (let index = 0; index < work.length; index++) {
-    const origin = work[index]!;
-    if (origin.kind === "parameter") work.push(...(await resolveParameter(session, reader!, repo, origin, visited)));
+    const { origin, through } = work[index]!;
+    if (origin.kind === "parameter") work.push(...(await resolveParameter(session, reader!, repo, origin, through)));
     else settled.push(origin);
   }
   const verdict = decideProducer(settled, hypothesis.change.rejected);
@@ -240,19 +240,24 @@ async function producerOf(session: ConsumerSession, link: Link, hypothesis: Requ
   return [decided, ...frontiers];
 }
 
-/** What a parameter holds at each proven caller of its function; a caller the graph cannot prove, and a function nobody calls, are frontiers. */
-async function resolveParameter(session: ConsumerSession, reader: RequestOriginReader, repo: string, origin: Extract<Origin, { kind: "parameter" }>, visited: Set<string>): Promise<Origin[]> {
+/** An origin still to settle, and the parameters it was reached through: a parameter met again on that way is a recursion, while one reached by another way is a result to compute again. */
+interface OriginStep {
+  origin: Origin;
+  through: readonly string[];
+}
+
+/** What a parameter holds at each proven caller of its function; a caller the graph cannot prove, a function nobody calls and a recursion are frontiers. */
+async function resolveParameter(session: ConsumerSession, reader: RequestOriginReader, repo: string, origin: Extract<Origin, { kind: "parameter" }>, through: readonly string[]): Promise<OriginStep[]> {
   const { parameter } = origin;
   const key = canonicalJson([parameter.file, parameter.symbol, parameter.line, parameter.index, parameter.path, parameter.body]);
-  if (visited.has(key)) return [];
-  visited.add(key);
-  const lost = (at: Evidence, detail: string): Origin => ({ kind: "frontier", reason: "unresolved-callers", detail, at, hops: origin.hops, conditions: origin.conditions });
+  const lost = (at: Evidence, detail: string): OriginStep => ({ origin: { kind: "frontier", reason: "unresolved-callers", detail, at, hops: origin.hops, conditions: origin.conditions }, through });
   const declaration = { path: parameter.file, line: parameter.line };
+  if (through.includes(key)) return [lost(declaration, "recursion")];
   const found = session.callers({ repo, file: parameter.file, symbol: parameter.symbol, line: parameter.line });
   if (found.kind === "unavailable") return [lost(declaration, "graph-unavailable")];
   if (found.kind === "unresolved") return [lost(declaration, "unresolved")];
   if (found.callers.length === 0) return [lost(declaration, "no-caller")];
-  const resolved: Origin[] = [];
+  const resolved: OriginStep[] = [];
   for (const caller of found.callers) {
     const at: Evidence = { path: caller.resource ?? caller.file, line: caller.at ?? caller.line };
     if (caller.resource !== undefined) resolved.push(lost(at, "template-caller"));
@@ -261,8 +266,8 @@ async function resolveParameter(session: ConsumerSession, reader: RequestOriginR
     else if (caller.at === undefined) resolved.push(lost(at, "unresolved-caller"));
     else {
       const argument = await reader.ofArgument({ file: caller.file, line: caller.at, callee: parameter.symbol }, parameter.index, parameter.path, parameter.body);
-      const through: Hop = { step: "caller", evidence: { path: caller.file, line: caller.at } };
-      for (const value of argument.kind === "omitted" ? parameter.omitted : argument.origins) resolved.push({ ...value, hops: [...origin.hops, through, ...value.hops], conditions: [...origin.conditions, ...value.conditions] });
+      const step: Hop = { step: "caller", evidence: { path: caller.file, line: caller.at } };
+      for (const value of argument.kind === "omitted" ? parameter.omitted : argument.origins) resolved.push({ origin: { ...value, hops: [...origin.hops, step, ...value.hops], conditions: [...origin.conditions, ...value.conditions] }, through: [...through, key] });
     }
   }
   return resolved;

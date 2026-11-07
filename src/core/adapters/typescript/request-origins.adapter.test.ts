@@ -46,13 +46,23 @@ test("a later definite write replaces earlier ones, a written undefined included
   assert.deepEqual(show(await body(PAGE("this.http.post('/v', { x: 'OK', ...{ y: 1 } })"), POST_AT, "x")), ['"OK"@4']);
 });
 
-test("a spread whose presence is unknown keeps the earlier write and adds a frontier", async () => {
-  const lines = PAGE("this.http.post('/v', { x: 'OK', ...load() })");
-  assert.deepEqual(show(await body(lines, POST_AT, "x")), ['"OK"@4', "frontier call-result@4"]);
+test("a spread whose presence is unknown may overwrite the earlier write, so only the frontier remains", async () => {
+  assert.deepEqual(show(await body(PAGE("this.http.post('/v', { id: null, ...load() })"), POST_AT, "id")), ["frontier call-result@4"]);
+  assert.deepEqual(show(await body(PAGE("const overrides = () => ({ id: 1 })", "this.http.post('/v', { id: null, ...overrides() })"), 5, "id")), ["frontier call-result@5"]);
 });
 
-test("a computed key, a getter and a method make the property uncertain, and a toJSON makes the whole value a frontier", async () => {
-  assert.deepEqual(show(await body(PAGE("this.http.post('/v', { id: 1, [key()]: 2 })"), POST_AT, "id")), ["1@4", "frontier untracked@4"]);
+test("a spread proven to lack the property on one branch keeps the earlier write beside the other branch's frontier", async () => {
+  assert.deepEqual(show(await body(PAGE("this.http.post('/v', { id: null, ...(flag ? {} : load()) })"), POST_AT, "id")), ["null@4", "frontier call-result@4"]);
+});
+
+test("a spread of a parameter is a frontier, since the callers may or may not carry the property", async () => {
+  const lines = ["class Page {", "  constructor(private http: HttpClient) {}", "  add(extra: Vet) {", "    return this.http.post('/v', { id: null, ...extra })", "  }", "}"];
+  assert.deepEqual(show(await body(lines, 4, "id", "Page.add")), ["frontier untracked@4"]);
+});
+
+test("a computed key, a getter, a method and a prototype make the property uncertain, and a toJSON makes the whole value a frontier", async () => {
+  assert.deepEqual(show(await body(PAGE("this.http.post('/v', { id: 1, [key()]: 2 })"), POST_AT, "id")), ["frontier untracked@4"]);
+  assert.deepEqual(show(await body(PAGE("this.http.post('/v', { __proto__: proto })"), POST_AT, "id")), ["frontier untracked@4"]);
   assert.deepEqual(show(await body(PAGE("this.http.post('/v', { get id() { return 1 } })"), POST_AT, "id")), ["frontier untracked@4"]);
   assert.deepEqual(show(await body(PAGE("this.http.post('/v', { id: null, toJSON() { return {} } })"), POST_AT, "id")), ["frontier untracked@4"]);
 });
@@ -78,6 +88,22 @@ test("the wire writes undefined as absence, a non-finite number as null and an u
   assert.deepEqual(show(await body(lines, POST_AT, "n")), ["null@4"]);
   assert.deepEqual(show(await body(lines, POST_AT, "v")), ["absent@4"]);
   assert.deepEqual(show(await body(lines, POST_AT, "list[]")), ["1@4", "null@4"]);
+});
+
+test("a function or a symbol is dropped from an object and is null in an array slot", async () => {
+  const lines = PAGE("this.http.post('/v', { a: () => 1, b: Symbol('b'), c: function () {}, list: [() => 1, Symbol('x'), 1] })");
+  assert.deepEqual(show(await body(lines, POST_AT, "a")), ["absent@4"]);
+  assert.deepEqual(show(await body(lines, POST_AT, "b")), ["absent@4"]);
+  assert.deepEqual(show(await body(lines, POST_AT, "c")), ["absent@4"]);
+  assert.deepEqual(show(await body(lines, POST_AT, "list[]")), ["null@4", "null@4", "1@4"]);
+});
+
+test("the operator selects on the JavaScript value and the wire serializes the selected one", async () => {
+  const lines = PAGE("this.http.post('/v', { a: NaN ?? 1, b: Infinity || 1, c: ({ n: NaN }).n ?? 1, d: 0 || NaN })");
+  assert.deepEqual(show(await body(lines, POST_AT, "a")), ["null@4"]);
+  assert.deepEqual(show(await body(lines, POST_AT, "b")), ["null@4"]);
+  assert.deepEqual(show(await body(lines, POST_AT, "c")), ["null@4"]);
+  assert.deepEqual(show(await body(lines, POST_AT, "d")), ["null@4"]);
 });
 
 test("parentheses, as, ! and satisfies are transparent", async () => {
@@ -148,6 +174,23 @@ test("a parameter's default stands for an omitted or undefined argument, and is 
   assert.deepEqual(origin?.kind === "parameter" && show(origin.parameter.omitted), ["null@3"]);
 });
 
+test("a parameter handed to another call, or aliased, is no longer what the callers passed", async () => {
+  const escaped = ["class Page {", "  constructor(private http: HttpClient) {}", "  add(vet: Vet) {", "    normalize(vet)", "    return this.http.post('/v', vet)", "  }", "}"];
+  assert.deepEqual(show(await body(escaped, 5, "id", "Page.add")), ["frontier mutated@5"]);
+  const aliased = ["class Page {", "  constructor(private http: HttpClient) {}", "  add(vet: Vet) {", "    const other = vet", "    return this.http.post('/v', vet)", "  }", "}"];
+  assert.deepEqual(show(await body(aliased, 5, "id", "Page.add")), ["frontier mutated@5"]);
+});
+
+test("a use of the value in the same statement after the request, or in straight-line code after it, is told apart", async () => {
+  const sameStatement = ["class Page {", "  constructor(private http: HttpClient) {}", "  add(vet: Vet) {", "    return this.http.post('/v', vet).pipe(catchError(this.handle('add', vet)))", "  }", "}"];
+  const [origin] = await body(sameStatement, 4, "id", "Page.add");
+  assert.equal(origin?.kind, "parameter");
+  const later = ["class Page {", "  constructor(private http: HttpClient) {}", "  add(vet: Vet) {", "    const sent = this.http.post('/v', vet)", "    normalize(vet)", "    return sent", "  }", "}"];
+  assert.deepEqual(show(await body(later, 4, "id", "Page.add")), ["frontier mutated@4"]);
+  const before = ["class Page {", "  constructor(private http: HttpClient) {}", "  add(vet: Vet) {", "    return this.http.post(normalize(vet), vet)", "  }", "}"];
+  assert.deepEqual(show(await body(before, 4, "id", "Page.add")), ["frontier mutated@4"]);
+});
+
 test("destructured, rest and arguments-reading parameters are frontiers", async () => {
   const destructured = ["class Page {", "  constructor(private http: HttpClient) {}", "  add({ id }: Vet) {", "    return this.http.post('/v', { id })", "  }", "}"];
   assert.deepEqual(show(await body(destructured, 4, "id", "Page.add")), ["frontier untracked@4"]);
@@ -185,6 +228,15 @@ test("a call through a wrapper method follows the wrapped call's body with its p
   assert.deepEqual(await origins(9, "Page.two", "id"), ["2@9"]);
   assert.deepEqual(await origins(10, "Page.three", "id"), ["3@10"]);
   assert.deepEqual(await origins(10, "Page.three", "kind"), ['"v"@4']);
+});
+
+test("a chain of wrapper methods is followed through every forwarding call down to the HttpClient body", async () => {
+  const chain = ["class Crud {", "  constructor(private http: HttpClient) {}", "  post(url: string, data: any) { return this.put(url, data) }", "  put(url: string, data: any) { return this.http.put(url, { ...data, id: 1 }) }", "}"];
+  const lines = [...chain, "class Page {", "  constructor(private crud: Crud) {}", "  one() { this.crud.post('/v', { id: null, name: 'n' }) }", "}"];
+  const reader = readerOf([source("a.ts", lines)]);
+  const origins = async (path: string) => show(await reader.ofBody({ file: "a.ts", line: at(8), symbol: "Page.one" }, parseAccessPath(path)!));
+  assert.deepEqual(await origins("id"), ["1@4"]);
+  assert.deepEqual(await origins("name"), ['"n"@8']);
 });
 
 test("a wrapper's parameter bound to a caller's own parameter continues at the callers of that function", async () => {
@@ -229,4 +281,35 @@ test("a call that is no POST, PUT or PATCH of the project has no body to follow"
 
 test("a call site the file does not hold is a frontier", async () => {
   assert.deepEqual(show(await body(PAGE("this.http.post('/v', {})"), 99, "id")), ["frontier untracked@99"]);
+});
+
+const PAGE_FILE = source("a.ts", PAGE("this.http.post('/v', { id: null })"));
+const withInterceptors = async (extra: readonly { path: string; content: string }[], path = "id") => show(await readerOf([PAGE_FILE, ...extra]).ofBody({ file: "a.ts", line: at(POST_AT), symbol: "Page.save" }, parseAccessPath(path)!));
+
+test("a registered interceptor that replaces the body makes every body a frontier at the interceptor", async () => {
+  const swap = source("i.ts", ["export const swap = (req, next) => {", "  return next(req.clone({ body: { id: 1 } }))", "}"]);
+  const config = source("c.ts", ["import { swap } from './i'", "export const providers = [provideHttpClient(withInterceptors([swap]))]"]);
+  assert.deepEqual(await withInterceptors([swap, config]), ["frontier untracked@2"]);
+});
+
+test("a class-based interceptor registered for HTTP_INTERCEPTORS is read the same way", async () => {
+  const swap = source("i.ts", ["export class Swap {", "  intercept(req, next) { return next(new HttpRequest('POST', req.url, { id: 1 })) }", "}"]);
+  const config = source("c.ts", ["import { Swap } from './i'", "export const providers = [{ provide: HTTP_INTERCEPTORS, useClass: Swap, multi: true }]"]);
+  assert.deepEqual(await withInterceptors([swap, config]), ["frontier untracked@2"]);
+});
+
+test("an interceptor that clones only headers, params or the url keeps the body", async () => {
+  const headers = source("i.ts", ["export const auth = (req, next) => {", "  req = req.clone({ setHeaders: { A: 'b' }, url: 'x' })", "  return next(req)", "}"]);
+  const config = source("c.ts", ["import { auth } from './i'", "export const providers = [provideHttpClient(withInterceptors([auth]))]"]);
+  assert.deepEqual(await withInterceptors([headers, config]), ["null@4"]);
+});
+
+test("an interceptor the reader cannot read is a frontier at its registration", async () => {
+  const config = source("c.ts", ["import { external } from 'some-library'", "export const providers = [provideHttpClient(withInterceptors([external]))]"]);
+  assert.deepEqual(await withInterceptors([config]), ["frontier untracked@2"]);
+});
+
+test("a class-based interceptor the reader cannot resolve is a frontier at its registration", async () => {
+  const config = source("c.ts", ["import { External } from 'some-library'", "export const providers = [{ provide: HTTP_INTERCEPTORS, useClass: External, multi: true }]"]);
+  assert.deepEqual(await withInterceptors([config]), ["frontier untracked@2"]);
 });
