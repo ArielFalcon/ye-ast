@@ -61,17 +61,18 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
 7. Trace's receiver bindings are a consumer: the binding of a receiver's root name, and of every store into a receiver
    bound in the file (its initializer and each assignment), comes from the resolver. A receiver whose root is dynamic
    stays a cut.
-8. Admitted for trace slice 2's declared external annotations (S5), not yet used: a name in a type position (a type
-   annotation's type reference, an `implements` or `extends` clause) may be looked up as a name, through
-   `getSymbolAtLocation` on that identifier, so a declared type can be told apart from a library, primitive or package
-   one. It stays no type API: no `getTypeAtLocation`, no `getTypeOfSymbol`, no inference, and the `typeCount` test is to
-   cover the type positions when S5 adds them. Until then the resolver answers `none` for a name in a type position.
-   The root bindings of a use (`ImportOrigins.rootBindings`, read by outline) already answer a type name, without the
-   resolver: by the type scopes written around it (a type parameter, an `infer`, a mapped type's key, a declaration in an
-   enclosing block, namespace or the file), then the file's imports and the language's globals.
-9. Admitted for S5, not yet used: a receiver annotated with a library, primitive or package type is an external leaf
-   carrying the declared type as its evidence only when no in-scope repository type extends or implements that name and
-   the name is not imported from one of the repository's own packages. A type declared nowhere (generated code) stays unknown.
+8. A name in a type position (a type annotation's type reference, an `implements` or `extends` clause) is looked up
+   as a name, so a declared type can be told apart from a library, primitive or package one. It stays no type API: no
+   `getTypeAtLocation`, no `getTypeOfSymbol`, no inference. The lookup is the root bindings' (`ImportOrigins`), shared by
+   outline and trace slice 2's declared external annotations (S5): the type scopes written around the name (a type
+   parameter, an `infer`, a mapped type's key, a declaration in an enclosing block, namespace or the file), then the
+   file's imports and the language's globals. The resolver itself still answers `none` for a name in a type position,
+   and the `typeCount` test still holds: no type is created.
+9. A receiver annotated with a library, primitive or package type is an external leaf (trace slice 2, S5) only when no
+   in-scope repository class or interface extends or implements that type and the type is not imported from one of the
+   repository's own packages (the module resolver never resolves those to a package). A type declared nowhere
+   (generated code) stays unknown. The leaf's evidence is the module or the global it is rooted at, as for every other
+   leaf; the answer gains no field, so the declared type itself is not written.
 
 ## Consequences
 

@@ -320,3 +320,97 @@ test("a direct eval, strict or not, in the scope of a local or in a scope inside
     "}",
   ])).receiverBindings.map(({ receiver }) => receiver), ["c"]);
 });
+
+test("a receiver declared once with one type, a parameter, a local no store binds, a field or a constructor property, is held by that annotation", async () => {
+  assert.deepEqual((await read([
+    "import { Router } from '@angular/router';",
+    "export class Page {",
+    "  private label: string = '';",
+    "  constructor(private router: Router) {}",
+    "  go(list: readonly number[], cache: (Map<string, number>) | null): void {",
+    "    this.router.navigate([]);",
+    "    this.label.trim();",
+    "    list.at(0);",
+    "    cache.get('a');",
+    "    let pending: Router;",
+    "    pending.navigate([]);",
+    "    const items: unknown[] = [];",
+    "    items.push(1);",
+    "  }",
+    "}",
+  ])).receiverBindings, [
+    { line: 6, column: 5, receiver: "router", member: "navigate", holds: { kind: "annotated", type: "Router", line: 4, column: 31 } },
+    { line: 7, column: 5, receiver: "label", member: "trim", holds: { kind: "annotated", type: "string", line: 3, column: 18 } },
+    { line: 8, column: 5, receiver: "list", member: "at", holds: { kind: "annotated", type: "Array", line: 5, column: 21 } },
+    { line: 9, column: 5, receiver: "cache", member: "get", holds: { kind: "annotated", type: "Map", line: 5, column: 39 } },
+    { line: 11, column: 5, receiver: "pending", member: "navigate", holds: { kind: "annotated", type: "Router", line: 10, column: 18 } },
+    { line: 13, column: 5, receiver: "items", member: "push", holds: { kind: "literal", type: "Array" } },
+  ]);
+  assert.deepEqual((await read(["export class Label {", "  text: string;", "  set(value: string): void { this.text = value; this.text.trim(); }", "}"])).receiverBindings, [
+    { line: 3, column: 49, receiver: "text", member: "trim", holds: { kind: "annotated", type: "string", line: 2, column: 9 } },
+  ]);
+});
+
+test("a destructured, untyped, any, union, function-typed, getter or static receiver, one declared twice or exported, one that escapes or is written through, or one a direct eval or a with body may write is held by no annotation", async () => {
+  assert.deepEqual((await read([
+    "import { Router } from '@angular/router';",
+    "class Repo { navigate(): void {} }",
+    "export class Page {",
+    "  get current(): Router { return undefined!; }",
+    "  shared: Router;",
+    "  static shared: Router;",
+    "  static only: Router;",
+    "  run({ nested }: { nested: Router }, plain, loose: any, either: Router | Repo, call: () => void): void {",
+    "    nested.navigate([]);",
+    "    plain.navigate([]);",
+    "    loose.navigate([]);",
+    "    either.navigate([]);",
+    "    call.call(undefined);",
+    "    this.current.navigate([]);",
+    "    this.shared.navigate([]);",
+    "  }",
+    "  static reset(): void { this.only.navigate([]); }",
+    "}",
+    "export function scoped(target: Router, scope: object): void {",
+    "  with (scope) { target = other; }",
+    "  target.navigate([]);",
+    "}",
+  ])).receiverBindings, []);
+  assert.deepEqual((await read(["import { Router } from '@angular/router';", "var twice: Router;", "var twice: Router;", "twice.navigate([]);"])).receiverBindings, []);
+  assert.deepEqual((await read([
+    "import { keep } from './keep';",
+    "export function escapes(param: string[]): string[] {",
+    "  const passed: string[] = [];",
+    "  keep(passed);",
+    "  passed.push('a');",
+    "  const patched: string[] = [];",
+    "  patched.push = keep;",
+    "  patched.push('a');",
+    "  param.push('a');",
+    "  shared.push('a');",
+    "  return param;",
+    "}",
+    "export const shared: string[] = [];",
+    "export class Holder {",
+    "  passed: string[] = [];",
+    "  patched: string[] = [];",
+    "  go(): void {",
+    "    keep(this.passed);",
+    "    this.passed.push('a');",
+    "    this.patched.push = keep;",
+    "    this.patched.push('a');",
+    "  }",
+    "}",
+  ])).receiverBindings, []);
+  assert.deepEqual((await read([
+    "import { Router } from '@angular/router';",
+    "export function patched(router: Router): void {",
+    "  eval('router = other');",
+    "  router.navigate([]);",
+    "}",
+    "export class Patched {",
+    "  router: Router;",
+    "  go(): void { eval('this.router = other'); this.router.navigate([]); }",
+    "}",
+  ])).receiverBindings, []);
+});

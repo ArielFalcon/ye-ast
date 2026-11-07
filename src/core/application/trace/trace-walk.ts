@@ -360,6 +360,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const bare: { reference: GraphUnresolvedReference; name: string }[] = [];
     const rooted: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[] }[] = [];
     const constructed: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; holds: Extract<ReceiverBinding["holds"], { kind: "constructed" }> }[] = [];
+    const annotated: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; holds: Extract<ReceiverBinding["holds"], { kind: "annotated" }> }[] = [];
     for (const reference of unsettledBy(callsFrom(node), called)) {
       const own = ownMemberOf(reference.name);
       const members = own === undefined ? [] : uses.ownMembers(node, own, ["method"]);
@@ -380,6 +381,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
             const declared = bound.kind === "declared" ? ownMethodOf(reference.file, bound.name, callee.name, bound.line) : undefined;
             if (bound.kind === "literal") await leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(bound.type, callee.name), () => settleByName(reference, callee.name, named, true));
             else if (bound.kind === "constructed") constructed.push({ reference, name: callee.name, named, holds: bound });
+            else if (bound.kind === "annotated") annotated.push({ reference, name: callee.name, named, holds: bound });
             else if (declared !== undefined) children.push(childAt(declared, reference.line, reference.column, reference.name, "call"));
             else await settleByName(reference, callee.name, named);
           } else if (PLAIN_CHAIN.test(reference.name) && !reference.name.startsWith("this.")) rooted.push({ reference, name: callee.name, named });
@@ -396,6 +398,16 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         const method = origin?.kind === "repository" ? ownMethodOf(origin.file, holds.name, name) : undefined;
         if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(origin.name, name), () => settleByName(reference, name, named, true));
         else if (method !== undefined) children.push(childAt(method, reference.line, reference.column, reference.name, "call"));
+        else await settleByName(reference, name, named);
+      }
+    }
+    if (annotated.length > 0) {
+      const owner = { name: node.name, line: node.startLine, endLine: node.endLine };
+      const types = await origins.declaredTypes(annotated.map(({ reference, holds }) => ({ file: reference.file, line: holds.line, column: holds.column, spelled: holds.type, owner })), signal);
+      for (const [index, { reference, name, named }] of annotated.entries()) {
+        const type = types[index];
+        if (type?.kind === "global") await leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(type.name, name), () => settleByName(reference, name, named, true));
+        else if (type?.kind === "package") await leafUnlessReplaced({ kind: "import", module: type.module, name: reference.name }, { module: type.module }, () => settleByName(reference, name, named, true));
         else await settleByName(reference, name, named);
       }
     }

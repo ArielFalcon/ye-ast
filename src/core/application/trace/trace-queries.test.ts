@@ -3,7 +3,7 @@ import test from "node:test";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Fact, Finding } from "../../domain/shared/fact.ts";
 import type { TraceStep, TraceValue } from "../../domain/trace/trace-fact.ts";
-import type { ImportOriginSite, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { DeclaredType, ImportOriginSite, ReplacedRoots, ResolvedNameSite, UseSite } from "../../ports/import-origins.port.ts";
 import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { TraceBudget, TraceRequest } from "../../ports/trace-queries.port.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
@@ -52,6 +52,8 @@ interface Options {
   receiverBindings?: Readonly<Record<string, readonly ReceiverBinding[]>>;
   /** The roots the snapshot replaces; none by default. */
   replaced?: ReplacedRoots;
+  /** The type each annotation names, by the name it is spelled with; unknown by default. */
+  declared?: Readonly<Record<string, DeclaredType>>;
   /** The member calls the relations prove. */
   proofs?: Pick<RelationExtraction, "memberUses" | "externalUses">;
 }
@@ -85,6 +87,7 @@ function setup(options: Options) {
     memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: [], receiverBindings: options.receiverBindings?.[file.path] ?? [] }) },
     importOrigins: () => ({
       replacedRoots: async () => options.replaced ?? written(),
+      declaredTypes: async (sites: readonly UseSite[]) => sites.map((site) => options.declared?.[site.spelled] ?? { kind: "unknown" }),
       origins: async (sites: readonly ImportOriginSite[]) => { options.onOrigins?.(); return sites.map(answer); },
       rootOrigins: async (sites: readonly ResolvedNameSite[]) => sites.map((site): Finding<ImportOrigin> => {
         const root = options.roots?.[site.name];
@@ -667,6 +670,19 @@ test("an external leaf at or below a path the repository writes, under a package
     assert.equal(fact.status, "partial", name);
     assert.deepEqual(valueOf(fact).steps.flatMap((step) => step.external ?? []), [], name);
   }
+});
+
+test("a member call on a receiver annotated with a library or a package type is a leaf under that type, and one whose type is unknown or replaced stays a cut", async () => {
+  const annotated = (type: string): Options => boundCall({ kind: "annotated", type, line: 8, column: 20 });
+  const cut = [["unresolved-link", ["src/a.ts:9 store.save", "src/a.ts::save", "src/b.ts::Repo.save"]]];
+  const global = await factOf({ ...annotated("Storage"), declared: { Storage: { kind: "global", name: "Storage" } } });
+  const imported = await factOf({ ...annotated("Store"), declared: { Store: { kind: "package", module: "@ngrx/store", name: "Store" } } });
+  const unknown = await factOf(annotated("Repo"));
+  const replaced = await factOf({ ...annotated("Storage"), declared: { Storage: { kind: "global", name: "Storage" } }, replaced: written(["Storage", "prototype", "save"]) });
+
+  assert.deepEqual(valueOf(global).steps.flatMap((step) => step.external ?? []), [{ kind: "global", names: ["store.save"] }]);
+  assert.deepEqual(valueOf(imported).steps.flatMap((step) => step.external ?? []), [{ kind: "import", module: "@ngrx/store", names: ["store.save"] }]);
+  for (const fact of [unknown, replaced]) assert.deepEqual(cutsOf(fact), cut);
 });
 
 test("a write below another path, beside the called member, or on an object no receiver inherits from leaves the leaf external", async () => {

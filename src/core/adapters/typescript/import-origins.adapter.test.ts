@@ -701,3 +701,46 @@ test("super is rooted at its class's extends expression, bound as that name is",
 
   assert.deepEqual(binding, { kind: "ambient", root: "Error" });
 });
+
+/**
+ * The type a `value` parameter is annotated with on the last line, after the given lines, among the given extra sources,
+ * placed where the receiver reader places it: past `readonly`.
+ */
+async function declaredTypeOf(annotation: string, spelled: string, lines: readonly string[] = [], extra: readonly SourceFile[] = []) {
+  const content = [...lines, `export function run(value: ${annotation}): void { value.go(); }`];
+  const file: SourceFile = { path: "src/use.ts", content: content.join("\n") };
+  const manifest: SourceFile = { path: "package.json", content: JSON.stringify({ name: "shop", dependencies: { "@angular/router": "1.0.0" } }) };
+  const site = { file: file.path, line: content.length, column: content.at(-1)!.indexOf(annotation.replace(/^readonly /, "")) + 1, spelled, owner: { name: "run", line: content.length, endLine: content.length } };
+  const [type] = await createImportOrigins([CONFIG, manifest, LOCAL, file, ...extra]).declaredTypes([site]);
+  return type;
+}
+
+test("an annotation names a library type by its keyword, array syntax or an unbound name, and a package's export by its exported name", async () => {
+  for (const [annotation, spelled, lines, expected] of [
+    ["Map<string, number>", "Map", [], { kind: "global", name: "Map" }],
+    ["string", "string", [], { kind: "global", name: "String" }],
+    ["number", "number", [], { kind: "global", name: "Number" }],
+    ["readonly number[]", "Array", [], { kind: "global", name: "Array" }],
+    ["Router", "Router", ["import { Router } from '@angular/router';"], { kind: "package", module: "@angular/router", name: "Router" }],
+    ["Base", "Base", ["import { Router as Base } from '@angular/router';"], { kind: "package", module: "@angular/router", name: "Router" }],
+    ["ng.Router", "ng", ["import * as ng from '@angular/router';"], { kind: "package", module: "@angular/router", name: "Router" }],
+  ] as const) assert.deepEqual(await declaredTypeOf(annotation, spelled, lines), expected, annotation);
+});
+
+test("an annotation the repository declares, imports from its own files or packages, binds to nothing, or a repository type extends or implements, is unknown", async () => {
+  const subtypes: SourceFile = {
+    path: "src/subtypes.ts",
+    content: ["import { Router as Base } from '@angular/router';", "export class AppRouter extends Base {}", "export class Cache extends Map<string, number> {}", "export interface Labels extends ReadonlyArray<string> {}"].join("\n"),
+  };
+  for (const [annotation, spelled, lines, extra] of [
+    ["Local", "Local", ["class Local {}"], []],
+    ["T", "T", ["type T = { go(): void };"], []],
+    ["helper", "helper", ["import { helper } from './local';"], []],
+    ["Shared", "Shared", ["import { Shared } from 'shop';"], []],
+    ["ApiClient", "ApiClient", [], []],
+    ["any", "any", [], []],
+    ["Router", "Router", ["import { Router } from '@angular/router';"], [subtypes]],
+    ["Map<string, number>", "Map", [], [subtypes]],
+    ["ReadonlyArray<string>", "ReadonlyArray", [], [subtypes]],
+  ] as const) assert.deepEqual(await declaredTypeOf(annotation, spelled, lines, extra), { kind: "unknown" }, `${annotation} ${extra.length}`);
+});

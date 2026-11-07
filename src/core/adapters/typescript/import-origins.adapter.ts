@@ -11,7 +11,7 @@ import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RootOrigin } from "../../domain/impact/edge-policy.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
+import type { DeclaredType, ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 import { parseAngularRouteFile } from "./angular-router.extractor.ts";
@@ -124,6 +124,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     return names;
   };
   let replaced: ReplacedRoots | undefined;
+  let subtyped: ReadonlySet<string> | undefined;
   /** The globals the snapshot declares, the member paths it writes and the packages it writes through; read when first asked. */
   const replacedRoots = (): ReplacedRoots => {
     if (replaced !== undefined) return replaced;
@@ -204,7 +205,68 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
       for (const { chain, index, owner } of chains) results[index] = await bindingOf(file, tree, chain, bound, owner);
     }
     return results;
+  }, declaredTypes: async (sites, signal) => {
+    const results: DeclaredType[] = sites.map(() => UNKNOWN_TYPE);
+    for (const [file, group] of Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file)) {
+      if (signal?.aborted) break;
+      const parsed = indexOf(file);
+      if (parsed === undefined) continue;
+      for (const { site, index } of group) {
+        const type = await annotatedTypeAt(file, parsed.index, parsed.text, site);
+        results[index] = type.kind === "unknown" || (await subtypedTypes()).has(typeKey(type)) ? UNKNOWN_TYPE : type;
+      }
+    }
+    return results;
   } };
+
+  /** The library or package type an annotation's first name, keyword or array syntax names at the site. */
+  async function annotatedTypeAt(file: string, tree: FileIndex, text: string, site: UseSite): Promise<DeclaredType> {
+    const nodes = nodesAt(tree, text, site);
+    const keyword = nodes.find((node) => KEYWORD_TYPES.has(node.kind) && node.getText(tree.source) === site.spelled);
+    if (keyword !== undefined) return { kind: "global", name: KEYWORD_TYPES.get(keyword.kind)! };
+    if (site.spelled === "Array" && nodes.some(ts.isArrayTypeNode)) return { kind: "global", name: "Array" };
+    const head = nodes.find((node): node is ts.Identifier => ts.isIdentifier(node) && node.text === site.spelled && isTypeName(node));
+    if (head === undefined) return UNKNOWN_TYPE;
+    const member = ts.isQualifiedName(head.parent) && head.parent.left === head ? head.parent.right.text : undefined;
+    return typeOf(file, await bindingOf(file, tree, { root: head, ...(member === undefined ? {} : { member }) }, undefined, site.owner));
+  }
+
+  /** A root binding as a type from outside the repository: a library global named alone, or a package's export by its exported name. */
+  function typeOf(file: string, binding: RootBinding): DeclaredType {
+    if (binding.kind === "ambient") return { kind: "global", name: binding.root };
+    if (binding.kind !== "import" || binding.origin.kind !== "external") return UNKNOWN_TYPE;
+    const imported = moduleShapeOf(file)?.imports.get(binding.root)?.imported;
+    const name = imported === "*" ? binding.member : binding.member === undefined ? imported : undefined;
+    return name === undefined ? UNKNOWN_TYPE : { kind: "package", module: binding.origin.module, name };
+  }
+
+  /** The library and package types an in-scope repository class or interface extends or implements; read when first asked. */
+  async function subtypedTypes(): Promise<ReadonlySet<string>> {
+    if (subtyped !== undefined) return subtyped;
+    const keys = new Set<string>();
+    for (const [path, text] of texts) {
+      if (!isTypeScriptSource(path) || !HERITAGE.test(text)) continue;
+      const parsed = indexOf(path);
+      if (parsed === undefined) continue;
+      const heads: { root: ts.Identifier; member?: string }[] = [];
+      const visit = (node: ts.Node): void => {
+        if (ts.isHeritageClause(node)) for (const type of node.types) {
+          const root = headOf(type.expression);
+          const member = chainNames(type.expression)[1];
+          if (ts.isIdentifier(root)) heads.push({ root, ...(member === undefined ? {} : { member }) });
+        }
+        node.forEachChild(visit);
+      };
+      visit(parsed.index.source);
+      const bound = heads.some(({ root }) => !isTypeName(root)) ? bindFile(path, text) : undefined;
+      for (const head of heads) {
+        const type = typeOf(path, await bindingOf(path, parsed.index, head, bound, NO_OWNER));
+        if (type.kind !== "unknown") keys.add(typeKey(type));
+      }
+    }
+    subtyped = keys;
+    return keys;
+  }
 
   async function importBinding(file: string, specifier: string, root: string, member: string | undefined): Promise<RootBinding> {
     const resolved = await modules.resolve(file, specifier);
@@ -244,6 +306,33 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
 }
 
 const UNKNOWN_BINDING: RootBinding = { kind: "unknown" };
+const UNKNOWN_TYPE: DeclaredType = { kind: "unknown" };
+
+/** No declaration owns a heritage clause's name: it is bound at the file's level. */
+const NO_OWNER: UseSite["owner"] = { name: "", line: 0, endLine: 0 };
+
+const HERITAGE = /\b(extends|implements)\b/;
+
+/** The library type a primitive keyword annotation names. */
+const KEYWORD_TYPES: ReadonlyMap<ts.SyntaxKind, string> = new Map([
+  [ts.SyntaxKind.StringKeyword, "String"],
+  [ts.SyntaxKind.NumberKeyword, "Number"],
+  [ts.SyntaxKind.BooleanKeyword, "Boolean"],
+  [ts.SyntaxKind.BigIntKeyword, "BigInt"],
+  [ts.SyntaxKind.SymbolKeyword, "Symbol"],
+]);
+
+function typeKey(type: Exclude<DeclaredType, { kind: "unknown" }>): string {
+  return type.kind === "global" ? type.name : `${type.module}#${type.name}`;
+}
+
+/** The nodes that start at a site's 1-based place; none when the place lies outside its line. */
+function nodesAt({ source, starting }: FileIndex, text: string, site: UseSite): readonly ts.Node[] {
+  const starts = source.getLineStarts();
+  if (!Number.isInteger(site.line) || !Number.isInteger(site.column) || site.line < 1 || site.column < 1 || site.line > starts.length) return [];
+  const point = starts[site.line - 1]! + site.column - 1;
+  return point >= (site.line < starts.length ? starts[site.line]! : text.length) ? [] : (starting.get(point) ?? []);
+}
 
 /** The first name of a chain written at a site (`this` stands for itself), and the name after it when the chain has one. */
 interface Chain {

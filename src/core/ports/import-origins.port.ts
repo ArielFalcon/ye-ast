@@ -64,6 +64,16 @@ export interface ImportOrigins {
    */
   rootBindings(sites: readonly UseSite[], signal?: AbortSignal): Promise<readonly RootBinding[]>;
   /**
+   * One entry per site, in the order received: the library or package type the annotation written at the site states,
+   * its first name spelled as `spelled` (a primitive keyword, `Array` for an array type, or a type name). A keyword is
+   * its library type (`string` is `String`); a name the type scopes and the file leave unbound is a global of the
+   * language's libraries, and an import of a package the repository depends on is that package's export by its exported
+   * name. `unknown` when the repository declares the type, the name binds nothing (generated code), the package is one
+   * the repository declares itself, or an in-scope repository type extends or implements the same type, so a value of
+   * it may run repository code (ADR-0029 decision 9).
+   */
+  declaredTypes(sites: readonly UseSite[], signal?: AbortSignal): Promise<readonly DeclaredType[]>;
+  /**
    * Where the repository may run its own code where a library's is expected: the path of every global the snapshot
    * declares, every member path a source writes from a global (`Math.max = f`, `Array.prototype[k] = f`,
    * `globalThis.fetch = f`, `Object.assign(process.env, vars)`), and every package a source writes through an import of
@@ -85,6 +95,9 @@ export interface ReplacedRoots {
   /** Package names, as an import specifier's first one or two segments name them (`lodash`, `@angular/core`). */
   packages: ReadonlySet<string>;
 }
+
+/** A type from outside the repository: a global of the language's libraries, or a package's export. */
+export type DeclaredType = { kind: "global"; name: string } | { kind: "package"; module: string; name: string } | { kind: "unknown" };
 
 /** A place a declaration uses a name, where the index places the use: repository-relative and 1-based. */
 export interface UseSite {

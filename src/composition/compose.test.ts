@@ -673,7 +673,7 @@ test("a trace over a real index charges an anonymous callback to its encloser, d
   assert.deepEqual(answer.value.status === "complete" && answer.value.value.steps, [{
     id: 0, depth: 0, file: "src/flow.ts", symbol: "run", kind: "function", line: 1, endLine: 6,
     leaves: [{ symbol: "helper", file: "src/flow.ts", start: 7, end: 9 }, { symbol: "named", file: "src/flow.ts", start: 3, end: 3, deferred: true }],
-    external: [{ kind: "unnamed", names: ["items.forEach", "items.map"] }],
+    external: [{ kind: "global", names: ["items.forEach", "items.map"] }],
   }]);
 });
 
@@ -822,12 +822,12 @@ test("a trace over a real index keeps a member call on a local a cut when a stor
   assert.deepEqual(guarded.value.status === "partial" && guarded.value.cuts.map((cut) => cut.at[0]), [
     "src/guarded.ts:11 leaked.push",
     "src/guarded.ts:14 patched.push",
-    "src/guarded.ts:15 param.push",
     "src/guarded.ts:17 first.push",
     "src/guarded.ts:18 exported.push",
     "src/guarded.ts:5 mixed.set",
     "src/guarded.ts:8 counted.test",
   ]);
+  assert.deepEqual(guarded.value.status === "partial" && guarded.value.value.steps.flatMap((step) => (step.external ?? []).flatMap((group) => group.names.map((name) => `${group.kind} ${name}`))).sort(), ["global Map", "global Map", "global param.push"]);
   assert.deepEqual(scripted.value.status === "partial" && scripted.value.cuts.map((cut) => cut.at[0]), ["src/script.ts:3 shared.push", "src/script.ts:6 dynamic.push"]);
 });
 
@@ -1517,7 +1517,7 @@ test("a trace over a real index keeps a member call a cut when the code declares
   const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/members.ts", symbol: "run" }] });
 
   assert.ok(answer.ok && answer.value.status === "partial");
-  assert.deepEqual(answer.value.value.steps[0]?.external, [{ kind: "unnamed", names: ["items.map", "s.deepOnly", "s.paramOnly"] }]);
+  assert.deepEqual(answer.value.value.steps[0]?.external, [{ kind: "global", names: ["items.map"] }, { kind: "unnamed", names: ["s.deepOnly", "s.paramOnly"] }]);
   const cut = (call: string, name: string): string[] => [`src/members.ts:${lineOf(`  ${call}(${call === "s.setErrors" ? "\"x\"" : ""});`)} ${call}`, `src/members.ts::${name}`];
   assert.deepEqual(answer.value.cuts.map((entry) => entry.at), [
     cut("s.aliasKey", "aliasKey"), cut("s.assigned", "assigned"), cut("s.fieldMethod", "fieldMethod"),
