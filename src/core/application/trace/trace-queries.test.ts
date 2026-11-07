@@ -1221,15 +1221,6 @@ const at = (line: number, column: number, path = "/x", overrides: Partial<CallSi
 const effectPaths = (fact: Fact<TraceValue>) => valueOf(fact).steps.flatMap((step) => (step.effects ?? []).map((effect) => [step.symbol, effect.kind === "http" ? effect.target.path : effect.target.destination]));
 const effectCuts = (fact: Fact<TraceValue>) => cutsOf(fact).filter(([, at]) => (at as readonly string[])[0]!.includes(" effect"));
 
-test("a call site in a sibling method on the same line is no effect of the method traced", async () => {
-  const nodes = [PLACED_API, placedNode("a", "method", 5, 1, 5, 29), placedNode("b", "method", 5, 30, 5, 58)];
-  const edges = [{ from: "Api", to: "a", kind: "contains" }, { from: "Api", to: "b", kind: "contains" }];
-
-  const fact = await factOf({ nodes, edges, unresolved: [globalCall("a", 5, 7), globalCall("b", 5, 36)], roots: MATH, sources: HELD_A, placedSites: [at(5, 7, "/a"), at(5, 36, "/b")] }, [{ file: A, symbol: "a" }]);
-
-  assert.deepEqual(effectPaths(fact), [["a", "/a"]]);
-});
-
 test("a call site in a function the walk did not expand is neither an effect nor a cut of the body around it, even on a line that body calls on", async () => {
   const nodes = [PLACED_API, placedNode("run", "method", 6, 1, 6, 71), placedNode("dead", "function", 6, 22, 6, 50)];
   const edges = [{ from: "Api", to: "run", kind: "contains" }];
@@ -1270,21 +1261,12 @@ test("each shape's call sites are effects of the body that owns their exact plac
       options: { nodes: [PLACED_API, method("run", 5, 2, 5, 32)], edges: [member("run")], unresolved: [globalCall("run", 5, 10)], sources: [{ path: A, content: `${"\n".repeat(4)}${nonAsciiAfter}\n` }], placedSites: [at(5, 10, "/r")] } },
   ];
   for (const { shape, options, target, effects, cuts } of rows) {
-    const fact = await factOf({ roots: MATH, sources: [{ path: A, content: "" }], ...options }, [{ file: A, symbol: target }]);
+    const fact = await factOf({ roots: MATH, sources: HELD_A, ...options }, [{ file: A, symbol: target }]);
     assert.deepEqual(effectPaths(fact), effects, shape);
     assert.deepEqual(effectCuts(fact).map(([, at]) => (at as readonly string[])[0]), cuts, shape);
   }
 });
 
-
-test("a call site inside a function value the index declares no body for, and the walk proves no run of, is a cut of the body around it, never its effect", async () => {
-  const nodes = [PLACED_API, placedNode("run", "method", 4, 1, 4, 90)];
-
-  const fact = await factOf({ nodes, edges: [{ from: "Api", to: "run", kind: "contains" }], unresolved: [globalCall("run", 4, 37), globalCall("run", 4, 70)], roots: MATH, sources: [{ path: A, content: "" }], functionValues: { [A]: [valueSpan(4, 30, 67)] }, placedSites: [at(4, 36, "/dead")] }, [{ file: A, symbol: "run" }]);
-
-  assert.deepEqual(effectPaths(fact), []);
-  assert.deepEqual(effectCuts(fact).map(([, at]) => (at as readonly string[])[0]), ["src/a.ts:4 http effect"]);
-});
 
 test("each function-value shape keeps its call sites from the body around it unless the index declares the value and the walk expands it", async () => {
   const run = placedNode("run", "method", 6, 1, 9, 2);
@@ -1304,7 +1286,7 @@ test("each function-value shape keeps its call sites from the body around it unl
       options: { nodes: [PLACED_API, run, placedNode("dead", "function", 7, 22, 7, 50)], edges: [call("run", "dead", 8, 4)], unresolved: [globalCall("dead", 7, 28)], functionValues: { [A]: [valueSpan(7, 22, 50)] }, placedSites: [at(7, 28, "/dead")] } },
   ];
   for (const { shape, options, effects, cuts } of rows) {
-    const fact = await factOf({ roots: MATH, sources: [{ path: A, content: "" }], ...options, edges: [member, ...(options.edges ?? [])], unresolved: [globalCall("run", 7, 21), ...(options.unresolved ?? [])] }, [{ file: A, symbol: "run" }]);
+    const fact = await factOf({ roots: MATH, sources: HELD_A, ...options, edges: [member, ...(options.edges ?? [])], unresolved: [globalCall("run", 7, 21), ...(options.unresolved ?? [])] }, [{ file: A, symbol: "run" }]);
     assert.deepEqual(effectPaths(fact), effects, shape);
     assert.deepEqual(effectCuts(fact).map(([, at]) => (at as readonly string[])[0]), cuts, shape);
   }

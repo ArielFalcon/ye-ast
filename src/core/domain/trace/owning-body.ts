@@ -10,13 +10,13 @@ export interface SourceSpan {
   end: SourcePosition;
 }
 
-function compare(a: SourcePosition, b: SourcePosition): number {
+export function comparePositions(a: SourcePosition, b: SourcePosition): number {
   return a.line - b.line || a.column - b.column;
 }
 
 /** Whether `at` lies inside `span`, from its start up to, and not including, its end. */
 export function containsPosition(span: SourceSpan, at: SourcePosition): boolean {
-  return compare(span.start, at) <= 0 && compare(at, span.end) < 0;
+  return comparePositions(span.start, at) <= 0 && comparePositions(at, span.end) < 0;
 }
 
 /**
@@ -28,7 +28,7 @@ export function owningBody<T extends SourceSpan>(bodies: readonly T[], at: Sourc
   let owner: T | undefined;
   for (const body of bodies) {
     if (!containsPosition(body, at)) continue;
-    if (owner === undefined || compare(body.start, owner.start) > 0 || (compare(body.start, owner.start) === 0 && compare(body.end, owner.end) < 0)) owner = body;
+    if (owner === undefined || comparePositions(body.start, owner.start) > 0 || (comparePositions(body.start, owner.start) === 0 && comparePositions(body.end, owner.end) < 0)) owner = body;
   }
   return owner;
 }

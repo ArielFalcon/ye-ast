@@ -1177,7 +1177,7 @@ function readingPlanLines(value: TraceValue, detail: ResponseMode): string[] {
   return [`reading plan (${ranges.length} ${ranges.length === 1 ? "range" : "ranges"}, ${lines} lines):`, ...listed];
 }
 
-/** Every effect of the trace in pre-order, first, since they decide what a change risks; an undecided target is among the cuts. */
+/** Every effect of the trace, in pre-order; a site whose target is undecided is among the cuts. */
 function effectLines(steps: readonly TraceStep[]): string[] {
   const effects = steps.flatMap((step) => (step.effects ?? []).map((effect) => `${effectText(effect)} at ${placeText(step.file, effect.line)}`));
   return [`effects (${effects.length})${effects.length === 0 ? "" : `: ${effects.join(", ")}`}`];
