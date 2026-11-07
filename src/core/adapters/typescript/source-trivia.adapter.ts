@@ -2,6 +2,7 @@ import ts from "typescript";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
 import { sourceTree } from "./source-tree.ts";
+import { hasSyntaxErrors } from "./syntax.ts";
 
 /**
  * The lines no token of the parsed file touches. The parser's own tokens are read, never a bare scan, because a regular
@@ -12,8 +13,7 @@ export function createTypeScriptTrivia(): SourceTrivia {
     triviaLines: async (file) => {
       if (!isTypeScriptSource(file.path)) return new Set();
       const tree = sourceTree(file, ts.ScriptTarget.Latest);
-      const diagnostics = (tree as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics;
-      if (diagnostics.length > 0) return new Set();
+      if (hasSyntaxErrors(tree)) return new Set();
       const code = new Set<number>();
       const visit = (node: ts.Node): void => {
         if (ts.isJSDoc(node) || node.kind === ts.SyntaxKind.EndOfFileToken) return;

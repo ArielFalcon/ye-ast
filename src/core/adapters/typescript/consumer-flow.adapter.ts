@@ -1,9 +1,9 @@
 import ts from "typescript";
+import { lineOf } from "./syntax.ts";
 import { siteFile, sourceUnreadable, type Carrier, type CarrierSite, type FlowFrontier, type FlowNext, type FlowResult, type FlowUse } from "../../domain/contracts/consumer-flow.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { ConsumerFlowReader } from "../../ports/consumer-flow.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import { lineOf } from "./http-call-sites.adapter.ts";
 import { buildProgram, resolverKey, type Program, type Unit } from "./consumer-flow.index.ts";
 import { lineage, memberDeclaration, methodDeclared } from "./consumer-flow.classes.ts";
 import { declaredInput, memberSite, Walker, type Held } from "./consumer-flow.walker.ts";

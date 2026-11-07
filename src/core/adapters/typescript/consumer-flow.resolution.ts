@@ -1,9 +1,9 @@
 import ts from "typescript";
 import type { Origin, Program, Unit } from "./consumer-flow.index.ts";
-import { injectedClass, methodDeclared } from "./consumer-flow.classes.ts";
+import { methodDeclared } from "./consumer-flow.classes.ts";
+import { injectedClass } from "./angular-injection.ts";
 import { declaringScope, isDynamicName, isFunctionNode, namedFunction, type NamedFunction } from "./consumer-flow.syntax.ts";
-import { thisClass, unwrapped } from "./syntax.ts";
-import { constructorParameters, typeName } from "./http-call-sites.adapter.ts";
+import { constructorParameters, thisClass, typeName, unwrapped } from "./syntax.ts";
 
 export type Resolved = { kind: "function"; file: string; named: NamedFunction } | { kind: "external" };
 

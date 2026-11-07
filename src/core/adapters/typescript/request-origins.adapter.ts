@@ -4,7 +4,8 @@ import type { ArgumentOrigins, RequestOriginReader } from "../../ports/request-o
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { buildProgram } from "./consumer-flow.index.ts";
 import { calleeName } from "./consumer-flow.syntax.ts";
-import { createRequestBodies, lineOf, symbolOf, VERBS } from "./http-call-sites.adapter.ts";
+import { createRequestBodies, symbolOf, VERBS } from "./http-call-sites.adapter.ts";
+import { lineOf } from "./syntax.ts";
 import { bodyReplacements } from "./request-interceptors.ts";
 import { OriginWalker } from "./request-origins.walker.ts";
 

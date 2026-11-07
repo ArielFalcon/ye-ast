@@ -41,19 +41,25 @@ const RULES: readonly Rule[] = [
     concept: "the class `this` denotes",
     pattern: /(?:function|const)\s+(?:enclosingClass\w*|thisClass\w*|ownerOfThis)\b/,
     owners: ["typescript/syntax.ts"],
-    pending: ["typescript/http-call-sites.adapter.ts"],
+    pending: [],
   },
   {
     concept: "recognizing Angular's inject by its spelling instead of its import (the owner is angular-injection.ts)",
     pattern: /(?:getText\([^)]*\)|\.text)\s*[!=]==\s*"inject"/,
     owners: [],
-    pending: ["typescript/http-call-sites.adapter.ts"],
+    pending: [],
   },
   {
     concept: "reading the bindings of an import statement",
     pattern: /\.importClause\b/,
     owners: ["typescript/import-bindings.ts"],
-    pending: ["typescript/http-call-sites.adapter.ts"],
+    pending: [],
+  },
+  {
+    concept: "whether a TypeScript file parsed without syntax errors",
+    pattern: /\.parseDiagnostics\b/,
+    owners: ["typescript/syntax.ts"],
+    pending: ["typescript/import-origins.adapter.ts"],
   },
   {
     concept: "parsing Java sources into files of a project",

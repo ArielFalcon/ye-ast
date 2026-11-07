@@ -1,5 +1,6 @@
 import type { LibrarySource } from "./library-source.ts";
 import type { HttpMethod } from "../entrypoints/http-route.ts";
+import { compareText } from "../shared/code-node.ts";
 import { declarationSpan, type Cut, type Evidence, type Finding, type UnknownReason } from "../shared/fact.ts";
 
 /** A call one repository makes out of itself: an HTTP request or a published message, with where it is written. */
@@ -101,6 +102,23 @@ export interface UnresolvedCallSite {
   via?: string;
   /** The request the code writes, when the snapshot decides everything but where it goes. */
   stated?: StatedRequest;
+}
+
+/** Where a call site is written in the workspace: the place a link starts from. */
+export type CallPlace = Pick<CallSite, "repo" | "file" | "line" | "symbol">;
+
+export function callPlaceOf(site: CallSite): CallPlace {
+  return { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol };
+}
+
+/** The order of call places: repository, file, line, then symbol. */
+export function compareCallPlaces(a: CallPlace, b: CallPlace): number {
+  return compareText(a.repo, b.repo) || compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol);
+}
+
+/** The order of call sites: by place, then by the status of the target at one place. */
+export function compareCallSites(a: CallSite, b: CallSite): number {
+  return compareCallPlaces(a, b) || compareText(a.target.status, b.target.status);
 }
 
 /** The place a call site is written, as the evidence of the finding that reports it. */

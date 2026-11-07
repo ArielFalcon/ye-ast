@@ -6,7 +6,7 @@ import { incompleteSectionCuts, provenanceOf, withCuts } from "../../domain/shar
 import type { Result } from "../../domain/shared/result.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
-import { unsettledCallSiteCut, type CallSite } from "../../domain/topology/call-site.ts";
+import { compareCallSites, unsettledCallSiteCut, type CallSite } from "../../domain/topology/call-site.ts";
 import {
   admitDownstream,
   admitUpstream,
@@ -139,9 +139,9 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
           ...(downstream.value.facts.get(repository.repo) ?? []).map((walk) => ({ kind: "downstream" as const, fact: provenanceOf(walk) })),
         ],
         ...(walkOf === undefined ? {} : { impact: walkOf }),
-        callSites: part.callSites.sort(compareSite),
-        unmatched: part.unmatched.sort(compareSite),
-        external: part.external.sort(compareSite),
+        callSites: part.callSites.sort(compareCallSites),
+        unmatched: part.unmatched.sort(compareCallSites),
+        external: part.external.sort(compareCallSites),
         unresolved: base.status === "unknown" ? [] : base.value.unresolved,
       };
       sections[repository.repo] = sectionOf(base, value, part.undecided, repository.repo === trigger ? unservedOperationCuts(impact?.changedContracts ?? []) : [], deps.digest);
@@ -410,10 +410,6 @@ function routesOfRemoved(changes: readonly ChangedEntrypoint[]): HttpRoute[] {
     if (method === undefined || path === undefined || !HTTP_METHODS.has(method)) return [];
     return [{ kind: "http-route", name: change.name, method: method as HttpMethod, path, handler: change.handler, basePath: { status: "unknown", reason: "unresolved", evidence: [] } }];
   });
-}
-
-function compareSite(a: CallSite, b: CallSite): number {
-  return compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol);
 }
 
 function unmatchedGateways(declared: readonly GatewayDeclaration[], repositories: readonly { repo: string; callSites: readonly CallSite[] }[]): GatewayDeclaration[] {

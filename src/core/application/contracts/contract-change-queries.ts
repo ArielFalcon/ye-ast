@@ -4,7 +4,7 @@ import type { Hypothesis } from "../../domain/contracts/hypothesis.ts";
 import { CONTRACT_CHANGE_RULES, type ContractChangeRule, type OperationDelta, type ResponseDelta, type RuleTarget } from "../../domain/contracts/contract-change-rules.ts";
 import { NOTHING, type ExchangeDigests, type OperationRequest, type OperationShape } from "../../domain/contracts/payload-shape.ts";
 import { deriveChanges, LISTING, REQUEST_READING, type Derivation, type DerivationFrontier } from "../../domain/contracts/shape-derivation.ts";
-import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
+import { httpRouteName, type HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { withCuts, type Evidence, type UnknownReason } from "../../domain/shared/fact.ts";
 import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
@@ -267,20 +267,18 @@ function read(files: readonly SourceFile[], providers: readonly PayloadShapes[],
         continue;
       }
       const entry = { shape: finding.value, place: finding.evidence[0]!, ...identityOf(finding.value, serving) };
-      claimed.set(keyOf(entry.identity), [...(claimed.get(keyOf(entry.identity)) ?? []), entry]);
+      claimed.set(httpRouteName(entry.identity), [...(claimed.get(httpRouteName(entry.identity)) ?? []), entry]);
     }
     for (const [key, entries] of claimed) if (!held.has(key)) held.set(key, entries);
     for (const finding of provider.requests?.(files) ?? []) {
       if (finding.status !== "complete") continue;
-      const key = keyOf(identityOf(finding.value, serving).identity);
+      const key = httpRouteName(identityOf(finding.value, serving).identity);
       if (held.get(key) === claimed.get(key) && !requests.has(key)) requests.set(key, finding.value);
     }
     if (stopped) break;
   }
   return { held, requests, unreadable };
 }
-
-const keyOf = ({ method, path }: Held["identity"]): string => `${method} ${path}`;
 
 function identityOf(written: Pick<OperationShape, "method" | "path" | "basePath">, serving: ServingWorkspace["serving"]): Pick<Held, "identity" | "unserved"> {
   const identity = { method: written.method, path: writtenPath(written) };

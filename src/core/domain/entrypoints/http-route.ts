@@ -32,10 +32,15 @@ export interface Handler {
   endLine?: number;
 }
 
+/** The name of a route, which a call names to reach it: `METHOD path`, with ` v<version>` when the mapping declares one. */
+export function httpRouteName({ method, path, version }: Pick<HttpRoute, "method" | "path" | "version">): string {
+  return `${method} ${path}${version === undefined ? "" : ` v${version}`}`;
+}
+
 /** `ANY` is a mapping that names no verb. A route is identified by its method, path, version and handler. */
 export interface HttpRoute {
   kind: "http-route";
-  /** `METHOD path`, with ` v<version>` when the mapping declares a version; never the base path. */
+  /** `httpRouteName`; never the base path. */
   name: string;
   method: HttpMethod;
   /** The path the code maps; the base path is not part of it. */

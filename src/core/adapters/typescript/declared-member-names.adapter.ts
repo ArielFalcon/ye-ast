@@ -3,10 +3,9 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import { annotated, isFunctionValueNode, localReceivers } from "./function-value-calls.ts";
-import { lineOf } from "./http-call-sites.adapter.ts";
 import type { SourcePosition, SourceSpan } from "../../domain/trace/owning-body.ts";
 import { isStatic } from "./syntax-names.ts";
-import { unwrapped } from "./syntax.ts";
+import { lineOf, unwrapped } from "./syntax.ts";
 import { sourceTree } from "./source-tree.ts";
 
 const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };

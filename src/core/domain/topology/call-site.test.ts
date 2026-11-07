@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { unresolvedCallSite, unsettledCallSiteCut, type CallSite } from "./call-site.ts";
+import { compareCallSites, unresolvedCallSite, unsettledCallSiteCut, type CallSite } from "./call-site.ts";
 
 function site(overrides: Partial<CallSite> = {}): CallSite {
   return { repo: "shop", file: "src/app/order.api.ts", line: 4, symbol: "OrderApi.create", transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [{ path: "src/app/order.api.ts", line: 4 }] }, ...overrides };
@@ -37,4 +37,29 @@ test("unresolved discovery retains the typed reason, diagnostic and every causal
 
 test("a call site the join could not settle is an unresolved-link cut at its file, then at its line", () => {
   assert.deepEqual(unsettledCallSiteCut(site({ file: "src/app/catalog.api.ts", line: 12 })), { kind: "unresolved-link", at: ["src/app/catalog.api.ts", "src/app/catalog.api.ts:12"] });
+});
+
+test("call sites order by repository, file, line and symbol, then by the status of the target at one place", () => {
+  const complete: CallSite["target"] = { status: "complete", value: { method: "GET", path: "/orders" }, evidence: [] };
+  const sites = [
+    site({ repo: "web", file: "a.ts", line: 1, symbol: "A" }),
+    site({ file: "src/b.ts", line: 1, symbol: "A" }),
+    site({ line: 10 }),
+    site({ symbol: "OrderApi.list" }),
+    site(),
+    site({ target: complete }),
+    site({ line: 9 }),
+  ];
+
+  const ordered = sites.toSorted(compareCallSites).map(({ repo, file, line, symbol, target }) => `${repo} ${file}:${line} ${symbol} ${target.status}`);
+
+  assert.deepEqual(ordered, [
+    "shop src/app/order.api.ts:4 OrderApi.create complete",
+    "shop src/app/order.api.ts:4 OrderApi.create unknown",
+    "shop src/app/order.api.ts:4 OrderApi.list unknown",
+    "shop src/app/order.api.ts:9 OrderApi.create unknown",
+    "shop src/app/order.api.ts:10 OrderApi.create unknown",
+    "shop src/b.ts:1 A unknown",
+    "web a.ts:1 A unknown",
+  ]);
 });

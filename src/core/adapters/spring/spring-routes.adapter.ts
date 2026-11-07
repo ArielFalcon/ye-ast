@@ -1,7 +1,7 @@
 import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
-import type { BasePath, HttpMethod } from "../../domain/entrypoints/http-route.ts";
+import { httpRouteName, type BasePath, type HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
 import { isSpringConfigFile, resourcesOfSource } from "../../domain/languages/spring-config.ts";
 import { declarationSpan } from "../../domain/shared/fact.ts";
@@ -368,7 +368,7 @@ function contractJoin(controller: Controller, method: MethodDecl): { operation: 
     status: "complete",
     value: {
       kind: "http-route",
-      name: `${operation.method} ${path}`,
+      name: httpRouteName({ method: operation.method, path }),
       method: operation.method,
       path,
       handler: { path: span.path, symbol: `${method.owner.qualifiedName}.${method.name}`, line: span.line, ...declarationSpan(span.line, span.endLine) },
@@ -429,7 +429,7 @@ function routesOfHandler(handler: MethodDecl, mapping: Mapping, classMapping: Ma
             status: "complete",
             value: {
               kind: "http-route",
-              name: `${method} ${routePath}${version === undefined ? "" : ` v${version}`}`,
+              name: httpRouteName({ method, path: routePath, ...(version === undefined ? {} : { version }) }),
               method,
               path: routePath,
               ...(version === undefined ? {} : { version }),

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
-import { thisClass, unwrapped } from "./syntax.ts";
+import { propertyOf, thisClass, unwrapped } from "./syntax.ts";
 
 function treeOf(content: string): ts.SourceFile {
   return sourceTree({ path: "src/probe.ts", content }, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
@@ -48,3 +48,10 @@ for (const [place, body, owner] of [
     assert.equal(thisClass(first(tree, isThis))?.name?.text, owner);
   });
 }
+
+test("propertyOf reads a key written as a name, a string or a shorthand, never a computed one", () => {
+  const tree = treeOf("const options = { plain: 1, 'quoted': 2, shorthand, [computed]: 4 };");
+  const object = first(tree, ts.isObjectLiteralExpression);
+
+  assert.deepEqual(["plain", "quoted", "shorthand", "computed"].map((key) => propertyOf(object, key)?.getText(tree)), ["1", "2", "shorthand", undefined]);
+});

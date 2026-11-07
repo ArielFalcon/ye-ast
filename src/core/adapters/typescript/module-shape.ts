@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { moduleStatement } from "./import-bindings.ts";
-import { hasModifier } from "./syntax.ts";
+import { hasModifier, hasSyntaxErrors } from "./syntax.ts";
 
 /** The lines a declaration spans in its file. */
 export interface RawSpan {
@@ -8,8 +8,14 @@ export interface RawSpan {
   endLine: number;
 }
 
-/** What a module exports under one name: a name it declares or imports, or another module's export it re-exports. */
+/**
+ * What a module exports under one name: a name it declares or imports, or another module's export it re-exports.
+ * `{ local: "default" }` is a default export that declares no name (`export default {}`, `export default class {}`):
+ * `default` is a reserved word, so no declaration or import can hold it.
+ */
 export type RawExport = { local: string } | { module: string; imported: string };
+
+export const ANONYMOUS_DEFAULT = "default";
 
 /** What an import brings in: the module it names and the export it takes there (`default` for a default import, `*` for a namespace). */
 export interface RawImport {
@@ -35,8 +41,11 @@ export interface ModuleShape {
 
 /** The one reading of a file's imports, top-level declarations and exports; undefined when the file has syntax errors. */
 export function moduleShape(tree: ts.SourceFile): ModuleShape | undefined {
-  const diagnostics = (tree as unknown as { parseDiagnostics?: readonly unknown[] }).parseDiagnostics ?? [];
-  if (diagnostics.length > 0) return undefined;
+  return hasSyntaxErrors(tree) ? undefined : recoveredModuleShape(tree);
+}
+
+/** `moduleShape` for a reader that reads a file with syntax errors as far as the parser recovered it. */
+export function recoveredModuleShape(tree: ts.SourceFile): ModuleShape {
   const line = (pos: number): number => tree.getLineAndCharacterOfPosition(pos).line + 1;
   const reimported = new Set<string>();
   const shape: ModuleShape = { imports: new Map(), reimported, declared: new Map(), classes: new Set(), exports: new Map(), stars: [] };
@@ -63,7 +72,7 @@ export function moduleShape(tree: ts.SourceFile): ModuleShape | undefined {
         for (const element of statement.exportClause.elements) shape.exports.set(element.name.text, { local: (element.propertyName ?? element.name).text });
       }
     } else if (ts.isExportAssignment(statement)) {
-      if (!statement.isExportEquals && ts.isIdentifier(statement.expression)) shape.exports.set("default", { local: statement.expression.text });
+      if (!statement.isExportEquals) shape.exports.set("default", { local: ts.isIdentifier(statement.expression) ? statement.expression.text : ANONYMOUS_DEFAULT });
     } else if (ts.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) if (ts.isIdentifier(declaration.name)) declare(declaration.name, statement, declaration);
     } else if (ts.isEnumDeclaration(statement)) {
@@ -71,6 +80,8 @@ export function moduleShape(tree: ts.SourceFile): ModuleShape | undefined {
     } else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name) {
       declare(statement.name, statement);
       if (ts.isClassDeclaration(statement)) shape.classes.add(statement.name.text);
+    } else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && hasModifier(statement, ts.SyntaxKind.ExportKeyword) && hasModifier(statement, ts.SyntaxKind.DefaultKeyword)) {
+      shape.exports.set("default", { local: ANONYMOUS_DEFAULT });
     }
   }
   return shape;
