@@ -56,7 +56,7 @@ test("a link that stays inside the declared directory is followed, as a pnpm lay
     { "checkout/node_modules/.pnpm/pkg@1.0.0/node_modules/pkg/index.d.ts": "export declare const pkg: 1;" },
     { "checkout/node_modules/pkg": ".pnpm/pkg@1.0.0/node_modules/pkg" },
   );
-  assert.deepEqual(createDeclaredTrees().open(output).entry("pkg/index.d.ts"), { kind: "file", content: "export declare const pkg: 1;" });
+  assert.deepEqual(createDeclaredTrees().open(output).entry("pkg/index.d.ts"), { kind: "file", path: ".pnpm/pkg@1.0.0/node_modules/pkg/index.d.ts", content: "export declare const pkg: 1;" });
 });
 
 test("a cycle of links is refused instead of followed forever", async () => {

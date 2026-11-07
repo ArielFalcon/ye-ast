@@ -62,14 +62,14 @@ function entryOf(output: DeclaredBuildOutput, path: string, deps: DeclaredTreeDe
         return { kind: "snapshot", path: posix.join(target, ...rest) };
       }
       if (index < segments.length - 1 && !status.isDirectory()) return ABSENT;
-      if (index === segments.length - 1) return terminal(status, host, deps);
+      if (index === segments.length - 1) return terminal(status, host, segments.join("/"), deps);
     }
-    return terminal({ isFile: () => false, isDirectory: () => true, isSymbolicLink: () => false }, host, deps);
+    return terminal({ isFile: () => false, isDirectory: () => true, isSymbolicLink: () => false }, host, "", deps);
   }
 }
 
-function terminal(status: EntryStatus, host: string, deps: DeclaredTreeDeps): DeclaredEntry {
-  if (status.isFile()) return { kind: "file", content: deps.readFile(host).toString("utf8") };
-  if (status.isDirectory()) return { kind: "directory", names: deps.readdir(host).toSorted() };
+function terminal(status: EntryStatus, host: string, path: string, deps: DeclaredTreeDeps): DeclaredEntry {
+  if (status.isFile()) return { kind: "file", path, content: deps.readFile(host).toString("utf8") };
+  if (status.isDirectory()) return { kind: "directory", path, names: deps.readdir(host).toSorted() };
   return ABSENT;
 }

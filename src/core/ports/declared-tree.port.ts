@@ -3,11 +3,12 @@ import type { DeclaredBuildOutput } from "../domain/shared/build-outputs.ts";
 /**
  * What a declared directory holds at a path relative to it (ADR-0037 decision 3). A symbolic link is read through its
  * link text, as the directory stands in the snapshot: a target inside the directory is followed, a target inside the
- * repository is `snapshot` (to be read from the snapshot, never from a working tree), any other target is `refused`.
+ * repository is `snapshot` (to be read from the snapshot, never from a working tree), any other target is `refused`. A
+ * file or a directory carries the path it was found at once its links were followed, relative to the directory.
  */
 export type DeclaredEntry =
-  | { kind: "file"; content: string }
-  | { kind: "directory"; names: readonly string[] }
+  | { kind: "file"; path: string; content: string }
+  | { kind: "directory"; path: string; names: readonly string[] }
   | { kind: "absent" }
   | { kind: "snapshot"; path: string }
   | { kind: "refused"; link: string };
