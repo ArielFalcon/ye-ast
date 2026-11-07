@@ -20,7 +20,25 @@ const REMOTE_USER = "src/main/java/app/remote/User.java";
 const SHADOWED = "src/main/java/app/shadow/Derived.java";
 const INHERITED_USER = "src/main/java/app/hidden/Base.java";
 const HIDDEN = "src/main/java/app/hidden/Derived.java";
+const ANONYMOUS = "src/main/java/app/hidden/Deferred.java";
 const FILES: Record<string, string> = {
+  "src/main/java/app/hidden/Task.java": "package app.hidden;\n\npublic interface Task {\n  Object run();\n}\n",
+  [ANONYMOUS]: [
+    "package app.hidden;",
+    "",
+    "public class Deferred extends Base {",
+    "  Object load() {",
+    "    Task task = new Task() {",
+    "      public Object run() {",
+    "        return new User();",
+    "      }",
+    "    };",
+    "    class User {}",
+    "    return task;",
+    "  }",
+    "}",
+    "",
+  ].join("\n"),
   [INHERITED_USER]: "package app.hidden;\n\npublic class Base {\n  static class User {}\n}\n",
   [HIDDEN]: [
     "package app.hidden;",
@@ -166,5 +184,17 @@ test("a Java type name read where no local class of the name is in scope yet is 
   for (const answer of [callers, impact]) {
     assert.ok(reached(answer).includes("later"), JSON.stringify(answer));
     assert.ok(reached(answer).includes("outside"), JSON.stringify(answer));
+  }
+});
+
+test("a Java type name read in an anonymous class body binds through the body's scope before the method around it", async () => {
+  const queries = composeQueries({ scratchRoot });
+  const callers = await queries.impact.callers({ repo, repoId: "java-name-bindings", revision: "HEAD", targets: [{ file: INHERITED_USER, symbol: "Base.User" }] });
+  const impact = await queries.impact.ofChange({ repo, repoId: "java-name-bindings", base: "HEAD~1", head: "HEAD" });
+
+  for (const answer of [callers, impact]) {
+    assert.ok(answer.ok, JSON.stringify(answer));
+    assert.ok(answer.value.status !== "unknown", JSON.stringify(answer.value));
+    assert.ok(answer.value.value.symbols.some(({ file, depth }) => file === ANONYMOUS && depth > 0), JSON.stringify(answer.value));
   }
 });

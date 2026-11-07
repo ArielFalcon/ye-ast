@@ -265,8 +265,8 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
   }
 
   function resolveSimple(head: string, scope: Scope, strict: boolean): TypeLookup | "unsettled" | LocalType {
-    const local = scope.at === undefined ? undefined : localTypeAt(head, scope.at);
-    if (local !== undefined) return { local };
+    const inside = scope.at === undefined ? undefined : boundInside(head, scope.at, scope, strict);
+    if (inside !== undefined) return inside;
     const { file } = scope;
     for (let type = scope.type; type !== undefined; type = type.outer) {
       const member = type.members.get(head) ?? inheritedMember(type, head, strict);
@@ -287,6 +287,28 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     return found.length === 1 && file.onDemandImports.every((container, index) => offered[index] !== undefined || repositoryPackage(container)) ? found[0] : "unsettled";
   }
 
+  /**
+   * What a name read at `at` denotes inside the innermost declared type around it, walking out from `at` (JLS 6.3,
+   * 15.9.5): a local type a block declares before it, then, at an anonymous class body, a type the body declares or a
+   * member type it inherits from the type it instantiates; `undefined` when none of those scopes declares the name. An
+   * instantiated type the sources do not declare leaves a strict reading unsettled, as any supertype they do not declare.
+   */
+  function boundInside(head: string, at: Node, scope: Scope, strict: boolean): TypeLookup | "unsettled" | LocalType | undefined {
+    for (let inner: Node = at, around = at.parent; around !== null && around.id !== scope.type?.node.id; inner = around, around = around.parent) {
+      const local = localTypeIn(head, inner, around);
+      if (local !== undefined) return { local };
+      const creation = around.type === "class_body" ? around.parent : null;
+      if (creation?.type !== "object_creation_expression") continue;
+      const member = namedChildren(around).find((declaration) => LOCAL_TYPE_DECLARATIONS.has(declaration.type) && declaration.childForFieldName("name")?.text === head);
+      if (member !== undefined) return { local: member };
+      const written = typeNodeName(creation.childForFieldName("type") ?? creation);
+      const instantiated = written.includes(".") ? lookupType(written, scope) : resolveSimple(written, { ...scope, at: creation }, strict);
+      const inherited = inheritedThrough([instantiated], head, strict, new Set([scope.file.packageName]), new Set());
+      if (inherited !== undefined) return inherited;
+    }
+    return undefined;
+  }
+
   const inherited = { strict: new Map<TypeDecl, Map<string, TypeLookup | "unsettled">>(), lenient: new Map<TypeDecl, Map<string, TypeLookup | "unsettled">>() };
 
   /**
@@ -299,27 +321,34 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     const byName = cache.get(type) ?? new Map<string, TypeLookup | "unsettled">();
     cache.set(type, byName);
     if (byName.has(head)) return byName.get(head);
+    const result = inheritedThrough(supertypesOf(type), head, strict, new Set([type.file.packageName]), new Set([type]));
+    byName.set(head, result);
+    return result;
+  }
+
+  function supertypesOf(type: TypeDecl): (TypeLookup | "unsettled" | LocalType)[] {
+    return [...interfaceNodes(type), ...[superclassNode(type)].filter((parent) => parent !== undefined)].map((node) => lookupType(typeNodeName(node), { file: type.file, type: type.outer }));
+  }
+
+  /** The member type of the name a type whose direct supertypes are `parents` inherits from them (`inheritedMember`). */
+  function inheritedThrough(parents: readonly (TypeLookup | "unsettled" | LocalType)[], head: string, strict: boolean, packages: ReadonlySet<string>, visited: Set<TypeDecl>): TypeLookup | "unsettled" {
     const found = new Set<TypeDecl>();
     let unsettled = false;
-    const visited = new Set<TypeDecl>([type]);
-    const visit = (sub: TypeDecl, packages: ReadonlySet<string>): void => {
-      for (const node of [...interfaceNodes(sub), ...[superclassNode(sub)].filter((parent) => parent !== undefined)]) {
-        const parent = lookupType(typeNodeName(node), { file: sub.file, type: sub.outer });
-        if (typeof parent !== "object") {
+    const visit = (supertypes: readonly (TypeLookup | "unsettled" | LocalType)[], on: ReadonlySet<string>): void => {
+      for (const parent of supertypes) {
+        if (typeof parent !== "object" || "local" in parent) {
           unsettled = true;
           continue;
         }
         if (visited.has(parent)) continue;
         visited.add(parent);
         const member = parent.members.get(head);
-        if (member === undefined) visit(parent, new Set([...packages, parent.file.packageName]));
-        else if (inherits(member, parent, packages)) found.add(member);
+        if (member === undefined) visit(supertypesOf(parent), new Set([...on, parent.file.packageName]));
+        else if (inherits(member, parent, on)) found.add(member);
       }
     };
-    visit(type, new Set([type.file.packageName]));
-    const result = found.size > 1 ? "ambiguous" : strict && unsettled ? "unsettled" : found.values().next().value;
-    byName.set(head, result);
-    return result;
+    visit(parents, packages);
+    return found.size > 1 ? "ambiguous" : strict && unsettled ? "unsettled" : found.values().next().value;
   }
 
   function inherits(member: TypeDecl, declaring: TypeDecl, packages: ReadonlySet<string>): boolean {
@@ -703,16 +732,12 @@ const LOCAL_TYPE_DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration
 const BLOCKS: ReadonlySet<string> = new Set(["block", "constructor_body", "switch_block_statement_group"]);
 
 /**
- * The local type of the name in scope at `at` (JLS 6.3): declared by a block around it, before it or around it; one a
- * switch block's earlier group declares is in scope for the rest of that switch block.
+ * The local type of the name `around` declares in scope at its child `inner` (JLS 6.3): a block's statement before it or
+ * around it; one a switch block's earlier group declares is in scope for the rest of that switch block.
  */
-function localTypeAt(name: string, at: Node): Node | undefined {
-  for (let inner: Node = at, around = at.parent; around !== null; inner = around, around = around.parent) {
-    const statements = around.type === "switch_block" ? around.namedChildren.filter((group) => group.startIndex <= inner.startIndex).flatMap((group) => group.namedChildren) : BLOCKS.has(around.type) ? around.namedChildren : [];
-    const declared = statements.find((statement) => statement.startIndex <= inner.startIndex && LOCAL_TYPE_DECLARATIONS.has(statement.type) && statement.childForFieldName("name")?.text === name);
-    if (declared !== undefined) return declared;
-  }
-  return undefined;
+function localTypeIn(name: string, inner: Node, around: Node): Node | undefined {
+  const statements = around.type === "switch_block" ? around.namedChildren.filter((group) => group.startIndex <= inner.startIndex).flatMap((group) => group.namedChildren) : BLOCKS.has(around.type) ? around.namedChildren : [];
+  return statements.find((statement) => statement.startIndex <= inner.startIndex && LOCAL_TYPE_DECLARATIONS.has(statement.type) && statement.childForFieldName("name")?.text === name);
 }
 
 function modifierWords(declaration: Node): string[] {

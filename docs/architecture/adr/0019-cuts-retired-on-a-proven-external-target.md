@@ -109,6 +109,10 @@ population did not.
   imports bind to it, and the edges into its homonyms: one the same verdict redirects to it is a use of it. A Java name
   read before a method's own `class User {}`, or outside the block that declares one, binds the member type its class
   inherits, though the graph matched it to the local class.
+- An anonymous class body is a scope of its own, read before the block around the instantiation: a type the body
+  declares, then a member type the type it instantiates declares or inherits. When the sources do not declare that type
+  (`new Runnable() { ... }`, a platform or missing type, or a local class), the name is `unknown`: the type may declare
+  a member type of the name, so the edge keeps the target the graph gave it, and a use it hides that way stays hidden.
 
 ## Not decided here
 
