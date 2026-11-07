@@ -298,6 +298,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     sourceTrivia,
     memberNames,
     relations: impactDeps.relations,
+    callSites,
     sourceSelection: isWritten,
   });
   const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);

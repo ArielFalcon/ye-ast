@@ -6,6 +6,7 @@ import type { TraceStep, TraceValue } from "../../domain/trace/trace-fact.ts";
 import type { DeclaredType, DispatchSite, DispatchTargets, ImportOriginSite, ReceiverCallSite, ReceiverMethod, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget, TraceRequest, TraceTarget } from "../../ports/trace-queries.port.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
+import type { CallSite } from "../../domain/topology/call-site.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
 import type { DeclaredCallable, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
@@ -72,6 +73,10 @@ interface Options {
   receivers?: Readonly<Record<string, ReceiverMethod>>;
   /** Called with the members of each read of the receivers' declared types. */
   onReceivers?: (members: readonly string[]) => void;
+  /** The call sites the RFC-0011 extraction reads in the snapshot; none by default. */
+  callSites?: readonly CallSite[];
+  /** Runs each time the call sites are read. */
+  onCallSites?: () => void;
 }
 
 function setup(options: Options) {
@@ -116,6 +121,7 @@ function setup(options: Options) {
       }),
     }),
     relations: { extract: async () => ({ relations: [], fields: [], locals: [], ...options.proofs, ...options.relations }) },
+    callSites: { of: async () => (options.onCallSites?.(), options.callSites ?? []) },
     engines: {},
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
   } as unknown as TraceQueriesDeps;
@@ -1117,4 +1123,78 @@ test("a call result proves nothing when its call is itself unproven, or when two
   const twice = await factOf({ ...resultCall(MADE, "Repo"), receiverBindings: { [A]: [{ line: 9, column: 5, receiver: "", member: "save", holds: MADE }, { line: 9, column: 5, receiver: "", member: "save", holds: MADE }] } });
 
   for (const fact of [unprovenHead, twice]) assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol).filter((symbol) => symbol === "save"), []);
+});
+
+const site = (line: number, overrides: Partial<CallSite> = {}): CallSite => ({
+  repo: "shop",
+  file: A,
+  line,
+  symbol: "Svc.run",
+  transport: "http",
+  target: { status: "complete", value: { method: "POST", path: "/orders/{}/checkout" }, evidence: [{ path: A, line }] },
+  ...overrides,
+});
+
+const EFFECTS_BODY: Options = {
+  nodes: [SVC, RUN, callee("helper"), callee("publish", A, 34)],
+  edges: [...CONTAINS, call("run", "helper", 8, 4), call("run", "publish", 9, 4)],
+};
+
+test("a call site the extraction resolves at a call of an expanded body is an effect of that step, with its kind and target", async () => {
+  const published: CallSite = site(9, { transport: "event", target: { status: "complete", value: { protocol: "nats", destination: "orders.created", role: "publish" }, evidence: [{ path: A, line: 9 }] } });
+
+  const fact = await factOf({ ...EFFECTS_BODY, callSites: [site(8), published] });
+
+  assert.equal(fact.status, "complete");
+  assert.deepEqual(valueOf(fact).steps[0]!.effects, [
+    { kind: "http", line: 8, target: { method: "POST", path: "/orders/{}/checkout" } },
+    { kind: "message", line: 9, target: { protocol: "nats", destination: "orders.created", role: "publish" } },
+  ]);
+});
+
+test("a call site whose target the extraction does not decide is an unresolved-link cut at its place naming the library, never an effect", async () => {
+  const unknown = site(8, { target: { status: "unknown", reason: "unresolved", evidence: [{ path: A, line: 8, via: "com.acme.rest.RestClient" }] } });
+
+  const fact = await factOf({ ...EFFECTS_BODY, callSites: [unknown] });
+
+  assert.equal(valueOf(fact).steps[0]!.effects, undefined);
+  assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/a.ts:8 http effect through com.acme.rest.RestClient"]]]);
+});
+
+test("a call site inside a declaration the walk did not expand is no effect of the step around it", async () => {
+  const fact = await factOf({ ...EFFECTS_BODY, nodes: [...EFFECTS_BODY.nodes, fakeNode("later", "function", A, 12, 14)], callSites: [site(13)] });
+
+  assert.equal(fact.status, "complete");
+  assert.deepEqual(valueOf(fact).steps.map((step) => step.effects), [undefined]);
+});
+
+test("a call site in an expanded body at no call place the index records is a cut at the site, never dropped", async () => {
+  const fact = await factOf({ ...EFFECTS_BODY, callSites: [site(15)] });
+
+  assert.equal(valueOf(fact).steps[0]!.effects, undefined);
+  assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/a.ts:15 http effect"]]]);
+});
+
+test("an effect is carried once, by the step that expanded its body, never by a seen occurrence", async () => {
+  const nodes = [SVC, RUN, callee("helper"), callee("wrap", A, 34)];
+  const edges = [...CONTAINS, call("run", "wrap", 8, 4), call("run", "wrap", 9, 4), call("wrap", "helper", 35, 4)];
+
+  const fact = await factOf({ nodes, edges, callSites: [site(35, { symbol: "wrap" })] });
+
+  assert.deepEqual(valueOf(fact).steps.map((step) => [step.symbol, step.seen ?? null, step.effects?.length ?? 0]), [["run", null, 0], ["wrap", null, 1], ["wrap", 1, 0]]);
+});
+
+test("the call sites are read once per query, however many bodies the walk expands", async () => {
+  let reads = 0;
+  await factOf({ ...EFFECTS_BODY, callSites: [site(8)], onCallSites: () => (reads += 1) });
+  assert.equal(reads, 1);
+});
+
+test("a body whose only record at a call site is an edge the walk does not follow stays a step carrying its effect, never folded away", async () => {
+  const nodes = [SVC, RUN, callee("helper")];
+  const edges = [...CONTAINS, call("run", "helper", 8, 4), { from: "helper", to: "Svc", kind: "references", line: 31, column: 2 }];
+
+  const fact = await factOf({ nodes, edges, callSites: [site(31, { symbol: "helper" })] });
+
+  assert.deepEqual(valueOf(fact).steps.map((step) => [step.symbol, step.effects?.map((effect) => effect.line)]), [["run", undefined], ["helper", [31]]]);
 });

@@ -28,6 +28,8 @@ import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps, type HeadReading } from "../snapshot/head-reading.ts";
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
 import { isTraceRoot, walkTrace } from "./trace-walk.ts";
+import { placeEffects } from "./trace-effects.ts";
+import type { CallSiteReader } from "../../domain/topology/call-site.ts";
 import { pagePlans } from "./page-plans.ts";
 import { unresolvedOncePerFile } from "../navigation/declaration-uses.ts";
 
@@ -40,6 +42,8 @@ export interface TraceQueriesDeps extends HeadReaderDeps {
   memberNames: DeclaredMemberNamesReader;
   /** Reads the relations impact reads, under the same retained key, for the member calls they prove (RFC-0013 R3). */
   relations: RelationExtractor;
+  /** Reads the snapshot's call sites (RFC-0011), the declared rows a trace's effects come from (RFC-0013 R12). */
+  callSites: CallSiteReader;
   /** Tells the trivia lines of a requested range apart, so they select nothing. */
   sourceTrivia: SourceTrivia;
   /** Version of each engine every operation runs on, by package name. */
@@ -109,6 +113,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const pages = pageRoots.size === 0 ? {} : { pages: { roots: pageRoots, of: pagePlans(store, memberProofs) } };
           const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, memberProofs, budget, ...pages, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
+          const effectCuts = await placeEffects(walk.roots, { store, unresolvedIn, sites: async () => (await deps.callSites.of(head.tree.sources, request.repoId)).filter((site) => head.selected(site.file)) });
 
           const { steps, ids } = traceSteps(walk.roots);
           const rootIds = new Map(roots.map((root, index) => [root.id, ids.get(walk.roots[index]!)!]));
@@ -125,6 +130,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             ...handlers.unplaced,
             ...selections.flatMap(({ target, selection }) => (isEntrypointTarget(target) ? unplacedHandlers(handlers.byTarget.get(traceTargetKey(target)) ?? [], selection) : [])),
             ...walk.cuts,
+            ...effectCuts,
           ];
           return { ok: true, value: withCuts(head.base(content, true), value, cuts) };
         } finally {

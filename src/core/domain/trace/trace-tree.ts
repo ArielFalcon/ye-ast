@@ -1,5 +1,5 @@
 import { compareText } from "../shared/code-node.ts";
-import type { ExternalCalls, TraceLeaf, TraceStep, TraceVia } from "./trace-fact.ts";
+import type { ExternalCalls, TraceEffect, TraceLeaf, TraceStep, TraceVia } from "./trace-fact.ts";
 
 /** A declaration a trace reaches; `key` tells two declarations apart and never leaves the walk. */
 export interface TraceDeclaration {
@@ -26,13 +26,15 @@ export interface WalkedStep {
   unsettled: boolean;
   children: WalkedStep[];
   external: ExternalCall[];
+  /** The effects its body makes, set on the occurrence that expanded it. */
+  effects?: TraceEffect[];
   /** Every body the declared hierarchy proves a call to this body-less method may run. */
   alternatives?: readonly TraceDeclaration[];
 }
 
 /** Read, and nothing in its body calls, leaves the repository or stays unsettled. */
 function isProvenTerminal(step: WalkedStep): boolean {
-  return step.expanded && !step.unsettled && step.children.length === 0 && step.external.length === 0;
+  return step.expanded && !step.unsettled && step.children.length === 0 && step.external.length === 0 && step.effects === undefined;
 }
 
 /** A declaration folds wherever it occurs below a root, so a `seen` step never points at a folded one. */
@@ -82,6 +84,7 @@ function stepOf(step: WalkedStep, id: number, depth: number, parent: number | un
     ...(seen === undefined ? {} : { seen }),
     ...(leaves.length === 0 ? {} : { leaves }),
     ...(step.external.length === 0 ? {} : { external: groupedByModule(step.external) }),
+    ...(step.effects === undefined ? {} : { effects: step.effects }),
     ...(step.alternatives === undefined ? {} : { alternatives: step.alternatives.map(({ symbol, file, start, end }) => ({ symbol, file, start, end })) }),
   };
 }

@@ -216,6 +216,7 @@ function rebuildTrace(t: Tables): TraceValue {
           return { symbol, file, start: line, end: endLine ?? line };
         }),
       }),
+      ...(step.effects === undefined ? {} : { effects: step.effects }),
     })),
     readingPlan: { ranges: t.list("/value/readingPlan/ranges", "reading-range").map((range) => ({ file: t.path(range.file), start: range.start, end: range.end, steps: range.steps })), lines: totals.lines },
     cost: { expanded: totals.expanded },
