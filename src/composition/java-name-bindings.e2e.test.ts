@@ -17,7 +17,10 @@ const USER = "src/main/java/app/domain/User.java";
 const VISITS = "src/main/java/app/dto/Visits.java";
 const STATE = "src/main/java/app/inherit/State.java";
 const REMOTE_USER = "src/main/java/app/remote/User.java";
+const SHADOWED = "src/main/java/app/shadow/Derived.java";
 const FILES: Record<string, string> = {
+  "src/main/java/app/shadow/Base.java": "package app.shadow;\n\npublic class Base {\n  static class User {}\n}\n",
+  [SHADOWED]: ["package app.shadow;", "", "public class Derived extends Base {", "  Object load() {", "    class User {}", "    return new User();", "  }", "}", ""].join("\n"),
   "src/main/java/app/inherit/Base.java": "package app.inherit;\n\npublic class Base {\n  private record State(int n) {}\n}\n",
   [STATE]: "package app.inherit;\n\npublic class State {}\n",
   "src/main/java/app/inherit/Derived.java": ["package app.inherit;", "", "public class Derived extends Base {", "  public State read() {", "    return new State();", "  }", "}", ""].join("\n"),
@@ -109,4 +112,18 @@ test("a Java type name a superclass's private member type spells is a use of the
 
   assert.ok((await reached(STATE, "State")).includes("src/main/java/app/inherit/Derived.java:read"));
   assert.ok((await reached(REMOTE_USER, "User")).includes("src/main/java/app/remote/Derived.java:load"));
+});
+
+test("a Java class declared in a method shadows a member type its class inherits, for its focus and its callers alike", async () => {
+  const queries = composeQueries({ scratchRoot });
+  const outline = await queries.outline.outline({ repo, repoId: "java-name-bindings", revision: "HEAD", focus: [{ file: SHADOWED, symbol: "Derived.load" }] });
+  assert.ok(outline.ok, JSON.stringify(outline));
+  assert.ok(outline.value.status !== "unknown", JSON.stringify(outline.value));
+  const used = outline.value.value.focus?.flatMap(({ uses }) => uses ?? []).flatMap((use) => ("declaration" in use && use.declaration !== undefined ? [use.declaration.file] : []));
+  const callers = await queries.impact.callers({ repo, repoId: "java-name-bindings", revision: "HEAD", targets: [{ file: SHADOWED, symbol: "Derived.load.User" }] });
+  assert.ok(callers.ok, JSON.stringify(callers));
+  assert.ok(callers.value.status !== "unknown", JSON.stringify(callers.value));
+
+  assert.deepEqual(used?.filter((file) => file === "src/main/java/app/shadow/Base.java"), []);
+  assert.ok(callers.value.value.symbols.some(({ file, symbol, depth }) => file === SHADOWED && symbol === "load" && depth === 1));
 });

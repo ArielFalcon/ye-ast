@@ -82,8 +82,8 @@ function rootOf(site: ResolvedNameSite, file: JavaFile, project: JavaProject): {
   const bare = segments.length === 1;
   /** A qualified name whose first segment is lowercase names a package, unless a source declares a type of that name. */
   if (!bare && PACKAGE_SEGMENT.test(head) && project.lookupType(head, { file, type: enclosing[0] }) === undefined) return packageQualified(segments, spelled.typePosition, file, project);
-  const bound = project.bindName(head, { file, type: enclosing[0] });
-  if (typeof bound === "object") return { origin: declaredBy(bound), bare };
+  const bound = project.bindName(head, { file, type: enclosing[0], at: spelled.node }, "strict");
+  if (typeof bound === "object") return "local" in bound ? undefined : { origin: declaredBy(bound), bare };
   const imported = bound === undefined ? file.singleImports.get(head) : undefined;
   return imported !== undefined && project.isPlatformName(imported) ? { origin: { kind: "external", module: packageOf(imported) }, bare } : undefined;
 }

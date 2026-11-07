@@ -94,8 +94,9 @@ function typeBinding(name: Node, file: JavaFile, project: JavaProject, owner: Us
   const type = enclosingType(name, file, project);
   const variable = typeVariableAround(name);
   if (variable !== undefined) return declaredBinding(name, variable, owner);
-  const declared = project.lookupType(name.text, { file, type });
-  if (declared === "ambiguous") return { kind: "ambiguous", root: name.text };
+  const declared = project.bindName(name.text, { file, type, at: name }, "lenient");
+  if (typeof declared === "object" && "local" in declared) return declaredBinding(name, declared.local, owner);
+  if (declared === "ambiguous" || declared === "unsettled") return { kind: "ambiguous", root: name.text };
   if (declared !== undefined && project.lookupType(name.text, { file: { ...file, onDemandImports: [] }, type }) === undefined) return { kind: "ambiguous", root: name.text };
   if (declared !== undefined) return { kind: "located", root: name.text, file: declared.file.path, path: declared.fqn };
   const named = qualifiedTypeName(name.text, { file, type }, project);

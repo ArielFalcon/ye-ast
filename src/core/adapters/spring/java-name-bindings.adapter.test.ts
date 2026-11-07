@@ -133,6 +133,18 @@ test("a name inside a class whose declaration the reader does not place, anonymo
   assert.deepEqual(await rootOf([LIMITS, local], localSite), unknownAt(localSite));
 });
 
+test("a class declared in an enclosing block before the use, or in an earlier group of its switch, shadows every other type of the name and proves nothing about it; one declared after does not", async () => {
+  const base = java("src/main/java/app/shadow/Base.java", ["package app.shadow;", "", "public class Base {", "  static class User {}", "}"]);
+  const derived = java("src/main/java/app/shadow/Derived.java", ["package app.shadow;", "", "class Derived extends Base {", "  Object load() {", "    class User {}", "    return new User();", "  }", "  Object later() {", "    Object made = new User();", "    class User {}", "    return made;", "  }", "  Object pick(int n) {", "    switch (n) {", "      case 1:", "        class User {}", "        break;", "      default:", "        return new User();", "    }", "    return null;", "  }", "}"]);
+  const shadowed = at(derived, "new User", "instantiates", "User");
+  const before = at(derived, "new User", "instantiates", "User", 2);
+  const switched = at(derived, "new User", "instantiates", "User", 3);
+
+  assert.deepEqual(await rootOf([base, derived], shadowed), unknownAt(shadowed));
+  assert.deepEqual(await rootOf([base, derived], switched), unknownAt(switched));
+  assert.deepEqual(await rootOf([base, derived], before), { status: "complete", value: { kind: "repository", file: base.path, declared: "app.shadow.Base.User" }, bare: true, evidence: [{ path: derived.path, line: before.line }] });
+});
+
 test("a member type of a superclass is in scope only where Java inherits it: never private, package-private only within its package", async () => {
   const base = java("src/main/java/app/base/Base.java", ["package app.base;", "", "public class Base {", "  private static class Hidden {}", "  static class Packaged {}", "  protected static class Shared {}", "}"]);
   const tops = ["Hidden", "Packaged", "Shared"].map((name) => java(`src/main/java/app/web/${name}.java`, ["package app.web;", "", `public class ${name} {}`]));

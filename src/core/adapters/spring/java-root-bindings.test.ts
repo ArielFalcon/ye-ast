@@ -81,3 +81,11 @@ test("a type two sources declare under the same qualified name is ambiguous", as
 
   assert.deepEqual(await createJavaRootBindings(createJavaParser(), [first, second, service])([site]), [{ kind: "ambiguous", root: "Helper" }]);
 });
+
+test("a class a method declares before the use shadows a member type its class inherits, and is local", async () => {
+  const base = { path: "src/main/java/app/shadow/Base.java", content: "package app.shadow;\npublic class Base {\n  static class User {}\n}\n" };
+  const derived = { path: "src/main/java/app/shadow/Derived.java", content: "package app.shadow;\npublic class Derived extends Base {\n  Object load() {\n    class User {}\n    return new User();\n  }\n}\n" };
+  const site = { file: derived.path, line: 5, column: 12, spelled: "User", owner: { name: "load", line: 3, endLine: 6 } };
+
+  assert.deepEqual(await createJavaRootBindings(createJavaParser(), [base, derived])([site]), [{ kind: "local", root: "User" }]);
+});
