@@ -142,7 +142,7 @@ project root above it. A build plugin that rewrites defines is not read.
 
 | Transport | Call-site side | Entrypoint side | Matched by | Confidence |
 |---|---|---|---|---|
-| http | `CallSite` with `HttpTarget` | `HttpRoute` (`http-route.ts:33-43`) | verb equal or route `ANY`; path segments equal, parameters stand for any parameter, then the base-path ladder below | 1.0; 0.6 when a placeholder of the call consumed a parameter of the route (parity, `openapi-http-resolver.adapter.ts:334-336`) |
+| http | `CallSite` with `HttpTarget` | `HttpRoute` (`http-route.ts:33-43`) | verb equal or route `ANY`; the two paths unify as typed templates (below), then the base-path ladder below | 1.0; 0.6 when a value the call fills at run time took a parameter of the route (parity, `openapi-http-resolver.adapter.ts:334-336`) |
 | http by contract | generated client call naming an `operationId` | the `HttpRoute` whose handler implements that `operationId` (RFC-0007 row S5) | `operationId` equal | 1.0; no path involved |
 | event | publish `CallSite` with `EventTarget` | `Listener` (`entrypoint.ts:5-12`) | same `protocol` and `destination` | 1.0 |
 | Spring in-process event | `publishEvent(new X())`, protocol `event`, destination the qualified type | `@EventListener` listener, destination the qualified type (RFC-0007 row S7) | as event; `from.repo` equals `to.repo` | 1.0 |
@@ -151,6 +151,22 @@ An in-process event is the same link with one repository, so one code path serve
 matches by stem (`Event`, `Model` suffix removed, 0.7) and keeps only the first publisher
 (`event-resolver.adapter.ts:23-27,94-98`); ye-ast links every pair on an exact destination and defers the stem
 (deferred list).
+
+### Path templates
+
+Both paths are read as typed templates (`core/domain/topology/path-template.ts`, the one owner of the grammar), never
+compared as strings. A segment is text and holes: `{}` is a value the call fills at run time, the hole every extractor
+writes; `{name}`, `{name:regex}` and `:name` are parameters. A route also states `*` (exactly one segment) and `**` or
+`{*name}` (the rest of the path, none of it included). A call that states its origin (`scheme://authority`, in its path
+or its base) states its whole path; a base the call declares comes before its path. Segment by segment:
+
+- text against text matches only when equal; a route parameter takes any text of the call;
+- a whole segment the call fills at run time takes a route parameter, never text the route states;
+- a segment the call fills partly (`user-{}`) matches a route segment of the same shape (`user-{id}`); against other text
+  that could hold it, it could match, which never links;
+- of the routes one rung takes in one repository, the most specific wins: fewer segments that take any text, then more
+  text stated, then a stated verb over `ANY`. Two routes equal on all three take the call equally: an ambiguous outcome
+  naming both routes, never a pick.
 
 ### Base paths and profiles
 
@@ -162,7 +178,7 @@ profile picked and the keys not joined ([ADR-0014](../adr/0014-angular-and-sprin
 |---|---|---|---|
 | 1 | `exact` | call path equals the route's `path` | link, no `profiles` |
 | 2 | `base-path` | call path equals one key of the base path plus the route's `path`, under the default or a profile expression | link; `profiles` lists every expression under which it holds, so a match that exists under `prod` only is visible as such |
-| 3 | `suffix` | one path ends with the other, the extra leading segments are all literals and the shorter path has a literal segment (qayaba's rule, `cross-repo-impact.ts:17-28`) | link, confidence capped at 0.5; for a route whose `basePath` is `unknown`, and for a gateway prefix the workspace declares in `boundaries[]` (RFC-0006) |
+| 3 | `suffix` | one path ends with the other, the extra leading segments of the longer are all text, and one segment both paths state as text agrees (qayaba's rule, `cross-repo-impact.ts:17-28`, made symmetric); a route longer than a call that states its origin never holds | link, confidence capped at 0.5; for a route whose `basePath` is `unknown`, and for a gateway prefix the workspace declares in `boundaries[]` (RFC-0006) |
 | 4 | none | no rule holds | no link; if the call site reached a declared service prefix, an item `unmatched` (qayaba's drift) |
 
 qayaba's pattern also allows up to three unconstrained prefix segments and bounds the source at 200 characters
@@ -530,7 +546,9 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   upstream, against the routes of the repositories given other than their own, by the ladder `exact`, `gateway-prefix`
   (declared), `route-overlap` (inferred), `base-path`, `suffix`; at one rung a literal segment beats a parameter, and two
   repositories at one rung are a cut, never a pick. A call under a gateway prefix never falls to a lower rung: when it
-  matches no route of the repository the prefix routes to, it is `unmatched`. A link counts only when it lands in a
+  matches no route of the repository the prefix routes to, it is `unmatched`. Removing a gateway prefix is evidence only
+  when one segment the rest of the call states as text agrees with the route, so a prefix that leaves nothing to compare
+  neither infers a gateway nor links. A link counts only when it lands in a
   reached route; a call to a route the walk did not reach is neither a link nor drift. `reach` of a one-hop link is its own
   `Link.id`. A repository holding an impacted call site is walked with `impact.callers` over that call site's line, at the
   snapshot read, so the answer also names what depends on the call site there (a frontend's UI routes, for instance). A

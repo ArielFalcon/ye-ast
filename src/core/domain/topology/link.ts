@@ -28,6 +28,8 @@ export interface UnlinkedCallSite {
   name: string;
   /** The repositories that matched equally, sorted; only when `ambiguous`. */
   repos?: readonly string[];
+  /** The routes that took the call equally, sorted; only when an HTTP call is `ambiguous`. */
+  routes?: readonly string[];
 }
 
 /** The ids of the links crossed from the change, nearest first. */

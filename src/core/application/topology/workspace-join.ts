@@ -56,7 +56,7 @@ export function linkMapOf(joined: readonly JoinedSite[]): { links: Link[]; unlin
     const from = { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol };
     for (const link of answer.links ?? []) links.set(link.id, link);
     if (answer.links !== undefined) continue;
-    if (answer.ambiguous !== undefined) unlinked.push({ from, transport: site.transport, outcome: "ambiguous", name: answer.ambiguous.key, repos: answer.ambiguous.repos });
+    if (answer.ambiguous !== undefined) unlinked.push({ from, transport: site.transport, outcome: "ambiguous", name: answer.ambiguous.key, repos: answer.ambiguous.repos, ...(answer.ambiguous.routes === undefined ? {} : { routes: answer.ambiguous.routes }) });
     else if (answer.unmatched !== undefined) unlinked.push({ from, transport: site.transport, outcome: "unmatched", name: answer.unmatched });
   }
   return {

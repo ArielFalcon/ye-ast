@@ -3,6 +3,7 @@ import type { HttpRoute } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
 import type { CallSite, EventTarget, HttpTarget } from "./call-site.ts";
 import { linkIdentity, type Link, type LinkBasis } from "./link.ts";
+import { callTemplate, literalText, looseness, routeSegments, RUN_TIME_HOLE, statedLength, unify, type CallTemplate, type TemplateSegment, type Unification } from "./path-template.ts";
 
 /** A repository's entrypoints, as the join reads them. */
 export interface RepositoryEntrypoints {
@@ -26,6 +27,8 @@ export interface AmbiguousMatch {
   /** The prefix or destination that matched. */
   key: string;
   repos: readonly string[];
+  /** The names of the routes that took the call equally, sorted; absent for a destination. */
+  routes?: readonly string[];
 }
 
 export interface JoinResult {
@@ -45,42 +48,27 @@ export interface Match {
 }
 
 const ANY_METHOD = "ANY";
-const PARAMETER = "{}";
-const PARAMETER_SEGMENT = /^(:[A-Za-z_][A-Za-z0-9_]*|\{[^/}]*\})$/;
 const SUFFIX_CONFIDENCE = 0.5;
 const PARITY_CONFIDENCE = 0.6;
 
-/** A path as the segments the ladder compares: no query, no trailing slash, every parameter one placeholder. */
-function pathSegments(path: string): string[] {
-  const withoutQuery = path.split("?")[0] ?? path;
-  const pathname = withoutQuery.replace(/^(?:[a-z][a-z0-9+.-]*:)?\/\/[^/]+/i, "");
-  return pathname
-    .split("/")
-    .filter((segment) => segment !== "")
-    .map((segment) => (PARAMETER_SEGMENT.test(segment) ? PARAMETER : segment));
+type Matched = Extract<Unification, { outcome: "matches" }>;
+
+/** A route a rung took, with how the call unified with it and, for a base path, the profiles under which it holds. */
+interface Taken {
+  route: HttpRoute;
+  unified: Matched;
+  profiles?: readonly string[];
 }
 
-/** Equal segments, a route parameter standing for the call's segment. */
-function samePath(routePath: readonly string[], callPath: readonly string[]): boolean {
-  return routePath.length === callPath.length && routePath.every((segment, index) => segment === PARAMETER || segment === callPath[index]);
-}
+/** What one rung finds in one repository: the route it lands on, or the routes that take the call equally. */
+type Landing = { match: Match } | { tie: readonly HttpRoute[] };
 
 function accepts(route: HttpRoute, method: HttpTarget["method"]): boolean {
   return route.method === ANY_METHOD || route.method === method;
 }
 
-/** A call placeholder standing for a route parameter is a parity, not a literal match. */
-function equalPathConfidence(callPath: readonly string[]): number {
-  return callPath.includes(PARAMETER) ? PARITY_CONFIDENCE : 1;
-}
-
-/** Whether the shorter path is the tail of the longer and every extra leading segment of the longer is a literal. */
-function isSuffixMatch(routePath: readonly string[], callPath: readonly string[]): boolean {
-  const [shorter, longer] = routePath.length <= callPath.length ? [routePath, callPath] : [callPath, routePath];
-  if (shorter.length === 0 || !shorter.some((segment) => segment !== PARAMETER)) return false;
-  const cut = longer.length - shorter.length;
-  if (longer.slice(0, cut).includes(PARAMETER)) return false;
-  return shorter.every((segment, index) => segment === PARAMETER || segment === longer[cut + index]);
+function matched(unified: Unification): Matched | undefined {
+  return unified.outcome === "matches" ? unified : undefined;
 }
 
 /** The base-path keys a route's configuration declares, with the profile that declares each; no profile is picked. */
@@ -92,37 +80,85 @@ function basePathKeys(route: HttpRoute): { keys: readonly string[]; profile?: st
   return held.filter((entry) => entry.keys.length > 0);
 }
 
-/** Of the routes that match, the one that names the most segments itself: a literal beats a parameter at the same place. */
-function mostSpecific(routes: readonly HttpRoute[]): HttpRoute | undefined {
-  const parameters = (route: HttpRoute): number => pathSegments(route.path).filter((segment) => segment === PARAMETER).length;
-  return routes.toSorted((a, b) => parameters(a) - parameters(b))[0];
+/**
+ * Of the routes a rung took, the one that is most specific: fewer segments that take any text, then more text stated,
+ * then a stated verb over none. Routes equal on every count take the call equally, so they are a tie, never a pick.
+ */
+function mostSpecific(taken: readonly Taken[]): Landing | undefined {
+  const rank = ({ route }: Taken): readonly number[] => {
+    const segments = routeSegments(route.path);
+    return [looseness(segments), -statedLength(segments), route.method === ANY_METHOD ? 1 : 0];
+  };
+  const order = (a: Taken, b: Taken): number => rank(a).reduce((difference, value, index) => difference || value - rank(b)[index]!, 0);
+  const [first, ...rest] = taken.toSorted(order);
+  if (first === undefined) return undefined;
+  const tied = rest.filter((candidate) => order(candidate, first) === 0 && candidate.route !== first.route);
+  return tied.length === 0 ? { match: matchOf(first, "exact") } : { tie: [first.route, ...tied.map(({ route }) => route)] };
 }
 
-function exactMatch(target: HttpTarget, routes: readonly HttpRoute[]): Match | undefined {
-  const callPath = pathSegments(target.path);
-  const route = mostSpecific(routes.filter((candidate) => accepts(candidate, target.method) && samePath(pathSegments(candidate.path), callPath)));
-  return route === undefined ? undefined : { route, basis: "exact", confidence: equalPathConfidence(callPath) };
+function matchOf({ route, unified, profiles }: Taken, basis: LinkBasis): Match {
+  const confidence = basis === "suffix" ? SUFFIX_CONFIDENCE : unified.parity ? PARITY_CONFIDENCE : 1;
+  return { route, basis, confidence, ...(profiles === undefined ? {} : { profiles }) };
 }
 
-function basePathMatch(target: HttpTarget, routes: readonly HttpRoute[]): Match | undefined {
-  const callPath = pathSegments(target.path);
-  const holding = routes
-    .filter((route) => accepts(route, target.method))
-    .map((route) => ({ route, via: basePathKeys(route).filter(({ keys }) => keys.some((key) => samePath([...pathSegments(key), ...pathSegments(route.path)], callPath))) }))
-    .filter(({ via }) => via.length > 0);
-  const route = mostSpecific(holding.map((entry) => entry.route));
-  const via = holding.find((entry) => entry.route === route)?.via;
-  if (route === undefined || via === undefined) return undefined;
-  const profiles = via.flatMap(({ profile }) => (profile === undefined ? [] : [profile])).toSorted(compareText);
-  const underDefault = via.some(({ profile }) => profile === undefined);
-  return { route, basis: "base-path", confidence: equalPathConfidence(callPath), ...(underDefault ? {} : { profiles }) };
+function withBasis(landing: Landing | undefined, basis: LinkBasis): Landing | undefined {
+  return landing === undefined || "tie" in landing ? landing : { match: { ...landing.match, basis, confidence: basis === "suffix" ? SUFFIX_CONFIDENCE : landing.match.confidence } };
 }
 
-function suffixMatch(target: HttpTarget, routes: readonly HttpRoute[]): Match | undefined {
-  const callPath = pathSegments(target.path);
-  const route = mostSpecific(routes.filter((candidate) => accepts(candidate, target.method) && isSuffixMatch(pathSegments(candidate.path), callPath)));
-  return route === undefined ? undefined : { route, basis: "suffix", confidence: SUFFIX_CONFIDENCE };
+type Rung = (call: CallTemplate, method: HttpTarget["method"], routes: readonly HttpRoute[]) => Landing | undefined;
+
+const exactRung: Rung = (call, method, routes) =>
+  mostSpecific(routes.flatMap((route) => {
+    const unified = accepts(route, method) ? matched(unify(call.segments, routeSegments(route.path))) : undefined;
+    return unified === undefined ? [] : [{ route, unified }];
+  }));
+
+const basePathRung: Rung = (call, method, routes) => {
+  const taken = routes.flatMap((route): Taken[] => {
+    if (!accepts(route, method)) return [];
+    const via = basePathKeys(route).flatMap(({ keys, profile }) => {
+      const unified = keys.map((key) => matched(unify(call.segments, [...routeSegments(key), ...routeSegments(route.path)]))).find((found) => found !== undefined);
+      return unified === undefined ? [] : [{ unified, profile }];
+    });
+    const [first] = via;
+    if (first === undefined) return [];
+    const underDefault = via.some(({ profile }) => profile === undefined);
+    const profiles = via.flatMap(({ profile }) => (profile === undefined ? [] : [profile])).toSorted(compareText);
+    return [{ route, unified: first.unified, ...(underDefault ? {} : { profiles }) }];
+  });
+  return withBasis(mostSpecific(taken), "base-path");
+};
+
+/**
+ * One path ends with the other: the extra leading segments of the longer state only text, and one segment both paths
+ * state as text agrees. A call that states its origin states its whole path, so a longer route cannot end with it.
+ */
+function suffixUnify(call: CallTemplate, route: readonly TemplateSegment[]): Matched | undefined {
+  const routeLonger = route.length > call.segments.length;
+  if (routeLonger && call.origin !== undefined) return undefined;
+  const [shorter, longer] = routeLonger ? [call.segments, route] : [route, call.segments];
+  const cut = longer.length - shorter.length;
+  if (cut === 0 || shorter.length === 0 || !longer.slice(0, cut).every((segment) => literalText(segment) !== undefined)) return undefined;
+  const unified = matched(routeLonger ? unify(call.segments, route.slice(cut)) : unify(call.segments.slice(cut), route));
+  return unified !== undefined && unified.literals > 0 ? unified : undefined;
 }
+
+const suffixRung: Rung = (call, method, routes) =>
+  withBasis(mostSpecific(routes.flatMap((route) => {
+    const unified = accepts(route, method) ? suffixUnify(call, routeSegments(route.path)) : undefined;
+    return unified === undefined ? [] : [{ route, unified }];
+  })), "suffix");
+
+/** What the call takes once its gateway prefix is removed: equal paths and configured base paths, never a suffix, and only with a segment both state as text. */
+const behindGatewayRung: Rung = (call, method, routes) => {
+  const stripped = { ...call, segments: call.segments.slice(1) };
+  const evidenced = routes.filter((route) => {
+    if (!accepts(route, method)) return false;
+    const unified = matched(unify(stripped.segments, routeSegments(route.path))) ?? basePathKeys(route).flatMap(({ keys }) => keys).map((key) => matched(unify(stripped.segments, [...routeSegments(key), ...routeSegments(route.path)]))).find((found) => found !== undefined);
+    return unified !== undefined && unified.literals > 0;
+  });
+  return exactRung(stripped, method, evidenced) ?? basePathRung(stripped, method, evidenced);
+};
 
 function httpRoutes(repository: RepositoryEntrypoints): HttpRoute[] {
   return repository.entrypoints.flatMap((entrypoint) => (entrypoint.kind === "http-route" ? [entrypoint] : []));
@@ -131,18 +167,14 @@ function httpRoutes(repository: RepositoryEntrypoints): HttpRoute[] {
 /** The first path segment of a call, which is the prefix a gateway routes. */
 export function prefixOf(target: HttpTarget): string | undefined {
   if (/^[a-z][a-z0-9+.-]*:/i.test(target.path) && !/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i.test(target.path)) return undefined;
-  const [first] = pathSegments(target.path);
-  return first === undefined || first === PARAMETER ? undefined : first;
+  const [first] = callTemplate({ path: target.path }).segments;
+  return first === undefined ? undefined : literalText(first);
 }
 
-function withoutPrefix(target: HttpTarget): HttpTarget {
-  return { ...target, path: `/${pathSegments(target.path).slice(1).join("/")}` };
-}
-
-/** What the call matches once its gateway prefix is removed: equal paths and configured base paths, never a suffix. */
-export function matchBehindGateway(target: HttpTarget, routes: readonly HttpRoute[]): Match | undefined {
-  const stripped = withoutPrefix(target);
-  return exactMatch(stripped, routes) ?? basePathMatch(stripped, routes);
+/** The routes a call takes once its gateway prefix is removed, by equal paths and configured base paths: one, or several equally. */
+export function servedBehindGateway(target: HttpTarget, routes: readonly HttpRoute[]): readonly HttpRoute[] {
+  const landing = behindGatewayRung(callTemplate({ path: target.path }), target.method, routes);
+  return landing === undefined ? [] : "tie" in landing ? landing.tie : [landing.match.route];
 }
 
 function linkTo(site: CallSite, repo: string, match: Match): Link {
@@ -157,15 +189,19 @@ function linkTo(site: CallSite, repo: string, match: Match): Link {
   return { ...link, id: linkIdentity(link) };
 }
 
-/** The one repository a rung of the ladder lands in; two repositories make it ambiguous, never a pick. */
-function atRung(rung: (target: HttpTarget, routes: readonly HttpRoute[]) => Match | undefined, target: HttpTarget, repositories: readonly RepositoryEntrypoints[]): { repo: string; match: Match } | { ambiguous: readonly string[] } | undefined {
+type Landed = { repo: string; match: Match } | { ambiguous: readonly string[]; routes: readonly string[] };
+
+/** The one repository a rung of the ladder lands in, on one route; two repositories, or two routes taken equally, are ambiguous, never a pick. */
+function atRung(rung: Rung, call: CallTemplate, method: HttpTarget["method"], repositories: readonly RepositoryEntrypoints[]): Landed | undefined {
   const landed = repositories.flatMap((repository) => {
-    const match = rung(target, httpRoutes(repository));
-    return match === undefined ? [] : [{ repo: repository.repo, match }];
+    const landing = rung(call, method, httpRoutes(repository));
+    return landing === undefined ? [] : [{ repo: repository.repo, landing }];
   });
   const [first, ...rest] = landed;
   if (first === undefined) return undefined;
-  return rest.length === 0 ? first : { ambiguous: landed.map((candidate) => candidate.repo).sort(compareText) };
+  if (rest.length === 0 && "match" in first.landing) return { repo: first.repo, match: first.landing.match };
+  const routes = landed.flatMap(({ landing }) => ("match" in landing ? [landing.match.route.name] : landing.tie.map((route) => route.name)));
+  return { ambiguous: landed.map((candidate) => candidate.repo).sort(compareText), routes: [...new Set(routes)].sort(compareText) };
 }
 
 /** The one route of one repository a declared operation lands on, or the repositories that serve it equally. */
@@ -176,9 +212,10 @@ export type DeclaredOperationMatch = { repo: string; route: HttpRoute } | { ambi
  * path, then the base path a route's configuration adds. Two repositories serving it equally are ambiguous, never a pick.
  */
 export function matchDeclaredOperation(target: HttpTarget, repositories: readonly RepositoryEntrypoints[]): DeclaredOperationMatch | undefined {
-  const landed = atRung(exactMatch, target, repositories) ?? atRung(basePathMatch, target, repositories);
-  if (landed === undefined || "ambiguous" in landed) return landed;
-  return { repo: landed.repo, route: landed.match.route };
+  const call = callTemplate(target);
+  const landed = atRung(exactRung, call, target.method, repositories) ?? atRung(basePathRung, call, target.method, repositories);
+  if (landed === undefined) return undefined;
+  return "ambiguous" in landed ? { ambiguous: landed.ambiguous } : { repo: landed.repo, route: landed.match.route };
 }
 
 /**
@@ -188,21 +225,22 @@ export function matchDeclaredOperation(target: HttpTarget, repositories: readonl
  * the service's drift.
  */
 export function matchCallSite(site: CallSite, target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): JoinResult {
+  const call = callTemplate(target);
   const prefix = prefixOf(target);
-  const settled = (landed: ReturnType<typeof atRung>, basis?: Gateway["basis"]): JoinResult | undefined => {
+  const settled = (landed: Landed | undefined, basis?: Gateway["basis"]): JoinResult | undefined => {
     if (landed === undefined) return undefined;
-    if ("ambiguous" in landed) return { ambiguous: { key: prefix ?? target.path, repos: landed.ambiguous } };
-    return { links: [linkTo(site, landed.repo, basis === undefined ? landed.match : { ...landed.match, basis, confidence: landed.match.confidence })] };
+    if ("ambiguous" in landed) return { ambiguous: { key: prefix ?? target.path, repos: landed.ambiguous, routes: landed.routes } };
+    return { links: [linkTo(site, landed.repo, basis === undefined ? landed.match : { ...landed.match, basis })] };
   };
-  const exact = settled(atRung(exactMatch, target, repositories));
+  const exact = settled(atRung(exactRung, call, target.method, repositories));
   if (exact !== undefined) return exact;
 
   const gateway = gateways.find((candidate) => candidate.prefix === prefix);
   if (gateway !== undefined) {
     const served = repositories.filter((repository) => repository.repo === gateway.repo);
-    return settled(atRung(matchBehindGateway, target, served), gateway.basis) ?? { unmatched: target.path };
+    return settled(atRung(behindGatewayRung, call, target.method, served), gateway.basis) ?? { unmatched: target.path };
   }
-  const found = settled(atRung(basePathMatch, target, repositories)) ?? settled(atRung(suffixMatch, target, repositories));
+  const found = settled(atRung(basePathRung, call, target.method, repositories)) ?? settled(atRung(suffixRung, call, target.method, repositories));
   if (found !== undefined) return found;
   return prefix !== undefined && repositories.some((repository) => repository.repo === prefix) ? { unmatched: target.path } : {};
 }
@@ -223,7 +261,7 @@ export function inferGateways(calls: readonly CallSite[], repositories: readonly
   const inferred: Gateway[] = [];
   for (const [prefix, calling] of byPrefix) {
     if (declared.some((gateway) => gateway.prefix === prefix)) continue;
-    const serving = repositories.filter((repository) => calling.some(({ target, from }) => from !== repository.repo && matchBehindGateway(target, httpRoutes(repository)) !== undefined));
+    const serving = repositories.filter((repository) => calling.some(({ target, from }) => from !== repository.repo && servedBehindGateway(target, httpRoutes(repository)).length > 0));
     const [only, ...others] = serving;
     if (only !== undefined && others.length === 0) inferred.push({ prefix, repo: only.repo, basis: "route-overlap" });
   }
@@ -253,7 +291,7 @@ function sameSubject(published: string, consumed: string): boolean {
     if (token === NATS_REST) return index < tokens.length;
     const own = tokens[index];
     if (own === undefined) return false;
-    if (token !== NATS_ONE_TOKEN && own !== PARAMETER && token !== own) return false;
+    if (token !== NATS_ONE_TOKEN && own !== RUN_TIME_HOLE && token !== own) return false;
   }
   return index === tokens.length;
 }

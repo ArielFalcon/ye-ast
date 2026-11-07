@@ -329,7 +329,7 @@ export const partSchema = z.discriminatedUnion("kind", [
     site: unresolvedCallSiteSchema,
   }),
   part("unlinked-call-site", {
-    site: z.strictObject({ from: linkEndpoints.from, transport, outcome: z.enum(["unmatched", "ambiguous"]), name: z.string(), repos: strings.exactOptional() }),
+    site: z.strictObject({ from: linkEndpoints.from, transport, outcome: z.enum(["unmatched", "ambiguous"]), name: z.string(), repos: strings.exactOptional(), routes: strings.exactOptional() }),
   }),
   part("workspace-link", {
     link: z.strictObject({

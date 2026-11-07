@@ -10,7 +10,8 @@ import { complete, placed, spanOf, unknown, withEvidence } from "./findings.ts";
 import { argumentsOf, typeNameOf } from "./java-members.ts";
 import { ancestorsOf, receiverOf, symbolOf, type Invocation } from "./java-invocations.ts";
 import { qualifiedTypeName, scopeOf, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
-import { PLACEHOLDER, JavaValueEvaluator } from "./java-value-evaluator.ts";
+import { JavaValueEvaluator } from "./java-value-evaluator.ts";
+import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 
 /** One publish call: where it is written, the client that publishes and the argument that names the destination. */
 interface Publish {
@@ -118,7 +119,7 @@ export class JavaEventReader {
   private destination(publish: Publish, scope: UrlScope): string | undefined {
     if (publish.client.byType === true) return this.eventType(publish.argument, scope);
     const text = this.text.of(publish.argument, scope);
-    return text === undefined || text.split(TOKEN_SEPARATOR).every((token) => token === PLACEHOLDER) ? undefined : text;
+    return text === undefined || text.split(TOKEN_SEPARATOR).every((token) => token === RUN_TIME_HOLE) ? undefined : text;
   }
 
   /** The qualified type of an event expression: an instantiation, or a name whose declared type the sources state. */

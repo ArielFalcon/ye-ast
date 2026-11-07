@@ -1024,7 +1024,7 @@ test("a call the join reaches without a link is an explicit outcome: unmatched u
 
   assert.deepEqual(value.links, []);
   assert.deepEqual(value.unlinked, [
-    { from: { repo: "shop-web", file: "src/app/shop-web.api.ts", line: 3, symbol: "shop-web.call3" }, transport: "http", outcome: "ambiguous", name: "shared", repos: ["billing", "orders"] },
+    { from: { repo: "shop-web", file: "src/app/shop-web.api.ts", line: 3, symbol: "shop-web.call3" }, transport: "http", outcome: "ambiguous", name: "shared", repos: ["billing", "orders"], routes: ["POST /shared"] },
     { from: { repo: "shop-web", file: "src/app/shop-web.api.ts", line: 5, symbol: "shop-web.call5" }, transport: "http", outcome: "unmatched", name: "/orders/missing" },
   ]);
   const section = value.sections["shop-web"];
