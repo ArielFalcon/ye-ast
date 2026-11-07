@@ -11,7 +11,7 @@ import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-ori
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { ModuleDependencies, ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
-import { createGraphNavigation } from "./graph-navigation.ts";
+import { createGraphNavigation, isInside } from "./graph-navigation.ts";
 import { declarationAt, importBindings } from "./import-bindings.ts";
 
 /**
@@ -104,20 +104,26 @@ const IMPORT = "imports";
 /** Declarations that hold a value, which a call may find any object in. */
 const VALUE_KINDS: readonly string[] = ["constant", "variable"];
 /** The types whose members a value receiver may stand for, and a receiver's store or annotation may name. */
-const TYPE_KINDS: readonly string[] = ["class", "component", "interface"];
+const TYPE_KINDS: readonly string[] = EDGE_POLICY.ownerKinds;
 /** The declarations that can own a local an `inject()` call initializes. */
 const LOCAL_OWNER_KINDS: readonly string[] = [...EDGE_POLICY.relations.from, "function"];
 
-const bindingKey = (line: number, column: number, member: string): string => `${line}:${column}:${member}`;
+export const bindingKey = (line: number, column: number, member: string): string => `${line}:${column}:${member}`;
+
+/** A source's receiver bindings by `bindingKey`; a place two bindings name is ambiguous. */
+export function receiverBindingsByPlace(found: readonly ReceiverBinding[]): ReadonlyMap<string, ReceiverBinding | "ambiguous"> {
+  const byPlace = new Map<string, ReceiverBinding | "ambiguous">();
+  for (const binding of found) {
+    const key = bindingKey(binding.line, binding.column, binding.member);
+    byPlace.set(key, byPlace.has(key) ? "ambiguous" : binding);
+  }
+  return byPlace;
+}
 
 interface SyntaxIndex {
   receiverBindings: ReadonlyMap<string, ReceiverBinding | "ambiguous">;
   /** The callee each call starting at a place spells, without white space, by `line:column`. */
   callees: ReadonlyMap<string, readonly string[]>;
-}
-
-function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
-  return inner.file === outer.file && outer.startLine <= inner.startLine && inner.endLine <= outer.endLine;
 }
 
 export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs }: EdgeTargetsDeps): EdgeTargets {
@@ -127,14 +133,9 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs }:
   const syntaxIn = (read: (file: string) => Promise<DeclaredMemberNames>, file: string): Promise<SyntaxIndex> => {
     let held = syntaxIndexes.get(file);
     if (held === undefined) {
-      held = read(file).then(({ receiverBindings: found, calls }) => {
-        const byPlace = new Map<string, ReceiverBinding | "ambiguous">();
-        for (const binding of found) {
-          const key = bindingKey(binding.line, binding.column, binding.member);
-          byPlace.set(key, byPlace.has(key) ? "ambiguous" : binding);
-        }
+      held = read(file).then(({ receiverBindings, calls }) => {
         const callees = Map.groupBy(calls ?? [], (call) => `${call.line}:${call.column}`);
-        return { receiverBindings: byPlace, callees: new Map([...callees].map(([place, at]) => [place, at.map((call) => call.name.replace(/\s+/g, ""))])) };
+        return { receiverBindings: receiverBindingsByPlace(receiverBindings), callees: new Map([...callees].map(([place, at]) => [place, at.map((call) => call.name.replace(/\s+/g, ""))])) };
       });
       syntaxIndexes.set(file, held);
     }
@@ -235,9 +236,8 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs }:
     if (receiver === "" || syntaxOf === undefined) return false;
     const syntax = await syntaxIn(syntaxOf, source.file);
     const callees = syntax.callees.get(`${line}:${column}`) ?? [];
-    const declaredAt = (ref: SymbolRef, kinds: readonly string[]): GraphSymbol | undefined => navigation.declarationAt(ref, kinds);
     const enclosing = (owner: SymbolRef, kinds: readonly string[]): boolean => {
-      const declaration = declaredAt(owner, kinds);
+      const declaration = navigation.declarationAt(owner, kinds);
       return declaration !== undefined && isInside(source, declaration);
     };
     const origin = callees.includes(`this.${receiver}.${target.name}`)
@@ -246,11 +246,11 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs }:
         ? single(held.locals.filter((local) => local.local === receiver && enclosing(local.owner, LOCAL_OWNER_KINDS)))
         : "unbound";
     if (origin === "unbound") return false;
-    if (origin !== undefined) return "class" in origin.holds && declares(declaredAt(origin.holds.class, TYPE_KINDS));
+    if (origin !== undefined) return "class" in origin.holds && declares(navigation.declarationAt(origin.holds.class, TYPE_KINDS));
     const bound = syntax.receiverBindings.get(bindingKey(line, column, target.name));
     if (bound === undefined || bound === "ambiguous" || bound.receiver !== receiver) return false;
     const holds = bound.holds;
-    if (holds.kind === "declared") return declares(declaredAt({ path: source.file, line: holds.line, symbol: holds.name }, TYPE_KINDS));
+    if (holds.kind === "declared") return declares(navigation.declarationAt({ path: source.file, line: holds.line, symbol: holds.name }, TYPE_KINDS));
     if (holds.kind === "annotated") return declares(await typeNamed(source.file, holds.type));
     if (holds.kind === "constructed") return declares(await typeNamed(source.file, holds.name));
     return false;

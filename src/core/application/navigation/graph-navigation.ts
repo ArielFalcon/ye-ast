@@ -25,6 +25,11 @@ export interface GraphNavigation {
   referencesThrough(file: string, receiver: string): readonly GraphUnresolvedReference[];
 }
 
+/** Whether `inner` is declared within the lines of `outer`, in the same file. */
+export function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
+  return inner.file === outer.file && outer.startLine <= inner.startLine && inner.endLine <= outer.endLine;
+}
+
 export function createGraphNavigation(reader: CodeGraphReader, isTestFile: (path: string) => boolean): GraphNavigation {
   const known = new Map<GraphNodeId, GraphSymbol | undefined>();
   const load = (ids: readonly GraphNodeId[]): void => {

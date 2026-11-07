@@ -7,7 +7,7 @@ import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-orig
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
+import { createGraphNavigation, isInside, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { edgeKey, type FollowedEdge } from "../navigation/edge-targets.ts";
 
 /**
@@ -90,9 +90,6 @@ export interface EdgeCorrections {
 
 const NO_CORRECTIONS: EdgeCorrections = { dropped: new Set(), into: new Map() };
 
-function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
-  return inner.file === outer.file && outer.startLine <= inner.startLine && inner.endLine <= outer.endLine;
-}
 const USAGE_EDGES = ["calls", "instantiates", "references"];
 
 /** The declarations a relation ends at, and the only ones that can own a local an `inject()` call initializes. */

@@ -18,7 +18,7 @@ import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
 import type { RelationExtraction } from "../relations/relation-extractor.ts";
-import type { EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
+import { bindingKey, receiverBindingsByPlace, type EdgeTargets, type FollowedEdge } from "../navigation/edge-targets.ts";
 import { createDeclarationUses, unsettledBy, type UnresolvedIn } from "../navigation/declaration-uses.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
@@ -103,8 +103,6 @@ const PLAIN_CHAIN = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)+$/;
 type ProvenCall = { kind: "member"; receiver: SymbolRef; member: SymbolRef } | { kind: "external"; holds: string } | { kind: "replaceable" };
 
 const provenKey = (file: string, line: number, column: number, name: string): string => JSON.stringify([file, line, column, name]);
-
-const bindingKey = (line: number, column: number, member: string): string => `${line}:${column}:${member}`;
 
 /**
  * What an external leaf names: a module, or the member path it calls from a global (none for a call nothing roots) and
@@ -202,12 +200,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const { callables, functionValueCalls, receiverBindings } = await syntaxOf(file);
     const byName = new Map<string, DeclaredCallable[]>();
     for (const callable of callables) byName.set(callable.name, [...(byName.get(callable.name) ?? []), callable]);
-    const bindings = new Map<string, ReceiverBinding | "ambiguous">();
-    for (const binding of receiverBindings) {
-      const key = bindingKey(binding.line, binding.column, binding.member);
-      bindings.set(key, bindings.has(key) ? "ambiguous" : binding);
-    }
-    return { callables: byName, functionValueCalls: new Set(functionValueCalls.map(functionValueKey)), receiverBindings: bindings };
+    return { callables: byName, functionValueCalls: new Set(functionValueCalls.map(functionValueKey)), receiverBindings: receiverBindingsByPlace(receiverBindings) };
   });
   /**
    * What the relations prove a member call runs, by its place: a repository method of the class a field or local holds
@@ -432,7 +425,6 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     });
     const passed = uses.followed(node, values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));
     const verdicts = await targets.verdictsOf([...called, ...passed], signal);
-    /** The kept edges into a member of a class the index matched by name on a value receiver (ADR-0029 decision 11), by their index. */
     const valueRoots = new Map(
       [...called, ...passed].flatMap(({ target }, index) => {
         const verdict = verdicts[index]!;

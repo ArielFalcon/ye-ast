@@ -3,7 +3,7 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import type { ConsumerCaller, ConsumerCallers, ConsumerMemberOccurrence, ConsumerMemberOccurrences, MemberReceiver } from "../../ports/consumer-sources.port.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { InboundOccurrence, InboundOccurrences } from "../impact/inbound-edges.ts";
-import { createGraphNavigation } from "../navigation/graph-navigation.ts";
+import { createGraphNavigation, isInside } from "../navigation/graph-navigation.ts";
 
 /**
  * The places the function declared at `line` of `file` is depended on, as the impact families see them: the graph's
@@ -58,10 +58,6 @@ function candidatesThroughFields(store: CodeGraphReader, inbound: InboundOccurre
     .unresolvedReferences([...files])
     .filter((reference) => (EDGE_POLICY.fieldMemberUses as readonly string[]).includes(reference.kind) && reference.name.endsWith(named) && reference.name.length > named.length)
     .map((reference) => ({ file: reference.file, line: reference.line, column: 1, receiver: reference.name === `this${named}` ? "this" : "injected" }));
-}
-
-function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
-  return inner.file === outer.file && outer.startLine <= inner.startLine && inner.endLine <= outer.endLine;
 }
 
 function callerOf(occurrence: InboundOccurrence): ConsumerCaller {
