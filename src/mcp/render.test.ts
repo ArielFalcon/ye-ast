@@ -271,7 +271,11 @@ const useAt = (n: number, verdict: object) => ({ status: "complete", value: { re
 
 /** Every hypothesis unknown but one, a change with no derived hypothesis for it, and a derivation cut: nothing here may read as safe. */
 function consequences(findings: object[]): Fact<ConsequencesValue> {
-  const derivation = { ...base, status: "partial", cuts: [{ kind: "deadline", at: ["src/Gone.java"] }], value: { gained: [], operations: { added: ["GET /new"], removed: [] }, frontiers: [
+  const derivation = { ...base, status: "partial", cuts: [{ kind: "deadline", at: ["src/Gone.java"] }], value: { differences: [
+    { rule: "operation-added", level: "compatible", target: "operation", operation: "GET /new", delta: "added", places: { head: { repo: "api", path: "openapi.yaml", line: 30 } } },
+    { rule: "response-property-became-nullable", level: "breaking", target: "response", operation: "GET /pets", property: "name", delta: "introduced-null", places: { base: { repo: "api", path: "openapi.yaml", line: 12 }, head: { repo: "api", path: "openapi.yaml", line: 12 } } },
+    { rule: "response-property-constraint-narrowed", level: "compatible", target: "response", operation: "GET /pets", property: "name", delta: "constraint-narrowed", subject: "maxLength", base: 9, head: 3, places: { base: { repo: "api", path: "openapi.yaml", line: 12 }, head: { repo: "api", path: "openapi.yaml", line: 14 } } },
+  ], frontiers: [
     { status: "unknown", reason: "unresolved", kind: "unserved-operation", operation: "GET /pets", evidence: [{ repo: "api", path: "openapi.yaml", line: 12 }] },
     { status: "unknown", reason: "source-unreadable", kind: "unreadable-contract", side: "base", evidence: [{ repo: "api", path: "openapi.yaml", line: 1 }] },
   ] } };
@@ -299,13 +303,17 @@ test("a contract consequences summary counts each answer's verdicts and keeps it
   for (const text of [summary, details]) {
     assert.match(text, /unknown \(no-project\): no repository serves GET \/vets/);
     assert.match(text, /status: partial \(cuts: 1 deadline\)/);
-    assert.match(text, /operations added \(1\): GET \/new/);
     assert.match(text, /unserved-operation \(unresolved\)/);
     assert.match(text, /unreadable-contract \(source-unreadable\)/);
     assert.match(text, /status: partial \(cuts: 1 section: change.derivation\)/);
   }
   assert.match(summary, /13 findings: 4 admits, 4 incompatible, 4 review, 1 unknown \(source-unreadable\)/);
   assert.doesNotMatch(summary, /src\/use-1\.ts/);
+  assert.match(summary, /differences \(3\): 2 compatible, 1 breaking/);
+  assert.doesNotMatch(summary, /response-property-became-nullable/);
+  assert.ok(details.includes("    - breaking response-property-became-nullable GET /pets name at api:openapi.yaml:12"));
+  assert.ok(details.includes("    - compatible response-property-constraint-narrowed GET /pets name (maxLength: 9 -> 3) at api:openapi.yaml:14"));
+  assert.ok(details.includes("    - compatible operation-added GET /new at api:openapi.yaml:30"));
   assert.match(summary, /frontiers \(2\): 1 unreadable-contract \(source-unreadable\), 1 unserved-operation \(unresolved\)/);
   for (let n = 1; n <= 12; n++) assert.ok(details.includes(`at web:src/use-${n}.ts:${n};`), `finding ${n}`);
   assert.ok(details.includes("at web:src/broken.ts:99"));

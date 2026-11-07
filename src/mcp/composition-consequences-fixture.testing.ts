@@ -73,7 +73,7 @@ const responseAnswer: HypothesisAnswer = {
   status: "complete",
   hypothesis: { method: "GET", path: "/api/orders/{id}", target: "response", property: "customer", change: "removed" },
   oldContract: OLD_GUARANTEE,
-  derivedFrom: { operation: "GET /api/orders/{id}", property: "customer", places: { base: CONTRACT_BASE, head: CONTRACT_HEAD } },
+  derivedFrom: { operation: "GET /api/orders/{id}", property: "customer", rules: ["response-property-became-nullable"], places: { base: CONTRACT_BASE, head: CONTRACT_HEAD } },
   findings: [incompatibleUse, guardedUse, frontier],
 };
 
@@ -92,7 +92,7 @@ export function consequencesValue(): ConsequencesValue {
       base: "main", head: "HEAD", snapshots: { base: SHA_C, head: SHA_A },
       derivation: {
         ...factOf({
-          gained: [], operations: { added: [], removed: [] },
+          differences: [],
           frontiers: [{ status: "unknown", reason: "unresolved", kind: "unknown-shape", operation: "GET /api/orders/{id}", property: "customer", evidence: [DERIVATION_FRONTIER_PLACE] }],
         }, { snapshot: shaRef(API, SHA_A) }),
       },

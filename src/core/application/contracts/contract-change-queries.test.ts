@@ -281,13 +281,31 @@ test("the hypotheses a change derives are answered on one preparation in the ord
   const { fact, value, change } = await composite(ask());
 
   assert.deepEqual(events.filter((event) => !event.startsWith("read")), ["open", "session GET /pets city", "session GET /pets zip", "session GET /zoo city", "session GET /zoo zip", "close"]);
-  assert.deepEqual(value.answers.map(({ derivedFrom }) => [derivedFrom?.operation, derivedFrom?.property]), [["GET /pets", "city"], ["GET /pets", "zip"], ["GET /zoo", "city"], ["GET /zoo", "zip"]]);
+  assert.deepEqual(value.answers.map(({ derivedFrom }) => [derivedFrom?.operation, derivedFrom?.property, derivedFrom?.rules]), [
+    ["GET /pets", "city", ["response-property-became-nullable"]],
+    ["GET /pets", "zip", ["response-property-became-nullable"]],
+    ["GET /zoo", "city", ["response-property-became-nullable"]],
+    ["GET /zoo", "zip", ["response-property-became-nullable"]],
+  ]);
   assert.deepEqual(value.answers[0]!.derivedFrom!.places, { base: { path: "api/openapi.json", line: 2, via: "declared", repo: "web" }, head: { path: "api/openapi.json", line: 2, via: "declared", repo: "web" } });
   assert.deepEqual(value.answers[0]!.oldContract, TEXT.values);
   assert.deepEqual([change.base, change.head, change.snapshots], ["base", "head", { base: "base", head: "head" }]);
   assert.deepEqual([fact.inputs.declaredConfig.base, fact.inputs.declaredConfig.head, value.repositorySnapshots], ["base", "head", SNAPSHOTS]);
   assert.equal(change.derivation.status, "complete");
   assert.deepEqual([fact.status, sectionCuts(fact)], ["partial", ["answers.0", "answers.1", "answers.2", "answers.3"]]);
+});
+
+test("the derivation lists every classified difference with its rule, level and places in the repository; an operation one revision declares has only that revision's place", async () => {
+  const base = [fileOf("api/openapi.json", [{ path: "/pets", shape: object(property("city", NULLABLE_TEXT)) }, { path: "/gone" }])];
+  const head = [fileOf("api/openapi.json", [{ path: "/pets", shape: object(property("city", TEXT), optional("zip", TEXT)) }])];
+  const { change } = await composite(setup({ base, head }).ask());
+  assert.ok(change.derivation.status === "complete");
+  const place = (line: number) => ({ path: "api/openapi.json", line, via: "declared", repo: "web" });
+  assert.deepEqual(change.derivation.value.differences, [
+    { rule: "operation-removed", level: "breaking", target: "operation", operation: "GET /gone", delta: "removed", places: { base: place(2) } },
+    { rule: "response-property-became-non-nullable", level: "compatible", target: "response", operation: "GET /pets", property: "city", delta: "retired-null", places: { base: place(1), head: place(1) } },
+    { rule: "response-optional-property-added", level: "compatible", target: "response", operation: "GET /pets", property: "zip", delta: "added-optional", places: { base: place(1), head: place(1) } },
+  ]);
 });
 
 test("both revisions read and compared with nothing derived is a complete composite that still holds the change, and a frontier it recorded makes it visible without making it partial", async () => {

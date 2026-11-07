@@ -7,7 +7,7 @@ import { ANYTHING, LITERAL_CLASSES, type KnownShape, type LiteralClass, type Sha
 import type { Literal } from "./use-operation.ts";
 
 /** A value the head no longer permits and the derivation lists without following: a literal class narrowed or gone counts as the class. */
-export type RetiredValue = "null" | "absence" | "array" | "object" | LiteralClass;
+type RetiredValue = "null" | "absence" | "array" | "object" | LiteralClass;
 
 /** What a change did at one place, in the order a derivation lists them for a place. */
 export const SHAPE_DELTAS = [

@@ -1,9 +1,9 @@
 import { formatAccessPath } from "../../domain/contracts/access-path.ts";
-import type { ChangeFrontier, ConsequencesValue, DerivationValue } from "../../domain/contracts/consequence-fact.ts";
+import type { ChangeFrontier, ClassifiedDifference, ConsequencesValue, DerivationValue } from "../../domain/contracts/consequence-fact.ts";
 import type { ResponseHypothesis } from "../../domain/contracts/hypothesis.ts";
 import { CONTRACT_CHANGE_RULES, type ContractChangeRule, type OperationDelta, type RuleTarget } from "../../domain/contracts/contract-change-rules.ts";
 import type { OperationShape } from "../../domain/contracts/payload-shape.ts";
-import { deriveChanges, type DerivationFrontier, type RetiredValue, type ShapeDelta } from "../../domain/contracts/shape-derivation.ts";
+import { deriveChanges, type DerivationFrontier, type ShapeDelta } from "../../domain/contracts/shape-derivation.ts";
 import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { withCuts, type Evidence, type UnknownReason } from "../../domain/shared/fact.ts";
@@ -51,16 +51,14 @@ export function createContractChange({ sources, revisions, shapes }: ContractCha
       let derivation: NonNullable<ConsequencesValue["change"]>["derivation"] = { ...derivationBase, status: "unknown", reason: "revision-unavailable" };
       if (before.ok && after.ok) {
         const plan = planChange(before.value.files, after.value.files, shapes, prepared.serving);
-        for (const { hypothesis, operation, property, places } of plan.hypotheses) answered.push(await answerOn(prepared, factBase, hypothesis, { operation, property, places: { base: place(places.base), head: place(places.head) } }));
+        for (const { hypothesis, operation, property, rules, places } of plan.hypotheses) answered.push(await answerOn(prepared, factBase, hypothesis, { operation, property, rules, places: { base: place(places.base), head: place(places.head) } }));
         const value: DerivationValue = {
-          gained: plan.differences.flatMap(({ target, delta, subject, operation, property, places }) => {
-            const retired = target === "response" ? retiredOf(delta, subject) : undefined;
-            return retired === undefined || property === undefined ? [] : [{ operation, property, retired, places: { base: place(places.base!), head: place(places.head!) } }];
-          }),
-          operations: {
-            added: plan.differences.flatMap(({ target, delta, operation }) => (target === "operation" && delta === "added" ? [operation] : [])),
-            removed: plan.differences.flatMap(({ target, delta, operation }) => (target === "operation" && delta === "removed" ? [operation] : [])),
-          },
+          differences: plan.differences.map(({ rule, places, ...difference }): ClassifiedDifference => ({
+            rule: rule.id,
+            level: rule.level,
+            ...difference,
+            places: { ...(places.base === undefined ? {} : { base: place(places.base) }), ...(places.head === undefined ? {} : { head: place(places.head) }) },
+          })),
           frontiers: plan.frontiers.map(({ evidence, reason, ...frontier }): ChangeFrontier => ({ status: "unknown", reason: reason ?? defaultReason(frontier.kind), ...frontier, evidence: evidence.map(place) })),
         };
         derivation = withCuts(derivationBase, value, [...prepared.cuts, ...before.value.cuts, ...after.value.cuts]);
@@ -69,9 +67,6 @@ export function createContractChange({ sources, revisions, shapes }: ContractCha
     });
   };
 }
-
-const retiredOf = (delta: PlannedDifference["delta"], subject: string | undefined): RetiredValue | undefined =>
-  delta === "retired-null" ? "null" : delta === "retired-absence" ? "absence" : delta === "retired-class" ? (subject as RetiredValue) : undefined;
 
 const defaultReason = (kind: ChangeFrontier["kind"]): UnknownReason => (kind === "unreadable-contract" ? "source-unreadable" : "unresolved");
 

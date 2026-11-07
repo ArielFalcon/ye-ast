@@ -392,7 +392,7 @@ reference the reader cannot resolve keeps its file among the shape's sources, so
 value set as the old guarantee), the base and head places in the contract as evidence, and its consequences as P2
 answers them, on the head snapshot, from one prepared workspace (P3). Gained guarantees are listed, not followed. An
 `unknown` shape or an unsupported delta is a frontier at its contract place. Operations the head no longer declares, or
-newly declares, are listed by name (the `impact` family reports them) and derive no hypothesis.
+newly declares, are listed with their place and derive no hypothesis. P6 lists all of these as classified differences.
 
 **Cost.** Shapes are read only for operations whose contract files the change touched; each pair of schema nodes is
 compared once; the consequence walks are those of the declared form, over one prepared workspace.
@@ -571,6 +571,13 @@ cannot.
 An operation only the head declares is `operation-added` (compatible); one only the base declares is
 `operation-removed` (breaking). The rows are typed as one per delta, so a delta without a rule does not compile. Rule
 ids are part of the answer and change with the producer version (ADR-0024); no fact that holds them is stored.
+
+**Answer.** The derivation section lists every difference once, in the order of the operations (each operation's own
+first, then its properties'), with its rule id, level, side of the exchange (`operation` or `response`), operation,
+property, delta, the class or keyword it names with the keyword's value at each revision, and the operation's contract
+place at each revision that declares it. It replaces the separate lists of gained guarantees and of added and removed
+operations. A derived answer's `derivedFrom` names the rules of the differences its hypothesis answers; the other
+differences are listed and not followed.
 
 **Ownership.** `impact` keeps its digest comparison: it answers which code a change reaches, and the consequences family
 is the one owner of what the difference means.
