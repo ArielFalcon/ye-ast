@@ -1,5 +1,6 @@
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import type { DeclaredScope, Finding, TrustMode } from "../../domain/shared/fact.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { PathSelection } from "../../domain/shared/scope.ts";
 import type { ScratchDirectory } from "../../ports/scratch-directory.port.ts";
@@ -7,6 +8,7 @@ import { isInMapScope } from "../../domain/map/entrypoint-map.ts";
 import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
+import { createDerivedFacts } from "./derived-facts.ts";
 import { ABORTED, extractSources, listExport, readSources, withScratch, type CommitExtraction, type SnapshotData, type SnapshotReaderDeps, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
 
 type Sources = Pick<CommitExtraction, "export" | "sources">;
@@ -37,13 +39,16 @@ export interface SnapshotRetention {
   keepSources(sources: readonly SourceFile[]): void;
   keepFindings(sources: readonly SourceFile[], findings: readonly Finding<Entrypoint>[]): void;
   output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal): Promise<T>;
+  /** The derived facts of the files read under this snapshot's trust, kept by their content (ADR-0035). */
+  facts: DerivedFacts;
 }
 
-export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache" | "digest">, identity: string, listing: object): SnapshotRetention | undefined {
+export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache" | "digest">, identity: string, listing: object, trust: TrustMode): SnapshotRetention | undefined {
   const cache = deps.snapshotCache;
   if (cache === undefined) return undefined;
   let entry: string | undefined;
   return {
+    facts: createDerivedFacts(cache, deps.digest, trust),
     lookup() {
       entry ??= deps.digest.of(canonicalJson({ key: identity, listing }));
       return cache.get(entry);
@@ -95,7 +100,7 @@ export async function prepareCommit(
       const answer = await (written ??= listed.value.materialize(signal));
       return signal?.aborted ? ABORTED : answer;
     };
-    const retention = snapshotRetention(deps, identity, writtenListing(exported.value));
+    const retention = snapshotRetention(deps, identity, writtenListing(exported.value), context.trust);
     let loaded: Sources | undefined;
     let extracted: CommitExtraction | undefined;
     const sources = async (signal?: AbortSignal): Promise<Result<Sources, VcsFault>> => {
@@ -137,7 +142,7 @@ export async function prepareCommit(
           }
           return answer;
         },
-        ...(retention === undefined ? {} : { retained: retention.output }),
+        ...(retention === undefined ? {} : { retained: retention.output, facts: retention.facts }),
       },
     };
   };

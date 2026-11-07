@@ -296,8 +296,7 @@ const shapes = {
       head: z.string(),
       snapshots: z.looseObject({ base: z.string(), head: z.string() }),
       derivation: factOf(z.looseObject({
-        gained: z.array(z.looseObject({ operation: z.string(), property: z.string() })),
-        operations: z.looseObject({ added: strings, removed: strings }),
+        differences: z.array(z.looseObject({ rule: z.string(), level: z.enum(["breaking", "review", "compatible"]), target: z.string(), operation: z.string(), delta: z.string(), places: z.looseObject({ base: repositoryEvidence.optional(), head: repositoryEvidence.optional() }) })),
         frontiers: z.array(z.looseObject({ kind: z.string(), reason: z.string(), evidence: z.array(repositoryEvidence) })),
       })),
     }).optional(),

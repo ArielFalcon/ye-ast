@@ -9,12 +9,14 @@ import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { readsPastRoot, type RootOrigin } from "../../domain/impact/edge-policy.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { DeclaredType, ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
-import { moduleResolverOf, packageOf } from "./module-resolver.ts";
+import { moduleResolverOf, packageOf, rememberedModuleResolver } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
-import { parseAngularRouteFile } from "./angular-router.extractor.ts";
+import { moduleShape } from "./module-shape.ts";
+import { unwrapped } from "./syntax.ts";
 import { createExportLookup, type ModuleShape } from "./declaration-lookup.ts";
 
 /** The names the pinned `typescript` declares, held once for the process rather than rebuilt per query. */
@@ -46,14 +48,26 @@ const parseShared: ParseSource = (file) => sourceTree(file, ts.ScriptTarget.Late
  * files the snapshot already holds. A file that declares a name it also imports is `unknown` for that name, because the
  * declaration may shadow the import at the place the reference sits.
  */
-export function createImportOrigins(sources: readonly SourceFile[], parse: ParseSource = parseShared): ImportOrigins {
+export function createImportOrigins(sources: readonly SourceFile[], { parse = parseShared, facts }: { parse?: ParseSource; facts?: DerivedFacts } = {}): ImportOrigins {
   const texts = new Map(sources.map((file) => [file.path, file.content]));
   const files = new Map(sources.map((file) => [file.path, file]));
-  const modules = moduleResolverOf(sources);
+  const modules = facts === undefined ? moduleResolverOf(sources) : rememberedModuleResolver(sources, facts);
+  /** What `derive` reads from one file alone, kept between readers when facts are given (ADR-0035). */
+  const derivedOf = <T>(slot: string, path: string, derive: () => T): T => (facts === undefined ? derive() : facts.ofFile(slot, files.get(path)!, derive));
+  const trees = new Map<string, ts.SourceFile>();
+  /** Every syntax tree the reader reads, parsed once for its life through `parse`. */
+  const treeOf = (path: string): ts.SourceFile => {
+    let tree = trees.get(path);
+    if (tree === undefined) {
+      tree = parse(files.get(path)!);
+      trees.set(path, tree);
+    }
+    return tree;
+  };
   /** What each file exports, read once and only when a namespace member asks. */
   const moduleShapes = new Map<string, ModuleShape | undefined>();
   function moduleShapeOf(file: string): ModuleShape | undefined {
-    if (!moduleShapes.has(file)) moduleShapes.set(file, texts.has(file) && isTypeScriptSource(file) ? parseAngularRouteFile(file, texts.get(file)!) : undefined);
+    if (!moduleShapes.has(file)) moduleShapes.set(file, texts.has(file) && isTypeScriptSource(file) ? moduleShape(treeOf(file)) : undefined);
     return moduleShapes.get(file);
   }
   const resolvedFile = async (from: string, specifier: string): Promise<string | undefined> => {
@@ -68,26 +82,20 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     return typeShapes.get(file);
   }, resolvedFile);
   const shapes = new Map<string, FileShape>();
-  const parameterStarts = new Map<string, ReadonlySet<number>>();
-  /** A file is bound once for the life of the reader, and only the places of its parameter uses are kept (ADR-0029). */
-  const isParameterUse: ParameterUse = (source, text, identifier) => {
-    let starts = parameterStarts.get(source.fileName);
-    if (starts === undefined) {
-      starts = parameterUses(source.fileName, text);
-      parameterStarts.set(source.fileName, starts);
+  const starts = new Map<string, ReadonlySet<number>>();
+  /** The name starts one binding of a file proves, read once per file for the life of the reader (ADR-0029). */
+  const startsOf = (slot: string, path: string, read: () => Iterable<number>): ReadonlySet<number> => {
+    const key = `${slot}\u0000${path}`;
+    let held = starts.get(key);
+    if (held === undefined) {
+      held = new Set(derivedOf(slot, path, () => [...read()]));
+      starts.set(key, held);
     }
-    return starts.has(identifier.getStart(source));
+    return held;
   };
-  const dynamicStarts = new Map<string, ReadonlySet<number>>();
+  const isParameterUse: ParameterUse = (source, text, identifier) => startsOf("ts-parameter-uses", source.fileName, () => parameterUses(source.fileName, text)).has(identifier.getStart(source));
   /** A name a `with` body or a direct `eval` may rebind proves no origin; only a file that has either is bound for it. */
-  const isDynamicUse: ParameterUse = (source, text, identifier) => {
-    let starts = dynamicStarts.get(source.fileName);
-    if (starts === undefined) {
-      starts = DYNAMIC_SCOPE.test(text) ? dynamicUses(source.fileName, text) : new Set();
-      dynamicStarts.set(source.fileName, starts);
-    }
-    return starts.has(identifier.getStart(source));
-  };
+  const isDynamicUse: ParameterUse = (source, text, identifier) => startsOf("ts-dynamic-uses", source.fileName, () => (DYNAMIC_SCOPE.test(text) ? dynamicUses(source.fileName, text) : [])).has(identifier.getStart(source));
   const bindsOncePerFile = (): ((path: string) => BoundFile) => {
     const bound = new Map<string, BoundFile>();
     return (path) => {
@@ -100,7 +108,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
   const indexOf = (file: string): { index: FileIndex; text: string } | undefined => {
     const text = texts.get(file);
     if (text === undefined || !isTypeScriptSource(file)) return undefined;
-    if (!indexes.has(file)) indexes.set(file, indexed(parse(files.get(file)!)));
+    if (!indexes.has(file)) indexes.set(file, indexed(treeOf(file)));
     const index = indexes.get(file);
     return index === undefined ? undefined : { index, text };
   };
@@ -112,7 +120,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     let held = shapes.get(file);
     if (held === undefined) {
       const text = texts.get(file);
-      held = text === undefined || !isTypeScriptSource(file) ? { bindings: new Map<string, string>(), declared: new Set<string>() } : describeTree(parseShared(files.get(file)!));
+      held = text === undefined || !isTypeScriptSource(file) ? { bindings: new Map<string, string>(), declared: new Set<string>() } : (indexOf(file)?.index.shape ?? describeTree(treeOf(file)));
       shapes.set(file, held);
     }
     return held;
@@ -130,8 +138,10 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     for (const [path, text] of texts) {
       const augments = path.endsWith(".d.ts") || text.includes("declare global");
       if (!augments && !isTypeScriptSource(path)) continue;
-      const tree = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, false);
-      const declared = augments ? declaredNames(tree) : ts.isExternalModule(tree) ? [] : scriptGlobalNames(tree);
+      const declared = derivedOf("ts-script-globals", path, () => {
+        const tree = treeOf(path);
+        return [...(augments ? declaredNames(tree) : ts.isExternalModule(tree) ? [] : scriptGlobalNames(tree))];
+      });
       for (const name of declared) names.add(name);
     }
     globals = names;
@@ -145,7 +155,13 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     const written: WrittenRoots = { paths: new Map([...repositoryGlobals()].map((name) => [name, [name]])), packages: new Set() };
     for (const [path, text] of texts) {
       if (!isTypeScriptSource(path)) continue;
-      addWrittenRoots(path, text, ts.createSourceFile(path, text, ts.ScriptTarget.Latest, false), written, (name) => LIB_GLOBALS.has(name));
+      const own = derivedOf("ts-written-roots", path, () => {
+        const into: WrittenRoots = { paths: new Map(), packages: new Set() };
+        addWrittenRoots(path, text, treeOf(path), into, (name) => LIB_GLOBALS.has(name));
+        return { paths: [...into.paths], packages: [...into.packages] };
+      });
+      for (const [key, segments] of own.paths) written.paths.set(key, segments);
+      for (const name of own.packages) written.packages.add(name);
     }
     const paths = [...written.paths].sort(([a], [b]) => compareText(a, b)).map(([, segments]) => segments);
     replaced = { paths, globalObjects: GLOBAL_OBJECTS, packages: written.packages };
@@ -354,7 +370,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     if (declarations.length > 0 && declarations.every((declaration) => ts.isClassLike(declaration) || ts.isInterfaceDeclaration(declaration))) return { file, declarations };
     const [only, ...others] = declarations;
     if (only === undefined || others.length > 0) return undefined;
-    if (ts.isVariableDeclaration(only) && only.initializer !== undefined && (ts.getCombinedNodeFlags(only) & ts.NodeFlags.Const) !== 0) return heritageOf(file, unwrappedValue(only.initializer), boundOf, depth + 1);
+    if (ts.isVariableDeclaration(only) && only.initializer !== undefined && (ts.getCombinedNodeFlags(only) & ts.NodeFlags.Const) !== 0) return heritageOf(file, unwrapped(only.initializer), boundOf, depth + 1);
     if (ts.isTypeAliasDeclaration(only) && ts.isTypeLiteralNode(only.type)) return { file, declarations };
     if (ts.isTypeAliasDeclaration(only) && ts.isTypeReferenceNode(only.type)) return heritageOf(file, only.type, boundOf, depth + 1);
     return undefined;
@@ -443,12 +459,6 @@ function withTypes(shape: ModuleShape | undefined, source: ts.SourceFile | undef
 }
 
 const NO_SPAN = { line: 0, endLine: 0 };
-
-function unwrappedValue(expression: ts.Expression): ts.Expression {
-  let inner = expression;
-  while (ts.isParenthesizedExpression(inner) || ts.isAsExpression(inner) || ts.isSatisfiesExpression(inner) || ts.isNonNullExpression(inner)) inner = inner.expression;
-  return inner;
-}
 
 /** The library type a primitive keyword annotation names. */
 const KEYWORD_TYPES: ReadonlyMap<ts.SyntaxKind, string> = new Map([

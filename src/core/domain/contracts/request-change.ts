@@ -1,6 +1,6 @@
 import { canonicalJson } from "../shared/canonical-json.ts";
 import type { Result } from "../shared/result.ts";
-import { literalsOf, TYPE_KINDS, type ChangeInput, type ChangeRefusal, type ValueClass } from "./change.ts";
+import { compareValues, holdsClass, literalsOf, TYPE_KINDS, type ChangeEntryInput, type ChangeInput, type ChangeRefusal, type ValueClass } from "./change.ts";
 import { LITERAL_CLASSES, type ClassValues, type LiteralClass, type ValueSet } from "./payload-shape.ts";
 import type { Literal } from "./use-operation.ts";
 
@@ -12,6 +12,8 @@ export interface RequestChange {
   /** Each entry once, in a fixed order. */
   entries: readonly RequestEntry[];
   rejected: ValueSet;
+  /** What the old contract accepted, when it is read from a contract rather than assumed to accept every rejected value. */
+  oldAcceptance?: ValueSet;
 }
 
 const ORDER = ["required", "non-nullable", "type", "values"] as const;
@@ -31,6 +33,31 @@ export function parseRequestChange(input: ChangeInput): Result<RequestChange, Ch
   if (contradicts(entries)) return refuse("contradictory-change", input);
   entries.sort((a, b) => ORDER.indexOf(kindOf(a)) - ORDER.indexOf(kindOf(b)));
   return { ok: true, value: { entries, rejected: rejectionOf(entries) } };
+}
+
+/**
+ * What a server that accepted `base` and accepts `head` at one place stops accepting, as the comparison of the two value
+ * sets names it, written as the entries a declared request change uses and normalized as one; `undefined` when it
+ * accepts as much as before. A rejection those entries cannot write (nothing but absence accepted, classes retired with
+ * several or no present class left, a class narrowed to its listed literals) is refused.
+ */
+export function derivedRequestChange(base: ValueSet, head: ValueSet): Result<RequestChange, ChangeRefusal> | undefined {
+  const { delta, gained } = compareValues(base, head);
+  if (delta?.alwaysAbsent === true) return refuse("unsupported-change", "accepts nothing but absence");
+  const entries: ChangeEntryInput[] = [];
+  if (gained.includes("absence")) entries.push("required");
+  if (gained.includes("null")) entries.push("non-nullable");
+  const narrowed = LITERAL_CLASSES.find((valueClass) => gained.includes(valueClass) && holdsClass(head, valueClass));
+  if (narrowed !== undefined) return refuse("unsupported-change", `narrows ${narrowed} to listed literals`);
+  if (gained.some((value) => value !== "absence" && value !== "null")) {
+    const kept = TYPE_KINDS.filter((valueClass) => holdsClass(head, valueClass));
+    if (kept.length !== 1) return refuse("unsupported-change", `retires a class and leaves ${kept.length === 0 ? "none" : kept.join(", ")}`);
+    entries.push({ type: kept[0]! });
+  }
+  if (delta !== undefined && delta.retired.length > 0) entries.push({ values: { removed: delta.retired } });
+  if (entries.length === 0) return undefined;
+  const change = parseRequestChange(entries);
+  return change.ok ? { ok: true, value: { ...change.value, oldAcceptance: base } } : change;
 }
 
 /** The change as the answer echoes it: a single entry as written, several as their normalized list. */

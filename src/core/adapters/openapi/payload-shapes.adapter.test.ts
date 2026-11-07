@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { formatAccessPath } from "../../domain/contracts/access-path.ts";
 import { deriveChanges } from "../../domain/contracts/shape-derivation.ts";
-import type { KnownShape, OperationShape, Shape } from "../../domain/contracts/payload-shape.ts";
+import type { KnownShape, OperationRequest, OperationShape, Shape } from "../../domain/contracts/payload-shape.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { createPayloadShapes } from "./payload-shapes.adapter.ts";
 
@@ -45,6 +45,73 @@ test("keywords constrain together: nullable and an enumeration restrict their ow
   assert.equal(values("kind").null, false);
   assert.deepEqual(values("size").literals.number, [1, 2]);
   assert.equal(values("either").null, true);
+});
+
+test("the keywords a value set does not state are kept at their place, extensions included and documentation left out, and a place without them carries none", () => {
+  const root = rootOf([document({ Root: { type: "object", properties: { name: { type: "string", maxLength: 3, pattern: "^a", readOnly: true, default: "a", description: "d", title: "t", example: "x", "x-tag": 1, "x-nullable": true }, plain: STRING } } })]).shape;
+  assert.deepEqual(known(property(root, "name").shape).keywords, { default: "a", maxLength: 3, pattern: "^a", readOnly: true, "x-tag": 1 });
+  assert.equal("keywords" in known(property(root, "plain").shape), false);
+});
+
+test("an allOf keeps the keywords of the schema that holds it and of every branch, each value once and every distinct value of one keyword listed", () => {
+  const root = known(rootOf([document({ Root: { allOf: [{ $ref: "#/components/schemas/Base" }, { type: "object", minProperties: 1, properties: { name: STRING } }], readOnly: true }, Base: { type: "object", minProperties: 2, deprecated: true, properties: { id: STRING } } })]).shape);
+  assert.deepEqual(root.keywords, { deprecated: true, minProperties: [1, 2], readOnly: true });
+});
+
+test("the digests of an operation change exactly with its request, its non-success responses, and its success responses' status, media types and headers, never with its success schema", () => {
+  const read = (operationOf: (schema: unknown) => Record<string, unknown>, components: Record<string, unknown> = {}) => {
+    const content = JSON.stringify({ openapi: "3.0.3", paths: { "/pets": { get: { operationId: "list", ...operationOf({ $ref: "#/components/schemas/Root" }) } } }, components: { schemas: { Root: STRING }, ...components } });
+    return rootOf([{ path: "api/openapi.yml", content }]).digests!;
+  };
+  const ok = (schema: unknown) => ({ "200": { description: "ok", content: { "application/json": { schema } } } });
+  const base = read((schema) => ({ responses: ok(schema) }));
+  const differing = (digests: typeof base) => (["request", "errors", "envelope"] as const).filter((part) => digests[part] !== base[part]);
+  assert.deepEqual(differing(read((schema) => ({ parameters: [{ in: "query", name: "page", schema: STRING }], responses: ok(schema) }))), ["request"]);
+  assert.deepEqual(differing(read((schema) => ({ responses: { ...ok(schema), "404": { description: "missing", content: { "application/json": { schema } } } } }))), ["errors"]);
+  assert.deepEqual(differing(read((schema) => ({ responses: { "201": ok(schema)["200"] } }))), ["envelope"]);
+  assert.deepEqual(differing(read((schema) => ({ responses: { "200": { description: "ok", content: { "application/hal+json": { schema } } } } }))), ["envelope"]);
+  assert.deepEqual(differing(read((schema) => ({ responses: { "200": { ...ok(schema)["200"], headers: { "X-Total": { $ref: "#/components/headers/Total" } } } } }), { headers: { Total: { schema: STRING } } })), ["envelope"]);
+  assert.deepEqual(differing(read((schema) => ({ responses: { "200": { ...ok(schema)["200"], headers: { "X-Total": { $ref: "#/components/headers/Total" } } } } }), { headers: { Total: { schema: { type: "integer" } } } })), ["envelope"]);
+  assert.deepEqual(differing(read((schema) => ({ responses: ok(schema) }), { schemas: { Root: { type: "integer" } } })), []);
+});
+
+function requestOf(content: unknown, path = "api/openapi.yml"): OperationRequest {
+  const [finding] = shapes.requests!([{ path, content: JSON.stringify(content) }]);
+  assert.equal(finding?.status, "complete");
+  return (finding as { value: OperationRequest }).value;
+}
+const fields = (shape: Shape) => known(shape).object!.properties.map(({ name, required }) => [name, required]);
+
+test("a request is read in the request direction: a read-only property is never required, a path parameter always is, the body's own requirement is apart from its properties', and the parameters are one closed object per location", () => {
+  const request = requestOf({
+    openapi: "3.0.3",
+    paths: {
+      "/pets/{id}": {
+        parameters: [{ in: "path", name: "id", schema: { type: "integer" } }],
+        post: { parameters: [{ $ref: "#/components/parameters/Page", required: false }, { in: "header", name: "X-Trace", schema: STRING }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/Pet" } } } }, responses: { "200": { description: "ok" } } },
+      },
+    },
+    components: { schemas: { Pet: { type: "object", required: ["id", "name"], properties: { id: { type: "integer", readOnly: true }, name: STRING } } }, parameters: { Page: { in: "query", name: "page", required: true, schema: { type: "integer" } } } },
+  });
+  assert.equal(request.body!.required, true);
+  assert.deepEqual(fields(request.body!.shape), [["id", false], ["name", true]]);
+  const parameters = known(request.parameters);
+  assert.equal(parameters.object!.open, false);
+  assert.deepEqual(fields(parameters), [["cookie", true], ["header", true], ["path", true], ["query", true]]);
+  const at = (location: string) => known(property(parameters, location).shape);
+  assert.deepEqual([fields(at("path")), fields(at("query")), fields(at("header")), fields(at("cookie"))], [[["id", true]], [["page", true]], [["X-Trace", false]], []]);
+  assert.equal(at("query").object!.open, false);
+  assert.deepEqual(known(property(at("query"), "page").shape).values.literals.number, "every");
+});
+
+test("a body whose media types declare different schemas, or a Swagger 2.0 form, is unknown; a Swagger 2.0 body parameter is the body; an operation without one has none", () => {
+  const twoSchemas = requestOf({ openapi: "3.0.3", paths: { "/pets": { post: { requestBody: { content: { "application/json": { schema: STRING }, "text/plain": { schema: { type: "integer" } } } }, responses: {} } } } });
+  assert.deepEqual([twoSchemas.body!.shape.kind, twoSchemas.body!.required], ["unknown", false]);
+  const swagger = (parameters: unknown[]) => requestOf({ swagger: "2.0", paths: { "/pets": { post: { parameters, responses: {} } } } }, "api/swagger.json");
+  const body = swagger([{ in: "body", name: "pet", required: true, schema: { type: "object", properties: { name: STRING } } }, { in: "query", name: "dry", type: "boolean" }]);
+  assert.deepEqual([body.body!.required, fields(body.body!.shape), known(property(known(property(known(body.parameters), "query").shape), "dry").shape).values.literals.boolean], [true, [["name", false]], "every"]);
+  assert.equal(swagger([{ in: "formData", name: "file", type: "file" }]).body!.shape.kind, "unknown");
+  assert.equal(requestOf({ openapi: "3.0.3", paths: { "/pets": { get: { responses: {} } } } }).body, undefined);
 });
 
 test("a Swagger 2.0 document gives its response schema and the base path the contract declares", () => {

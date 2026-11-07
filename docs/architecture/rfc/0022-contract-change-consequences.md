@@ -346,9 +346,9 @@ That is the whole rule; the change kinds are its names:
 | literals | `{ "values": { "added" } }` |
 
 Retired literals are `values.removed`, read as P2 reads them (a strict comparison with one is `review`). A retired `null`
-or a retired absence (a property made non-nullable or required) is reported as a gained guarantee, with its place, and
-is not followed: a branch that tested for it may now be dead, which this phase does not search. A path where nothing is
-introduced or retired derives nothing. `renamed`, `wrapped` and `meaning` are never derived. The derived change is built
+or a retired absence (a property made non-nullable or required) is reported as a difference the head gains, with its
+place, and is not followed: a branch that tested for it may now be dead, which this phase does not search. A path where
+nothing is introduced or retired derives no hypothesis; what else it may differ in is classified by P6. `renamed`, `wrapped` and `meaning` are never derived. The derived change is built
 normalized, as the parser builds a declared one; the parser stays the input of a written hypothesis, and its refusal of
 two `type` entries or of a literal outside a new type guards written input only. The base value set is the old
 guarantee the answer states, replacing the assumed one. A delta at the response root or at an array element itself (a
@@ -392,7 +392,7 @@ reference the reader cannot resolve keeps its file among the shape's sources, so
 value set as the old guarantee), the base and head places in the contract as evidence, and its consequences as P2
 answers them, on the head snapshot, from one prepared workspace (P3). Gained guarantees are listed, not followed. An
 `unknown` shape or an unsupported delta is a frontier at its contract place. Operations the head no longer declares, or
-newly declares, are listed by name (the `impact` family reports them) and derive no hypothesis.
+newly declares, are listed with their place and derive no hypothesis. P6 lists all of these as classified differences.
 
 **Cost.** Shapes are read only for operations whose contract files the change touched; each pair of schema nodes is
 compared once; the consequence walks are those of the declared form, over one prepared workspace.
@@ -489,12 +489,17 @@ payloads, with negative controls, zero false `incompatible`/`admits`, frontiers 
 per query against the response family. A request answer lists each producer as a complete finding with its verdict,
 witness and chain, and states that the old contract accepted the rejected values.
 
-**Server shapes (later slice, after the gate).** The shape port gains request bodies so a diff derives rejections:
+**Server shapes.** The shape port states what an operation accepts (`requests`) so a diff derives rejections. Built for
+OpenAPI documents with P6; Spring request bodies are a later slice, and until then a reader of Spring handlers states
+no request and its changed operations stay one `request-unread` frontier.
 
-- OpenAPI: the request schema through the existing resolver, read in the request direction: a `readOnly` property is
-  never a request obligation, `writeOnly` is readable, whole-body `required` is apart from property `required`;
-  unsupported media, conflicting alternatives and constraints outside the value set vocabulary are frontiers.
-- Spring `@RequestBody`: acceptance is read only under an evidenced Spring and Jackson version and mapper
+- OpenAPI (built): the request schema through the existing resolver, read in the request direction: a `readOnly`
+  property is never a request obligation, `writeOnly` is readable, whole-body `required` is apart from property
+  `required`; media types that declare different schemas are an `unknown` body, and a body none of them describes
+  accepts anything. Parameters (OpenAPI 3 and Swagger 2, operation over path item, a `$ref` resolved) are one closed
+  object per location (`cookie`, `header`, `path`, `query`), each parameter a property, a path parameter always
+  required; a Swagger `in: body` parameter is the body and `formData` makes it `unknown`.
+- Spring `@RequestBody` (later): acceptance is read only under an evidenced Spring and Jackson version and mapper
   configuration. Jackson 2 reads `null` into a primitive as its default; Jackson 3 (Spring Boot 4) rejects it. Unknown
   properties are ignored under the documented Boot 2-4 defaults. A validation rejection is inferred only when the
   validation entry (`@Valid`/`@Validated` and groups), the cascade path and the deserialized value are established; a
@@ -503,8 +508,12 @@ witness and chain, and states that the old contract accepted the rejected values
   unknown text; numeric input (ordinals) and custom creators, aliases or formats are a frontier. Jackson coerces
   between scalars, so a scalar place whose present classes depend on coercion is `unknown`, and only presence and
   `null` are derived where they are exact.
-- Derivation: the shape comparison is extended to properties the head newly declares and to exact narrowed literal
-  sets; a request rejection is base acceptance minus head acceptance, and a difference it cannot state is a frontier.
+- Derivation (built): the shape comparison reads the body in the request direction, with the body's own requirement as
+  the root's absence; a request rejection is base acceptance minus head acceptance at a place, written as the declared
+  request change P5.1 answers (`required`, `non-nullable`, removed literals, `{ "type": class }`), with the base
+  acceptance as the old contract. A property the head newly declares is compared from what the base let it hold
+  (anything under an open object, nothing under a closed one). A rejection the vocabulary cannot state (a class narrowed
+  to listed literals, several classes kept beside a retired one) is an `unsupported-delta` frontier with the reason.
 
 **Out of P5.** The server as a reader of what the producer sends (no Java flow reader); form models and validators (a
 `form-value` frontier, counted first); websocket and brokers (no typed instance in the corpus). Spring application
@@ -512,6 +521,128 @@ events are open question 4.
 
 **Cost.** Origins are memoized per expression, followed path and call-binding context within one prepared workspace;
 recursion and unresolved continuations end in frontiers; caller lookups reuse the session's. No cross-call cache.
+
+## Classified differences (P6, proposed)
+
+P4 answers what a change introduces; it says nothing about a property the head adds, a bound it tightens, or a change no
+consumer follows. Measured on four corpus contracts over 93 revision pairs: of 303 operations whose response data the
+change altered, 195 derived nothing (117 changed only keywords a value set does not state, 39 added a property, 38
+changed only non-success responses, 1 a media type), and none of the 105 altered requests was classified. P6 ([corpus probe](../../evaluations/contract-change-rules/2026-11-07-corpus-probe.md)) names every
+difference with a rule from one catalog, in the taxonomy of oasdiff's breaking-change checks, so an agent reads "property
+X of operation Y became nullable; rule `response-property-became-nullable`, breaking; these consumers read it unguarded"
+without writing a hypothesis.
+
+**Detection stays with the derivation.** `deriveChanges` is the one module that decides what changed at a place. Each
+difference is a delta with its place: a hypothesis's own (`removed`, `introduced-absence`, `introduced-null`,
+`introduced-class` with the class, `literals-added`, `literals-retired`; `undeclared` once for a property an open object
+stops declaring, and for everything below it, instead of one difference per class it then admits), a retired value (`retired-absence`,
+`retired-null`, `retired-class`), a property only the head declares (`added-required`, `added-optional`; nothing below
+it is compared), and a keyword the value set does not state. A difference at the body root or at an array element is
+listed too; a hypothesis cannot name that place, so it is also an `unsupported-delta` frontier when a reading would
+derive one there:
+
+| Keyword | Delta |
+|---|---|
+| an upper bound (`maximum`, `exclusiveMaximum`, `maxLength`, `maxItems`, `maxProperties`) | lowered or added: `constraint-narrowed`; raised or dropped: `constraint-widened` |
+| a lower bound (`minimum`, `exclusiveMinimum`, `minLength`, `minItems`, `minProperties`) | raised or added: `constraint-narrowed`; lowered or dropped: `constraint-widened` |
+| `pattern`, `format`, `multipleOf`, `uniqueItems` | added: `constraint-narrowed`; dropped: `constraint-widened`; replaced: `constraint-changed` |
+| a bound whose value is not a number at either revision | `constraint-changed` |
+| `default`, `deprecated`, `readOnly`, `xml` | `annotation-changed` (`readOnly` restricts what a writer sends, never what a reader receives) |
+| any other keyword (`writeOnly`, `discriminator`, an extension) | an `unclassified-difference` frontier naming it, never silence |
+
+A keyword at its default value (`uniqueItems: false`, `deprecated: false`, `readOnly: false`) is its absence. The shape
+carries these keywords: the OpenAPI reader keeps every keyword it does not turn into the value set or the structure,
+leaving out documentation (`description`, `summary`, `example`, `examples`, `externalDocs`, `title`, `$comment`, `$id`,
+`$schema`); an `allOf` keeps the keywords of the schema that holds it and of every branch, several distinct values of
+one keyword as their list. An extension (`x-`, except the `x-nullable` it models) is kept: in the corpus, generator
+extensions such as one that adds `@JsonInclude(NON_NULL)` change what the wire carries. Shapes read from Spring handlers
+carry none.
+
+**The catalog classifies.** `core/domain/contracts/contract-change-rules.ts` holds one row per delta and side of the
+exchange: a stable id and a level. `breaking`: a party that conforms to the old contract can fail under the new one;
+`review`: it may; `compatible`: it cannot. Whether a given consumer does fail stays the verdict of its use. The
+response rows follow from the direction of reading: what a response introduces can break its readers, what it retires
+cannot. The request rows are their mirror: what the server stops accepting can break its writers, what it newly accepts
+cannot.
+
+| Delta | Response rule | Level |
+|---|---|---|
+| `removed` | `response-property-removed` | breaking |
+| `undeclared` | `response-property-undeclared` | breaking |
+| `introduced-absence` | `response-property-became-optional` | breaking |
+| `introduced-null` | `response-property-became-nullable` | breaking |
+| `introduced-class` | `response-property-type-changed` | breaking |
+| `literals-added` | `response-property-enum-value-added` | review |
+| `literals-retired` | `response-property-enum-value-removed` | compatible |
+| `retired-absence` | `response-property-became-required` | compatible |
+| `retired-null` | `response-property-became-non-nullable` | compatible |
+| `retired-class` | `response-property-type-narrowed` | compatible |
+| `added-required` | `response-required-property-added` | compatible |
+| `added-optional` | `response-optional-property-added` | compatible |
+| `constraint-narrowed` | `response-property-constraint-narrowed` | compatible |
+| `constraint-widened` | `response-property-constraint-widened` | review |
+| `constraint-changed` | `response-property-constraint-changed` | review |
+| `annotation-changed` | `response-property-annotation-changed` | compatible |
+| `errors-changed` | `response-error-changed` | review |
+| `envelope-changed` | `response-success-envelope-changed` | review |
+
+| Delta | Request body rule | Parameter rule | Level |
+|---|---|---|---|
+| `removed` | `request-property-removed` | `request-parameter-removed` | breaking (body), review (parameter) |
+| `undeclared` | `request-property-undeclared` | `request-parameter-undeclared` | compatible |
+| `introduced-absence` | `request-property-became-optional` | `request-parameter-became-optional` | compatible |
+| `introduced-null` | `request-property-became-nullable` | `request-parameter-became-nullable` | compatible |
+| `introduced-class` | `request-property-type-widened` | `request-parameter-type-widened` | compatible |
+| `literals-added` | `request-property-enum-value-added` | `request-parameter-enum-value-added` | compatible |
+| `literals-retired` | `request-property-enum-value-removed` | `request-parameter-enum-value-removed` | breaking |
+| `retired-absence` | `request-property-became-required` | `request-parameter-became-required` | breaking |
+| `retired-null` | `request-property-became-non-nullable` | `request-parameter-became-non-nullable` | breaking |
+| `retired-class` | `request-property-type-narrowed` | `request-parameter-type-narrowed` | breaking |
+| `added-required` | `request-required-property-added` | `request-required-parameter-added` | breaking |
+| `added-optional` | `request-optional-property-added` | `request-optional-parameter-added` | compatible |
+| `constraint-narrowed` | `request-property-constraint-narrowed` | `request-parameter-constraint-narrowed` | breaking |
+| `constraint-widened` | `request-property-constraint-widened` | `request-parameter-constraint-widened` | compatible |
+| `constraint-changed` | `request-property-constraint-changed` | `request-parameter-constraint-changed` | review |
+| `annotation-changed` | `request-property-annotation-changed` | `request-parameter-annotation-changed` | review |
+
+A body property that disappears from a closed schema is no longer accepted; a parameter the contract stops declaring is
+`review`, since a contract does not say whether a server rejects a parameter it does not declare. The body's own place
+is the property `""`. A request body difference the server's rejection answers (a retired value, or a property added where the base
+accepted more) derives a request hypothesis the producer evaluator of P5.1 answers, naming its rules. An optional
+property an open base object newly declares is compatible, as in oasdiff, and still derives the hypothesis of the values
+the head rejects there, which each producer's verdict settles; a parameter difference is
+listed and not followed, since no producer reader locates parameters.
+
+An operation only the head declares is `operation-added` (compatible); one only the base declares is
+`operation-removed` (breaking). The rows are typed as one per delta, so a delta without a rule does not compile. Rule
+ids are part of the answer and change with the producer version (ADR-0024); no fact that holds them is stored.
+
+**Fail closed.** The body shape is not all an operation exchanges. The OpenAPI reader states three digests per
+operation, with the digest the `impact` family already computes (one owner, documentation left out, references
+followed): the request (parameters, body, consumed media), the non-success responses, and the success responses without
+their schemas (status codes, media types, headers). A changed operation whose non-success responses differ is
+`errors-changed`; one whose success responses differ beyond their schemas is `envelope-changed`; neither is followed,
+since no consumer reader follows error handling or headers. The request is compared through the reader's request (body
+and parameters, above); a request whose digest differs while that comparison finds nothing (a consumed media type, a
+schema renamed behind a reference) is an `unclassified-difference` frontier at the operation. A reader that states no
+request (Spring handlers) leaves the request of its changed operations unread: one `request-unread` frontier
+(`no-extractor`) for the whole change, with the place of each, rather than one marker per operation. The request of an
+operation is taken from the reader whose response shape is held for it, never combined from two readers. A refactor that
+keeps every value set, keyword and digest (an `allOf` split, a schema moved behind a reference) reports nothing.
+
+**Answer.** The derivation section lists every difference once, in the order of the operations (each operation's own
+first, then its properties'), with its rule id, level, side of the exchange (`operation`, `response`, `request` or
+`parameter`, whose property is `<location>.<name>` and below), operation,
+property, delta, the class or keyword it names with the keyword's value at each revision, and the operation's contract
+place at each revision that declares it. It replaces the separate lists of gained guarantees and of added and removed
+operations. A derived answer's `derivedFrom` names the rules of the differences its hypothesis answers; the other
+differences are listed and not followed. A derivation frontier on the request side names its side (`target`).
+
+**Ownership.** `impact` keeps its digest comparison: it answers which code a change reaches, and the consequences family
+is the one owner of what the difference means.
+
+**Out of P6 so far.** Request bodies read from Spring handlers (one `request-unread` frontier), Spring Bean Validation
+annotations and Spring response headers or status codes, consumed media types, security schemes, callbacks.
 
 ## Output
 
@@ -532,7 +663,7 @@ as `ye_ast_contract_consequences` ([ADR-0034](../adr/0034-name-contract-conseque
 
 | Layer | Owns |
 |---|---|
-| `core/domain/contracts` | hypothesis, access path, path rewrites, value sets, change normalization, guard and verdict rules, payload shapes and the hypotheses a pair of them derives |
+| `core/domain/contracts` | hypothesis, access path, path rewrites, value sets, change normalization, guard and verdict rules, payload shapes, the hypotheses and differences a pair of them derives, and the rule catalog that classifies the differences |
 | `core/domain/languages` | the step semantics and prototype table of a consumer language (JavaScript for both adapters, from P2) |
 | `core/ports` | the driven port for flow steps and uses, the driving query family |
 | `core/application/contracts` | the worklist over chains, frontier accounting, the fact |

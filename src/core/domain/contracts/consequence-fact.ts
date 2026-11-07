@@ -3,11 +3,11 @@ import type { RepositoryEvidence } from "../shared/repository-evidence.ts";
 import type { Handler } from "../entrypoints/http-route.ts";
 import type { LinkBasis } from "../topology/link.ts";
 import type { ChangeEntry } from "./change.ts";
+import type { OperationDelta, ResponseDelta, RuleLevel, RuleTarget } from "./contract-change-rules.ts";
 import type { Hop } from "./consumer-flow.ts";
 import type { ValueSet } from "./payload-shape.ts";
 import type { RequestEntry } from "./request-change.ts";
 import type { ProducerVerdict } from "./request-origin.ts";
-import type { RetiredValue } from "./shape-derivation.ts";
 import type { UseOperation, Verdict } from "./verdict.ts";
 
 /** A step of a chain, placed in the repository it happens in. */
@@ -56,8 +56,8 @@ export interface AnswerBody {
   hypothesis: { method: string; path: string; target: string; property: string; change: ChangeEntry | RequestEntry | readonly ChangeEntry[] | readonly RequestEntry[]; renamedTo?: string; elementsAt?: string };
   /** What the old contract guaranteed: the assumption when the hypothesis was written, the base value set when it was derived from a diff. */
   oldContract: typeof OLD_GUARANTEE | typeof OLD_ACCEPTANCE | ValueSet;
-  /** Set on an answer `ofChange` derived: the operation and property it came from, and where that operation sits in the contract at each revision. */
-  derivedFrom?: { operation: string; property: string; places: { base: RepositoryEvidence; head: RepositoryEvidence } };
+  /** Set on an answer `ofChange` derived: the operation and property it came from, the rules of the differences it answers, and where that operation sits in the contract at each revision. */
+  derivedFrom?: { operation: string; property: string; rules: readonly string[]; places: { base: RepositoryEvidence; head: RepositoryEvidence } };
   /** Under a `values` change, how many uses only show the value or compare it with another literal and so give no finding. */
   silent?: number;
   /** A complete finding is a use (response) or a producer (request) with its verdict; an `unknown` one is a place the flow could not be followed. */
@@ -67,19 +67,31 @@ export interface AnswerBody {
 /** `partial` names what cut the answer; `unknown` is a hypothesis nothing could be followed for, with the reason. */
 export type HypothesisAnswer = AnswerBody & ({ status: "complete" } | { status: "partial"; cuts: readonly [Cut, ...Cut[]] } | { status: "unknown"; reason: UnknownReason; detail: string });
 
-/** A guarantee the head gives that the base did not: listed with its place and not followed. */
-export interface GainedGuaranteeItem {
+/** One difference a change made to a contract, classified by the rule of its delta; a derived answer follows the ones its hypothesis answers. */
+export interface ClassifiedDifference {
+  rule: string;
+  level: RuleLevel;
+  target: RuleTarget;
   operation: string;
-  property: string;
-  retired: RetiredValue;
-  places: { base: RepositoryEvidence; head: RepositoryEvidence };
+  /** The property of the payload the difference is at; absent for the operation itself. */
+  property?: string;
+  delta: ResponseDelta | OperationDelta;
+  /** The class or keyword the delta names. */
+  subject?: string;
+  /** The keyword's value at each revision, absent where the revision does not carry it. */
+  base?: unknown;
+  head?: unknown;
+  /** Where the operation sits in the contract at each revision that declares it. */
+  places: { base?: RepositoryEvidence; head?: RepositoryEvidence };
 }
 
 /** A place the change could not be derived at, so nothing at or below it is decided. */
 export interface ChangeFrontier {
   status: "unknown";
   reason: UnknownReason;
-  kind: "unsupported-delta" | "recursive-shape" | "unknown-shape" | "ambiguous-operation" | "unserved-operation" | "unreadable-contract";
+  kind: "unsupported-delta" | "recursive-shape" | "unknown-shape" | "unclassified-difference" | "request-unread" | "ambiguous-operation" | "unserved-operation" | "unreadable-contract";
+  /** The side of the exchange a derivation frontier is on, when it is not the response. */
+  target?: "request" | "parameter";
   operation?: string;
   property?: string;
   side?: "base" | "head";
@@ -88,9 +100,8 @@ export interface ChangeFrontier {
 }
 
 export interface DerivationValue {
-  gained: readonly GainedGuaranteeItem[];
-  /** Operations only one revision declares, by name: they derive no hypothesis. */
-  operations: { added: readonly string[]; removed: readonly string[] };
+  /** In the order of the operations, each operation's own difference first, then its properties'. */
+  differences: readonly ClassifiedDifference[];
   frontiers: readonly ChangeFrontier[];
 }
 

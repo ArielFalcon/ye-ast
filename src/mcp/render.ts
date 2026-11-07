@@ -16,7 +16,7 @@ import { hasUnprovedUses } from "../core/domain/outline/outline-uses.ts";
 import type { ExternalCalls, TraceStep, TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
-import type { ChangeFrontier, ConsequenceFinding, ConsequencesValue, HypothesisAnswer, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
+import type { ChangeFrontier, ClassifiedDifference, ConsequenceFinding, ConsequencesValue, HypothesisAnswer, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { Cut, Evidence, Fact, Finding, SnapshotRef, WalkBounds } from "../core/domain/shared/fact.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
@@ -1650,7 +1650,7 @@ export function renderDecisions(fact: Fact<DecisionValue>, detail: ResponseMode 
 }
 
 
-const CONSEQUENCES_FULL_GUIDE = "Match value.answers by index (the order asked, or sorted by operation and property for a change) and check each answer's status, reason and cuts; findings[].value.chain and verdict.witness hold the chains and witnesses, and an unknown finding carries its reason and places. A change's value.change.derivation holds the gained guarantees, the operations added and removed, and the derivation frontiers; value.repositorySnapshots names the snapshot of every repository read.";
+const CONSEQUENCES_FULL_GUIDE = "Match value.answers by index (the order asked, or sorted by operation and property for a change) and check each answer's status, reason and cuts; findings[].value.chain and verdict.witness hold the chains and witnesses, and an unknown finding carries its reason and places. A change's value.change.derivation holds every classified difference (rule, level, operation, property, places) and the derivation frontiers; answers[].derivedFrom.rules names the rules a derived answer follows; value.repositorySnapshots names the snapshot of every repository read.";
 
 /** The counted text when it is no longer than listing what it counts, the listing otherwise; a tie keeps the count (RFC-0017 section 1). Details always lists. */
 function elided(counts: readonly string[], listing: readonly string[], detail: ResponseMode): string[] {
@@ -1694,18 +1694,23 @@ function answerLines(answer: HypothesisAnswer, index: number, detail: ResponseMo
 }
 
 function frontierLine(frontier: ChangeFrontier): string {
-  const subject = [frontier.operation, frontier.property, frontier.side === undefined ? undefined : `at ${frontier.side}`].filter((part) => part !== undefined).join(" ");
+  const subject = [frontier.operation, frontier.target, frontier.property, frontier.side === undefined ? undefined : `at ${frontier.side}`].filter((part) => part !== undefined && part !== "").join(" ");
   return `    - ${frontier.kind} (${frontier.reason})${subject === "" ? "" : ` ${subject}`}${frontier.detail === undefined ? "" : `: ${frontier.detail}`}${frontier.evidence.length === 0 ? "" : ` at ${frontier.evidence.map(repositoryEvidenceText).join(", ")}`}`;
+}
+
+function differenceLine({ level, rule, operation, property, subject, base, head, places }: ClassifiedDifference): string {
+  const value = (written: unknown) => (written === undefined ? "absent" : JSON.stringify(written));
+  const about = subject === undefined ? "" : base === undefined && head === undefined ? ` (${subject})` : ` (${subject}: ${value(base)} -> ${value(head)})`;
+  return `    - ${level} ${rule} ${operation}${property ? ` ${property}` : ""}${about} at ${repositoryEvidenceText((places.head ?? places.base)!)}`;
 }
 
 function derivationLines(value: NonNullable<ConsequencesValue["change"]>, detail: ResponseMode): string[] {
   const { derivation } = value;
   const lines = [`change: ${value.base} -> ${value.head} (commits ${value.snapshots.base} -> ${value.snapshots.head})`, "derivation:", ...statusLines(derivation, "  ")];
   if (derivation.status === "unknown") return lines;
-  const { gained, operations, frontiers } = derivation.value;
-  const gainedListing = [`  gained guarantees (${gained.length}):`, ...gained.map((item) => `    - ${item.operation} ${item.property} (${item.retired}) at ${repositoryEvidenceText(item.places.head)}`)];
-  lines.push(...(gained.length === 0 ? [`  gained guarantees (0):`] : elided([`  gained guarantees (${gained.length}): ${categoryRecovery({ details: "lists them" })}`], gainedListing, detail)));
-  lines.push(`  operations added (${operations.added.length}): ${operations.added.join(", ")}`.trimEnd(), `  operations removed (${operations.removed.length}): ${operations.removed.join(", ")}`.trimEnd());
+  const { differences, frontiers } = derivation.value;
+  const classified = [`  differences (${differences.length}): ${countedBy(differences.map(({ level }) => level))}; ${categoryRecovery({ details: "lists each with its rule and place" })}`];
+  lines.push(...(differences.length === 0 ? ["  differences (0):"] : elided(classified, [`  differences (${differences.length}):`, ...differences.map(differenceLine)], detail)));
   const counts = [`  frontiers (${frontiers.length}): ${countedBy(frontiers.map((frontier) => `${frontier.kind} (${frontier.reason})`))}; ${categoryRecovery({ details: "lists them with their places" })}`];
   lines.push(...(frontiers.length === 0 ? ["  frontiers (0):"] : elided(counts, [`  frontiers (${frontiers.length}):`, ...frontiers.map(frontierLine)], detail)));
   return lines;

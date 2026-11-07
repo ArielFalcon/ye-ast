@@ -165,7 +165,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const loads = await deps.dynamicLoads.extract(headTree.sources);
           if (signal?.aborted) return ABORTED;
-          const origins = deps.importOrigins?.(headTree.sources);
+          const origins = deps.importOrigins?.(headTree.sources, undefined, head.prepared?.facts);
           const unresolved = unresolvedOf(store, headTree);
           const proofs = await referenceProofsOf(origins, store, headTree, request.signal, unresolved);
           if (signal?.aborted) return ABORTED;
@@ -204,7 +204,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           const references = unresolvedReferencesIn(store, written);
           const modules = deps.moduleDependencies === undefined ? undefined : await moduleDependenciesOf(deps.moduleDependencies, head.prepared, headTree, request.signal);
           if (request.signal?.aborted) return ABORTED;
-          const origins = deps.importOrigins?.(headTree.sources);
+          const origins = deps.importOrigins?.(headTree.sources, undefined, head.prepared?.facts);
           const read = await readImporters(store, covered, references, modules, origins === undefined ? undefined : createEdgeTargets({ origins, store, modules }), request.signal);
           if (request.signal?.aborted) return ABORTED;
           const moduleOnly = new Set(modules?.files.filter((file) => file.moduleOnly).map((file) => file.file));
@@ -393,7 +393,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (signal?.aborted) return ABORTED;
       const loads = await deps.dynamicLoads.extract(headTree.sources);
       if (signal?.aborted) return ABORTED;
-      const origins = deps.importOrigins?.(headTree.sources);
+      const origins = deps.importOrigins?.(headTree.sources, undefined, head.prepared?.facts);
       const unresolved = unresolvedOf(store, headTree);
       const proofs = await referenceProofsOf(origins, store, headTree, request.signal, unresolved);
       if (request.signal?.aborted) return ABORTED;

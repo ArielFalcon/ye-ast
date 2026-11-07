@@ -19,6 +19,7 @@ export interface LiveSnapshotReaders {
   sources(signal?: AbortSignal): Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>>;
   extract(signal?: AbortSignal): Promise<Result<CommitExtraction, VcsFault>>;
   retained?: PreparedCommit["retained"];
+  facts?: PreparedCommit["facts"];
 }
 
 /**
@@ -27,7 +28,7 @@ export interface LiveSnapshotReaders {
  * HEAD, so a capture whose files did not change reuses what an earlier one read, and an edit misses.
  */
 export function liveSnapshotReaders(deps: Pick<SnapshotReaderDeps, "reader" | "extractor" | "snapshotCache" | "digest">, capture: LiveCapture): LiveSnapshotReaders {
-  const retention = snapshotRetention(deps, canonicalJson({ live: true, repo: capture.repo, scope: capture.scope, trust: capture.trust }), capture.export);
+  const retention = snapshotRetention(deps, canonicalJson({ live: true, repo: capture.repo, scope: capture.scope, trust: capture.trust }), capture.export, capture.trust);
   let loaded: Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>> | undefined;
   let extracted: Promise<Result<CommitExtraction, VcsFault>> | undefined;
   let retainedFindings: readonly Finding<Entrypoint>[] | undefined;
@@ -76,6 +77,6 @@ export function liveSnapshotReaders(deps: Pick<SnapshotReaderDeps, "reader" | "e
         throw error;
       }
     },
-    ...(retention === undefined ? {} : { retained: retention.output }),
+    ...(retention === undefined ? {} : { retained: retention.output, facts: retention.facts }),
   };
 }

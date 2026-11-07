@@ -8,6 +8,7 @@ import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RootOrigin } from "../../domain/impact/edge-policy.ts";
 import type { ImportOriginSite } from "../../ports/import-origins.port.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 
 const CONFIG: SourceFile = {
   path: "tsconfig.json",
@@ -241,7 +242,7 @@ test("an import-equals require binds its name to the module it names, unless the
 
 test("a reader parses a file once however many times its sites are asked, and answers each ask the same", async () => {
   const parsed: string[] = [];
-  const reader = createImportOrigins(SOURCES, (file) => (parsed.push(file.path), sourceTree({ ...file }, ts.ScriptTarget.Latest)));
+  const reader = createImportOrigins(SOURCES, { parse: (file) => (parsed.push(file.path), sourceTree({ ...file }, ts.ScriptTarget.Latest)) });
   const ask = (line: number, name: string) => reader.origins([{ file: PAGE.path, line, column: 1, name, fullName: name, kind: "calls" }]);
 
   const answers = [await ask(11, "Store"), await ask(12, "helper"), await ask(11, "Store")];
@@ -769,6 +770,13 @@ test("a repository type whose heritage follows constants, type aliases and impor
   ] as const) assert.deepEqual(await declaredTypeOf(annotation, spelled, lines, [aliases, bases]), { kind: "unknown" }, annotation);
 });
 
+test("a constant behind any wrapper that keeps its value proves the heritage it holds", async () => {
+  for (const initializer of ["(Error)", "Error as ErrorConstructor", "Error satisfies ErrorConstructor", "<ErrorConstructor>Error", "Error!"]) {
+    const heritage: SourceFile = { path: "src/heritage.ts", content: [`const Fault = ${initializer};`, "export class RepoError extends Fault {}"].join("\n") };
+    assert.deepEqual(await declaredTypeOf("Map<string, number>", "Map", [], [heritage]), { kind: "global", name: "Map" }, initializer);
+  }
+});
+
 test("heritage that names no repository class or interface and no library type makes every annotation unknown", async () => {
   const holder: SourceFile = { path: "src/holder.ts", content: "export class Holder { static Inner = Map; }" };
   for (const heritage of [
@@ -814,4 +822,74 @@ test("heritage between repository classes and interfaces, imported or local, pro
   };
   const shape: SourceFile = { path: "src/shape.ts", content: "export class Shape {}\nexport interface Outlined {}" };
   assert.deepEqual(await declaredTypeOf("Map<string, number>", "Map", [], [shapes, shape]), { kind: "global", name: "Map" });
+});
+
+/** Derived facts in memory, recording each derivation as `slot` or `slot path`. */
+function rememberingFacts(): DerivedFacts & { derived: string[] } {
+  const kept = new Map<string, string>();
+  const derived: string[] = [];
+  return {
+    derived,
+    ofFile(slot, file, derive) {
+      const key = JSON.stringify([slot, file.path, file.content]);
+      if (!kept.has(key)) {
+        derived.push(`${slot} ${file.path}`);
+        kept.set(key, JSON.stringify(derive()));
+      }
+      return JSON.parse(kept.get(key)!);
+    },
+    async ofInputs(slot, inputs, derive) {
+      const key = JSON.stringify([slot, inputs]);
+      if (!kept.has(key)) {
+        derived.push(slot);
+        kept.set(key, JSON.stringify(await derive()));
+      }
+      return JSON.parse(kept.get(key)!);
+    },
+    fingerprint: (inputs) => JSON.stringify(inputs),
+    drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
+  };
+}
+
+const PARAMETER: SourceFile = { path: "src/parameter.ts", content: ["export function run(redact: () => void): void {", "  redact();", "}", ""].join("\n") };
+const DYNAMIC: SourceFile = { path: "src/dynamic.ts", content: ["export function run(): void {", "  eval('x');", "  helper();", "}", ""].join("\n") };
+const WRITER: SourceFile = { path: "src/writer.ts", content: ["export {};", "(Array.prototype as any).last = () => 1;", ""].join("\n") };
+const SCRIPT: SourceFile = { path: "src/script.ts", content: "var scriptGlobal = 1;\n" };
+const MEMO_SOURCES = [...SOURCES, PARAMETER, DYNAMIC, WRITER, SCRIPT];
+
+async function everyAnswer(sources: readonly SourceFile[], facts?: DerivedFacts): Promise<string> {
+  const reader = createImportOrigins(sources, facts === undefined ? {} : { facts });
+  const origins = await reader.origins([11, 12, 13].map((line) => ({ file: PAGE.path, line, column: 1, name: ["Store", "helper", "filter"][line - 11]!, fullName: ["Store", "helper", "filter"][line - 11]!, kind: "calls" as const })));
+  const roots = await reader.rootOrigins([{ file: PARAMETER.path, line: 2, column: 3, kind: "calls", name: "redact" }, { file: DYNAMIC.path, line: 3, column: 3, kind: "calls", name: "helper" }]);
+  const replaced = await reader.replacedRoots();
+  return JSON.stringify([origins, roots, replaced], (_, value) => (value instanceof Set ? [...value] : value));
+}
+
+test("a reader over content another reader derived from derives nothing again, and answers what a reader without facts answers", async () => {
+  const facts = rememberingFacts();
+  const first = await everyAnswer(MEMO_SOURCES, facts);
+  const derived = [...facts.derived];
+
+  const second = await everyAnswer(MEMO_SOURCES.map((file) => ({ ...file })), facts);
+
+  for (const slot of ["ts-parameter-uses src/parameter.ts", "ts-dynamic-uses src/dynamic.ts", "ts-written-roots src/writer.ts", "ts-script-globals src/script.ts", "ts-module-resolution"]) assert.ok(derived.includes(slot), slot);
+  assert.deepEqual(facts.derived, derived);
+  assert.equal(second, first);
+  assert.equal(first, await everyAnswer(MEMO_SOURCES));
+});
+
+test("an edited file derives its own facts again, and a resolution only when a path or a JSON file changes", async () => {
+  const facts = rememberingFacts();
+  await everyAnswer(MEMO_SOURCES, facts);
+  const edited = (file: SourceFile, content: string) => MEMO_SOURCES.map((source) => (source.path === file.path ? { ...source, content } : source));
+
+  facts.derived.length = 0;
+  const local = edited(LOCAL, `${LOCAL.content}export const more = 1;\n`);
+  assert.equal(await everyAnswer(local, facts), await everyAnswer(local));
+  assert.ok(facts.derived.length > 0 && facts.derived.every((entry) => entry.endsWith(LOCAL.path)), JSON.stringify(facts.derived));
+
+  facts.derived.length = 0;
+  const config = edited(CONFIG, JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@app/*": ["lib/*"] } } }));
+  assert.equal(await everyAnswer(config, facts), await everyAnswer(config));
+  assert.ok(facts.derived.includes("ts-module-resolution"));
 });
