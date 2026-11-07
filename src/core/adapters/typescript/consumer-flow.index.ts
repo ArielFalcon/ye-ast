@@ -8,11 +8,14 @@ import { lineOf } from "./http-call-sites.adapter.ts";
 import { moduleResolverOf } from "./module-resolver.ts";
 import { namedFunction, type NamedFunction } from "./consumer-flow.syntax.ts";
 import { sourceTree } from "./source-tree.ts";
+import { declarationCounts } from "./syntax-names.ts";
 
 export interface Unit {
   file: string;
   tree: ts.SourceFile;
   imports: ReadonlyMap<string, RawImport>;
+  /** How often each name is declared anywhere in the file. */
+  declared: ReadonlyMap<string, number>;
   classes: ReadonlyMap<string, ts.ClassDeclaration>;
   functions: ReadonlyMap<string, NamedFunction>;
 }
@@ -89,7 +92,7 @@ function describe(file: string, tree: ts.SourceFile, imports: ReadonlyMap<string
       if (named !== undefined) functions.set(named.name, named);
     }
   }
-  return { file, tree, imports, classes, functions };
+  return { file, tree, imports, declared: declarationCounts(tree), classes, functions };
 }
 
 interface RouterCall {

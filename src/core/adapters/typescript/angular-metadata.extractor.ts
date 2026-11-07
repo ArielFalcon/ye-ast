@@ -2,9 +2,8 @@ import ts from "typescript";
 import { declarationCounts, isStatic } from "./syntax-names.ts";
 import type { RawRouteFile } from "./angular-router.extractor.ts";
 import { thisClass, unwrapped } from "./syntax.ts";
+import { angularCoreExport, type FileNames } from "./angular-injection.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
-
-const ANGULAR_CORE = "@angular/core";
 
 /** A name as written: `Foo`, or `ns.Foo` for a member of a namespace import. */
 export interface RawReference {
@@ -123,18 +122,8 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
   const declarations = declarationCounts(sf);
   const result: RawAngularFile = { classes: [], memberEvidence: proveMembers ? readMemberEvidence(sf, declarations, shape) : { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), writes: [], subclasses: [], passed: [], hidden: new Set(), qualified: [], escapedMutator: false, unknownBinding: false, unknownProvider: false }, injections: [], fields: [], substituted: [], arrays: new Map() };
 
-  /* The export of `@angular/core` an expression names: `inject`, or `core.inject` through a namespace import. */
-  const coreName = (expression: ts.Expression): string | undefined => {
-    if (ts.isIdentifier(expression)) {
-      const bound = shape.imports.get(expression.text);
-      return coreExternal && !declarations.has(expression.text) && bound?.module === ANGULAR_CORE ? bound.imported : undefined;
-    }
-    if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
-      const bound = shape.imports.get(expression.expression.text);
-      return coreExternal && !declarations.has(expression.expression.text) && bound?.module === ANGULAR_CORE && bound.imported === "*" ? expression.name.text : undefined;
-    }
-    return undefined;
-  };
+  const names: FileNames = { imports: shape.imports, declared: declarations };
+  const coreName = (expression: ts.Expression): string | undefined => (coreExternal ? angularCoreExport(expression, names) : undefined);
   const decoratorsOf = (node: ts.Node): Map<string, ts.CallExpression> => {
     const found = new Map<string, ts.CallExpression>();
     for (const decorator of ts.canHaveDecorators(node) ? (ts.getDecorators(node) ?? []) : []) {
@@ -396,11 +385,6 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
   const subclassOf = new Map<ts.ClassDeclaration, RawSubclass>();
   /** The locals and constructor parameters that hold an instance of a class the syntax names, by name. */
   const holders = new Map<string, RawReference>();
-  const isInject = (callee: ts.Expression): boolean => {
-    const e = unwrapped(callee);
-    if (ts.isIdentifier(e)) return (declarations.get(e.text) ?? 0) === 0 && shape.imports.get(e.text)?.module === ANGULAR_CORE && shape.imports.get(e.text)?.imported === "inject";
-    return ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression) && e.name.text === "inject" && shape.imports.get(e.expression.text)?.module === ANGULAR_CORE && shape.imports.get(e.expression.text)?.imported === "*";
-  };
   const platform = (name: string): boolean => LIB_GLOBALS.has(name) && (declarations.get(name) ?? 0) === 0 && !shape.imports.has(name);
   /** A value made where it is written: a literal, or a platform collection (`new Uint8Array(n)`, `Array.from(…)`), never a `Proxy`. */
   const isFresh = (expression: ts.Expression): boolean => {
@@ -555,7 +539,7 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
       if (owner !== undefined) result.passed.push({ field: { owner: owned(owner), field: node.name.text } });
       else if (node.expression.kind !== ts.SyntaxKind.ThisKeyword && namespaced(node) === undefined) result.passed.push({ fieldNamed: node.name.text });
     }
-    const made = ts.isCallExpression(node) && isInject(node.expression) && node.arguments[0] !== undefined ? namespaced(node.arguments[0]) : undefined;
+    const made = ts.isCallExpression(node) && angularCoreExport(node.expression, { imports: shape.imports, declared: declarations }) === "inject" && node.arguments[0] !== undefined ? namespaced(node.arguments[0]) : undefined;
     if (made !== undefined && ts.isVariableDeclaration(node.parent) && node.parent.initializer === node && ts.isIdentifier(node.parent.name)) holders.set(node.parent.name.text, made);
     else if (made !== undefined && !(ts.isPropertyDeclaration(node.parent) && node.parent.initializer === node) && escapes(node as ts.Expression)) result.passed.push({ instance: made });
     if (ts.isConstructorDeclaration(node)) {

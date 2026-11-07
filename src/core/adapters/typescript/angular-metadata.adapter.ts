@@ -3,6 +3,7 @@ import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
 import { bindFile } from "./lexical-bindings.ts";
 import { unwrapped } from "./syntax.ts";
+import { ANGULAR_CORE } from "./angular-injection.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 import { isAngularWorkspace, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { AngularClass, Operand, TemplateSource } from "../../domain/relations/angular-class.ts";
@@ -21,7 +22,6 @@ import { manifestsOf, pathsByProject, projectOf } from "./angular-projects.ts";
 import { createModuleResolver, type ManifestPackages } from "./module-resolver.ts";
 import { providerIdentityEvidence, type ProviderIdentityEvidence } from "./provider-identity.ts";
 
-const ANGULAR_CORE = "@angular/core";
 const NO_PROVIDER_IDENTITY: ProviderIdentityEvidence = {
   tokens: new Set(), exportedTokens: new Set(), imports: new Map(), writes: new Set(),
 };

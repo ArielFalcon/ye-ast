@@ -20,7 +20,7 @@ export function resolveFunction(program: Program, unit: Unit, callee: ts.Express
   const receiver = unwrapped(expression.expression);
   if (cls === undefined) return undefined;
   if (receiver.kind === ts.SyntaxKind.ThisKeyword) return methodOf(unit.file, cls, expression.name.text);
-  const className = receiverClass(receiver, cls);
+  const className = receiverClass(unit, receiver, cls);
   if (className === undefined) return undefined;
   const owner = unit.classes.get(className);
   if (owner !== undefined) return methodOf(unit.file, owner, expression.name.text);
@@ -68,12 +68,12 @@ function methodOf(file: string, cls: ts.ClassLikeDeclaration, name: string): Res
 }
 
 /** The class a receiver is an instance of: a field or constructor parameter of the class that holds it by type or `inject(X)`. */
-function receiverClass(receiver: ts.Expression, cls: ts.ClassLikeDeclaration): string | undefined {
+function receiverClass(unit: Unit, receiver: ts.Expression, cls: ts.ClassLikeDeclaration): string | undefined {
   const name = ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword ? receiver.name.text : ts.isIdentifier(receiver) ? receiver.text : undefined;
   if (name === undefined) return undefined;
   for (const member of cls.members) {
     if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name) && member.name.text === name) {
-      const injected = member.initializer === undefined ? undefined : injectedClass(member.initializer);
+      const injected = member.initializer === undefined ? undefined : injectedClass(member.initializer, unit);
       return injected ?? (member.type === undefined ? undefined : typeName(member.type));
     }
   }

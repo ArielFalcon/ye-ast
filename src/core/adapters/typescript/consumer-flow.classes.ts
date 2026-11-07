@@ -2,6 +2,7 @@ import ts from "typescript";
 import { constructorParameters, typeName } from "./http-call-sites.adapter.ts";
 import type { Program, Unit } from "./consumer-flow.index.ts";
 import { declaringScope, namedFunction, propertyNameText, type NamedFunction } from "./consumer-flow.syntax.ts";
+import { injectedToken, type FileNames } from "./angular-injection.ts";
 import { isStatic } from "./syntax-names.ts";
 import { thisClass, unwrapped } from "./syntax.ts";
 
@@ -66,10 +67,10 @@ export function methodDeclared(cls: ts.ClassLikeDeclaration, name: string): Name
   return fn === undefined ? undefined : namedFunction(fn);
 }
 
-export function injectedClass(expression: ts.Expression): string | undefined {
-  if (!ts.isCallExpression(expression) || !ts.isIdentifier(expression.expression) || expression.expression.text !== "inject") return undefined;
-  const [first] = expression.arguments;
-  return first !== undefined && ts.isIdentifier(first) ? first.text : undefined;
+/** The class an Angular `inject(X)` call asks for, by the name `X` is written with. */
+export function injectedClass(expression: ts.Expression, names: FileNames): string | undefined {
+  const token = injectedToken(expression, names);
+  return token !== undefined && ts.isIdentifier(token) ? token.text : undefined;
 }
 
 /**
@@ -79,27 +80,27 @@ export function injectedClass(expression: ts.Expression): string | undefined {
 export function injectedInstance(program: Program, unit: Unit, receiver: ts.Expression): ClassRef | undefined {
   const bare = unwrapped(receiver);
   let name: string | undefined;
-  if (ts.isPropertyAccessExpression(bare) && bare.expression.kind === ts.SyntaxKind.ThisKeyword) name = injectedField(thisClass(bare), bare.name.text);
-  else if (ts.isIdentifier(bare)) name = injectedLocal(bare);
+  if (ts.isPropertyAccessExpression(bare) && bare.expression.kind === ts.SyntaxKind.ThisKeyword) name = injectedField(unit, thisClass(bare), bare.name.text);
+  else if (ts.isIdentifier(bare)) name = injectedLocal(unit, bare);
   return name === undefined ? undefined : classNamed(program, unit, name);
 }
 
-function injectedField(cls: ts.ClassLikeDeclaration | undefined, field: string): string | undefined {
+function injectedField(unit: Unit, cls: ts.ClassLikeDeclaration | undefined, field: string): string | undefined {
   if (cls === undefined) return undefined;
   const property = cls.members.find((member): member is ts.PropertyDeclaration => ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name) && member.name.text === field);
-  if (property !== undefined) return property.initializer === undefined ? undefined : injectedClass(property.initializer);
+  if (property !== undefined) return property.initializer === undefined ? undefined : injectedClass(property.initializer, unit);
   if (!ts.isClassDeclaration(cls) || !(ts.getDecorators(cls)?.length ?? 0)) return undefined;
   const parameter = constructorParameters(cls).find((candidate) => ts.isIdentifier(candidate.name) && candidate.name.text === field && ts.isParameterPropertyDeclaration(candidate, candidate.parent));
   return parameter?.type === undefined ? undefined : typeName(parameter.type);
 }
 
-function injectedLocal(identifier: ts.Identifier): string | undefined {
+function injectedLocal(unit: Unit, identifier: ts.Identifier): string | undefined {
   const scope = declaringScope(identifier);
   const statements = ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isModuleBlock(scope) ? scope.statements : [];
   for (const statement of statements) {
     if (!ts.isVariableStatement(statement)) continue;
     for (const declaration of statement.declarationList.declarations) {
-      if (ts.isIdentifier(declaration.name) && declaration.name.text === identifier.text && declaration.initializer !== undefined) return injectedClass(declaration.initializer);
+      if (ts.isIdentifier(declaration.name) && declaration.name.text === identifier.text && declaration.initializer !== undefined) return injectedClass(declaration.initializer, unit);
     }
   }
   return undefined;

@@ -253,6 +253,17 @@ test("a member read through an injected instance of its owner is followed from t
   assert.deepEqual(uses(await follow([SERVICE_FILE, local], memberRead("page.ts", IMPORT_LINES + 3), "owner")), [`${IMPORT_LINES + 3} owner.name|owner []`]);
 });
 
+test("only Angular's inject, under any import name, makes an injected instance; an inject from elsewhere is a frontier", async () => {
+  const lines = ["class Page {", "  svc = di(Svc)", "  show() { show(this.svc.order().owner.name) }", "}"];
+  const aliased = reader(lines, "import { Svc } from './svc'\nimport { inject as di } from '@angular/core'\n");
+  const namespaced = reader(lines.map((line) => line.replace("di(", "ng.inject(")), "import { Svc } from './svc'\nimport * as ng from '@angular/core'\n");
+  const foreign = reader(lines.map((line) => line.replace("di(", "inject(")), "import { Svc } from './svc'\nimport { inject } from './container'\n");
+
+  for (const file of [aliased, namespaced]) assert.deepEqual(uses(await follow([SERVICE_FILE, file], memberRead("page.ts", IMPORT_LINES + 3), "owner")), [`${IMPORT_LINES + 3} owner.name|owner []`]);
+  const lost = await follow([SERVICE_FILE, foreign], memberRead("page.ts", IMPORT_LINES + 3), "owner");
+  assert.deepEqual([uses(lost), frontiers(lost)], [[], [`${IMPORT_LINES + 3} unmodelled-flow:member receiver`]]);
+});
+
 test("the subclass of the owner reads the member through this; a subclass that redeclares it is a frontier at the declaration", async () => {
   const sub = reader(["class Sub extends Svc {", "  show() { show(this.order().owner.name) }", "}"]);
   const redeclared = reader(["class Sub extends Svc {", "  order = signal<Order>(null)", "  show() { show(this.order().owner.name) }", "}"]);
@@ -582,6 +593,8 @@ test("a site kind this reader does not follow yet is a frontier at its place, ne
 const ROUTES = (extra: string) => [
   source("order.resolver.ts", ["export const orderResolver = () => inject(OrderService).find(1)"]),
   source("order.component.ts", [
+    "import { inject } from '@angular/core'",
+    "import { ActivatedRoute } from '@angular/router'",
     "export class OrderComponent {",
     "  order = input<Order>()",
     "  route = inject(ActivatedRoute)",
@@ -603,7 +616,7 @@ test("a route resolver continues to the component input when input binding is en
   const result = await follow(files, resolverReturn, "owner");
   assert.deepEqual(next(result), ["input order@- owner"]);
   assert.deepEqual(steps(result), ["resolver-input"]);
-  assert.deepEqual(uses(result), ["4 owner.name|owner []"]);
+  assert.deepEqual(uses(result), ["6 owner.name|owner []"]);
   assert.deepEqual(result.uses[0]!.hops.map((hop) => hop.step), ["resolver-input", "route-data", "subscribe", "assign"]);
 });
 
@@ -611,7 +624,7 @@ test("without input binding the component input is a frontier with its reason, r
   const result = await follow(ROUTES(""), resolverReturn, "owner");
   assert.deepEqual(next(result), []);
   assert.equal(result.frontiers[0]!.cause, "unsupported-binding");
-  assert.deepEqual(uses(result), ["4 owner.name|owner []"]);
+  assert.deepEqual(uses(result), ["6 owner.name|owner []"]);
 });
 
 test("a function that no route registers adds nothing at its return", async () => {

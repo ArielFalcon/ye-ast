@@ -952,7 +952,7 @@ export class Walker {
   private routeHolders(cls: ts.ClassLikeDeclaration): ReadonlySet<string> {
     const names = new Set<string>();
     const holdsRoute = (type: ts.TypeNode | undefined, initializer: ts.Expression | undefined): boolean =>
-      (type !== undefined && typeName(type) === ROUTE_HOLDER) || (initializer !== undefined && injectedClass(initializer) === ROUTE_HOLDER);
+      (type !== undefined && typeName(type) === ROUTE_HOLDER) || (initializer !== undefined && injectedClass(initializer, this.unit) === ROUTE_HOLDER);
     for (const member of cls.members) {
       if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name) && holdsRoute(member.type, member.initializer)) names.add(member.name.text);
       if (ts.isConstructorDeclaration(member)) for (const parameter of member.parameters) if (ts.isIdentifier(parameter.name) && holdsRoute(parameter.type, undefined)) names.add(parameter.name.text);

@@ -43,6 +43,12 @@ const RULES: readonly Rule[] = [
     owners: ["typescript/syntax.ts"],
     pending: ["spring/java-receiver-methods.ts", "typescript/http-call-sites.adapter.ts"],
   },
+  {
+    concept: "recognizing Angular's inject by its spelling instead of its import (the owner is angular-injection.ts)",
+    pattern: /(?:getText\([^)]*\)|\.text)\s*[!=]==\s*"inject"/,
+    owners: [],
+    pending: ["typescript/http-call-sites.adapter.ts"],
+  },
 ];
 
 function sourceFiles(directory: string): string[] {
