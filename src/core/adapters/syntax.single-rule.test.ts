@@ -22,7 +22,7 @@ const RULES: readonly Rule[] = [
     concept: "parsing a file",
     pattern: /\bts\.createSourceFile\(/,
     owners: ["typescript/source-tree.ts", "typescript/url-define.ts", "typescript/typescript-lib-globals.extract.ts"],
-    pending: ["typescript/angular-router.extractor.ts", "typescript/import-origins.adapter.ts", "typescript/lexical-bindings.ts"],
+    pending: ["typescript/import-origins.adapter.ts", "typescript/lexical-bindings.ts"],
   },
   {
     concept: "a program over a file",
@@ -47,6 +47,12 @@ const RULES: readonly Rule[] = [
     concept: "recognizing Angular's inject by its spelling instead of its import (the owner is angular-injection.ts)",
     pattern: /(?:getText\([^)]*\)|\.text)\s*[!=]==\s*"inject"/,
     owners: [],
+    pending: ["typescript/http-call-sites.adapter.ts"],
+  },
+  {
+    concept: "reading the bindings of an import statement",
+    pattern: /\.importClause\b/,
+    owners: ["typescript/import-bindings.ts"],
     pending: ["typescript/http-call-sites.adapter.ts"],
   },
 ];

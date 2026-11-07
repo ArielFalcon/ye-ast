@@ -1,4 +1,5 @@
 import ts from "typescript";
+import type { ModuleShape } from "./module-shape.ts";
 import { unwrapped } from "./syntax.ts";
 
 export interface ProviderIdentityEvidence {
@@ -9,24 +10,9 @@ export interface ProviderIdentityEvidence {
 }
 
 /** Syntax evidence only. External module authentication is supplied by the caller. */
-export function providerIdentityEvidence(sf: ts.SourceFile, coreExternal: boolean, counts: ReadonlyMap<string, number>): ProviderIdentityEvidence {
+export function providerIdentityEvidence(sf: ts.SourceFile, shape: Pick<ModuleShape, "imports" | "reimported">, coreExternal: boolean, counts: ReadonlyMap<string, number>): ProviderIdentityEvidence {
   const imports = new Map<string, { module: string; imported: string }>();
-  const importCounts = new Map<string, number>();
-  const noteImport = (name: string): void => { importCounts.set(name, (importCounts.get(name) ?? 0) + 1); };
-  for (const s of sf.statements) {
-    if (!ts.isImportDeclaration(s) || !ts.isStringLiteral(s.moduleSpecifier)) continue;
-    if (s.importClause?.name) noteImport(s.importClause.name.text);
-    const b = s.importClause?.namedBindings;
-    if (b && ts.isNamespaceImport(b)) {
-      noteImport(b.name.text);
-      if (!s.importClause?.isTypeOnly) imports.set(b.name.text, { module: s.moduleSpecifier.text, imported: "*" });
-    }
-    if (b && ts.isNamedImports(b)) for (const e of b.elements) {
-      noteImport(e.name.text);
-      if (!s.importClause?.isTypeOnly && !e.isTypeOnly) imports.set(e.name.text, { module: s.moduleSpecifier.text, imported: (e.propertyName ?? e.name).text });
-    }
-  }
-  for (const [name, count] of importCounts) if (count !== 1) imports.delete(name);
+  for (const [name, { module, imported, typeOnly }] of shape.imports) if (imported !== "default" && typeOnly !== true && !shape.reimported.has(name)) imports.set(name, { module, imported });
   const tokens = new Set<string>();
   const exportedTokens = new Set<string>();
   for (const s of sf.statements) {

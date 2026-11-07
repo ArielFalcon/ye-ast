@@ -1,5 +1,5 @@
 import ts from "typescript";
-import type { RawImport } from "./angular-router.extractor.ts";
+import type { RawImport } from "./module-shape.ts";
 import { unwrapped } from "./syntax.ts";
 
 export const ANGULAR_CORE = "@angular/core";

@@ -8,6 +8,10 @@ export function unwrapped(expression: ts.Expression): ts.Expression {
   return inner;
 }
 
+export function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
+  return ts.canHaveModifiers(node) && (ts.getModifiers(node) ?? []).some((modifier) => modifier.kind === kind);
+}
+
 /**
  * The class whose instance `this` denotes at `node`. Arrow functions keep the `this` around them; an instance method,
  * accessor, constructor or property initializer binds it to its class; any other function, an object literal's method,

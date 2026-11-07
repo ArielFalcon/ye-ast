@@ -135,7 +135,7 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
         const usesCore = [...shape.imports.values()].some((binding) => binding.module === ANGULAR_CORE);
         const coreExternal = usesCore && "external" in await resolver.resolve(file, ANGULAR_CORE);
         const angular = readAngularMetadataFile(sf, shape, collectSites, coreExternal);
-        return { shape, angular, identity: proveMembers ? providerIdentityEvidence(sf, coreExternal, angular.memberEvidence.declarations) : NO_PROVIDER_IDENTITY };
+        return { shape, angular, identity: proveMembers ? providerIdentityEvidence(sf, shape, coreExternal, angular.memberEvidence.declarations) : NO_PROVIDER_IDENTITY };
       })();
       parsed.set(file, held);
     }
