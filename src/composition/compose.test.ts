@@ -719,6 +719,21 @@ test("callers and a trace at one snapshot read the relations once, under the one
   assert.equal(relationReads(), 1);
 });
 
+test("a measured callers names the origin reads of its reference proofs as stages", async () => {
+  writeFileSync(join(repo, "src", "origin.ts"), ["export function origin(): number {", "  return 1;", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "user.ts"), ["import { origin } from './origin';", "export function user(): number {", "  return origin();", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "origin");
+  const lines: string[] = [];
+  const { impact } = composeQueries({ scratchRoot, measure: (line) => lines.push(line) });
+
+  assert.ok((await impact.callers({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/origin.ts", symbol: "origin" }] })).ok);
+
+  const stages = lines.map((line) => JSON.parse(line).ye_ast as { event: string; stage?: string }).flatMap((record) => (record.event === "stage" ? [record.stage] : []));
+  assert.ok(stages.includes("import-origins"));
+  assert.ok(stages.includes("root-origins"));
+});
+
 test("a trace over a real index leaves a library global's member call as a global leaf, and keeps it a cut where a local shadows the global", async () => {
   writeFileSync(join(repo, "src", "clamp.ts"), ["export function clamp(value: number): number {", "  return Math.max(value, 0);", "}", "export function max(value: number): number {", "  return value;", "}", ""].join("\n"));
   writeFileSync(join(repo, "src", "shadow.ts"), ["import { max } from './clamp';", "export function shadowed(value: number): number {", "  const Math = { max };", "  return Math.max(value);", "}", ""].join("\n"));

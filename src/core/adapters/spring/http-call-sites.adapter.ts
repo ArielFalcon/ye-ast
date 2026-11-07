@@ -25,7 +25,8 @@ import { ancestorsOf, NO_VARIABLES, receiverOf, symbolOf, type Invocation } from
 import { externalNames, scopeOf, type Expr, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 import { stringLiteralValue } from "./java-literals.ts";
 import { isAnnotation, annotationUses, createSpringAnnotations, pathExpressions, type SpringAnnotations } from "./request-mapping.ts";
-import { PLACEHOLDER, JavaValueEvaluator } from "./java-value-evaluator.ts";
+import { JavaValueEvaluator } from "./java-value-evaluator.ts";
+import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 
 const UNDECIDED = Symbol("undecided");
 const ORIGIN = /^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/?#]*)([\s\S]*)$/;
@@ -334,7 +335,7 @@ function splitOrigin(text: string): { origin?: string; rest: string } {
   const match = ORIGIN.exec(text);
   if (match === null) return { rest: text };
   const origin = match[1] ?? "";
-  const cut = origin.indexOf(PLACEHOLDER);
+  const cut = origin.indexOf(RUN_TIME_HOLE);
   return cut === -1 ? { origin, rest: match[2] ?? "" } : { origin: origin.slice(0, cut), rest: text.slice(text.indexOf(origin) + cut) };
 }
 
@@ -353,11 +354,11 @@ function joinPath(...parts: readonly string[]): string {
  * path under a client base the snapshot does not decide keeps its path, with the base `UNDECIDED`.
  */
 function targetOf(text: string, client: Declared): { base?: string | typeof UNDECIDED; path: string } | undefined {
-  if (text.startsWith(PLACEHOLDER)) return undefined;
+  if (text.startsWith(RUN_TIME_HOLE)) return undefined;
   const absolute = splitOrigin(text);
   const declared = typeof client === "string" ? splitOrigin(client) : { rest: "" };
   const base = absolute.origin ?? declared.origin ?? client;
   const path = absolute.origin === undefined ? joinPath(declared.rest, text) : pathOf(absolute.rest);
   const segments = path.split("/").filter((segment) => segment !== "");
-  return segments.length > 0 && segments.every((segment) => segment === PLACEHOLDER) ? undefined : { ...(base === undefined ? {} : { base }), path };
+  return segments.length > 0 && segments.every((segment) => segment === RUN_TIME_HOLE) ? undefined : { ...(base === undefined ? {} : { base }), path };
 }
