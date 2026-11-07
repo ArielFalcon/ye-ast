@@ -343,12 +343,13 @@ test("an element two components match and a binding to a directive are frontiers
   assert.deepEqual([...ambiguous.next, ...bound.next], []);
 });
 
-test("the value that contains the changed property handed to a method, $any or another call is a frontier; the changed value itself is an unmodelled use", () => {
+test("the value handed to a component method continues in it; one handed to $any or another object's call is a frontier", () => {
   const result = follow('<p (click)="select(order())"></p>\n<p [title]="$any(order())"></p>\n{{ format(order()) }}\n{{ helper.show(order()) }}', ["owner"]);
   const exact = follow('<p (click)="select(order().owner)"></p>', ["owner"]);
 
-  assert.deepEqual(frontiers(result), ["unmodelled-flow:template-call:select@1", "unmodelled-flow:$any@2", "unmodelled-flow:template-call:format@3", "unmodelled-flow:call:show@4"]);
-  assert.deepEqual(uses(exact), ["owner | owner []@1"]);
+  assert.deepEqual(frontiers(result), ["unmodelled-flow:$any@2", "unmodelled-flow:call:show@4"]);
+  assert.deepEqual(result.next.map((next) => next.carrier.site.kind === "method-parameter" && next.carrier.site.method), ["select", "format"]);
+  assert.deepEqual(exact.next.map((next) => next.carrier.path), [[]]);
 });
 
 test("a method called on the changed value dereferences it, and one called on its container is a frontier", () => {
@@ -364,9 +365,9 @@ test("uses, next carriers and frontiers come in source order with lines relative
   const scope = [card("OwnerCard", "app-owner-card")];
   const first = follow(text, ["owner"], { scope, firstLine: 20 });
 
-  assert.deepEqual(uses(first), ["owner.name | owner []@20", "owner | owner []@22", "owner | owner []@23", "owner.id | owner []@24"]);
-  assert.deepEqual(frontiers(first), ["unmodelled-flow:template-call:select@20"]);
-  assert.deepEqual(first.next.map((next) => next.carrier.site.kind === "input" && next.carrier.site.name), ["owner", "other"]);
+  assert.deepEqual(uses(first), ["owner.name | owner []@20", "owner | owner []@23", "owner.id | owner []@24"]);
+  assert.deepEqual(frontiers(first), []);
+  assert.deepEqual(first.next.map((next) => next.carrier.site.kind === "input" ? next.carrier.site.name : next.carrier.site.kind === "method-parameter" && next.carrier.site.method), ["select", "owner", "other", "show"]);
   assert.deepEqual(follow(text, ["owner"], { scope, firstLine: 20 }), first);
 });
 
@@ -539,4 +540,111 @@ test("a use after the @switch block is not guarded by its cases", () => {
   const result = follow("@switch (order().kind) { @case ('A') { } }\n{{ order().kind }}", ["kind"]);
 
   assert.deepEqual(guardsByUse(result).at(-1), "kind: ");
+});
+
+function followCall(text: string, returned: NonNullable<FlowResult["next"][number]["returnsTo"]>, path: AccessPath, options: { offset?: number; firstLine?: number } = {}): FlowResult {
+  const unit: TemplateUnit = { component: OWNER, path: "src/app/order-view.html", text, firstLine: options.firstLine ?? 1, ...(options.offset === undefined ? {} : { offset: options.offset }), scope: [] };
+  return createTemplateFlowReader().follow(unit, { site: returned, path });
+}
+
+const returnsOf = (result: FlowResult) => result.next.map((next) => next.returnsTo!);
+
+test("a component method that receives the value in a template call is the next carrier, and the call comes back to its expression", () => {
+  const text = "{{ label(order()) }}\n{{ describe(1, order().owner) }}";
+  const result = follow(text, ["owner"]);
+  const [label, describe] = result.next;
+
+  assert.deepEqual(label?.carrier, { site: { kind: "method-parameter", repo: "shop", file: OWNER.path, owner: OWNER.symbol, method: "label", index: 0 }, path: ["owner"] });
+  assert.deepEqual(describe?.carrier, { site: { kind: "method-parameter", repo: "shop", file: OWNER.path, owner: OWNER.symbol, method: "describe", index: 1 }, path: [] });
+  assert.deepEqual(describe?.hops.map((hop) => ({ step: hop.step, line: hop.evidence.line, rewrite: hop.rewrite })), [{ step: "argument", line: 2, rewrite: [{ from: ["owner"], to: [] }] }]);
+  assert.deepEqual(
+    returnsOf(result).map(({ resource, start, end, callee, argument }) => [resource, text.slice(start, end), callee, argument]),
+    [
+      ["src/app/order-view.html", "label(order())", "label", 0],
+      ["src/app/order-view.html", "describe(1, order().owner)", "describe", 1],
+    ],
+  );
+  assert.deepEqual(result.uses, []);
+  assert.deepEqual(result.frontiers, []);
+});
+
+test("two calls on one line, and one call with the value in two arguments, stay apart by expression and argument", () => {
+  const text = "{{ pick(order(), order()) + pick(order()) }}";
+  const result = follow(text, ["owner"]);
+
+  assert.deepEqual(
+    returnsOf(result).map(({ start, end, argument }) => [text.slice(start, end), argument]),
+    [
+      ["pick(order(), order())", 0],
+      ["pick(order(), order())", 1],
+      ["pick(order())", 0],
+    ],
+  );
+});
+
+test("the offsets of a template call are in the coordinates of its file: an inline template adds where its text starts", () => {
+  const text = "<p>{{ label(order()) }}</p>";
+  const [plain] = returnsOf(follow(text, ["owner"]));
+  const [shifted] = returnsOf(
+    createTemplateFlowReader().follow({ component: OWNER, path: OWNER.path, text, firstLine: 5, offset: 400, scope: [] }, { site: { kind: "member", repo: "shop", file: OWNER.path, owner: OWNER.symbol, member: "order" }, path: ["owner"] }),
+  );
+
+  assert.deepEqual([shifted?.start, shifted?.end, shifted?.resource], [plain!.start + 400, plain!.end + 400, OWNER.path]);
+});
+
+test("a call on a helper or on the compiler's cast, and a template variable called as a function, are not method calls of the component", () => {
+  const result = follow("{{ helper.show(order()) }}\n{{ $any(order()) }}\n@for (f of fns; track f) { {{ f(order()) }} }", ["owner"]);
+
+  assert.deepEqual(result.next, []);
+  assert.deepEqual(frontiers(result), ["unmodelled-flow:call:show@1", "unmodelled-flow:$any@2", "unmodelled-flow:call:f@3"]);
+});
+
+test("a template call under a guard that reaches the changed value is a frontier, as a binding is", () => {
+  const result = follow("@if (order().owner) { {{ label(order()) }} }", ["owner"]);
+
+  assert.deepEqual(result.next, []);
+  assert.deepEqual(frontiers(result), ["unmodelled-flow:guarded-argument:label@1"]);
+});
+
+test("the result of a template call is read like a member: its reads with their guards, through an alias, and in another call", () => {
+  const text = "{{ label(order()).owner.name }}\n@let y = label(order());\n{{ y.owner.id }}\n{{ other(label(order())) }}";
+  const [direct, aliased, nested] = returnsOf(follow(text, ["owner"]));
+  const guardedText = "{{ label(order())?.owner.name }}";
+  const [guarded] = returnsOf(follow(guardedText, ["owner"]));
+
+  assert.deepEqual(uses(followCall(text, direct!, ["owner"])), ["owner.name | owner []@1"]);
+  assert.deepEqual(uses(followCall(text, aliased!, ["owner"])), ["owner.id | owner []@3"]);
+  assert.deepEqual(
+    followCall(text, nested!, ["owner"]).next.map((next) => next.carrier.site.kind === "method-parameter" && next.carrier.site.method),
+    ["other"],
+  );
+  assert.deepEqual(guardsByUse(followCall(guardedText, guarded!, ["owner"])), ["owner.name: optional-chain(!= null true)"]);
+});
+
+test("the result of a template call that is a container of the changed value, shown or tested, has no use", () => {
+  const text = "{{ label(order()) }}\n@if (label(order())) { }";
+  const [shown, tested] = returnsOf(follow(text, ["owner"]));
+
+  assert.deepEqual(followCall(text, shown!, ["owner"]), { uses: [], next: [], frontiers: [] });
+  assert.deepEqual(followCall(text, tested!, ["owner"]), { uses: [], next: [], frontiers: [] });
+});
+
+test("an event handler's result is compared strictly with false, whether it is the handler or the last of its statements", () => {
+  const text = '<p (click)="select(order())"></p>\n<p (click)="log(); select(order().owner)"></p>';
+  const [plain, chained] = returnsOf(follow(text, ["owner"]));
+  const compared = { steps: [], end: { kind: "compare", operator: "===", literal: false } };
+
+  assert.deepEqual(followCall(text, plain!, []).uses.map((use) => use.operation), [compared]);
+  assert.deepEqual(followCall(text, chained!, []).uses.map((use) => use.operation), [compared]);
+  const early = '<p (click)="select(order().owner); log()"></p>';
+  assert.deepEqual(followCall(early, returnsOf(follow(early, ["owner"]))[0]!, []).uses.map((use) => use.operation.end), [{ kind: "consume", as: "handed-on" }]);
+});
+
+test("an alias that holds the changed value without being followed ends in a frontier, never in silence", () => {
+  const container = follow("@let y = ok ? order : other;\n{{ y.owner.name }}", ["owner"]);
+  const exact = follow("@let y = ok ? order().owner : other;\n{{ y.name }}", ["owner"]);
+
+  assert.deepEqual(frontiers(container), ["unmodelled-flow:let:y@1"]);
+  assert.deepEqual(frontiers(exact), ["unmodelled-flow:let:y@1"]);
+  assert.deepEqual(frontiers(follow("@let y = order().owner.name;\n{{ y }}", ["owner"])), []);
 });

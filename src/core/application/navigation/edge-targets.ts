@@ -10,8 +10,9 @@ import { declarationAt, importBindings } from "./import-bindings.ts";
 /**
  * What the edges the graph resolved really reach, read from the root of the name each spells at its position through
  * the source file's own bindings (`ImportOrigins.rootOrigins`) and, for a root an import binds, the declaration the
- * module statements and the graph's `imports` edges join it to (`importBindings`). The one owner of that decision for
- * every family that reads graph edges as dependences.
+ * module statements and the graph's `imports` edges join it to (`importBindings`). An edge whose root proof reads past
+ * its root (`RootOrigin.pastRoot`) is kept: the root says where the chain starts, not what the call runs. The one owner
+ * of that decision for every family that reads graph edges as dependences.
  */
 export interface EdgeTargets {
   /** One verdict per edge, in the order received; an edge the graph placed nowhere is kept. */
@@ -30,11 +31,6 @@ export interface EdgeTargetsDeps {
    * edge is redirected.
    */
   modules?: ModuleDependencies | { reader: ModuleDependenciesReader; sources: readonly SourceFile[] } | undefined;
-  /**
-   * Keep every edge whose root proof reads past its root (`RootOrigin.pastRoot`) instead of judging it: the root says
-   * where the chain starts, not what the call runs. Trace sets it; impact and outline judge such an edge by its root.
-   */
-  keepPastRoot?: true;
 }
 
 /** A graph edge with both of its ends. */
@@ -55,7 +51,7 @@ export type EdgeTarget = Exclude<EdgeVerdict<GraphSymbol>, { kind: "drop" }> | {
 const KEEP: EdgeTarget = { kind: "keep" };
 const IMPORT = "imports";
 
-export function createEdgeTargets({ origins, store, modules, keepPastRoot }: EdgeTargetsDeps): EdgeTargets {
+export function createEdgeTargets({ origins, store, modules }: EdgeTargetsDeps): EdgeTargets {
   const verdicts = new Map<string, EdgeTarget>();
   /** Per file, the declaration each local name its imports bind reaches, when the join proves exactly one. */
   const bound = new Map<string, ReadonlyMap<string, GraphSymbol>>();
@@ -81,7 +77,7 @@ export function createEdgeTargets({ origins, store, modules, keepPastRoot }: Edg
       const roots = await origins.rootOrigins(fresh.map(({ edge, source, target }) => ({ file: source.file, line: edge.line!, column: edge.column! + 1, kind: edge.kind, name: target.name })), signal);
       for (const [index, { edge, source, target }] of fresh.entries()) {
         const root = roots[index];
-        if (root === undefined || (keepPastRoot === true && root.pastRoot === true)) continue;
+        if (root === undefined || root.pastRoot === true) continue;
         const proven = root.status === "complete" && root.value.kind === "repository" && root.bare === true ? (await bindingsOf(source.file)).get(target.name) ?? (root.value.declared === undefined ? undefined : declarationAt(store, root.value.file, root.value.declared)) : undefined;
         const verdict = edgeVerdict<GraphNodeId>(root, proven?.id, target);
         verdicts.set(edgeKey(edge), verdict.kind === "redirect" ? { kind: "redirect", to: proven! } : verdict.kind === "drop" && root.status === "complete" ? { kind: "drop", root: root.value } : { kind: "keep" });

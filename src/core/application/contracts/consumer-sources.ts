@@ -26,6 +26,8 @@ import { createHeadReader, type HeadReaderDeps } from "../snapshot/head-reading.
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import { ABORTED, declaredTrustOf, withScratch } from "../snapshot/read-snapshot.ts";
 import type { WorkspaceReadOperation } from "../topology/workspace-operation.ts";
+import type { WorkspaceSnapshotContext } from "../topology/workspace-snapshots.ts";
+import type { Handler } from "../../domain/entrypoints/http-route.ts";
 import { entrypointsOf } from "../topology/workspace-join.ts";
 import { callersOfFunction, occurrencesOfMember } from "./consumer-callers.ts";
 import { createConsumerTemplateReader } from "./consumer-templates.ts";
@@ -45,6 +47,8 @@ export interface ConsumerSourcesDeps {
   /** Proves which unresolved references of the code graph are real occurrences; without it no call through an injected field or local is settled. */
   importOrigins?: ImportOriginsReader;
 }
+
+type ReadPlan = Extract<WorkspaceSnapshotContext["plans"][number], { kind: "read" }>;
 
 interface Reading {
   flow: ConsumerFlowReader;
@@ -67,36 +71,57 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
         if (fact.status === "unknown") return { ok: false as const, fault: { kind: "git-failed" as const, detail: "the workspace read answered nothing" } };
 
         return withScratch(deps.heads.scratch, async (directory) => {
-          const readings = new Map<string, Reading>();
+          const readings = new Map<string, Promise<Result<Reading, WorkspaceFault>>>();
           const stores: CodeGraphReader[] = [];
-          const session = async (hypothesis: Hypothesis): Promise<Result<ConsumerSession, WorkspaceFault>> => {
-            const operation = `${hypothesis.method} ${hypothesis.path}`;
-            const { links, ambiguousCalls, unresolvedCalls } = httpCallsOf(fact.value.repositories, fact.value.workspace.gateways, operation);
-            const serving = fact.value.repositories
-              .flatMap((repository) => entrypointsOf(repository).entrypoints.flatMap((entrypoint) => (entrypoint.kind === "http-route" && entrypoint.name === operation ? [{ repo: repository.repo, handler: entrypoint.handler }] : [])))
-              .sort((a, b) => compareText(a.repo, b.repo) || compareText(a.handler.path, b.handler.path) || a.handler.line - b.handler.line);
-            const callers = new Set(links.filter((link) => isCallOf(link, operation)).map((link) => link.from.repo));
+          let workspaceJoin: WorkspaceHttpJoin | undefined;
 
-            for (const plan of context.plans) {
-              if (plan.kind !== "read" || !callers.has(plan.at.repoId) || readings.has(plan.at.repoId)) continue;
-              const trust = (await declaredTrustOf(deps.heads, plan.at.declared)) ?? "untrusted";
-              const prepared = await prepareCommit({ ...deps.heads, preparation: context.preparation }, plan.at.source, plan.at.revision, directory, context.selection, { scope: context.scope, trust }, context.signal);
-              if (!prepared.ok) return prepared;
-              const loaded = await prepared.value.sources(context.signal);
-              if (!loaded.ok) return loaded;
-              const { sources } = loaded.value;
-              const indexed = await heads.indexHead(prepared.value, directory, context.signal);
-              if (indexed === "aborted") return ABORTED;
-              if (indexed !== "unavailable" && "fault" in indexed) return { ok: false, fault: indexed.fault };
-              if (indexed !== "unavailable") stores.push(indexed.store);
-              const origins = indexed === "unavailable" ? undefined : await deps.relations.extract(sources, { memberProofs: memberProofContextOf(loaded.value, context.scope) });
-              const proofs = indexed === "unavailable" ? undefined : await referenceProofsOf(deps.importOrigins?.(loaded.value.sources), indexed.store, loaded.value, context.signal);
-              readings.set(plan.at.repoId, {
+          const readRepository = async (plan: ReadPlan): Promise<Result<Reading, WorkspaceFault>> => {
+            const trust = (await declaredTrustOf(deps.heads, plan.at.declared)) ?? "untrusted";
+            const prepared = await prepareCommit({ ...deps.heads, preparation: context.preparation }, plan.at.source, plan.at.revision, directory, context.selection, { scope: context.scope, trust }, context.signal);
+            if (!prepared.ok) return prepared;
+            const loaded = await prepared.value.sources(context.signal);
+            if (!loaded.ok) return loaded;
+            const { sources } = loaded.value;
+            const indexed = await heads.indexHead(prepared.value, directory, context.signal);
+            if (indexed === "aborted") return ABORTED;
+            if (indexed !== "unavailable" && "fault" in indexed) return { ok: false, fault: indexed.fault };
+            if (indexed !== "unavailable") stores.push(indexed.store);
+            const origins = indexed === "unavailable" ? undefined : await deps.relations.extract(sources, { memberProofs: memberProofContextOf(loaded.value, context.scope) });
+            const proofs = indexed === "unavailable" ? undefined : await referenceProofsOf(deps.importOrigins?.(loaded.value.sources), indexed.store, loaded.value, context.signal);
+            return {
+              ok: true,
+              value: {
                 flow: await deps.flow(sources, plan.at.repoId),
                 templates: await createConsumerTemplateReader({ metadata: deps.metadata, flow: deps.templateFlow }, sources),
                 graph: indexed === "unavailable" ? undefined : indexed.store,
                 inbound: indexed === "unavailable" || origins === undefined ? undefined : inboundEdgesOf(indexed.store, origins, proofs),
-              });
+              },
+            };
+          };
+
+          /** A repository is read once, by whichever session asks first; a session that asks meanwhile waits for that reading, and a failed reading is made again by the next. */
+          const readingOf = (plan: ReadPlan): Promise<Result<Reading, WorkspaceFault>> => {
+            const held = readings.get(plan.at.repoId);
+            if (held !== undefined) return held;
+            const reading = readRepository(plan).then((result) => {
+              if (!result.ok) readings.delete(plan.at.repoId);
+              return result;
+            });
+            readings.set(plan.at.repoId, reading);
+            return reading;
+          };
+
+          const session = async (hypothesis: Hypothesis): Promise<Result<ConsumerSession, WorkspaceFault>> => {
+            const operation = `${hypothesis.method} ${hypothesis.path}`;
+            const join = (workspaceJoin ??= joinHttpCalls(fact.value.repositories, fact.value.workspace.gateways));
+            const callers = new Set(join.links.filter((link) => isCallOf(link, operation)).map((link) => link.from.repo));
+
+            const reached = new Map<string, Reading>();
+            for (const plan of context.plans) {
+              if (plan.kind !== "read" || !callers.has(plan.at.repoId)) continue;
+              const reading = await readingOf(plan);
+              if (!reading.ok) return reading;
+              reached.set(plan.at.repoId, reading.value);
             }
 
             const { schema, snapshot, producer, inputs } = fact;
@@ -111,18 +136,21 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
               ok: true,
               value: {
                 base: { ...base, inputs: { ...base.inputs, engines: sortedEngines({ ...base.inputs.engines, ...deps.engines }) } },
-                links,
-                serving,
-                unresolvedCalls,
-                ambiguousCalls,
+                links: join.links,
+                serving: join.serving.get(operation) ?? [],
+                unresolvedCalls: join.unresolvedCalls,
+                ambiguousCalls: join.ambiguousCalls.filter((call) => call.reaching.has(operation)).map(({ from, repos }) => ({ from, repos })),
                 cuts: fact.status === "partial" ? fact.cuts : [],
                 callers: ({ repo, ...declaration }) => {
-                  const reading = readings.get(repo);
+                  const reading = reached.get(repo);
                   return callersOfFunction(reading?.graph, reading?.inbound, declaration);
                 },
-                memberOccurrences: () => occurrencesOfMember(),
-                flow: { follow: (carrier) => readings.get(carrier.site.repo)?.flow.follow(carrier) ?? sourceUnreadable(carrier.site) },
-                templates: { follow: (carrier) => readings.get(carrier.site.repo)?.templates.follow(carrier) ?? sourceUnreadable(carrier.site) },
+                memberOccurrences: ({ repo, ...member }) => {
+                  const reading = reached.get(repo);
+                  return occurrencesOfMember(reading?.graph, reading?.inbound, member);
+                },
+                flow: { follow: (carrier) => reached.get(carrier.site.repo)?.flow.follow(carrier) ?? sourceUnreadable(carrier.site) },
+                templates: { follow: (carrier) => reached.get(carrier.site.repo)?.templates.follow(carrier) ?? sourceUnreadable(carrier.site) },
               },
             };
           };
@@ -139,36 +167,61 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
 }
 
 /**
- * The HTTP call sites of the workspace decided once each, against the routes of every repository including their own: the
- * links they make, the call sites that reach the operation in more than one repository, and those whose target no read
- * could evaluate. A call site two repositories serve equally is ambiguous, never linked to its own.
+ * What the workspace says about HTTP whatever the hypothesis, decided once: the links its call sites make, the call sites
+ * no read could evaluate, the call sites two repositories serve equally with the operations each candidate would link
+ * them to, and the handlers each operation has. A hypothesis only selects from it.
  */
-function httpCallsOf(repositories: readonly WorkspaceRepository[], gateways: readonly Gateway[], operation: string): Pick<ConsumerSession, "links" | "ambiguousCalls" | "unresolvedCalls"> {
+interface WorkspaceHttpJoin {
+  links: readonly Link[];
+  unresolvedCalls: ConsumerSession["unresolvedCalls"];
+  ambiguousCalls: readonly (ConsumerSession["ambiguousCalls"][number] & { reaching: ReadonlySet<string> })[];
+  serving: ReadonlyMap<string, ConsumerSession["serving"]>;
+}
+
+/**
+ * The HTTP call sites of the workspace decided once each, against the routes of every repository including their own. A
+ * call site two repositories serve equally is ambiguous, never linked to its own.
+ */
+function joinHttpCalls(repositories: readonly WorkspaceRepository[], gateways: readonly Gateway[]): WorkspaceHttpJoin {
   const entrypoints = repositories.map(entrypointsOf);
   const links = new Map<string, Link>();
-  const ambiguousCalls: ConsumerSession["ambiguousCalls"][number][] = [];
+  const ambiguousCalls: WorkspaceHttpJoin["ambiguousCalls"][number][] = [];
   const unresolvedCalls: ConsumerSession["unresolvedCalls"][number][] = [];
   for (const site of repositories.flatMap((repository) => repository.callSites)) {
     if (site.transport !== "http") continue;
     const target = httpTargetOf(site);
     const from = { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol };
     if (target === undefined) {
-      if (site.target.status === "unknown") unresolvedCalls.push({ repo: site.repo, file: site.file, line: site.line, symbol: site.symbol });
+      if (site.target.status === "unknown") unresolvedCalls.push(from);
       continue;
     }
     const joined = matchCallSite(site, target, entrypoints, gateways);
     for (const link of joined.links ?? []) links.set(link.id, link);
     const repos = joined.ambiguous?.repos.toSorted(compareText);
-    if (repos !== undefined && repos.some((repo) => matchCallSite(site, target, entrypoints.filter((candidate) => candidate.repo === repo), gateways).links?.some((link) => isCallOf(link, operation)))) ambiguousCalls.push({ from, repos });
+    if (repos === undefined) continue;
+    const reaching = new Set(repos.flatMap((repo) => (matchCallSite(site, target, entrypoints.filter((candidate) => candidate.repo === repo), gateways).links ?? []).flatMap((link) => httpRouteName(link) ?? [])));
+    ambiguousCalls.push({ from, repos, reaching });
   }
   const byPlace = (a: { repo: string; file: string; line: number }, b: { repo: string; file: string; line: number }) => compareText(a.repo, b.repo) || compareText(a.file, b.file) || a.line - b.line;
+  const serving = new Map<string, { repo: string; handler: Handler }[]>();
+  for (const { repo, entrypoints: routes } of entrypoints) {
+    for (const entrypoint of routes) {
+      if (entrypoint.kind === "http-route") serving.set(entrypoint.name, [...(serving.get(entrypoint.name) ?? []), { repo, handler: entrypoint.handler }]);
+    }
+  }
+  for (const handlers of serving.values()) handlers.sort((a, b) => compareText(a.repo, b.repo) || compareText(a.handler.path, b.handler.path) || a.handler.line - b.handler.line);
   return {
     links: [...links.values()].sort((a, b) => compareText(a.id, b.id)),
-    ambiguousCalls: ambiguousCalls.sort((a, b) => byPlace(a.from, b.from)),
     unresolvedCalls: unresolvedCalls.sort(byPlace),
+    ambiguousCalls: ambiguousCalls.sort((a, b) => byPlace(a.from, b.from)),
+    serving,
   };
 }
 
+function httpRouteName(link: Link): string | undefined {
+  return link.transport === "http" && link.to.kind === "http-route" ? link.to.name : undefined;
+}
+
 export function isCallOf(link: Link, operation: string): boolean {
-  return link.transport === "http" && link.to.kind === "http-route" && link.to.name === operation;
+  return httpRouteName(link) === operation;
 }

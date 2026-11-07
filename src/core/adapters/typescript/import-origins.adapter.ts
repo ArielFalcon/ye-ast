@@ -35,7 +35,7 @@ interface FileIndex {
 
 export type ParseSource = (file: SourceFile) => ts.SourceFile;
 
-const parseWithParents: ParseSource = (file) => sourceTree(file, ts.ScriptTarget.Latest, true);
+const parseShared: ParseSource = (file) => sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
 
 /**
  * Reads, per file, the name each import binds to the specifier it came from, and resolves that specifier through the
@@ -46,7 +46,7 @@ const parseWithParents: ParseSource = (file) => sourceTree(file, ts.ScriptTarget
  * files the snapshot already holds. A file that declares a name it also imports is `unknown` for that name, because the
  * declaration may shadow the import at the place the reference sits.
  */
-export function createImportOrigins(sources: readonly SourceFile[], parse: ParseSource = parseWithParents): ImportOrigins {
+export function createImportOrigins(sources: readonly SourceFile[], parse: ParseSource = parseShared): ImportOrigins {
   const texts = new Map(sources.map((file) => [file.path, file.content]));
   const files = new Map(sources.map((file) => [file.path, file]));
   const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(sources));
@@ -790,8 +790,7 @@ function topLevelNames(statement: ts.Statement): string[] {
 
 /** What one file imports and what it binds. */
 function describe(file: SourceFile): FileShape {
-  /** No parent pointers: the two walks below descend, and a parent on every node doubles what a tree costs. */
-  const tree = sourceTree(file, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  const tree = sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
   return describeTree(tree);
 }
 

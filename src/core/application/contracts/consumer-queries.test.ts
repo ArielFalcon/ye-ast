@@ -10,7 +10,7 @@ import type { TestedGuard, UseOperation } from "../../domain/contracts/verdict.t
 import type { FactBase } from "../../domain/shared/fact.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import type { ConsequencesRequest, ConsumerQueries } from "../../ports/consumer-queries.port.ts";
-import type { ConsumerCaller, ConsumerCallers, ConsumerSession, PreparedWorkspace } from "../../ports/consumer-sources.port.ts";
+import type { ConsumerCaller, ConsumerCallers, ConsumerMemberOccurrences, ConsumerSession, PreparedWorkspace } from "../../ports/consumer-sources.port.ts";
 import { consequencesOn, createConsumerQueries } from "./consumer-queries.ts";
 
 const path = (text: string) => parseAccessPath(text)!;
@@ -53,6 +53,7 @@ interface Setup {
   flow?: Record<string, FlowResult>;
   templates?: Record<string, FlowResult>;
   callers?: Record<string, ConsumerCallers>;
+  members?: Record<string, ConsumerMemberOccurrences>;
   serving?: ConsumerSession["serving"];
   unresolvedCalls?: ConsumerSession["unresolvedCalls"];
   ambiguousCalls?: ConsumerSession["ambiguousCalls"];
@@ -73,7 +74,7 @@ function setup(options: Setup = {}) {
     ambiguousCalls: options.ambiguousCalls ?? [],
     cuts: [],
     callers: (declaration) => (asked.push(declaration.symbol), options.callers?.[declaration.symbol] ?? { kind: "found", callers: [] }),
-    memberOccurrences: () => ({ kind: "unavailable" }),
+    memberOccurrences: ({ member }) => options.members?.[member] ?? { kind: "found", occurrences: [] },
     flow: { follow: (carrier) => (followed.push(carrier), options.flow?.[carrierKey(carrier.site)] ?? NO_FLOW) },
     templates: { follow: (carrier) => (templated.push(carrier), options.templates?.[carrierKey(carrier.site)] ?? NO_FLOW) },
   };
@@ -546,4 +547,111 @@ test("followed call sites are evidence of the answer even when no chain reaches 
 
   assert.deepEqual(fact.value.findings, []);
   assert.deepEqual(fact.evidence.map((place) => [place.path, place.line, "repo" in place && place.repo]), [["src/owner.service.ts", 10, "web"]]);
+});
+
+const SERVICE_MEMBER = { kind: "member" as const, repo: "web", file: "src/svc.ts", owner: "Svc", member: "owner", line: 6 };
+const memberReadAt = (file: string, line: number) => ({ kind: "member-read" as const, repo: "web", file, line, column: 1, owner: "Svc", member: "owner" });
+const reachingMember = { [carrierKey(siteOf())]: { uses: [], next: [{ carrier: { site: SERVICE_MEMBER, path: path("address") }, hops: [] }], frontiers: [] } };
+
+test("a member that holds the value is followed into the reads of other classes whose receiver the graph resolved", async () => {
+  const flow = { ...reachingMember, [carrierKey(memberReadAt("src/page.ts", 20))]: { uses: [use(21, { operation: READ })], next: [], frontiers: [] } };
+  const members = { owner: { kind: "found" as const, occurrences: [{ file: "src/page.ts", line: 20, column: 1, receiver: "injected" as const }] } };
+  const { ask, followed } = setup({ flow, members });
+
+  const fact = await ask();
+
+  assert.deepEqual(verdictsOf(fact), ["incompatible"]);
+  assert.deepEqual(followed.filter((carrier) => carrier.site.kind === "member-read").map((carrier) => carrierKey(carrier.site)), [carrierKey(memberReadAt("src/page.ts", 20))]);
+});
+
+test("a read of the member through a receiver the graph did not resolve is a frontier at that read, and a template read is left to the template reader", async () => {
+  const members = {
+    owner: {
+      kind: "found" as const,
+      occurrences: [
+        { file: "src/guess.ts", line: 4, column: 1, receiver: "other" as const },
+        { file: "src/page.ts", line: 9, column: 1, receiver: "template" as const, resource: "src/page.html" },
+      ],
+    },
+  };
+  const { ask, followed } = setup({ flow: reachingMember, members });
+
+  const fact = await ask();
+
+  assert.deepEqual(verdictsOf(fact), ["unmodelled-flow:member-receiver"]);
+  assert.deepEqual(fact.value.findings[0]?.evidence.at(-1)?.line, 4);
+  assert.equal(followed.filter((carrier) => carrier.site.kind === "member-read").length, 0);
+});
+
+test("a member the graph cannot enumerate is a frontier at its declaration, never an empty answer", async () => {
+  for (const [members, via] of [
+    [{ owner: { kind: "unavailable" as const } }, "graph-unavailable:member-readers"],
+    [{ owner: { kind: "unresolved" as const } }, "unresolved-caller:member-readers"],
+  ] as const) {
+    const fact = await setup({ flow: reachingMember, members }).ask();
+
+    assert.deepEqual(verdictsOf(fact), [via]);
+    assert.deepEqual(fact.value.findings[0]?.evidence.at(-1)?.line, 6);
+  }
+});
+
+test("a boundary reached through two links is followed under each, so each link keeps its uses", async () => {
+  const flow = {
+    [carrierKey(siteOf("src/a.service.ts", 10))]: { uses: [], next: [{ carrier: { site: SERVICE_MEMBER, path: path("address") }, hops: [] }], frontiers: [] },
+    [carrierKey(siteOf("src/b.service.ts", 10))]: { uses: [], next: [{ carrier: { site: SERVICE_MEMBER, path: path("address") }, hops: [] }], frontiers: [] },
+    [carrierKey(SERVICE_MEMBER)]: { uses: [use(14, { operation: READ })], next: [], frontiers: [] },
+  };
+
+  const fact = await setup({ flow, links: [link({ file: "src/a.service.ts" }), link({ file: "src/b.service.ts" })] }).ask();
+
+  const links = fact.value.findings.flatMap((finding) => (finding.status === "complete" ? [finding.value.link.call.file] : []));
+  assert.deepEqual(links, ["src/a.service.ts", "src/b.service.ts"]);
+});
+
+const TEMPLATE_CALL = { kind: "template-call-result" as const, repo: "web", resource: "src/page.html", start: 4, end: 20, callee: "label", argument: 0 };
+const LABEL = { kind: "method-parameter" as const, repo: "web", file: "src/page.ts", owner: "Page", method: "label", index: 0 };
+const labelReturn = { kind: "return" as const, repo: "web", file: "src/base.ts", symbol: "label", line: 4 };
+const intoLabel = { carrier: { site: LABEL, path: path("address") }, hops: [{ step: "argument" as const, evidence: { path: "src/page.html", line: 2 } }], returnsTo: TEMPLATE_CALL };
+
+test("a template call into a component method continues at the template expression when the method returns the value, with no graph edge to say so", async () => {
+  const flow = {
+    [carrierKey(siteOf())]: { uses: [], next: [intoLabel], frontiers: [] },
+    [carrierKey(LABEL)]: { uses: [], next: [{ carrier: { site: labelReturn, path: path("address") }, hops: [{ step: "return" as const, evidence: { path: "src/base.ts", line: 5 } }] }], frontiers: [] },
+  };
+  const templates = { [carrierKey(TEMPLATE_CALL)]: { uses: [use(2, { site: { path: "src/page.html", line: 2 }, operation: READ })], next: [], frontiers: [] } };
+  const { ask, asked, followed, templated } = setup({ flow, templates });
+
+  const fact = await ask();
+
+  assert.deepEqual(verdictsOf(fact), ["incompatible"]);
+  assert.deepEqual(asked, []);
+  assert.deepEqual(templated.map((carrier) => carrier.site.kind), ["template-call-result"]);
+  assert.equal(followed.some((carrier) => carrier.site.kind === "template-call-result"), false);
+});
+
+test("a component method entered without a template expression to go back to returns to the callers the graph knows", async () => {
+  const flow = {
+    [carrierKey(siteOf())]: { uses: [], next: [{ carrier: { site: LABEL, path: path("address") }, hops: [] }], frontiers: [] },
+    [carrierKey(LABEL)]: { uses: [], next: [{ carrier: { site: labelReturn, path: path("address") }, hops: [] }], frontiers: [] },
+  };
+  const { ask, asked } = setup({ flow });
+
+  const fact = await ask();
+
+  assert.deepEqual(asked, ["label"]);
+  assert.deepEqual(verdictsOf(fact), ["no-caller"]);
+});
+
+test("a method entered from a template that returns something else than its own result does not go back to the expression", async () => {
+  const other = { ...labelReturn, symbol: "other" };
+  const flow = {
+    [carrierKey(siteOf())]: { uses: [], next: [intoLabel], frontiers: [] },
+    [carrierKey(LABEL)]: { uses: [], next: [{ carrier: { site: other, path: path("address") }, hops: [] }], frontiers: [] },
+  };
+  const { ask, templated } = setup({ flow });
+
+  const fact = await ask();
+
+  assert.deepEqual(verdictsOf(fact), ["unmodelled-flow:return-context"]);
+  assert.deepEqual(templated, []);
 });
