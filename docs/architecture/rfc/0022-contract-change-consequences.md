@@ -518,7 +518,7 @@ recursion and unresolved continuations end in frontiers; caller lookups reuse th
 P4 answers what a change introduces; it says nothing about a property the head adds, a bound it tightens, or a change no
 consumer follows. Measured on four corpus contracts over 93 revision pairs: of 303 operations whose response data the
 change altered, 195 derived nothing (117 changed only keywords a value set does not state, 39 added a property, 38
-changed only non-success responses, 1 a media type), and none of the 105 altered requests was classified. P6 names every
+changed only non-success responses, 1 a media type), and none of the 105 altered requests was classified. P6 ([corpus probe](../../evaluations/contract-change-rules/2026-11-07-corpus-probe.md)) names every
 difference with a rule from one catalog, in the taxonomy of oasdiff's breaking-change checks, so an agent reads "property
 X of operation Y became nullable; rule `response-property-became-nullable`, breaking; these consumers read it unguarded"
 without writing a hypothesis.
