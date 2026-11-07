@@ -60,8 +60,8 @@ interface Options {
   callables?: Readonly<Record<string, readonly DeclaredCallable[]>>;
   /** The bodies the declared hierarchy proves a body-less method runs, by its name; unknown by default. */
   dispatch?: Readonly<Record<string, DispatchTargets>>;
-  /** The template relations and each component's template, as the relations read them; none by default. */
-  relations?: Pick<RelationExtraction, "relations" | "templates">;
+  /** The template relations, each component's template and the template calls they prove, as the relations read them; none by default. */
+  relations?: Pick<RelationExtraction, "relations" | "templates" | "memberUses">;
   /** The entrypoints the map reads at the head; none by default. */
   findings?: readonly Finding<Entrypoint>[];
   /** Runs each time the map's entrypoints are read. */
@@ -832,7 +832,7 @@ const CHILD_REF = { path: B, symbol: "Child", line: 1 };
 const handlerCall = (member: string, line: number) => ({ file: PAGE_HTML, line, column: 5, member });
 const PAGE_RELATIONS: Pick<RelationExtraction, "relations" | "templates"> = {
   relations: [{ status: "complete", value: { kind: "uses-component", name: "Page>Child", from: PAGE_REF, to: CHILD_REF }, evidence: [{ path: PAGE_HTML, line: 4 }] }],
-  templates: [{ component: PAGE_REF, handlers: [handlerCall("reset", 3), handlerCall("save", 5), handlerCall("reset", 6)] }, { component: CHILD_REF, handlers: [] }],
+  templates: [{ component: PAGE_REF, handlers: [handlerCall("reset", 3), handlerCall("save", 5), handlerCall("reset", 6)], eventCalls: [], uses: [CHILD_REF] }, { component: CHILD_REF, handlers: [], eventCalls: [], uses: [] }],
 };
 const pageShape = (fact: Fact<TraceValue>) => valueOf(fact).steps.map((step) => [step.symbol, step.parent ?? null, step.via ?? null]);
 
@@ -854,14 +854,14 @@ test("the same component traced by its declaration keeps its members in source o
 });
 
 test("a handler the template binds that the component does not declare is a cut at the binding, never a silently missing step", async () => {
-  const relations = { ...PAGE_RELATIONS, templates: [{ component: PAGE_REF, handlers: [handlerCall("gone", 7)] }] };
+  const relations = { ...PAGE_RELATIONS, templates: [{ component: PAGE_REF, handlers: [handlerCall("gone", 7)], eventCalls: [], uses: [] }] };
   const fact = await factOf({ nodes: PAGE_NODES, edges: PAGE_EDGES, unresolved: PAGE_OUTWARD, relations, findings: [page("/p", handlerAt(A, "Page", 1))] }, [{ kind: "ui-route", name: "/p" }]);
   assert.ok(cutsOf(fact).some(([kind, at]) => kind === "unresolved-link" && JSON.stringify(at) === JSON.stringify([`${PAGE_HTML}:7 gone`])), JSON.stringify(cutsOf(fact)));
 });
 
 test("a page whose template cannot be read, or that the relations hold no template for, is a cut there and still lists what its class runs", async () => {
   const cases = [
-    { templates: [{ component: PAGE_REF, handlers: [], unreadable: { path: PAGE_HTML, line: 1 } }], at: `${PAGE_HTML}:1` },
+    { templates: [{ component: PAGE_REF, handlers: [], eventCalls: [], uses: [], unreadable: { path: PAGE_HTML, line: 1 } }], at: `${PAGE_HTML}:1` },
     { templates: [], at: `${A}:1 Page` },
   ];
   for (const { templates, at } of cases) {
@@ -880,7 +880,7 @@ test("a page's template item the relations could not place, or a used declaratio
       { status: "complete", value: { kind: "uses-directive", name: "Page>Lost", from: PAGE_REF, to: { path: B, symbol: "Lost", line: 40 } }, evidence: [{ path: PAGE_HTML, line: 3 }] },
       { status: "complete", value: { kind: "uses-component", name: "Other>Child", from: other, to: CHILD_REF }, evidence: [{ path: "src/other.html", line: 1 }] },
     ],
-    templates: [{ component: PAGE_REF, lines: { path: PAGE_HTML, start: 1, end: 10 }, handlers: [] }],
+    templates: [{ component: PAGE_REF, lines: { path: PAGE_HTML, start: 1, end: 10 }, handlers: [], eventCalls: [], uses: [] }],
   };
   const fact = await factOf({ nodes: PAGE_NODES, edges: PAGE_EDGES, unresolved: PAGE_OUTWARD, relations, findings: [page("/p", handlerAt(A, "Page", 1))] }, [{ kind: "ui-route", name: "/p" }]);
   const templateCuts = cutsOf(fact).filter(([, at]) => (at as string[])[0]!.startsWith(PAGE_HTML));
@@ -901,4 +901,32 @@ test("a class root beside a page root keeps its members in source order and owes
   const plainRoot = steps.find((step) => step.symbol === "Plain")!;
   assert.deepEqual(steps.filter((step) => step.parent === plainRoot.id).map((step) => step.line), [31, 34]);
   assert.equal(cutsOf(fact).some(([, at]) => (at as string[]).includes(`${B}:30 Plain`)), false);
+});
+
+test("an event binding's call to a field's method runs the method the relations prove at that place, and any call they prove nothing for is a cut there", async () => {
+  const store = [fakeNode("Store", "class", B, 30, 50), fakeNode("Store.save", "method", B, 32, 34, "save")];
+  const storeRef = { path: B, symbol: "Store", line: 30 };
+  const proof = { owner: PAGE_REF, receiver: storeRef, member: { path: B, symbol: "save", line: 32 }, reference: { file: PAGE_HTML, line: 2, column: 20, name: "store.save", kind: "calls" as const }, template: true as const };
+  const relations: Pick<RelationExtraction, "relations" | "templates" | "memberUses"> = {
+    relations: [],
+    templates: [{ component: PAGE_REF, handlers: [handlerCall("save", 5)], eventCalls: [{ file: PAGE_HTML, line: 2, column: 20, name: "store.save" }, { file: PAGE_HTML, line: 4, column: 9, name: "$event.stopPropagation" }], uses: [] }],
+    memberUses: [proof],
+  };
+  const fact = await factOf({ nodes: [...PAGE_NODES, ...store], edges: [...PAGE_EDGES, { from: "Store", to: "Store.save", kind: "contains" }], unresolved: [...PAGE_OUTWARD, OUTWARD_CALL("Store.save", B, 33)], relations, findings: [page("/p", handlerAt(A, "Page", 1))] }, [{ kind: "ui-route", name: "/p" }]);
+  const children = valueOf(fact).steps.filter((step) => step.parent === 0).map((step) => [step.symbol, step.file, step.via]);
+  assert.deepEqual(children.slice(5, 7), [["save", B, "template"], ["save", A, "member"]]);
+  assert.ok(cutsOf(fact).some(([, at]) => JSON.stringify(at) === JSON.stringify([`${PAGE_HTML}:4 $event.stopPropagation`])), JSON.stringify(cutsOf(fact)));
+  assert.equal(cutsOf(fact).some(([, at]) => (at as string[])[0]!.startsWith(`${PAGE_HTML}:2`)), false);
+});
+
+test("a page's template children run in the order the template first uses them, never grouped by relation kind", async () => {
+  const used = [fakeNode("Mark", "class", B, 30, 40), fakeNode("Fmt", "class", B, 42, 50)];
+  const at = (symbol: string, line: number) => ({ path: B, symbol, line });
+  const relation = (kind: "uses-component" | "uses-directive" | "uses-pipe", to: { path: string; symbol: string; line: number }) => ({ status: "complete" as const, value: { kind, name: `Page>${to.symbol}`, from: PAGE_REF, to }, evidence: [{ path: PAGE_HTML, line: 4 }] });
+  const relations: Pick<RelationExtraction, "relations" | "templates"> = {
+    relations: [relation("uses-component", CHILD_REF), relation("uses-directive", at("Mark", 30)), relation("uses-pipe", at("Fmt", 42))],
+    templates: [{ component: PAGE_REF, handlers: [], eventCalls: [], uses: [at("Mark", 30), at("Fmt", 42), CHILD_REF] }],
+  };
+  const fact = await factOf({ nodes: [...PAGE_NODES, ...used], edges: PAGE_EDGES, unresolved: [...PAGE_OUTWARD, OUTWARD_CALL("Mark", B, 31), OUTWARD_CALL("Fmt", B, 43)], relations, findings: [page("/p", handlerAt(A, "Page", 1))] }, [{ kind: "ui-route", name: "/p" }]);
+  assert.deepEqual(valueOf(fact).steps.filter((step) => step.via === "template").map((step) => step.symbol), ["Mark", "Fmt", "Child"]);
 });

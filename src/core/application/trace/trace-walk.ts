@@ -78,8 +78,8 @@ export interface TraceWalkInput {
 export interface PagePlan {
   /** The members the framework calls itself, in the order it calls them. */
   lifecycle: readonly string[];
-  /** The component's own methods its template's event bindings call, in template text order. */
-  handlers: readonly { member: string; file: string; line: number; column: number }[];
+  /** What its template's event bindings call, in template text order: an own method by name, or the method a proof names. */
+  handlers: readonly ({ file: string; line: number; column: number } & ({ member: string } | { runs: GraphSymbol }))[];
   /** The declarations its template uses, in template order. */
   children: readonly GraphSymbol[];
   cuts: readonly Cut[];
@@ -548,9 +548,13 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
  */
 function pageOrder(children: readonly Child[], plan: PagePlan, cuts: Cut[]): Child[] {
   const handlerRank = new Map<string, number>();
-  for (const { member } of plan.handlers) if (!handlerRank.has(member)) handlerRank.set(member, handlerRank.size);
+  const runs: { child: Child; rank: readonly [number, number] }[] = [];
   const members = new Set(children.filter(({ via }) => via === "member").map(({ symbol }) => symbol.name));
-  for (const handler of plan.handlers) if (!members.has(handler.member)) cuts.push({ kind: "unresolved-link", at: [placeAt(handler.file, handler.line, handler.member)] });
+  for (const [index, handler] of plan.handlers.entries()) {
+    if ("runs" in handler) runs.push({ child: { symbol: handler.runs, place: { line: null, column: null, spelling: handler.runs.name, target: handler.runs.id }, via: "template" }, rank: [2, index] });
+    else if (!members.has(handler.member)) cuts.push({ kind: "unresolved-link", at: [placeAt(handler.file, handler.line, handler.member)] });
+    else if (!handlerRank.has(handler.member)) handlerRank.set(handler.member, index);
+  }
   cuts.push(...plan.cuts);
   const rankOf = ({ symbol, via, place }: Child): readonly [number, number] => {
     const line = place.line ?? symbol.startLine;
@@ -562,7 +566,7 @@ function pageOrder(children: readonly Child[], plan: PagePlan, cuts: Cut[]): Chi
   };
   const ranked = children.map((child) => ({ child, rank: rankOf(child) }));
   const used = plan.children.map((symbol, index) => ({ child: { symbol, place: { line: null, column: null, spelling: symbol.name, target: symbol.id }, via: "template" as const }, rank: [3, index] as const }));
-  return [...ranked, ...used].sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1]).map(({ child }) => child);
+  return [...ranked, ...runs, ...used].sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1]).map(({ child }) => child);
 }
 
 /**

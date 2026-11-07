@@ -65,7 +65,7 @@ const USAGE = [
   "       ye-ast importers [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
   "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
   "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] --focus <file>:<symbol> | --focus <file>:<line> ... <repo>",
-  "       ye-ast trace [--revision <rev> | --live] [--repo-id <id>] [scope] [--depth <n>] [--expansions <n>] [--entrypoint <kind>:<name>]... <repo> [<file>:<symbol> | <file>:<start>-<end>] ...   (what the declarations execute, in source order, with a reading plan)",
+  "       ye-ast trace [--revision <rev> | --live] [--repo-id <id>] [scope] [--depth <n>] [--expansions <n>] [--entrypoint <kind>:<name>]... <repo> [<file>:<symbol> | <file>:<start>-<end>] ...   (declarations or entrypoints, not both: what they execute, in source order, with a reading plan)",
   "       ye-ast workspace [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast decisions [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast init --trust trusted|untrusted [--workspace <file>] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration)",
@@ -75,7 +75,7 @@ const USAGE = [
   "--repo-id: the name every fact carries; the directory name of the repository's main worktree when omitted, so every worktree of one repository answers the same name",
   "--live: reads the working tree of a repository declared trusted (ye-ast init --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr and as a live sibling of the fact in the JSON",
   "--focus: outline only, repeatable, instead of files: <file>:<symbol> selects the declarations whose dotted containment path ends with it at whole names (Class.member, or a bare name at any depth); <file>:<line> the innermost declaration holding that line. Each match comes with its containers, how many of the file's declarations were left out, and what its own body uses outside itself (a declaration, a package or a global, with the lines of each use; an unproved use is a cut), without imports",
-  "--entrypoint: trace only, repeatable: an entrypoint of the map at the same revision, by its kind (http-route, ui-route, listener, job) and its name as the map prints it, split at the first colon (http-route:POST /orders, ui-route:/orders/:id); it starts at the handler of every entrypoint of that kind and name, a UI route at its component, and a name the map does not hold is the unknown-entrypoint fault listing the names of that kind",
+  "--entrypoint: trace only, repeatable, instead of declarations: an entrypoint of the map at the same revision, by its kind (http-route, ui-route, listener, job) and its name as the map prints it, split at the first colon (http-route:POST /orders, ui-route:/orders/:id); it starts at the handler of every entrypoint of that kind and name, a UI route at its component, and a name the map does not hold is the unknown-entrypoint fault listing the names of that kind",
   "--offline: reads every repository from its own clone and refreshes no declared remote, as under untrusted; only workspace and decisions take it",
   "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers, importers, outline, trace, workspace and decisions; without --include every path is included; --exclude wins)",
   "changed: [--changed <glob>]...   (impact only: globs over the changed paths; only the change's paths they select seed the walk, while the repository is read whole, so callers outside them are known; a glob that selects no changed path is an error)",
@@ -500,6 +500,7 @@ async function parseTraceRequest(args: readonly string[], deps: RepositoryNaming
     const [path, ...specs] = positionals;
     const budget = parseBudget(values);
     const targets = [...specs.map(parseTarget), ...(values.entrypoint ?? []).map(parseEntrypoint)];
+    if (specs.length > 0 && values.entrypoint !== undefined) return undefined;
     const scope = parseScope(values);
     const at = atRevision(values);
     if (path === undefined || targets.length === 0 || budget === undefined || scope === undefined || at === undefined || targets.some((target) => target === undefined)) return undefined;

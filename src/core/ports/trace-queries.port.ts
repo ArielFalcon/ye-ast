@@ -25,6 +25,11 @@ export interface EntrypointTarget {
 /** A declaration, a line range, or an entrypoint of the map at the same snapshot. */
 export type TraceTarget = CallersTarget | EntrypointTarget;
 
+/** A trace starts from declarations or from entrypoints, never both: a request that mixes them is refused before any work. */
+export function mixesTargetKinds(targets: readonly TraceTarget[]): boolean {
+  return new Set(targets.map((target) => "kind" in target)).size > 1;
+}
+
 /** No entrypoint of the map has a requested kind and name; each entry lists the names the map holds of that kind. */
 export interface UnknownEntrypointFault {
   kind: "unknown-entrypoint";

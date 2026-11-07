@@ -265,8 +265,8 @@ async function traceThroughEach(cliTargets: readonly string[], targets: readonly
 }
 
 test("the three transports pass an entrypoint target, by kind and the name split at the first colon, alike", async () => {
-  const targets = [{ file: "src/a.ts", symbol: "run" }, { kind: "ui-route", name: "/orders/:id" }];
-  const { asked, cliCode, reply, result } = await traceThroughEach(["src/a.ts:run", "--entrypoint", "ui-route:/orders/:id"], targets, { ok: true, value: TRACE_FACT });
+  const targets = [{ kind: "ui-route", name: "/orders/:id" }, { kind: "http-route", name: "POST /orders" }];
+  const { asked, cliCode, reply, result } = await traceThroughEach(["--entrypoint", "ui-route:/orders/:id", "--entrypoint", "http-route:POST /orders"], targets, { ok: true, value: TRACE_FACT });
   assert.deepEqual([cliCode, reply?.error, result.isError === true], [0, undefined, false]);
   assert.deepEqual(asked, [[targets], [targets], [targets]]);
 });
@@ -284,4 +284,10 @@ test("the three transports answer an unknown entrypoint as its own fault with th
   assert.deepEqual([reply?.error?.code, reply?.error?.data], [-32023, { kind: "unknown-entrypoint", entries }]);
   const text = result.content.map((part) => ("text" in part ? part.text : "")).join("");
   assert.deepEqual([result.isError, /fault: unknown-entrypoint/.test(text), text.includes("http-route POST /orders: the map's http-route names: GET /orders")], [true, true, true]);
+});
+
+test("the three transports refuse declaration targets together with entrypoint targets, asking nothing", async () => {
+  const { asked, cliCode, reply, result } = await traceThroughEach(["src/a.ts:run", "--entrypoint", "ui-route:/orders"], [{ file: "src/a.ts", symbol: "run" }, { kind: "ui-route", name: "/orders" }], { ok: true, value: TRACE_FACT });
+  assert.deepEqual([cliCode, reply?.error?.code, result.isError], [2, -32602, true]);
+  assert.deepEqual(asked, [[], [], []]);
 });

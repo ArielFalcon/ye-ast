@@ -44,9 +44,9 @@ async function run(classes: AngularClass[], files: SourceFile[] = [], metadataFi
     templates: {
       read: (given) => {
         units.push(...given);
-        return [];
+        return { relations: [], uses: [] };
       },
-      effects: () => ({ calls: [], handlers: [], writes: [], passed: [] }),
+      effects: () => ({ calls: [], handlers: [], eventCalls: [], writes: [], passed: [] }),
     },
   });
   return { findings: (await extractor.extract(files)).relations, units };
@@ -180,32 +180,40 @@ test("member proof eligibility and exact uses pass through relation extraction",
       received = context;
       return { classes: [], findings: [], fields: [], locals: [], memberUses: [proof] };
     } },
-    templates: { read: () => [], effects: () => ({ calls: [], handlers: [], writes: [], passed: [] }) },
+    templates: { read: () => ({ relations: [], uses: [] }), effects: () => ({ calls: [], handlers: [], eventCalls: [], writes: [], passed: [] }) },
   });
   const result = await extractor.extract([], options);
   assert.deepEqual((received as typeof options).memberProofs, options.memberProofs);
   assert.deepEqual(result.memberUses, [proof]);
 });
 
-test("each component's template comes with the handlers its event bindings call, or the place where its template cannot be read", async () => {
+test("each component's template comes with its handlers, its other event calls and the declarations it uses in order, or the place where no template can be read", async () => {
   const handler = { file: "src/app/host.ts", line: 21, column: 4, member: "save" };
+  const eventCall = { file: "src/app/host.ts", line: 21, column: 12, name: "store.load" };
+  const bare: AngularClass = { kind: "component", ref: ref("Bare"), selector: "app-bare", imports: [], hostDirectives: [] };
   const classes = [
     component("Host", { template: inline("<ok>\n</ok>") }),
     component("Broken", { template: inline("<bad>") }),
     component("Gone", { template: { file: { path: "src/app/gone.html", at: { path: "src/app/gone.ts", line: 6 } } } }),
     component("Opaque", { template: { unreadable: { path: "src/app/opaque.ts", line: 8 } } }),
+    bare,
     directive("Hi"),
   ];
   const extractor = createAngularRelationExtractor({
     metadata: { read: async () => ({ classes, findings: [], fields: [], locals: [] }) },
-    templates: { read: () => [], effects: ({ text }) => (text === "<bad>" ? { calls: [], handlers: [], writes: [], passed: [], unreadable: true } : { calls: [], handlers: [handler], writes: [], passed: [] }) },
+    templates: {
+      read: () => ({ relations: [], uses: [{ component: ref("Host"), uses: [ref("Card"), ref("Hi")] }] }),
+      effects: ({ text }) => (text === "<bad>" ? { calls: [], handlers: [], eventCalls: [], writes: [], passed: [], unreadable: true } : { calls: [], handlers: [handler], eventCalls: [eventCall], writes: [], passed: [] }),
+    },
   });
   const { templates } = await extractor.extract([]);
+  const none = { handlers: [], eventCalls: [], uses: [] };
   assert.deepEqual(templates, [
-    { component: ref("Host"), lines: { path: "src/app/host.ts", start: 20, end: 21 }, handlers: [handler] },
-    { component: ref("Broken"), lines: { path: "src/app/broken.ts", start: 20, end: 20 }, handlers: [], unreadable: { path: "src/app/broken.ts", line: 20 } },
-    { component: ref("Gone"), handlers: [], unreadable: { path: "src/app/gone.ts", line: 6 } },
-    { component: ref("Opaque"), handlers: [], unreadable: { path: "src/app/opaque.ts", line: 8 } },
+    { component: ref("Host"), lines: { path: "src/app/host.ts", start: 20, end: 21 }, handlers: [handler], eventCalls: [eventCall], uses: [ref("Card"), ref("Hi")] },
+    { component: ref("Broken"), lines: { path: "src/app/broken.ts", start: 20, end: 20 }, ...none, unreadable: { path: "src/app/broken.ts", line: 20 } },
+    { component: ref("Gone"), ...none, unreadable: { path: "src/app/gone.ts", line: 6 } },
+    { component: ref("Opaque"), ...none, unreadable: { path: "src/app/opaque.ts", line: 8 } },
+    { component: ref("Bare"), ...none, unreadable: { path: "src/app/bare.ts", line: 5 } },
   ]);
 });
 
@@ -217,7 +225,7 @@ test("a template the metadata reader already read for its effects is not parsed 
       context?.templateEffects?.(host);
       return { classes: [host], findings: [], fields: [], locals: [] };
     } },
-    templates: { read: () => [], effects: ({ text }) => (parsed.push(text), { calls: [], handlers: [], writes: [], passed: [] }) },
+    templates: { read: () => ({ relations: [], uses: [] }), effects: ({ text }) => (parsed.push(text), { calls: [], handlers: [], eventCalls: [], writes: [], passed: [] }) },
   });
   await extractor.extract([]);
   assert.deepEqual(parsed, ["<x></x>"]);

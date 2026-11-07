@@ -28,7 +28,7 @@ import {
 import { relation, type Relation, type RelationKind, type SymbolRef } from "../../domain/relations/relation.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
-import type { ScopeMember, TemplateEffects, TemplateHandlerCall, TemplateMemberCall, TemplateUnit, TemplateUsageReader, TemplateWrite } from "../../ports/template-usage.port.ts";
+import type { ScopeMember, TemplateEffects, TemplateEventCall, TemplateHandlerCall, TemplateMemberCall, TemplateUnit, TemplateUsage, TemplateUsageReader, TemplateWrite } from "../../ports/template-usage.port.ts";
 import { bindTemplate } from "./template-binding.ts";
 
 /**
@@ -37,14 +37,21 @@ import { bindTemplate } from "./template-binding.ts";
  * desugaring and the control-flow blocks included; nothing is type-checked.
  */
 export function createTemplateUsageReader(): TemplateUsageReader {
-  return { read: (units) => sortFindings(units.flatMap(usagesOf)), effects };
+  return { read, effects };
 }
+
+function read(units: readonly TemplateUnit[]): TemplateUsage {
+  const read = units.map(usagesOf);
+  return { relations: sortFindings(read.flatMap(({ findings }) => findings)), uses: units.map((unit, index) => ({ component: unit.component, uses: read[index]!.uses })) };
+}
+
+const byPlace = (a: { line: number; column: number }, b: { line: number; column: number }): number => a.line - b.line || a.column - b.column;
 
 const COMPARISONS: ReadonlySet<string> = new Set(["==", "===", "!=", "!=="]);
 
 function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): TemplateEffects {
   const parsed = parseTemplate(template.text, template.path);
-  if ((parsed.errors ?? []).some((error) => error.level === ParseErrorLevel.ERROR)) return { calls: [], handlers: [], writes: [], passed: [], unreadable: true };
+  if ((parsed.errors ?? []).some((error) => error.level === ParseErrorLevel.ERROR)) return { calls: [], handlers: [], eventCalls: [], writes: [], passed: [], unreadable: true };
   const bound = new R3TargetBinder(new SelectorMatcher<DirectiveMeta[]>()).bind({ template: parsed.nodes });
   const peel = (ast: AST): AST => (ast instanceof ParenthesizedExpression || ast instanceof NonNullAssert ? peel(ast.expression) : ast);
   const ownField = (ast: AST): PropertyRead | undefined => {
@@ -55,6 +62,7 @@ function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): T
   const lineOf = (offset: number): number => lineStarts.findLastIndex((start) => start <= offset);
   const calls: TemplateMemberCall[] = [];
   const handlers: TemplateHandlerCall[] = [];
+  const eventCalls: TemplateEventCall[] = [];
   let inEvent = false;
   const writes: TemplateWrite[] = [];
   const reads: PropertyRead[] = [];
@@ -103,6 +111,7 @@ function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): T
       const field = callee instanceof PropertyRead ? ownField(callee.receiver) : undefined;
       if (callee instanceof PropertyRead && field !== undefined) calls.push({ ...placeOf(call.sourceSpan.start), field: field.name, member: callee.name });
       if (inEvent && ownField(callee) !== undefined) handlers.push({ ...placeOf(call.sourceSpan.start), member: (callee as PropertyRead).name });
+      else if (inEvent) eventCalls.push({ ...placeOf(call.sourceSpan.start), name: template.text.slice(call.receiver.sourceSpan.start, call.receiver.sourceSpan.end) });
       super.visitCall(call, context);
     }
 
@@ -140,16 +149,18 @@ function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): T
   for (const node of parsed.nodes) visitor.visit(node);
   return {
     calls: calls.sort((a, b) => a.line - b.line || a.column - b.column),
-    handlers: handlers.sort((a, b) => a.line - b.line || a.column - b.column),
+    handlers: handlers.sort(byPlace),
+    eventCalls: eventCalls.sort(byPlace),
     writes,
     passed: [...new Set(reads.filter((read) => !used.has(read)).map((read) => read.name))].sort(),
   };
 }
 
-function usagesOf(unit: TemplateUnit): Finding<Relation>[] {
+/** The relations of one unit, and the declarations it uses in the order they first appear in its text. */
+function usagesOf(unit: TemplateUnit): { findings: Finding<Relation>[]; uses: SymbolRef[] } {
   const at = (line: number): Evidence => ({ path: unit.path, line: unit.firstLine + line });
   const template = bindTemplate(unit);
-  if ("errorLine" in template) return [unknown("source-unreadable", at(template.errorLine))];
+  if ("errorLine" in template) return { findings: [unknown("source-unreadable", at(template.errorLine))], uses: [] };
 
   const findings: Finding<Relation>[] = template.unreadable.map((ref) => unknown("no-extractor", { path: ref.path, line: ref.line }));
   const { members } = template;
@@ -157,32 +168,36 @@ function usagesOf(unit: TemplateUnit): Finding<Relation>[] {
   for (const member of unit.scope) if (member.kind === "pipe") pipes.set(member.name, [...(pipes.get(member.name) ?? []), member.ref]);
 
   const found = new Map<string, Finding<Relation>>();
-  const use = (kind: RelationKind, to: SymbolRef, line: number): void => {
+  const firstOffset = new Map<string, { to: SymbolRef; offset: number }>();
+  const use = (kind: RelationKind, to: SymbolRef, line: number, offset: number): void => {
     const key = `${kind}\0${to.path}\0${to.symbol}`;
     const existing = found.get(key);
     if (existing === undefined || (existing.evidence[0]?.line ?? 0) > unit.firstLine + line) found.set(key, { status: "complete", value: relation(kind, unit.component, to), evidence: [at(line)] });
+    const first = firstOffset.get(key);
+    if (first === undefined || first.offset > offset) firstOffset.set(key, { to, offset });
   };
   const visitor = new UsageVisitor(template.bound, {
-    directive: (meta, line) => {
+    directive: (meta, line, offset) => {
       const member = members.get(meta.ref.key);
-      if (member !== undefined) use(meta.isComponent ? "uses-component" : "uses-directive", member.ref, line);
+      if (member !== undefined) use(meta.isComponent ? "uses-component" : "uses-directive", member.ref, line, offset);
     },
     clash: (line) => findings.push(unknown("unresolved", at(line))),
-    pipe: (name, line) => {
+    pipe: (name, line, offset) => {
       const named = pipes.get(name) ?? [];
       const [only] = named;
       if (named.length > 1) findings.push(unknown("unresolved", at(line)));
-      else if (only !== undefined) use("uses-pipe", only, line);
+      else if (only !== undefined) use("uses-pipe", only, line, offset);
     },
   });
   for (const node of template.nodes) visitor.visit(node);
-  return [...findings, ...found.values()];
+  return { findings: [...findings, ...found.values()], uses: [...firstOffset.values()].sort((a, b) => a.offset - b.offset).map(({ to }) => to) };
 }
 
+/** `offset` is the place in the template text, which orders uses on one line. */
 interface UsageSink {
-  directive(meta: DirectiveMeta, line: number): void;
+  directive(meta: DirectiveMeta, line: number, offset: number): void;
   clash(line: number): void;
-  pipe(name: string, line: number): void;
+  pipe(name: string, line: number, offset: number): void;
 }
 
 /** Walks every node and expression of a template, with the line of the template node the walk is in. */
@@ -215,7 +230,7 @@ class UsageVisitor extends CombinedRecursiveAstVisitor {
   }
 
   override visitPipe(pipe: BindingPipe, context?: unknown): void {
-    this.sink.pipe(pipe.name, this.line);
+    this.sink.pipe(pipe.name, this.line, pipe.sourceSpan.start);
     super.visitPipe(pipe, context);
   }
 
@@ -223,7 +238,7 @@ class UsageVisitor extends CombinedRecursiveAstVisitor {
     const matched = this.bound.getDirectivesOfNode(node) ?? [];
     const components = matched.filter((meta) => meta.isComponent);
     if (components.length > 1) this.sink.clash(node.sourceSpan.start.line);
-    for (const meta of matched) if (!meta.isComponent || components.length === 1) this.sink.directive(meta, node.sourceSpan.start.line);
+    for (const meta of matched) if (!meta.isComponent || components.length === 1) this.sink.directive(meta, node.sourceSpan.start.line, node.sourceSpan.start.offset);
   }
 }
 

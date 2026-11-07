@@ -3,7 +3,7 @@ import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-orig
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { TemplateHandlerCall } from "../../ports/template-usage.port.ts";
+import type { TemplateEventCall, TemplateHandlerCall } from "../../ports/template-usage.port.ts";
 
 /**
  * What the impact use case asks for injection and template relations. It lives here, not in `core/ports`, because an
@@ -36,5 +36,9 @@ export interface ComponentTemplate {
   /** The lines the template text spans, where its relations and handlers are placed; absent when it was not read. */
   lines?: { path: string; start: number; end: number };
   handlers: readonly TemplateHandlerCall[];
+  eventCalls: readonly TemplateEventCall[];
+  /** The declarations the template uses, in the order they first appear in its text. */
+  uses: readonly SymbolRef[];
+  /** Where no template can be read: one that does not parse or cannot be found, or a component that names none. */
   unreadable?: Evidence;
 }

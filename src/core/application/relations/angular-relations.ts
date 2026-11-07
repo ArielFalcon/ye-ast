@@ -40,15 +40,17 @@ async function extractRelations(deps: AngularRelationsDeps, files: readonly Sour
   const templateEffects = (component: Extract<AngularClass, { kind: "component" }>): TemplateEffects => templateRead(component).effects;
   const { classes, findings, fields, locals, memberUses, externalUses } = await deps.metadata.read(files, { ...options, templateEffects });
   const { units, findings: unitFindings } = templateUnitsOf(classes, contents);
+  const usage = deps.templates.read(units);
+  const usesOf = new Map(usage.uses.map(({ component, uses }) => [classKey(component), uses]));
   const templates = classes.flatMap((candidate): ComponentTemplate[] => {
     if (candidate.kind !== "component") return [];
     const { effects, unreadable, lines } = templateRead(candidate);
-    return [{ component: candidate.ref, ...(lines === undefined ? {} : { lines }), handlers: effects.handlers, ...(unreadable === undefined ? {} : { unreadable }) }];
+    return [{ component: candidate.ref, ...(lines === undefined ? {} : { lines }), handlers: effects.handlers, eventCalls: effects.eventCalls, uses: usesOf.get(classKey(candidate.ref)) ?? [], ...(unreadable === undefined ? {} : { unreadable }) }];
   });
-  return { relations: sortFindings([...findings, ...unitFindings, ...deps.templates.read(units)]), fields, locals, ...(memberUses === undefined ? {} : { memberUses }), ...(externalUses === undefined ? {} : { externalUses }), templates };
+  return { relations: sortFindings([...findings, ...unitFindings, ...usage.relations]), fields, locals, ...(memberUses === undefined ? {} : { memberUses }), ...(externalUses === undefined ? {} : { externalUses }), templates };
 }
 
-const NO_EFFECTS: TemplateEffects = { calls: [], handlers: [], writes: [], passed: [] };
+const NO_EFFECTS: TemplateEffects = { calls: [], handlers: [], eventCalls: [], writes: [], passed: [] };
 
 interface TemplateRead {
   effects: TemplateEffects;
@@ -59,7 +61,7 @@ interface TemplateRead {
 /** What a component's template does, and the place it cannot be read from: its own place, or where it names its file. */
 function readTemplate(templates: TemplateUsageReader, component: Extract<AngularClass, { kind: "component" }>, contents: ReadonlyMap<string, string>): TemplateRead {
   const source = component.template === undefined ? undefined : templateOf(component, component.template, contents);
-  if (source === undefined) return { effects: NO_EFFECTS };
+  if (source === undefined) return { effects: NO_EFFECTS, unreadable: { path: component.ref.path, line: component.ref.line } };
   if ("unknown" in source) return { effects: { ...NO_EFFECTS, unreadable: true }, unreadable: source.unknown.evidence[0]! };
   const effects = templates.effects(source);
   const lines = { path: source.path, start: source.firstLine, end: source.firstLine + source.text.split("\n").length - 1 };
