@@ -72,12 +72,13 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
         markCut(step, unplacedEffect(site), cuts);
         continue;
       }
+      const reached = placed.origins === undefined ? undefined : expandedSteps(step.children.filter((child) => child.at?.line === site.line && child.at.column === placed.column! + 1));
       let proven = true;
       for (const origin of placed.origins ?? []) {
         const sourceBodies = bodiesOf(origin.file);
         const body = owningBody(sourceBodies, origin);
         const ranges = await functionValuesOf(origin.file);
-        if (body === undefined || !expanded.has(body.symbol.id) || !countedAlike(origin.column, lineOf(origin.file, origin.line) ?? "") || ranges === undefined || !executesInBody(body, ranges, origin)) {
+        if (body === undefined || !reached!.has(body.symbol.id) || !countedAlike(origin.column, lineOf(origin.file, origin.line) ?? "") || ranges === undefined || !executesInBody(body, ranges, origin)) {
           proven = false;
           break;
         }
@@ -116,9 +117,13 @@ function markCut(step: WalkedStep, cut: Cut, cuts: Cut[]): void {
 function expandedSteps(roots: readonly WalkedStep[]): Map<GraphNodeId, WalkedStep> {
   const found = new Map<GraphNodeId, WalkedStep>();
   const pending = [...roots];
+  const visited = new Set<WalkedStep>();
   for (let step = pending.pop(); step !== undefined; step = pending.pop()) {
+    if (visited.has(step)) continue;
+    visited.add(step);
     if (step.expanded && !found.has(step.declaration.key as GraphNodeId)) found.set(step.declaration.key as GraphNodeId, step);
     pending.push(...step.children);
+    if (step.seen !== undefined) pending.push(step.seen);
   }
   return found;
 }

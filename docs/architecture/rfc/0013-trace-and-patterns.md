@@ -736,7 +736,7 @@ zero effects, and remains partial. No complete status changes in this paired cas
 ### Effect extraction provenance (2026-11-07)
 
 A Java call site derived through other methods carries its extraction bodies and leaf occurrences only in
-`PlacedCallSite` metadata. A propagated target is an effect only when trace expanded every owning body and the
+`PlacedCallSite` metadata. A propagated target is an effect only when trace expanded every owning body through that call site (including proven `seen` links), and the
 occurrences pass the existing function-value execution boundary. Otherwise it remains an effect cut at the caller.
 The same rule applies to HTTP and messages. Identical effects at the same step and line are reported once.
 This adds no public call-site fields and changes no stored schema.

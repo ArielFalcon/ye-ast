@@ -41,10 +41,10 @@ function commit(files: Readonly<Record<string, string>>): void {
   execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: repo, env: GIT_ENV });
 }
 
-async function trace(target: string): Promise<{ status: string; value: TraceValue; cuts?: Cut[] }> {
+async function trace(target: string, ...also: string[]): Promise<{ status: string; value: TraceValue; cuts?: Cut[] }> {
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const code = await composeCli({ scratchRoot: join(workspace, "scratch"), indexCache: join(workspace, "cache") })(["trace", repo, target], { out: (line) => stdout.push(line), err: (line) => stderr.push(line) });
+  const code = await composeCli({ scratchRoot: join(workspace, "scratch"), indexCache: join(workspace, "cache") })(["trace", repo, target, ...also], { out: (line) => stdout.push(line), err: (line) => stderr.push(line) });
   assert.equal(code, EXIT_CODE.ok, stderr.join("\n"));
   return JSON.parse(stdout.join("\n"));
 }
@@ -230,6 +230,8 @@ class Flow {
   assert.deepEqual(effectsOf(result.value), []);
   assert.equal(result.status, "partial");
   assert.ok(result.cuts?.some((cut) => cut.at[0]?.includes("message effect")));
+  const separateRoot = await trace("src/Flow.java:Flow.run", "src/Flow.java:Worker.process");
+  assert.equal(separateRoot.value.steps.find((step) => step.symbol === "run")?.effects, undefined);
 });
 
 test("identical effects at one propagated Java call are deduplicated", async () => {
