@@ -9,13 +9,11 @@ import { createJavaRootBindings } from "./java-root-bindings.ts";
 import { createJavaDeclaredTypes } from "./java-declared-types.ts";
 import { createJavaDispatchTargets } from "./java-dispatch-targets.ts";
 import { createJavaReceiverMethods } from "./java-receiver-methods.ts";
+import { declaredVariablesOnce, declaresAnyVariable, type DeclaredVariables } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { withJavaSources } from "./java-project.ts";
 import { createJavaProject, isTypeDeclaration, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
-const VARIABLE_DECLARATIONS: ReadonlySet<string> = new Set(["variable_declarator", "formal_parameter", "spread_parameter", "catch_formal_parameter", "resource", "enhanced_for_statement"]);
-/** Where a bare identifier declares a variable: a lambda parameter, or a pattern variable. */
-const PATTERN_OR_LAMBDA: ReadonlySet<string> = new Set(["lambda_expression", "inferred_parameters", "instanceof_expression", "type_pattern", "record_pattern_component"]);
 const PLAIN_CHAIN = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
 /** A package starts lowercase, so a qualified name whose first segment does is one. */
 const PACKAGE_SEGMENT = /^[a-z]/;
@@ -52,10 +50,11 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
         const files = new Map(parse(javaSources).files.map((file) => [file.path, file]));
         const project = createJavaProject([...files.values()]);
         const unreadable = new Set(project.unreadable);
+        const variables = declaredVariablesOnce();
         for (const { site, index } of asked) {
           const file = files.get(site.file);
           if (file === undefined || unreadable.has(file)) continue;
-          const root = rootOf(site, file, project);
+          const root = rootOf(site, file, project, variables);
           if (root !== undefined) results[index] = { status: "complete", value: root.origin, ...(root.bare ? { bare: true as const } : {}), ...(root.pastRoot ? { pastRoot: true as const } : {}), evidence: [{ path: site.file, line: site.line }] };
         }
         return results;
@@ -69,22 +68,23 @@ function unresolved(site: { file: string; line: number }): Finding<ImportOrigin>
 }
 
 /** Where a site's spelled chain is rooted; `pastRoot` counted from the root type, after its package (`readsPastRoot`). */
-function rootOf(site: ResolvedNameSite, file: JavaFile, project: JavaProject): { origin: ImportOrigin; bare: boolean; pastRoot: boolean } | undefined {
+function rootOf(site: ResolvedNameSite, file: JavaFile, project: JavaProject, variables: (scope: Node) => DeclaredVariables): { origin: ImportOrigin; bare: boolean; pastRoot: boolean } | undefined {
   const spelled = spelledAt(site, file.root);
   if (spelled === undefined) return undefined;
-  const found = chainRootOf(spelled, file, project);
+  const found = chainRootOf(spelled, file, project, variables);
   if (found === undefined) return undefined;
   const segments = spelled.chain.split(".");
   const root = segments.findIndex((segment) => !PACKAGE_SEGMENT.test(segment));
   return { ...found, pastRoot: readsPastRoot(site.kind, segments.length - root) };
 }
 
-function chainRootOf(spelled: Spelled, file: JavaFile, project: JavaProject): { origin: ImportOrigin; bare: boolean } | undefined {
+function chainRootOf(spelled: Spelled, file: JavaFile, project: JavaProject, variables: (scope: Node) => DeclaredVariables): { origin: ImportOrigin; bare: boolean } | undefined {
   const enclosing = enclosingTypes(spelled.node, file, project);
   if (enclosing === undefined) return undefined;
   const segments = spelled.chain.split(".");
   const head = segments[0]!;
-  if (!spelled.typePosition && (declaresVariable(file.root, head) || enclosing.some((type) => project.hierarchy(type).types.some((member) => member.file !== file && declaresVariable(member.node, head))))) return undefined;
+  const obscured = (scope: Node): boolean => declaresAnyVariable(variables(scope), head);
+  if (!spelled.typePosition && (obscured(file.root) || enclosing.some((type) => project.hierarchy(type).types.some((member) => member.file !== file && obscured(member.node))))) return undefined;
   const bare = segments.length === 1;
   /** A qualified name whose first segment is lowercase names a package, unless a source declares a type of that name. */
   if (!bare && PACKAGE_SEGMENT.test(head) && project.lookupType(head, { file, type: enclosing[0] }) === undefined) return packageQualified(segments, spelled.typePosition, file, project);
@@ -148,17 +148,6 @@ function enclosingTypes(node: Node, file: JavaFile, project: JavaProject): TypeD
     around.push(type);
   }
   return around;
-}
-
-/** Whether the file declares a variable of the name anywhere: a variable obscures a type of the same name. */
-function declaresVariable(root: Node, name: string): boolean {
-  const pending: Node[] = [root];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (VARIABLE_DECLARATIONS.has(node.type) && node.childForFieldName("name")?.text === name) return true;
-    if (node.type === "identifier" && node.text === name && PATTERN_OR_LAMBDA.has(node.parent?.type ?? "")) return true;
-    for (const child of node.namedChildren) if (child !== null) pending.push(child);
-  }
-  return false;
 }
 
 /** A name whose first segment is a package: rooted at the type of the repository its longest type prefix names, or outside. */

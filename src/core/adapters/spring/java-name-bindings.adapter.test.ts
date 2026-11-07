@@ -112,6 +112,19 @@ test("a call whose receiver a variable of the same name as a type holds proves n
   assert.deepEqual(await rootOf([LIMITS, pattern], patternSite), unknownAt(patternSite));
 });
 
+test("a variable of a type's name anywhere in the file, a field or a local of another method, or a field of a supertype in another file, obscures the type", async () => {
+  const meter = (members: readonly string[], heritage = "") => java("src/main/java/app/api/Meter.java", ["package app.api;", "", "import app.other.Limits;", "", `class Meter${heritage} {`, "  int a() { return Limits.limit(); }", ...members, "}"]);
+  const base = java("src/main/java/app/api/Base.java", ["package app.api;", "", "class Base {", "  protected Object Limits;", "}"]);
+  for (const [sources, use] of [[[], meter(["  Object Limits;"])], [[], meter(["  void b() { Object Limits = null; }"])], [[base], meter([], " extends Base")]] as const) {
+    const site = at(use, "Limits.limit", "calls", "limit");
+    assert.deepEqual(await rootOf([LIMITS, ...sources, use], site), unknownAt(site), use.content);
+  }
+  const plain = meter([], " extends Base");
+  const site = at(plain, "Limits.limit", "calls", "limit");
+  const unrelated = { ...base, content: base.content.replace("Object Limits", "Object other") };
+  assert.equal((await rootOf([LIMITS, unrelated, plain], site)).status, "complete");
+});
+
 test("a static import, which may import a member type of the name, proves nothing about a name it may bind", async () => {
   const sibling: SourceFile = { path: "src/main/java/app/api/Limits.java", content: "package app.api;\n\npublic class Limits {}\n" };
   const single = java("src/main/java/app/api/Single.java", ["package app.api;", "", "import static app.other.Holder.Limits;", "", "class Single {", "  Limits limits;", "}"]);

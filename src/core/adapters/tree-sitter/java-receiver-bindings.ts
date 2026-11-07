@@ -1,11 +1,8 @@
 import type { Node } from "web-tree-sitter";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
+import { declaredVariablesOnce, declaresLocal } from "./java-declared-variables.ts";
 import { enclosingBody, fieldsOf, localBinding, thisField } from "./java-function-value-calls.ts";
 
-/** Nodes that declare a variable under their `name` field, besides the ones `localBinding` reads. */
-const VARIABLE_DECLARATIONS: ReadonlySet<string> = new Set(["variable_declarator", "formal_parameter", "spread_parameter", "catch_formal_parameter", "resource", "enhanced_for_statement"]);
-/** Where a bare identifier declares a variable: a lambda parameter, or a pattern variable. */
-const PATTERN_OR_LAMBDA: ReadonlySet<string> = new Set(["lambda_expression", "inferred_parameters", "instanceof_expression", "type_pattern", "record_pattern_component"]);
 /** Types a declaration may state that name a class or an interface. */
 const CLASS_TYPES: ReadonlySet<string> = new Set(["type_identifier", "scoped_type_identifier", "generic_type"]);
 /** A call whose name says it reads or writes a field by reflection or through a handle. */
@@ -31,6 +28,9 @@ export function javaReceiverBindings(root: Node): ReceiverBinding[] {
     for (const child of node.namedChildren) if (child !== null) visit(child);
   };
   visit(root);
+  const declaredIn = declaredVariablesOnce();
+  /** Whether a type body declares a variable of the name anywhere but as a field: it may shadow the field where it is used. */
+  const declaresVariable = (body: Node | undefined, name: string): boolean => body !== undefined && declaresLocal(declaredIn(body), name);
 
   const fieldType = (at: Node, name: string): Node | undefined => {
     const body = enclosingBody(at);
@@ -81,15 +81,4 @@ function headOf(type: Node): Node | undefined {
 
 function isPrivate(field: Node): boolean {
   return field.namedChildren.find((child) => child?.type === "modifiers")?.children.some((modifier) => modifier?.type === "private") ?? false;
-}
-
-/** Whether a type body declares a variable of the name anywhere but as a field: it may shadow the field where it is used. */
-function declaresVariable(body: Node | undefined, name: string): boolean {
-  const pending: Node[] = body === undefined ? [] : [body];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (VARIABLE_DECLARATIONS.has(node.type) && node.parent?.type !== "field_declaration" && node.childForFieldName("name")?.text === name) return true;
-    if (node.type === "identifier" && node.text === name && PATTERN_OR_LAMBDA.has(node.parent?.type ?? "")) return true;
-    for (const child of node.namedChildren) if (child !== null) pending.push(child);
-  }
-  return false;
 }
