@@ -676,3 +676,31 @@ This correction aligns with slice 4 commit `74dec88e`: both existing function-va
 `executesInBody` is the small exported predicate next to main’s `owningBody` in `domain/trace/owning-body.ts`, available for slice 4 integration. It tests whether a site lies in a value range inside the selected body; a range containing that whole body is that body itself or its ancestor and does not exclude it. A deferred value's missing calls and pending references do not enter its lexical encloser's settlement as steps, externals or cuts, and inventory alone does not make a deferred field an executed member. The existing edge to the callee receiving that argument remains. Existing resolved direct-step advisories through callbacks/Java lambdas are unchanged, as requested. Effects intentionally differ: slice 4 retains a cut for high-value information in an unproven function value.
 
 The public table covers an unused stored arrow, unknown callback consumer, ignored function expression, unindexed IIFE, unused Java Runnable lambda, anonymous class and an index-declared invoked arrow. A unary function-expression invocation pins the other side of the boundary: the outer invocation retains its cut even when its first token shares the function value’s start. Value ranges are matched to the call’s actual enclosing syntax scopes, so lexical contents and an invocation wrapping that value are distinct. The last retains its `[1].map` global call; uninvoked or unindexed values contribute none to the encloser. The existing settlement fixture required `[1].map` from an uninvoked `computed` callback; that expectation encoded the same false external. Its direct literal-call witness now lives in the executed `run` method, preserving coverage of R4 settlement. C2, Java signature comparison files and SCHEMA are unchanged.
+
+
+### Integration with main and final measurement (2026-11-07)
+
+The owner requested merging main `273871bd` (slice 4), followed by main's test-only pruning at `2f3569b8`. Correction/integration commit `b63f9cca` keeps main's single `owningBody` and `comparePositions` in `domain/trace/owning-body.ts`; `owningBodyAt` and its former source file are removed. Calls and effects share `declarationSpan` and `executesInBody`, plus the same required `functionValues` source and existing language predicates. Call inventory matches those ranges to the actual enclosing syntax scopes, preserving an outer invocation that wraps a value even when both start at the same token. Effects retain their deliberate high-value cut policy. Source metadata is never inferred from callee spelling. Staging rules version 11 and its fitness digest distinguish the combined adapter; there is one historical version 10 entry. No additional SCHEMA bump is introduced beyond main.
+
+The 19 focused integration entries passed. Four final merged mutations each typechecked with exit 0 and made the public tests fail: disconnect the range predicate; omit Java ranges/scopes; treat an expanded indexed value as unrun; and treat an invocation wrapping a value as its lexical contents. All were restored. The scope table includes both parenthesized and unary IIFEs, an invoked indexed arrow, unused arrow/function expression, unknown consumer, Java lambda and anonymous class. It preserves the edge to `ignore` while forbidding its callback's external. Main's pruned tests stay pruned.
+
+A single lean baseline export was reused in place for main `2f3569b8`. Both implementations ran all 92 probes at identical pinned input SHAs (TS49/Java43); all exit 0. The historical pre-R12 tables above describe their named commits and must not be conflated with this main comparison:
+
+| Corpus | Traces | Steps main → integrated | Cuts main → integrated | Complete main → integrated |
+|---|---:|---:|---:|---:|
+| pfe | 14 | 301 → 263 | 48 → 28 | 0 → 0 |
+| pbr | 15 | 325 → 327 | 250 → 270 | 0 → 0 |
+| rwf | 8 | 97 → 97 | 41 → 41 | 2 → 2 |
+| rwb | 15 | 357 → 357 | 324 → 299 | 0 → 0 |
+| shop | 10 | 345 → 361 | 190 → 155 | 1 → 2 |
+| ord | 13 | 261 → 280 | 356 → 416 | 0 → 0 |
+| web | 15 | 2445 → 2384 | 1071 → 807 | 0 → 0 |
+| self | 2 | 4957 → 4974 | 2559 → 2219 | 0 → 0 |
+| Total | 92 | 9088 → 9043 | 4839 → 4235 | 3 → 4 |
+
+Expanded bodies: 5,211 → 5,170. All 17 non-trace commands remain byte-identical in stdout, stderr and exit code, all exit 0: map6, callers4, importers2, outline2, impact3. The seven sampled unnecessary cuts from the limited recheck (C19/C47/C65/C93/C238/C242/C254) all remain: this scope rule removes 0/7, and no separate patch was attempted. They are constructor delegation, an explicit static call and array-return chains outside deferred value scopes. Existing resolved direct-callback/Java-lambda step advisories remain unchanged.
+
+Evidence under `/private/tmp/ye-ast-unaccounted.9WC4fO`: `merged-final-summary.json`, `measure/base` (main2f3569b8), `measure/head`, pinned manifests `probes-deferred-pinned.json` / `diff-deferred-pinned.json`, `merged-mutations.json` and `merged-*-mutation.log`. Original baseline15f44 outputs remain under `measure/base-15f44`; reviewed0890 outputs remain under `measure/pre-deferred`. Only one baseline source export exists. ThingsBoard is excluded from all runs; HOME, XDG cache/config and TMPDIR point inside this scratch. Java signature-comparison files are unchanged relative to main; C2 render ordering and the accepted alias boundary are unchanged.
+
+
+Final closure verification on Node v24.22.2: foreground `npm run check` exited 0, with typecheck, architecture and all 3,699 tests passing; none failed, cancelled or skipped. No implementation change followed that run. Global code-cleanup and the repo extension reviewed the own diff against main: canonical range helpers/predicates reused, duplicate adapter properties/version entries removed, unused helper retired, both root selection and walk wired to the same source; C2, main's pruned tests and base advisories left intact. Cleanup itself did not commit or merge. `git diff main --check` passed. Scratch footprint about449 MB, including one updated base export and retained evidence; no ThingsBoard input, user-cache/config write or push.
