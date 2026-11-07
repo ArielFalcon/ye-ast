@@ -29,6 +29,8 @@ import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps, type HeadReading } from "../snapshot/head-reading.ts";
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
 import { isTraceRoot, walkTrace } from "./trace-walk.ts";
+import { placeEffects } from "./trace-effects.ts";
+import type { PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
 import { pagePlans } from "./page-plans.ts";
 import { unresolvedOncePerFile } from "../navigation/declaration-uses.ts";
 
@@ -41,6 +43,8 @@ export interface TraceQueriesDeps extends HeadReaderDeps {
   memberNames: DeclaredMemberNamesReader;
   /** Reads the relations impact reads, under the same retained key, for the member calls they prove (RFC-0013 R3). */
   relations: RelationExtractor;
+  /** Reads the snapshot's call sites (RFC-0011), the declared rows a trace's effects come from (RFC-0013 R12). */
+  callSites: PlacedCallSiteReader;
   /** Tells the trivia lines of a requested range apart, so they select nothing. */
   sourceTrivia: SourceTrivia;
   /** Version of each engine every operation runs on, by package name. */
@@ -94,7 +98,8 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           for (const file of rootFiles) {
             const symbols = store.symbolsInFiles([file]);
             if (symbols.some((symbol) => symbol.kind === "property" || symbol.kind === "field")) {
-              for (const id of callsByOwner((await syntaxOf(file)).calls ?? [], symbols).keys()) syntaxCalls.add(id);
+              const syntax = await syntaxOf(file);
+              for (const [id, calls] of callsByOwner(syntax.calls ?? [], symbols, syntax.functionValues)) if (calls.some((call) => !call.deferred)) syntaxCalls.add(id);
             }
           }
           const isRoot = isTraceRoot(store, unresolvedIn, syntaxCalls);
@@ -118,6 +123,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const pages = pageRoots.size === 0 ? {} : { pages: { roots: pageRoots, of: pagePlans(store, memberProofs) } };
           const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, memberProofs, budget, ...pages, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
+          const effectCuts = await placeEffects(walk.roots, { store, unresolvedIn, sites: async () => (await deps.callSites.placed(head.tree.sources, request.repoId)).filter(({ site }) => head.selected(site.file)), lineOf: linesOncePerFile(sources), functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined) });
 
           const { steps, ids } = traceSteps(walk.roots);
           const rootIds = new Map(roots.map((root, index) => [root.id, ids.get(walk.roots[index]!)!]));
@@ -134,6 +140,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             ...handlers.unplaced,
             ...selections.flatMap(({ target, selection }) => (isEntrypointTarget(target) ? unplacedHandlers(handlers.byTarget.get(traceTargetKey(target)) ?? [], selection) : [])),
             ...walk.cuts,
+            ...effectCuts,
           ];
           return { ok: true, value: withCuts(head.base(content, true), value, cuts) };
         } finally {
@@ -219,7 +226,7 @@ function declarationsOncePerFile(reader: DeclaredMemberNamesReader): (file: Sour
   };
 }
 
-const NOTHING_DECLARED: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [] };
+const NOTHING_DECLARED: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
 
 /** Each member name with the sources that declare it, sorted. */
 async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file: SourceFile) => Promise<DeclaredMemberNames>): Promise<ReadonlyMap<string, readonly string[]>> {
@@ -237,4 +244,17 @@ async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file:
 async function rangeRoots(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], trivia: SourceTrivia, isRoot: (symbol: GraphSymbol) => boolean): Promise<RootSelection> {
   const ranges = await requestedRanges(store, changes, sources, trivia);
   return selectRoots(store, ranges.changes, [], NO_COMPONENTS, ranges.uncovered, isRoot);
+}
+
+/** A line of a source, splitting each source once for the life of one query. */
+function linesOncePerFile(sources: ReadonlyMap<string, SourceFile>): (file: string, line: number) => string | undefined {
+  const split = new Map<string, readonly string[]>();
+  return (file, line) => {
+    let lines = split.get(file);
+    if (lines === undefined) {
+      lines = sources.get(file)?.content.split("\n") ?? [];
+      split.set(file, lines);
+    }
+    return lines[line - 1];
+  };
 }

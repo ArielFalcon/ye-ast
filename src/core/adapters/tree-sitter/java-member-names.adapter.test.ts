@@ -29,9 +29,9 @@ test("enum constants are names", async () => {
 test("a source of another language or one that does not parse declares none, and the parser is made only for a Java source", async () => {
   let created = 0;
   const reader = createJavaMemberNames(async () => (created += 1, createJavaParser()));
-  assert.deepEqual(await read(["const a = { m() {} };"], "src/a.ts", reader), { names: [], functionValueCalls: [], callables: [], receiverBindings: [] });
+  assert.deepEqual(await read(["const a = { m() {} };"], "src/a.ts", reader), { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] });
   assert.equal(created, 0);
-  assert.deepEqual(await read(["class {"], "src/A.java", reader), { names: [], functionValueCalls: [], callables: [], receiverBindings: [] });
+  assert.deepEqual(await read(["class {"], "src/A.java", reader), { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] });
   assert.equal(created, 1);
 });
 
@@ -182,4 +182,14 @@ test("a call on a var, varargs, untyped lambda, pattern or resource variable, or
     ["class A { private Map<String, String> cache, cache; void run() { cache.get(\"k\"); } }"],
     ["class A { int[] counts; private int size; void run() { counts.clone(); } }"],
   ]) assert.deepEqual((await read([...header, ...body])).receiverBindings, [], body[0]);
+});
+
+test("lambdas, method references and anonymous class bodies are function values, each whole; a named class body and a method are not", async () => {
+  const values = (await read([
+    "class A {",
+    "  void run() { Runnable r = () -> go(); list.forEach(this::send);",
+    "    Runnable t = new Runnable() { public void run() { go(); } }; }",
+    "}",
+  ])).functionValues;
+  assert.deepEqual(values.map(({ start, end }) => [start.line, start.column, end.line, end.column]), [[2, 28, 2, 38], [2, 53, 2, 63], [3, 32, 3, 63]]);
 });

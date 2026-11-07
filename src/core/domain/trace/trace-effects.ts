@@ -1,0 +1,26 @@
+import type { Cut } from "../shared/fact.ts";
+import { placeAt } from "../impact/impact-cuts.ts";
+import type { CallSite } from "../topology/call-site.ts";
+import type { TraceEffect } from "./trace-fact.ts";
+
+/**
+ * What a call site the RFC-0011 extraction reads is in a trace (R12): an effect with its kind and target when the
+ * extraction resolves the target, otherwise an `unresolved-link` cut at its place naming the library it goes through.
+ * The kind is the extraction's transport, never a guess from a name.
+ */
+export function effectOf(site: CallSite): { effect: TraceEffect } | { cut: Cut } {
+  const kind = site.transport === "http" ? "http" : "message";
+  const { target } = site;
+  if (target.status === "complete") {
+    if (kind === "http" && "path" in target.value) return { effect: { kind, line: site.line, target: target.value } };
+    if (kind === "message" && "destination" in target.value) return { effect: { kind, line: site.line, target: target.value } };
+  }
+  return { cut: unplacedEffect(site) };
+}
+
+/** A call site the trace cannot carry as an effect: a cut at its place, naming the library its target goes through when the extraction names one. */
+export function unplacedEffect(site: CallSite): Cut {
+  const kind = site.transport === "http" ? "http" : "message";
+  const via = site.target.status === "unknown" ? site.target.evidence[0]?.via : undefined;
+  return { kind: "unresolved-link", at: [placeAt(site.file, site.line, `${kind} effect${via === undefined ? "" : ` through ${via}`}`)] };
+}

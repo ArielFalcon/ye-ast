@@ -55,9 +55,9 @@ export interface GraphSymbol {
   language: string;
   startLine: number;
   endLine: number;
-  /** Zero-based UTF-16 columns from the existing index, when present. End is exclusive. */
-  startColumn?: number;
-  endColumn?: number;
+  /** Where the declaration starts and ends on those lines, 0-based, the end exclusive, as codegraph's parser counts them. */
+  startColumn: number;
+  endColumn: number;
 }
 
 export interface GraphEdge {

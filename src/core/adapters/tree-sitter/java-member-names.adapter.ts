@@ -1,13 +1,14 @@
+import type { SourceSpan } from "../../domain/trace/owning-body.ts";
 import type { Node } from "web-tree-sitter";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
 import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, FunctionValueCall, SyntaxCall } from "../../ports/declared-member-names.port.ts";
-import { javaFunctionValueCalls } from "./java-function-value-calls.ts";
+import { isFunctionValueNode, javaFunctionValueCalls } from "./java-function-value-calls.ts";
 import { javaReceiverBindings } from "./java-receiver-bindings.ts";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { JavaParser } from "./java-parser.adapter.ts";
 
-const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [] };
+const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
 /** Modifiers that keep a subtype from overriding a method. */
 const FIXED: readonly string[] = ["static", "private", "final"];
 
@@ -37,9 +38,13 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
         const name = node.childForFieldName("name");
         if (name !== null) names.add(name.text);
       };
+      const functionValues: SourceSpan[] = [];
       const visit = (node: Node): void => {
+        const functionValue = isFunctionValueNode(node) || isAnonymousClassBody(node);
+        if (functionValue) functionValues.push({ start: { line: node.startPosition.row + 1, column: node.startPosition.column }, end: { line: node.endPosition.row + 1, column: node.endPosition.column } });
         const ownerName = ["class_declaration", "interface_declaration", "enum_declaration", "record_declaration", "method_declaration", "constructor_declaration", "compact_constructor_declaration"].includes(node.type) || (node.type === "variable_declarator" && MEMBER_FIELDS.includes(node.parent?.type ?? "")) ? node.childForFieldName("name") : null;
-        if (ownerName !== null) owners.push({ name: ownerName.text, start: node.startPosition.row + 1, nameLine: ownerName.startPosition.row + 1, nameColumn: ownerName.startPosition.column, startColumn: node.startPosition.column, endLine: node.endPosition.row + 1, endColumn: node.endPosition.column });
+        const owns = ownerName !== null || functionValue;
+        if (owns) owners.push({ name: ownerName?.text ?? "", start: node.startPosition.row + 1, nameLine: (ownerName ?? node).startPosition.row + 1, nameColumn: (ownerName ?? node).startPosition.column, startColumn: node.startPosition.column, endLine: node.endPosition.row + 1, endColumn: node.endPosition.column });
         if (node.type === "method_invocation" || node.type === "object_creation_expression" || node.type === "explicit_constructor_invocation") {
           const argumentsNode = node.childForFieldName("arguments");
           const type = node.childForFieldName("type");
@@ -62,7 +67,7 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
         }
         if (node.type === "record_declaration") for (const component of node.childForFieldName("parameters")?.namedChildren ?? []) if (component?.type === "formal_parameter") nameOf(component);
         for (const child of node.namedChildren) if (child !== null) visit(child);
-        if (ownerName !== null) owners.pop();
+        if (owns) owners.pop();
       };
       let functionValueCalls: FunctionValueCall[];
       let receiverBindings: ReceiverBinding[];
@@ -73,7 +78,12 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
       } finally {
         parsed.value.dispose();
       }
-      return { names: [...names].sort(compareText), functionValueCalls, callables, receiverBindings, calls };
+      return { names: [...names].sort(compareText), functionValueCalls, callables, receiverBindings, calls, functionValues };
     },
   };
+}
+
+/** The methods of a class declared in place run only when something calls them. */
+function isAnonymousClassBody(node: Node): boolean {
+  return node.type === "class_body" && node.parent?.type === "object_creation_expression";
 }

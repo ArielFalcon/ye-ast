@@ -331,9 +331,9 @@ function toSymbol(node: Node): GraphSymbol {
     file: node.filePath,
     language: node.language,
     startLine: node.startLine,
+    endLine: node.endLine,
     startColumn: node.startColumn,
     endColumn: node.endColumn,
-    endLine: node.endLine,
   };
 }
 

@@ -2,7 +2,7 @@ import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { CallSite, HttpTarget, StatedRequest } from "../../domain/topology/call-site.ts";
-import type { CallSiteReader } from "../../domain/topology/call-site.ts";
+import type { CallSiteReader, PlacedCallSite, PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { moduleResolverOf, type ModuleResolver } from "./module-resolver.ts";
@@ -105,8 +105,8 @@ interface Located<E extends ts.Expression = ts.Expression> {
   trail: ReadonlySet<string>;
 }
 
-export function createHttpCallSites(): CallSiteReader {
-  return { of: async (files, repo) => read(files, repo) };
+export function createHttpCallSites(): CallSiteReader & PlacedCallSiteReader {
+  return { of: async (files, repo) => (await readPlaced(files, repo)).map(({ site }) => site), placed: readPlaced };
 }
 
 function readerOf(files: readonly SourceFile[]): { shapes: ReadonlyMap<string, FileShape>; reader: Reader } {
@@ -137,13 +137,16 @@ export function createRequestBodies(files: readonly SourceFile[]): (call: ts.Cal
   };
 }
 
-async function read(files: readonly SourceFile[], repo: string): Promise<readonly CallSite[]> {
+async function readPlaced(files: readonly SourceFile[], repo: string): Promise<readonly PlacedCallSite[]> {
   const { shapes, reader: read } = readerOf(files);
-  const found: CallSite[] = [];
+  const found: PlacedCallSite[] = [];
   for (const shape of shapes.values()) {
-    for (const call of calls(shape.source)) found.push(...(await read.callSite(shape, call, repo)));
+    for (const call of calls(shape.source)) {
+      const column = shape.source.getLineAndCharacterOfPosition(call.getStart(shape.source)).character;
+      for (const site of await read.callSite(shape, call, repo)) found.push({ site, column });
+    }
   }
-  return found.sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
+  return found.sort(({ site: a }, { site: b }) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
 }
 function describe(file: SourceFile): FileShape {
   const source = sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);

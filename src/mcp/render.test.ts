@@ -201,6 +201,29 @@ test("a trace tree line carries the call line, a foreign span, the seen and defe
   assert.ok(text.includes("    #3 7 total seen #1"), text);
 });
 
+function effectsFact(): Fact<TraceValue> {
+  const fact = traceFact();
+  const steps = fact.status === "unknown" ? [] : fact.value.steps.map((step) =>
+    step.id === 1 ? { ...step, effects: [{ kind: "http" as const, line: 15, target: { method: "POST" as const, path: "/orders/checkout", base: "https://api" } }] }
+      : step.id === 2 ? { ...step, effects: [{ kind: "message" as const, line: 7, target: { protocol: "nats" as const, destination: "orders.created", role: "publish" as const } }] }
+        : step);
+  return { ...fact, value: { ...(fact as { value: TraceValue }).value, steps } } as Fact<TraceValue>;
+}
+
+test("a trace summary lists every effect first, in pre-order, each with its target and its place", () => {
+  const text = renderTrace(effectsFact());
+  assert.ok(text.includes("effects (2): http POST /orders/checkout base https://api at src/order.ts:15, message nats orders.created at src/tax.ts:7\nbranches are not evaluated"), text);
+});
+
+test("a trace summary with no effect says so, never leaving the line out", () => {
+  assert.ok(renderTrace(traceFact()).includes("\neffects (0)\n"), renderTrace(traceFact()));
+});
+
+test("a trace tree line carries the effects of its body with their lines", () => {
+  const text = renderTrace(effectsFact(), "details");
+  assert.ok(text.includes("      external: lodash: sum, map\n      effects: http POST /orders/checkout base https://api at 15\n"), text);
+});
+
 test("an unresolved trace call names its place and spelling with its candidates, counted in summary when shorter", () => {
   const candidates = ["src/a.ts:handle", "src/b.ts:handle", "src/c.ts:handle"];
   const fact = traceFact([{ kind: "unresolved-link", at: ["src/order.ts:15 this.handler.handle", ...candidates] }]);

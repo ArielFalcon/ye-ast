@@ -616,7 +616,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_trace",
     {
       title: "What declarations execute",
-      description: "Use to follow a flow forward before reading it file by file: from each declaration a target selects (a name, possibly several declarations, an inclusive line range, or an entrypoint), the calls its body makes in source order, then theirs, each declaration expanded once and later repeats marked seen. Branches are not evaluated. Terminal callees fold into leaves with their spans; calls leaving the repository group by module; a call no rule settles is a cut listing its candidates. The reading plan lists the spans to open, merged per file. For who depends on a declaration use ye_ast_callers.",
+      description: "Use to follow a flow forward before reading it file by file: from each declaration a target selects (a name, maybe several declarations, an inclusive line range, or an entrypoint), the calls its body makes in source order, then theirs, each declaration expanded once, repeats marked seen. Branches are not evaluated. Terminal callees fold into leaves with their spans; external calls group by module; declared-client requests and messages are effects with their target (undecided: a cut); a call no rule settles is a cut listing candidates. The reading plan lists the spans to open, merged per file. For who depends on a declaration use ye_ast_callers.",
       inputSchema: compactInput(TOOL_INPUTS.trace),
       annotations,
     },

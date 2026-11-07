@@ -116,8 +116,7 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    outside the repository, whose members the sources do not state; when its members of the name are an overload, a
    varargs, a `private` method or one of `Object`'s; or when a source holds Lombok's `@Delegate` or `@ExtensionMethod`,
    by which a processor adds an overload or rewrites a call with no declaration in the sources. Signatures, here and in
-   R7's overrides, compare parameter types as the strict reading resolves them, after imports, nesting and the file's
-   package, never by their text: `save(X)` in another package may name another `X`, an overload. A name nothing in the
+   R7's overrides, compare parameter identities by decision 12, never by their text: `save(X)` in another package may name another `X`, an overload. A name nothing in the
    repository binds and no single import names is one type only for files that read it from the same package and
    on-demand imports. Two methods whose parameter types are not certainly one declared type may still be one (a name the
    reading leaves unsettled, a type variable, whose binding by an implementation is not read): nothing narrows to either,
@@ -166,6 +165,43 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    field the relations prove holds a package or global type makes the call a leaf under it. A call into an interface
    keeps its dispatch cut. Impact, callers, importers and outline still read such an edge as a possible dependence.
 
+12. Java signature identity has one owner, `JavaProject.typeIdentity` and `readSignature`, shared by trace dispatch,
+    receiver-method comparison. This is an identity comparison, not an extension of the
+    strict resolver's external-leaf or dependency proof. Its lexical walk is the existing resolver's: local and
+    enclosing member types, including inherited member types, precede imports. A type parameter remains variable,
+    never a concrete signature proof. Local types without a placed declaration, inaccessible or ambiguous members,
+    and an unknown superclass retain the cut. A member type can shadow a single-type import (JLS 6.4.1).
+    Single-type and single-static imports precede the file's package and on-demand imports; conflicting single imports
+    or a conflicting top-level declaration in the compilation unit prove nothing. Static imports resolve a public
+    static member type through its declaring repository type, including inherited members and implicitly static
+    member interfaces, annotation types, enums and records. Unread external member
+    suppliers remain unknown. The file's own package precedes ordinary and static on-demand imports. `java.lang` is
+    an implicit on-demand supplier, not a higher-priority import. Known demand suppliers must agree on one identity;
+    a known collision stays cut even beside an unknown supplier. A missing supplier is never assumed empty merely
+    because a collision would make a compilable program illegal (JLS 6.5.5.1, 7.5).
+    For exclusion of platform collisions, the public top-level names of `java.lang` and `java.util` are the union of
+    the Java SE 8, 11, 17, 21 and 25 package summaries, checked into `java-platform-type-names.ts`. This inventory is
+    a versioned language model, never read from the host JDK or a repository build. An unlisted package or platform
+    member-type container stays unknown. A future platform release requires updating the inventory before its new
+    names can be excluded. Repository package membership uses the same snapshot-source boundary as the resolver;
+    generated or dependency declarations absent from that boundary cannot be reconstructed.
+    When demand suppliers cannot be enumerated, equal unresolved resolution contexts (own package, ordinary demands,
+    static demands and simple name) can establish only equality of the two signature expressions, as the prior
+    same-context rule did; they select no supplier and prove no repository target or external leaf. Different contexts
+    do not prove equality, and known collisions never use this fallback. Qualified repository member names resolve
+    to their declaring member, so inherited spellings compare canonically. The first segment of a qualified name uses
+    the same lexical, import and demand reading as a simple type name, regardless of capitalization. A resolved type
+    qualifier leads through its member types one at a time. Only after every type supplier is excluded can a qualifier
+    be read as a package: known package prefixes lead to a declared top-level type, then to member types only
+    (JLS 6.5.4-5). An unproven qualifier, type-parameter qualifier or terminal declaration stays cut; spelling alone
+    never establishes qualified identity. Imported qualifiers and mixed package/type/member paths use this same walk.
+    Array dimensions remain part of identity. Spring's `counterpart` retains its baseline text comparison and generic
+    matching policy: its qualified-homonym limitation remains an advisory for a separate fix backed by a compilable
+    false-fact reproduction. This unit changes neither map behavior nor dependency/external-leaf readings.
+    No schema or persisted graph shape changes. `bindName`'s strict and lenient query behavior is unchanged.
+    The owner's J1 instruction authorizes choosing the root fix and testing this shared comparison; S3's proposed
+    import precedence and compilability assumption are corrected by these rules.
+
 ## Consequences
 
 - One implementation of scoping: a variant the binder handles is handled by both consumers.
@@ -213,3 +249,6 @@ Correction verification: final foreground `npm run check` exited 0 with typechec
 Exact-owner correction after review of `05318a8c`: names and line numbers cannot assign execution ownership. The unique innermost exact source span is now shared as `owningBodyAt` in `domain/shared/source-span.ts`; equal/overlapping ownership stays unproven. Existing declaration columns are transported through the graph port without a schema change. Indexed calls and unresolved references reconcile to a unique site in that body before existing origin settlement. A line-only ambiguous join is a cut, never a step. Exact invocation starts and exact spelling take precedence over statement anchors and final callee names. Both TS and Java readers supply the spans/anchors; no new binder or receiver whitelist is added.
 
 The public same-line repro was RED, then GREEN; the class/nested/arrow/tag/optional/Unicode table checks empty and active bodies. Type-correct owner and ambiguous-join mutations were caught. Final 92 probes, excluding ThingsBoard: baseline/corrected steps 9,027/9,094, cuts 4,742/5,055, expansions 5,125/5,142, complete 3/3; all exit 0. Differential 17/17 identical in stdout/stderr/exit code. Final foreground Node v24.22.2 `npm run check` exited 0, all 3,666 tests pass with typecheck and architecture. RFC-0013 records per-corpus measurements and evidence paths. Staging rules version 10 invalidates adapter-derived caches; SCHEMA is unchanged. C2 is unchanged.
+
+
+Deferred-execution follow-up, aligned with slice 4 `74dec88e`: exact containment proves lexical ownership, not execution. The existing function-value readers export `isFunctionValueNode`; syntax readers expose one `functionValues` range source with the same nested start/end shape as effects. Shared `executesInBody`, next to `owningBodyAt`, excludes contents of unindexed function values from the outer body's missing-call and pending-reference settlement. The walk proves no run of such a value, including an IIFE; an index-declared value that the walk expands retains its own calls. The existing edge to the consumer remains. Resolved direct-step advisories at base are unchanged. The public ignored-callback repro was RED and the TS/Java scope table is GREEN. RFC-0013 records final mutation evidence and measurements.

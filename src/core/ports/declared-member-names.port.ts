@@ -1,4 +1,5 @@
 import type { SourceFile } from "./entrypoint-extractor.port.ts";
+import type { SourceSpan } from "../domain/trace/owning-body.ts";
 
 /** The member names one source declares where a value can live, and its callable declarations, read from its syntax. */
 export interface DeclaredMemberNames {
@@ -12,6 +13,12 @@ export interface DeclaredMemberNames {
   callables: readonly DeclaredCallable[];
   /** In source order. */
   receiverBindings: readonly ReceiverBinding[];
+  /**
+   * The function values the source writes, each whole, in source order: the same arrows, function expressions, lambdas
+   * and method references a function-value call is read through, and a Java anonymous class body. What runs inside one
+   * runs only when something runs the value.
+   */
+  functionValues: readonly SourceSpan[];
 }
 
 /**

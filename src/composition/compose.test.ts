@@ -779,7 +779,7 @@ test("a trace over a real index takes no method as what runs on a receiver it se
   ].join("\n"));
   git("add", "-A");
   git("commit", "-q", "-m", "forms");
-  const { trace } = composeQueries({ scratchRoot });
+  const { trace } = composeQueries({ scratchRoot, indexCache: join(workspace, "index-cache") });
 
   const indexed = ["paren", "bang", "satisfied", "cast", "angle", "optional", "Holder.run"];
   for (const name of [...Object.keys(forms), "Holder.run"]) {
@@ -1935,7 +1935,7 @@ test("missing syntax calls use the same import, ambient, receiver and repository
     "@Injectable()",
     "export class Settled {",
     "  value = computed(() => [1].map(x => x));",
-    "  run() { return new Set([1]); }",
+    "  run() { [1].map(x => x); return new Set([1]); }",
     "}",
     "export function unknown(x: any) { return x.map(); }",
     "declare function register(value: unknown): void; register({ map: 1 });",
@@ -1982,5 +1982,41 @@ test("same-line body ownership preserves class, nested, arrow, tagged and option
     assert.ok(present.ok && present.value.status === 'partial', `${name}: ${JSON.stringify(present)}`);
     assert.ok(present.value.cuts.some((cut) => cut.at[0]?.includes(' aOnly')), `${name}: ${JSON.stringify(present)}`);
     assert.ok(!present.value.cuts.some((cut) => cut.at[0]?.includes(' bOnly')), name);
+  }
+});
+
+
+test("an uninvoked function value contributes no inventoried calls to its enclosing body", async () => {
+  writeFileSync(join(repo, "src/deferred.ts"), 'function ignore(cb:()=>void){} export function entry(){ ignore(() => [1].map(x=>x)); }');
+  git("add", "-A"); git("commit", "-qm", "ignored callback");
+  const { trace } = composeQueries({ scratchRoot });
+  const answer = await trace.walk({ repo, repoId: "deferred", revision: "HEAD", targets: [{ file: "src/deferred.ts", symbol: "entry" }] });
+  assert.ok(answer.ok && answer.value.status === "complete", JSON.stringify(answer));
+  assert.deepEqual(answer.value.value.steps.flatMap((step) => step.external ?? []), []);
+  assert.deepEqual(answer.value.value.steps.flatMap((step) => step.leaves ?? []).map((leaf) => leaf.symbol), ["ignore"]);
+});
+
+test("inventory respects deferred values and preserves an index-declared function value the walk expands", async () => {
+  const rows = [
+    ["arrow", "ts", 'export function entry(){ const dead = () => [1].map(x=>x); }', "entry", false],
+    ["unknown", "ts", 'export function entry(){ unknown(() => [1].map(x=>x)); }', "entry", false],
+    ["expression", "ts", 'function ignore(cb:()=>void){} export function entry(){ ignore(function(){ [1].map(x=>x); }); }', "entry", false],
+    ["iife", "ts", 'export function entry(){ (() => [1].map(x=>x))(); }', "entry", false],
+    ["unary-iife", "ts", 'export function entry(){ void function(){ [1].map(x=>x); }(); }', "entry", false],
+    ["invoked", "ts", 'export function entry(){ const live = () => [1].map(x=>x); live(); }', "entry", true],
+    ["lambda", "java", 'class Flow { void entry(){ Runnable dead = () -> { ((Flow)null).missing(); }; } }', "Flow.entry", false],
+    ["anonymous", "java", 'class Flow { void entry(){ Runnable dead = new Runnable(){ public void run(){ ((Flow)null).missing(); } }; } }', "Flow.entry", false],
+  ] as const;
+  for (const [name, ext, source] of rows) writeFileSync(join(repo, `src/${name}.${ext}`), source);
+  git("add", "-A"); git("commit", "-qm", "function value boundaries");
+  const { trace } = composeQueries({ scratchRoot });
+  for (const [name, ext, , symbol, immediate] of rows) {
+    const answer = await trace.walk({ repo, repoId: "deferred", revision: "HEAD", targets: [{ file: `src/${name}.${ext}`, symbol }] });
+    assert.ok(answer.ok && answer.value.status !== "unknown", `${name}: ${JSON.stringify(answer)}`);
+    if (name.includes("iife")) assert.equal(answer.value.status, "partial", `${name}: ${JSON.stringify(answer)}`);
+    const names = answer.value.value.steps.flatMap((step) => step.external ?? []).flatMap((leaf) => leaf.names);
+    assert.equal(names.includes("[1].map"), immediate, name);
+    assert.ok(!names.some((name) => name.includes("missing")), `${name}: ${JSON.stringify(answer)}`);
+    assert.ok(!(answer.value.status === "partial" ? answer.value.cuts : []).some((cut) => cut.at.some((at) => at.includes("missing"))), `${name}: ${JSON.stringify(answer)}`);
   }
 });

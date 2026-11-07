@@ -7,9 +7,13 @@ export interface FakeNode {
   file: string;
   start: number;
   end: number;
+  /** 0-based, the end exclusive; by default the declaration covers its first and last lines whole. */
   startColumn?: number;
   endColumn?: number;
 }
+
+/** Wide enough that a declaration without columns covers every column of its lines. */
+const WHOLE_LINE = 10_000;
 
 export interface FakeEdge {
   from: string;
@@ -44,7 +48,7 @@ export function fakeNode(id: string, kind: string, file: string, start: number, 
 /** An in-memory code graph; every list comes back in the order the store promises. */
 export function fakeCodeGraph(nodes: readonly FakeNode[], edges: readonly FakeEdge[], unresolved: readonly FakeUnresolved[] = []): CodeGraphReader {
   const symbols = new Map<string, GraphSymbol>(
-    nodes.map((node) => [node.id, { id: handle(node.id), kind: node.kind, name: node.name ?? node.id, qualifiedName: `${node.file}::${node.name ?? node.id}`, file: node.file, language: "java", startLine: node.start, endLine: node.end, ...(node.startColumn === undefined ? {} : { startColumn: node.startColumn }), ...(node.endColumn === undefined ? {} : { endColumn: node.endColumn }) }]),
+    nodes.map((node) => [node.id, { id: handle(node.id), kind: node.kind, name: node.name ?? node.id, qualifiedName: `${node.file}::${node.name ?? node.id}`, file: node.file, language: "java", startLine: node.start, endLine: node.end, startColumn: node.startColumn ?? 0, endColumn: node.endColumn ?? WHOLE_LINE }]),
   );
   const edge = (e: FakeEdge): GraphEdge => ({
     source: handle(e.from),

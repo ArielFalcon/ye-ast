@@ -1,6 +1,8 @@
 import ts from "typescript";
 import type { FunctionValueCall, ReceiverBinding, ReceiverValue } from "../../ports/declared-member-names.port.ts";
+import { lineOf } from "./http-call-sites.adapter.ts";
 import { bindFile, type BoundFile, isDirectEval, type LexicalBinding, unwrapped } from "./lexical-bindings.ts";
+import { isStatic } from "./syntax-names.ts";
 
 const LOGICAL_OPERATORS: readonly ts.SyntaxKind[] = [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken];
 /** Operators that store their right operand, or may: `a ??= f` leaves `a` holding `f` when it held nothing. */
@@ -129,7 +131,7 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
 
   const functionValueCalls = accesses.flatMap((access): FunctionValueCall[] => {
     const receiver = unwrapped(access.expression);
-    const line = tree.getLineAndCharacterOfPosition(access.getStart(tree)).line + 1;
+    const line = lineOf(tree, access);
     if (isThisMember(receiver)) {
       const owner = thisClassOf(receiver);
       const name = receiver.name.text;
@@ -170,8 +172,7 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
     const [field, ...others] = declared;
     if (field === undefined || others.length > 0 || !isClassPrivate(field) || !fieldStaysLocal(owner, name, copies)) return undefined;
     if (ts.isParameter(field)) return annotated(field.type, tree);
-    const isStatic = ts.isPropertyDeclaration(field) && field.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword);
-    return ts.isPropertyDeclaration(field) && !isStatic ? annotated(field.type, tree) : undefined;
+    return ts.isPropertyDeclaration(field) && !isStatic(field) ? annotated(field.type, tree) : undefined;
   };
   const receiverBindings = accesses.flatMap((access): ReceiverBinding[] => {
     const receiver = seenThrough(access.expression);
@@ -335,19 +336,14 @@ function storedValue(value: ts.Expression, bindingOf: (identifier: ts.Identifier
   if (ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner) || ts.isTemplateExpression(inner)) return { kind: "literal", type: "String" };
   if (!ts.isNewExpression(inner) || !ts.isIdentifier(inner.expression)) return undefined;
   const name = inner.expression.text;
+  const at = tree.getLineAndCharacterOfPosition(inner.getStart(tree));
+  const constructed: ReceiverValue = { kind: "constructed", name, line: at.line + 1, column: at.character + 1 };
   const binding = bindingOf(inner.expression);
-  if (binding?.kind === "none") {
-    const at = tree.getLineAndCharacterOfPosition(inner.getStart(tree));
-    return { kind: "constructed", name, line: at.line + 1, column: at.character + 1 };
-  }
+  if (binding?.kind === "none") return constructed;
   if (binding?.kind !== "declared" || binding.declarations.length !== 1) return undefined;
   const declaration = binding.declarations[0]!;
-  if (ts.isClassDeclaration(declaration) && declaration.name !== undefined) return { kind: "declared", name, line: tree.getLineAndCharacterOfPosition(declaration.name.getStart(tree)).line + 1 };
-  if (ts.isImportSpecifier(declaration) || ts.isImportClause(declaration)) {
-    const at = tree.getLineAndCharacterOfPosition(inner.getStart(tree));
-    return { kind: "constructed", name, line: at.line + 1, column: at.character + 1 };
-  }
-  return undefined;
+  if (ts.isClassDeclaration(declaration) && declaration.name !== undefined) return { kind: "declared", name, line: lineOf(tree, declaration.name) };
+  return ts.isImportSpecifier(declaration) || ts.isImportClause(declaration) ? constructed : undefined;
 }
 
 /** `a`, `this` and a chain of plain names after either: what the receiver rules above, or a root's binding, settle. */
@@ -427,7 +423,12 @@ function isFunctionValue(value: ts.Expression): boolean {
     if (LOGICAL_OPERATORS.includes(operator)) return isFunctionValue(value.left) || isFunctionValue(value.right);
     if (operator === ts.SyntaxKind.CommaToken || ASSIGNMENTS.includes(operator)) return isFunctionValue(value.right);
   }
-  return ts.isArrowFunction(value) || ts.isFunctionExpression(value);
+  return isFunctionValueNode(value);
+}
+
+/** An arrow or a function expression: the values a function-value call is read through. */
+export function isFunctionValueNode(node: ts.Node): node is ts.ArrowFunction | ts.FunctionExpression {
+  return ts.isArrowFunction(node) || ts.isFunctionExpression(node);
 }
 
 function isFunctionType(type: ts.TypeNode | undefined): boolean {

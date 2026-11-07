@@ -1,4 +1,4 @@
-import { owningBodyAt } from "../../domain/shared/source-span.ts";
+import { declarationSpan, owningBody } from "../../domain/trace/owning-body.ts";
 import { callsByOwner, matchOwnedCall, positionedBodies, type OwnedCall } from "./syntax-calls.ts";
 import { isSeedable } from "../../domain/change/seeds.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
@@ -383,11 +383,11 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   });
 
   /** The members of a class root that run code, by their declaration: methods, and properties or fields whose initializer makes calls. */
-  const syntaxCallsIn = memoizedBy((file: string) => file, async (file) => callsByOwner((await syntaxOf(file)).calls ?? [], store.symbolsInFiles([file])));
+  const syntaxCallsIn = memoizedBy((file: string) => file, async (file) => callsByOwner((await syntaxOf(file)).calls ?? [], store.symbolsInFiles([file]), (await syntaxOf(file)).functionValues));
 
   const rawBodiesIn = memoizedBy((file: string) => file, async (file) => {
     const declarations = store.symbolsInFiles([file]);
-    return positionedBodies(declarations, (await syntaxOf(file)).calls ?? []).map((body) => declarations.find((symbol) => symbol.id === body.id)!).filter((body): body is typeof body & { startColumn: number; endColumn: number } => body.startColumn !== undefined && body.endColumn !== undefined);
+    return positionedBodies(declarations, (await syntaxOf(file)).calls ?? []).map((body) => declarations.find((symbol) => symbol.id === body.id)!).map((symbol) => ({ ...symbol, ...declarationSpan(symbol) }));
   });
 
   const membersOf = async (node: GraphSymbol): Promise<Child[]> => {
@@ -395,7 +395,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const syntax = await syntaxCallsIn(node.file);
     return navigation
       .membersOf(node)
-      .filter((member) => member.kind === "method" || ((FIELD_KINDS as readonly string[]).includes(member.kind) && (syntax.has(member.id) || callEdgesOf(store, member).length > 0 || callsFrom(member).length > 0)))
+      .filter((member) => member.kind === "method" || ((FIELD_KINDS as readonly string[]).includes(member.kind) && (syntax.get(member.id)?.some((call) => !call.deferred) || callEdgesOf(store, member).length > 0 || callsFrom(member).length > 0)))
       .map((member) => childAt(member, member.startLine, null, member.name, "member"));
   };
 
@@ -440,7 +440,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const unplaced: GraphUnresolvedReference[] = [];
     const rawBodies = await rawBodiesIn(node.file);
     const matched = (line: number | null, column: number | null, name: string) => {
-      const owner = line === null || column === null || !Number.isFinite(column) ? undefined : owningBodyAt(rawBodies, line, column);
+      const owner = line === null || column === null || !Number.isFinite(column) ? undefined : owningBody(rawBodies, { line, column });
       return owner !== undefined && owner.id !== node.id ? undefined : matchOwnedCall(owned, line, column, name);
     };
     const called = uses.followed(node, calls).flatMap((followed) => {
@@ -457,6 +457,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       if (syntax.calls === undefined) return [reference];
       const site = matched(reference.line, reference.column, reference.name);
       if (site === undefined) { unplaced.push(reference); return []; }
+      if (site.deferred) return [];
       accounted.add(site);
       return [{ ...reference, line: site.line, column: site.column - 1 }];
     });
@@ -544,7 +545,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     }
     const missing: GraphUnresolvedReference[] = [];
     for (const call of owned) {
-      if (accounted.has(call)) continue;
+      if (accounted.has(call) || call.deferred) continue;
       const reference = { from: node.id, file: node.file, line: call.line, column: call.column - 1, name: call.name, kind: call.kind, candidates: [] };
       if (call.ambiguous) cuts.push(unresolvedAt(reference, []));
       else missing.push(reference);
