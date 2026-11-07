@@ -6,6 +6,7 @@
  * The input schema belongs to composition-input.ts; the query schema of `requests[].query` is supplied by it.
  */
 import { z } from "zod";
+import { HTTP_METHODS } from "../core/domain/entrypoints/http-route.ts";
 import { validateCompositionReferences, validateCompositionIssues } from "./compose-evidence.ts";
 import { COMPOSE_QUERY } from "./composition-input.ts";
 import type { ComposeFull, ComposeReceipt, CompositionGraph, CoverageSummary, RelationValue } from "./composition-contract.ts";
@@ -45,7 +46,7 @@ const fileRecord = z.strictObject({ id: ids.file, repo: z.string(), origin: evid
 const anchorRecord = z.strictObject({ id: ids.anchor, file: ids.file, symbol: z.string(), line: int, endLine: int.exactOptional(), supports });
 const evidenceRecord = z.strictObject({ id: ids.evidence, origin: evidenceOrigin, repo: z.string(), value: evidenceValue, supports });
 
-const httpMethod = z.enum(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "ANY"]);
+const httpMethod = z.enum(HTTP_METHODS);
 const entryIdentity = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("http-route"), method: httpMethod, path: z.string(), version: z.string().exactOptional(), handler: ids.entity }),
   z.strictObject({ kind: z.literal("ui-route"), path: z.string(), outlet: z.string().exactOptional(), component: z.union([ids.entity, z.literal("unknown")]) }),

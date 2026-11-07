@@ -1,7 +1,7 @@
 import type { UrlScope } from "./java-values.ts";
 import { agreed, JavaMethodFlow, reachedDiagnostic } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
-import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
+import { requestMethodOf, type HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import { compareCallSites, type CallSite, type CallSiteDiagnostic, type HttpTarget, type StatedRequest } from "../../domain/topology/call-site.ts";
 import type { Configuration } from "./application-config.ts";
@@ -13,7 +13,6 @@ import {
   FLUENT_VERBS,
   HTTP_CLIENT_NAME,
   HTTP_EXCHANGE,
-  HTTP_METHODS,
   REQUEST_METHOD_TYPES,
   REST_TEMPLATE_TYPES,
   TEMPLATE_EXPLICIT,
@@ -243,8 +242,7 @@ export class JavaHttpReader {
       if (closure !== undefined) return this.methodOf(closure.node, closure.scope);
     }
     const named = this.text.of(node, scope) ?? (node.type === "string_literal" ? stringLiteralValue(node.text) : node.type === "field_access" ? methodField(node) : node.type === "method_invocation" ? methodCall(node) : undefined);
-    const upper = named?.toUpperCase();
-    return upper !== undefined && HTTP_METHODS.has(upper) ? (upper as HttpMethod) : undefined;
+    return named === undefined ? undefined : requestMethodOf(named.toUpperCase());
   }
 
   /** The calls an interface declares with Feign or `@HttpExchange`: one per mapped method. */

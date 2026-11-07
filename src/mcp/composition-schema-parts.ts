@@ -5,6 +5,7 @@ import { dependencyDiagnostic } from "./dependency-schema.ts";
  * field exact, so an unknown key or an `undefined` member is rejected instead of passed through.
  */
 import { z } from "zod";
+import { HTTP_METHODS } from "../core/domain/entrypoints/http-route.ts";
 import { CALL_SITE_CAUSES } from "../core/domain/topology/call-site.ts";
 import { TRUST_MODES, type DeclaredConfig } from "../core/domain/shared/fact.ts";
 import type { Part } from "./composition-contract.ts";
@@ -92,7 +93,7 @@ function evidenceFinding<T extends z.ZodType>(value: T) {
   ]);
 }
 
-const httpMethod = z.enum(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "ANY"]);
+const httpMethod = z.enum(HTTP_METHODS);
 const changedOperation = {
   change: z.enum(["added", "removed", "altered"]), method: httpMethod, path: z.string(), operationId: z.string().exactOptional(),
   document: z.string(), line: int, parts: z.array(z.enum(["request", "response"])).exactOptional(),

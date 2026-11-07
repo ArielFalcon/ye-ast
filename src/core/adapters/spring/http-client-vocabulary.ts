@@ -38,7 +38,6 @@ export const EXCHANGE_VERBS: ReadonlyMap<string, HttpMethod> = new Map(
   [...FLUENT_VERBS].map(([name, method]) => [`${SERVICE}${name[0]?.toUpperCase()}${name.slice(1)}Exchange`, method]),
 );
 
-export const HTTP_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"]);
 
 /** The names a type that makes HTTP requests carries; a call through one whose source is unknown is a cut naming it. */
 export const HTTP_CLIENT_NAME = /(RestClient|WebClient|HttpClient|RestTemplate|RestOperations|ApiClient)$/;

@@ -3,7 +3,7 @@ import { posix } from "node:path";
 import { isMap, isScalar, LineCounter, parseDocument, type Document } from "yaml";
 import type { ContractData, UnresolvedReference } from "../../domain/contracts/contract-operation.ts";
 import { isContractDocument } from "../../domain/languages/openapi.ts";
-import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
+import { REQUEST_METHODS, type HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { afterOrigin } from "../../domain/topology/path-template.ts";
@@ -11,7 +11,7 @@ import type { Finding } from "../../domain/shared/fact.ts";
 import type { ContractOperation, ContractRoutes } from "../../ports/contract-routes.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 
-const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "trace"]);
+const VERBS: ReadonlySet<string> = new Set(REQUEST_METHODS.map((method) => method.toLowerCase()));
 const OPENAPI = /^3\./;
 const SWAGGER = "2.0";
 export const DOCUMENTATION: ReadonlySet<string> = new Set(["description", "summary", "example", "examples", "externalDocs"]);

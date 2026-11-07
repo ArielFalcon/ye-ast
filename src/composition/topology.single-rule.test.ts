@@ -25,6 +25,12 @@ const RULES: readonly { concept: string; pattern: RegExp; owner: string; pending
     pattern: /\\\/\\\/\(?\[\^\/\?#\]\*/,
     pending: [],
   },
+  {
+    concept: "the HTTP methods a route serves and a request names",
+    owner: "core/domain/entrypoints/http-route.ts",
+    pattern: /"GET",\s*"HEAD",\s*"POST"/,
+    pending: [],
+  },
 ];
 
 function sourceFiles(directory: string): string[] {

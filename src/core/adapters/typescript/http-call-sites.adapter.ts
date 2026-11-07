@@ -3,6 +3,7 @@ import { sourceTree } from "./source-tree.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import { compareCallSites, type CallSite, type CallSiteReader, type HttpTarget, type PlacedCallSite, type PlacedCallSiteReader, type StatedRequest } from "../../domain/topology/call-site.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
+import { requestMethodOf } from "../../domain/entrypoints/http-route.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { moduleResolverOf, type ModuleResolver } from "./module-resolver.ts";
 import { buildDefines, type BuildDefines } from "./url-define.ts";
@@ -1303,8 +1304,7 @@ function objectOf(expression: ts.Expression): ts.ObjectLiteralExpression | undef
 }
 
 function verbOf(name: string): HttpTarget["method"] {
-  const upper = name.toUpperCase();
-  return (["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"] as const).find((verb) => verb === upper) ?? "GET";
+  return requestMethodOf(name.toUpperCase()) ?? "GET";
 }
 
 /**

@@ -4,6 +4,14 @@ export const HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "O
 
 export type HttpMethod = (typeof HTTP_METHODS)[number];
 
+/** The methods a request names; `ANY` is a route's, never a request's. */
+export const REQUEST_METHODS = HTTP_METHODS.filter((method): method is Exclude<HttpMethod, "ANY"> => method !== "ANY");
+
+/** The request method a name spells, in upper case as HTTP writes it; undefined for any other name. */
+export function requestMethodOf(name: string): Exclude<HttpMethod, "ANY"> | undefined {
+  return REQUEST_METHODS.find((method) => method === name);
+}
+
 /** The configuration keys that put a path before every route of an application; a key no document sets is absent. */
 export interface BasePathKeys {
   /** `server.servlet.context-path` */
