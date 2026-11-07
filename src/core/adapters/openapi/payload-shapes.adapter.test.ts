@@ -47,6 +47,17 @@ test("keywords constrain together: nullable and an enumeration restrict their ow
   assert.equal(values("either").null, true);
 });
 
+test("the keywords a value set does not state are kept at their place, without documentation or extensions, and a place without them carries none", () => {
+  const root = rootOf([document({ Root: { type: "object", properties: { name: { type: "string", maxLength: 3, pattern: "^a", readOnly: true, default: "a", description: "d", title: "t", example: "x", "x-tag": 1 }, plain: STRING } } })]).shape;
+  assert.deepEqual(known(property(root, "name").shape).keywords, { default: "a", maxLength: 3, pattern: "^a", readOnly: true });
+  assert.equal("keywords" in known(property(root, "plain").shape), false);
+});
+
+test("an allOf keeps the keywords of the schema that holds it and of every branch, each value once and every distinct value of one keyword listed", () => {
+  const root = known(rootOf([document({ Root: { allOf: [{ $ref: "#/components/schemas/Base" }, { type: "object", minProperties: 1, properties: { name: STRING } }], readOnly: true }, Base: { type: "object", minProperties: 2, deprecated: true, properties: { id: STRING } } })]).shape);
+  assert.deepEqual(root.keywords, { deprecated: true, minProperties: [1, 2], readOnly: true });
+});
+
 test("a Swagger 2.0 document gives its response schema and the base path the contract declares", () => {
   const file: SourceFile = { path: "api/swagger.json", content: JSON.stringify({ swagger: "2.0", basePath: "/api", paths: { "/pets": operation({ "200": { description: "ok", schema: { type: "array", items: STRING } } }) } }) };
   const result = rootOf([file]);

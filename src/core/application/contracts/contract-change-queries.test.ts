@@ -15,6 +15,9 @@ const TEXT: KnownShape = { kind: "known", values: set({ literals: { boolean: [],
 const NULLABLE_TEXT: KnownShape = { kind: "known", values: set({ literals: { boolean: [], number: [], string: "every" }, null: true }) };
 const property = (name: string, shape: Shape): ShapeProperty => ({ name, required: true, shape });
 const object = (...properties: ShapeProperty[]): KnownShape => ({ kind: "known", values: set({ object: true }), object: { properties, open: false } });
+const literals = (string: KnownShape["values"]["literals"]["string"], number: KnownShape["values"]["literals"]["number"] = []): KnownShape => ({ kind: "known", values: set({ literals: { boolean: [], number, string } }) });
+const keyed = (shape: KnownShape, keywords: Record<string, unknown>): KnownShape => ({ ...shape, keywords });
+const optional = (name: string, shape: Shape): ShapeProperty => ({ name, required: false, shape });
 
 /** A file whose content is the JSON of the operations it declares; `unreadable` makes the reader fail on it. */
 interface Declared {
@@ -60,8 +63,11 @@ test("every operation whose sources changed derives its hypotheses, sorted by op
   assert.deepEqual(plan.hypotheses.map(({ operation, property: at }) => `${operation} ${at}`), ["GET /owners city", "GET /owners zip", "GET /pets city", "GET /pets zip"]);
   assert.deepEqual(plan.hypotheses[2]!.places, { base: { path: "api/openapi.json", line: 1, via: "declared" }, head: { path: "api/openapi.json", line: 1, via: "declared" } });
   assert.deepEqual(plan.hypotheses[0]!.hypothesis, { method: "GET", path: "/owners", target: "response", property: ["city"], change: plan.hypotheses[0]!.hypothesis.change });
-  assert.deepEqual(plan.operations, { added: ["POST /owners"], removed: [] });
+  assert.deepEqual(operationDifferences(plan), [["POST /owners", "operation-added", "compatible"]]);
+  assert.deepEqual(plan.differences.find(({ target }) => target === "operation")!.places, { head: { path: "api/openapi.json", line: 2, via: "declared" } });
 });
+
+const operationDifferences = (plan: ReturnType<typeof changeOf>) => plan.differences.filter(({ target }) => target === "operation").map(({ operation, rule }) => [operation, rule.id, rule.level]);
 
 /** The workspace serves each path of the table, naming it as its route does; anything else is served by `others`. */
 const servedAs = (table: Record<string, string>, others: ServingOperation = { kind: "unserved" }): ServingWorkspace["serving"] => ({ method, path }) => (table[path] === undefined ? others : { kind: "served", method, path: table[path] });
@@ -71,7 +77,7 @@ test("an operation a document declares is named as the route that serves it name
   const head = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_HEAD, basePath: "/api" }, { path: "/new", shape: PET_HEAD, basePath: "/api" }])];
   const plan = changeOf(base, head, [reader("declared")], servedAs({ "/api/pets": "/pets" }));
   assert.deepEqual(plan.hypotheses.map(({ hypothesis, operation }) => [hypothesis.method, hypothesis.path, operation]), [["GET", "/pets", "GET /pets"], ["GET", "/pets", "GET /pets"]]);
-  assert.deepEqual(plan.operations, { added: ["GET /api/new"], removed: ["GET /api/gone"] });
+  assert.deepEqual(operationDifferences(plan), [["GET /api/gone", "operation-removed", "breaking"], ["GET /api/new", "operation-added", "compatible"]]);
 });
 
 test("an operation no route serves, or several repositories serve, is a frontier with its places and derives nothing; one whose sources did not change is not reported", () => {
@@ -100,7 +106,7 @@ test("two readers that write one operation with different paths agree on it once
 test("sources that are the same at both revisions are not read by any reader", () => {
   const calls: string[] = [];
   const same = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_BASE }])];
-  assert.deepEqual(changeOf(same, same, [reader("declared", calls)]), { hypotheses: [], gained: [], frontiers: [], operations: { added: [], removed: [] } });
+  assert.deepEqual(changeOf(same, same, [reader("declared", calls)]), { hypotheses: [], differences: [], frontiers: [] });
   assert.deepEqual(calls, []);
 });
 
@@ -159,12 +165,49 @@ test("an operation declared twice by one reader, or whose servers disagree, is a
   assert.deepEqual([disagree.hypotheses, disagree.frontiers.map(({ detail }) => detail)], [[], ["servers disagree"]]);
 });
 
-test("a gained guarantee is listed with its operation, property and places; a place the derivation stopped at is a frontier carrying its operation and property", () => {
+const RESPONSE_RULES: readonly [string, Shape, Shape, string, string][] = [
+  ["response-property-removed", object(property("a", TEXT)), object(), "a", "breaking"],
+  ["response-property-became-optional", object(property("a", TEXT)), object(optional("a", TEXT)), "a", "breaking"],
+  ["response-property-became-nullable", object(property("a", TEXT)), object(property("a", NULLABLE_TEXT)), "a", "breaking"],
+  ["response-property-type-changed", object(property("a", TEXT)), object(property("a", literals("every", "every"))), "a", "breaking"],
+  ["response-property-enum-value-added", object(property("a", literals(["A"]))), object(property("a", literals(["A", "B"]))), "a", "review"],
+  ["response-property-enum-value-removed", object(property("a", literals(["A", "B"]))), object(property("a", literals(["A"]))), "a", "compatible"],
+  ["response-property-became-required", object(optional("a", TEXT)), object(property("a", TEXT)), "a", "compatible"],
+  ["response-property-became-non-nullable", object(property("a", NULLABLE_TEXT)), object(property("a", TEXT)), "a", "compatible"],
+  ["response-property-type-narrowed", object(property("a", literals("every", "every"))), object(property("a", TEXT)), "a", "compatible"],
+  ["response-required-property-added", object(), object(property("a", TEXT)), "a", "compatible"],
+  ["response-optional-property-added", object(), object(optional("a", TEXT)), "a", "compatible"],
+  ["response-property-constraint-narrowed", object(property("a", TEXT)), object(property("a", keyed(TEXT, { maxLength: 3 }))), "a", "compatible"],
+  ["response-property-constraint-widened", object(property("a", keyed(TEXT, { maxLength: 3 }))), object(property("a", TEXT)), "a", "review"],
+  ["response-property-constraint-changed", object(property("a", keyed(TEXT, { pattern: "^a" }))), object(property("a", keyed(TEXT, { pattern: "^b" }))), "a", "review"],
+  ["response-property-annotation-changed", object(property("a", TEXT)), object(property("a", keyed(TEXT, { deprecated: true }))), "a", "compatible"],
+];
+
+for (const [rule, baseShape, headShape, at, level] of RESPONSE_RULES) {
+  test(`a change the derivation names is classified by the rule ${rule}, with its level, operation, property and places`, () => {
+    const plan = changeOf([fileOf("api/openapi.json", [{ path: "/pets", shape: baseShape }])], [fileOf("api/openapi.json", [{ path: "/pets", shape: headShape }])], [reader("declared")]);
+    assert.deepEqual(plan.differences.map(({ rule: { id, level: classified }, target, operation, property: changed }) => [id, classified, target, operation, changed]), [[rule, level, "response", "GET /pets", at]]);
+    assert.deepEqual(plan.differences[0]!.places, { base: { path: "api/openapi.json", line: 1, via: "declared" }, head: { path: "api/openapi.json", line: 1, via: "declared" } });
+  });
+}
+
+test("a derived hypothesis names the rules of every difference it answers, and a keyword difference keeps both values", () => {
+  const base = [fileOf("api/openapi.json", [{ path: "/pets", shape: object(property("a", keyed(TEXT, { maxLength: 4 }))) }])];
+  const head = [fileOf("api/openapi.json", [{ path: "/pets", shape: object(optional("a", keyed(NULLABLE_TEXT, { maxLength: 2 }))) }])];
+  const plan = changeOf(base, head, [reader("declared")]);
+  assert.deepEqual(plan.hypotheses.map(({ property: at, rules }) => [at, rules]), [["a", ["response-property-became-nullable", "response-property-became-optional"]]]);
+  assert.deepEqual(plan.differences.map(({ rule, subject, base: was, head: now }) => [rule.id, subject, was, now]), [
+    ["response-property-became-optional", undefined, undefined, undefined],
+    ["response-property-became-nullable", undefined, undefined, undefined],
+    ["response-property-constraint-narrowed", "maxLength", 4, 2],
+  ]);
+});
+
+test("a place the derivation stopped at is a frontier carrying its operation and property", () => {
   const unknown: Shape = { kind: "unknown", reason: "unresolved", evidence: [{ path: "api/openapi.json", line: 1, via: "oneOf" }] };
   const base = [fileOf("api/openapi.json", [{ path: "/pets", shape: object(property("city", NULLABLE_TEXT), property("owner", TEXT)) }])];
   const head = [fileOf("api/openapi.json", [{ path: "/pets", shape: object(property("city", TEXT), property("owner", unknown)) }])];
   const plan = changeOf(base, head, [reader("declared")]);
-  assert.deepEqual(plan.gained.map(({ operation, property: at, retired }) => [operation, at, retired]), [["GET /pets", "city", "null"]]);
   assert.deepEqual(plan.frontiers.map(({ kind, operation, property: at, side, reason }) => [kind, operation, at, side, reason]), [["unknown-shape", "GET /pets", "owner", "head", "unresolved"]]);
   assert.deepEqual(plan.frontiers[0]!.evidence, unknown.evidence);
 });

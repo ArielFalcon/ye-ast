@@ -79,7 +79,7 @@ export interface GainedGuaranteeItem {
 export interface ChangeFrontier {
   status: "unknown";
   reason: UnknownReason;
-  kind: "unsupported-delta" | "recursive-shape" | "unknown-shape" | "ambiguous-operation" | "unserved-operation" | "unreadable-contract";
+  kind: "unsupported-delta" | "recursive-shape" | "unknown-shape" | "unclassified-difference" | "ambiguous-operation" | "unserved-operation" | "unreadable-contract";
   operation?: string;
   property?: string;
   side?: "base" | "head";

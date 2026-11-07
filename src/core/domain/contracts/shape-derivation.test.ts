@@ -16,18 +16,21 @@ const object = (properties: readonly ShapeProperty[], open = false): KnownShape 
 const array = (elements: Shape): KnownShape => known(set({ array: true }), { elements });
 
 const hypotheses = (base: Shape, head: Shape) => deriveChanges(base, head).hypotheses.map(({ property: path, change }) => [formatAccessPath(path), change.entries] as const);
+const differences = (base: Shape, head: Shape) => deriveChanges(base, head).differences.map(({ path, delta, subject }) => [formatAccessPath(path), delta, subject] as const);
+const keyed = (shape: KnownShape, keywords: Readonly<Record<string, unknown>>): KnownShape => ({ ...shape, keywords });
 
 test("a required property the head no longer declares in a closed object is removed, and the base value set is the old guarantee", () => {
   const derived = deriveChanges(object([property("typeId", NUMBER), property("name", TEXT)]), object([property("name", TEXT)]));
   assert.deepEqual(hypotheses(object([property("typeId", NUMBER), property("name", TEXT)]), object([property("name", TEXT)])), [["typeId", ["removed"]]]);
   assert.deepEqual(derived.hypotheses[0]!.change.oldGuarantee, set({ literals: { boolean: [], number: "every", string: [] } }));
-  assert.deepEqual([derived.gained, derived.frontiers], [[], []]);
+  assert.deepEqual([derived.differences.map(({ delta }) => delta), derived.frontiers], [["removed"], []]);
 });
 
 test("a property that becomes nullable, optional or both is the introduced value, one name each", () => {
   const base = object([property("city", TEXT), property("zip", TEXT)]);
   const head = object([property("city", NULLABLE_TEXT), property("zip", TEXT, false)]);
   assert.deepEqual(hypotheses(base, head), [["city", ["nullable"]], ["zip", ["optional"]]]);
+  assert.deepEqual(differences(base, head), [["city", "introduced-null", undefined], ["zip", "introduced-absence", undefined]]);
 });
 
 test("an enumeration opened to its class is a type change whose old guarantee names the listed literals", () => {
@@ -38,23 +41,68 @@ test("an enumeration opened to its class is a type change whose old guarantee na
 test("literals added to and removed from an enumeration are the values change", () => {
   const derived = deriveChanges(object([property("kind", enumeration("CAT", "DOG"))]), object([property("kind", enumeration("CAT", "BIRD"))]));
   assert.deepEqual(derived.hypotheses.map(({ change }) => change.entries), [[{ values: { added: ["BIRD"], removed: ["DOG"] } }]]);
+  assert.deepEqual(derived.differences.map(({ delta }) => delta), ["literals-added", "literals-retired"]);
 });
 
 test("a class swapped for another introduces the new class and gains nothing to follow but the retired one, which is listed", () => {
   const derived = deriveChanges(object([property("size", TEXT)]), object([property("size", NUMBER)]));
   assert.deepEqual(derived.hypotheses.map(({ change }) => change.entries), [[{ type: "number" }]]);
-  assert.deepEqual(derived.gained.map(({ path, retired }) => [formatAccessPath(path), retired]), [["size", "string"]]);
+  assert.deepEqual(differences(object([property("size", TEXT)]), object([property("size", NUMBER)])), [["size", "introduced-class", "number"], ["size", "retired-class", "string"]]);
 });
 
-test("a retired null or retired absence is a gained guarantee: listed with its place, never a hypothesis", () => {
+test("a retired null or retired absence is a difference the head gains: listed with its place, never a hypothesis", () => {
   const derived = deriveChanges(object([property("city", NULLABLE_TEXT), property("zip", TEXT, false)]), object([property("city", TEXT), property("zip", TEXT)]));
   assert.deepEqual(derived.hypotheses, []);
-  assert.deepEqual(derived.gained.map(({ path, retired }) => [formatAccessPath(path), retired]), [["city", "null"], ["zip", "absence"]]);
+  assert.deepEqual(derived.differences.map(({ path, delta }) => [formatAccessPath(path), delta]), [["city", "retired-null"], ["zip", "retired-absence"]]);
 });
 
-test("a property the base does not declare is an addition and derives nothing, in an open or a closed object", () => {
-  const added = [property("fresh", TEXT)];
-  for (const open of [false, true]) assert.deepEqual(deriveChanges(object([property("a", TEXT)], open), object([property("a", TEXT), ...added], open)), { hypotheses: [], gained: [], frontiers: [] });
+test("a property only the head declares is an addition, required or optional, in an open or a closed object, and nothing below it is derived", () => {
+  const added = [property("fresh", object([property("deep", TEXT)])), property("maybe", TEXT, false)];
+  for (const open of [false, true]) {
+    assert.deepEqual(deriveChanges(object([property("a", TEXT)], open), object([property("a", TEXT), ...added], open)), {
+      hypotheses: [],
+      differences: [{ path: ["fresh"], delta: "added-required" }, { path: ["maybe"], delta: "added-optional" }],
+      frontiers: [],
+    });
+  }
+});
+
+test("an upper bound lowered or added narrows the place and one raised or dropped widens it; a lower bound the other way round", () => {
+  const base = object([property("a", keyed(TEXT, { maxLength: 10 })), property("b", keyed(TEXT, { maxLength: 10 })), property("c", keyed(TEXT, { maxLength: 10 })), property("d", TEXT), property("e", keyed(NUMBER, { minimum: 1 })), property("f", keyed(NUMBER, { minimum: 1 })), property("g", NUMBER)]);
+  const head = object([property("a", keyed(TEXT, { maxLength: 9 })), property("b", keyed(TEXT, { maxLength: 11 })), property("c", TEXT), property("d", keyed(TEXT, { maxItems: 3 })), property("e", keyed(NUMBER, { minimum: 2 })), property("f", keyed(NUMBER, { minimum: 0 })), property("g", keyed(NUMBER, { minimum: 0 }))]);
+  assert.deepEqual(differences(base, head), [
+    ["a", "constraint-narrowed", "maxLength"],
+    ["b", "constraint-widened", "maxLength"],
+    ["c", "constraint-widened", "maxLength"],
+    ["d", "constraint-narrowed", "maxItems"],
+    ["e", "constraint-narrowed", "minimum"],
+    ["f", "constraint-widened", "minimum"],
+    ["g", "constraint-narrowed", "minimum"],
+  ]);
+  assert.deepEqual(deriveChanges(base, head).differences[0], { path: ["a"], delta: "constraint-narrowed", subject: "maxLength", base: 10, head: 9 });
+});
+
+test("a pattern, format, multiple or uniqueness added narrows the place, dropped widens it, and one replaced, like a bound that is not a number, is a change", () => {
+  const base = object([property("a", TEXT), property("b", keyed(TEXT, { format: "int32" })), property("c", keyed(TEXT, { pattern: "^a" })), property("d", keyed(NUMBER, { exclusiveMinimum: true })), property("e", keyed(TEXT, { uniqueItems: false }))]);
+  const head = object([property("a", keyed(TEXT, { pattern: "^a" })), property("b", TEXT), property("c", keyed(TEXT, { pattern: "^b" })), property("d", keyed(NUMBER, { exclusiveMinimum: false })), property("e", keyed(TEXT, { uniqueItems: true }))]);
+  assert.deepEqual(differences(base, head), [
+    ["a", "constraint-narrowed", "pattern"],
+    ["b", "constraint-widened", "format"],
+    ["c", "constraint-changed", "pattern"],
+    ["d", "constraint-changed", "exclusiveMinimum"],
+    ["e", "constraint-narrowed", "uniqueItems"],
+  ]);
+});
+
+test("a default, a deprecation or an XML name that changed is an annotation change, and equal keywords derive nothing", () => {
+  const base = object([property("a", keyed(TEXT, { default: "x", maxLength: 3 })), property("b", TEXT)]);
+  const head = object([property("a", keyed(TEXT, { default: "y", maxLength: 3 })), property("b", keyed(TEXT, { deprecated: true }))]);
+  assert.deepEqual(differences(base, head), [["a", "annotation-changed", "default"], ["b", "annotation-changed", "deprecated"]]);
+});
+
+test("a keyword the derivation does not classify that changed is an unclassified difference at its place, never silence", () => {
+  const derived = deriveChanges(object([property("id", keyed(NUMBER, { readOnly: true }))]), object([property("id", NUMBER)]));
+  assert.deepEqual([derived.differences, derived.frontiers], [[], [{ path: ["id"], kind: "unclassified-difference", detail: "readOnly" }]]);
 });
 
 test("an open object that stops declaring a property holds every value there: each class the base did not allow is introduced", () => {
@@ -111,7 +159,7 @@ test("a pair cut by a recursion above it is not reused from another path, where 
 });
 
 test("a delta at the response root or at an array element is an unsupported delta at that place", () => {
-  assert.deepEqual(deriveChanges(TEXT, NULLABLE_TEXT), { hypotheses: [], gained: [], frontiers: [{ path: [], kind: "unsupported-delta" }] });
+  assert.deepEqual(deriveChanges(TEXT, NULLABLE_TEXT), { hypotheses: [], differences: [], frontiers: [{ path: [], kind: "unsupported-delta" }] });
   const derived = deriveChanges(object([property("tags", array(TEXT))]), object([property("tags", array(NULLABLE_TEXT))]));
   assert.deepEqual([derived.hypotheses, derived.frontiers.map(({ path, kind }) => [formatAccessPath(path), kind])], [[], [["tags[]", "unsupported-delta"]]]);
 });
@@ -125,13 +173,13 @@ test("a property inside array elements is derived under the element segment", ()
 test("a place a side cannot state is a frontier carrying its side, reason and evidence, and nothing below it is derived", () => {
   const unknown: Shape = { kind: "unknown", reason: "unresolved", evidence: [{ path: "api.yml", line: 4, via: "oneOf" }] };
   const derived = deriveChanges(object([property("pet", object([property("name", TEXT)]))]), object([property("pet", unknown)]));
-  assert.deepEqual(derived, { hypotheses: [], gained: [], frontiers: [{ path: ["pet"], kind: "unknown-shape", side: "head", reason: "unresolved", evidence: unknown.evidence }] });
+  assert.deepEqual(derived, { hypotheses: [], differences: [], frontiers: [{ path: ["pet"], kind: "unknown-shape", side: "head", reason: "unresolved", evidence: unknown.evidence }] });
 });
 
-test("an anything-place on both sides derives nothing, and an object whose head loses the class is a gained guarantee", () => {
-  assert.deepEqual(deriveChanges(object([property("x", ANYTHING)]), object([property("x", ANYTHING)])), { hypotheses: [], gained: [], frontiers: [] });
+test("an anything-place on both sides derives nothing, and an object whose head loses the class retires it", () => {
+  assert.deepEqual(deriveChanges(object([property("x", ANYTHING)]), object([property("x", ANYTHING)])), { hypotheses: [], differences: [], frontiers: [] });
   const derived = deriveChanges(object([property("x", object([]))]), object([property("x", TEXT)]));
-  assert.deepEqual(derived.gained.map(({ retired }) => retired), ["object"]);
+  assert.deepEqual(derived.differences.filter(({ delta }) => delta === "retired-class").map(({ subject }) => subject), ["object"]);
 });
 
 test("the derivation is deterministic: hypotheses, gains and frontiers come out sorted by path whatever the declaration order", () => {

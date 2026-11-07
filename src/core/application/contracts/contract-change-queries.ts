@@ -1,8 +1,9 @@
 import { formatAccessPath } from "../../domain/contracts/access-path.ts";
 import type { ChangeFrontier, ConsequencesValue, DerivationValue } from "../../domain/contracts/consequence-fact.ts";
 import type { ResponseHypothesis } from "../../domain/contracts/hypothesis.ts";
+import { CONTRACT_CHANGE_RULES, type ContractChangeRule, type OperationDelta, type RuleTarget } from "../../domain/contracts/contract-change-rules.ts";
 import type { OperationShape } from "../../domain/contracts/payload-shape.ts";
-import { deriveChanges, type DerivationFrontier, type RetiredValue } from "../../domain/contracts/shape-derivation.ts";
+import { deriveChanges, type DerivationFrontier, type RetiredValue, type ShapeDelta } from "../../domain/contracts/shape-derivation.ts";
 import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { withCuts, type Evidence, type UnknownReason } from "../../domain/shared/fact.ts";
@@ -52,8 +53,14 @@ export function createContractChange({ sources, revisions, shapes }: ContractCha
         const plan = planChange(before.value.files, after.value.files, shapes, prepared.serving);
         for (const { hypothesis, operation, property, places } of plan.hypotheses) answered.push(await answerOn(prepared, factBase, hypothesis, { operation, property, places: { base: place(places.base), head: place(places.head) } }));
         const value: DerivationValue = {
-          gained: plan.gained.map(({ places, ...gained }) => ({ ...gained, places: { base: place(places.base), head: place(places.head) } })),
-          operations: plan.operations,
+          gained: plan.differences.flatMap(({ target, delta, subject, operation, property, places }) => {
+            const retired = target === "response" ? retiredOf(delta, subject) : undefined;
+            return retired === undefined || property === undefined ? [] : [{ operation, property, retired, places: { base: place(places.base!), head: place(places.head!) } }];
+          }),
+          operations: {
+            added: plan.differences.flatMap(({ target, delta, operation }) => (target === "operation" && delta === "added" ? [operation] : [])),
+            removed: plan.differences.flatMap(({ target, delta, operation }) => (target === "operation" && delta === "removed" ? [operation] : [])),
+          },
           frontiers: plan.frontiers.map(({ evidence, reason, ...frontier }): ChangeFrontier => ({ status: "unknown", reason: reason ?? defaultReason(frontier.kind), ...frontier, evidence: evidence.map(place) })),
         };
         derivation = withCuts(derivationBase, value, [...prepared.cuts, ...before.value.cuts, ...after.value.cuts]);
@@ -63,16 +70,26 @@ export function createContractChange({ sources, revisions, shapes }: ContractCha
   };
 }
 
+const retiredOf = (delta: PlannedDifference["delta"], subject: string | undefined): RetiredValue | undefined =>
+  delta === "retired-null" ? "null" : delta === "retired-absence" ? "absence" : delta === "retired-class" ? (subject as RetiredValue) : undefined;
+
 const defaultReason = (kind: ChangeFrontier["kind"]): UnknownReason => (kind === "unreadable-contract" ? "source-unreadable" : "unresolved");
 
 const contradiction = (detail: string): Result<never, ConsequencesFault> => ({ ok: false, fault: { kind: "contradictory-revisions", detail } });
 
-/** A guarantee the head gives that the base did not, before it is placed in a repository. */
-interface PlannedGain {
+/** A difference the change made, classified by its rule, before it is placed in a repository. */
+export interface PlannedDifference {
+  rule: ContractChangeRule;
+  target: RuleTarget;
   operation: string;
-  property: string;
-  retired: RetiredValue;
-  places: { base: Evidence; head: Evidence };
+  /** The property of the payload the difference is at; absent for the operation itself. */
+  property?: string;
+  delta: ShapeDelta | OperationDelta;
+  subject?: string;
+  base?: unknown;
+  head?: unknown;
+  /** Where the operation sits in the contract at each revision that declares it. */
+  places: { base?: Evidence; head?: Evidence };
 }
 
 /** A place the change could not be derived at, before it is placed in a repository. */
@@ -90,14 +107,16 @@ export interface PlannedHypothesis {
   hypothesis: ResponseHypothesis;
   operation: string;
   property: string;
+  /** The rules of the differences the hypothesis answers, sorted. */
+  rules: readonly string[];
   places: { base: Evidence; head: Evidence };
 }
 
 export interface ChangePlan {
   hypotheses: readonly PlannedHypothesis[];
-  gained: readonly PlannedGain[];
+  /** In the order of the operations, each operation's own difference first, then its properties' in the order the derivation lists them. */
+  differences: readonly PlannedDifference[];
   frontiers: readonly PlannedFrontier[];
-  operations: { added: readonly string[]; removed: readonly string[] };
 }
 
 /** An operation as one reader states it. */
@@ -124,10 +143,9 @@ interface Reading {
  */
 export function planChange(baseFiles: readonly SourceFile[], headFiles: readonly SourceFile[], shapes: readonly PayloadShapes[], serving: ServingWorkspace["serving"]): ChangePlan {
   const hypotheses: PlannedHypothesis[] = [];
-  const gained: PlannedGain[] = [];
+  const differences: PlannedDifference[] = [];
   const frontiers: PlannedFrontier[] = [];
-  const operations = { added: [] as string[], removed: [] as string[] };
-  if (!sourcesDiffer(baseFiles, headFiles)) return { hypotheses, gained, frontiers, operations };
+  if (!sourcesDiffer(baseFiles, headFiles)) return { hypotheses, differences, frontiers };
   const before = read(baseFiles, shapes, serving);
   const after = read(headFiles, shapes, serving);
   const changed = changedSources(baseFiles, headFiles);
@@ -138,8 +156,8 @@ export function planChange(baseFiles: readonly SourceFile[], headFiles: readonly
   for (const operation of [...new Set([...before.held.keys(), ...after.held.keys()])].sort(compareText)) {
     const [base, ...otherBase] = before.held.get(operation) ?? [];
     const [head, ...otherHead] = after.held.get(operation) ?? [];
-    if (base === undefined) operations.added.push(operation);
-    else if (head === undefined) operations.removed.push(operation);
+    if (base === undefined) differences.push(operationDifference("added", operation, { head: head!.place }));
+    else if (head === undefined) differences.push(operationDifference("removed", operation, { base: base.place }));
     else if (![base, ...otherBase, head, ...otherHead].some(({ shape, place }) => changed(place.path) || shape.files.some(changed))) continue;
     else {
       const entries = [base, ...otherBase, head, ...otherHead];
@@ -151,13 +169,19 @@ export function planChange(baseFiles: readonly SourceFile[], headFiles: readonly
       const places = { base: base.place, head: head.place };
       const derivation = deriveChanges(base.shape.shape, head.shape.shape);
       const { method, path } = head.identity;
-      for (const { property, change } of derivation.hypotheses) hypotheses.push({ hypothesis: { method, path, target: "response", property, change }, operation, property: formatAccessPath(property), places });
-      for (const { path: at, retired } of derivation.gained) gained.push({ operation, property: formatAccessPath(at), retired, places });
+      const ruleOf = (delta: ShapeDelta) => CONTRACT_CHANGE_RULES.response[delta];
+      for (const { property, change, differences: answered } of derivation.hypotheses) {
+        const rules = answered.map(({ delta }) => ruleOf(delta).id).sort(compareText);
+        hypotheses.push({ hypothesis: { method, path, target: "response", property, change }, operation, property: formatAccessPath(property), rules, places });
+      }
+      for (const { path: at, ...difference } of derivation.differences) differences.push({ rule: ruleOf(difference.delta), target: "response", operation, property: formatAccessPath(at), ...difference, places });
       for (const { path: at, evidence, ...frontier } of derivation.frontiers) frontiers.push({ ...frontier, operation, property: formatAccessPath(at), evidence: evidence ?? [base.place, head.place] });
     }
   }
-  return { hypotheses, gained, frontiers, operations };
+  return { hypotheses, differences, frontiers };
 }
+
+const operationDifference = (delta: OperationDelta, operation: string, places: PlannedDifference["places"]): PlannedDifference => ({ rule: CONTRACT_CHANGE_RULES.operation[delta], target: "operation", operation, delta, places });
 
 /** Why an operation cannot be followed from its entries, when it cannot: declared more than once, undecided servers, or not exactly one route that serves it. */
 function undecidedOperation(entries: readonly Held[], repeated: boolean): Pick<PlannedFrontier, "kind" | "detail"> | undefined {

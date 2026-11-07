@@ -29,6 +29,7 @@ interface Analysis {
   required: ReadonlySet<string>;
   open: boolean;
   items: Located | undefined;
+  keywords: Readonly<Record<string, unknown>>;
 }
 
 const KIND_OF_TYPE: Readonly<Record<string, Kind>> = { string: "string", number: "number", integer: "number", boolean: "boolean", array: "array", object: "object", null: "null" };
@@ -42,6 +43,22 @@ const IGNORED: ReadonlySet<string> = new Set([
 
 /** Keywords that change which values a place admits in a way a value set does not state: the place is unknown. */
 const UNMODELLED: readonly string[] = ["oneOf", "anyOf", "not", "patternProperties", "if", "then", "else", "prefixItems", "contains", "propertyNames", "unevaluatedProperties", "unevaluatedItems", "dependentSchemas", "additionalItems"];
+
+/** Keywords the reader turns into the value set or the structure of a place. */
+const MODELLED: ReadonlySet<string> = new Set(["type", "nullable", "x-nullable", "enum", "const", "properties", "required", "additionalProperties", "items", "allOf", "$ref"]);
+
+/** Keywords that only document a schema; an extension (`x-`) does too, unless the reader models it. */
+const DOCUMENTING: ReadonlySet<string> = new Set([...DOCUMENTATION, "title", "$comment", "$id", "$schema"]);
+
+/** The keywords of one schema node its value set does not state, which the shape keeps for the derivation to compare. */
+const keptKeywords = (node: Json): [string, unknown][] => Object.entries(node).filter(([keyword]) => !MODELLED.has(keyword) && !DOCUMENTING.has(keyword) && !keyword.startsWith("x-"));
+
+/** The keywords several nodes hold together: one value as itself, several distinct values of one keyword as their sorted list. */
+function joinedKeywords(nodes: readonly Json[]): Readonly<Record<string, unknown>> {
+  const values = new Map<string, Map<string, unknown>>();
+  for (const [keyword, value] of nodes.flatMap(keptKeywords)) values.set(keyword, (values.get(keyword) ?? new Map()).set(canonicalJson(value), value));
+  return Object.fromEntries([...values].sort(([a], [b]) => compareText(a, b)).map(([keyword, distinct]) => [keyword, distinct.size === 1 ? [...distinct.values()][0] : [...distinct].sort(([a], [b]) => compareText(a, b)).map(([, value]) => value)]));
+}
 
 /** The keywords a branch of an `allOf` may hold for the branches to be a plain merge of open object schemas. */
 const MERGEABLE: ReadonlySet<string> = new Set([...IGNORED, "type", "properties", "required", "additionalProperties", "allOf"]);
@@ -116,7 +133,7 @@ function createReader(referenced: ReferencedDocuments, place: Evidence, document
       remember(analysis);
       return analysis;
     }
-    const known: KnownShape = { kind: "known", values: valuesOf(analysis) };
+    const known: KnownShape = { kind: "known", values: valuesOf(analysis), ...(Object.keys(analysis.keywords).length === 0 ? {} : { keywords: analysis.keywords }) };
     remember(known);
     if (known.values.object) known.object = { properties: propertiesOf(analysis), open: analysis.open };
     if (known.values.array) known.elements = analysis.items === undefined ? ANYTHING : shapeOf(analysis.items.file, analysis.items.node);
@@ -148,7 +165,7 @@ function createReader(referenced: ReferencedDocuments, place: Evidence, document
     if (allowed === undefined) return unknown("type");
     if (listed !== undefined && !(Array.isArray(listed) && listed.every(isListed))) return unknown("enum");
     const properties = new Map(Object.entries(isRecord(node.properties) ? node.properties : {}).map(([name, written]): [string, Located] => [name, { file, node: written }]));
-    return { allowed, listed, properties, required: requiredOf(node), open: node.additionalProperties !== false, items: node.items === undefined ? undefined : { file, node: node.items } };
+    return { allowed, listed, properties, required: requiredOf(node), open: node.additionalProperties !== false, items: node.items === undefined ? undefined : { file, node: node.items }, keywords: joinedKeywords([node]) };
   }
 
   /** Branches are merged only when each is an open object schema whose properties are disjoint from the others' or the same schema. */
@@ -175,7 +192,7 @@ function createReader(referenced: ReferencedDocuments, place: Evidence, document
         properties.set(name, property);
       }
     }
-    return { allowed, listed: undefined, properties, required, open: true, items: undefined };
+    return { allowed, listed: undefined, properties, required, open: true, items: undefined, keywords: joinedKeywords([top.node as Json, ...conjuncts.map(({ node }) => node as Json)]) };
   }
 
   /** The nodes an `allOf` is the conjunction of, itself included when it holds keywords of its own. */

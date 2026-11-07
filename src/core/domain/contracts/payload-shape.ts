@@ -34,6 +34,8 @@ export interface KnownShape {
   object?: { properties: readonly ShapeProperty[]; open: boolean };
   /** Present when the place may hold an array: the shape of its elements. */
   elements?: Shape;
+  /** The JSON Schema keywords the place carries that its value set does not state (bounds, patterns, annotations), by keyword; absent when it carries none. */
+  keywords?: Readonly<Record<string, unknown>>;
 }
 
 /** A place the reader cannot state; nothing below it is derived. */

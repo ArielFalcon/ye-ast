@@ -346,9 +346,9 @@ That is the whole rule; the change kinds are its names:
 | literals | `{ "values": { "added" } }` |
 
 Retired literals are `values.removed`, read as P2 reads them (a strict comparison with one is `review`). A retired `null`
-or a retired absence (a property made non-nullable or required) is reported as a gained guarantee, with its place, and
-is not followed: a branch that tested for it may now be dead, which this phase does not search. A path where nothing is
-introduced or retired derives nothing. `renamed`, `wrapped` and `meaning` are never derived. The derived change is built
+or a retired absence (a property made non-nullable or required) is reported as a difference the head gains, with its
+place, and is not followed: a branch that tested for it may now be dead, which this phase does not search. A path where
+nothing is introduced or retired derives no hypothesis; what else it may differ in is classified by P6. `renamed`, `wrapped` and `meaning` are never derived. The derived change is built
 normalized, as the parser builds a declared one; the parser stays the input of a written hypothesis, and its refusal of
 two `type` entries or of a literal outside a new type guards written input only. The base value set is the old
 guarantee the answer states, replacing the assumed one. A delta at the response root or at an array element itself (a
@@ -513,6 +513,71 @@ events are open question 4.
 **Cost.** Origins are memoized per expression, followed path and call-binding context within one prepared workspace;
 recursion and unresolved continuations end in frontiers; caller lookups reuse the session's. No cross-call cache.
 
+## Classified differences (P6, proposed)
+
+P4 answers what a change introduces; it says nothing about a property the head adds, a bound it tightens, or a change no
+consumer follows. Measured on four corpus contracts over 93 revision pairs: of 303 operations whose response data the
+change altered, 195 derived nothing (117 changed only keywords a value set does not state, 39 added a property, 38
+changed only non-success responses, 1 a media type), and none of the 105 altered requests was classified. P6 names every
+difference with a rule from one catalog, in the taxonomy of oasdiff's breaking-change checks, so an agent reads "property
+X of operation Y became nullable; rule `response-property-became-nullable`, breaking; these consumers read it unguarded"
+without writing a hypothesis.
+
+**Detection stays with the derivation.** `deriveChanges` is the one module that decides what changed at a place. Each
+difference is a delta with its place: a hypothesis's own (`removed`, `introduced-absence`, `introduced-null`,
+`introduced-class` with the class, `literals-added`, `literals-retired`), a retired value (`retired-absence`,
+`retired-null`, `retired-class`), a property only the head declares (`added-required`, `added-optional`; nothing below
+it is derived), and a keyword the value set does not state:
+
+| Keyword | Delta |
+|---|---|
+| an upper bound (`maximum`, `exclusiveMaximum`, `maxLength`, `maxItems`, `maxProperties`) | lowered or added: `constraint-narrowed`; raised or dropped: `constraint-widened` |
+| a lower bound (`minimum`, `exclusiveMinimum`, `minLength`, `minItems`, `minProperties`) | raised or added: `constraint-narrowed`; lowered or dropped: `constraint-widened` |
+| `pattern`, `format`, `multipleOf`, `uniqueItems` | added: `constraint-narrowed`; dropped: `constraint-widened`; replaced: `constraint-changed` |
+| a bound whose value is not a number at either revision | `constraint-changed` |
+| `default`, `deprecated`, `xml` | `annotation-changed` |
+| any other keyword | an `unclassified-difference` frontier naming it, never silence |
+
+A keyword at its default value (`uniqueItems: false`, `deprecated: false`) is its absence. The shape carries these
+keywords: the OpenAPI reader keeps every keyword it does not turn into the value set or the structure, leaving out
+documentation (`description`, `summary`, `example`, `examples`, `externalDocs`, `title`, `$comment`, `$id`, `$schema`)
+and extensions (`x-`, except the `x-nullable` it models); an `allOf` keeps the keywords of the schema that holds it and
+of every branch, several distinct values of one keyword as their list. Shapes read from Spring handlers carry none.
+
+**The catalog classifies.** `core/domain/contracts/contract-change-rules.ts` holds one row per delta and side of the
+exchange: a stable id and a level. `breaking`: a party that conforms to the old contract can fail under the new one;
+`review`: it may; `compatible`: it cannot. Whether a given consumer does fail stays the verdict of its use. The
+response rows follow from the direction of reading: what a response introduces can break its readers, what it retires
+cannot.
+
+| Delta | Response rule | Level |
+|---|---|---|
+| `removed` | `response-property-removed` | breaking |
+| `introduced-absence` | `response-property-became-optional` | breaking |
+| `introduced-null` | `response-property-became-nullable` | breaking |
+| `introduced-class` | `response-property-type-changed` | breaking |
+| `literals-added` | `response-property-enum-value-added` | review |
+| `literals-retired` | `response-property-enum-value-removed` | compatible |
+| `retired-absence` | `response-property-became-required` | compatible |
+| `retired-null` | `response-property-became-non-nullable` | compatible |
+| `retired-class` | `response-property-type-narrowed` | compatible |
+| `added-required` | `response-required-property-added` | compatible |
+| `added-optional` | `response-optional-property-added` | compatible |
+| `constraint-narrowed` | `response-property-constraint-narrowed` | compatible |
+| `constraint-widened` | `response-property-constraint-widened` | review |
+| `constraint-changed` | `response-property-constraint-changed` | review |
+| `annotation-changed` | `response-property-annotation-changed` | compatible |
+
+An operation only the head declares is `operation-added` (compatible); one only the base declares is
+`operation-removed` (breaking). The rows are typed as one per delta, so a delta without a rule does not compile. Rule
+ids are part of the answer and change with the producer version (ADR-0024); no fact that holds them is stored.
+
+**Ownership.** `impact` keeps its digest comparison: it answers which code a change reaches, and the consequences family
+is the one owner of what the difference means.
+
+**Out of P6 so far.** Request bodies and parameters derived from a diff (P5's server shapes, awaiting the owner's
+decision on P5's growth), Spring Bean Validation annotations, security schemes, callbacks.
+
 ## Output
 
 The RFC-0002 envelope. Uses are complete findings with their verdict (the witness, failing step or end and capability
@@ -532,7 +597,7 @@ as `ye_ast_contract_consequences` ([ADR-0034](../adr/0034-name-contract-conseque
 
 | Layer | Owns |
 |---|---|
-| `core/domain/contracts` | hypothesis, access path, path rewrites, value sets, change normalization, guard and verdict rules, payload shapes and the hypotheses a pair of them derives |
+| `core/domain/contracts` | hypothesis, access path, path rewrites, value sets, change normalization, guard and verdict rules, payload shapes, the hypotheses and differences a pair of them derives, and the rule catalog that classifies the differences |
 | `core/domain/languages` | the step semantics and prototype table of a consumer language (JavaScript for both adapters, from P2) |
 | `core/ports` | the driven port for flow steps and uses, the driving query family |
 | `core/application/contracts` | the worklist over chains, frontier accounting, the fact |
