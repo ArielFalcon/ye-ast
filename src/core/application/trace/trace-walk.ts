@@ -1,7 +1,7 @@
 import { declarationSpan, executesInBody, owningBody } from "../../domain/trace/owning-body.ts";
 import { callsByOwner, matchOwnedCall, positionedBodies, type OwnedCall } from "./syntax-calls.ts";
 import { isSeedable } from "../../domain/change/seeds.ts";
-import { CALL_EDGE_KINDS, FIELD_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
+import { CALL_EDGE_KINDS, EDGE_POLICY, FIELD_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor, placeAt } from "../../domain/impact/impact-cuts.ts";
 import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-fact.ts";
 import { branchesOf, declarationPath } from "../../domain/shared/declaration-tree.ts";
@@ -17,7 +17,7 @@ import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
 import type { RelationExtraction } from "../relations/relation-extractor.ts";
-import { bindingKey, receiverBindingsByPlace, type EdgeTargets, type FollowedEdge } from "../navigation/edge-targets.ts";
+import { holdsAt, receiverBindingsByPlace, type EdgeTargets, type FollowedEdge } from "../navigation/edge-targets.ts";
 import { provenCallsOf, provenKey, type ProvenCall, type ProvenCalls } from "../navigation/proven-calls.ts";
 import { createDeclarationUses, unsettledBy, type UnresolvedIn } from "../navigation/declaration-uses.ts";
 
@@ -28,7 +28,7 @@ const DEFERRED_KINDS: readonly string[] = ["function", "method"];
 const TYPE_ONLY_KINDS: readonly string[] = ["interface", "type_alias"];
 
 /** Declarations a supertype reference can name. */
-const TYPE_KINDS: readonly string[] = ["class", "interface", "component"];
+const TYPE_KINDS: readonly string[] = EDGE_POLICY.ownerKinds;
 
 /** Declarations whose syntax says whether they have a body and whether a subtype can override them. */
 const CALLABLE_KINDS: readonly string[] = ["method", "function"];
@@ -221,10 +221,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     return paths.some((written) => (path.length > 0 && covers(written, path, root.open)) || onPrototype(written));
   };
   /** The receiver binding the call's own source proves at the place the call starts, for the member and receiver it spells. */
-  const boundAt = async (reference: GraphUnresolvedReference, member: string, receiver = receiverOf(reference.name) ?? ""): Promise<ReceiverBinding["holds"] | undefined> => {
-    const binding = (await syntaxIndexOf(reference.file)).receiverBindings.get(bindingKey(reference.line, reference.column + 1, member));
-    return binding !== undefined && binding !== "ambiguous" && binding.receiver === receiver ? binding.holds : undefined;
-  };
+  const boundAt = async (reference: GraphUnresolvedReference, member: string, receiver = receiverOf(reference.name) ?? ""): Promise<ReceiverBinding["holds"] | undefined> =>
+    holdsAt((await syntaxIndexOf(reference.file)).receiverBindings, reference.line, reference.column + 1, member, receiver);
   /** The one method named `member` the one class of `name` in `file` (at `line`, when given) declares itself; none otherwise. */
   const ownMethodOf = (file: string, name: string, member: string, line?: number): GraphSymbol | undefined => {
     const classes = store.symbolsInFiles([file]).filter((symbol) => symbol.kind === "class" && joinsFact(symbol, { path: file, line: line ?? symbol.startLine, symbol: name }));

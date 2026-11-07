@@ -10,6 +10,7 @@ const SOURCE = fileURLToPath(new URL("../", import.meta.url));
 const RULES: readonly { concept: string; pattern: RegExp; owner: string; pending: readonly string[] }[] = [
   { concept: "a symbol declared within another", pattern: /(\w+)\.file === (\w+)\.file && \2\.startLine <= \1\.startLine && \1\.endLine <= \2\.endLine/, owner: "core/application/navigation/graph-navigation.ts", pending: [] },
   { concept: "a source's receiver bindings by place", pattern: /\.has\(key\) \? "ambiguous"/, owner: "core/application/navigation/edge-targets.ts", pending: [] },
+  { concept: "what a receiver's binding at a place holds", pattern: /!== "ambiguous" && \w+\.receiver === receiver/, owner: "core/application/navigation/edge-targets.ts", pending: [] },
   { concept: "the member proofs by call place", pattern: /\.template !== true/, owner: "core/application/navigation/proven-calls.ts", pending: [] },
   { concept: "the declarations that can own an inject() local", pattern: /\[\.\.\.EDGE_POLICY\.relations\.from, "function"\]/, owner: "core/domain/impact/edge-policy.ts", pending: [] },
   { concept: "the declarations that hold a value", pattern: /VALUE_KINDS: readonly string\[\] = \["constant", "variable"\]/, owner: "core/application/navigation/edge-targets.ts", pending: ["core/application/trace/syntax-calls.ts"] },

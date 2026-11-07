@@ -120,6 +120,12 @@ export function receiverBindingsByPlace(found: readonly ReceiverBinding[]): Read
   return byPlace;
 }
 
+/** What the one binding at a place proves `receiver` holds, for a call of `member` starting there. */
+export function holdsAt(bindings: ReadonlyMap<string, ReceiverBinding | "ambiguous">, line: number, column: number, member: string, receiver: string): ReceiverBinding["holds"] | undefined {
+  const binding = bindings.get(bindingKey(line, column, member));
+  return binding !== undefined && binding !== "ambiguous" && binding.receiver === receiver ? binding.holds : undefined;
+}
+
 interface SyntaxIndex {
   receiverBindings: ReadonlyMap<string, ReceiverBinding | "ambiguous">;
   /** The callee each call starting at a place spells, without white space, by `line:column`. */
@@ -244,9 +250,8 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs }:
         : "unbound";
     if (origin === "unbound") return false;
     if (origin !== undefined) return "class" in origin.holds && declares(navigation.declarationAt(origin.holds.class, TYPE_KINDS));
-    const bound = syntax.receiverBindings.get(bindingKey(line, column, target.name));
-    if (bound === undefined || bound === "ambiguous" || bound.receiver !== receiver) return false;
-    const holds = bound.holds;
+    const holds = holdsAt(syntax.receiverBindings, line, column, target.name, receiver);
+    if (holds === undefined) return false;
     if (holds.kind === "declared") return declares(navigation.declarationAt({ path: source.file, line: holds.line, symbol: holds.name }, TYPE_KINDS));
     if (holds.kind === "annotated") return declares(await typeNamed(source.file, holds.type));
     if (holds.kind === "constructed") return declares(await typeNamed(source.file, holds.name));
