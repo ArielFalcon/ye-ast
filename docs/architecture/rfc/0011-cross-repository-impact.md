@@ -156,8 +156,11 @@ matches by stem (`Event`, `Model` suffix removed, 0.7) and keeps only the first 
 Both paths are read as typed templates (`core/domain/topology/path-template.ts`, the one owner of the grammar), never
 compared as strings. A segment is text and holes: `{}` is a value the call fills at run time, the hole every extractor
 writes; `{name}`, `{name:regex}` and `:name` are parameters. A route also states `*` (exactly one segment) and `**` or
-`{*name}` (the rest of the path, none of it included). A call that states its origin (`scheme://authority`, in its path
-or its base) states its whole path; a base the call declares comes before its path. Segment by segment:
+`{*name}` (the rest of the path, none of it included). Every call-site reader states its target through the same
+reading of a URL (`callUrl`): the origin is `scheme://authority` or `//authority`, and the authority ends at the path,
+the query, the fragment or a value the code fills, since that value may hold the start of the path; the target carries
+the origin as its base and the path without query or fragment. A call that states its origin states its whole path,
+whatever base it declares; a base the call declares comes before its path. Segment by segment:
 
 - text against text matches only when equal; a route parameter takes any text of the call;
 - a whole segment the call fills at run time takes a route parameter, never text the route states;

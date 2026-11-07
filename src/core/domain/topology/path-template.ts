@@ -21,10 +21,46 @@ export type Unification = { outcome: "matches"; literals: number; parity: boolea
 export const CANNOT_MATCH: Unification = { outcome: "cannot-match" };
 const COULD: Unification = { outcome: "could-match" };
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
-/** A scheme and authority, the authority captured. */
-const ORIGIN = /^(?:[a-z][a-z0-9+.-]*:)?\/\/([^/]*)/i;
+/** A scheme and authority, the authority captured: it ends where the path, the query or the fragment starts. */
+const ORIGIN = /^(?:[a-z][a-z0-9+.-]*:)?\/\/([^/?#]*)/i;
 /** A `{...}` hole, with one level of braces inside for a regular expression such as `{id:\d{3}}`. */
 const HOLE = /\{[^/{}]*(?:\{[^/{}]*\}[^/{}]*)*\}/g;
+
+/**
+ * A URL as a call writes it: the scheme and authority it names (`scheme://host`, or `//host`), and its path without the
+ * query or the fragment, a slash before each segment.
+ */
+export interface CallUrl {
+  origin?: string;
+  path: string;
+}
+
+/** The one reading of a URL a call writes; every reader of call sites states its target through it. */
+export function callUrl(text: string): CallUrl {
+  const { origin, rest } = splitOrigin(text);
+  return urlOf(origin, pathSegments(rest.split(/[?#]/)[0] ?? ""));
+}
+
+/** The URL parts a call writes one after another come to, as a URL resolves: a part that names an origin starts it again. */
+export function joinedCallUrl(...parts: readonly string[]): CallUrl {
+  let origin: string | undefined;
+  let segments: string[] = [];
+  for (const part of parts) {
+    const read = callUrl(part);
+    if (read.origin !== undefined) [origin, segments] = [read.origin, []];
+    segments.push(...pathSegments(read.path));
+  }
+  return urlOf(origin, segments);
+}
+
+function pathSegments(path: string): string[] {
+  return path.split("/").filter((segment) => segment !== "");
+}
+
+function urlOf(origin: string | undefined, segments: readonly string[]): CallUrl {
+  const path = `/${segments.join("/")}`;
+  return origin === undefined ? { path } : { origin, path };
+}
 
 /** The path a call states: a base it declares comes first, and an absolute path overrides it. */
 export function callTemplate(target: { path: string; base?: string }): CallTemplate {
@@ -129,9 +165,13 @@ function edgesAgree(call: readonly TemplatePart[], route: readonly TemplatePart[
   return (callHead.startsWith(routeHead) || routeHead.startsWith(callHead)) && (callEnd.endsWith(routeEnd) || routeEnd.endsWith(callEnd));
 }
 
+/** A value the code fills ends the authority: it may hold the start of the path, so it is never read as the host. */
 function splitOrigin(text: string): { origin?: string; rest: string } {
   const match = ORIGIN.exec(text);
-  return match === null ? { rest: text } : { origin: match[0], rest: text.slice(match[0].length) };
+  if (match === null) return { rest: text };
+  const hole = match[0].indexOf(RUN_TIME_HOLE);
+  const end = hole === -1 ? match[0].length : hole;
+  return { origin: text.slice(0, end), rest: text.slice(end) };
 }
 
 function withOrigin(origin: string | undefined, segments: TemplateSegment[]): CallTemplate {
