@@ -868,6 +868,18 @@ test("callers never settles a call by a package, global or platform root the cal
   assert.deepEqual(await callersOf("callerslogger", { "package.json": manifest, "use.ts": logger }, { file: "use.ts", symbol: "Sink.flush" }), { status: "partial", callers: [], cuts: [["unresolved-link", "use.ts", "use.ts:7 other.logger.flush"]] });
 });
 
+test("importers counts as a user a file whose call reads past a platform root into a repository override", async () => {
+  const files = {
+    "Boot.java": ["public class Boot {", "  public static void main(String[] args) { System.setOut(new RepoStream()); new Use().entry(); }", "}", ""].join("\n"),
+    "RepoStream.java": ["class RepoStream extends java.io.PrintStream {", "  RepoStream() { super(new java.io.ByteArrayOutputStream()); }", "  public void println(String text) { System.err.println(\"REPOSITORY_PRINTLN\"); }", "}", ""].join("\n"),
+    "Use.java": ["public class Use {", "  public void entry() { java.lang.System.out.println(\"x\"); }", "}", ""].join("\n"),
+  };
+  const answer = await composeQueries({ scratchRoot }).impact.importers({ repo: committedRepository("importerspastroot", files), repoId: "importerspastroot", revision: "HEAD", files: ["RepoStream.java"] });
+
+  assert.ok(answer.ok);
+  assert.deepEqual(answer.value.status === "unknown" ? undefined : answer.value.value.files.map((entry) => entry.users), [["Boot.java", "Use.java"]]);
+});
+
 /** Repository functions named like library members, so a member call settled by its name alone is a cut. */
 const HOMONYMS = ["export function push(): void {}", "export function test(): void {}", "export function set(): void {}", "export function save(): void {}", "export class Other {", "  save(): void {}", "}", ""].join("\n");
 

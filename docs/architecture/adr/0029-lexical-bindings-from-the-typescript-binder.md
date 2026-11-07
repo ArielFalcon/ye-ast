@@ -100,7 +100,7 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    starts, not what it runs past the root: nothing records what the repository stores in a platform class's fields or a
    package's or global's members (`System.setOut`, `other.setLogger`), so a call that reads a member between its root and
    its own member (`System.out.println`, `other.logger.flush`, `document.body.appendChild`) is not settled by its root,
-   whether the index left it pending or resolved it into an edge: trace, impact, callers and outline keep such an edge instead of dropping it, and keep such a pending call a cut (ADR-0019, amendment). The leaf's evidence is the module or the global it is rooted at, as for every other
+   whether the index left it pending or resolved it into an edge: trace, impact, callers, importers and outline keep such an edge instead of dropping it, and keep such a pending call a cut (ADR-0019, amendment). The leaf's evidence is the module or the global it is rooted at, as for every other
    leaf; the answer gains no field, so the declared type itself is not written.
 
 ## Consequences
