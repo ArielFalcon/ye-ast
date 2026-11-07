@@ -570,11 +570,9 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
       changed = true;
       if (verdict.kind === "redirect") moveTo(verdict.to, followed);
     }
-    for (const symbol of reached) {
-      for (const followed of await targets.redirectedInto(symbol, signal)) {
-        dropped.add(edgeKey(followed.edge));
-        if (moveTo(symbol, followed)) changed = true;
-      }
+    for (const followed of await targets.redirectedInto(reached, signal)) {
+      dropped.add(edgeKey(followed.edge));
+      if (moveTo(followed.target, followed)) changed = true;
     }
     if (!changed) return { inbound, walk };
   }
