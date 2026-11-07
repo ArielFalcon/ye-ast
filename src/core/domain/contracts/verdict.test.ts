@@ -3,6 +3,7 @@ import test from "node:test";
 import { parseAccessPath } from "./access-path.ts";
 import { parseChange, type Change, type ChangeInput, type ValueClass } from "./change.ts";
 import type { AccessStep, JsonValue, Literal, Predicate, Replacement, UseEnd } from "./use-operation.ts";
+import type { ValueSet } from "./payload-shape.ts";
 import { decideUse, type FallbackGuard, type Guard, type TestedGuard, type UntestedGuard, type UseOperation, type UseSite } from "./verdict.ts";
 
 const path = (text: string) => parseAccessPath(text)!;
@@ -237,6 +238,19 @@ test("a value the change retires is never walked, and no fresh value equals a li
   const onlyOld = guard({ kind: "literal", operator: "===", literal: "OLD" });
   const retiredString = changeOf([{ type: "string" }, { values: { removed: ["OLD"] } }]);
   assert.deepEqual(onChanged(missing, retiredString, [onlyOld]), { kind: "review", reason: "retired-literal" });
+});
+
+test("an enumeration opened to its class never walks a literal the old contract already listed: no representative equals one, and a use naming one is not given it as a new value", () => {
+  const listed = (strings: readonly string[]): ValueSet => ({ literals: { boolean: [], number: [], string: strings }, array: false, object: false, null: false, absent: false });
+  const opened = (strings: readonly string[]): Change => ({ ...AS_STRING, oldGuarantee: listed(strings) });
+  const toFixed = calling("toFixed");
+  assert.equal((onChanged(toFixed, AS_STRING) as { witness?: string }).witness, '""');
+  assert.equal((onChanged(toFixed, opened(["", "a"])) as { witness?: string }).witness, '"aa"');
+  const named = guard({ kind: "literal", operator: "===", literal: "OLD" }, { holds: false });
+  assert.equal((onChanged(toFixed, opened(["OLD"]), [named]) as { witness?: string }).witness, '""');
+  const onlyOld = guard({ kind: "literal", operator: "===", literal: "OLD" });
+  assert.deepEqual(onChanged(toFixed, opened(["OLD"]), [onlyOld]), { kind: "admits", guards: [onlyOld] });
+  assert.equal((onChanged(toFixed, { ...AS_STRING, oldGuarantee: { ...listed([]), literals: { boolean: [], number: [], string: "every" } } }) as { witness?: string }).witness, '""');
 });
 
 test("a use that compares the value strictly with a retired literal written directly is to be reviewed", () => {
