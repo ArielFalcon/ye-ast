@@ -171,6 +171,7 @@ test("an operation declared twice by one reader, or whose servers disagree, is a
 
 const RESPONSE_RULES: readonly [string, Shape, Shape, string, string][] = [
   ["response-property-removed", object(property("a", TEXT)), object(), "a", "breaking"],
+  ["response-property-undeclared", { ...object(property("a", TEXT)), object: { properties: [property("a", TEXT)], open: true } }, { ...object(), object: { properties: [], open: true } }, "a", "breaking"],
   ["response-property-became-optional", object(property("a", TEXT)), object(optional("a", TEXT)), "a", "breaking"],
   ["response-property-became-nullable", object(property("a", TEXT)), object(property("a", NULLABLE_TEXT)), "a", "breaking"],
   ["response-property-type-changed", object(property("a", TEXT)), object(property("a", literals("every", "every"))), "a", "breaking"],

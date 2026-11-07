@@ -105,8 +105,12 @@ test("a keyword the derivation does not classify that changed is an unclassified
   assert.deepEqual([derived.differences, derived.frontiers], [[], [{ path: ["id"], kind: "unclassified-difference", detail: "writeOnly" }]]);
 });
 
-test("an open object that stops declaring a property holds every value there: each class the base did not allow is introduced", () => {
-  const derived = deriveChanges(object([property("name", TEXT)], true), object([], true));
+test("an open object that stops declaring a property holds every value there: each class the base did not allow is introduced, as one undeclared difference", () => {
+  const derived = deriveChanges(object([property("name", known(TEXT.values, { keywords: { maxLength: 3 } }))], true), object([], true));
+  assert.deepEqual(derived.differences, [{ path: ["name"], delta: "undeclared" }]);
+  assert.deepEqual(derived.hypotheses[0]!.differences, derived.differences);
+  const nested = deriveChanges(object([property("owner", object([property("name", TEXT)]))], true), object([], true));
+  assert.deepEqual(nested.differences.map(({ path, delta }) => [formatAccessPath(path), delta]), [["owner", "undeclared"], ["owner.name", "undeclared"]]);
   assert.deepEqual(derived.hypotheses[0]!.change.entries, ["nullable", "optional", { type: "boolean" }, { type: "number" }, { type: "array" }, { type: "object" }]);
   assert.deepEqual(derived.hypotheses[0]!.change.introduced, ["null", "undefined", "boolean", "number", "array", "object"]);
   assert.deepEqual(derived.hypotheses[0]!.change.oldGuarantee, set({ literals: { boolean: [], number: [], string: "every" } }));

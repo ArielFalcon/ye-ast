@@ -33,6 +33,7 @@ export const CONTRACT_CHANGE_RULES: {
   }),
   response: Object.freeze({
     removed: rule("response-property-removed", "breaking"),
+    undeclared: rule("response-property-undeclared", "breaking"),
     "introduced-absence": rule("response-property-became-optional", "breaking"),
     "introduced-null": rule("response-property-became-nullable", "breaking"),
     "introduced-class": rule("response-property-type-changed", "breaking"),

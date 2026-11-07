@@ -12,6 +12,7 @@ type RetiredValue = "null" | "absence" | "array" | "object" | LiteralClass;
 /** What a change did at one place, in the order a derivation lists them for a place. */
 export const SHAPE_DELTAS = [
   "removed",
+  "undeclared",
   "introduced-absence",
   "introduced-null",
   "introduced-class",
@@ -67,7 +68,7 @@ export interface Derivation {
 }
 
 type Entry =
-  | { kind: "delta"; path: AccessPath; delta: ValueDelta }
+  | { kind: "delta"; path: AccessPath; delta: ValueDelta; undeclared?: true }
   | { kind: "difference"; path: AccessPath; difference: Omit<ShapeDifference, "path"> }
   | { kind: "frontier"; path: AccessPath; frontier: Omit<DerivationFrontier, "path"> };
 
@@ -114,7 +115,7 @@ export function deriveChanges(base: Shape, head: Shape): Derivation {
       const change = derivedChange(entry.delta);
       if (!change.ok) frontiers.push({ path: entry.path, kind: "unsupported-delta", detail: change.fault.kind });
       else {
-        const named = differencesOf(entry.delta).map((difference) => ({ path: entry.path, ...difference }));
+        const named = (entry.undeclared === true ? [{ delta: "undeclared" as const }] : differencesOf(entry.delta)).map((difference) => ({ path: entry.path, ...difference }));
         hypotheses.push({ property: entry.path, change: change.value, differences: named });
         differences.push(...named);
       }
@@ -172,7 +173,8 @@ class Comparison {
     const { paired, added, headOpen } = propertiesOf(base, head);
     for (const [name, baseProperty, headProperty] of paired) {
       const headShape = headProperty?.shape ?? (headOpen ? ANYTHING : NOTHING);
-      take(name, this.place(baseProperty.shape, headShape, { base: !baseProperty.required, head: headProperty === undefined || !headProperty.required }));
+      const walk = this.place(baseProperty.shape, headShape, { base: !baseProperty.required, head: headProperty === undefined || !headProperty.required });
+      take(name, headProperty === undefined && headOpen ? undeclared(walk) : walk);
     }
     for (const { name, required } of added) entries.push({ kind: "difference", path: [name], difference: { delta: required ? "added-required" : "added-optional" } });
     if (base.values.array && head.values.array) take(ELEMENT, this.place(base.elements ?? ANYTHING, head.elements ?? ANYTHING, NOT_ABSENT));
@@ -185,6 +187,11 @@ class Comparison {
     }
     return { entries, floor };
   }
+}
+
+/** A property an open object stops declaring, with everything below it: each delta is an undeclared one, and what keywords and retired values it lost is implied. */
+function undeclared({ entries, floor }: Walk): Walk {
+  return { entries: entries.flatMap((entry): Entry[] => (entry.kind === "frontier" ? [entry] : entry.kind === "delta" ? [{ ...entry, undeclared: true }] : [])), floor };
 }
 
 interface Properties {

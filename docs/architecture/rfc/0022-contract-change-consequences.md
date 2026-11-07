@@ -525,7 +525,8 @@ without writing a hypothesis.
 
 **Detection stays with the derivation.** `deriveChanges` is the one module that decides what changed at a place. Each
 difference is a delta with its place: a hypothesis's own (`removed`, `introduced-absence`, `introduced-null`,
-`introduced-class` with the class, `literals-added`, `literals-retired`), a retired value (`retired-absence`,
+`introduced-class` with the class, `literals-added`, `literals-retired`; `undeclared` once for a property an open object
+stops declaring, and for everything below it, instead of one difference per class it then admits), a retired value (`retired-absence`,
 `retired-null`, `retired-class`), a property only the head declares (`added-required`, `added-optional`; nothing below
 it is derived), and a keyword the value set does not state:
 
@@ -555,6 +556,7 @@ cannot.
 | Delta | Response rule | Level |
 |---|---|---|
 | `removed` | `response-property-removed` | breaking |
+| `undeclared` | `response-property-undeclared` | breaking |
 | `introduced-absence` | `response-property-became-optional` | breaking |
 | `introduced-null` | `response-property-became-nullable` | breaking |
 | `introduced-class` | `response-property-type-changed` | breaking |
