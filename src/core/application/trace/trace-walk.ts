@@ -69,7 +69,20 @@ export interface TraceWalkInput {
   /** The relations impact reads, for the member calls they prove; read when a member call first needs them. */
   memberProofs: () => Promise<Pick<RelationExtraction, "memberUses" | "externalUses">>;
   budget: TraceBudget;
+  /** The roots an entrypoint starts at, of which a class (a UI route's component) runs as a page (R9), and what a component runs as one; absent without such a root. */
+  pages?: { roots: ReadonlySet<GraphNodeId>; of: (component: GraphSymbol) => Promise<PagePlan | undefined> };
   signal?: AbortSignal;
+}
+
+/** What a component runs as a page, beside its constructor and field initializers. */
+export interface PagePlan {
+  /** The members the framework calls itself, in the order it calls them. */
+  lifecycle: readonly string[];
+  /** The component's own methods its template's event bindings call, in template text order. */
+  handlers: readonly { member: string; file: string; line: number; column: number }[];
+  /** The declarations its template uses, in template order. */
+  children: readonly GraphSymbol[];
+  cuts: readonly Cut[];
 }
 
 export interface TraceWalk {
@@ -145,7 +158,7 @@ interface Body {
  * cut that leaves it free to expand at a later, shallower one. Every read is cached for this walk only.
  */
 export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkInput): Promise<TraceWalk | "aborted"> {
-  const { store, unresolvedIn, origins, targets, inScope, memberDeclarations, syntaxOf, memberProofs, budget, signal } = input;
+  const { store, unresolvedIn, origins, targets, inScope, memberDeclarations, syntaxOf, memberProofs, budget, pages, signal } = input;
   const navigation = createGraphNavigation(store, () => false);
   const uses = createDeclarationUses(store, navigation, unresolvedIn);
   const callsFrom = (node: GraphSymbol): readonly GraphUnresolvedReference[] => uses.referencesFrom(node, CALL_EDGE_KINDS);
@@ -465,8 +478,11 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       return;
     }
     const first = expandedAt.get(symbol.id);
-    /** A class root also owes its members, which no expansion below a root made. */
-    const owesMembers = depth === 0 && CLASS_KINDS.includes(symbol.kind) && (first === undefined || !rootExpansions.has(first));
+    /** A class root, and a declaration a page's template uses, run their members. */
+    const ownsMembers = depth === 0 || step.via === "template";
+    const page = ownsMembers && pages !== undefined && CLASS_KINDS.includes(symbol.kind) && (step.via === "template" || pages.roots.has(symbol.id));
+    /** Such a class also owes its members, which no expansion below a root made. */
+    const owesMembers = ownsMembers && CLASS_KINDS.includes(symbol.kind) && (first === undefined || !rootExpansions.has(first));
     if (first !== undefined && !owesMembers) {
       step.seen = first;
       return;
@@ -481,9 +497,15 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     }
     expansions += 1;
     if (first === undefined) expandedAt.set(symbol.id, step);
-    if (depth === 0) rootExpansions.add(step);
+    if (ownsMembers) rootExpansions.add(step);
     step.expanded = true;
-    const body = await bodyOf(symbol, depth === 0);
+    const body = await bodyOf(symbol, ownsMembers);
+    if (page) {
+      const plan = await pages!.of(symbol);
+      if (plan === undefined) {
+        if (depth === 0) body.cuts.push({ kind: "unresolved-link", at: [placeAt(symbol.file, symbol.startLine, symbol.name)] });
+      } else body.children = pageOrder(body.children, plan, body.cuts);
+    }
     const dispatch = await unboundDispatch(symbol);
     if (dispatch?.cut !== undefined) body.cuts.push(dispatch.cut);
     if (dispatch?.alternatives !== undefined) step.alternatives = dispatch.alternatives.map(declarationOf);
@@ -494,7 +516,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     for (const child of body.children) {
       const { line, column } = child.place;
       const walked = stepOf(child.symbol, {
-        ...(line === null || child.via === "member" || child.via === "dispatch" ? {} : { at: { line, ...(column === null ? {} : { column: column + 1 }) } }),
+        ...(line === null || child.via === "member" || child.via === "dispatch" || child.via === "template" ? {} : { at: { line, ...(column === null ? {} : { column: column + 1 }) } }),
         via: child.via,
         ...(child.deferred === undefined ? {} : { deferred: child.deferred }),
       });
@@ -516,6 +538,31 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     cuts: [...cuts, ...boundCuts("depth", stopped.depth, budget.depth), ...boundCuts("caller-budget", stopped.expansions, budget.expansions)],
     expanded: expansions,
   };
+}
+
+/**
+ * A page's children in the order it runs them (R9): its constructor, its field initializers and what its class body
+ * calls, in source order; its lifecycle hooks in the framework's order; the handlers its template binds to events, in
+ * template order; the declarations its template uses; then its other members, in source order. A handler the class
+ * runs no member of is a cut at the binding.
+ */
+function pageOrder(children: readonly Child[], plan: PagePlan, cuts: Cut[]): Child[] {
+  const handlerRank = new Map<string, number>();
+  for (const { member } of plan.handlers) if (!handlerRank.has(member)) handlerRank.set(member, handlerRank.size);
+  const members = new Set(children.filter(({ via }) => via === "member").map(({ symbol }) => symbol.name));
+  for (const handler of plan.handlers) if (!members.has(handler.member)) cuts.push({ kind: "unresolved-link", at: [placeAt(handler.file, handler.line, handler.member)] });
+  cuts.push(...plan.cuts);
+  const rankOf = ({ symbol, via, place }: Child): readonly [number, number] => {
+    const line = place.line ?? symbol.startLine;
+    if (via !== "member" || symbol.name === "constructor" || (FIELD_KINDS as readonly string[]).includes(symbol.kind)) return [0, line];
+    const hook = plan.lifecycle.indexOf(symbol.name);
+    if (hook >= 0) return [1, hook];
+    const handler = handlerRank.get(symbol.name);
+    return handler === undefined ? [4, line] : [2, handler];
+  };
+  const ranked = children.map((child) => ({ child, rank: rankOf(child) }));
+  const used = plan.children.map((symbol, index) => ({ child: { symbol, place: { line: null, column: null, spelling: symbol.name, target: symbol.id }, via: "template" as const }, rank: [3, index] as const }));
+  return [...ranked, ...used].sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1]).map(({ child }) => child);
 }
 
 /**

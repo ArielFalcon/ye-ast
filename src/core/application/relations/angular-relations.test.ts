@@ -46,7 +46,7 @@ async function run(classes: AngularClass[], files: SourceFile[] = [], metadataFi
         units.push(...given);
         return [];
       },
-      effects: () => ({ calls: [], writes: [], passed: [] }),
+      effects: () => ({ calls: [], handlers: [], writes: [], passed: [] }),
     },
   });
   return { findings: (await extractor.extract(files)).relations, units };
@@ -180,9 +180,45 @@ test("member proof eligibility and exact uses pass through relation extraction",
       received = context;
       return { classes: [], findings: [], fields: [], locals: [], memberUses: [proof] };
     } },
-    templates: { read: () => [], effects: () => ({ calls: [], writes: [], passed: [] }) },
+    templates: { read: () => [], effects: () => ({ calls: [], handlers: [], writes: [], passed: [] }) },
   });
   const result = await extractor.extract([], options);
   assert.deepEqual((received as typeof options).memberProofs, options.memberProofs);
   assert.deepEqual(result.memberUses, [proof]);
+});
+
+test("each component's template comes with the handlers its event bindings call, or the place where its template cannot be read", async () => {
+  const handler = { file: "src/app/host.ts", line: 21, column: 4, member: "save" };
+  const classes = [
+    component("Host", { template: inline("<ok>\n</ok>") }),
+    component("Broken", { template: inline("<bad>") }),
+    component("Gone", { template: { file: { path: "src/app/gone.html", at: { path: "src/app/gone.ts", line: 6 } } } }),
+    component("Opaque", { template: { unreadable: { path: "src/app/opaque.ts", line: 8 } } }),
+    directive("Hi"),
+  ];
+  const extractor = createAngularRelationExtractor({
+    metadata: { read: async () => ({ classes, findings: [], fields: [], locals: [] }) },
+    templates: { read: () => [], effects: ({ text }) => (text === "<bad>" ? { calls: [], handlers: [], writes: [], passed: [], unreadable: true } : { calls: [], handlers: [handler], writes: [], passed: [] }) },
+  });
+  const { templates } = await extractor.extract([]);
+  assert.deepEqual(templates, [
+    { component: ref("Host"), lines: { path: "src/app/host.ts", start: 20, end: 21 }, handlers: [handler] },
+    { component: ref("Broken"), lines: { path: "src/app/broken.ts", start: 20, end: 20 }, handlers: [], unreadable: { path: "src/app/broken.ts", line: 20 } },
+    { component: ref("Gone"), handlers: [], unreadable: { path: "src/app/gone.ts", line: 6 } },
+    { component: ref("Opaque"), handlers: [], unreadable: { path: "src/app/opaque.ts", line: 8 } },
+  ]);
+});
+
+test("a template the metadata reader already read for its effects is not parsed again for its handlers", async () => {
+  const parsed: string[] = [];
+  const extractor = createAngularRelationExtractor({
+    metadata: { read: async (_files, context) => {
+      const host = component("Host") as Extract<AngularClass, { kind: "component" }>;
+      context?.templateEffects?.(host);
+      return { classes: [host], findings: [], fields: [], locals: [] };
+    } },
+    templates: { read: () => [], effects: ({ text }) => (parsed.push(text), { calls: [], handlers: [], writes: [], passed: [] }) },
+  });
+  await extractor.extract([]);
+  assert.deepEqual(parsed, ["<x></x>"]);
 });

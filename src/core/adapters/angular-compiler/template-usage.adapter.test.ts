@@ -89,3 +89,21 @@ test("the same units give the same findings in the same order", () => {
   assert.deepEqual(read(text, scope), read(text, scope));
   assert.deepEqual(read(text, scope), read(text, [...scope].reverse()));
 });
+
+test("the handlers a template binds to events are the component's own methods its event bindings call, in text order, never a template local's or a field's member", () => {
+  const text = [
+    '<button (click)="save(); this.reset()">x</button>',
+    "<p>{{ total() }}</p>",
+    '<ng-template let-item let-act><a (click)="item.open(); act(); pick(item)">y</a></ng-template>',
+    '<input #box (keyup)="box.focus(); store.load()">',
+    '@defer { <i></i> } @loading { <b (click)="wait()"></b> } @placeholder { <s (click)="hold()"></s> }',
+  ].join("\n");
+  const effects = createTemplateUsageReader().effects({ path: "src/app/host.html", text, firstLine: 4 });
+  assert.deepEqual(effects.handlers.map(({ file, line, column, member }) => `${file}:${line}:${column} ${member}`), [
+    "src/app/host.html:4:18 save",
+    "src/app/host.html:4:26 reset",
+    "src/app/host.html:6:63 pick",
+    "src/app/host.html:8:43 wait",
+    "src/app/host.html:8:85 hold",
+  ]);
+});

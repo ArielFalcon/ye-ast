@@ -60,6 +60,8 @@ interface Options {
   callables?: Readonly<Record<string, readonly DeclaredCallable[]>>;
   /** The bodies the declared hierarchy proves a body-less method runs, by its name; unknown by default. */
   dispatch?: Readonly<Record<string, DispatchTargets>>;
+  /** The template relations and each component's template, as the relations read them; none by default. */
+  relations?: Pick<RelationExtraction, "relations" | "templates">;
   /** The entrypoints the map reads at the head; none by default. */
   findings?: readonly Finding<Entrypoint>[];
   /** Runs each time the map's entrypoints are read. */
@@ -105,7 +107,7 @@ function setup(options: Options) {
         return { status: "complete", value, evidence: [], ...(bare === undefined ? {} : { bare }) };
       }),
     }),
-    relations: { extract: async () => ({ relations: [], fields: [], locals: [], ...options.proofs }) },
+    relations: { extract: async () => ({ relations: [], fields: [], locals: [], ...options.proofs, ...options.relations }) },
     engines: {},
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
   } as unknown as TraceQueriesDeps;
@@ -808,4 +810,95 @@ test("a trace by declaration never reads the map's entrypoints", async () => {
   let extracted = 0;
   await factOf({ nodes: API, edges: API_EDGES, onExtract: () => void (extracted += 1) }, [{ file: A, symbol: "other" }]);
   assert.equal(extracted, 0);
+});
+
+const PAGE_HTML = "src/page.html";
+/** A component `Page` whose members are declared out of the order a page runs them, and a component `Child` its template uses. */
+const PAGE_MEMBERS: FakeNode[] = [
+  fakeNode("Page.ngOnDestroy", "method", A, 3, 4, "ngOnDestroy"),
+  fakeNode("Page.save", "method", A, 6, 8, "save"),
+  fakeNode("Page.ngOnInit", "method", A, 10, 12, "ngOnInit"),
+  fakeNode("Page.data", "property", A, 14, 14, "data"),
+  fakeNode("Page.constructor", "method", A, 16, 18, "constructor"),
+  fakeNode("Page.helper", "method", A, 20, 22, "helper"),
+  fakeNode("Page.ngAfterViewInit", "method", A, 24, 26, "ngAfterViewInit"),
+  fakeNode("Page.reset", "method", A, 28, 30, "reset"),
+];
+const PAGE_NODES: FakeNode[] = [fakeNode("Page", "class", A, 1, 60), ...PAGE_MEMBERS, fakeNode("Child", "class", B, 1, 20), fakeNode("Child.ngOnInit", "method", B, 3, 5, "ngOnInit")];
+const PAGE_EDGES: FakeEdge[] = [...PAGE_MEMBERS.map(({ id }) => ({ from: "Page", to: id, kind: "contains" })), { from: "Child", to: "Child.ngOnInit", kind: "contains" }];
+const PAGE_OUTWARD: FakeUnresolved[] = [...PAGE_MEMBERS, fakeNode("Child.ngOnInit", "method", B, 3, 5)].map(({ id, file, start }) => OUTWARD_CALL(id, file, start));
+const PAGE_REF = { path: A, symbol: "Page", line: 1 };
+const CHILD_REF = { path: B, symbol: "Child", line: 1 };
+const handlerCall = (member: string, line: number) => ({ file: PAGE_HTML, line, column: 5, member });
+const PAGE_RELATIONS: Pick<RelationExtraction, "relations" | "templates"> = {
+  relations: [{ status: "complete", value: { kind: "uses-component", name: "Page>Child", from: PAGE_REF, to: CHILD_REF }, evidence: [{ path: PAGE_HTML, line: 4 }] }],
+  templates: [{ component: PAGE_REF, handlers: [handlerCall("reset", 3), handlerCall("save", 5), handlerCall("reset", 6)] }, { component: CHILD_REF, handlers: [] }],
+};
+const pageShape = (fact: Fact<TraceValue>) => valueOf(fact).steps.map((step) => [step.symbol, step.parent ?? null, step.via ?? null]);
+
+test("a UI route's component runs its constructor and field initializers, then its lifecycle hooks in Angular's order, then its template's event handlers, then its template children, then its other members", async () => {
+  const fact = await factOf({ nodes: PAGE_NODES, edges: PAGE_EDGES, unresolved: PAGE_OUTWARD, relations: PAGE_RELATIONS, findings: [page("/p", handlerAt(A, "Page", 1))] }, [{ kind: "ui-route", name: "/p" }]);
+  assert.deepEqual(pageShape(fact), [
+    ["Page", null, null],
+    ["data", 0, "member"], ["constructor", 0, "member"],
+    ["ngOnInit", 0, "member"], ["ngAfterViewInit", 0, "member"], ["ngOnDestroy", 0, "member"],
+    ["reset", 0, "member"], ["save", 0, "member"],
+    ["Child", 0, "template"], ["ngOnInit", 8, "member"],
+    ["helper", 0, "member"],
+  ]);
+});
+
+test("the same component traced by its declaration keeps its members in source order, with no template children", async () => {
+  const fact = await factOf({ nodes: PAGE_NODES, edges: PAGE_EDGES, unresolved: PAGE_OUTWARD, relations: PAGE_RELATIONS }, [{ file: A, symbol: "Page" }]);
+  assert.deepEqual(pageShape(fact).map(([symbol]) => symbol), ["Page", "ngOnDestroy", "save", "ngOnInit", "data", "constructor", "helper", "ngAfterViewInit", "reset"]);
+});
+
+test("a handler the template binds that the component does not declare is a cut at the binding, never a silently missing step", async () => {
+  const relations = { ...PAGE_RELATIONS, templates: [{ component: PAGE_REF, handlers: [handlerCall("gone", 7)] }] };
+  const fact = await factOf({ nodes: PAGE_NODES, edges: PAGE_EDGES, unresolved: PAGE_OUTWARD, relations, findings: [page("/p", handlerAt(A, "Page", 1))] }, [{ kind: "ui-route", name: "/p" }]);
+  assert.ok(cutsOf(fact).some(([kind, at]) => kind === "unresolved-link" && JSON.stringify(at) === JSON.stringify([`${PAGE_HTML}:7 gone`])), JSON.stringify(cutsOf(fact)));
+});
+
+test("a page whose template cannot be read, or that the relations hold no template for, is a cut there and still lists what its class runs", async () => {
+  const cases = [
+    { templates: [{ component: PAGE_REF, handlers: [], unreadable: { path: PAGE_HTML, line: 1 } }], at: `${PAGE_HTML}:1` },
+    { templates: [], at: `${A}:1 Page` },
+  ];
+  for (const { templates, at } of cases) {
+    const fact = await factOf({ nodes: PAGE_NODES, edges: PAGE_EDGES, unresolved: PAGE_OUTWARD, relations: { relations: [], templates }, findings: [page("/p", handlerAt(A, "Page", 1))] }, [{ kind: "ui-route", name: "/p" }]);
+    assert.ok(cutsOf(fact).some(([kind, places]) => kind === "unresolved-link" && JSON.stringify(places) === JSON.stringify([at])), at);
+    assert.equal(valueOf(fact).steps.filter((step) => step.parent === 0).length, 8, at);
+  }
+});
+
+test("a page's template item the relations could not place, or a used declaration the index does not hold, is a cut at the template; another component's items are not the page's", async () => {
+  const other = { path: B, symbol: "Other", line: 30 };
+  const relations: Pick<RelationExtraction, "relations" | "templates"> = {
+    relations: [
+      { status: "unknown", reason: "unresolved", evidence: [{ path: PAGE_HTML, line: 2 }] },
+      { status: "unknown", reason: "unresolved", evidence: [{ path: PAGE_HTML, line: 12 }] },
+      { status: "complete", value: { kind: "uses-directive", name: "Page>Lost", from: PAGE_REF, to: { path: B, symbol: "Lost", line: 40 } }, evidence: [{ path: PAGE_HTML, line: 3 }] },
+      { status: "complete", value: { kind: "uses-component", name: "Other>Child", from: other, to: CHILD_REF }, evidence: [{ path: "src/other.html", line: 1 }] },
+    ],
+    templates: [{ component: PAGE_REF, lines: { path: PAGE_HTML, start: 1, end: 10 }, handlers: [] }],
+  };
+  const fact = await factOf({ nodes: PAGE_NODES, edges: PAGE_EDGES, unresolved: PAGE_OUTWARD, relations, findings: [page("/p", handlerAt(A, "Page", 1))] }, [{ kind: "ui-route", name: "/p" }]);
+  const templateCuts = cutsOf(fact).filter(([, at]) => (at as string[])[0]!.startsWith(PAGE_HTML));
+  assert.deepEqual(templateCuts, [["unresolved-link", [`${PAGE_HTML}:2`]], ["unresolved-link", [`${PAGE_HTML}:3 Lost`]]]);
+  assert.equal(valueOf(fact).steps.some((step) => step.via === "template"), false);
+});
+
+test("a class root beside a page root keeps its members in source order and owes no template", async () => {
+  const plain = [fakeNode("Plain", "class", B, 30, 50), fakeNode("Plain.ngOnDestroy", "method", B, 31, 32, "ngOnDestroy"), fakeNode("Plain.ngOnInit", "method", B, 34, 35, "ngOnInit")];
+  const fact = await factOf({
+    nodes: [...PAGE_NODES, ...plain],
+    edges: [...PAGE_EDGES, { from: "Plain", to: "Plain.ngOnDestroy", kind: "contains" }, { from: "Plain", to: "Plain.ngOnInit", kind: "contains" }],
+    unresolved: [...PAGE_OUTWARD, OUTWARD_CALL("Plain.ngOnDestroy", B, 31), OUTWARD_CALL("Plain.ngOnInit", B, 34)],
+    relations: PAGE_RELATIONS,
+    findings: [page("/p", handlerAt(A, "Page", 1))],
+  }, [{ kind: "ui-route", name: "/p" }, { file: B, symbol: "Plain" }]);
+  const steps = valueOf(fact).steps;
+  const plainRoot = steps.find((step) => step.symbol === "Plain")!;
+  assert.deepEqual(steps.filter((step) => step.parent === plainRoot.id).map((step) => step.line), [31, 34]);
+  assert.equal(cutsOf(fact).some(([, at]) => (at as string[]).includes(`${B}:30 Plain`)), false);
 });

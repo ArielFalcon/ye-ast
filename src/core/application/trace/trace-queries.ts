@@ -28,6 +28,7 @@ import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps, type HeadReading } from "../snapshot/head-reading.ts";
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
 import { isTraceRoot, walkTrace } from "./trace-walk.ts";
+import { pagePlans } from "./page-plans.ts";
 import { unresolvedOncePerFile } from "../navigation/declaration-uses.ts";
 
 export interface TraceQueriesDeps extends HeadReaderDeps {
@@ -104,7 +105,9 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const edgeTargets = createEdgeTargets({ origins, store, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: head.tree.sources } });
           let proven: ReturnType<typeof retainedRelations> | undefined;
           const memberProofs = () => (proven ??= retainedRelations(deps.relations, head.prepared, head.tree, request));
-          const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, memberProofs, budget, ...(signal === undefined ? {} : { signal }) });
+          const pageRoots = new Set(selections.flatMap(({ target, selection }) => (isEntrypointTarget(target) ? selection.seeds.map(({ symbol }) => symbol.id) : [])));
+          const pages = pageRoots.size === 0 ? {} : { pages: { roots: pageRoots, of: pagePlans(store, memberProofs) } };
+          const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, memberProofs, budget, ...pages, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
 
           const { steps, ids } = traceSteps(walk.roots);

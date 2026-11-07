@@ -1,8 +1,9 @@
 import type { ExternalMemberUseOrigin, MemberUseOrigin, MemberProofContext } from "../../domain/relations/member-use.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
-import type { Relation } from "../../domain/relations/relation.ts";
-import type { Finding } from "../../domain/shared/fact.ts";
+import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
+import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { TemplateHandlerCall } from "../../ports/template-usage.port.ts";
 
 /**
  * What the impact use case asks for injection and template relations. It lives here, not in `core/ports`, because an
@@ -26,4 +27,14 @@ export interface RelationExtraction {
   locals: readonly LocalOrigin[];
   memberUses?: readonly MemberUseOrigin[];
   externalUses?: readonly ExternalMemberUseOrigin[];
+  /** Per component, in class order: the own methods its template's event bindings call, or where its template cannot be read. */
+  templates?: readonly ComponentTemplate[];
+}
+
+export interface ComponentTemplate {
+  component: SymbolRef;
+  /** The lines the template text spans, where its relations and handlers are placed; absent when it was not read. */
+  lines?: { path: string; start: number; end: number };
+  handlers: readonly TemplateHandlerCall[];
+  unreadable?: Evidence;
 }

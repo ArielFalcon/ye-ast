@@ -33,9 +33,19 @@ export interface TemplateWrite {
   member?: string;
 }
 
+/** A call an event binding makes to a method of the component itself: `(click)="save()"` or `this.save()`. */
+export interface TemplateHandlerCall {
+  file: string;
+  line: number;
+  column: number;
+  member: string;
+}
+
 /** What one template does through the component's own fields: its member calls, its writes, and the fields it passes on. */
 export interface TemplateEffects {
   calls: readonly TemplateMemberCall[];
+  /** The component's own methods its event bindings call, in text order. */
+  handlers: readonly TemplateHandlerCall[];
   writes: readonly TemplateWrite[];
   /** The fields whose value the template hands to something other than a member access, call or test of it. */
   passed: readonly string[];

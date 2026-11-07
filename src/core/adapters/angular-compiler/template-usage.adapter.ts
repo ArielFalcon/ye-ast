@@ -21,13 +21,14 @@ import {
   type BindingPipe,
   type BoundTarget,
   type DirectiveMeta,
+  type TmplAstBoundEvent,
   type TmplAstElement,
   type TmplAstTemplate,
 } from "@angular/compiler";
 import { relation, type Relation, type RelationKind, type SymbolRef } from "../../domain/relations/relation.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
-import type { ScopeMember, TemplateEffects, TemplateMemberCall, TemplateUnit, TemplateUsageReader, TemplateWrite } from "../../ports/template-usage.port.ts";
+import type { ScopeMember, TemplateEffects, TemplateHandlerCall, TemplateMemberCall, TemplateUnit, TemplateUsageReader, TemplateWrite } from "../../ports/template-usage.port.ts";
 import { bindTemplate } from "./template-binding.ts";
 
 /**
@@ -43,7 +44,7 @@ const COMPARISONS: ReadonlySet<string> = new Set(["==", "===", "!=", "!=="]);
 
 function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): TemplateEffects {
   const parsed = parseTemplate(template.text, template.path);
-  if ((parsed.errors ?? []).some((error) => error.level === ParseErrorLevel.ERROR)) return { calls: [], writes: [], passed: [], unreadable: true };
+  if ((parsed.errors ?? []).some((error) => error.level === ParseErrorLevel.ERROR)) return { calls: [], handlers: [], writes: [], passed: [], unreadable: true };
   const bound = new R3TargetBinder(new SelectorMatcher<DirectiveMeta[]>()).bind({ template: parsed.nodes });
   const peel = (ast: AST): AST => (ast instanceof ParenthesizedExpression || ast instanceof NonNullAssert ? peel(ast.expression) : ast);
   const ownField = (ast: AST): PropertyRead | undefined => {
@@ -53,6 +54,8 @@ function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): T
   const lineStarts = [0, ...[...template.text.matchAll(/\n/g)].map((match) => match.index + 1)];
   const lineOf = (offset: number): number => lineStarts.findLastIndex((start) => start <= offset);
   const calls: TemplateMemberCall[] = [];
+  const handlers: TemplateHandlerCall[] = [];
+  let inEvent = false;
   const writes: TemplateWrite[] = [];
   const reads: PropertyRead[] = [];
   const used = new Set<AST>();
@@ -60,7 +63,20 @@ function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): T
     const own = ownField(ast);
     if (own !== undefined) used.add(own);
   };
+  const placeOf = (offset: number): { file: string; line: number; column: number } => {
+    const index = lineOf(offset);
+    return { file: template.path, line: template.firstLine + index, column: offset - lineStarts[index]! + 1 };
+  };
   const visitor = new (class extends CombinedRecursiveAstVisitor {
+    override visitBoundEvent(event: TmplAstBoundEvent): void {
+      inEvent = true;
+      try {
+        super.visitBoundEvent(event);
+      } finally {
+        inEvent = false;
+      }
+    }
+
     override visitPropertyRead(read: PropertyRead, context?: unknown): void {
       if (ownField(read) === read) reads.push(read);
       use(read.receiver);
@@ -85,10 +101,8 @@ function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): T
     override visitCall(call: Call, context?: unknown): void {
       const callee = peel(call.receiver);
       const field = callee instanceof PropertyRead ? ownField(callee.receiver) : undefined;
-      if (callee instanceof PropertyRead && field !== undefined) {
-        const index = lineOf(call.sourceSpan.start);
-        calls.push({ file: template.path, line: template.firstLine + index, column: call.sourceSpan.start - lineStarts[index]! + 1, field: field.name, member: callee.name });
-      }
+      if (callee instanceof PropertyRead && field !== undefined) calls.push({ ...placeOf(call.sourceSpan.start), field: field.name, member: callee.name });
+      if (inEvent && ownField(callee) !== undefined) handlers.push({ ...placeOf(call.sourceSpan.start), member: (callee as PropertyRead).name });
       super.visitCall(call, context);
     }
 
@@ -126,6 +140,7 @@ function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): T
   for (const node of parsed.nodes) visitor.visit(node);
   return {
     calls: calls.sort((a, b) => a.line - b.line || a.column - b.column),
+    handlers: handlers.sort((a, b) => a.line - b.line || a.column - b.column),
     writes,
     passed: [...new Set(reads.filter((read) => !used.has(read)).map((read) => read.name))].sort(),
   };
