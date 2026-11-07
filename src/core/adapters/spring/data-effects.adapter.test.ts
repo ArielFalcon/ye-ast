@@ -152,10 +152,10 @@ interface Repo extends Repository<Item,Long> {
  @org.springframework.data.jpa.repository.Modifying @org.springframework.data.jpa.repository.Query("delete from Item") int findByCode(int s);
 }
 class Overload { void run(Repo r) { r.findByCode("x"); } }`;
-  for (const variant of [content, content.replace("java.lang.String s", "long s").replace('findByCode("x")', "findByCode(1L)")]) {
+  for (const [variant, access] of [[content, undefined], [content.replace("java.lang.String s", "long s").replace('findByCode("x")', "findByCode(1L)"), "read"]] as const) {
     const sites = await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Overload.java", content: variant }]);
     assert.equal(sites.length, 1);
-    assert.equal(sites[0]!.site.effect, undefined);
+    assert.equal(sites[0]!.site.effect?.access, access);
   }
 });
 
@@ -177,5 +177,52 @@ test("a shared receiver candidate without value ownership is a cut, never an ann
     const sites = await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Service.java", content: `class Service { ${member} void run() { db.update("x"); } }` }]);
     assert.equal(sites.length, 1);
     assert.equal(sites[0]!.site.effect, undefined);
+  }
+});
+
+test("declared annotations need an exact argument signature, including unknown inherited framework overloads", async () => {
+  const prelude = `import org.springframework.data.jpa.repository.JpaRepository;
+class Item {}
+`;
+  const modifying = '@org.springframework.data.jpa.repository.Modifying @org.springframework.data.jpa.repository.Query("delete from Item")';
+  const reading = '@org.springframework.data.jpa.repository.Query("select i from Item i")';
+  const cases = [
+    source("inherited-overload"),
+    prelude + `interface Repo extends JpaRepository<Item,Long> { ${reading} int save(int id); } class Svc { void run(Repo r, Item item) { r.save(item); } }`,
+    prelude + `interface Repo extends JpaRepository<Item,Long> { ${reading} int deleteById(int id); } class Svc { void run(Repo r) { r.deleteById(1L); } }`,
+    prelude + `interface Base extends JpaRepository<Item,Long> { ${modifying} int findById(int id); } interface Repo extends Base {} class Svc { void run(Repo r) { r.findById(1L); } }`,
+    prelude + `interface Repo extends JpaRepository<Item,Long> { ${modifying} int arbitrary(int id); } class Svc { int value() { return 1; } void run(Repo r) { r.arbitrary(value()); } }`,
+  ];
+  for (const content of cases) {
+    const sites = await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Overload.java", content }]);
+    assert.equal(sites.length, 1);
+    assert.equal(sites[0]!.site.effect, undefined, content);
+  }
+});
+
+test("exact literal and lexical parameter types preserve the invoked declaration's own read or write", async () => {
+  const content = `import org.springframework.data.jpa.repository.JpaRepository;
+class Item {}
+interface Repo extends JpaRepository<Item,Long> {
+ @org.springframework.data.jpa.repository.Modifying @org.springframework.data.jpa.repository.Query("delete from Item") int arbitrary(int id);
+ @org.springframework.data.jpa.repository.Query("select i from Item i") int arbitrary(long id);
+}
+class Svc { void run(Repo r, int id) { r.arbitrary(1); r.arbitrary(1L); r.arbitrary(id); } }`;
+  const sites = await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Exact.java", content }]);
+  assert.deepEqual(sites.map(({ site }) => site.effect?.access), ["write", "read", "write"]);
+});
+
+test("reference argument identity is lexical; an unplaced local homonym cannot match a declared signature", async () => {
+  const prelude = `class Item {}
+interface Named { @org.springframework.data.jpa.repository.Modifying @org.springframework.data.jpa.repository.Query("delete from Item") int named(Item item); }
+interface Repo extends Named, org.springframework.data.jpa.repository.JpaRepository<Item,Long> {}
+`;
+  for (const [body, expected] of [
+    ['void run(Repo r, Item item) { r.named(item); }', "write"],
+    ['void run(Repo r) { class Item {} Item item = new Item(); r.named(item); }', undefined],
+  ] as const) {
+    const sites = await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Reference.java", content: prelude + `class Svc { ${body} }` }]);
+    assert.equal(sites.length, 1);
+    assert.equal(sites[0]!.site.effect?.access, expected);
   }
 });

@@ -10,7 +10,7 @@ import { annotationAt, resolve } from "./java-declared-types.ts";
 import { enclosingType } from "./java-root-bindings.ts";
 import { argumentsOf, typeNameOf } from "./java-members.ts";
 import { invocationsOf, type Invocation } from "./java-invocations.ts";
-import { createJavaProject, describeFile, readSignature, sameSignature, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, describeFile, readArgumentSignature, readSignature, sameSignature, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 import { DATA_CLIENTS, ENTITY_OPERATIONS, QUERY_CONFIGURATION, QUERY_FACTORIES, QUERY_OPERATIONS, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
 
 export function createJavaDataEffects(parser: JavaParser): DataEffectReader {
@@ -86,10 +86,16 @@ function effectAt(call: Invocation, project: JavaProject, bindings: ReadonlyMap<
     if (entities.length === 0) return undefined;
     if (receiver?.unproven === true) return false;
     const named = project.hierarchy(type).types.flatMap((owner) => owner.methods.filter((method) => method.name === operation));
-    const methods = named.filter((method) => method.parameterTypes.length === argumentsOf(call.node).length);
+    let methods = named.filter((method) => method.parameterTypes.length === argumentsOf(call.node).length);
     if (named.some((method) => method.node.childForFieldName("parameters")?.namedChildren.some((node) => node.type === "spread_parameter"))) return false;
     const signatures = methods.map((method) => readSignature(method, project));
-    if (methods.length > 1 || (methods.length > 0 && signatures.some((signature) => signature === undefined || !sameSignature(signatures[0]!, signature)))) return false;
+    if (methods.length > 0) {
+      const argumentsSignature = readArgumentSignature(call.node, { file: call.type.file, type: call.type, at: call.node }, project);
+      if (argumentsSignature === undefined || signatures.some((signature) => signature === undefined)) return false;
+      const matching = methods.filter((_, index) => sameSignature(signatures[index]!, argumentsSignature));
+      if (matching.length !== 1) return false;
+      methods = matching;
+    }
     if (named.length > 0 && methods.length === 0) return false;
     if (methods.some((method) => method.hasBody)) return undefined;
     const annotations = queryAnnotations(methods, project);
