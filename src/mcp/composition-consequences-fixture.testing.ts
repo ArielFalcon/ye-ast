@@ -12,7 +12,7 @@ import type { ExecutedSource, PublicRead } from "./query-runner.ts";
 
 export const API = "api";
 export const WEB = "web";
-export const HANDLER_FILE = "src/main/java/shop/OrdersController.java";
+const HANDLER_FILE = "src/main/java/shop/OrdersController.java";
 export const FIND_HANDLER = { path: HANDLER_FILE, symbol: "OrdersController.find", line: 11, endLine: 12 };
 export const CREATE_HANDLER = { path: HANDLER_FILE, symbol: "OrdersController.create", line: 20, endLine: 22 };
 export const SERVICE_FILE = "src/app/order.service.ts";
@@ -22,7 +22,7 @@ const web = (path: string, line: number, extra: Partial<RepositoryEvidence> = {}
 const plain = ({ repo: _repo, ...evidence }: RepositoryEvidence) => evidence;
 
 export const USE_PLACE = web(TEMPLATE_FILE, 1);
-export const GUARDED_PLACE = web(TEMPLATE_FILE, 2);
+const GUARDED_PLACE = web(TEMPLATE_FILE, 2);
 export const GUARD_PLACE = web(TEMPLATE_FILE, 3);
 export const WITNESS_PLACE = web(SERVICE_FILE, 28);
 export const PRODUCER_CALL = web(SERVICE_FILE, 30);

@@ -19,6 +19,7 @@ and agreed before its slice starts.
 | `ye-ast init` | Records the user's trust declaration outside the repository, writes the fixed layer under `.ye-ast/`, ignores ye-ast's folders (`.ye-ast/`, `.ye-ast-graph/`) through `.git/info/exclude`, and prints the client configuration |
 | `ye-ast serve` | Serves the query protocol on stdio to a host that runs ye-ast as a child process ([ADR-0011](../adr/0011-query-protocol-in-the-mvp.md)) |
 | `ye-ast mcp` | Starts the stdio MCP server |
+| `ye-ast contract-consequences` | Prints the contract consequences fact of written hypotheses or of a contract diff ([RFC-0023](0023-consequences-surfaces.md)) |
 | `ye-ast --version`, `--help` | Exist today |
 
 **Exit codes and signals.** `0` ok; `1` the query answered with a typed fault (unknown revision, a path that is not a
@@ -105,6 +106,9 @@ integer of at most 2147483647 (the largest delay a timer honours); when it elaps
 | `impact.ofChange` | request | `repo`, `repoId`, `base`, `head`, `changed?`, `scope?`, `budget?` | the impact fact |
 | `impact.callers` | request | `repo`, `source?`, `repoId`, `revision`, `targets` (`{file, symbol}` or `{file, start, end}`), `scope?`, `budget?` | the impact fact |
 | `impact.importers` | request | `repo`, `repoId`, `revision`, `files`, `scope?` | the impact fact |
+| `trace.walk` | request | `repo`, `repoId`, `revision`, `targets`, `scope?`, `budget?` | the trace fact |
+| `contractConsequences.ofHypotheses` | request | `repo`, `repos?`, `gateways?`, `hypotheses` (non-empty), `scope?` | the contract consequences fact ([RFC-0023](0023-consequences-surfaces.md)) |
+| `contractConsequences.ofChange` | request | `repo`, `repos?`, `gateways?`, `base`, `head?`, `scope?` | the contract consequences fact |
 
 `source` on `impact.callers` is an optional snapshot read location supplied by a host composing workspace reads.
 `repo` remains the declared clone whose trust applies; omitting `source` reads that clone. MCP does not expose this
@@ -163,6 +167,8 @@ and once each, and `globs` for `unknown-change-path`. The set is closed:
 | `unsupported-object-format` | -32020 | live capture does not support the repository object format |
 | `live-mirror-failed` | -32021 | a live mirror operation failed |
 | `unknown-entrypoint` | -32023 | a trace target names an entrypoint kind and name the map at that revision does not hold |
+| `invalid-hypothesis` | -32024 | a contract consequences hypothesis is malformed or unsupported; data holds its `index` and refusal |
+| `contradictory-revisions` | -32025 | the bound repository's revision contradicts the change's `head` |
 
 ## Fixed layer (MVP)
 
@@ -204,6 +210,8 @@ owner ID and recorded snapshot, or requires updated registration when absent. Se
 | `ye_ast_outline` | Which declarations, spans and imports are in selected files? | `files`, `revision`, `live`, `scope` |
 | `ye_ast_workspace` | Which outward names and candidate repositories are recorded? | `repos`, `gateways`, `revision`, `live`, `offline`, `scope` |
 | `ye_ast_decisions` | Which workspace configuration gaps need user input? | `repos`, `gateways`, `revision`, `live`, `offline`, `scope` |
+| `ye_ast_trace` | What do declarations execute, in source order, with their effects? | `targets`, `revision`, `live`, `scope`, `budget` |
+| `ye_ast_contract_consequences` | What does a request/response contract change break in consumers and producers? | `hypotheses` or `base`/`head`, `revision`, `live` (hypotheses only), `scope`, `workspace` |
 | `ye_ast_compose` | Which related observations can share entities and evidence? | `queries`, `expect`, `deadlineMs` |
 
 The composition operation extends the seven original families. It accepts 1–16 typed semantic queries, validates all

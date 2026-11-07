@@ -1,6 +1,7 @@
 # RFC-0023: The `contractConsequences` query family on every surface
 
-- Status: Draft, 2026-11-07
+- Status: Accepted and implemented, 2026-11-07 (see "Implementation notes"; "Where it stands" records the state
+  before it)
 - Related: [ADR-0034](../adr/0034-name-contract-consequences-explicitly.md) (the public names),
   [ADR-0033](../adr/0033-contract-consequences-as-one-query-family.md) (the decision),
   [ADR-0032](../adr/0032-a-query-family-is-done-when-every-surface-exposes-it.md) (the rule),
@@ -167,6 +168,22 @@ Each unit carries its tests and docs and runs alone (no concurrent full suites o
    `ye_ast_trace`, missing today), RFC-0022 "Output" pointing here, the architecture index and the docs site.
 
 The review of each unit checks uniformity explicitly (ADR-0032 decision 3) besides correctness.
+
+## Implementation notes
+
+Units 1 to 3 landed as designed, with these choices the design left open:
+
+- The MCP family identifier is `contract_consequences`: tool names derive as `ye_ast_<family>`, so compose registers
+  `fresh("contract_consequences")`.
+- An empty `hypotheses` list is refused on every surface (MCP schema, CLI usage, protocol parameters).
+- A workspace read's cuts also limit `change.derivation`, which looks operations up through the same workspace; a change
+  with no derived hypotheses over a cut workspace is therefore `partial`, never `complete`.
+- `derived-contract-change` carries `handlers`, the handlers its answer's findings reach, since a derived change may
+  reach several.
+- The SCHEMA version was not bumped (owner, 2026-11-06: no schema bumps while the MCP has no consumers), which answers
+  open question 1.
+- A hypothesis `path` is the route as the workspace links it (with any context prefix the handler's route carries); a
+  bare contract path no repository serves answers `unknown`.
 
 ## Open questions
 
