@@ -55,6 +55,9 @@ export interface GraphSymbol {
   language: string;
   startLine: number;
   endLine: number;
+  /** Where the declaration starts and ends on those lines, 0-based, the end exclusive, as codegraph's parser counts them. */
+  startColumn: number;
+  endColumn: number;
 }
 
 export interface GraphEdge {
