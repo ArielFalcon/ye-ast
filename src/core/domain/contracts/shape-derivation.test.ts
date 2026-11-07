@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ELEMENT, formatAccessPath } from "./access-path.ts";
 import { ANYTHING, type KnownShape, type Shape, type ShapeProperty, type ValueSet } from "./payload-shape.ts";
-import { deriveChanges } from "./shape-derivation.ts";
+import { deriveChanges, LISTING, REQUEST_READING } from "./shape-derivation.ts";
 
 const set = (overrides: Partial<ValueSet> = {}): ValueSet => ({ literals: { boolean: [], number: [], string: [] }, array: false, object: false, null: false, absent: false, ...overrides });
 const known = (values: ValueSet, rest: Partial<KnownShape> = {}): KnownShape => ({ kind: "known", values, ...rest });
@@ -162,10 +162,37 @@ test("a pair cut by a recursion above it is not reused from another path, where 
   assert.deepEqual(derived.frontiers.map(({ path }) => formatAccessPath(path)), ["first.b.a", "second.a.b.a"]);
 });
 
-test("a delta at the response root or at an array element is an unsupported delta at that place", () => {
-  assert.deepEqual(deriveChanges(TEXT, NULLABLE_TEXT), { hypotheses: [], differences: [], frontiers: [{ path: [], kind: "unsupported-delta" }] });
+test("a delta at the response root or at an array element is an unsupported delta at that place, and still a listed difference", () => {
+  assert.deepEqual(deriveChanges(TEXT, NULLABLE_TEXT), { hypotheses: [], differences: [{ path: [], delta: "introduced-null" }], frontiers: [{ path: [], kind: "unsupported-delta" }] });
   const derived = deriveChanges(object([property("tags", array(TEXT))]), object([property("tags", array(NULLABLE_TEXT))]));
   assert.deepEqual([derived.hypotheses, derived.frontiers.map(({ path, kind }) => [formatAccessPath(path), kind])], [[], [["tags[]", "unsupported-delta"]]]);
+});
+
+test("read as a request, the same comparison derives what the server stops accepting, answering the retired differences, while a response derives nothing from them", () => {
+  const base = object([property("a", NULLABLE_TEXT, false), property("b", enumeration("A", "B"))]);
+  const head = object([property("a", TEXT), property("b", enumeration("A"))]);
+  const derived = deriveChanges(base, head, REQUEST_READING);
+  assert.deepEqual(derived.hypotheses.map(({ property: path, change, differences: answered }) => [formatAccessPath(path), change.entries, answered.map(({ delta }) => delta)]), [
+    ["a", ["required", "non-nullable"], ["retired-absence", "retired-null"]],
+    ["b", [{ values: { removed: ["B"] } }], ["literals-retired"]],
+  ]);
+  assert.deepEqual(derived.hypotheses[0]!.change.oldAcceptance, { ...NULLABLE_TEXT.values, absent: true });
+  assert.deepEqual(derived.differences, deriveChanges(base, head).differences);
+  assert.deepEqual(deriveChanges(base, head).hypotheses.map(({ property: path }) => formatAccessPath(path)), ["b"]);
+});
+
+test("read as a request, a required property only the head declares is required of every writer, and an open base accepted any value there, so a property it newly declares answers its addition", () => {
+  const closed = deriveChanges(object([]), object([property("id", TEXT), property("note", TEXT, false)]), REQUEST_READING);
+  assert.deepEqual(closed.hypotheses.map(({ property: path, change, differences: answered }) => [formatAccessPath(path), change.entries, answered.map(({ delta }) => delta)]), [["id", ["required"], ["added-required"]]]);
+  const open = deriveChanges(object([], true), object([property("id", TEXT), property("note", TEXT, false)], true), REQUEST_READING);
+  assert.deepEqual(open.hypotheses.map(({ property: path, change, differences: answered }) => [formatAccessPath(path), change.entries, answered.map(({ delta }) => delta)]), [["id", ["required", "non-nullable", { type: "string" }], ["added-required"]], ["note", ["non-nullable", { type: "string" }], ["added-optional"]]]);
+});
+
+test("read as a request, a body that becomes required is a difference at its root and an unsupported delta there; a reading that lists derives no hypothesis", () => {
+  const derived = deriveChanges(TEXT, TEXT, REQUEST_READING, { base: true, head: false });
+  assert.deepEqual([derived.hypotheses, derived.differences, derived.frontiers], [[], [{ path: [], delta: "retired-absence" }], [{ path: [], kind: "unsupported-delta" }]]);
+  const listed = deriveChanges(object([property("page", NULLABLE_TEXT, false)]), object([property("page", TEXT)]), LISTING);
+  assert.deepEqual([listed.hypotheses, listed.frontiers, listed.differences.map(({ delta }) => delta)], [[], [], ["retired-absence", "retired-null"]]);
 });
 
 test("a property inside array elements is derived under the element segment", () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { KnownShape, OperationShape, Shape, ShapeProperty, ValueSet } from "../../domain/contracts/payload-shape.ts";
+import type { KnownShape, OperationRequest, OperationShape, Shape, ShapeProperty, ValueSet } from "../../domain/contracts/payload-shape.ts";
 import type { Cut, FactBase, Finding } from "../../domain/shared/fact.ts";
 import type { ConsumerSession, ConsumerSources, ServingWorkspace, ServingOperation } from "../../ports/consumer-sources.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -28,6 +28,8 @@ interface Declared {
   files?: string[];
   /** What the reader states beyond the success body; `null` for a reader that states none. */
   digests?: { request: string; errors: string; envelope: string } | null;
+  /** What the operation accepts, no body and no parameters by default; `null` for a reader that states no request. */
+  request?: { body?: { shape: Shape; required: boolean }; parameters?: Shape } | null;
 }
 
 function fileOf(path: string, operations: Declared[] | "unreadable"): SourceFile {
@@ -48,10 +50,21 @@ function reader(name: string, calls: string[] = []): PayloadShapes {
         }));
       });
     },
+    requests: (files) =>
+      files.flatMap((file): Finding<OperationRequest>[] => {
+        const declared = JSON.parse(file.content) as Declared[] | "unreadable";
+        if (declared === "unreadable") return [];
+        return declared.flatMap((operation, index): Finding<OperationRequest>[] => {
+          if (operation.request === null) return [];
+          const value: OperationRequest = { operationId: undefined, method: (operation.method ?? "GET") as OperationShape["method"], path: operation.path, basePath: operation.basePath === null ? undefined : (operation.basePath ?? ""), body: operation.request?.body, parameters: operation.request?.parameters ?? NO_PARAMETERS, files: [file.path] };
+          return [{ status: "complete", value, evidence: [{ path: file.path, line: index + 1, via: name }] }];
+        });
+      }),
   };
 }
 
 const DIGESTS = { request: "r", errors: "e", envelope: "s" };
+const NO_PARAMETERS: Shape = object();
 
 /** Every declared operation is served as it is written. */
 const asWritten: ServingWorkspace["serving"] = ({ method, path }) => ({ kind: "served", method, path });
@@ -213,10 +226,69 @@ test("a request that differs is an unclassified difference at the operation, nev
 });
 
 test("changed operations whose reader states no request are one request-unread frontier for the whole change, with each one's place", () => {
-  const base = [fileOf("api/code.json", [{ path: "/vets", digests: null }, { path: "/owners", shape: PET_BASE, digests: null }, { path: "/pets", shape: PET_BASE, digests: null }])];
-  const head = [fileOf("api/code.json", [{ path: "/pets", shape: PET_HEAD, digests: null }, { path: "/owners", shape: PET_HEAD, digests: null }, { path: "/vets", digests: null }])];
+  const base = [fileOf("api/code.json", [{ path: "/vets", digests: null, request: null }, { path: "/owners", shape: PET_BASE, digests: null, request: null }, { path: "/pets", shape: PET_BASE, digests: null, request: null }])];
+  const head = [fileOf("api/code.json", [{ path: "/pets", shape: PET_HEAD, digests: null, request: null }, { path: "/owners", shape: PET_HEAD, digests: null, request: null }, { path: "/vets", digests: null, request: null }])];
   const plan = changeOf(base, head, [reader("code")]);
   assert.deepEqual(plan.frontiers.map(({ kind, operation, reason, evidence }) => [kind, operation, reason, evidence.map(({ line }) => line)]), [["request-unread", undefined, "no-extractor", [2, 1, 3]]]);
+});
+
+const open = (...properties: ShapeProperty[]): KnownShape => ({ ...object(...properties), object: { properties, open: true } });
+const TEXT_OR_NUMBER = literals("every", "every");
+
+/** One change to a property `a`, as a request rule and a parameter rule name it: in the body, and in the object parameter `p` of the query. */
+const REQUEST_RULES: readonly [string, string, string, KnownShape, KnownShape][] = [
+  ["request-property-removed:breaking", "request-parameter-removed:review", "removed", object(property("a", TEXT)), object()],
+  ["request-property-undeclared:compatible", "request-parameter-undeclared:compatible", "undeclared", open(property("a", TEXT)), open()],
+  ["request-property-became-optional:compatible", "request-parameter-became-optional:compatible", "introduced-absence", object(property("a", TEXT)), object(optional("a", TEXT))],
+  ["request-property-became-nullable:compatible", "request-parameter-became-nullable:compatible", "introduced-null", object(property("a", TEXT)), object(property("a", NULLABLE_TEXT))],
+  ["request-property-type-widened:compatible", "request-parameter-type-widened:compatible", "introduced-class", object(property("a", TEXT)), object(property("a", TEXT_OR_NUMBER))],
+  ["request-property-enum-value-added:compatible", "request-parameter-enum-value-added:compatible", "literals-added", object(property("a", literals(["A"]))), object(property("a", literals(["A", "B"])))],
+  ["request-property-enum-value-removed:breaking", "request-parameter-enum-value-removed:breaking", "literals-retired", object(property("a", literals(["A", "B"]))), object(property("a", literals(["A"])))],
+  ["request-property-became-required:breaking", "request-parameter-became-required:breaking", "retired-absence", object(optional("a", TEXT)), object(property("a", TEXT))],
+  ["request-property-became-non-nullable:breaking", "request-parameter-became-non-nullable:breaking", "retired-null", object(property("a", NULLABLE_TEXT)), object(property("a", TEXT))],
+  ["request-property-type-narrowed:breaking", "request-parameter-type-narrowed:breaking", "retired-class", object(property("a", TEXT_OR_NUMBER)), object(property("a", TEXT))],
+  ["request-required-property-added:breaking", "request-required-parameter-added:breaking", "added-required", object(), object(property("a", TEXT))],
+  ["request-optional-property-added:compatible", "request-optional-parameter-added:compatible", "added-optional", object(), object(optional("a", TEXT))],
+  ["request-property-constraint-narrowed:breaking", "request-parameter-constraint-narrowed:breaking", "constraint-narrowed", object(property("a", TEXT)), object(property("a", keyed(TEXT, { maxLength: 3 })))],
+  ["request-property-constraint-widened:compatible", "request-parameter-constraint-widened:compatible", "constraint-widened", object(property("a", keyed(TEXT, { maxLength: 3 }))), object(property("a", TEXT))],
+  ["request-property-constraint-changed:review", "request-parameter-constraint-changed:review", "constraint-changed", object(property("a", keyed(TEXT, { pattern: "^a" }))), object(property("a", keyed(TEXT, { pattern: "^b" })))],
+  ["request-property-annotation-changed:review", "request-parameter-annotation-changed:review", "annotation-changed", object(property("a", TEXT)), object(property("a", keyed(TEXT, { default: "x" })))],
+];
+
+const inQuery = (schema: Shape): Shape => object(property("cookie", object()), property("header", object()), property("path", object()), property("query", object(property("p", schema))));
+const requestPlan = (baseRequest: NonNullable<Declared["request"]>, headRequest: NonNullable<Declared["request"]>) => changeOf([fileOf("api/openapi.json", [{ path: "/pets", method: "POST", request: baseRequest }])], [fileOf("api/openapi.json", [{ path: "/pets", method: "POST", request: headRequest, files: ["api/changed.json"] }])], [reader("declared")]);
+
+for (const [bodyRule, parameterRule, delta, baseShape, headShape] of REQUEST_RULES) {
+  test(`a request change the derivation names is classified by the rules ${bodyRule} in the body and ${parameterRule} in a parameter`, () => {
+    const body = requestPlan({ body: { shape: baseShape, required: true } }, { body: { shape: headShape, required: true } });
+    const parameter = requestPlan({ parameters: inQuery(baseShape) }, { parameters: inQuery(headShape) });
+    const named = (plan: ReturnType<typeof changeOf>) => plan.differences.map(({ rule, target, operation, property: at, delta: found }) => [`${rule.id}:${rule.level}`, target, operation, at, found]);
+    assert.deepEqual(named(body), [[bodyRule, "request", "POST /pets", "a", delta]]);
+    assert.deepEqual(named(parameter), [[parameterRule, "parameter", "POST /pets", "query.p.a", delta]]);
+  });
+}
+
+test("what the server stops accepting in a body derives a request hypothesis naming the rules it answers; a parameter derives none", () => {
+  const plan = requestPlan({ body: { shape: object(optional("a", NULLABLE_TEXT)), required: true }, parameters: inQuery(object(optional("a", TEXT))) }, { body: { shape: object(property("a", TEXT)), required: true }, parameters: inQuery(object(property("a", TEXT))) });
+  assert.deepEqual(plan.hypotheses.map(({ hypothesis, operation, property: at, rules }) => [hypothesis.target, hypothesis.method, hypothesis.path, operation, at, hypothesis.change.entries, rules]), [
+    ["request", "POST", "/pets", "POST /pets", "a", ["required", "non-nullable"], ["request-property-became-non-nullable", "request-property-became-required"]],
+  ]);
+});
+
+test("a body that becomes required is a request difference at the body itself and an unsupported delta there, never a hypothesis", () => {
+  const plan = requestPlan({ body: { shape: TEXT, required: false } }, { body: { shape: TEXT, required: true } });
+  assert.deepEqual([plan.hypotheses, plan.differences.map(({ rule, target, property: at }) => [rule.id, target, at]), plan.frontiers.map(({ kind, target, property: at }) => [kind, target, at])], [[], [["request-property-became-required", "request", ""]], [["unsupported-delta", "request", ""]]]);
+});
+
+test("a request whose digest differs is an unclassified difference only when no request difference names it", () => {
+  const classified = changeOf([fileOf("api/openapi.json", [{ path: "/pets", request: { body: { shape: object(optional("a", TEXT)), required: true } } }])], [fileOf("api/openapi.json", [{ path: "/pets", digests: { ...DIGESTS, request: "r2" }, request: { body: { shape: object(property("a", TEXT)), required: true } } }])], [reader("declared")]);
+  assert.deepEqual([classified.differences.map(({ rule }) => rule.id), classified.frontiers], [["request-property-became-required"], []]);
+});
+
+test("a reader that states no request leaves the requests of its changed operations to one request-unread frontier, even when a later reader states them", () => {
+  const responsesOnly: PayloadShapes = { responses: reader("code").responses };
+  const plan = changeOf([fileOf("api/code.json", [{ path: "/pets", shape: PET_BASE }])], [fileOf("api/code.json", [{ path: "/pets", shape: PET_HEAD }])], [responsesOnly, reader("declared")]);
+  assert.deepEqual(plan.frontiers.map(({ kind, evidence }) => [kind, evidence.length]), [["request-unread", 1]]);
 });
 
 test("a derived hypothesis names the rules of every difference it answers, and a keyword difference keeps both values", () => {
@@ -334,6 +406,15 @@ test("the derivation lists every classified difference with its rule, level and 
     { rule: "response-property-became-non-nullable", level: "compatible", target: "response", operation: "GET /pets", property: "city", delta: "retired-null", places: { base: place(1), head: place(1) } },
     { rule: "response-optional-property-added", level: "compatible", target: "response", operation: "GET /pets", property: "zip", delta: "added-optional", places: { base: place(1), head: place(1) } },
   ]);
+});
+
+test("a request hypothesis a change derives is answered with the others, stating what the server accepted at the base and the rules it answers", async () => {
+  const base = [fileOf("api/openapi.json", [{ path: "/pets", method: "POST", request: { body: { shape: object(optional("a", TEXT)), required: true } } }])];
+  const head = [fileOf("api/openapi.json", [{ path: "/pets", method: "POST", request: { body: { shape: object(property("a", TEXT)), required: true } } }])];
+  const { events, ask } = setup({ base, head });
+  const { value } = await composite(ask());
+  assert.ok(events.includes("session POST /pets a"));
+  assert.deepEqual(value.answers.map(({ hypothesis, oldContract, derivedFrom }) => [hypothesis.target, hypothesis.property, hypothesis.change, oldContract, derivedFrom?.rules]), [["request", "a", "required", { ...TEXT.values, absent: true }, ["request-property-became-required"]]]);
 });
 
 test("both revisions read and compared with nothing derived is a complete composite that still holds the change, and a frontier it recorded makes it visible without making it partial", async () => {

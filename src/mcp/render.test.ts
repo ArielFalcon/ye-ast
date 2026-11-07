@@ -278,6 +278,7 @@ function consequences(findings: object[]): Fact<ConsequencesValue> {
   ], frontiers: [
     { status: "unknown", reason: "unresolved", kind: "unserved-operation", operation: "GET /pets", evidence: [{ repo: "api", path: "openapi.yaml", line: 12 }] },
     { status: "unknown", reason: "source-unreadable", kind: "unreadable-contract", side: "base", evidence: [{ repo: "api", path: "openapi.yaml", line: 1 }] },
+    { status: "unknown", reason: "unresolved", kind: "unsupported-delta", target: "request", operation: "POST /pets", property: "", evidence: [{ repo: "api", path: "openapi.yaml", line: 20 }] },
   ] } };
   const value = {
     repositorySnapshots: [{ repo: "api", snapshot: base.snapshot }, { repo: "web", snapshot: { ...base.snapshot, repo: "web" } }],
@@ -314,7 +315,8 @@ test("a contract consequences summary counts each answer's verdicts and keeps it
   assert.ok(details.includes("    - breaking response-property-became-nullable GET /pets name at api:openapi.yaml:12"));
   assert.ok(details.includes("    - compatible response-property-constraint-narrowed GET /pets name (maxLength: 9 -> 3) at api:openapi.yaml:14"));
   assert.ok(details.includes("    - compatible operation-added GET /new at api:openapi.yaml:30"));
-  assert.match(summary, /frontiers \(2\): 1 unreadable-contract \(source-unreadable\), 1 unserved-operation \(unresolved\)/);
+  assert.match(summary, /frontiers \(3\): 1 unreadable-contract \(source-unreadable\), 1 unserved-operation \(unresolved\), 1 unsupported-delta \(unresolved\)/);
+  assert.ok(details.includes("    - unsupported-delta (unresolved) POST /pets request at api:openapi.yaml:20"));
   for (let n = 1; n <= 12; n++) assert.ok(details.includes(`at web:src/use-${n}.ts:${n};`), `finding ${n}`);
   assert.ok(details.includes("at web:src/broken.ts:99"));
   assert.ok(details.includes("api:openapi.yaml:12"));

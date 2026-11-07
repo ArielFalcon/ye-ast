@@ -90,6 +90,8 @@ export interface ChangeFrontier {
   status: "unknown";
   reason: UnknownReason;
   kind: "unsupported-delta" | "recursive-shape" | "unknown-shape" | "unclassified-difference" | "request-unread" | "ambiguous-operation" | "unserved-operation" | "unreadable-contract";
+  /** The side of the exchange a derivation frontier is on, when it is not the response. */
+  target?: "request" | "parameter";
   operation?: string;
   property?: string;
   side?: "base" | "head";

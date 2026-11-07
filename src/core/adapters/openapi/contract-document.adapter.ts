@@ -124,7 +124,7 @@ function asList(value: unknown): readonly unknown[] {
 }
 
 /** What an operation's request is made of: the parameters of its path and its own, its body, and the media it consumes. */
-export function requestOf(contract: ParsedContract, { operation, shared }: DeclaredOperation): unknown {
+export function requestOf(contract: ParsedContract, { operation, shared }: DeclaredOperation): { parameters: unknown[]; requestBody: unknown; consumes: unknown } {
   return { parameters: [...asList(shared), ...asList(operation.parameters)], requestBody: operation.requestBody, consumes: operation.consumes ?? contract.content.consumes };
 }
 

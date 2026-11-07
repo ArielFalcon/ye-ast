@@ -1,4 +1,4 @@
-import { ANYTHING, LITERAL_CLASSES, type KnownShape, type OperationShape, type Shape, type ShapeProperty, type UnknownShape } from "../../domain/contracts/payload-shape.ts";
+import { ANYTHING, LITERAL_CLASSES, NOTHING, type KnownShape, type OperationRequest, type OperationShape, type Shape, type ShapeProperty, type UnknownShape } from "../../domain/contracts/payload-shape.ts";
 import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { isContractDocument } from "../../domain/languages/openapi.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
@@ -7,7 +7,7 @@ import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { Literal } from "../../domain/contracts/use-operation.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PayloadShapes } from "../../ports/payload-shapes.port.ts";
-import { createDigester, DOCUMENTATION, declaredOperations, parseContract, producesOf, referencedDocuments, requestOf, targetOf, type Digester, type ReferencedDocuments } from "./contract-document.adapter.ts";
+import { createDigester, DOCUMENTATION, declaredOperations, parseContract, producesOf, referencedDocuments, requestOf, targetOf, type DeclaredOperation, type Digester, type ParsedContract, type ReferencedDocuments } from "./contract-document.adapter.ts";
 
 type Json = Record<string, unknown>;
 type Kind = LiteralKindName | "array" | "object" | "null";
@@ -66,42 +66,71 @@ const MERGEABLE: ReadonlySet<string> = new Set([...IGNORED, "type", "properties"
 
 const SUCCESS = /^2(\d\d|XX)$/i;
 
-/** The shapes of the success responses of the operations OpenAPI 3.x and Swagger 2.0 documents declare. */
+/** The shapes of the success responses, and of what the requests carry, of the operations OpenAPI 3.x and Swagger 2.0 documents declare. */
 export function createPayloadShapes(): PayloadShapes {
   return {
     responses: (files) => {
       const referenced = referencedDocuments(files);
-      return files.flatMap((file) => (isContractDocument(file.path) ? shapesOf(file, referenced) : []));
+      return files.flatMap((file) => (isContractDocument(file.path) ? operationsOf(file, (contract, declared, place) => responseShapeOf(contract, declared, place, referenced)) : []));
+    },
+    requests: (files) => {
+      const referenced = referencedDocuments(files);
+      return files.flatMap((file) => (isContractDocument(file.path) ? operationsOf(file, (contract, declared, place) => requestShapeOf(contract, declared, place, referenced)) : []));
     },
   };
 }
 
-function shapesOf(file: SourceFile, referenced: ReferencedDocuments): readonly Finding<OperationShape>[] {
+type OperationIdentity = Pick<OperationShape, "operationId" | "method" | "path" | "basePath">;
+
+/** What `read` states of each operation one contract document declares, beside the operation's identity; the document's own failure when it cannot be read. */
+function operationsOf<T>(file: SourceFile, read: (contract: ParsedContract, declared: DeclaredOperation, place: Evidence) => T): readonly Finding<OperationIdentity & T>[] {
   const contract = parseContract(file);
   if (contract === undefined) return [];
   if ("status" in contract) return [contract];
-  return declaredOperations(contract).map((declared): Finding<OperationShape> => {
-    const { path, verb, operation, operationId, line } = declared;
+  return declaredOperations(contract).map((declared) => {
+    const { path, verb, operationId, line } = declared;
     const place = { path: file.path, line };
-    const reader = createReader(referenced, place, file.path);
-    const shape = reader.success(operation.responses);
-    const digester = createDigester(file.path, referenced);
-    const digests = {
-      request: digester.digest(requestOf(contract, declared)),
-      errors: digester.digest(isRecord(operation.responses) ? Object.fromEntries(Object.entries(operation.responses).filter(([code]) => !SUCCESS.test(code))) : operation.responses),
-      envelope: digester.digest({ responses: reader.envelope(operation.responses, digester.digest), produces: producesOf(contract, declared) }),
-    };
-    const files = new Set([...reader.files, ...digester.files(), ...digester.unresolved().flatMap(({ file: named }) => named ?? [])]);
-    const value: OperationShape = { operationId, method: verb.toUpperCase() as HttpMethod, path, basePath: contract.basePath, shape, files: [...files].sort(compareText), digests };
-    return { status: "complete", value, evidence: [place] };
+    const identity: OperationIdentity = { operationId, method: verb.toUpperCase() as HttpMethod, path, basePath: contract.basePath };
+    return { status: "complete", value: { ...identity, ...read(contract, declared, place) }, evidence: [place] };
   });
+}
+
+function requestShapeOf(contract: ParsedContract, declared: DeclaredOperation, place: Evidence, referenced: ReferencedDocuments): Omit<OperationRequest, keyof OperationIdentity> {
+  const reader = createReader(referenced, place, place.path, "request");
+  const written = requestOf(contract, declared);
+  const { body, parameters } = reader.request(written.parameters, written.requestBody);
+  return { body, parameters, files: [...reader.files].sort(compareText) };
+}
+
+const LOCATIONS = ["cookie", "header", "path", "query"] as const;
+
+/** The keywords of a Swagger 2.0 parameter that say where and how it is sent rather than what it holds. */
+const PARAMETER_FIELDS: ReadonlySet<string> = new Set(["in", "name", "required", "allowEmptyValue"]);
+
+const closedObject = (properties: readonly ShapeProperty[]): KnownShape => ({ kind: "known", values: { ...NOTHING.values, object: true }, object: { properties, open: false } });
+
+function responseShapeOf(contract: ParsedContract, declared: DeclaredOperation, place: Evidence, referenced: ReferencedDocuments): Omit<OperationShape, keyof OperationIdentity> {
+  const { operation } = declared;
+  const reader = createReader(referenced, place, place.path);
+  const shape = reader.success(operation.responses);
+  const digester = createDigester(place.path, referenced);
+  const digests = {
+    request: digester.digest(requestOf(contract, declared)),
+    errors: digester.digest(isRecord(operation.responses) ? Object.fromEntries(Object.entries(operation.responses).filter(([code]) => !SUCCESS.test(code))) : operation.responses),
+    envelope: digester.digest({ responses: reader.envelope(operation.responses, digester.digest), produces: producesOf(contract, declared) }),
+  };
+  const files = new Set([...reader.files, ...digester.files(), ...digester.unresolved().flatMap(({ file: named }) => named ?? [])]);
+  return { shape, files: [...files].sort(compareText), digests };
 }
 
 const isRecord = (value: unknown): value is Json => typeof value === "object" && value !== null && !Array.isArray(value);
 const isListed = (value: unknown): value is Literal | null => value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean";
 
-/** Reads the schemas of one operation; a schema reached twice is one shape object, which the derivation relies on to compare it once. */
-function createReader(referenced: ReferencedDocuments, place: Evidence, document: string) {
+/**
+ * Reads the schemas of one operation in one direction; a schema reached twice is one shape object, which the derivation
+ * relies on to compare it once. In the request direction a read-only property is never required.
+ */
+function createReader(referenced: ReferencedDocuments, place: Evidence, document: string, direction: "response" | "request" = "response") {
   const files = new Set([document]);
   const shapes = new Map<string, Shape>();
   const unknown = (via: string): UnknownShape => ({ kind: "unknown", reason: "unresolved", evidence: [{ ...place, via }] });
@@ -154,7 +183,7 @@ function createReader(referenced: ReferencedDocuments, place: Evidence, document
     return names.map((name) => {
       const declared = properties.get(name);
       const shape = declared !== undefined ? shapeOf(declared.file, declared.node) : open ? ANYTHING : unknown(`required property ${name} of a closed object is not declared`);
-      return { name, required: required.has(name), shape };
+      return { name, required: required.has(name) && !(direction === "request" && declared !== undefined && readOnly(declared)), shape };
     });
   }
 
@@ -223,6 +252,28 @@ function createReader(referenced: ReferencedDocuments, place: Evidence, document
     return found;
   }
 
+  function readOnly(declared: Located): boolean {
+    const property = resolve(declared.file, declared.node);
+    return !("kind" in property) && isRecord(property.node) && property.node.readOnly === true;
+  }
+
+  /** The schemas the media of one body or response declare, `undefined` for one that declares none. */
+  function mediaSchemas(located: Located): (Located | UnknownShape | undefined)[] {
+    const media = isRecord(located.node) && isRecord(located.node.content) ? Object.values(located.node.content) : [located.node];
+    return (media.length === 0 ? [undefined] : media).map((entry) => (isRecord(entry) && entry.schema !== undefined ? resolve(located.file, entry.schema) : undefined));
+  }
+
+  /** The one schema `declared` agree on, `unknown` when they differ, and `none` when none declares one. */
+  function agreed(declared: readonly (Located | UnknownShape | undefined)[], disagreement: string, none: Shape): Shape {
+    const unreadable = declared.find((entry): entry is UnknownShape => entry !== undefined && "kind" in entry);
+    if (unreadable !== undefined) return unreadable;
+    const schemas = declared as (Located | undefined)[];
+    const identities = new Set(schemas.map((schema) => (schema === undefined ? "none" : (schema.key ?? `${schema.file}\0${canonicalJson(schema.node)}`))));
+    if (identities.size > 1) return unknown(disagreement);
+    const [first] = schemas;
+    return first === undefined ? none : shapeOf(first.file, first.node);
+  }
+
   /** The schema all success responses declare, `unknown` when they or their media types differ, and nothing but absence when none has a body. */
   function success(responses: unknown): Shape {
     if (!isRecord(responses)) return unknown("responses");
@@ -233,16 +284,45 @@ function createReader(referenced: ReferencedDocuments, place: Evidence, document
       const response = resolve(document, responses[code]);
       if ("kind" in response) return response;
       if (!isRecord(response.node)) return unknown("response");
-      const media = isRecord(response.node.content) ? Object.values(response.node.content) : [response.node];
-      for (const entry of media.length === 0 ? [undefined] : media) declared.push(isRecord(entry) && entry.schema !== undefined ? resolve(response.file, entry.schema) : undefined);
+      declared.push(...mediaSchemas(response));
     }
-    const unreadable = declared.find((entry): entry is UnknownShape => entry !== undefined && "kind" in entry);
-    if (unreadable !== undefined) return unreadable;
-    const schemas = declared as (Located | undefined)[];
-    const identities = new Set(schemas.map((schema) => (schema === undefined ? "none" : (schema.key ?? `${schema.file}\0${canonicalJson(schema.node)}`))));
-    if (identities.size > 1) return unknown("success responses declare different schemas");
-    const [first] = schemas;
-    return first === undefined ? NO_BODY : shapeOf(first.file, first.node);
+    return agreed(declared, "success responses declare different schemas", NOTHING);
+  }
+
+  /** A parameter as written or as the reference it holds names, whatever else sits beside the reference. */
+  function parameterOf(written: unknown): Located | UnknownShape {
+    return isRecord(written) && typeof written.$ref === "string" ? resolve(document, { $ref: written.$ref }) : { file: document, node: written };
+  }
+
+  /** What a parameter holds: its schema, its one media schema, or (Swagger 2.0) the parameter itself. */
+  function parameterShape({ file, node }: Located): Shape {
+    const parameter = node as Json;
+    if (parameter.schema !== undefined) return shapeOf(file, parameter.schema);
+    if (parameter.content !== undefined) return agreed(mediaSchemas({ file, node: parameter }), "parameter media types declare different schemas", ANYTHING);
+    return shapeOf(file, Object.fromEntries(Object.entries(parameter).filter(([key]) => !PARAMETER_FIELDS.has(key))));
+  }
+
+  /**
+   * The body and parameters of one operation's request. A parameter of the operation replaces one of its path with the
+   * same location and name; a Swagger 2.0 body parameter is the body, and a form makes it unknown.
+   */
+  function request(written: readonly unknown[], requestBody: unknown): Pick<OperationRequest, "body" | "parameters"> {
+    const byLocation = new Map<string, Map<string, ShapeProperty>>(LOCATIONS.map((location) => [location, new Map()]));
+    let body: OperationRequest["body"];
+    for (const each of written) {
+      const parameter = parameterOf(each);
+      if ("kind" in parameter || !isRecord(parameter.node)) return { body, parameters: "kind" in parameter ? parameter : unknown("parameter") };
+      const { in: location, name, required } = parameter.node;
+      if (location === "body") body = { shape: shapeOf(parameter.file, parameter.node.schema), required: required === true };
+      else if (location === "formData") body = { shape: unknown("formData"), required: false };
+      else if (typeof location === "string" && typeof name === "string" && byLocation.has(location)) byLocation.get(location)!.set(name, { name, required: required === true || location === "path", shape: parameterShape(parameter) });
+      else return { body, parameters: unknown("parameter") };
+    }
+    const parameters = closedObject(LOCATIONS.map((location) => ({ name: location, required: true, shape: closedObject([...byLocation.get(location)!.values()].sort((a, b) => compareText(a.name, b.name))) })));
+    if (requestBody === undefined) return { body, parameters };
+    const declared = resolve(document, requestBody);
+    if ("kind" in declared || !isRecord(declared.node)) return { body: { shape: "kind" in declared ? declared : unknown("requestBody"), required: false }, parameters };
+    return { body: { shape: agreed(mediaSchemas(declared), "request media types declare different schemas", ANYTHING), required: declared.node.required === true }, parameters };
   }
 
   /** The success responses without their schemas, each digested from the file it is declared in: what a reader receives beside the body. */
@@ -257,10 +337,8 @@ function createReader(referenced: ReferencedDocuments, place: Evidence, document
     });
   }
 
-  return { files, success, envelope };
+  return { files, success, envelope, request };
 }
-
-const NO_BODY: KnownShape = Object.freeze({ kind: "known", values: Object.freeze({ literals: Object.freeze({ boolean: [], number: [], string: [] }), array: false, object: false, null: false, absent: false }) });
 
 /** The kinds a `type` allows, `undefined` for one this reader does not know; `nullable` adds null to a declared type. */
 function allowedKinds(node: Json): Record<Kind, boolean> | undefined {

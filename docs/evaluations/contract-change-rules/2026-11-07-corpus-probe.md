@@ -10,7 +10,8 @@ derivation report something for, and with which rule?
   `petclinic/backend-rest` (`src/main/resources/openapi.yml`, 35 pairs) and three services of the second corpus
   (`src/main/resources/openapi/api-definition.yaml`: orders 6, restaurants 39, users 13 pairs).
 - For each pair, the document at both commits went through `changedContracts` (the digest comparison `impact` reports:
-  added, removed, or altered with the parts that differ) and through `planChange` with the OpenAPI shape reader,
+  added, removed, or altered with the parts that differ) and through `planChange` with the OpenAPI shape reader (its
+  responses and, from the request step on, its requests),
   serving every operation as the document writes it, with the base path set aside so both name an operation alike.
 - An altered part is *reported* when the plan holds a hypothesis, a classified difference or a frontier for that
   operation and part. A script outside the repository did this through the library; nothing was written to the corpus.
@@ -27,20 +28,22 @@ a property, 38 changed only non-success responses, 1 changed a media type or sta
 
 ## After (branch `feat/contract-change-rules`)
 
-| Altered part | Count | Reports nothing |
-|---|---|---|
-| response | 303 | 2 |
-| request | 105 | 0 (each an `unclassified-difference` frontier) |
+| Altered part | Count | Reports nothing | Before the request step |
+|---|---|---|---|
+| response | 303 | 2 | 2 |
+| request | 105 | 0 | 0 (each an `unclassified-difference` frontier) |
 
 The 2 left are refactors that keep every value set, keyword and digest: an inline schema moved behind a `$ref`, and a
-schema split into an `allOf`. Only the textual digest of `impact` differs.
+schema split into an `allOf`. Only the textual digest of `impact` differs. On the request side, the one
+`unclassified-difference` left is the same refactor (a request schema renamed behind its `$ref`).
 
-Differences by rule over the 93 pairs:
+Differences by rule over the 93 pairs (response side; the request step added 12 `undeclared` and 1 `type-changed`
+listed at an array element or the body root, which were only an `unsupported-delta` frontier before):
 
 | Rule | Level | Count |
 |---|---|---|
-| `response-property-type-changed` | breaking | 11 |
-| `response-property-undeclared` | breaking | 227 |
+| `response-property-type-changed` | breaking | 12 |
+| `response-property-undeclared` | breaking | 239 |
 | `response-property-became-nullable` | breaking | 4 |
 | `response-property-became-optional` | breaking | 10 |
 | `operation-removed` | breaking | 47 |
@@ -58,9 +61,40 @@ Differences by rule over the 93 pairs:
 | `response-property-enum-value-removed` | compatible | 3 |
 | `operation-added` | compatible | 53 |
 
-Frontiers: `unclassified-difference` 105 at a request and 32 at a schema extension (`x-field-extra-annotation`, which
+Request differences by rule, 276 in total:
+
+| Rule | Level | Count |
+|---|---|---|
+| `request-property-became-required` | breaking | 20 |
+| `request-property-constraint-narrowed` | breaking | 18 |
+| `request-required-property-added` | breaking | 16 |
+| `request-required-parameter-added` | breaking | 5 |
+| `request-property-type-narrowed` | breaking | 4 |
+| `request-parameter-enum-value-removed` | breaking | 1 |
+| `request-property-enum-value-removed` | breaking | 1 |
+| `request-property-removed` | breaking | 1 |
+| `request-parameter-removed` | review | 9 |
+| `request-property-constraint-changed` | review | 9 |
+| `request-property-annotation-changed` | review | 7 |
+| `request-property-undeclared` | compatible | 63 |
+| `request-optional-property-added` | compatible | 46 |
+| `request-optional-parameter-added` | compatible | 18 |
+| `request-property-type-widened` | compatible | 15 |
+| `request-property-constraint-widened` | compatible | 11 |
+| `request-property-enum-value-added` | compatible | 9 |
+| `request-property-became-nullable` | compatible | 8 |
+| `request-parameter-constraint-widened` | compatible | 8 |
+| `request-parameter-enum-value-added` | compatible | 4 |
+| `request-property-became-optional` | compatible | 3 |
+
+80 request hypotheses were derived, each naming the rules it answers: 41 from breaking differences and 39 from an
+optional property an open base object newly declares (the head rejects the values the base accepted there).
+
+Frontiers before the request step: `unclassified-difference` 105 at a request and 32 at a schema extension (`x-field-extra-annotation`, which
 the corpus generator turns into `@JsonInclude(NON_NULL)` or a validator); `unknown-shape` 134 and `unsupported-delta`
-13, as P4 already reported them.
+13, as P4 already reported them. After it, on the request side: `unknown-shape` 19, `unsupported-delta` 7 (a body
+that became required, or a rejection the request vocabulary cannot state), `unclassified-difference` 8 at a request
+schema keyword (6 extensions, 2 `id`) and 1 at a request the comparison finds equal.
 
 ## What the probe changed in the design
 
@@ -74,5 +108,7 @@ the corpus generator turns into `@JsonInclude(NON_NULL)` or a validator); `unkno
 
 ## Not measured
 
-Shapes read from Spring handlers (the probe ran the OpenAPI reader only), consumer verdicts (the probe
-reads the derivation only), and request classification (P5's server shapes, not built).
+Shapes read from Spring handlers (the probe ran the OpenAPI reader only), and consumer or producer verdicts (the probe
+reads the derivation only). One petclinic change run through the CLI turned its 4 request frontiers into 4
+`request-property-became-required` differences whose hypotheses the producer evaluator answered (`unknown`,
+`no-call-site`, with the api repository bound alone).

@@ -1694,14 +1694,14 @@ function answerLines(answer: HypothesisAnswer, index: number, detail: ResponseMo
 }
 
 function frontierLine(frontier: ChangeFrontier): string {
-  const subject = [frontier.operation, frontier.property, frontier.side === undefined ? undefined : `at ${frontier.side}`].filter((part) => part !== undefined).join(" ");
+  const subject = [frontier.operation, frontier.target, frontier.property, frontier.side === undefined ? undefined : `at ${frontier.side}`].filter((part) => part !== undefined && part !== "").join(" ");
   return `    - ${frontier.kind} (${frontier.reason})${subject === "" ? "" : ` ${subject}`}${frontier.detail === undefined ? "" : `: ${frontier.detail}`}${frontier.evidence.length === 0 ? "" : ` at ${frontier.evidence.map(repositoryEvidenceText).join(", ")}`}`;
 }
 
 function differenceLine({ level, rule, operation, property, subject, base, head, places }: ClassifiedDifference): string {
   const value = (written: unknown) => (written === undefined ? "absent" : JSON.stringify(written));
   const about = subject === undefined ? "" : base === undefined && head === undefined ? ` (${subject})` : ` (${subject}: ${value(base)} -> ${value(head)})`;
-  return `    - ${level} ${rule} ${operation}${property === undefined ? "" : ` ${property}`}${about} at ${repositoryEvidenceText((places.head ?? places.base)!)}`;
+  return `    - ${level} ${rule} ${operation}${property ? ` ${property}` : ""}${about} at ${repositoryEvidenceText((places.head ?? places.base)!)}`;
 }
 
 function derivationLines(value: NonNullable<ConsequencesValue["change"]>, detail: ResponseMode): string[] {
