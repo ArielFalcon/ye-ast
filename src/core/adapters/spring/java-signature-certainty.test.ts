@@ -78,3 +78,31 @@ test("a known on-demand collision stays a cut even when another supplier is unkn
   ]).dispatchTargets([{ file: port.path, line: 2, name: "send" }]);
   assert.deepEqual(result[0], UNKNOWN);
 });
+
+test("qualified type names resolve the qualifier's binding and each member, never its spelling or capitalization", async () => {
+  const common = [source("a/q", "package a; public class q { public static class X { public static class Y {} } }"),
+    source("b/q", "package b; public class q { public static class X {} }")];
+  const check = async (portType: string, baseType: string, subType: string, imports: [string, string, string], extra: SourceFile[] = [], members = "") => {
+    const port = source("p/Port", `package p; ${imports[0]} public interface Port { void send(${portType} v); }`);
+    return (await createJavaNameBindings(createJavaParser, [...common, ...extra, port,
+      source("p/Base", `package p; ${imports[1]} public class Base implements Port { ${members} public void send(${baseType} v) {} }`),
+      source("r/Sub", `package r; ${imports[2]} public class Sub extends p.Base { public void send(${subType} v) {} }`),
+    ]).dispatchTargets([{ file: port.path, line: 1, name: "send" }]))[0];
+  };
+  const bodies = { kind: "bodies", bodies: [{ file: "p/Base.java", start: 1, nameLine: 1 }, { file: "r/Sub.java", start: 1, nameLine: 1 }] };
+
+  assert.deepEqual(await check("q.X", "q.X", "q.X", ["import a.*;", "import a.*;", "import b.*;"]), UNKNOWN);
+  assert.deepEqual(await check("a.q.X", "a.q.X", "a.q.X", ["", "", ""]), bodies);
+  assert.deepEqual(await check("q.X", "q.X", "q.X", ["import a.*;", "import a.*;", "import a.*;"]), bodies);
+  assert.deepEqual(await check("q.X", "q.X", "q.X", ["import a.q;", "import a.q;", "import a.q;"]), bodies);
+  assert.deepEqual(await check("a.q.X.Y", "a.Child.X.Y", "a.q.X.Y", ["", "", ""],
+    [source("a/Child", "package a; public class Child extends q {}")]), bodies);
+  assert.deepEqual(await check("X.Y", "X.Y", "a.q.X.Y", ["import a.q.X;", "import a.q.X;", ""]), bodies);
+  assert.deepEqual(await check("X.Y", "X.Y", "a.q.X.Y", ["import static a.q.X;", "import static a.q.X;", ""]), bodies);
+  assert.deepEqual(await check("p.Base.q.X", "q.X", "q.X", ["", "", "import b.*;"], [],
+    "public static class q { public static class X {} }"), bodies);
+  assert.deepEqual(await check("A.q.X", "q.X", "q.X", ["", "import A.q;", "import A.*;"],
+    [source("A/q", "package A; public class q { public static class X {} }")]), bodies);
+  assert.deepEqual(await check("q.X", "q.X", "q.X", ["", "import missing.*;", "import missing.*;"],
+    [source("q/X", "package q; public class X {}")]), UNKNOWN);
+});

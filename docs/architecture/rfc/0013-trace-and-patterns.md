@@ -365,24 +365,32 @@ completion. Realworld's changed roots are `ArticleMutation` (45 → 49 steps), `
 (36 → 38). Orders' changed class root is `OrdersController` (10 → 61). Every other class trace is byte-identical.
 
 The identity reading (ADR-0029 decision 12) proves implicit `java.lang` and repository wildcard-imported parameter
-names without choosing an unknown supplier. Its platform inventory never classifies an external leaf. Spring's
-`counterpart` shares the former text-identity defect and now consumes the same signature reading. Public extractor
-regressions establish that qualified homonyms no longer inherit a false mapping and that uncertain matches become
-unresolved items instead of certain routes. Existing generic matching remains outside this concrete identity change.
+names without choosing an unknown supplier. Its platform inventory never classifies an external leaf. A qualified
+name first resolves its leftmost segment through the lexical/import/demand reading; a proven type leads through
+member declarations, while a proven package leads through known package prefixes to a declared type and its members.
+Capitalization and equal spelling establish no identity. Unread qualifiers or terminal declarations stay cuts.
+The compilable review repro (`q.X` supplied by `a.*` versus `b.*`) therefore stays unknown instead of listing a false
+subclass body. Package-qualified, type-qualified, inherited, mixed and imported-qualifier forms share that rule.
+Spring's `counterpart` and route adapter are restored exactly to main's behavior. Its text comparison remains an
+advisory: changing that separate query requires a compilable false-fact reproduction and a correction scoped to
+removing that fact. The previously added orders map uncertainty did not meet that criterion and is withdrawn.
 
 Differential: map, impact, callers, importers and outline on each of those three repositories (15 commands). Callers,
 importers and outline use the largest selected class file; impact compares the pinned revision's third first-parent ancestor with
-that revision. Stdout, stderr and exit status are compared: 14/15 byte-identical, all exit 0. All 12 non-map commands
-and two maps are identical. Orders' map adds one unresolved item at `OrdersEventPublisherNatsImpl.onOrderCreatedEvent`
-(line 48): its hierarchy reaches the unread `DomainEventSubscriber`, whose member types cannot be excluded when
-comparing the imported event type. All three complete HTTP findings, every prior finding, snapshot and inputs are
-identical; none is removed. This extra uncertainty is conservative and does not assert a route or an external target.
-The strict and lenient binding readings used by dependency queries remain unchanged.
+that revision. After the review correction, stdout, stderr and exit status are compared: **15/15 byte-identical**,
+including all three maps, all exit 0. The added unresolved item in orders is absent; `counterpart` and the route adapter
+match main exactly. The correction re-ran all 45 class traces, both checkout targets and all 15 differential commands
+on the same pinned revisions; the trace measurements in the table are retained unchanged. Two public-seam tests
+built from the review repros were observed RED, then GREEN; reverting qualified identity to text or reintroducing the
+uncertain counterpart each fails its test, and both mutation variants pass typecheck. The qualified-name matrix and
+the review's minimal map source compile with `javac` (10 source sets). Foreground `npm run check` on Node 24.22.2:
+3,671 passed, zero failed or cancelled.
 
 Measurements use one exported main tree and shared graph cache, with absolute XDG cache/config paths, isolated HOME
-and TMPDIR under one system-temp scratch. The final head is replayed against the recorded baseline using that same
-export and cache. The scratch retains the pinned targets, exit codes, hashes, metrics and the exact map difference;
-intermediate full outputs are not retained. No schema bump or CLI/help change is required.
+and TMPDIR under one system-temp scratch. The correction measures baseline and final head afresh using that same
+export and cache. The scratch retains pinned
+targets, exit codes, hashes, metrics, compiler evidence and the RED/mutation/check logs; intermediate exports and
+caches are removed after verification. No schema bump or CLI/help change is required.
 
 ## Patterns (deferred)
 

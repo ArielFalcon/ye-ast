@@ -261,6 +261,12 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     }
   }
 
+  const packages = new Set<string>();
+  for (const name of [...files.map((file) => file.packageName), ...PLATFORM_TYPE_NAMES.keys()]) {
+    const parts = name.split(".");
+    for (let end = 1; end <= parts.length; end++) if (parts[0] !== "") packages.add(parts.slice(0, end).join("."));
+  }
+
   const claimed = [...new Set(files.map((file) => claimedPlatformPackage(file.packageName)).filter((owned) => owned !== undefined))];
 
   function isPlatformName(fqn: string): boolean {
@@ -305,6 +311,7 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
 
   function typeIdentity(name: string, scope: Scope): string | undefined {
     const [head = "", ...rest] = name.split(".");
+    if (rest.length > 0 && scope.at !== undefined && typeVariableAround(scope.at, head) !== undefined) return undefined;
     const { file } = scope;
     const direct = file.singleImports.get(head);
     if (file.conflictingSingleImports.has(head) || (direct !== undefined && types.some((type) => type.file === file && type.outer === undefined && type.name === head && type.fqn !== direct))) return undefined;
@@ -326,7 +333,6 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     }
     const own = byFqn(file.packageName === "" ? head : `${file.packageName}.${head}`);
     if (own !== undefined) return typeof own === "object" ? memberIdentity(own, rest) : undefined;
-    if (rest.length > 0 && /^[a-z]/.test(head)) return qualifiedIdentity(name);
     const offers = [
       ...new Set(["java.lang", ...file.onDemandImports]),
     ].map((container) => demandIdentity(container, head, false));
@@ -337,22 +343,26 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
       : undefined;
     const identity = uniqueIdentity(offers.filter((offer) => offer !== ""));
     if (identity !== undefined) return extendIdentity(identity, rest);
-    return rest.length === 0 ? `context:${file.packageName}|${head}` : undefined;
+    return rest.length === 0 ? `context:${file.packageName}|${head}` : qualifiedIdentity(name);
   }
 
   function uniqueIdentity(identities: readonly (string | undefined)[]): string | undefined {
     return identities.length > 0 && identities[0] !== undefined && identities.every((identity) => identity === identities[0]) ? identities[0] : undefined;
   }
 
+  /** An absolute name: packages until a declared type is reached, then member types only (JLS 6.5.4-5). */
   function qualifiedIdentity(name: string): string | undefined {
-    const declared = byFqn(name);
-    if (declared !== undefined) return typeof declared === "object" ? declared.fqn : undefined;
     const parts = name.split(".");
-    for (let end = parts.length - 1; end > 0; end--) {
-      const owner = byFqn(parts.slice(0, end).join("."));
-      if (owner !== undefined) return typeof owner === "object" ? memberIdentity(owner, parts.slice(end)) : undefined;
+    let prefix = "";
+    for (const [index, part] of parts.entries()) {
+      const qualified = prefix === "" ? part : `${prefix}.${part}`;
+      const declared = prefix === "" ? undefined : byFqn(qualified);
+      if (declared !== undefined) return typeof declared === "object" && !packages.has(qualified) ? memberIdentity(declared, parts.slice(index + 1)) : undefined;
+      if (PLATFORM_TYPE_NAMES.get(prefix)?.has(part) && isPlatformName(qualified)) return index === parts.length - 1 ? qualified : undefined;
+      if (!packages.has(qualified)) return undefined;
+      prefix = qualified;
     }
-    return name;
+    return undefined;
   }
 
   function extendIdentity(identity: string, rest: readonly string[]): string | undefined {
@@ -369,7 +379,9 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
 
   /** Empty means a known supplier has no such type; undefined means its declarations are unknown. */
   function demandIdentity(container: string, name: string, onlyStatic: boolean): string | undefined {
-    const owner = byFqn(container);
+    const declaredOwner = byFqn(container);
+    const canonical = declaredOwner === undefined ? qualifiedIdentity(container) : undefined;
+    const owner = declaredOwner ?? (canonical === undefined ? undefined : byFqn(canonical));
     if (owner !== undefined) {
       if (typeof owner !== "object") return undefined;
       const member = owner.members.get(name) ?? inheritedMember(owner, name, true);
@@ -724,59 +736,39 @@ export type Counterpart = MethodDecl | "ambiguous" | undefined;
  * The method of `type` that `method` overrides or is overridden by: same name and arity, told apart by parameter types.
  * Declarations that match only through a type variable and that several methods claim equally are `"ambiguous"`.
  */
-export function counterpart(type: TypeDecl, method: MethodDecl, project: JavaProject): Counterpart {
+export function counterpart(type: TypeDecl, method: MethodDecl): Counterpart {
   const compatibleWith = (candidates: readonly MethodDecl[], target: MethodDecl) =>
-    candidates.filter((candidate) => candidate.name === target.name && compatibleParameters(candidate, target, project));
+    candidates.filter((candidate) => candidate.name === target.name && sameParameters(candidate, target, parameterCompatible));
   const candidates = compatibleWith(type.methods, method);
-  const exact = candidates.filter((candidate) => certainParameters(candidate, method, project));
+  const exact = candidates.filter((candidate) => sameParameters(candidate, method, (a, _, b) => a === b));
   const chosen = exact.length > 0 ? exact : candidates;
   const [found] = chosen;
   if (chosen.length > 1) return "ambiguous";
   if (found === undefined || exact.length > 0) return found;
-  if (uncertainParameters(found, method, project)) return "ambiguous";
   const rivals = compatibleWith(
     method.owner.methods.filter((rival) => rival !== method),
     found,
-  ).filter((rival) => !type.methods.some((other) => other !== found && certainParameters(other, rival, project)));
-  if (rivals.some((rival) => certainParameters(rival, found, project))) return undefined;
+  ).filter((rival) => !type.methods.some((other) => other !== found && sameParameters(other, rival, (a, _, b) => a === b)));
+  if (rivals.some((rival) => sameParameters(rival, found, (a, _, b) => a === b))) return undefined;
   return rivals.length > 0 ? "ambiguous" : found;
 }
 
-function identityTail(name: string): string {
-  return name.slice(Math.max(name.lastIndexOf("|"), name.lastIndexOf(".")) + 1);
+export function sameParameters(
+  first: MethodDecl,
+  second: MethodDecl,
+  matches: (a: string, aVariables: ReadonlySet<string>, b: string, bVariables: ReadonlySet<string>) => boolean,
+): boolean {
+  return (
+    first.parameterTypes.length === second.parameterTypes.length &&
+    first.parameterTypes.every((parameter, index) => matches(parameter, first.typeVariables, second.parameterTypes[index] ?? "", second.typeVariables))
+  );
 }
 
-function uncertainParameters(first: MethodDecl, second: MethodDecl, project: JavaProject): boolean {
-  const a = readSignature(first, project);
-  const b = readSignature(second, project);
-  return a === undefined || b === undefined || a.some((parameter, index) => {
-    const other = b[index];
-    return other !== undefined && !("variable" in parameter) && !("variable" in other) && parameter.name !== other.name
-      && (parameter.name.startsWith("context:") || other.name.startsWith("context:"));
-  });
-}
-
-function certainParameters(first: MethodDecl, second: MethodDecl, project: JavaProject): boolean {
-  const a = readSignature(first, project);
-  const b = readSignature(second, project);
-  return a !== undefined && b !== undefined && a.length === b.length && a.every((parameter, index) => {
-    const other = b[index]!;
-    return parameter.dimensions === other.dimensions && ("variable" in parameter && "variable" in other
-      ? first.parameterTypes[index] === second.parameterTypes[index]
-      : !("variable" in parameter) && !("variable" in other) && parameter.name === other.name);
-  });
-}
-
-function compatibleParameters(first: MethodDecl, second: MethodDecl, project: JavaProject): boolean {
-  if (first.parameterTypes.length !== second.parameterTypes.length) return false;
-  if (certainParameters(first, second, project)) return true;
-  const a = readSignature(first, project);
-  const b = readSignature(second, project);
-  if (a === undefined || b === undefined) return true;
-  return a.length === b.length && a.every((parameter, index) => {
-    const other = b[index]!;
-    return parameter.dimensions === other.dimensions && ("variable" in parameter || "variable" in other || parameter.name === other.name || ((parameter.name.startsWith("context:") || other.name.startsWith("context:")) && identityTail(parameter.name) === identityTail(other.name)));
-  });
+export function parameterCompatible(a: string, aVariables: ReadonlySet<string>, b: string, bVariables: ReadonlySet<string>): boolean {
+  if (a === b) return true;
+  const [elementA = "", dimensionsA = ""] = /^(.*?)((?:\[\])*)$/.exec(a)?.slice(1) ?? [];
+  const [elementB = "", dimensionsB = ""] = /^(.*?)((?:\[\])*)$/.exec(b)?.slice(1) ?? [];
+  return dimensionsA === dimensionsB && (aVariables.has(elementA) || bVariables.has(elementB));
 }
 
 /** Declares the types of a file and their members; a nested type waits on a stack, since nesting depth is the file's. */
@@ -930,10 +922,10 @@ function dimensionsOf(node: Node): number {
   return (dimensions?.text.match(/\[/g) ?? []).length;
 }
 
-export function typeVariableAround(name: Node): Node | undefined {
+export function typeVariableAround(name: Node, spelling = name.text): Node | undefined {
   for (let scope = name.parent; scope !== null; scope = scope.parent) {
     const parameters = scope.childForFieldName("type_parameters");
-    const found = parameters?.namedChildren.find((parameter) => parameter?.namedChildren[0]?.text === name.text);
+    const found = parameters?.namedChildren.find((parameter) => parameter?.namedChildren[0]?.text === spelling);
     if (found !== undefined && found !== null) return found;
   }
   return undefined;

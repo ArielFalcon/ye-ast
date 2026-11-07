@@ -166,7 +166,7 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    keeps its dispatch cut. Impact, callers, importers and outline still read such an edge as a possible dependence.
 
 12. Java signature identity has one owner, `JavaProject.typeIdentity` and `readSignature`, shared by trace dispatch,
-    receiver-method comparison and Spring's `counterpart`. This is an identity comparison, not an extension of the
+    receiver-method comparison. This is an identity comparison, not an extension of the
     strict resolver's external-leaf or dependency proof. Its lexical walk is the existing resolver's: local and
     enclosing member types, including inherited member types, precede imports. A type parameter remains variable,
     never a concrete signature proof. Local types without a placed declaration, inaccessible or ambiguous members,
@@ -189,10 +189,16 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
     static demands and simple name) can establish only equality of the two signature expressions, as the prior
     same-context rule did; they select no supplier and prove no repository target or external leaf. Different contexts
     do not prove equality, and known collisions never use this fallback. Qualified repository member names resolve
-    to their declaring member, so inherited spellings compare canonically. Array dimensions remain part of identity.
-    Spring's concrete signature comparisons use this same proof: a possible but unproven mapping match becomes an
-    unresolved item rather than a route or a silently dropped mapping. Its existing type-variable matching policy is
-    unchanged. No schema or persisted graph shape changes. `bindName`'s strict and lenient query behavior is unchanged.
+    to their declaring member, so inherited spellings compare canonically. The first segment of a qualified name uses
+    the same lexical, import and demand reading as a simple type name, regardless of capitalization. A resolved type
+    qualifier leads through its member types one at a time. Only after every type supplier is excluded can a qualifier
+    be read as a package: known package prefixes lead to a declared top-level type, then to member types only
+    (JLS 6.5.4-5). An unproven qualifier, type-parameter qualifier or terminal declaration stays cut; spelling alone
+    never establishes qualified identity. Imported qualifiers and mixed package/type/member paths use this same walk.
+    Array dimensions remain part of identity. Spring's `counterpart` retains its baseline text comparison and generic
+    matching policy: its qualified-homonym limitation remains an advisory for a separate fix backed by a compilable
+    false-fact reproduction. This unit changes neither map behavior nor dependency/external-leaf readings.
+    No schema or persisted graph shape changes. `bindName`'s strict and lenient query behavior is unchanged.
     The owner's J1 instruction authorizes choosing the root fix and testing this shared comparison; S3's proposed
     import precedence and compilability assumption are corrected by these rules.
 
