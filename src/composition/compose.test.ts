@@ -849,6 +849,89 @@ test("a Java trace never settles a call by a root it reads past, whether the gra
   assert.deepEqual(await traceOf("varalias", { "Use.java": alias }), { status: "complete", cuts: [], steps: [["entry", null], ["println", null], ["println", null]] });
 });
 
+/** The status, cuts and steps (symbol, place, parent, via, the step it repeats and its leaves) of a trace of `Use.entry` over a fresh repository holding `files`. */
+async function javaTrace(name: string, files: Readonly<Record<string, readonly string[]>>) {
+  const answer = await composeQueries({ scratchRoot }).trace.walk({
+    repo: committedRepository(name, Object.fromEntries(Object.entries(files).map(([file, lines]) => [file, [...lines, ""].join("\n")]))),
+    repoId: name,
+    revision: "HEAD",
+    targets: [{ file: "Use.java", symbol: "Use.entry" }],
+  });
+  assert.ok(answer.ok);
+  const { status } = answer.value;
+  return {
+    status,
+    cuts: status === "partial" ? answer.value.cuts.map((cut) => [cut.kind, ...cut.at]) : [],
+    steps: status === "unknown" ? [] : answer.value.value.steps.map((step) => [`${step.file}:${step.line} ${step.symbol}`, step.parent ?? null, step.via ?? null, step.seen ?? null, step.leaves?.map((leaf) => `${leaf.file}:${leaf.start} ${leaf.symbol}`) ?? null]),
+  };
+}
+
+/** A port with one implementation, and a homonym of each of its methods, so a call settled by its name is a cut. */
+const REPO_PORT: Readonly<Record<string, readonly string[]>> = {
+  "Repo.java": ["public interface Repo {", "  void save(String value);", "  Repo find();", "}"],
+  "JdbcRepo.java": ["public class JdbcRepo implements Repo {", "  public void save(String value) {}", "  public Repo find() { return this; }", "}"],
+  "Other.java": ["class Other {", "  void save(String value) {}", "  Repo find() { return null; }", "}"],
+};
+
+test("a Java call on what a repository method declares it returns steps at the method of that declared type, and dispatch expands the one body below it", async () => {
+  const use = ["public class Use {", "  public void entry(Repo param) {", "    param.find().save(\"c\");", "  }", "}"];
+
+  assert.deepEqual(await javaTrace("chained", { ...REPO_PORT, "Use.java": use }), {
+    status: "complete",
+    cuts: [],
+    steps: [
+      ["Use.java:2 entry", null, null, null, null],
+      ["Repo.java:3 find", 0, "call", null, ["JdbcRepo.java:3 find"]],
+      ["Repo.java:2 save", 0, "call", null, ["JdbcRepo.java:2 save"]],
+    ],
+  });
+});
+
+test("a Java call the index resolved on a parameter steps at the method the parameter's declared type names, with a cut at a subclass that overrides it, and is a cut when the declared hierarchy proves nothing", async () => {
+  const use = ["public class Use {", "  public void entry(Plain p) {", "    p.save();", "  }", "}"];
+  const plain = ["class Plain {", "  void save() {}", "}"];
+  const twin = ["class Twin extends Plain {", "  void save() {}", "}"];
+
+  assert.deepEqual(await javaTrace("overridden", { "Use.java": use, "Plain.java": plain, "Twin.java": twin }), {
+    status: "partial",
+    cuts: [["unresolved-link", "Plain.java:2 save", "Twin.java::Twin.save"]],
+    steps: [
+      ["Use.java:2 entry", null, null, null, null],
+      ["Plain.java:2 save", 0, "call", null, null],
+    ],
+  });
+  const kotlin = "class Twin : Plain() { override fun save() { System.exit(1) } }\n";
+  assert.deepEqual(await javaTrace("kotlin", { "Use.java": use, "Plain.java": plain, "Twin.kt": [kotlin] }), {
+    status: "partial",
+    cuts: [["unresolved-link", "Use.java:3 save", "Plain.java::Plain.save"], ["no-extractor", "Twin.kt"]],
+    steps: [["Use.java:2 entry", null, null, null, null]],
+  });
+});
+
+test("a Java call on a parameter whose declared type is a record steps at the record's method, which the index holds as a function of no container", async () => {
+  const use = ["public class Use {", "  public void entry(Order order) {", "    order.total();", "  }", "}"];
+  const order = ["public record Order(int amount) {", "  public int total() { return amount; }", "}"];
+  const other = ["class Other {", "  int total() { return 0; }", "}"];
+
+  assert.deepEqual(await javaTrace("record", { "Use.java": use, "Order.java": order, "Other.java": other }), {
+    status: "complete",
+    cuts: [],
+    steps: [["Use.java:2 entry", null, null, null, ["Order.java:2 total"]]],
+  });
+});
+
+test("a Java call the index resolved on a non-private field or a var local stays a step under an aspect, since nothing falsifies the declared type", async () => {
+  const use = ["public class Use {", "  Plain field;", "  public void entry() {", "    field.save();", "    var local = new Plain();", "    local.save();", "  }", "}"];
+  const plain = ["class Plain {", "  void save() {}", "}"];
+  const aspect = ["@org.aspectj.lang.annotation.Aspect", "class Logging {}"];
+
+  assert.deepEqual(await javaTrace("aspect", { "Use.java": use, "Plain.java": plain, "Logging.java": aspect }), {
+    status: "complete",
+    cuts: [],
+    steps: [["Use.java:3 entry", null, null, null, ["Plain.java:2 save", "Plain.java:1 Plain"]]],
+  });
+});
+
 test("a TypeScript trace settles a call by its package or global root only when the call reads one member below it", async () => {
   const manifest = JSON.stringify({ name: "use", dependencies: { "other-lib": "1.0.0" } });
   const logger = ["import * as other from \"other-lib\";", "class Sink {", "  flush(): void { console.log(\"REPOSITORY_FLUSH\"); }", "}", "export function entry(): void {", "  other.setLogger(new Sink());", "  other.logger.flush();", "}", ""].join("\n");

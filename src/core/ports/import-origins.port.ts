@@ -84,6 +84,17 @@ export interface ImportOrigins {
    */
   dispatchTargets(sites: readonly DispatchSite[], signal?: AbortSignal): Promise<readonly DispatchTargets[]>;
   /**
+   * One entry per site, in the order received: the method a member call names by the type the sources declare its
+   * receiver to hold (RFC-0013 R3, R5), the declaration a call on a value of that type is resolved to at compile time,
+   * below which dispatch decides the body. The type is a repository type stated by the receiver's parameter, local or
+   * private field, or the declared return type of the repository method a receiver call names in the same way (`f().m()`).
+   * `unknown` when the language types structurally (TypeScript), when nothing states the type, when it is a type variable,
+   * when the type's hierarchy reaches a type outside the repository, when its members of the name are not one signature of
+   * the call's arity (an overload, a varargs, a private or an `Object` method), or when the declared hierarchy does not
+   * prove the bodies a value of the type may run for it (`dispatchTargets`).
+   */
+  receiverMethods(sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ReceiverMethod[]>;
+  /**
    * Where the repository may run its own code where a library's is expected: the path of every global the snapshot
    * declares, every member path a source writes from a global (`Math.max = f`, `Array.prototype[k] = f`,
    * `globalThis.fetch = f`, `Object.assign(process.env, vars)`), and every package a source writes through an import of
@@ -118,6 +129,22 @@ export interface DispatchSite {
 
 /** The method bodies a call to a body-less method may run, each by its file and the 1-based lines from its first token to its name, sorted. */
 export type DispatchTargets = { kind: "bodies"; bodies: readonly { file: string; start: number; nameLine: number }[] } | { kind: "unknown" };
+
+/** A member call by the place it starts, repository-relative and 1-based with a UTF-16 column, and the member it calls. */
+export interface ReceiverCallSite {
+  file: string;
+  line: number;
+  column: number;
+  member: string;
+}
+
+/**
+ * The method declaration a call names, by its file and the 1-based lines from its first token to its name; `unproven`
+ * when the call's receiver is a value it reads (a parameter, a local, a field, a member of another value or what another
+ * call returns) and the sources may make a value of any declared type run code they do not show, so no index edge from
+ * the call proves what it runs either.
+ */
+export type ReceiverMethod = { kind: "method"; file: string; start: number; nameLine: number } | { kind: "unproven" } | { kind: "unknown" };
 
 /** A place a declaration uses a name, where the index places the use: repository-relative and 1-based. */
 export interface UseSite {

@@ -14,10 +14,10 @@ const LANGUAGE_ANNOTATIONS: ReadonlySet<string> = new Set(["Override", "Deprecat
 const OBJECT_METHODS: ReadonlySet<string> = new Set(["equals", "hashCode", "toString"]);
 
 /** A class's superclass as the strict reading settles it: a repository type, none written, or one outside the repository or unsettled. */
-type Superclass = TypeDecl | "none" | "outside";
+export type Superclass = TypeDecl | "none" | "outside";
 
 /** The declared hierarchy of the sources, by the strict reading of every supertype a declaration writes. */
-interface Hierarchy {
+export interface Hierarchy {
   subtypes: ReadonlyMap<TypeDecl, readonly TypeDecl[]>;
   superclasses: ReadonlyMap<TypeDecl, Superclass>;
   /** Types with a supertype that is not a repository type: a platform or dependency type, or one the reading leaves unsettled. */
@@ -72,8 +72,8 @@ export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sou
   };
 }
 
-function targetsOf(method: MethodDecl, hierarchy: Hierarchy): DispatchTargets {
-  const owner = method.owner;
+/** The bodies a call of `method` runs on a value of `owner`, the method's own owner unless a declared type below it states the value. */
+export function targetsOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl = method.owner): DispatchTargets {
   if (isAnnotated(owner.node) || isAnnotated(method.node)) return UNKNOWN;
   if (ancestorsOf(owner, hierarchy).some((type) => hierarchy.outside.has(type))) return UNKNOWN;
   const below = belowOf(owner, hierarchy);
@@ -118,7 +118,7 @@ function isFunctional(owner: TypeDecl, hierarchy: Hierarchy): boolean {
 }
 
 /** The type and every repository type above it. */
-function ancestorsOf(type: TypeDecl, hierarchy: Hierarchy): TypeDecl[] {
+export function ancestorsOf(type: TypeDecl, hierarchy: Hierarchy): TypeDecl[] {
   const above = new Set<TypeDecl>([type]);
   const parents = new Map<TypeDecl, TypeDecl[]>();
   for (const [supertype, subtypes] of hierarchy.subtypes) for (const subtype of subtypes) parents.set(subtype, [...(parents.get(subtype) ?? []), supertype]);
@@ -137,7 +137,7 @@ function belowOf(type: TypeDecl, hierarchy: Hierarchy): ReadonlySet<TypeDecl> {
 }
 
 /** Reads every declaration's supertypes; `undefined` when an aspect or a JDK API that implements an interface at run time may run code behind any type. */
-function hierarchyOf(files: readonly JavaFile[], project: JavaProject): Hierarchy | undefined {
+export function hierarchyOf(files: readonly JavaFile[], project: JavaProject): Hierarchy | undefined {
   const placed = new Map(project.types.map((type) => [type.node.id, type]));
   const subtypes = new Map<TypeDecl, TypeDecl[]>();
   const superclasses = new Map<TypeDecl, Superclass>();

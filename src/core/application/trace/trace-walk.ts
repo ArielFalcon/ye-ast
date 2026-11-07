@@ -11,7 +11,7 @@ import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/tr
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import type { DispatchTargets, ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { DispatchTargets, ImportOriginSite, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
@@ -280,8 +280,16 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
    */
   const placedBodies = (targets: DispatchTargets): GraphSymbol[] | undefined => {
     if (targets.kind === "unknown") return undefined;
-    const placed = targets.bodies.map(({ file, start, nameLine }) => store.symbolsInFiles([file]).filter((symbol) => symbol.kind === "method" && start <= symbol.startLine && symbol.startLine <= nameLine));
-    return placed.every((symbols) => symbols.length === 1) ? placed.map((symbols) => symbols[0]!) : undefined;
+    const placed = targets.bodies.map((body) => placedMethod(body));
+    return placed.every((symbol) => symbol !== undefined) ? placed : undefined;
+  };
+  /**
+   * The one declaration of `kinds` the index places between a declaration's first token and its name. The index holds a
+   * record's methods as functions of no container, so a proof of the method a call names accepts either kind.
+   */
+  const placedMethod = ({ file, start, nameLine }: Omit<Extract<ReceiverMethod, { kind: "method" }>, "kind">, kinds: readonly string[] = ["method"]): GraphSymbol | undefined => {
+    const placed = store.symbolsInFiles([file]).filter((symbol) => kinds.includes(symbol.kind) && start <= symbol.startLine && symbol.startLine <= nameLine);
+    return placed.length === 1 ? placed[0] : undefined;
   };
   /**
    * What dispatch may run instead of the body the walk reads, from the declaration's own syntax: a body-less callable
@@ -342,20 +350,6 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       if (await isReplaced(root)) await replaced();
       else external.push(call);
     };
-    for (const [index, { edge, target }] of [...called, ...passed].entries()) {
-      const verdict = verdicts[index]!;
-      const value = index >= called.length;
-      if (verdict.kind === "keep" || verdict.kind === "redirect") {
-        const reached = verdict.kind === "redirect" ? verdict.to : target;
-        children.push(value ? childAt(reached, edge.line, edge.column, target.name, "reference", true) : childAt(reached, edge.line, edge.column, target.name, "call"));
-      } else if (verdict.root.kind === "local-parameter") {
-        cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name).map(candidateOf))] });
-      } else {
-        const dropped = verdict.root;
-        const place: Cut = { kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name).map(candidateOf))] };
-        await leafUnlessReplaced(dropped.kind === "external" ? { kind: "import", module: dropped.module, name: target.name } : { kind: "global", name: target.name }, dropped.kind === "external" ? { module: dropped.module } : { path: ["name" in dropped ? dropped.name : target.name], member: target.name, open: true }, () => cuts.push(place));
-      }
-    }
     /**
      * A member call nothing settled by its receiver: a cut listing the declarations of its name, or, when no declaration and
      * no source names it and the repository replaces nothing the call was found to name, an external call (R6).
@@ -375,6 +369,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const rooted: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[] }[] = [];
     const constructed: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; holds: Extract<ReceiverBinding["holds"], { kind: "constructed" }> }[] = [];
     const annotated: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; holds: Extract<ReceiverBinding["holds"], { kind: "annotated" }> }[] = [];
+    /** Member calls no other proof settles, which the type the sources declare the receiver to hold may (R3, R5). */
+    const typed: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[] }[] = [];
     for (const reference of unsettledBy(callsFrom(node), called)) {
       const own = ownMemberOf(reference.name);
       const members = own === undefined ? [] : uses.ownMembers(node, own, ["method"]);
@@ -399,7 +395,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
             else if (declared !== undefined) children.push(childAt(declared, reference.line, reference.column, reference.name, "call"));
             else await settleByName(reference, callee.name, named);
           } else if (PLAIN_CHAIN.test(reference.name) && !reference.name.startsWith("this.")) rooted.push({ reference, name: callee.name, named });
-          else await settleByName(reference, callee.name, named);
+          else typed.push({ reference, name: callee.name, named });
         }
       }
     }
@@ -422,7 +418,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         const type = types[index];
         if (type?.kind === "global") await leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(type.name, name), () => settleByName(reference, name, named, true));
         else if (type?.kind === "package") await leafUnlessReplaced({ kind: "import", module: type.module, name: reference.name }, { module: type.module }, () => settleByName(reference, name, named, true));
-        else await settleByName(reference, name, named);
+        else typed.push({ reference, name, named });
       }
     }
     if (rooted.length > 0) {
@@ -435,6 +431,42 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         else if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, { path: reference.name.split("."), member: name }, () => settleByName(reference, name, named, true));
         else await settleByName(reference, name, named);
       }
+    }
+    /**
+     * One read of the receivers' declared types for the body: a call the index resolved on a receiver the call reads is a
+     * step only at the method that type names, and a cut when the sources may falsify any declared type (R3, R5); a call
+     * no other proof settles is a step at the method it names.
+     */
+    const placedCalls = called.filter(({ edge }) => edge.line !== null && edge.column !== null);
+    const receiverSites = [
+      ...placedCalls.map(({ edge, target }) => ({ file: node.file, line: edge.line!, column: edge.column! + 1, member: target.name })),
+      ...typed.map(({ reference, name }) => ({ file: reference.file, line: reference.line, column: reference.column + 1, member: name })),
+    ];
+    const found = receiverSites.length === 0 ? [] : await origins.receiverMethods(receiverSites, signal);
+    const receivers = new Map(placedCalls.map((followed, index): [FollowedEdge, ReceiverMethod] => [followed, found[index] ?? { kind: "unknown" }]));
+    for (const [index, followed] of [...called, ...passed].entries()) {
+      const { edge, target } = followed;
+      const verdict = verdicts[index]!;
+      const value = index >= called.length;
+      if (verdict.kind === "keep" || verdict.kind === "redirect") {
+        const receiver = value ? undefined : receivers.get(followed);
+        const proven = receiver?.kind === "method" ? placedMethod(receiver, CALLABLE_KINDS) : undefined;
+        const reached = proven ?? (verdict.kind === "redirect" ? verdict.to : target);
+        if (receiver !== undefined && receiver.kind !== "unknown" && proven === undefined) cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique([candidateOf(target), ...declarationsNamed(target.name).map(candidateOf)])] });
+        else children.push(value ? childAt(reached, edge.line, edge.column, target.name, "reference", true) : childAt(reached, edge.line, edge.column, target.name, "call"));
+      } else if (verdict.root.kind === "local-parameter") {
+        cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name).map(candidateOf))] });
+      } else {
+        const dropped = verdict.root;
+        const place: Cut = { kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name).map(candidateOf))] };
+        await leafUnlessReplaced(dropped.kind === "external" ? { kind: "import", module: dropped.module, name: target.name } : { kind: "global", name: target.name }, dropped.kind === "external" ? { module: dropped.module } : { path: ["name" in dropped ? dropped.name : target.name], member: target.name, open: true }, () => cuts.push(place));
+      }
+    }
+    for (const [index, { reference, name, named }] of typed.entries()) {
+      const receiver = found[placedCalls.length + index];
+      const method = receiver?.kind === "method" ? placedMethod(receiver, CALLABLE_KINDS) : undefined;
+      if (method !== undefined) children.push(childAt(method, reference.line, reference.column, reference.name, "call"));
+      else await settleByName(reference, name, named);
     }
     if (bare.length > 0) {
       const sites = bare.map(({ reference, name }): ImportOriginSite => ({ file: reference.file, line: reference.line, column: reference.column + 1, name, fullName: reference.name, kind: reference.kind }));

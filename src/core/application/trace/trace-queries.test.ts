@@ -3,7 +3,7 @@ import test from "node:test";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Fact, Finding } from "../../domain/shared/fact.ts";
 import type { TraceStep, TraceValue } from "../../domain/trace/trace-fact.ts";
-import type { DeclaredType, DispatchSite, DispatchTargets, ImportOriginSite, ReplacedRoots, ResolvedNameSite, UseSite } from "../../ports/import-origins.port.ts";
+import type { DeclaredType, DispatchSite, DispatchTargets, ImportOriginSite, ReceiverCallSite, ReceiverMethod, ReplacedRoots, ResolvedNameSite, UseSite } from "../../ports/import-origins.port.ts";
 import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { TraceBudget, TraceRequest } from "../../ports/trace-queries.port.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
@@ -60,6 +60,10 @@ interface Options {
   callables?: Readonly<Record<string, readonly DeclaredCallable[]>>;
   /** The bodies the declared hierarchy proves a body-less method runs, by its name; unknown by default. */
   dispatch?: Readonly<Record<string, DispatchTargets>>;
+  /** The method the receiver's declared type names for a member call, by the member; unknown by default. */
+  receivers?: Readonly<Record<string, ReceiverMethod>>;
+  /** Called with the members of each read of the receivers' declared types. */
+  onReceivers?: (members: readonly string[]) => void;
 }
 
 function setup(options: Options) {
@@ -93,6 +97,7 @@ function setup(options: Options) {
       replacedRoots: async () => options.replaced ?? written(),
       declaredTypes: async (sites: readonly UseSite[]) => sites.map((site) => options.declared?.[site.spelled] ?? { kind: "unknown" }),
       dispatchTargets: async (sites: readonly DispatchSite[]) => sites.map((site) => options.dispatch?.[site.name] ?? { kind: "unknown" }),
+      receiverMethods: async (sites: readonly ReceiverCallSite[]) => (options.onReceivers?.(sites.map((site) => site.member)), sites.map((site) => options.receivers?.[site.member] ?? { kind: "unknown" })),
       origins: async (sites: readonly ImportOriginSite[]) => { options.onOrigins?.(); return sites.map(answer); },
       rootOrigins: async (sites: readonly ResolvedNameSite[]) => sites.map((site): Finding<ImportOrigin> => {
         const root = options.roots?.[site.name];
@@ -243,6 +248,39 @@ test("this.<member> inside the class that declares it is a step at the member", 
   assert.equal(fact.status, "complete");
   const step = valueOf(fact).steps[1]!;
   assert.deepEqual([step.symbol, step.via, step.at], ["save", "own-member", { line: 9, column: 5 }]);
+});
+
+test("a call the receiver's declared type names steps at that method, whatever method the index resolved it to, and a method the index does not place proves nothing", async () => {
+  const nodes = [SVC, RUN, fakeNode("Repo.save", "method", B, 3, 5, "save"), fakeNode("Impl.save", "method", B, 7, 9, "save"), fakeNode("Repo.find", "method", B, 11, 13, "find")];
+  const unresolved: FakeUnresolved[] = [{ from: "run", name: "this.repo.find", kind: "calls", file: A, line: 10, column: 4 }];
+  const options = { nodes, edges: [...CONTAINS, call("run", "Impl.save", 9, 4)], unresolved, sources: [{ path: B, content: "" }] };
+
+  const proven = await factOf({ ...options, receivers: { save: { kind: "method", file: B, start: 3, nameLine: 3 }, find: { kind: "method", file: B, start: 11, nameLine: 11 } } });
+  const unplaced = await factOf({ ...options, receivers: { save: { kind: "method", file: B, start: 20, nameLine: 20 }, find: { kind: "method", file: B, start: 20, nameLine: 20 } } });
+
+  assert.deepEqual(cutsOf(proven), []);
+  assert.deepEqual(valueOf(proven).steps[0]?.leaves?.map(({ file, start }) => [file, start]), [[B, 3], [B, 11]]);
+  assert.deepEqual(cutsOf(unplaced), [
+    ["unresolved-link", ["src/a.ts:10 this.repo.find", "src/b.ts::find"]],
+    ["unresolved-link", ["src/a.ts:9 save", "src/b.ts::save"]],
+  ]);
+});
+
+test("a body reads its receivers' declared types once, for its resolved calls and its unsettled member calls together", async () => {
+  const reads: (readonly string[])[] = [];
+  const nodes = [SVC, RUN, fakeNode("Repo.save", "method", B, 3, 5, "save"), fakeNode("Repo.find", "method", B, 11, 13, "find")];
+  const unresolved: FakeUnresolved[] = [{ from: "run", name: "this.repo.find", kind: "calls", file: A, line: 10, column: 4 }];
+
+  await factOf({ nodes, edges: [...CONTAINS, call("run", "Repo.save", 9, 4)], unresolved, onReceivers: (members) => reads.push(members) });
+
+  assert.deepEqual(reads, [["save", "find"]]);
+});
+
+test("a call the index resolved on a receiver whose method nothing proves is a cut, and one the receivers say nothing about stays a step", async () => {
+  const options = { nodes: [SVC, RUN, fakeNode("Repo.save", "method", B, 3, 5, "save")], edges: [...CONTAINS, call("run", "Repo.save", 9, 4)] };
+
+  assert.deepEqual(cutsOf(await factOf({ ...options, receivers: { save: { kind: "unproven" } } })), [["unresolved-link", ["src/a.ts:9 save", "src/b.ts::save"]]]);
+  assert.deepEqual(valueOf(await factOf(options)).steps[0]?.leaves?.map(({ file, start }) => [file, start]), [[B, 3]]);
 });
 
 test("a member call whose name no declaration has leaves the repository, unnamed, and cuts nothing", async () => {
@@ -743,6 +781,12 @@ test("a member call on a receiver annotated with a library or a package type is 
   assert.deepEqual(valueOf(global).steps.flatMap((step) => step.external ?? []), [{ kind: "global", names: ["store.save"] }]);
   assert.deepEqual(valueOf(imported).steps.flatMap((step) => step.external ?? []), [{ kind: "import", module: "@ngrx/store", names: ["store.save"] }]);
   for (const fact of [unknown, replaced]) assert.deepEqual(cutsOf(fact), cut);
+});
+
+test("a member call on a receiver annotated with a type the declared types do not place outside the repository steps at the method that type names", async () => {
+  const fact = await factOf({ ...boundCall({ kind: "annotated", type: "Repo", line: 8, column: 20 }), receivers: { save: { kind: "method", file: B, start: 3, nameLine: 3 } } });
+
+  assert.deepEqual(valueOf(fact).steps.map((step) => [step.file, step.line, step.via ?? null]), [[A, 5, null], [B, 3, "call"]]);
 });
 
 test("a write below another path, beside the called member, or on an object no receiver inherits from leaves the leaf external", async () => {

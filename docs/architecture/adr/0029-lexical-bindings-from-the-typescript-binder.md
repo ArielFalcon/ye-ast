@@ -102,6 +102,41 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    its own member (`System.out.println`, `other.logger.flush`, `document.body.appendChild`) is not settled by its root,
    whether the index left it pending or resolved it into an edge: trace, impact, callers, importers and outline keep such an edge instead of dropping it, and keep such a pending call a cut (ADR-0019, amendment). The leaf's evidence is the module or the global it is rooted at, as for every other
    leaf; the answer gains no field, so the declared type itself is not written.
+10. In Java (trace slice 3, S4a) a declared repository type proves the method a call names, since Java types nominally:
+   a value a declaration states the type of is an instance of that type or of a type below it. A receiver held by such a
+   type through the receiver bindings of decision 9 (a parameter, a local or loop variable, or a `private` field the file
+   names only through `this` and never by reflection), or by the declared return type of the repository method a
+   receiver call names in the same way (`x.f().m()`, and `f().m()` or `this.f().m()` through the enclosing class), names
+   the one method the type's members of that name, its own and inherited, offer for the call's arity: the type's own,
+   else the nearest up its class chain. An overriding method may only return a subtype of the declared return type, which
+   dispatch covers. Trace steps at that method, and dispatch decides the body below it (RFC-0013 R7). The proof needs the
+   declared hierarchy to prove every body a value of the type may run (R7's guards, with the declared type as the owner)
+   and holds nothing when a source does not parse or a JVM source no extractor reads is in scope; when the type is a type
+   variable, an enum or an annotation type (a record is a final class); when a type at or above it names a supertype
+   outside the repository, whose members the sources do not state; when its members of the name are an overload, a
+   varargs, a `private` method or one of `Object`'s; or when a source holds Lombok's `@Delegate` or `@ExtensionMethod`,
+   by which a processor adds an overload or rewrites a call with no declaration in the sources. Decision 9's global guard
+   is scoped here, as R7 scopes it: a supertype outside the repository, an anonymous or local class and a lambda or method
+   reference withhold the proof only inside the declared type's hierarchy (at or above it for a supertype, below it for
+   an anonymous or local class, the type itself being a functional interface for a lambda). That is sound because Java
+   types nominally: a value of a repository type `T` is an instance of a class whose declared supertypes reach `T`, and a
+   platform class cannot extend a repository type, so a repository class with a platform supertype elsewhere is no value
+   of `T`, an anonymous or local class implements only the type it names, and a lambda implements only a functional
+   interface. Decision 9 needs the global guard because there the declared type is a platform type, which any of those may
+   implement without the sources saying so. An aspect, a dynamic-proxy API, a source that does not parse and a JVM source
+   no extractor reads stay global. A call the index resolved into an edge keeps it, with the walk's override rule (R10)
+   cutting at a type below that declares the method, whether or not this proof holds: codegraph resolves a Java receiver
+   by its declared type, so a `var` local, a non-`private` field or an aspect in scope do not change what the edge
+   names. The edge is a step only at the proven method, and a cut, only when the sources may make a value of any declared
+   type run code they do not show: a source that does not parse, a JVM source no extractor reads (a Kotlin subclass
+   overriding the method), or a JDK API that implements an interface at run time; then a call on a value it reads (a
+   variable, a member of another value, another call's result) is a cut listing the edge's target and every declaration
+   of its name. The declared type stays true at run time because the compiler checks every assignment, a cast and the
+   cast it inserts where a generic value is read into a declared type are checked at run time, and a reflective write is
+   checked against the field's type; a type variable and `var` state no type here. A Spring proxy over a class runs the
+   same body after its advice, which is framework code, or repository code only through an aspect (an R7 guard); a JDK
+   proxy implements only interfaces (an R7 guard). Outside the promise: a write through `sun.misc.Unsafe` or JNI, and an
+   annotation processor this decision does not name that adds an overload to a class.
 
 ## Consequences
 
@@ -122,6 +157,7 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
 ## Not decided here
 
 - Using the binder for any other fact than the consumers above.
-- Narrowing a receiver to a repository type, and following a chain through declared return types (RFC-0013 R5): trace
-  slice 3, with dispatch (R7).
+- Narrowing a receiver to a repository type in TypeScript, and following a chain there through declared return types
+  (RFC-0013 R5): structural typing lets a compatible object of another class stand where the type is declared (trace
+  slice 3, S4b, research).
 - Java bindings, which have their own reader.
