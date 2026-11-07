@@ -32,3 +32,13 @@ export function owningBody<T extends SourceSpan>(bodies: readonly T[], at: Sourc
   }
   return owner;
 }
+
+/** The exact source span transported by an indexed declaration. */
+export function declarationSpan(declaration: { startLine: number; startColumn: number; endLine: number; endColumn: number }): SourceSpan {
+  return { start: { line: declaration.startLine, column: declaration.startColumn }, end: { line: declaration.endLine, column: declaration.endColumn } };
+}
+
+/** A value containing the whole indexed body is that body or its ancestor; a value inside it is not proven to run. */
+export function executesInBody(body: SourceSpan, values: readonly SourceSpan[], at: SourcePosition): boolean {
+  return !values.some((value) => containsPosition(value, at) && !(containsPosition(value, body.start) && comparePositions(body.end, value.end) <= 0));
+}

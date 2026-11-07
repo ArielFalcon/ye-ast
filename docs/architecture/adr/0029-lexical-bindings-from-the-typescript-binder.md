@@ -226,3 +226,40 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
   (RFC-0013 R5), beyond the nominal classes of decision 11: structural typing lets a compatible object of another
   class stand where the type is declared (trace slice 3, S4b, research).
 - Java bindings, which have their own reader.
+
+## Trace call inventory (2026-11-07)
+
+The existing member readers also supply every written call's place, callee name and syntax owners. Trace reconciles these with its indexed calls and pending references before declaring a body complete. Missing sites enter the existing unresolved-reference settlement; only unproven sites remain unresolved-link cuts. Syntax ownership includes field initializers and keeps a member's calls out of its class body; an anonymous callback remains with its encloser. This adds no lexical resolver, binding proof, type checker or stored schema. Other query families retain their existing dependency semantics: an unaccounted execution site alone proves no dependency edge.
+
+## Precision boundary after the call inventory follow-up
+
+Template render calls use the existing Angular expression binder and member-origin proofs, with unknown calls kept as cuts. Their text order precedes event handlers in the page reading plan; it does not prove runtime branch execution or render frequency.
+
+A local copied from an injected field remains unproven. Relaxing the field-copy escape guard does not create a local origin (`localSites` accepts injection locals), and admits a false direct-member proof after passing the copied value to an unknown-member writer. The public metadata experiment returned direct/alias/escaped-alias proof counts 1/0/0 before relaxation and 1/0/1 after it. The guard is retained; admitting copies requires binding-aware, transitive use/escape evidence, with the same proof contract for trace, impact and callers.
+
+Follow-up measurements against baseline 15f44afa: all 92 probes ran before and after, with 61 changed answers, 4,742 → 5,745 cuts and unchanged 5,125 body expansions. All 17 non-trace commands were byte-identical (stdout/stderr/exit 0). RFC-0013 records the per-repository counts and public-seam mutation evidence.
+
+Verification: public composed-query RED/GREEN and caught type-correct inventory/render mutations; final `npm run check` passed all 3,662 tests, typecheck and architecture checks.
+
+Parent correction of the call inventory: unconditional cuts were rejected. The same 92 probes now produce 4,987 cuts instead of 5,745 (baseline 4,742), restoring baseline's three complete answers. Of the prior 1,003 extra cut places, existing proofs settle 422 as external leaves, 288 as global terminals and 52 as steps; 241 remain cuts. No second binder, method whitelist, R6c policy change or schema change is introduced. C2 is unchanged. RFC-0013 records the corrected top-30 breakdown and 17/17 differential.
+
+Correction verification: final foreground `npm run check` exited 0 with typecheck, architecture and all 3,663 tests passing. Public S2 repros remain cuts; C2 render order and alias decision are unchanged.
+
+
+Exact-owner correction after review of `05318a8c`: names and line numbers cannot assign execution ownership. The unique innermost exact source span is now shared as `owningBodyAt` in `domain/shared/source-span.ts`; equal/overlapping ownership stays unproven. Existing declaration columns are transported through the graph port without a schema change. Indexed calls and unresolved references reconcile to a unique site in that body before existing origin settlement. A line-only ambiguous join is a cut, never a step. Exact invocation starts and exact spelling take precedence over statement anchors and final callee names. Both TS and Java readers supply the spans/anchors; no new binder or receiver whitelist is added.
+
+The public same-line repro was RED, then GREEN; the class/nested/arrow/tag/optional/Unicode table checks empty and active bodies. Type-correct owner and ambiguous-join mutations were caught. Final 92 probes, excluding ThingsBoard: baseline/corrected steps 9,027/9,094, cuts 4,742/5,055, expansions 5,125/5,142, complete 3/3; all exit 0. Differential 17/17 identical in stdout/stderr/exit code. Final foreground Node v24.22.2 `npm run check` exited 0, all 3,666 tests pass with typecheck and architecture. RFC-0013 records per-corpus measurements and evidence paths. Staging rules version 10 invalidates adapter-derived caches; SCHEMA is unchanged. C2 is unchanged.
+
+
+Deferred-execution follow-up, aligned with slice 4 `74dec88e`: exact containment proves lexical ownership, not execution. The existing function-value readers export `isFunctionValueNode`; syntax readers expose one `functionValues` range source with the same nested start/end shape as effects. Shared `executesInBody`, next to `owningBodyAt`, excludes contents of unindexed function values from the outer body's missing-call and pending-reference settlement. The walk proves no run of such a value, including an IIFE; an index-declared value that the walk expands retains its own calls. The existing edge to the consumer remains. Resolved direct-step advisories at base are unchanged. The public ignored-callback repro was RED and the TS/Java scope table is GREEN. RFC-0013 records final mutation evidence and measurements.
+
+
+Main integration (`273871bd`, then test pruning `2f3569b8`) retires the separate owningBodyAt: calls and effects share main's owningBody/comparePositions, one declarationSpan conversion and executesInBody in domain/trace/owning-body.ts. Both consume the required functionValues source and existing isFunctionValueNode predicates. Lexical scope membership distinguishes a value's contents from the invocation wrapping that value; no IIFE execution inference is added. Staging version11 invalidates the combined adapter, with no additional public/stored schema bump. Four merged mutants typecheck0/test1; focused integration19 pass. Final paired92 probes against main2f3569b8: steps9088→9043, cuts4839→4235, complete3→4, expansions5211→5170; all exit0 at identical input SHAs. Differential17/17 byte-identical. The scope rule removes0/7 sampled noisy cuts; no separate precision patch. RFC-0013 records per-corpus counts, evidence and the final check result. C2 and main's pruned tests remain unchanged.
+
+
+Final merged closure check: Node v24.22.2 foreground `npm run check` exited 0; typecheck, architecture and all 3,699 tests pass (0 failed/cancelled/skipped). Own diff passes global/repo cleanup and whitespace checks. The final source is shared with main; no further implementation change followed verification.
+
+
+Owner correction after c6003d08 rejection: only additional syntactic inventory excludes unindexed function values. The indexed walk's callback contents are handled exactly as on main, preserving original edges/references before reconciliation rather than discarding pending obligations. This supersedes the earlier missing-call/pending-reference exclusion statement above; effects remain unchanged. Public cb/forEach and subscribe forEach/filter repros were RED then GREEN, and dropping retained references is caught by a type-correct mutation. Fresh paired92: steps9088→9161, cuts4839→5133, complete3→3; zero complete-status changes. Shopizer probe58 remains partial with both original cuts exactly equal. Differential17/17 identical. RFC-0013 records evidence and final verification.
+
+Final bounded-round verification: Node v24.22.2 foreground `npm run check` exited0; typecheck, architecture and all3,700 tests pass, none failed/cancelled/skipped. Global/repo cleanup reviewed only this correction and reused existing range/settlement components; no other production rule changed. `git diff --check` passes. No source implementation changed after this check.

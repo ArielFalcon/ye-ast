@@ -1,3 +1,5 @@
+import { declarationSpan, executesInBody, owningBody } from "../../domain/trace/owning-body.ts";
+import { callsByOwner, matchOwnedCall, positionedBodies, type OwnedCall } from "./syntax-calls.ts";
 import { isSeedable } from "../../domain/change/seeds.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { CALL_EDGE_KINDS, FIELD_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
@@ -39,11 +41,11 @@ const VALUE_KINDS: readonly string[] = ["constant", "variable"];
 const CLASS_KINDS: readonly string[] = ["class", "component"];
 
 /** What a trace can start from: what an impact walk seeds, or a property or field whose initializer makes calls. */
-export function isTraceRoot(store: CodeGraphReader, unresolvedIn: UnresolvedIn): (symbol: GraphSymbol) => boolean {
+export function isTraceRoot(store: CodeGraphReader, unresolvedIn: UnresolvedIn, syntaxCalls: ReadonlySet<GraphNodeId> = new Set()): (symbol: GraphSymbol) => boolean {
   return (symbol) =>
     isSeedable(symbol) ||
     ((FIELD_KINDS as readonly string[]).includes(symbol.kind) &&
-      (callEdgesOf(store, symbol).length > 0 || unresolvedIn(symbol.file).some((reference) => reference.from === symbol.id && CALL_EDGE_KINDS.includes(reference.kind))));
+      (syntaxCalls.has(symbol.id) || callEdgesOf(store, symbol).length > 0 || unresolvedIn(symbol.file).some((reference) => reference.from === symbol.id && CALL_EDGE_KINDS.includes(reference.kind))));
 }
 
 function callEdgesOf(store: CodeGraphReader, symbol: GraphSymbol) {
@@ -82,7 +84,9 @@ export interface TraceWalkInput {
 export interface PagePlan {
   /** The members the framework calls itself, in the order it calls them. */
   lifecycle: readonly string[];
-  /** What its template's event bindings call, in template text order: an own method by name, or the method a proof names. */
+  /** What template rendering calls, in template text order. */
+  render?: PagePlan["handlers"];
+  /** What event bindings call, in template text order: an own method or the method a proof names. */
   handlers: readonly ({ file: string; line: number; column: number } & ({ member: string } | { runs: GraphSymbol }))[];
   /** The declarations its template uses, in template order. */
   children: readonly GraphSymbol[];
@@ -249,7 +253,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     return paths.some((written) => (path.length > 0 && covers(written, path, root.open)) || onPrototype(written));
   };
   /** The receiver binding the call's own source proves at the place the call starts, for the member and receiver it spells. */
-  const boundAt = async (reference: GraphUnresolvedReference, member: string, receiver = receiverOf(reference.name)): Promise<ReceiverBinding["holds"] | undefined> => {
+  const boundAt = async (reference: GraphUnresolvedReference, member: string, receiver = receiverOf(reference.name) ?? ""): Promise<ReceiverBinding["holds"] | undefined> => {
     const binding = (await syntaxIndexOf(reference.file)).receiverBindings.get(bindingKey(reference.line, reference.column + 1, member));
     return binding !== undefined && binding !== "ambiguous" && binding.receiver === receiver ? binding.holds : undefined;
   };
@@ -379,11 +383,20 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   });
 
   /** The members of a class root that run code, by their declaration: methods, and properties or fields whose initializer makes calls. */
-  const membersOf = (node: GraphSymbol): Child[] => {
+  const syntaxCallsIn = memoizedBy((file: string) => file, async (file) => {
+    const syntax = await syntaxOf(file);
+    return callsByOwner(syntax.calls ?? [], store.symbolsInFiles([file]), syntax.functionValues);
+  });
+
+  const indexedBodiesIn = memoizedBy((file: string) => file, async (file) =>
+    positionedBodies(store.symbolsInFiles([file]), (await syntaxOf(file)).calls ?? []).map((body) => ({ ...body, ...declarationSpan(body) })));
+
+  const membersOf = async (node: GraphSymbol): Promise<Child[]> => {
     if (!CLASS_KINDS.includes(node.kind)) return [];
+    const syntax = await syntaxCallsIn(node.file);
     return navigation
       .membersOf(node)
-      .filter((member) => member.kind === "method" || ((FIELD_KINDS as readonly string[]).includes(member.kind) && (callEdgesOf(store, member).length > 0 || callsFrom(member).length > 0)))
+      .filter((member) => member.kind === "method" || ((FIELD_KINDS as readonly string[]).includes(member.kind) && (syntax.get(member.id)?.some((call) => !call.deferred) || callEdgesOf(store, member).length > 0 || callsFrom(member).length > 0)))
       .map((member) => childAt(member, member.startLine, null, member.name, "member"));
   };
 
@@ -422,13 +435,43 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   async function bodyOf(node: GraphSymbol, root: boolean): Promise<Body> {
     const calls = callEdgesOf(store, node);
     const values = store.outgoingEdges([node.id], ["references"]);
-    const called = uses.followed(node, calls);
+    const syntax = await syntaxOf(node.file);
+    const owned = (await syntaxCallsIn(node.file)).get(node.id) ?? [];
+    const accounted = new Set<OwnedCall>();
+    const unplaced: GraphUnresolvedReference[] = [];
+    const indexedBodies = await indexedBodiesIn(node.file);
+    const reconciled = (line: number | null, column: number | null, name: string): boolean => {
+      if (syntax.calls === undefined) return false;
+      const site = matchOwnedCall(owned, line, column, name);
+      return site !== undefined ? site.deferred !== true : line === null || column === null || executesInBody(declarationSpan(node), syntax.functionValues, { line, column });
+    };
+    const accountedSite = (line: number | null, column: number | null, name: string): OwnedCall | undefined => {
+      const owner = line === null || column === null || !Number.isFinite(column) ? undefined : owningBody(indexedBodies, { line, column });
+      const site = owner !== undefined && owner.id !== node.id ? undefined : matchOwnedCall(owned, line, column, name);
+      if (site !== undefined) accounted.add(site);
+      return site;
+    };
+    const called = uses.followed(node, calls).flatMap((followed) => {
+      if (!reconciled(followed.edge.line, followed.edge.column, followed.target.name)) return [followed];
+      const site = accountedSite(followed.edge.line, followed.edge.column, followed.target.name);
+      if (site === undefined) {
+        unplaced.push({ from: node.id, file: node.file, line: followed.edge.line ?? node.startLine, column: followed.edge.column ?? 0, name: followed.target.name, kind: followed.edge.kind, candidates: [] });
+        return [];
+      }
+      return [{ ...followed, edge: { ...followed.edge, line: site.line, column: site.column - 1 } }];
+    });
+    const indexed = callsFrom(node).flatMap((reference) => {
+      if (!reconciled(reference.line, reference.column, reference.name)) return [reference];
+      const site = accountedSite(reference.line, reference.column, reference.name);
+      if (site === undefined) { unplaced.push(reference); return []; }
+      return [{ ...reference, line: site.line, column: site.column - 1 }];
+    });
     const passed = uses.followed(node, values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));
     const verdicts = await targets.verdictsOf([...called, ...passed], signal);
     const valueRoots = await valueReceivers(node, [...called, ...passed], verdicts);
     const external: ExternalCall[] = [];
-    const children: Child[] = root ? membersOf(node) : [];
-    const cuts: Cut[] = [];
+    const children: Child[] = root ? await membersOf(node) : [];
+    const cuts: Cut[] = unplaced.map((reference) => unresolvedAt(reference, []));
     /** An external call is a leaf only while the repository writes nothing over what it names; otherwise `replaced` decides. */
     const leafUnlessReplaced = async (call: ExternalCall, root: LeafRoot, replaced: () => unknown): Promise<void> => {
       if (await isReplaced(root)) await replaced();
@@ -505,7 +548,14 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       } else if (bound !== undefined) await settleBound(reference, target.name, named, bound);
       else cuts.push(unresolvedAt(reference, named));
     }
-    for (const reference of unsettledBy(callsFrom(node), called)) {
+    const missing: GraphUnresolvedReference[] = [];
+    for (const call of owned) {
+      if (accounted.has(call) || call.deferred) continue;
+      const reference = { from: node.id, file: node.file, line: call.line, column: call.column - 1, name: call.name, kind: call.kind, candidates: [] };
+      if (call.ambiguous) cuts.push(unresolvedAt(reference, []));
+      else missing.push(reference);
+    }
+    for (const reference of unsettledBy([...indexed, ...missing], called)) {
       const own = ownMemberOf(reference.name);
       const members = own === undefined ? [] : uses.ownMembers(node, own, ["method"]);
       if (members.length === 1) children.push(childAt(members[0]!, reference.line, reference.column, reference.name, "own-member"));
@@ -692,18 +742,18 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
 
 /**
  * A page's children in the order it runs them (R9): its constructor, its field initializers and what its class body
- * calls, in source order; its lifecycle hooks in the framework's order; the handlers its template binds to events, in
+ * calls, in source order; its lifecycle hooks in the framework's order; render calls then event handlers, each in
  * template order; the declarations its template uses; then its other members, in source order. A handler the class
  * runs no member of is a cut at the binding.
  */
 function pageOrder(children: readonly Child[], plan: PagePlan, cuts: Cut[]): Child[] {
-  const handlerRank = new Map<string, number>();
+  const handlerRank = new Map<string, readonly [number, number]>();
   const runs: { child: Child; rank: readonly [number, number] }[] = [];
   const members = new Set(children.filter(({ via }) => via === "member").map(({ symbol }) => symbol.name));
-  for (const [index, handler] of plan.handlers.entries()) {
-    if ("runs" in handler) runs.push({ child: { symbol: handler.runs, place: { line: null, column: null, spelling: handler.runs.name, target: handler.runs.id }, via: "template" }, rank: [2, index] });
+  for (const [phase, calls] of [[2, plan.render ?? []], [3, plan.handlers]] as const) for (const [index, handler] of calls.entries()) {
+    if ("runs" in handler) runs.push({ child: { symbol: handler.runs, place: { line: null, column: null, spelling: handler.runs.name, target: handler.runs.id }, via: "template" }, rank: [phase, index] });
     else if (!members.has(handler.member)) cuts.push({ kind: "unresolved-link", at: [placeAt(handler.file, handler.line, handler.member)] });
-    else if (!handlerRank.has(handler.member)) handlerRank.set(handler.member, index);
+    else if (!handlerRank.has(handler.member)) handlerRank.set(handler.member, [phase, index]);
   }
   cuts.push(...plan.cuts);
   const rankOf = ({ symbol, via, place }: Child): readonly [number, number] => {
@@ -712,10 +762,10 @@ function pageOrder(children: readonly Child[], plan: PagePlan, cuts: Cut[]): Chi
     const hook = plan.lifecycle.indexOf(symbol.name);
     if (hook >= 0) return [1, hook];
     const handler = handlerRank.get(symbol.name);
-    return handler === undefined ? [4, line] : [2, handler];
+    return handler ?? [5, line];
   };
   const ranked = children.map((child) => ({ child, rank: rankOf(child) }));
-  const used = plan.children.map((symbol, index) => ({ child: { symbol, place: { line: null, column: null, spelling: symbol.name, target: symbol.id }, via: "template" as const }, rank: [3, index] as const }));
+  const used = plan.children.map((symbol, index) => ({ child: { symbol, place: { line: null, column: null, spelling: symbol.name, target: symbol.id }, via: "template" as const }, rank: [4, index] as const }));
   return [...ranked, ...runs, ...used].sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1]).map(({ child }) => child);
 }
 

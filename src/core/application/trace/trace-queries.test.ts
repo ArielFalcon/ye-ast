@@ -10,7 +10,7 @@ import type { CallSite, PlacedCallSite } from "../../domain/topology/call-site.t
 import type { SourceSpan } from "../../domain/trace/owning-body.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
-import type { DeclaredCallable, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredCallable, ReceiverBinding, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import type { RelationExtraction } from "../relations/relation-extractor.ts";
 import { createTraceQueries, type TraceQueriesDeps } from "./trace-queries.ts";
 
@@ -24,6 +24,7 @@ type Origin = Finding<ImportOrigin> & { occurrence?: true };
 const written = (...paths: string[][]): ReplacedRoots => ({ paths, globalObjects: new Set(["globalThis", "window"]), packages: new Set() });
 
 interface Options {
+  syntaxCalls?: Readonly<Record<string, readonly SyntaxCall[]>>;
   nodes: readonly FakeNode[];
   edges?: readonly FakeEdge[];
   unresolved?: readonly FakeUnresolved[];
@@ -110,7 +111,7 @@ function setup(options: Options) {
       open: () => ({ ok: true, value: store }),
     },
     sourceTrivia: { triviaLines: async (file: { path: string }) => (options.onTrivia?.(file.path), new Set(options.trivia?.[file.path] ?? [])) },
-    memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: options.callables?.[file.path] ?? [], receiverBindings: options.receiverBindings?.[file.path] ?? [], functionValues: options.functionValues?.[file.path] ?? [] }) },
+    memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: options.callables?.[file.path] ?? [], receiverBindings: options.receiverBindings?.[file.path] ?? [], ...(options.syntaxCalls?.[file.path] === undefined ? {} : { calls: options.syntaxCalls[file.path] }), functionValues: options.functionValues?.[file.path] ?? [] }) },
     importOrigins: () => ({
       replacedRoots: async () => options.replaced ?? written(),
       rootBindings: async (sites: readonly UseSite[]) => sites.map((site) => options.receiverRoots?.[site.spelled] ?? { kind: "unknown" }),
@@ -1289,5 +1290,23 @@ test("each function-value shape keeps its call sites from the body around it unl
     const fact = await factOf({ roots: MATH, sources: HELD_A, ...options, edges: [member, ...(options.edges ?? [])], unresolved: [globalCall("run", 7, 21), ...(options.unresolved ?? [])] }, [{ file: A, symbol: "run" }]);
     assert.deepEqual(effectPaths(fact), effects, shape);
     assert.deepEqual(effectCuts(fact).map(([, at]) => (at as readonly string[])[0]), cuts, shape);
+  }
+});
+
+test("line-only call records settle only a unique site in their own body", async () => {
+  const nodes = [
+    { ...fakeNode("run", "function", A, 1), startColumn: 0, endColumn: 80 },
+    { ...fakeNode("target", "function", B, 5), startColumn: 0, endColumn: 30 },
+  ];
+  const first: SyntaxCall = { kind: "calls", line: 1, column: 10, name: "target", callee: "target", owners: [] };
+  for (const sites of [[first], [first, { ...first, column: 30 }]]) {
+    const fact = await factOf({ nodes, sources: [{ path: A, content: "run" }, { path: B, content: "target" }], edges: [{ from: "run", to: "target", kind: "calls", line: 1 }], syntaxCalls: { [A]: sites } });
+    const leaves = valueOf(fact).steps.flatMap((step) => step.leaves ?? []).map((leaf) => leaf.symbol);
+    if (sites.length === 1) assert.deepEqual(leaves, ["target"]);
+    else {
+      assert.equal(fact.status, "partial");
+      assert.deepEqual(leaves, []);
+      assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["run"]);
+    }
   }
 });

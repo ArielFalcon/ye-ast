@@ -2,8 +2,10 @@ import { ANGULAR_LIFECYCLE_HOOKS } from "../../domain/relations/angular-class.ts
 import { placeAt } from "../../domain/impact/impact-cuts.ts";
 import { joinsFact } from "../../domain/shared/code-node.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
+import { comparePositions } from "../../domain/trace/owning-body.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { RelationExtraction } from "../relations/relation-extractor.ts";
+import type { TemplateEventCall } from "../../ports/template-usage.port.ts";
 import type { PagePlan } from "./trace-walk.ts";
 
 const refKey = (ref: { path: string; symbol: string; line: number }): string => JSON.stringify([ref.path, ref.symbol, ref.line]);
@@ -13,8 +15,9 @@ const TEMPLATE_RELATIONS: readonly string[] = ["uses-component", "uses-directive
 
 /**
  * What a component runs as a page (RFC-0013 R9), from the relations: the framework's lifecycle hooks, what its template's
- * event bindings call, and the declarations its template uses, in template order. An event call is an own method, or a
- * method the relations prove the call runs (a field's, `store.save()`); any other is a cut at the binding, as are a
+ * render expressions and event bindings call, and the declarations its template uses, in template order. A template call
+ * is an own method, or a method the relations prove the call runs (a field's, `store.save()`); any other is a cut at the
+ * binding, as are a
  * template that cannot be read, a template item the relations could not place and a used declaration the index does not hold.
  * A class the relations know no template of has no plan.
  */
@@ -41,7 +44,7 @@ export function pagePlans(store: CodeGraphReader, relations: () => Promise<Pick<
       else cuts.push({ kind: "unresolved-link", at: [placeAt(at?.path ?? to.path, at?.line ?? to.line, to.symbol)] });
     }
     const proven = Map.groupBy((read.memberUses ?? []).filter((use) => use.template === true), ({ reference }) => placeKey(reference.file, reference.line, reference.column));
-    const eventCalls = template.eventCalls.flatMap((call): PagePlan["handlers"][number][] => {
+    const settledCalls = (calls: readonly TemplateEventCall[]) => calls.flatMap((call): PagePlan["handlers"][number][] => {
       const proofs = proven.get(placeKey(call.file, call.line, call.column)) ?? [];
       const runs = proofs.length === 1 && proofs[0]!.substitutes === undefined ? store.symbolsInFiles([proofs[0]!.member.path]).filter((symbol) => symbol.kind === "method" && joinsFact(symbol, proofs[0]!.member)) : [];
       if (runs.length === 1) return [{ file: call.file, line: call.line, column: call.column, runs: runs[0]! }];
@@ -50,7 +53,8 @@ export function pagePlans(store: CodeGraphReader, relations: () => Promise<Pick<
     });
     return {
       lifecycle: ANGULAR_LIFECYCLE_HOOKS,
-      handlers: [...template.handlers, ...eventCalls].sort((a, b) => a.line - b.line || a.column - b.column),
+      render: [...template.renderHandlers ?? [], ...settledCalls(template.renderCalls ?? [])].sort(comparePositions),
+      handlers: [...template.handlers, ...settledCalls(template.eventCalls)].sort(comparePositions),
       children: used.sort((a, b) => a.rank - b.rank || a.line - b.line).map(({ symbol }) => symbol),
       cuts,
     };

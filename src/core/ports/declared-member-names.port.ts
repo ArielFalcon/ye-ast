@@ -3,6 +3,8 @@ import type { SourceSpan } from "../domain/trace/owning-body.ts";
 
 /** The member names one source declares where a value can live, and its callable declarations, read from its syntax. */
 export interface DeclaredMemberNames {
+  /** Every syntactic call or construction, at its callee start (1-based UTF-16). */
+  calls?: readonly SyntaxCall[];
   /** Sorted, once each. */
   names: readonly string[];
   /** In source order. */
@@ -99,4 +101,16 @@ export interface DeclaredCallable {
 export interface DeclaredMemberNamesReader {
   /** A source of a language the reader does not parse, or one the parser rejects, declares none. */
   memberNames(file: SourceFile): Promise<DeclaredMemberNames>;
+}
+
+/** A written call and the enclosing declarations that can own its execution, outermost first. */
+export interface SyntaxCall {
+  kind: "calls" | "instantiates";
+  line: number;
+  column: number;
+  name: string;
+  callee?: string;
+  /** Exact source anchors used by indexers for the same invocation expression or statement. */
+  anchors?: readonly { line: number; column: number }[];
+  owners: readonly { name: string; start: number; nameLine: number; nameColumn: number; startColumn: number; endLine: number; endColumn: number }[];
 }

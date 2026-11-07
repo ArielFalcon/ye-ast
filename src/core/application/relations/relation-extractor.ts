@@ -27,7 +27,7 @@ export interface RelationExtraction {
   locals: readonly LocalOrigin[];
   memberUses?: readonly MemberUseOrigin[];
   externalUses?: readonly ExternalMemberUseOrigin[];
-  /** Per component, in class order: the own methods its template's event bindings call, or where its template cannot be read. */
+  /** Per component, in class order: the calls its template's render expressions and event bindings make, or where its template cannot be read. */
   templates?: readonly ComponentTemplate[];
 }
 
@@ -35,6 +35,8 @@ export interface ComponentTemplate {
   component: SymbolRef;
   /** The lines the template text spans, where its relations and handlers are placed; absent when it was not read. */
   lines?: { path: string; start: number; end: number };
+  renderHandlers?: readonly TemplateHandlerCall[];
+  renderCalls?: readonly TemplateEventCall[];
   handlers: readonly TemplateHandlerCall[];
   eventCalls: readonly TemplateEventCall[];
   /** The declarations the template uses, in the order they first appear in its text. */

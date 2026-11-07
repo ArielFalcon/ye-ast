@@ -2,7 +2,7 @@ import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
 import type { PlacedCallSite } from "../../domain/topology/call-site.ts";
 import { effectOf, unplacedEffect } from "../../domain/trace/trace-effects.ts";
-import { comparePositions, containsPosition, owningBody, type SourcePosition, type SourceSpan } from "../../domain/trace/owning-body.ts";
+import { declarationSpan, executesInBody, owningBody, type SourceSpan } from "../../domain/trace/owning-body.ts";
 import type { WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { CodeGraphReader, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { UnresolvedIn } from "../navigation/declaration-uses.ts";
@@ -43,7 +43,7 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
   const cuts: Cut[] = [];
   const byFile = Map.groupBy((await sites()).filter(({ site }) => files.has(site.file)), ({ site }) => site.file);
   for (const [file, inFile] of byFile) {
-    const bodies: Body[] = store.symbolsInFiles([file]).filter((symbol) => !NOT_DECLARED_KINDS.includes(symbol.kind)).map((symbol) => ({ symbol, start: { line: symbol.startLine, column: symbol.startColumn }, end: { line: symbol.endLine, column: symbol.endColumn } }));
+    const bodies: Body[] = store.symbolsInFiles([file]).filter((symbol) => !NOT_DECLARED_KINDS.includes(symbol.kind)).map((symbol) => ({ symbol, ...declarationSpan(symbol) }));
     const values = await functionValuesOf(file);
     const lines = new Map<GraphNodeId, ReadonlySet<number>>();
     const callLinesOf = (symbol: GraphSymbol) => lines.get(symbol.id) ?? lines.set(symbol.id, callLines(store, unresolvedIn, symbol)).get(symbol.id)!;
@@ -59,7 +59,7 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
       const owner = owningBody(bodies, at);
       const step = owner === undefined ? undefined : expanded.get(owner.symbol.id);
       if (owner === undefined || step === undefined) continue;
-      if (placed.declaration !== true && (!callLinesOf(owner.symbol).has(site.line) || insideUnrunValue(values, owner, at))) {
+      if (placed.declaration !== true && (!callLinesOf(owner.symbol).has(site.line) || (values === undefined || !executesInBody(owner, values, at)))) {
         markCut(step, unplacedEffect(site), cuts);
         continue;
       }
@@ -69,15 +69,6 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
     }
   }
   return cuts;
-}
-
-/**
- * Whether `at` lies inside a function value the owner's body holds without the index declaring it, a value whose run
- * the walk never proves. A value that holds the owner whole is the owner itself or a value around it. Without the
- * source (`values` undefined) every place counts as inside one.
- */
-function insideUnrunValue(values: readonly SourceSpan[] | undefined, owner: SourceSpan, at: SourcePosition): boolean {
-  return values === undefined || values.some((value) => containsPosition(value, at) && !(containsPosition(value, owner.start) && comparePositions(owner.end, value.end) <= 0));
 }
 
 /**

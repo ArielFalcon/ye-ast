@@ -1585,12 +1585,12 @@ test("a trace over a real index never follows an edge whose name a package binds
 
   const [make, pass, real] = await Promise.all([walk("make", "src/uses-package.ts"), walk("pass", "src/uses-package.ts"), walk("real", "src/uses-repo.ts")]);
 
-  const shape = (answer: typeof make) => {
-    assert.ok(answer.ok && answer.value.status === "complete", JSON.stringify(answer));
+  const shape = (answer: typeof make, status: "complete" | "partial" = "complete") => {
+    assert.ok(answer.ok && answer.value.status === status, JSON.stringify(answer));
     return answer.value.value.steps.map(({ symbol, leaves, external }) => ({ symbol, leaves: leaves?.map((leaf) => leaf.file), external }));
   };
   assert.deepEqual(shape(make), [{ symbol: "make", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["Base"] }] }]);
-  assert.deepEqual(shape(pass), [{ symbol: "pass", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["evaluate"] }] }]);
+  assert.deepEqual(shape(pass), [{ symbol: "pass", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["evaluate"] }, { kind: "global", names: ["[1].map"] }] }]);
   assert.deepEqual(shape(real), [{ symbol: "real", leaves: ["src/model.ts", "src/model.ts"], external: undefined }]);
 });
 
@@ -1815,4 +1815,166 @@ test("a trace over a real index keeps a call to a Java record accessor a cut, an
   assert.ok(answer.ok && answer.value.status === "partial");
   assert.equal(answer.value.value.steps[0]?.external, undefined);
   assert.deepEqual(answer.value.cuts.map((entry) => entry.at), [["src/Shapes.java:7 p.coordinate", "src/Point.java::coordinate"]]);
+});
+
+test("trace accounts for every syntactic call even when the index omits its receiver shape", async () => {
+  const shapes = ["(p ? p : p).save()", "[p][0].save()", "(0, p).save()", "p[key]()", "p.save()", "p?.save()", "p[key]`value`"];
+  for (const [index, shape] of shapes.entries()) {
+    const file = `src/inventory${index}.ts`;
+    writeFileSync(join(repo, file), `interface Port { save(): void; [key: string]: () => void }
+export function run(p: Port, key: string) { ${shape}; }
+export class Page { p!: Port; key!: string; field = ${shape.replaceAll("p", "this.p").replaceAll("key", "this.key")}; }`);
+  }
+  const javaShapes = ["(p == null ? p : p).save()", "new Port[]{p}[0].save()", "p.save()"];
+  for (const [index, shape] of javaShapes.entries()) {
+    writeFileSync(join(repo, `src/Inventory${index}.java`), `interface Port { void save(); }
+class Inventory${index} { void run(Port p) { ${shape}; } }`);
+  }
+  writeFileSync(join(repo, "src/InventoryConstructor.java"), [
+    "class InventoryConstructor {",
+    "  InventoryConstructor() {",
+    "    this(1);",
+    "  }",
+    "  InventoryConstructor(int value) {}",
+    "}",
+  ].join("\n"));
+  git("add", ".");
+  git("commit", "-qm", "call inventory");
+  const { trace } = composeQueries({ scratchRoot });
+  for (const index of shapes.keys()) {
+    const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: `src/inventory${index}.ts`, symbol: "run" }] });
+    assert.ok(answer.ok);
+    assert.equal(answer.value.status, "partial", shapes[index]);
+    if (index < 3) assert.ok(answer.value.cuts.some((cut) => cut.at[0] === `src/inventory${index}.ts:2 ${shapes[index]!.slice(0, -2)}`));
+    for (const symbol of ["Page", "Page.field"]) {
+      const field = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: `src/inventory${index}.ts`, symbol }] });
+      assert.ok(field.ok && field.value.status === "partial", JSON.stringify(field));
+    }
+  }
+  for (const index of javaShapes.keys()) {
+    const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: `src/Inventory${index}.java`, symbol: `Inventory${index}.run` }] });
+    assert.ok(answer.ok);
+    assert.equal(answer.value.status, "partial", javaShapes[index]);
+  }
+  const constructor = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/InventoryConstructor.java", symbol: "InventoryConstructor" }] });
+  assert.ok(constructor.ok && constructor.value.status === "partial");
+  assert.ok(constructor.value.cuts.some((cut) => cut.at[0] === "src/InventoryConstructor.java:3 this"));
+});
+
+test("a page orders render calls before event handlers and cuts every unbound template call", async () => {
+  writeFileSync(join(repo, "package.json"), JSON.stringify({ dependencies: { "@angular/core": "22.0.0", "@angular/router": "22.0.0" } }));
+  writeFileSync(join(repo, "src/page.ts"), [
+    "import { Component } from '@angular/core';",
+    "@Component({ selector: 'app-page', standalone: true, templateUrl: './page.html' })",
+    "export class Page {",
+    "  clicked() { unresolved(); }",
+    "  label() { unresolved(); }",
+    "  total() { unresolved(); }",
+    "}",
+  ].join("\n"));
+  writeFileSync(join(repo, "src/page.html"), '<div [title]="total()">{{ label() }}</div>\n{{ value.invoke() }} {{ missing() }}\n<button (click)="clicked()">Go</button>');
+  writeFileSync(join(repo, "src/routes.ts"), "import { Routes } from '@angular/router'; import { Page } from './page'; export const routes: Routes = [{ path: 'p', component: Page }];");
+  writeFileSync(join(repo, "src/main.ts"), "import { provideRouter } from '@angular/router'; import { routes } from './routes'; provideRouter(routes);");
+  git("add", "-A");
+  git("commit", "-qm", "render calls");
+  const { trace } = composeQueries({ scratchRoot });
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ kind: "ui-route", name: "/p" }] });
+  assert.ok(answer.ok && answer.value.status === "partial", JSON.stringify(answer));
+  assert.deepEqual(answer.value.value.steps.filter((step) => ["total", "label", "clicked"].includes(step.symbol)).map((step) => step.symbol), ["total", "label", "clicked"]);
+  assert.ok(answer.value.cuts.some((cut) => cut.at[0] === "src/page.html:2 missing"));
+  assert.ok(answer.value.cuts.some((cut) => cut.at[0] === "src/page.html:2 value.invoke"));
+});
+
+test("missing syntax calls use the same import, ambient, receiver and repository settlement as indexed pending calls", async () => {
+  writeFileSync(join(repo, "package.json"), JSON.stringify({ dependencies: { "@angular/core": "22.0.0" } }));
+  writeFileSync(join(repo, "src/settlement.ts"), [
+    "import { Injectable, computed } from '@angular/core';",
+    "@Injectable()",
+    "export class Settled {",
+    "  value = computed(() => [1].map(x => x));",
+    "  run() { [1].map(x => x); return new Set([1]); }",
+    "}",
+    "export function unknown(x: any) { return x.map(); }",
+    "declare function register(value: unknown): void; register({ map: 1 });",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-qm", "settlement");
+  const { trace } = composeQueries({ scratchRoot });
+  const settled = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/settlement.ts", symbol: "Settled" }] });
+  assert.ok(settled.ok && settled.value.status === "complete", JSON.stringify(settled));
+  assert.deepEqual(settled.value.value.steps.flatMap((step) => step.external ?? []).filter((leaf) => leaf.kind === "import" && leaf.module === "@angular/core").flatMap((leaf) => leaf.names).sort(), ["Injectable", "computed"]);
+  assert.ok(settled.value.value.steps.flatMap((step) => step.external ?? []).some((leaf) => leaf.kind === "global" && leaf.names.includes("[1].map")));
+  const unknown = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/settlement.ts", symbol: "unknown" }] });
+  assert.ok(unknown.ok && unknown.value.status === "partial");
+  assert.ok(unknown.value.cuts.some((cut) => cut.at[0] === "src/settlement.ts:7 x.map"));
+});
+
+test("same-line body ownership preserves class, nested, arrow, tagged and optional call boundaries", async () => {
+  const cases = [
+    ['classes', 'export class A { run(){ this.foo(); } foo(){ aOnly(); } } export class B { run(){} foo(){ bOnly(); } }', 'B.run', 'A.run'],
+    ['nested', 'export function first(){ function run(){ aOnly(); } } export function second(){ function run(){} }', 'second.run', 'first.run'],
+    ['arrows', 'export class A { run = () => { this.foo(); }; foo(){ aOnly(); } } export class B { run = () => {}; foo(){ bOnly(); } }', 'B.run', 'A.run'],
+    ['tags', 'export class A { run(){ this.foo`x`; } foo(){ aOnly(); } } export class B { run(){} foo(){ bOnly(); } }', 'B.run', 'A.run'],
+    ['unicode', 'const marker = "💠💠💠💠💠💠💠💠💠💠"; export class A { run(){ this.foo`x`; } foo(){ aOnly(); } } export class B { run(){} foo(){ bOnly(); } }', 'B.run', 'A.run'],
+    ['optional', 'export class A { run(){ this.foo?.(); } foo(){ aOnly(); } } export class B { run(){} foo(){ bOnly(); } }', 'B.run', 'A.run'],
+  ];
+  for (const [name, source] of cases) writeFileSync(join(repo, `src/${name}.ts`), source!);
+  git('add', '-A'); git('commit', '-qm', 'body boundaries');
+  const { trace } = composeQueries({ scratchRoot });
+  for (const [name, , symbol, active] of cases) {
+    const answer = await trace.walk({ repo, repoId: 'same', revision: 'HEAD', targets: [{ file: `src/${name}.ts`, symbol: symbol! }] });
+    assert.ok(answer.ok && answer.value.status === 'complete', `${name}: ${JSON.stringify(answer)}`);
+    assert.equal(answer.value.value.steps.length, 1, name);
+    assert.equal(answer.value.value.steps[0]?.external, undefined, name);
+    const present = await trace.walk({ repo, repoId: 'same', revision: 'HEAD', targets: [{ file: `src/${name}.ts`, symbol: active! }] });
+    assert.ok(present.ok && present.value.status === 'partial', `${name}: ${JSON.stringify(present)}`);
+    assert.ok(present.value.cuts.some((cut) => cut.at[0]?.includes(' aOnly')), `${name}: ${JSON.stringify(present)}`);
+    assert.ok(!present.value.cuts.some((cut) => cut.at[0]?.includes(' bOnly')), name);
+  }
+});
+
+test("an uninvoked function value contributes no inventoried calls to its enclosing body", async () => {
+  writeFileSync(join(repo, "src/deferred.ts"), 'function ignore(cb:()=>void){} export function entry(){ ignore(() => [1].map(x=>x)); }');
+  git("add", "-A"); git("commit", "-qm", "ignored callback");
+  const { trace } = composeQueries({ scratchRoot });
+  const answer = await trace.walk({ repo, repoId: "deferred", revision: "HEAD", targets: [{ file: "src/deferred.ts", symbol: "entry" }] });
+  assert.ok(answer.ok && answer.value.status === "complete", JSON.stringify(answer));
+  assert.deepEqual(answer.value.value.steps.flatMap((step) => step.external ?? []), []);
+  assert.deepEqual(answer.value.value.steps.flatMap((step) => step.leaves ?? []).map((leaf) => leaf.symbol), ["ignore"]);
+});
+
+test("inventory respects deferred values and preserves an index-declared function value the walk expands", async () => {
+  const rows = [
+    ["arrow", "ts", 'export function entry(){ const dead = () => [1].map(x=>x); }', "entry", false],
+    ["unknown", "ts", 'export function entry(){ unknown(() => [1].map(x=>x)); }', "entry", false],
+    ["expression", "ts", 'function ignore(cb:()=>void){} export function entry(){ ignore(function(){ [1].map(x=>x); }); }', "entry", false],
+    ["iife", "ts", 'export function entry(){ (() => [1].map(x=>x))(); }', "entry", false],
+    ["unary-iife", "ts", 'export function entry(){ void function(){ [1].map(x=>x); }(); }', "entry", false],
+    ["invoked", "ts", 'export function entry(){ const live = () => [1].map(x=>x); live(); }', "entry", true],
+  ] as const;
+  for (const [name, ext, source] of rows) writeFileSync(join(repo, `src/${name}.${ext}`), source);
+  git("add", "-A"); git("commit", "-qm", "function value boundaries");
+  const { trace } = composeQueries({ scratchRoot });
+  for (const [name, ext, , symbol, immediate] of rows) {
+    const answer = await trace.walk({ repo, repoId: "deferred", revision: "HEAD", targets: [{ file: `src/${name}.${ext}`, symbol }] });
+    assert.ok(answer.ok && answer.value.status !== "unknown", `${name}: ${JSON.stringify(answer)}`);
+    if (name.includes("iife")) assert.equal(answer.value.status, "partial", `${name}: ${JSON.stringify(answer)}`);
+    const names = answer.value.value.steps.flatMap((step) => step.external ?? []).flatMap((leaf) => leaf.names);
+    assert.equal(names.includes("[1].map"), immediate, name);
+  }
+});
+
+test("indexed callback obligations survive inventory exclusion", async () => {
+  const rows = [
+    ["each", "export function entry(cb: () => void) { [1].forEach(() => cb()); }", ["cb"]],
+    ["subscribe", "export function entry(obs: any, cb: () => void) { obs.subscribe((data: any) => { data.forEach(() => cb()); data.filter((x: any) => x); }); } declare function register(value: unknown): void; register({forEach: 1, filter: 1});", ["cb", "data.forEach", "data.filter"]],
+  ] as const;
+  for (const [name, source] of rows) writeFileSync(join(repo, `src/${name}.ts`), source);
+  git("add", "-A"); git("commit", "-qm", "callback obligations");
+  const { trace } = composeQueries({ scratchRoot });
+  for (const [name, , obligations] of rows) {
+    const answer = await trace.walk({ repo, repoId: "callbacks", revision: "HEAD", targets: [{ file: `src/${name}.ts`, symbol: "entry" }] });
+    assert.ok(answer.ok && answer.value.status === "partial", JSON.stringify(answer));
+    for (const obligation of obligations) assert.ok(answer.value.cuts.some((cut) => cut.at[0]?.endsWith(` ${obligation}`)), JSON.stringify(answer));
+  }
 });

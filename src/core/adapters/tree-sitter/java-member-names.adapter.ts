@@ -1,7 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
-import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, FunctionValueCall, ReceiverBinding, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import { isFunctionValueNode, javaFunctionValueCalls } from "./java-function-value-calls.ts";
 import type { SourceSpan } from "../../domain/trace/owning-body.ts";
 import { javaReceiverBindings } from "./java-receiver-bindings.ts";
@@ -31,13 +31,33 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
       if (!parsed.ok) return NONE;
       const names = new Set<string>();
       const callables: DeclaredCallable[] = [];
+      const calls: SyntaxCall[] = [];
+      const owners: SyntaxCall["owners"][number][] = [];
       const nameOf = (node: Node): void => {
         const name = node.childForFieldName("name");
         if (name !== null) names.add(name.text);
       };
       const functionValues: SourceSpan[] = [];
       const visit = (node: Node): void => {
-        if (isFunctionValueNode(node) || isAnonymousClassBody(node)) functionValues.push({ start: { line: node.startPosition.row + 1, column: node.startPosition.column }, end: { line: node.endPosition.row + 1, column: node.endPosition.column } });
+        const functionValue = isFunctionValueNode(node) || isAnonymousClassBody(node);
+        if (functionValue) functionValues.push({ start: { line: node.startPosition.row + 1, column: node.startPosition.column }, end: { line: node.endPosition.row + 1, column: node.endPosition.column } });
+        const ownerName = ["class_declaration", "interface_declaration", "enum_declaration", "record_declaration", "method_declaration", "constructor_declaration", "compact_constructor_declaration"].includes(node.type) || (node.type === "variable_declarator" && MEMBER_FIELDS.includes(node.parent?.type ?? "")) ? node.childForFieldName("name") : null;
+        const owns = ownerName !== null || functionValue;
+        if (owns) owners.push({ name: ownerName?.text ?? "", start: node.startPosition.row + 1, nameLine: (ownerName ?? node).startPosition.row + 1, nameColumn: (ownerName ?? node).startPosition.column, startColumn: node.startPosition.column, endLine: node.endPosition.row + 1, endColumn: node.endPosition.column });
+        if (node.type === "method_invocation" || node.type === "object_creation_expression" || node.type === "explicit_constructor_invocation") {
+          const argumentsNode = node.childForFieldName("arguments");
+          const type = node.childForFieldName("type");
+          const callee = node.childForFieldName("name")?.text ?? (type?.type === "generic_type" ? type.namedChildren[0]?.text : type?.text)?.split(".").at(-1);
+          const anchors = [];
+          let at: Node | null = node;
+          while (at !== null && !["method_declaration", "constructor_declaration", "class_body", "block", "lambda_expression"].includes(at.type)) {
+            anchors.push({ line: at.startPosition.row + 1, column: at.startPosition.column + 1 });
+            at = at.parent;
+          }
+          const named = node.childForFieldName("name") ?? type;
+          if (named !== null) anchors.push({ line: named.startPosition.row + 1, column: named.startPosition.column + 1 });
+          calls.push({ anchors, kind: node.type === "object_creation_expression" ? "instantiates" : "calls", ...(callee === undefined ? {} : { callee }), line: node.startPosition.row + 1, column: node.startPosition.column + 1, name: node.type === "object_creation_expression" ? node.childForFieldName("type")?.text ?? "new" : file.content.slice(node.startIndex, argumentsNode?.startIndex ?? node.endIndex).trim(), owners: [...owners] });
+        }
         if (node.type === "variable_declarator" ? MEMBER_FIELDS.includes(node.parent?.type ?? "") : NAMED.includes(node.type)) nameOf(node);
         if (node.type === "method_declaration") {
           const name = node.childForFieldName("name");
@@ -46,6 +66,7 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
         }
         if (node.type === "record_declaration") for (const component of node.childForFieldName("parameters")?.namedChildren ?? []) if (component?.type === "formal_parameter") nameOf(component);
         for (const child of node.namedChildren) if (child !== null) visit(child);
+        if (owns) owners.pop();
       };
       let functionValueCalls: FunctionValueCall[];
       let receiverBindings: ReceiverBinding[];
@@ -56,7 +77,7 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
       } finally {
         parsed.value.dispose();
       }
-      return { names: [...names].sort(compareText), functionValueCalls, callables, receiverBindings, functionValues };
+      return { names: [...names].sort(compareText), functionValueCalls, callables, receiverBindings, calls, functionValues };
     },
   };
 }
