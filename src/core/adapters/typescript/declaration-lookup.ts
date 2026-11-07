@@ -1,13 +1,10 @@
-import { ANONYMOUS_DEFAULT, type ModuleShape as FileModule } from "./module-shape.ts";
+import { ANONYMOUS_DEFAULT, type ModuleShape } from "./module-shape.ts";
 
 /** The declaration an exported name comes down to. */
 export interface Declaration {
   file: string;
   name: string;
 }
-
-/** What a file declares, imports and exports at its top level. */
-export type ModuleShape = Pick<FileModule, "exports" | "declared" | "imports" | "stars">;
 
 export type DeclarationLookup = (file: string, name: string, trail?: ReadonlySet<string>) => Promise<Declaration | undefined>;
 

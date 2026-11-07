@@ -1,13 +1,13 @@
 import type { Node } from "web-tree-sitter";
 import { descendants, isMember, localBindings, memberNodes, type Binding } from "./java-members.ts";
-import { externalNames, namedChildren, scopeOf, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { externalNames, isTypeDeclaration, namedChildren, scopeOf, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 export interface FieldLookup {
   fieldOf(type: TypeDecl, name: string): { binding: Binding; owner: TypeDecl } | undefined;
 }
 
 
 export const NO_VARIABLES: ReadonlyMap<string, Binding> = new Map();
-const DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration", "interface_declaration", "enum_declaration", "record_declaration", "annotation_type_declaration", "method_declaration", "constructor_declaration", "compact_constructor_declaration"]);
+const CALLABLE_DECLARATIONS: ReadonlySet<string> = new Set(["method_declaration", "constructor_declaration", "compact_constructor_declaration"]);
 
 /** One method call, with the type and member it is written in and the names that member declares. */
 export interface Invocation {
@@ -44,7 +44,7 @@ export function symbolOf({ type, member }: Invocation): string {
 export function ancestorsOf(node: Node): { symbol: string; line: number; endLine: number }[] {
   const ancestors: { symbol: string; line: number; endLine: number }[] = [];
   for (let current: Node | null = node; current !== null; current = current.parent) {
-    if (!DECLARATIONS.has(current.type)) continue;
+    if (!isTypeDeclaration(current) && !CALLABLE_DECLARATIONS.has(current.type)) continue;
     const name = current.childForFieldName("name")?.text;
     if (name !== undefined) ancestors.push({ symbol: name, line: current.startPosition.row + 1, endLine: current.endPosition.row + 1 });
   }

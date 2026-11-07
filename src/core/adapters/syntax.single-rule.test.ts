@@ -56,6 +56,20 @@ const RULES: readonly Rule[] = [
     pending: [],
   },
   {
+    concept: "whether a TypeScript node carries a modifier",
+    pattern: /\bgetModifiers\(/,
+    /* module-dependencies fingerprints every modifier of a declaration. */
+    owners: ["typescript/syntax.ts", "typescript/module-dependencies.adapter.ts"],
+    pending: [],
+  },
+  {
+    concept: "the value a TypeScript statement exports as default",
+    pattern: /SyntaxKind\.DefaultKeyword/,
+    /* module-dependencies fingerprints every modifier of a declaration; import-origins reads `export default interface`, a type. */
+    owners: ["typescript/import-bindings.ts", "typescript/module-dependencies.adapter.ts", "typescript/import-origins.adapter.ts"],
+    pending: [],
+  },
+  {
     concept: "whether a TypeScript file parsed without syntax errors",
     pattern: /\.parseDiagnostics\b/,
     owners: ["typescript/syntax.ts"],
@@ -73,6 +87,12 @@ const RULES: readonly Rule[] = [
     pattern: /enclosingBody\([^)]*\)\??\.parent/,
     owners: ["spring/java-project.ts"],
     pending: [],
+  },
+  {
+    concept: "the node kinds that declare a Java type",
+    pattern: /"(?:class|interface|enum|record|annotation_type)_declaration",\s*"(?:class|interface|enum|record|annotation_type)_declaration"/,
+    owners: ["spring/java-symbols.ts"],
+    pending: ["spring/java-declared-types.ts", "tree-sitter/java-member-names.adapter.ts"],
   },
 ];
 

@@ -1,7 +1,7 @@
 import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
-import { httpRouteName, type BasePath, type HttpMethod } from "../../domain/entrypoints/http-route.ts";
+import { httpRouteName, requestMethodOf, type BasePath, type HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
 import { isSpringConfigFile, resourcesOfSource } from "../../domain/languages/spring-config.ts";
 import { declarationSpan } from "../../domain/shared/fact.ts";
@@ -48,7 +48,6 @@ import {
 import { JavaValueEvaluator } from "./java-value-evaluator.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 
-const REQUEST_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"]);
 const ROUTER_FUNCTIONS: readonly string[] = [
   "org.springframework.web.reactive.function.server.RouterFunction",
   "org.springframework.web.servlet.function.RouterFunction",
@@ -461,7 +460,7 @@ function resolveMethods(mappings: readonly (Mapping | undefined)[]): Resolution<
   for (const mapping of mappings) {
     if (mapping === undefined) continue;
     if (mapping.verb !== undefined) values.add(mapping.verb);
-    const resolution = partition(mapping.attributes.get("method") ?? [], requestMethodOf);
+    const resolution = partition(mapping.attributes.get("method") ?? [], mappedMethod);
     resolution.values.forEach((value) => values.add(value));
     gaps.push(...resolution.gaps);
   }
@@ -469,9 +468,10 @@ function resolveMethods(mappings: readonly (Mapping | undefined)[]): Resolution<
   return { values: [...values], gaps };
 }
 
-function requestMethodOf(expr: Expr): Outcome<HttpMethod> {
+function mappedMethod(expr: Expr): Outcome<HttpMethod> {
   const name = expr.node.type === "identifier" || expr.node.type === "field_access" ? (expr.node.text.split(".").pop() ?? "") : "";
-  return REQUEST_METHODS.has(name) ? { value: name as HttpMethod } : { gap: "unresolved" };
+  const method = requestMethodOf(name);
+  return method === undefined ? { gap: "unresolved" } : { value: method };
 }
 
 function partition<T>(exprs: readonly Expr[], resolve: (expr: Expr) => Outcome<T>): Resolution<T> {

@@ -23,7 +23,7 @@ import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { EntrypointTarget, TraceFault, TraceQueries, TraceTarget, UnknownEntrypointFault } from "../../ports/trace-queries.port.ts";
 import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, triviaOncePerFile, type RootSelection } from "../navigation/root-selection.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
-import { createEdgeTargets } from "../navigation/edge-targets.ts";
+import { createEdgeTargets, NOTHING_DECLARED } from "../navigation/edge-targets.ts";
 import { retainedRelations } from "../relations/retained-relations.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps, type HeadReading } from "../snapshot/head-reading.ts";
@@ -116,7 +116,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
 
           const roots = [...new Map(selections.flatMap(({ selection }) => selection.seeds.map(({ symbol }): [GraphNodeId, GraphSymbol] => [symbol.id, symbol]))).values()].sort(comparePosition);
           const origins = deps.importOrigins(head.tree.sources, head.tree.export.files.map(({ path }) => path).filter(head.selected), head.prepared?.facts);
-          const edgeTargets = createEdgeTargets({ origins, store, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: head.tree.sources } });
+          const edgeTargets = createEdgeTargets({ origins, store, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: head.tree.sources }, syntaxOf });
           let proven: ReturnType<typeof retainedRelations> | undefined;
           const memberProofs = () => (proven ??= retainedRelations(deps.relations, head.prepared, head.tree, request));
           const pageRoots = new Set(selections.flatMap(({ target, selection }) => (isEntrypointTarget(target) ? selection.seeds.map(({ symbol }) => symbol.id) : [])));
@@ -226,7 +226,6 @@ function declarationsOncePerFile(reader: DeclaredMemberNamesReader): (file: Sour
   };
 }
 
-const NOTHING_DECLARED: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
 
 /** Each member name with the sources that declare it, sorted. */
 async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file: SourceFile) => Promise<DeclaredMemberNames>): Promise<ReadonlyMap<string, readonly string[]>> {

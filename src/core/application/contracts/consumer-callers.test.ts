@@ -3,6 +3,8 @@ import test from "node:test";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "../navigation/fake-code-graph.testing.ts";
 import { relation } from "../../domain/relations/relation.ts";
 import { createInboundEdges } from "../impact/inbound-edges.ts";
+import { edgeKey } from "../navigation/edge-targets.ts";
+import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
 import { callersOfFunction, occurrencesOfMember } from "./consumer-callers.ts";
 
 const FIND = { file: "src/owner.service.ts", symbol: "find", line: 8 };
@@ -67,6 +69,21 @@ test("every call occurrence of one caller is kept, so a weaker one beside a cert
   ]);
 });
 
+/** The inbound edges of `store` with every edge into `target` from `source` settled as a name match. */
+function settledAsNameMatch(store: CodeGraphReader, source: string, target: string) {
+  const [node] = store.symbolsByIds([target as never]);
+  const settled = new Map(store.incomingEdges([node!.id]).filter((edge) => edge.source === source).map((edge) => [edgeKey(edge), "name-match" as const]));
+  return createInboundEdges(store, () => false, [], [], [], undefined, undefined, new Set(), { dropped: new Set(), into: new Map(), settled });
+}
+
+test("a call settled as a name match is a caller that is not proven, at the heuristic confidence", () => {
+  const store = fakeCodeGraph([find(), fakeNode("load", "method", "src/page.ts", 20, 30, "load")], [{ from: "load", to: "find", kind: "calls", line: 25 }]);
+
+  const answer = callersOfFunction(store, settledAsNameMatch(store, "load", "find"), FIND);
+
+  assert.deepEqual(answer, { kind: "found", callers: [{ file: "src/page.ts", line: 20, at: 25, kind: "call", provenance: "heuristic", confidence: 0.3, proven: false }] });
+});
+
 const MEMBER = { file: "src/svc.ts", owner: "Svc", member: "items" };
 
 function occurrencesOf(nodes: FakeNode[], edges: FakeEdge[], member = MEMBER) {
@@ -104,6 +121,15 @@ test("a member read gets the receiver the graph resolved: this in the owner and 
       { file: "src/svc.ts", line: 11, column: 1, receiver: "this" },
     ],
   });
+});
+
+test("a member read settled as a name match has no receiver the graph resolved", () => {
+  const store = fakeCodeGraph(
+    [fakeNode("Svc", "class", "src/svc.ts", 1, 30), fakeNode("items", "property", "src/svc.ts", 5, 5, "items"), fakeNode("page", "method", "src/page.ts", 20, 30, "page")],
+    [{ from: "Svc", to: "items", kind: "contains" }, { from: "page", to: "items", kind: "calls", line: 25 }],
+  );
+
+  assert.deepEqual(occurrencesOfMember(store, settledAsNameMatch(store, "page", "items"), MEMBER), { kind: "found", occurrences: [{ file: "src/page.ts", line: 25, column: 1, receiver: "other" }] });
 });
 
 test("a class that injects the owner or a subtype of it, and names the member through a field, is a candidate read the graph's own edges do not list", () => {

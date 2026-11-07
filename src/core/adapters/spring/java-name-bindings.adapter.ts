@@ -11,9 +11,8 @@ import { createJavaDispatchTargets } from "./java-dispatch-targets.ts";
 import { createJavaReceiverMethods } from "./java-receiver-methods.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { withJavaSources } from "./java-project.ts";
-import { createJavaProject, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, isTypeDeclaration, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
-const TYPE_DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration", "interface_declaration", "enum_declaration", "record_declaration", "annotation_type_declaration"]);
 const VARIABLE_DECLARATIONS: ReadonlySet<string> = new Set(["variable_declarator", "formal_parameter", "spread_parameter", "catch_formal_parameter", "resource", "enhanced_for_statement"]);
 /** Where a bare identifier declares a variable: a lambda parameter, or a pattern variable. */
 const PATTERN_OR_LAMBDA: ReadonlySet<string> = new Set(["lambda_expression", "inferred_parameters", "instanceof_expression", "type_pattern", "record_pattern_component"]);
@@ -143,7 +142,7 @@ function enclosingTypes(node: Node, file: JavaFile, project: JavaProject): TypeD
   const declared = project.types.filter((type) => type.file === file);
   const around: TypeDecl[] = [];
   for (let parent = node.parent; parent !== null; parent = parent.parent) {
-    if (!TYPE_DECLARATIONS.has(parent.type)) continue;
+    if (!isTypeDeclaration(parent)) continue;
     const type = declared.find((candidate) => candidate.node.id === parent.id);
     if (type === undefined) return undefined;
     around.push(type);

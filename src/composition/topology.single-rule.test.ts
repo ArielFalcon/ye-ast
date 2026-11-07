@@ -23,7 +23,13 @@ const RULES: readonly { concept: string; pattern: RegExp; owner: string; pending
     concept: "reading the scheme and authority a URL starts with",
     owner: "core/domain/topology/path-template.ts",
     pattern: /\\\/\\\/\(?\[\^\/\?#\]\*/,
-    pending: ["core/adapters/openapi/contract-document.adapter.ts"],
+    pending: [],
+  },
+  {
+    concept: "the HTTP methods a route serves and a request names",
+    owner: "core/domain/entrypoints/http-route.ts",
+    pattern: /"GET",\s*"HEAD",\s*"POST"/,
+    pending: [],
   },
 ];
 
