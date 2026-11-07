@@ -88,7 +88,12 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const base = compositeBase(answer.value, [{ kind: "trace", fact: answer.value }, { kind: "workspace", fact: read.fact }], request.workspace, (value) => deps.digest.of(value));
           return { ok: true as const, value: { ...answer.value, ...base } };
         });
-        return result.ok ? { ok: true, value: result.value.value } : result;
+        if (!result.ok) return result;
+        if (request.live) {
+          const stale = result.value.workspaceLive?.find(notice => notice.kind === "stale" && notice.repo === request.repoId);
+          if (stale?.kind === "stale") request.onStale?.(stale.notice);
+        }
+        return { ok: true, value: result.value.value };
       }
       const targets = distinctTargets(request.targets);
       const declarations = targets.filter(isDeclarationTarget);

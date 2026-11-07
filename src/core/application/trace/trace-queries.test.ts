@@ -24,6 +24,7 @@ type Origin = Finding<ImportOrigin> & { occurrence?: true };
 const written = (...paths: string[][]): ReplacedRoots => ({ paths, globalObjects: new Set(["globalThis", "window"]), packages: new Set() });
 
 interface Options {
+  workspace?: TraceQueriesDeps["workspace"];
   syntaxCalls?: Readonly<Record<string, readonly SyntaxCall[]>>;
   nodes: readonly FakeNode[];
   edges?: readonly FakeEdge[];
@@ -96,6 +97,7 @@ function setup(options: Options) {
     return origin === undefined ? { status: "unknown", reason: "unresolved", evidence: [] } : { status: "complete", value: origin, evidence: [], occurrence: true };
   };
   const deps = {
+    ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
     vcs: {
       resolveCommit: async () => ({ ok: true, value: SHA }),
       exportCommit: async () => ({ ok: true, value: { files: [A, B].map((path) => ({ path, blob: "1", written: true })), skipped: [] } }),
@@ -1309,4 +1311,21 @@ test("line-only call records settle only a unique site in their own body", async
       assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["run"]);
     }
   }
+});
+
+
+test("a workspace live trace forwards the root stale notice once and never substitutes a library notice", async () => {
+  const fact = await factOf({ nodes: [SVC, RUN], edges: CONTAINS });
+  const rootNotice = { stateId: "root-state", changed: [A] };
+  const libraryNotice = { stateId: "library-state", changed: ["Library.java"] };
+  const workspace = { withRead: async () => ({ ok: true, value: { value: fact, workspaceLive: [
+    { kind: "stale", repo: "library", snapshot: { repo: "library", kind: "live", head: SHA, stateId: "library-state" }, notice: libraryNotice },
+    { kind: "stale", repo: "shop", snapshot: { repo: "shop", kind: "live", head: SHA, stateId: "root-state" }, notice: rootNotice },
+    { kind: "stale", repo: "shop", snapshot: { repo: "shop", kind: "live", head: SHA, stateId: "root-state" }, notice: rootNotice },
+  ] } }) } as unknown as NonNullable<TraceQueriesDeps["workspace"]>;
+  const notices: unknown[] = [];
+  const { queries } = setup({ nodes: [], workspace });
+  const result = await queries.walk({ repo: "/work/shop", repoId: "shop", live: true, workspace: {}, targets: [{ file: A, symbol: "run" }], onStale: notice => notices.push(notice) });
+  assert.ok(result.ok);
+  assert.deepEqual(notices, [rootNotice]);
 });

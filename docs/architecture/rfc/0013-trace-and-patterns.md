@@ -135,7 +135,7 @@ Trace accepts optional `workspace` (`repos`, `gateways`) and `offline` inputs on
 `ye_ast_trace` and composed trace queries. CLI uses `trace --workspace <manifest.json> [--offline]`. Omission preserves
 local-only output; `{}` uses eligible persisted workspace defaults. The existing workspace operation selects snapshots,
 computes artifact-proven dependency closures and supplies `LibrarySource` to placed call-site extraction. The Java reader uses its existing library summaries; other readers retain their existing coverage. Root indexing
-and the walk stay within the root repository. Library snapshots participate in the composite input identity; library
+and the walk stay within the root repository. A live root retains its existing `onStale` callback after the shared capture closes. Dependency-library live sidecars are not exposed by the Fact-returning trace port; the acceptance measurements use committed snapshots. Library snapshots participate in the composite input identity; library
 paths keep the existing `(library)/<repository>/...` provenance. Unrelated declared repositories are not library sources.
 
 A library summary carries uncertainty when a request occurs inside a function value whose execution is not proven,
