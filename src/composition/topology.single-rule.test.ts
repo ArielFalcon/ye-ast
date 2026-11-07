@@ -5,19 +5,25 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const SOURCE = fileURLToPath(new URL("../", import.meta.url));
-const OWNER = "core/domain/topology/call-site.ts";
-
-/** Each rule: the files that write it out, beside its owner; `pending` only shrinks. */
-const RULES: readonly { concept: string; pattern: RegExp; pending: readonly string[] }[] = [
+/** Each rule: the one file that owns it and the files that still write it out; `pending` only shrinks. */
+const RULES: readonly { concept: string; pattern: RegExp; owner: string; pending: readonly string[] }[] = [
   {
     concept: "the place of a call site",
+    owner: "core/domain/topology/call-site.ts",
     pattern: /\{\s*repo:\s*(\w+)\.repo,\s*file:\s*\1\.file,\s*line:\s*\1\.line,\s*symbol:\s*\1\.symbol\s*\}/,
     pending: [],
   },
   {
     concept: "the order of call sites",
+    owner: "core/domain/topology/call-site.ts",
     pattern: /a\.(?:from\.)?line - b\.(?:from\.)?line \|\| compareText\(a\.(?:from\.)?symbol, b\.(?:from\.)?symbol\)/,
     pending: ["composition/compose.ts", "mcp/render.ts"],
+  },
+  {
+    concept: "reading the scheme and authority a URL starts with",
+    owner: "core/domain/topology/path-template.ts",
+    pattern: /\\\/\\\/\(?\[\^\/\?#\]\*/,
+    pending: ["core/adapters/openapi/contract-document.adapter.ts"],
   },
 ];
 
@@ -29,13 +35,13 @@ function sourceFiles(directory: string): string[] {
   });
 }
 
-for (const { concept, pattern, pending } of RULES) {
+for (const { concept, pattern, owner, pending } of RULES) {
   test(`${concept} lives only in its owner`, () => {
     const holders = sourceFiles(SOURCE)
       .filter((file) => pattern.test(readFileSync(file, "utf8")))
       .map((file) => relative(SOURCE, file))
       .sort();
 
-    assert.deepEqual(holders, [OWNER, ...pending].sort());
+    assert.deepEqual(holders, [owner, ...pending].sort());
   });
 }

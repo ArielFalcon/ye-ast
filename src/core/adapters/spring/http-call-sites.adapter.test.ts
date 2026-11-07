@@ -194,6 +194,13 @@ test("an HttpExchange interface declares its calls with the verb of the annotati
   assert.deepEqual(await read([exchange]), ["GET /catalog/products/{id} CatalogApi.product@CatalogApi.java:5", "DELETE /catalog/products/{id} CatalogApi.drop@CatalogApi.java:6"]);
 });
 
+test("a URL names its host after `scheme://` or a bare `//`, whether a call or an HttpExchange type writes it", async () => {
+  const client = java("CatalogClient", ["class CatalogClient {", "  RestTemplate rt;", "  void find() { rt.getForObject(\"//catalog-svc/products\", String.class); }", "}"].join("\n"));
+  const exchange = java("CatalogApi", ["@HttpExchange(url = \"http://catalog-svc/catalog\")", "interface CatalogApi {", "  @GetExchange(\"/products\") String product();", "}"].join("\n"), ["org.springframework.web.service.annotation.*"]);
+
+  assert.deepEqual(await read([client, exchange]), ["GET /catalog/products via http://catalog-svc CatalogApi.product@CatalogApi.java:5", "GET /products via //catalog-svc CatalogClient.find@CatalogClient.java:8"]);
+});
+
 test("a @Value placeholder is read from the configuration, its default applies when the key is absent, and a key without value is unknown", async () => {
   const client = java(
     "BillingClient",

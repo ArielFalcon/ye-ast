@@ -25,10 +25,9 @@ import { externalNames, scopeOf, type Expr, type JavaFile, type JavaProject, typ
 import { stringLiteralValue } from "./java-literals.ts";
 import { isAnnotation, annotationUses, createSpringAnnotations, pathExpressions, type SpringAnnotations } from "./request-mapping.ts";
 import { JavaValueEvaluator } from "./java-value-evaluator.ts";
-import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
+import { callUrl, joinedCallUrl, RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 
 const UNDECIDED = Symbol("undecided");
-const ORIGIN = /^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/?#]*)([\s\S]*)$/;
 
 type Declared = string | typeof UNDECIDED | undefined;
 
@@ -276,12 +275,12 @@ export class JavaHttpReader {
     const head = this.text.attribute((url ?? service)?.node ?? feign.node, scope);
     const prefix = this.attributeText(feign.attributes.get("path")?.[0], scope);
     if (verb === undefined || (url ?? service) === undefined || prefix === undefined) return [at];
-    const origin = head === undefined ? undefined : url === undefined ? { origin: head, rest: "" } : splitOrigin(head);
+    const origin = head === undefined ? undefined : url === undefined ? { origin: head, path: "/" } : callUrl(head);
     return (pathExpressions(lookup.mapping.attributes) ?? [undefined]).map((expression) => {
       const path = this.attributeText(expression, scope);
       if (path === undefined) return at;
-      if (origin === undefined) return { ...at, stated: { method: verb, path: joinPath(prefix, path) } };
-      return origin.origin === undefined ? at : { target: complete({ method: verb, base: origin.origin, path: joinPath(origin.rest, prefix, path) }) };
+      if (origin === undefined) return { ...at, stated: { method: verb, path: joinedCallUrl(prefix, path).path } };
+      return origin.origin === undefined ? at : { target: complete({ method: verb, base: origin.origin, path: joinedCallUrl(origin.path, prefix, path).path }) };
     });
   }
 
@@ -296,8 +295,8 @@ export class JavaHttpReader {
       return own.map((expression) => {
         const path = this.attributeText(expression, scope);
         if (verb === undefined || path === undefined || prefix === undefined) return unknownAtNode(scope.type.file.path, use.node);
-        const absolute = splitOrigin(joinPath(prefix, path));
-        return complete({ method: verb, ...(absolute.origin === undefined ? { path: joinPath(prefix, path) } : { base: absolute.origin, path: pathOf(absolute.rest) }) });
+        const url = joinedCallUrl(prefix, path);
+        return complete({ method: verb, ...(url.origin === undefined ? {} : { base: url.origin }), path: url.path });
       });
     });
   }
@@ -329,35 +328,16 @@ function methodCall(node: Node): string | undefined {
   return object === "HttpMethod" && node.childForFieldName("name")?.text === "valueOf" && argument?.type === "string_literal" ? stringLiteralValue(argument.text) : undefined;
 }
 
-/** The scheme and authority a URL starts with; a part filled at run time ends the authority. */
-function splitOrigin(text: string): { origin?: string; rest: string } {
-  const match = ORIGIN.exec(text);
-  if (match === null) return { rest: text };
-  const origin = match[1] ?? "";
-  const cut = origin.indexOf(RUN_TIME_HOLE);
-  return cut === -1 ? { origin, rest: match[2] ?? "" } : { origin: origin.slice(0, cut), rest: text.slice(text.indexOf(origin) + cut) };
-}
-
-/** A path as a call states it: no query, one slash between segments, a leading one. */
-function pathOf(text: string): string {
-  const path = (text.split(/[?#]/)[0] ?? "").split("/").filter((segment) => segment !== "");
-  return `/${path.join("/")}`;
-}
-
-function joinPath(...parts: readonly string[]): string {
-  return pathOf(parts.join("/"));
-}
-
 /**
  * The base and path a URL text comes down to; a path that only the code fills at run time is not decided. A relative
  * path under a client base the snapshot does not decide keeps its path, with the base `UNDECIDED`.
  */
 function targetOf(text: string, client: Declared): { base?: string | typeof UNDECIDED; path: string } | undefined {
   if (text.startsWith(RUN_TIME_HOLE)) return undefined;
-  const absolute = splitOrigin(text);
-  const declared = typeof client === "string" ? splitOrigin(client) : { rest: "" };
+  const absolute = callUrl(text);
+  const declared = typeof client === "string" ? callUrl(client) : { path: "/" };
   const base = absolute.origin ?? declared.origin ?? client;
-  const path = absolute.origin === undefined ? joinPath(declared.rest, text) : pathOf(absolute.rest);
+  const path = absolute.origin === undefined ? joinedCallUrl(declared.path, text).path : absolute.path;
   const segments = path.split("/").filter((segment) => segment !== "");
   return segments.length > 0 && segments.every((segment) => segment === RUN_TIME_HOLE) ? undefined : { ...(base === undefined ? {} : { base }), path };
 }

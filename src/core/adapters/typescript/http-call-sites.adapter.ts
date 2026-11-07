@@ -6,7 +6,7 @@ import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { moduleResolverOf, type ModuleResolver } from "./module-resolver.ts";
 import { buildDefines, type BuildDefines } from "./url-define.ts";
-import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
+import { callUrl, joinedCallUrl, RUN_TIME_HOLE, type CallUrl } from "../../domain/topology/path-template.ts";
 import { injectedClass } from "./angular-injection.ts";
 import { declarationCounts } from "./syntax-names.ts";
 import { bindingNames, constructorParameters, hasModifier, lineOf, propertyOf, thisClass, typeName } from "./syntax.ts";
@@ -653,10 +653,11 @@ class Reader {
     const unknown = unresolvedAt(shape, call);
     const path = pathExpression === undefined ? undefined : textOf(await this.evaluate(shape, pathExpression, scope));
     if (path === undefined || method === undefined || !startsSegments(path)) return unknown;
-    const base = await this.baseUrl(shape, call);
-    const written = normalizePath(path);
-    if (base === UNDECIDED) return { ...unknown, stated: { method, path: written } };
-    return { target: { status: "complete", value: { method, path: written, ...(base === undefined ? {} : { base }) }, evidence: unknown.target.evidence } };
+    const own = callUrl(path);
+    const base = own.origin === undefined ? await this.baseUrl(shape, call) : undefined;
+    if (base === UNDECIDED) return { ...unknown, stated: { method, path: namedHoles(own.path) } };
+    const url: CallUrl = base === undefined ? own : joinedCallUrl(base, path);
+    return { target: { status: "complete", value: { method, path: namedHoles(url.path), ...(url.origin === undefined ? {} : { base: url.origin }) }, evidence: unknown.target.evidence } };
   }
 
   /** The base URL the call's options declare: undefined when they declare none, `UNDECIDED` when the snapshot does not decide it. */
@@ -1333,11 +1334,9 @@ function startsSegments(path: string): boolean {
   return true;
 }
 
-/** `:name` stands for a value the code fills, like `${expr}`; the query string and the fragment are not part of the path a route serves. */
-function normalizePath(path: string): string {
-  const end = path.search(/[?#]/);
-  const withoutQuery = end === -1 ? path : path.slice(0, end);
-  return withoutQuery
+/** `:name` stands for a value the code fills, like `${expr}`. */
+function namedHoles(path: string): string {
+  return path
     .split("/")
     .map((segment) => (/^:[A-Za-z_][A-Za-z0-9_]*$/.test(segment) ? RUN_TIME_HOLE : segment))
     .join("/");
