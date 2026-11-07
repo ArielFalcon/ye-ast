@@ -639,7 +639,7 @@ export function counterpart(type: TypeDecl, method: MethodDecl): Counterpart {
   return rivals.length > 0 ? "ambiguous" : found;
 }
 
-function sameParameters(
+export function sameParameters(
   first: MethodDecl,
   second: MethodDecl,
   matches: (a: string, aVariables: ReadonlySet<string>, b: string, bVariables: ReadonlySet<string>) => boolean,
@@ -650,7 +650,7 @@ function sameParameters(
   );
 }
 
-function parameterCompatible(a: string, aVariables: ReadonlySet<string>, b: string, bVariables: ReadonlySet<string>): boolean {
+export function parameterCompatible(a: string, aVariables: ReadonlySet<string>, b: string, bVariables: ReadonlySet<string>): boolean {
   if (a === b) return true;
   const [elementA = "", dimensionsA = ""] = /^(.*?)((?:\[\])*)$/.exec(a)?.slice(1) ?? [];
   const [elementB = "", dimensionsB = ""] = /^(.*?)((?:\[\])*)$/.exec(b)?.slice(1) ?? [];

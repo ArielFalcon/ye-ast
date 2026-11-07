@@ -199,6 +199,8 @@ export type PartPayload =
       /** Folded declarations, in the fact's order; one anchor may appear twice, once direct and once deferred. */
       leaves?: readonly { anchor: AnchorId; deferred?: true }[];
       external?: readonly ExternalCalls[];
+      /** Every body a call to this body-less method may run, when the declared hierarchy names them all. */
+      alternatives?: readonly AnchorId[];
     }
   | { kind: "trace-root"; target: string; steps: readonly number[] }
   | { kind: "reading-range"; file: FileId; start: number; end: number; steps: readonly number[] }

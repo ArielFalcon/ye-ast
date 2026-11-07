@@ -1149,7 +1149,7 @@ export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "
   return lines.join("\n");
 }
 
-const TRACE_FULL_GUIDE = "Select value.steps in pre-order: id, parent, depth, file, symbol, kind, line, endLine, at (the call in the parent), via, deferred, seen (the id that expanded it), leaves (folded terminal declarations with file, start, end) and external (calls leaving the repository by module). value.roots lists the root step ids per target; value.readingPlan.ranges lists file, start, end and the step ids each range covers, with the total lines. When partial, an unresolved-link cut is at[0] \"file:line spelling\" followed by its candidates, each \"file::Owner.member\" by containment path.";
+const TRACE_FULL_GUIDE = "Select value.steps in pre-order: id, parent, depth, file, symbol, kind, line, endLine, at (the call in the parent), via, deferred, seen (the id that expanded it), leaves (folded terminal declarations with file, start, end) and external (calls leaving the repository by module), alternatives (every body a body-less method may run, when proven; one expands below it via dispatch). value.roots lists the root step ids per target; value.readingPlan.ranges lists file, start, end and the step ids each range covers, with the total lines. When partial, an unresolved-link cut is at[0] \"file:line spelling\" followed by its candidates, each \"file::Owner.member\" by containment path.";
 
 const TRACE_BRANCHES = "branches are not evaluated: every call in a body is listed, whichever branch makes it";
 
@@ -1194,6 +1194,7 @@ function traceTreeLines(steps: readonly TraceStep[]): string[] {
       `${indent}#${step.id} ${step.at?.line ?? step.line} ${step.symbol}${step.parent === undefined ? ` [${step.kind}]` : ""}${span}${notes.length === 0 ? "" : ` ${notes.join(", ")}`}`,
       ...(leaves.length === 0 ? [] : [`${indent}  leaves: ${leaves.map((leaf) => (leaf.deferred ? `${leaf.symbol} (deferred)` : leaf.symbol)).join(", ")}`]),
       ...(step.external === undefined ? [] : [`${indent}  external: ${step.external.map(externalText).join("; ")}`]),
+      ...(step.alternatives === undefined ? [] : [`${indent}  dispatch alternatives (${step.alternatives.length}): ${step.alternatives.map((body) => placeText(body.file, body.start, body.end)).join(", ")}`]),
     ];
   });
 }

@@ -7,6 +7,7 @@ import { readsPastRoot, type RootOrigin } from "../../domain/impact/edge-policy.
 import type { ImportOrigins, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import { createJavaRootBindings } from "./java-root-bindings.ts";
 import { createJavaDeclaredTypes } from "./java-declared-types.ts";
+import { createJavaDispatchTargets } from "./java-dispatch-targets.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaProject, describeFile, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
@@ -38,6 +39,7 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
     origins: async (sites) => sites.map((site) => unresolved(site)),
     rootBindings: (sites, signal) => createJavaRootBindings(parser(), sources)(sites, signal),
     declaredTypes: createJavaDeclaredTypes(parser, sources, paths),
+    dispatchTargets: createJavaDispatchTargets(parser, sources, paths),
     replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),
     rootOrigins: async (sites, signal) => {
       const results: RootOrigin[] = sites.map((site) => unresolved(site));

@@ -489,6 +489,7 @@ class CompactView {
         part.seen === undefined ? "" : ` seen #${part.seen}`,
         part.leaves === undefined ? "" : `; leaves ${part.leaves.map((leaf) => `${this.anchor(leaf.anchor)}${leaf.deferred ? " (deferred)" : ""}`).join(", ")}`,
         part.external === undefined ? "" : `; external ${part.external.map((group) => `${group.kind === "import" ? group.module : group.kind}: ${group.names.join(", ")}`).join("; ")}`,
+        part.alternatives === undefined ? "" : `; dispatch alternatives ${part.alternatives.map((alternative) => this.anchor(alternative)).join(", ")}`,
       ].join("");
       case "trace-root": return `trace root ${quoted(part.target)} selects ${part.steps.map((step) => `#${step}`).join(", ") || "nothing"}`;
       case "reading-range": return `reading range ${this.file(part.file)}:${part.start}-${part.end} for ${part.steps.map((step) => `#${step}`).join(", ")}`;

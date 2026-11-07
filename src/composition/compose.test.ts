@@ -1189,7 +1189,7 @@ test("a trace over a real index expands a class root into its members even when 
   assert.deepEqual(answer.value.cuts.map((cut) => cut.at[0]), ["src/make.ts:2 unknown"]);
 });
 
-test("a trace over a real index reads dispatch from syntax: a body expands, static or unoverridden ones settle, a body-less method is a step with a cut listing its implementations", async () => {
+test("a trace over a real index reads dispatch from syntax: a body expands, static or unoverridden ones settle, a body-less method expands the one body its declared hierarchy proves", async () => {
   const files: Record<string, string[]> = {
     "Defaults.java": ["public interface Defaults {", "  default void run() { helper(); }", "  static void helper() {}", "}"],
     "Base.java": ["public abstract class Base {", "  @Deprecated", "  abstract void area();", "  final void fixed() { area(); }", "}"],
@@ -1206,12 +1206,11 @@ test("a trace over a real index reads dispatch from syntax: a body expands, stat
   assert.ok(helper.ok && helper.value.status === "complete");
   assert.ok(run.ok && run.value.status === "complete");
   assert.deepEqual(run.value.value.steps.map(({ symbol, leaves }) => ({ symbol, leaves: leaves?.map((leaf) => leaf.symbol) })), [{ symbol: "run", leaves: ["helper"] }]);
-  assert.ok(fixed.ok && fixed.value.status === "partial");
-  assert.deepEqual(fixed.value.value.steps.map(({ symbol, parent, leaves }) => ({ symbol, parent, leaves })), [
-    { symbol: "fixed", parent: undefined, leaves: undefined },
-    { symbol: "area", parent: 0, leaves: undefined },
+  assert.ok(fixed.ok && fixed.value.status === "complete");
+  assert.deepEqual(fixed.value.value.steps.map(({ symbol, parent, leaves, alternatives }) => ({ symbol, parent, leaves: leaves?.map((leaf) => `${leaf.file}:${leaf.start}`), alternatives })), [
+    { symbol: "fixed", parent: undefined, leaves: undefined, alternatives: undefined },
+    { symbol: "area", parent: 0, leaves: ["src/Sq.java:2"], alternatives: [{ symbol: "area", file: "src/Sq.java", start: 2, end: 2 }] },
   ]);
-  assert.deepEqual(fixed.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/Base.java:2 area", "src/Sq.java::Sq.area"]]);
 });
 
 test("a trace over a real index expands an overridable method with a body and cuts it at the overriders below its owner", async () => {
@@ -1253,12 +1252,13 @@ test("a trace over a real index matches a decorated method to its syntax from th
   assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/deco.ts:4 run", "src/deco.ts::Child.run"]]);
 });
 
-test("a trace over a real index lists an implementation below a parameterized supertype the index left unresolved", async () => {
+test("a trace over a real index lists an implementation below a parameterized supertype the index left unresolved when a lambda may implement the functional owner", async () => {
   writeFileSync(join(repo, "src", "Generic.java"), [
     "interface GPort<T> { void send(T x); }",
     "interface GSub extends GPort<String> { void send(String x); }",
     "class GImpl implements GSub { public void send(String x) {} }",
     "class GUse { void go(GPort<String> p) { p.send(\"x\"); } }",
+    "class GLambda { Runnable task = () -> {}; }",
     "",
   ].join("\n"));
   git("add", "-A");

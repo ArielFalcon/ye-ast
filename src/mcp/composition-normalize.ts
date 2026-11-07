@@ -517,6 +517,10 @@ function trace(b: Builder, root: ReadContext, value: TraceValue): void {
       const leafAnchor = b.anchor(root.here, { path: leaf.file, symbol: leaf.symbol, line: leaf.start, ...(leaf.end === leaf.start ? {} : { endLine: leaf.end }) }, root.id, at, `${at}/file`);
       return { anchor: leafAnchor, ...(leaf.deferred === undefined ? {} : { deferred: leaf.deferred }) };
     });
+    const alternatives = step.alternatives?.map((body, k) => {
+      const at = `${pointer}/alternatives/${k}`;
+      return b.anchor(root.here, { path: body.file, symbol: body.symbol, line: body.start, ...(body.end === body.start ? {} : { endLine: body.end }) }, root.id, at, `${at}/file`);
+    });
     b.part({
       kind: "trace-step", anchor, kindName: step.kind, step: step.id, depth: step.depth,
       ...(step.parent === undefined ? {} : { parent: step.parent }),
@@ -526,6 +530,7 @@ function trace(b: Builder, root: ReadContext, value: TraceValue): void {
       ...(step.deferred === undefined ? {} : { deferred: step.deferred }),
       ...(leaves === undefined ? {} : { leaves }),
       ...(step.external === undefined ? {} : { external: step.external }),
+      ...(alternatives === undefined ? {} : { alternatives }),
     }, root.id, [pointer]);
   });
   value.readingPlan.ranges.forEach(({ file, start, end, steps }, index) => {
