@@ -10,8 +10,8 @@ import { createJavaProject, describeFile, parameterCompatible, sameParameters, t
 const UNKNOWN: DispatchTargets = { kind: "unknown" };
 /** Annotations the language itself defines, which no generator or proxy reads to implement a type. */
 const LANGUAGE_ANNOTATIONS: ReadonlySet<string> = new Set(["Override", "Deprecated", "SuppressWarnings", "FunctionalInterface"]);
-/** Methods every interface inherits from `Object`, which do not count against a functional interface's one abstract method (JLS 9.8). */
-const OBJECT_METHODS: ReadonlySet<string> = new Set(["equals", "hashCode", "toString"]);
+/** The public methods of `Object` by name and arity, which do not count against a functional interface's one abstract method (JLS 9.8). */
+const OBJECT_METHODS: ReadonlySet<string> = new Set(["equals/1", "hashCode/0", "toString/0"]);
 
 /** A class's superclass as the strict reading settles it: a repository type, none written, or one outside the repository or unsettled. */
 type Superclass = TypeDecl | "none" | "outside";
@@ -19,6 +19,8 @@ type Superclass = TypeDecl | "none" | "outside";
 /** The declared hierarchy of the sources, by the strict reading of every supertype a declaration writes. */
 interface Hierarchy {
   subtypes: ReadonlyMap<TypeDecl, readonly TypeDecl[]>;
+  /** The repository types each type extends or implements directly. */
+  supertypes: ReadonlyMap<TypeDecl, readonly TypeDecl[]>;
   superclasses: ReadonlyMap<TypeDecl, Superclass>;
   /** Types with a supertype that is not a repository type: a platform or dependency type, or one the reading leaves unsettled. */
   outside: ReadonlySet<TypeDecl>;
@@ -80,7 +82,7 @@ function targetsOf(method: MethodDecl, hierarchy: Hierarchy): DispatchTargets {
   const names = new Set([owner, ...below].map((type) => type.name));
   if ([...hierarchy.unsettled].some((name) => names.has(name))) return UNKNOWN;
   if (hierarchy.unplaced.some(({ types, names: unsettled }) => types.some((type) => type === owner || below.has(type)) || unsettled.some((name) => names.has(name)))) return UNKNOWN;
-  if (owner.kind === "interface" && hierarchy.functionValues && isFunctional(owner, hierarchy)) return UNKNOWN;
+  if (hierarchy.functionValues && [owner, ...below].some((type) => type.kind === "interface" && isFunctional(type, hierarchy))) return UNKNOWN;
   if ([...below].some((type) => type.kind === "other")) return UNKNOWN;
   const bodies = new Map<Node, MethodDecl>();
   for (const type of [owner, ...below]) {
@@ -106,23 +108,69 @@ function bodyIn(type: TypeDecl, method: MethodDecl, hierarchy: Hierarchy): Metho
   return undefined;
 }
 
-/** Whether a lambda could implement the interface: its hierarchy declares at most one abstract method beside `Object`'s, by name and arity, or reaches a type the sources do not hold. */
-function isFunctional(owner: TypeDecl, hierarchy: Hierarchy): boolean {
-  const abstract = new Set(
-    ancestorsOf(owner, hierarchy)
-      .flatMap((type) => type.methods)
-      .filter((method) => !method.hasBody && !method.modifiers.includes("static") && !OBJECT_METHODS.has(method.name))
-      .map((method) => `${method.name}/${method.parameterTypes.length}`),
-  );
-  return abstract.size <= 1;
+/** A method an interface has under one signature: abstract or with a body, and the interface that declares it. */
+interface Member {
+  abstract: boolean;
+  from: TypeDecl;
+}
+
+/**
+ * Whether a lambda or a method reference could implement the interface: of the methods it declares or inherits, at most
+ * one is abstract beside `Object`'s, or the sources do not settle which are.
+ */
+function isFunctional(type: TypeDecl, hierarchy: Hierarchy): boolean {
+  const members = membersOf(type, hierarchy, new Map());
+  if (members === undefined) return true;
+  const abstract = [...members].filter(([, member]) => member.abstract).map(([signature]) => signature).filter((signature) => !OBJECT_METHODS.has(arityOf(signature)));
+  return abstract.length <= 1;
+}
+
+/**
+ * The methods an interface declares or inherits (JLS 9.4.1), by name and parameter types: its own declaration overrides
+ * every inherited method of the same signature, and an inherited one overrides those of the interfaces above the one
+ * that declares it; abstract methods of one signature from unrelated interfaces merge into one. `undefined` when the
+ * sources do not settle it: a supertype outside the repository, a cycle, or two methods of one name and arity that
+ * different interfaces spell with different parameter types, which a type argument or a qualified name may make the same
+ * signature.
+ */
+function membersOf(type: TypeDecl, hierarchy: Hierarchy, known: Map<TypeDecl, ReadonlyMap<string, Member> | undefined>): ReadonlyMap<string, Member> | undefined {
+  if (known.has(type)) return known.get(type);
+  known.set(type, undefined);
+  if (hierarchy.outside.has(type)) return undefined;
+  const members = new Map<string, Member>();
+  for (const method of type.methods) {
+    if (!method.modifiers.includes("static") && !method.modifiers.includes("private")) members.set(signatureOf(method), { abstract: !method.hasBody, from: type });
+  }
+  const inherited = new Map<string, Member[]>();
+  for (const supertype of hierarchy.supertypes.get(type) ?? []) {
+    const above = membersOf(supertype, hierarchy, known);
+    if (above === undefined) return undefined;
+    for (const [signature, member] of above) if (!members.has(signature)) inherited.set(signature, [...(inherited.get(signature) ?? []), member]);
+  }
+  for (const [signature, candidates] of inherited) {
+    const kept = candidates.filter((candidate) => !candidates.some((other) => other.from !== candidate.from && ancestorsOf(other.from, hierarchy).includes(candidate.from)));
+    const abstract = kept.every((candidate) => candidate.abstract);
+    members.set(signature, { abstract, from: kept[0]!.from });
+  }
+  const entries = [...members];
+  if (entries.some(([signature, member], index) => entries.some(([other, rival], later) => later > index && rival.from !== member.from && arityOf(other) === arityOf(signature)))) return undefined;
+  known.set(type, members);
+  return members;
+}
+
+function signatureOf(method: MethodDecl): string {
+  return `${method.name}/${method.parameterTypes.length}(${method.parameterTypes.join(",")})`;
+}
+
+/** `name/arity` of a signature. */
+function arityOf(signature: string): string {
+  return signature.slice(0, signature.indexOf("("));
 }
 
 /** The type and every repository type above it. */
 function ancestorsOf(type: TypeDecl, hierarchy: Hierarchy): TypeDecl[] {
   const above = new Set<TypeDecl>([type]);
-  const parents = new Map<TypeDecl, TypeDecl[]>();
-  for (const [supertype, subtypes] of hierarchy.subtypes) for (const subtype of subtypes) parents.set(subtype, [...(parents.get(subtype) ?? []), supertype]);
-  for (const current of above) for (const parent of parents.get(current) ?? []) above.add(parent);
+  for (const current of above) for (const parent of hierarchy.supertypes.get(current) ?? []) above.add(parent);
   return [...above];
 }
 
@@ -140,6 +188,7 @@ function belowOf(type: TypeDecl, hierarchy: Hierarchy): ReadonlySet<TypeDecl> {
 function hierarchyOf(files: readonly JavaFile[], project: JavaProject): Hierarchy | undefined {
   const placed = new Map(project.types.map((type) => [type.node.id, type]));
   const subtypes = new Map<TypeDecl, TypeDecl[]>();
+  const supertypes = new Map<TypeDecl, TypeDecl[]>();
   const superclasses = new Map<TypeDecl, Superclass>();
   const outside = new Set<TypeDecl>();
   const unsettled = new Set<string>();
@@ -168,13 +217,14 @@ function hierarchyOf(files: readonly JavaFile[], project: JavaProject): Hierarch
         else {
           if (!superclasses.has(declared)) superclasses.set(declared, "none");
           for (const type of types) subtypes.set(type, [...(subtypes.get(type) ?? []), declared]);
+          supertypes.set(declared, types);
           for (const name of names) unsettled.add(name);
         }
       }
       for (const child of node.namedChildren) if (child !== null) pending.push(child);
     }
   }
-  return { subtypes, superclasses, outside, unsettled, unplaced, functionValues };
+  return { subtypes, supertypes, superclasses, outside, unsettled, unplaced, functionValues };
 }
 
 function isAnnotated(declaration: Node): boolean {

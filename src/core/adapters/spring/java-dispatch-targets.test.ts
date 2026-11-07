@@ -93,3 +93,40 @@ test("a JDK API that implements an interface at run time, named anywhere, makes 
 
   assert.deepEqual(await targetsOf([SENDER, proxy]), { kind: "unknown" });
 });
+
+test("a default in a more specific interface overrides the abstract method it inherits, so an interface left with one abstract method is functional and a lambda makes its bodies unknown", async () => {
+  const base = java("Base.java", ["package app; public interface Base { void close(); }"]);
+  const port = java("Port.java", ["package app;", "public interface Port extends Base {", " void send(String s);", " default void close() {}", "}"]);
+  const lambda = java("Refs.java", ["package app; class Refs { Port p = s -> System.exit(1); }"]);
+  const sender = java("Sender.java", ["package app;", "public class Sender implements Port {", " public void send(String s) {}", " public void close() {}", "}"]);
+
+  assert.deepEqual(await targetsOf([base, lambda, sender], port, 3), { kind: "unknown" });
+});
+
+test("a lambda that implements a functional interface below the owner makes the owner's bodies unknown", async () => {
+  const sub = java("Sub.java", ["package app; public interface Sub extends Port { default void close() {} }"]);
+  const lambda = java("Refs.java", ["package app; class Refs { Sub p = s -> System.exit(1); }"]);
+
+  assert.deepEqual(await targetsOf([SENDER, sub, lambda]), { kind: "unknown" });
+});
+
+test("an inherited method of one name and arity spelled with other parameter types may be the same signature, so the interface may be functional and a lambda makes its bodies unknown", async () => {
+  const base = java("Base.java", ["package app; public interface Base<T> { void send(T message); }"]);
+  const port = java("Port.java", ["package app;", "public interface Port extends Base<String> {", " void close();", " void send(String message);", "}"]);
+  const plain = java("Port.java", ["package app;", "public interface Port {", " void close();", " void send(String message);", " void send(Integer message);", "}"]);
+  const lambda = java("Refs.java", ["package app; class Refs { Runnable task = () -> {}; }"]);
+  const sender = java("Sender.java", ["package app;", "public class Sender implements Port {", " public void close() {}", " public void send(String message) {}", " public void send(Integer message) {}", "}"]);
+  const closeOf = async (owner: SourceFile) => (await createJavaNameBindings(createJavaParser, [owner, base, lambda, sender]).dispatchTargets([{ file: owner.path, line: 3, name: "close" }]))[0];
+
+  assert.deepEqual(await closeOf(port), { kind: "unknown" });
+  assert.deepEqual(await closeOf(plain), { kind: "bodies", bodies: [{ file: sender.path, start: 3, nameLine: 3 }] });
+});
+
+test("an abstract method a more specific interface declares again overrides the default it inherits, so it still counts against a functional interface", async () => {
+  const base = java("Base.java", ["package app; public interface Base { default void close() {} }"]);
+  const strict = java("Strict.java", ["package app; public interface Strict extends Base { void close(); }"]);
+  const port = java("Port.java", ["package app;", "public interface Port extends Strict, Base {", " void send(String message);", "}"]);
+  const lambda = java("Refs.java", ["package app; class Refs { Runnable task = () -> {}; }"]);
+
+  assert.deepEqual(await targetsOf([base, strict, lambda, SENDER], port, 3), { kind: "bodies", bodies: [body(SENDER, 4)] });
+});
