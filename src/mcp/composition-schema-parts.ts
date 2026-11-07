@@ -310,6 +310,7 @@ export const partSchema = z.discriminatedUnion("kind", [
     effects: z.array(z.discriminatedUnion("kind", [
       z.strictObject({ kind: z.literal("http"), line: count, column: count.exactOptional(), target: httpTarget, place: ids.evidence.exactOptional() }),
       z.strictObject({ kind: z.literal("message"), line: count, column: count.exactOptional(), target: eventTarget, place: ids.evidence.exactOptional() }),
+      z.strictObject({ kind: z.literal("data"), line: count, column: count.exactOptional(), operation: z.string(), access: z.enum(["read", "write", "unknown"]), target: z.strictObject({ kind: z.enum(["entity", "table", "collection"]), name: z.string() }).exactOptional(), place: ids.evidence.exactOptional() }),
     ])).exactOptional(),
   }),
   part("trace-root", { target: z.string(), steps: z.array(count) }),

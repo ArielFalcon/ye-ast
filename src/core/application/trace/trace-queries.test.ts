@@ -1221,7 +1221,7 @@ const at = (line: number, column: number, path = "/x", overrides: Partial<CallSi
   site: site(line, { target: { status: "complete", value: { method: "GET", path }, evidence: [{ path: A, line }] }, ...overrides }),
   column,
 });
-const effectPaths = (fact: Fact<TraceValue>) => valueOf(fact).steps.flatMap((step) => (step.effects ?? []).map((effect) => [step.symbol, effect.kind === "http" ? effect.target.path : effect.target.destination]));
+const effectPaths = (fact: Fact<TraceValue>) => valueOf(fact).steps.flatMap((step) => (step.effects ?? []).map((effect) => [step.symbol, effect.kind === "http" ? effect.target.path : effect.kind === "message" ? effect.target.destination : effect.target?.name]));
 const effectCuts = (fact: Fact<TraceValue>) => cutsOf(fact).filter(([, at]) => (at as readonly string[])[0]!.includes(" effect"));
 
 test("a call site in a function the walk did not expand is neither an effect nor a cut of the body around it, even on a line that body calls on", async () => {

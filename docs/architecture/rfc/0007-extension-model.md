@@ -459,3 +459,23 @@ Angular and of Java with Spring must be added solidly".
 |---|---|---|
 | 1 | v1 scope: TypeScript/JavaScript and Java (qayaba's declared scope), with Java marked partial? | Decided: v1 covers Angular on TypeScript and Spring on Java, both completely. The approach and the definition of done are [ADR-0014](../adr/0014-angular-and-spring-from-own-extractors.md); the design per gap is above. Java starts with no statement syntax, no decision syntax and no module syntax in qayaba (`decisions: null`, `statements: null` and no entry among the module syntaxes: qayaba@4105c582 `qa-engine/src/shared-kernel/language-id.ts:27,37-40`), which row S1 adds |
 | 2 | Are plugins in-repo packages or separately published? | In-repo until a third party needs to publish one |
+
+
+### Trace data-access rows (RFC-0013 R12)
+
+The Spring adapter owns the syntax vocabulary for data effects, separate from cross-service call-site transports.
+Conformance fixtures live under `src/core/adapters/spring/fixtures/data-effects/`.
+
+| Row | Proven API | Reported fact and limits |
+|---|---|---|
+| Spring Data repositories | Repository, CrudRepository, ListCrudRepository, PagingAndSortingRepository, ListPagingAndSortingRepository, JpaRepository; project generic specializations | Standard CRUD operations and declared derived queries; @Query is read, @Modifying is write. Only a unique proven project method signature supplies annotations/body semantics; overload ambiguity is a cut. A proven method with a body stays project code. Generic substitution through lexical identity may prove an entity; raw or conflicting entity types yield no target. |
+| Spring JDBC | JdbcTemplate/JdbcOperations, NamedParameterJdbcTemplate/NamedParameterJdbcOperations, SimpleJdbcInsert/Operations | Query methods read, update/batchUpdate and insert methods write; arbitrary execute/call has unknown access. No SQL-table inference. Configuration getters are absent. |
+| JPA | javax.persistence and jakarta.persistence EntityManager, Query, TypedQuery | find/refresh read; persist/merge/remove/flush write; query terminal methods read or executeUpdate writes. Direct createQuery/createNamedQuery/createNativeQuery chains and standard Query configuration members (setParameter, bounds, hints and modes) are recognized at execution. Query construction alone is absent. Only a find class literal proves its entity. |
+
+Evidence: the REST backend has Spring Data specializations, JDBC implementations and Jakarta EntityManager calls;
+the commerce backend has Spring Data specializations and javax EntityManager calls; the acceptance service has a
+JpaRepository specialization. MyBatis mapper interfaces and calls occur in one other backend and remain a deferred
+row under ADR-0013. Mongo/Redis templates and TypeScript ORMs were not found; no row is added for them.
+Project wrappers remain code the trace walks, never vocabulary entries. Each admitted site is subject to slice 4's
+exact-position and function-value rules. Reads remain visible with their access class; no entity getter is a data row.
+The data effect union and compose schema are extended in place under the owner's no-bump rule (MCP has no consumers).

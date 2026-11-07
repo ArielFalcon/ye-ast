@@ -2,6 +2,7 @@ import { LIBRARY_ROOT, libraryPath, type LibrarySource } from "../../domain/topo
 import type { Node } from "web-tree-sitter";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { charLiteralValue, integerLiteralValue, stringLiteralValue, type LiteralValue } from "./java-literals.ts";
+import { localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
 
 /** The sources of the repositories a snapshot depends on, under a root no repository path can have. */
@@ -293,6 +294,7 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
   }
 
   function resolveSimple(head: string, scope: Scope, strict: boolean): TypeLookup | "unsettled" | LocalType {
+    if (strict && scope.file.conflictingSingleImports.has(head)) return "unsettled";
     const lexical = lexicalType(head, scope, strict);
     if (lexical !== undefined) return lexical;
     const { file } = scope;
@@ -913,6 +915,47 @@ export function readSignature(method: MethodDecl, project: JavaProject): Signatu
       if (name === undefined) return undefined;
       signature.push({ name, dimensions });
     }
+  }
+  return signature;
+}
+
+const INTEGER_LITERALS: ReadonlySet<string> = new Set(["decimal_integer_literal", "hex_integer_literal", "octal_integer_literal", "binary_integer_literal"]);
+
+/** Exact static argument types only; conversions, inference and expressions without a declared type remain unproven. */
+export function readArgumentSignature(invocation: Node, scope: Scope, project: JavaProject): Signature | undefined {
+  const list = invocation.childForFieldName("arguments");
+  const signature: Signature[number][] = [];
+  for (const argument of list === null ? [] : namedChildren(list)) {
+    let node = unwrapParentheses(argument);
+    if (node === undefined) return undefined;
+    if (node.type === "unary_expression") {
+      const operand = node.childForFieldName("operand");
+      if (operand === null || !INTEGER_LITERALS.has(operand.type)) return undefined;
+      node = operand;
+    }
+    if (INTEGER_LITERALS.has(node.type)) {
+      signature.push({ name: /[lL]$/.test(node.text) ? "long" : "int", dimensions: 0 });
+      continue;
+    }
+    if (node.type === "string_literal") {
+      signature.push({ name: "java.lang.String", dimensions: 0 });
+      continue;
+    }
+    if (node.type === "true" || node.type === "false") {
+      signature.push({ name: "boolean", dimensions: 0 });
+      continue;
+    }
+    if (node.type !== "identifier") return undefined;
+    const binding = localBinding(node);
+    if (binding === undefined || binding.startIndex > node.startIndex) return undefined;
+    const declaration = binding.type === "variable_declarator" ? binding.parent : binding;
+    const written = declaration?.childForFieldName("type");
+    if (written === null || written === undefined || written.type === "generic_type" || written.text === "var") return undefined;
+    const element = written.type === "array_type" ? written.childForFieldName("element") : written;
+    if (element === null || element.type === "generic_type" || typeVariableAround(element) !== undefined) return undefined;
+    const name = KEYWORD_TYPES.has(element.type) ? element.text : project.typeIdentity(element.text.replace(/\s+/g, ""), { ...scope, at: element });
+    if (name === undefined || name.startsWith("context:")) return undefined;
+    signature.push({ name, dimensions: dimensionsOf(written) + dimensionsOf(binding) });
   }
   return signature;
 }

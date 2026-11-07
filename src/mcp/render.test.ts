@@ -330,3 +330,19 @@ test("a contract consequences change whose derivation could not be computed keep
   assert.match(text, /derivation:\n  status: unknown \(revision-unavailable\)/);
   assert.match(text, /unknown \(no-project\): no repository serves GET \/vets/);
 });
+
+test("data effects render access and operation with optional proven targets in summaries and step details", () => {
+  const fact = traceFact();
+  assert.notEqual(fact.status, "unknown");
+  if (fact.status === "unknown") return;
+  fact.value.steps[0]!.effects = [
+    { kind: "data", line: 4, operation: "findById", access: "read", target: { kind: "entity", name: "shop.Order" } },
+    { kind: "data", line: 5, operation: "update", access: "write" },
+  ];
+  for (const mode of ["summary", "details"] as const) {
+    const text = renderTrace(fact, mode);
+    assert.ok(text.includes("data read findById entity shop.Order"));
+    assert.ok(text.includes("data write update"));
+    assert.ok(!text.includes("undefined"));
+  }
+});

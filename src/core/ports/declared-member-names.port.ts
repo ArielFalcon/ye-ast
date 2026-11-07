@@ -39,6 +39,8 @@ export interface ReceiverBinding {
   receiver: string;
   member: string;
   holds: ReceiverValue;
+  /** Candidate annotation only; the lexical reader did not prove the value is held by it. */
+  unproven?: true;
 }
 
 /**

@@ -238,10 +238,10 @@ function argumentCount(invocation: Node): number {
   return (invocation.childForFieldName("arguments")?.namedChildren ?? []).filter((argument) => argument !== null && !NOT_ARGUMENTS.has(argument.type)).length;
 }
 
-function hasVarargs(method: MethodDecl): boolean {
+export function hasVarargs(method: MethodDecl): boolean {
   return (method.node.childForFieldName("parameters")?.namedChildren ?? []).some((parameter) => parameter?.type === "spread_parameter");
 }
 
-function callKey(line: number, column: number, member: string): string {
+export function callKey(line: number, column: number, member: string): string {
   return `${line}:${column}:${member}`;
 }

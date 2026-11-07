@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { EXIT_CODE } from "../cli/main.ts";
@@ -300,4 +300,47 @@ export class Build {
     assert.equal(groups.length, 1);
     assert.equal(groups[0]!.names.length, 1);
   }
+});
+
+test("data effects belong to project method bodies, preserve exact ownership and cut an uninvoked function value", async () => {
+  commit({
+    "src/main/java/shop/Store.java": `package shop;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.jdbc.core.JdbcTemplate;
+import jakarta.persistence.EntityManager;
+class Order {}
+interface Orders extends JpaRepository<Order, Long> {}
+class Store {
+ private Orders orders;
+ private JdbcTemplate jdbc;
+ private EntityManager em;
+ void save(Order o) { orders.save(o); } void other() { jdbc.update("delete from other"); }
+ void run(Order o) { this.save(o); em.find(Order.class, 1L); }
+ void dead() { Runnable value = () -> jdbc.update("delete from orders"); System.out.println("x"); }
+}
+`,
+  });
+  const run = await trace("src/main/java/shop/Store.java:Store.run");
+  const saved = await trace("src/main/java/shop/Store.java:Store.save");
+  assert.deepEqual([...run.value.steps, ...saved.value.steps].flatMap((step) => step.effects ?? []).filter((effect) => effect.kind === "data").map(({ operation, access, target }) => [operation, access, target]), [
+    ["find", "read", { kind: "entity", name: "shop.Order" }],
+    ["save", "write", { kind: "entity", name: "shop.Order" }],
+  ]);
+  const dead = await trace("src/main/java/shop/Store.java:Store.dead");
+  assert.deepEqual(effectsOf(dead.value), []);
+  assert.ok(dead.cuts?.some((cut) => cut.at[0]?.includes("data effect")));
+});
+
+test("compiled review counterexamples cannot invent framework identity, entity identity or overload access", async () => {
+  const fixture = (name: string) => readFileSync(new URL(`../core/adapters/spring/fixtures/data-effects/${name}.java`, import.meta.url), "utf8");
+  commit({ "src/LocalType.java": fixture("local-type"), "src/WrongTarget.java": fixture("wrong-target"), "src/LoopShadow.java": fixture("loop-shadow"), "src/QueryOverload.java": fixture("query-overload") });
+  for (const [file, symbol] of [["LocalType", "LocalType.run"], ["LoopShadow", "LoopShadow.run"], ["QueryOverload", "QueryOverload.run"]]) {
+    const result = await trace(`src/${file}.java:${symbol}`);
+    assert.deepEqual(result.value.steps.flatMap((step) => step.effects ?? []).filter((effect) => effect.kind === "data"), []);
+    if (file === "QueryOverload") assert.ok(result.cuts?.some((cut) => cut.at.some((at) => at.includes("data effect"))));
+  }
+  const entity = await trace("src/WrongTarget.java:WrongTarget.run");
+  const effects = entity.value.steps.flatMap((step) => step.effects ?? []).filter((effect) => effect.kind === "data");
+  assert.equal(effects.length, 1);
+  assert.equal(effects[0]!.target, undefined);
 });
