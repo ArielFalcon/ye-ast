@@ -115,11 +115,11 @@ function responseShapeOf(contract: ParsedContract, declared: DeclaredOperation, 
   const shape = reader.success(operation.responses);
   const digester = createDigester(place.path, referenced);
   const digests = {
-    request: digester.digest(requestOf(contract, declared)),
+    request: digester.digest(reader.besideRequest(requestOf(contract, declared), digester.digest)),
     errors: digester.digest(isRecord(operation.responses) ? Object.fromEntries(Object.entries(operation.responses).filter(([code]) => !SUCCESS.test(code))) : operation.responses),
     envelope: digester.digest({ responses: reader.envelope(operation.responses, digester.digest), produces: producesOf(contract, declared) }),
   };
-  const files = new Set([...reader.files, ...digester.files(), ...digester.unresolved().flatMap(({ file: named }) => named ?? [])]);
+  const files = new Set([...reader.files, ...requestShapeOf(contract, declared, place, referenced).files, ...digester.files(), ...digester.unresolved().flatMap(({ file: named }) => named ?? [])]);
   return { shape, files: [...files].sort(compareText), digests };
 }
 
@@ -135,13 +135,19 @@ function createReader(referenced: ReferencedDocuments, place: Evidence, document
   const shapes = new Map<string, Shape>();
   const unknown = (via: string): UnknownShape => ({ kind: "unknown", reason: "unresolved", evidence: [{ ...place, via }] });
 
+  /**
+   * The schema a written one names through its references. A keyword beside a reference reads as the target only when
+   * the target, in the same file, states it with the same value: then ignoring it (OpenAPI 3.0) and combining it with the
+   * target (3.1) agree. Any other keyword beside a reference leaves the place unknown.
+   */
   function resolve(file: string, written: unknown): Located | UnknownShape {
     let current: Located = { file, node: written };
     const followed = new Set<string>();
     while (isRecord(current.node) && typeof current.node.$ref === "string") {
-      const ref = current.node.$ref;
-      if (Object.keys(current.node).some((key) => key !== "$ref" && !DOCUMENTATION.has(key))) return unknown(`reference with siblings ${ref}`);
+      const { $ref: ref, ...beside } = current.node;
       const target = targetOf(current.file, ref, referenced);
+      const restated = (keyword: string) => "node" in target && target.file === current.file && isRecord(target.node) && canonicalJson(target.node[keyword]) === canonicalJson(beside[keyword]);
+      if (Object.keys(beside).some((keyword) => !DOCUMENTATION.has(keyword) && !restated(keyword))) return unknown(`reference with siblings ${ref}`);
       if ("unresolved" in target) {
         if (target.unresolved.file !== undefined) files.add(target.unresolved.file);
         return unknown(`unresolved reference ${ref}`);
@@ -337,7 +343,32 @@ function createReader(referenced: ReferencedDocuments, place: Evidence, document
     });
   }
 
-  return { files, success, envelope, request };
+  /**
+   * The request without the schemas its body and parameter shapes read, each part digested from the file it is declared
+   * in: what a writer sends beside those values (media types, parameter serialization, consumed media), parameters in
+   * the order of their location and name.
+   */
+  function besideRequest({ parameters, requestBody, consumes }: ReturnType<typeof requestOf>, digest: Digester["digest"]): unknown {
+    const beside = parameters.map((written) => {
+      const parameter = parameterOf(written);
+      if ("kind" in parameter || !isRecord(parameter.node)) return { location: "", name: "", digest: digest(written) };
+      const { node } = parameter;
+      const kept = node.schema !== undefined || node.content !== undefined ? withoutSchema(node) : Object.fromEntries(Object.entries(node).filter(([key]) => PARAMETER_FIELDS.has(key)));
+      return { location: String(node.in), name: String(node.name), digest: digest(kept, parameter.file) };
+    });
+    beside.sort((a, b) => compareText(a.location, b.location) || compareText(a.name, b.name) || compareText(a.digest, b.digest));
+    const body = requestBody === undefined ? undefined : resolve(document, requestBody);
+    const bodyDigest = body === undefined ? undefined : "kind" in body || !isRecord(body.node) ? digest(requestBody) : digest(withoutSchema(body.node), body.file);
+    return { parameters: beside, body: bodyDigest, consumes };
+  }
+
+  return { files, success, envelope, request, besideRequest };
+}
+
+/** A parameter or body without the schema it holds or the schemas of its media, which keep only their other fields. */
+function withoutSchema({ schema: _schema, content, ...beside }: Json): Json {
+  if (!isRecord(content)) return content === undefined ? beside : { ...beside, content };
+  return { ...beside, content: Object.fromEntries(Object.entries(content).map(([media, entry]) => [media, isRecord(entry) ? Object.fromEntries(Object.entries(entry).filter(([key]) => key !== "schema")) : entry])) };
 }
 
 /** The kinds a `type` allows, `undefined` for one this reader does not know; `nullable` adds null to a declared type. */
