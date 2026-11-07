@@ -220,7 +220,7 @@ function rebuildTrace(t: Tables): TraceValue {
           return { symbol, file, start: line, end: endLine ?? line };
         }),
       }),
-      ...(step.effects === undefined ? {} : { effects: step.effects }),
+      ...(step.effects === undefined ? {} : { effects: step.effects.map(({ place: _place, ...effect }) => effect) }),
     })),
     readingPlan: { ranges: t.list("/value/readingPlan/ranges", "reading-range").map((range) => ({ file: t.path(range.file), start: range.start, end: range.end, steps: range.steps })), lines: totals.lines },
     cost: { expanded: totals.expanded },
@@ -520,6 +520,8 @@ test("workspace impact keeps reads with their kinds, call-site ancestors and sta
   const prefix = "/value/sections/web/value";
   const [site] = t.list(`${prefix}/callSites`, "call-site");
   assert.equal(site?.disposition, "matched");
+  const place = set.evidence.find(evidence => evidence.id === site?.site.location.place);
+  assert.deepEqual(place === undefined ? undefined : { repo: place.repo, value: place.value }, { repo: "web", value: { path: "src/orders.service.ts", line: 14 } });
   assert.deepEqual(site?.site.ancestors, [{ symbol: "OrdersService", line: 3, endLine: 40 }]);
   assert.deepEqual(site?.site.stated, { method: "GET", path: "/orders" });
   const [bare] = t.list(`${prefix}/unmatched`, "call-site");

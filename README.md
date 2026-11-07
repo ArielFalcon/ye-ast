@@ -727,4 +727,5 @@ Apache-2.0 · See [LICENSE](LICENSE)
 Trace can read explicitly declared client-library sources with `trace --workspace <manifest.json> [--offline]`, or
 `workspace`/`offline` on `ye_ast_trace` and composed trace queries. The existing workspace manifest supplies local
 repositories; artifact-proven dependency closures determine which library sources extraction reads. Omit workspace
-for the unchanged local-only answer. Undecidable runtime URL policies remain cuts.
+for the unchanged local-only answer. Undecidable runtime URL policies remain cuts. Compose relates trace effects to
+other observations through shared call-place evidence, without implying causality.

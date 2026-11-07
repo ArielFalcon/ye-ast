@@ -146,7 +146,7 @@ export const unresolvedCallSiteSchema = z.strictObject({
 
 export const linkBasis = z.enum(["exact", "base-path", "suffix", "operation-id", "event-destination", "gateway-prefix", "route-overlap"]);
 export const linkEndpoints = {
-  from: z.strictObject({ ...callLocation.shape, repo: z.string(), symbol: z.string() }),
+  from: z.strictObject({ ...callLocation.shape, repo: z.string(), symbol: z.string(), place: ids.evidence.exactOptional() }),
   to: <H extends z.ZodType>(handler: H) => z.strictObject({ repo: z.string(), kind: entrypointKind, name: z.string(), handler }),
 };
 const outwardKind = z.enum(["http-host", "path-prefix", "configuration-url", "destination", "dependency", "remote", "registry"]);
@@ -308,8 +308,8 @@ export const partSchema = z.discriminatedUnion("kind", [
     ])).exactOptional(),
     alternatives: z.array(ids.anchor).exactOptional(),
     effects: z.array(z.discriminatedUnion("kind", [
-      z.strictObject({ kind: z.literal("http"), line: count, target: httpTarget }),
-      z.strictObject({ kind: z.literal("message"), line: count, target: eventTarget }),
+      z.strictObject({ kind: z.literal("http"), line: count, target: httpTarget, place: ids.evidence.exactOptional() }),
+      z.strictObject({ kind: z.literal("message"), line: count, target: eventTarget, place: ids.evidence.exactOptional() }),
     ])).exactOptional(),
   }),
   part("trace-root", { target: z.string(), steps: z.array(count) }),
@@ -320,7 +320,7 @@ export const partSchema = z.discriminatedUnion("kind", [
     site: z.strictObject({
       repo: z.string(), symbol: z.string(),
       ancestors: z.array(z.strictObject({ symbol: z.string(), line: int, endLine: int })).exactOptional(),
-      transport, diagnostic: callSiteDiagnostic.exactOptional(), stated: stated.exactOptional(), location: callLocation,
+      transport, diagnostic: callSiteDiagnostic.exactOptional(), stated: stated.exactOptional(), location: z.strictObject({ ...callLocation.shape, place: ids.evidence.exactOptional() }),
       target: evidenceFinding(z.union([httpTarget, eventTarget])),
     }),
     disposition: z.enum(["matched", "unmatched", "external"]),

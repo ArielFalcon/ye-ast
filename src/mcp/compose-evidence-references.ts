@@ -55,7 +55,7 @@ export function partReferences(part: Part): Reference[] {
     case "outline-declaration":
       return [ref("anchor", "anchor", part.anchor), ...many("part", "children", part.children ?? [])];
     case "trace-step":
-      return [ref("anchor", "anchor", part.anchor), ...many("anchor", "leaves.anchor", (part.leaves ?? []).map((leaf) => leaf.anchor)), ...many("anchor", "alternatives", part.alternatives ?? [])];
+      return [ref("anchor", "anchor", part.anchor), ...many("anchor", "leaves.anchor", (part.leaves ?? []).map((leaf) => leaf.anchor)), ...many("anchor", "alternatives", part.alternatives ?? []), ...many("evidence", "effects.place", (part.effects ?? []).flatMap(effect => effect.place === undefined ? [] : [effect.place]))];
     case "reading-range":
       return [ref("file", "file", part.file)];
     case "trace-root":
@@ -72,14 +72,14 @@ export function partReferences(part: Part): Reference[] {
     case "name-candidate":
       return [ref("read", "context", part.context), ...many("evidence", "evidence", part.evidence)];
     case "call-site":
-      return [ref("file", "site.location.file", part.site.location.file), ...many("evidence", "site.target.evidence", part.site.target.evidence)];
+      return [ref("file", "site.location.file", part.site.location.file), ...many("evidence", "site.target.evidence", part.site.target.evidence), ...(part.site.location.place === undefined ? [] : [ref("evidence", "site.location.place", part.site.location.place)])];
     case "unresolved-call-site":
       return [];
     case "unlinked-call-site":
       return [ref("file", "site.from.file", part.site.from.file)];
     case "workspace-link":
       return [
-        ref("file", "link.from.file", part.link.from.file), ref("anchor", "link.to.handler", part.link.to.handler),
+        ...(part.link.from.place === undefined ? [] : [ref("evidence", "link.from.place", part.link.from.place)]), ref("file", "link.from.file", part.link.from.file), ref("anchor", "link.to.handler", part.link.to.handler),
         ...(part.reach ?? []).flatMap((reach) => (reach.status === "present" ? [ref("part", "reach.part", reach.part)] : [])),
       ];
     case "workspace-context": {

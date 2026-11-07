@@ -143,6 +143,11 @@ also through another library method. HTTP and message target readers retain a cu
 ownership and wrapper attribution at the root caller remain unchanged. Runtime-only URL policies remain cuts;
 owner-declared URL contracts and dependency-cache or jar discovery are outside this work.
 
+Compose normalizes effects, call sites and link origins with the same call-place evidence identity (repository,
+snapshot, file, line). Its existing shared-evidence/shared-support rules relate compatible observations automatically;
+this states a shared location, not causality. No pair-specific family matcher is introduced. Composed trace summaries
+include an effects count, including a single trace.
+
 ### The fact
 
 Slice 1 answers this shape; `alternatives` (R7) joined it in slice 3 and `effects` (R12) in slice 4.

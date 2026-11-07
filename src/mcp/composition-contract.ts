@@ -159,11 +159,11 @@ export type FileDependencyCategory = "importer" | "reexporter" | "dynamic-import
 /** A call-site location: never a declaration start. */
 export type CallLocation = { file: FileId; line: number; endLine?: number };
 export type CallSiteData = Omit<CallSite, "file" | "line" | "endLine" | "target"> & {
-  location: CallLocation;
+  location: CallLocation & { place?: EvidenceId };
   target: EvidenceFinding<HttpTarget | EventTarget>;
 };
 export type LinkData = Omit<Link, "from" | "to"> & {
-  from: CallLocation & { repo: string; symbol: string };
+  from: CallLocation & { repo: string; symbol: string; place?: EvidenceId };
   to: { repo: string; kind: Entrypoint["kind"]; name: string; handler: AnchorId };
 };
 
@@ -220,7 +220,7 @@ export type PartPayload =
       /** Every body a call to this body-less method may run, when the declared hierarchy names them all. */
       alternatives?: readonly AnchorId[];
       /** The requests and messages its body makes through a declared client (RFC-0013 R12). */
-      effects?: readonly TraceEffect[];
+      effects?: readonly (TraceEffect & { place?: EvidenceId })[];
     }
   | { kind: "trace-root"; target: string; steps: readonly number[] }
   | { kind: "reading-range"; file: FileId; start: number; end: number; steps: readonly number[] }
