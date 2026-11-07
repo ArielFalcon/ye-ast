@@ -45,7 +45,7 @@ async function extractRelations(deps: AngularRelationsDeps, files: readonly Sour
   const templates = classes.flatMap((candidate): ComponentTemplate[] => {
     if (candidate.kind !== "component") return [];
     const { effects, unreadable, lines } = templateRead(candidate);
-    return [{ component: candidate.ref, ...(lines === undefined ? {} : { lines }), handlers: effects.handlers, eventCalls: effects.eventCalls, uses: usesOf.get(classKey(candidate.ref)) ?? [], ...(unreadable === undefined ? {} : { unreadable }) }];
+    return [{ component: candidate.ref, ...(lines === undefined ? {} : { lines }), handlers: effects.handlers, eventCalls: effects.eventCalls, ...(effects.renderHandlers?.length ? { renderHandlers: effects.renderHandlers } : {}), ...(effects.renderCalls?.length ? { renderCalls: effects.renderCalls } : {}), uses: usesOf.get(classKey(candidate.ref)) ?? [], ...(unreadable === undefined ? {} : { unreadable }) }];
   });
   return { relations: sortFindings([...findings, ...unitFindings, ...usage.relations]), fields, locals, ...(memberUses === undefined ? {} : { memberUses }), ...(externalUses === undefined ? {} : { externalUses }), templates };
 }

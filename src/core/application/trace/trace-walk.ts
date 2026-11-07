@@ -83,7 +83,9 @@ export interface TraceWalkInput {
 export interface PagePlan {
   /** The members the framework calls itself, in the order it calls them. */
   lifecycle: readonly string[];
-  /** What its template's event bindings call, in template text order: an own method by name, or the method a proof names. */
+  /** What template rendering calls, in template text order. */
+  render?: PagePlan["handlers"];
+  /** What event bindings call, in template text order: an own method or the method a proof names. */
   handlers: readonly ({ file: string; line: number; column: number } & ({ member: string } | { runs: GraphSymbol }))[];
   /** The declarations its template uses, in template order. */
   children: readonly GraphSymbol[];
@@ -709,18 +711,18 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
 
 /**
  * A page's children in the order it runs them (R9): its constructor, its field initializers and what its class body
- * calls, in source order; its lifecycle hooks in the framework's order; the handlers its template binds to events, in
+ * calls, in source order; its lifecycle hooks in the framework's order; render calls then event handlers, each in
  * template order; the declarations its template uses; then its other members, in source order. A handler the class
  * runs no member of is a cut at the binding.
  */
 function pageOrder(children: readonly Child[], plan: PagePlan, cuts: Cut[]): Child[] {
-  const handlerRank = new Map<string, number>();
+  const handlerRank = new Map<string, readonly [number, number]>();
   const runs: { child: Child; rank: readonly [number, number] }[] = [];
   const members = new Set(children.filter(({ via }) => via === "member").map(({ symbol }) => symbol.name));
-  for (const [index, handler] of plan.handlers.entries()) {
-    if ("runs" in handler) runs.push({ child: { symbol: handler.runs, place: { line: null, column: null, spelling: handler.runs.name, target: handler.runs.id }, via: "template" }, rank: [2, index] });
+  for (const [phase, calls] of [[2, plan.render ?? []], [3, plan.handlers]] as const) for (const [index, handler] of calls.entries()) {
+    if ("runs" in handler) runs.push({ child: { symbol: handler.runs, place: { line: null, column: null, spelling: handler.runs.name, target: handler.runs.id }, via: "template" }, rank: [phase, index] });
     else if (!members.has(handler.member)) cuts.push({ kind: "unresolved-link", at: [placeAt(handler.file, handler.line, handler.member)] });
-    else if (!handlerRank.has(handler.member)) handlerRank.set(handler.member, index);
+    else if (!handlerRank.has(handler.member)) handlerRank.set(handler.member, [phase, index]);
   }
   cuts.push(...plan.cuts);
   const rankOf = ({ symbol, via, place }: Child): readonly [number, number] => {
@@ -729,10 +731,10 @@ function pageOrder(children: readonly Child[], plan: PagePlan, cuts: Cut[]): Chi
     const hook = plan.lifecycle.indexOf(symbol.name);
     if (hook >= 0) return [1, hook];
     const handler = handlerRank.get(symbol.name);
-    return handler === undefined ? [4, line] : [2, handler];
+    return handler ?? [5, line];
   };
   const ranked = children.map((child) => ({ child, rank: rankOf(child) }));
-  const used = plan.children.map((symbol, index) => ({ child: { symbol, place: { line: null, column: null, spelling: symbol.name, target: symbol.id }, via: "template" as const }, rank: [3, index] as const }));
+  const used = plan.children.map((symbol, index) => ({ child: { symbol, place: { line: null, column: null, spelling: symbol.name, target: symbol.id }, via: "template" as const }, rank: [4, index] as const }));
   return [...ranked, ...runs, ...used].sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1]).map(({ child }) => child);
 }
 

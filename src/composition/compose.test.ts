@@ -1875,6 +1875,14 @@ export class Page { p!: Port; key!: string; field = ${shape.replaceAll("p", "thi
     writeFileSync(join(repo, `src/Inventory${index}.java`), `interface Port { void save(); }
 class Inventory${index} { void run(Port p) { ${shape}; } }`);
   }
+  writeFileSync(join(repo, "src/InventoryConstructor.java"), [
+    "class InventoryConstructor {",
+    "  InventoryConstructor() {",
+    "    this(1);",
+    "  }",
+    "  InventoryConstructor(int value) {}",
+    "}",
+  ].join("\n"));
   git("add", ".");
   git("commit", "-qm", "call inventory");
   const { trace } = composeQueries({ scratchRoot });
@@ -1893,4 +1901,31 @@ class Inventory${index} { void run(Port p) { ${shape}; } }`);
     assert.ok(answer.ok);
     assert.equal(answer.value.status, "partial", javaShapes[index]);
   }
+  const constructor = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/InventoryConstructor.java", symbol: "InventoryConstructor" }] });
+  assert.ok(constructor.ok && constructor.value.status === "partial");
+  assert.ok(constructor.value.cuts.some((cut) => cut.at[0] === "src/InventoryConstructor.java:3 this"));
+});
+
+test("a page orders render calls before event handlers and cuts every unbound template call", async () => {
+  writeFileSync(join(repo, "package.json"), JSON.stringify({ dependencies: { "@angular/core": "22.0.0", "@angular/router": "22.0.0" } }));
+  writeFileSync(join(repo, "src/page.ts"), [
+    "import { Component } from '@angular/core';",
+    "@Component({ selector: 'app-page', standalone: true, templateUrl: './page.html' })",
+    "export class Page {",
+    "  clicked() { unresolved(); }",
+    "  label() { unresolved(); }",
+    "  total() { unresolved(); }",
+    "}",
+  ].join("\n"));
+  writeFileSync(join(repo, "src/page.html"), '<div [title]="total()">{{ label() }}</div>\n{{ value.invoke() }} {{ missing() }}\n<button (click)="clicked()">Go</button>');
+  writeFileSync(join(repo, "src/routes.ts"), "import { Routes } from '@angular/router'; import { Page } from './page'; export const routes: Routes = [{ path: 'p', component: Page }];");
+  writeFileSync(join(repo, "src/main.ts"), "import { provideRouter } from '@angular/router'; import { routes } from './routes'; provideRouter(routes);");
+  git("add", "-A");
+  git("commit", "-qm", "render calls");
+  const { trace } = composeQueries({ scratchRoot });
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ kind: "ui-route", name: "/p" }] });
+  assert.ok(answer.ok && answer.value.status === "partial", JSON.stringify(answer));
+  assert.deepEqual(answer.value.value.steps.filter((step) => ["total", "label", "clicked"].includes(step.symbol)).map((step) => step.symbol), ["total", "label", "clicked"]);
+  assert.ok(answer.value.cuts.some((cut) => cut.at[0] === "src/page.html:2 missing"));
+  assert.ok(answer.value.cuts.some((cut) => cut.at[0] === "src/page.html:2 value.invoke"));
 });

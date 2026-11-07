@@ -194,3 +194,13 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
 ## Trace call inventory (2026-11-07)
 
 The existing member readers also supply every written call's place, callee name and syntax owners. Trace reconciles these with its indexed calls and pending references before declaring a body complete. Missing sites remain unresolved-link cuts. Syntax ownership includes field initializers and keeps a member's calls out of its class body; an anonymous callback remains with its encloser. This adds no lexical resolver, binding proof, type checker or stored schema. Other query families retain their existing dependency semantics: an unaccounted execution site alone proves no dependency edge.
+
+## Precision boundary after the call inventory follow-up
+
+Template render calls use the existing Angular expression binder and member-origin proofs, with unknown calls kept as cuts. Their text order precedes event handlers in the page reading plan; it does not prove runtime branch execution or render frequency.
+
+A local copied from an injected field remains unproven. Relaxing the field-copy escape guard does not create a local origin (`localSites` accepts injection locals), and admits a false direct-member proof after passing the copied value to an unknown-member writer. The public metadata experiment returned direct/alias/escaped-alias proof counts 1/0/0 before relaxation and 1/0/1 after it. The guard is retained; admitting copies requires binding-aware, transitive use/escape evidence, with the same proof contract for trace, impact and callers.
+
+Follow-up measurements against baseline 15f44afa: all 92 probes ran before and after, with 61 changed answers, 4,742 → 5,745 cuts and unchanged 5,125 body expansions. All 17 non-trace commands were byte-identical (stdout/stderr/exit 0). RFC-0013 records the per-repository counts and public-seam mutation evidence.
+
+Verification: public composed-query RED/GREEN and caught type-correct inventory/render mutations; final `npm run check` passed all 3,662 tests, typecheck and architecture checks.

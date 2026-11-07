@@ -68,6 +68,8 @@ function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): T
   const lineOf = (offset: number): number => lineStarts.findLastIndex((start) => start <= offset);
   const calls: TemplateMemberCall[] = [];
   const handlers: TemplateHandlerCall[] = [];
+  const renderHandlers: TemplateHandlerCall[] = [];
+  const renderCalls: TemplateEventCall[] = [];
   const eventCalls: TemplateEventCall[] = [];
   let inEvent = false;
   const writes: TemplateWrite[] = [];
@@ -81,12 +83,11 @@ function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): T
     const index = lineOf(offset);
     return { file: template.path, line: template.firstLine + index, column: offset - lineStarts[index]! + 1 };
   };
-  /** Every call an event binding makes, whatever its shape: an own method is a handler, anything else an event call. */
-  const eventCall = (call: AST, callee: AST): void => {
-    if (!inEvent) return;
+  /** Every template call: an own method, or a site that needs an origin proof. */
+  const recordCall = (call: AST, callee: AST): void => {
     const own = ownField(callee);
-    if (own !== undefined) handlers.push({ ...placeOf(call.sourceSpan.start), member: own.name });
-    else eventCalls.push({ ...placeOf(call.sourceSpan.start), name: template.text.slice(callee.sourceSpan.start, callee.sourceSpan.end) });
+    if (own !== undefined) (inEvent ? handlers : renderHandlers).push({ ...placeOf(call.sourceSpan.start), member: own.name });
+    else (inEvent ? eventCalls : renderCalls).push({ ...placeOf(call.sourceSpan.start), name: template.text.slice(callee.sourceSpan.start, callee.sourceSpan.end) });
   };
   const visitor = new (class extends CombinedRecursiveAstVisitor {
     override visitBoundEvent(event: TmplAstBoundEvent): void {
@@ -123,17 +124,17 @@ function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): T
       const callee = peel(call.receiver);
       const field = callee instanceof PropertyRead ? ownField(callee.receiver) : undefined;
       if (callee instanceof PropertyRead && field !== undefined) calls.push({ ...placeOf(call.sourceSpan.start), field: field.name, member: callee.name });
-      eventCall(call, call.receiver);
+      recordCall(call, call.receiver);
       super.visitCall(call, context);
     }
 
     override visitSafeCall(call: SafeCall, context?: unknown): void {
-      eventCall(call, call.receiver);
+      recordCall(call, call.receiver);
       super.visitSafeCall(call, context);
     }
 
     override visitTaggedTemplateLiteral(tagged: TaggedTemplateLiteral, context?: unknown): void {
-      eventCall(tagged, tagged.tag);
+      recordCall(tagged, tagged.tag);
       super.visitTaggedTemplateLiteral(tagged, context);
     }
 
@@ -173,6 +174,8 @@ function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): T
     calls: calls.sort((a, b) => a.line - b.line || a.column - b.column),
     handlers: handlers.sort(byPlace),
     eventCalls: eventCalls.sort(byPlace),
+    renderHandlers: renderHandlers.sort(byPlace),
+    renderCalls: renderCalls.sort(byPlace),
     writes,
     passed: [...new Set(reads.filter((read) => !used.has(read)).map((read) => read.name))].sort(),
   };

@@ -59,6 +59,9 @@ export interface TemplateUsage {
 
 /** What one template does through the component's own fields: its member calls, its writes, and the fields it passes on. */
 export interface TemplateEffects {
+  /** Own methods and other calls outside event bindings, in template text order. */
+  renderHandlers?: readonly TemplateHandlerCall[];
+  renderCalls?: readonly TemplateEventCall[];
   calls: readonly TemplateMemberCall[];
   /** The component's own methods its event bindings call, in text order. */
   handlers: readonly TemplateHandlerCall[];
