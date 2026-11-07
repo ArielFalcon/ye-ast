@@ -1,12 +1,12 @@
 import { posix } from "node:path";
 import ts from "typescript";
+import { ANGULAR_CORE } from "./angular-injection.ts";
 import { sourceTree } from "./source-tree.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { AngularDeclaration, AngularDeclarationReader, AngularDecorator } from "../../ports/angular-declarations.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { angularProjects, pathsByProject } from "./angular-projects.ts";
 
-const ANGULAR_CORE = "@angular/core";
 const DECORATORS: ReadonlySet<string> = new Set<AngularDecorator>(["Component", "Directive", "Pipe", "Injectable", "NgModule"]);
 
 export function createAngularDeclarationReader(): AngularDeclarationReader {

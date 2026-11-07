@@ -18,7 +18,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import { isCallOf } from "./consumer-sources.ts";
 
 /** The bases that say the call reaches this operation; the others say it may, and are reported where they stop. */
-const QUALIFIED_BASES: ReadonlySet<LinkBasis> = new Set(["exact", "base-path", "operation-id"]);
+const QUALIFIED_BASES: ReadonlySet<LinkBasis> = new Set(["exact", "base-path"]);
 
 export interface ContractConsequencesQueriesDeps {
   sources: ConsumerSources;

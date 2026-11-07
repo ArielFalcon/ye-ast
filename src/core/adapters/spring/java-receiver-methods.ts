@@ -4,12 +4,12 @@ import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts"
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins, ReceiverMethod } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
-import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
+import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
+import { enclosingType, thisType, withJavaSources } from "./java-project.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
-import { enclosingType } from "./java-root-bindings.ts";
 import { ancestorsOf, hierarchyOf, targetsOf, type Hierarchy, type Superclass } from "./java-dispatch-targets.ts";
-import { createJavaProject, describeFile, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
@@ -55,21 +55,10 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
     const results: ReceiverMethod[] = sites.map(() => UNKNOWN);
     if (!sites.some(({ file }) => isJavaSource(file))) return results;
     const read = await parser();
-    const trees: JavaSyntaxTree[] = [];
-    try {
-      const files: JavaFile[] = [];
-      let parsedAll = true;
-      for (const source of java) {
-        const parsed = read.parse(source.content);
-        if (!parsed.ok) {
-          parsedAll = false;
-          continue;
-        }
-        trees.push(parsed.value);
-        files.push(describeFile(source.path, parsed.value.root));
-      }
+    return withJavaSources(read, (parse) => {
+      const { files, unparsed } = parse(java);
       const project = createJavaProject(files);
-      const falsified = !parsedAll || unreadJvm || project.unreadable.length > 0 || files.some((file) => namesAnyDynamicImplementation(file, project));
+      const falsified = unparsed.length > 0 || unreadJvm || project.unreadable.length > 0 || files.some((file) => namesAnyDynamicImplementation(file, project));
       const hierarchy = falsified ? undefined : hierarchyOf(files, project);
       const proves = hierarchy !== undefined && !files.some(({ root }) => rewritesCalls(root));
       const byPath = new Map(files.map((file) => [file.path, file]));
@@ -96,19 +85,16 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         } else if (falsified && resolver.holdsValue(invocations[0]!, source.file)) results[index] = UNPROVEN;
       }
       return results;
-    } finally {
-      for (const tree of trees) tree.dispose();
-    }
+    });
   };
 }
 
 function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) {
-  const placed = new Map(project.types.map((type) => [type.node.id, type]));
 
   /** The repository type the receiver of an invocation is declared to hold; none when nothing proves one. */
   const receiverOf = (invocation: Node, source: ReadFile): TypeDecl | undefined => {
     const object = invocation.childForFieldName("object");
-    if (object === null || object.type === "this") return enclosingClassOf(invocation);
+    if (object === null || object.type === "this") return thisType(invocation, source.file, project);
     if (object.type === "method_invocation") {
       const called = methodNamed(object, source);
       return called === undefined ? undefined : returnTypeOf(called);
@@ -118,12 +104,6 @@ function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) 
     if (binding === undefined || binding.receiver !== receiver || binding.holds.kind !== "annotated") return undefined;
     const name = annotationAt(source.file.root, binding.holds.line, binding.holds.column, binding.holds.type);
     return name === undefined ? undefined : repositoryType(name, source.file, name);
-  };
-
-  /** The class a bare or `this` call inside it names a member of: the type whose body holds the call, when the project places it. */
-  const enclosingClassOf = (node: Node): TypeDecl | undefined => {
-    const body = enclosingBody(node);
-    return body?.parent === null || body?.parent === undefined ? undefined : placed.get(body.parent.id);
   };
 
   /** The one method of the name that the receiver's declared type offers for the call's arity. */

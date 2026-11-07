@@ -9,8 +9,9 @@ import { createJavaRootBindings } from "./java-root-bindings.ts";
 import { createJavaDeclaredTypes } from "./java-declared-types.ts";
 import { createJavaDispatchTargets } from "./java-dispatch-targets.ts";
 import { createJavaReceiverMethods } from "./java-receiver-methods.ts";
-import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
-import { createJavaProject, describeFile, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
+import { withJavaSources } from "./java-project.ts";
+import { createJavaProject, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
 const TYPE_DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration", "interface_declaration", "enum_declaration", "record_declaration", "annotation_type_declaration"]);
 const VARIABLE_DECLARATIONS: ReadonlySet<string> = new Set(["variable_declarator", "formal_parameter", "spread_parameter", "catch_formal_parameter", "resource", "enhanced_for_statement"]);
@@ -48,15 +49,8 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
       const asked = sites.flatMap((site, index) => (isJavaSource(site.file) ? [{ site, index }] : []));
       if (asked.length === 0 || signal?.aborted) return results;
       const java = await parser();
-      const trees: JavaSyntaxTree[] = [];
-      try {
-        const files = new Map<string, JavaFile>();
-        for (const source of javaSources) {
-          const parsed = java.parse(source.content);
-          if (!parsed.ok) continue;
-          trees.push(parsed.value);
-          files.set(source.path, describeFile(source.path, parsed.value.root));
-        }
+      return withJavaSources(java, (parse) => {
+        const files = new Map(parse(javaSources).files.map((file) => [file.path, file]));
         const project = createJavaProject([...files.values()]);
         const unreadable = new Set(project.unreadable);
         for (const { site, index } of asked) {
@@ -65,10 +59,8 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
           const root = rootOf(site, file, project);
           if (root !== undefined) results[index] = { status: "complete", value: root.origin, ...(root.bare ? { bare: true as const } : {}), ...(root.pastRoot ? { pastRoot: true as const } : {}), evidence: [{ path: site.file, line: site.line }] };
         }
-      } finally {
-        for (const tree of trees) tree.dispose();
-      }
-      return results;
+        return results;
+      });
     },
   };
 }
