@@ -67,6 +67,15 @@ test("a computed key, a getter, a method and a prototype make the property uncer
   assert.deepEqual(show(await body(PAGE("this.http.post('/v', { id: null, toJSON() { return {} } })"), POST_AT, "id")), ["frontier untracked@4"]);
 });
 
+test("a serializer the walk can see applies to the whole serialized object, so no later write erases it", async () => {
+  const serving = "{ toJSON() { return { id: 1 } } }";
+  assert.deepEqual(show(await body(PAGE(`this.http.post('/v', { __proto__: ${serving}, id: null })`), POST_AT, "id")), ["frontier untracked@4"]);
+  assert.deepEqual(show(await body(PAGE(`this.http.post('/v', { ...${serving}, id: null })`), POST_AT, "id")), ["frontier untracked@4"]);
+  assert.deepEqual(show(await body(PAGE(`const base = ${serving}`, "this.http.post('/v', { ...base, id: null })"), 5, "id")), ["frontier untracked@5"]);
+  assert.deepEqual(show(await body(PAGE(`this.http.post('/v', { inner: { __proto__: ${serving}, id: null } })`), POST_AT, "inner.id")), ["frontier untracked@4"]);
+  assert.deepEqual(show(await body(PAGE("this.http.post('/v', { ...{ y: 1 }, id: null })"), POST_AT, "id")), ["null@4"]);
+});
+
 test("a nested path follows the object it names, an array element path follows every element, and a value that is no object ends in a frontier", async () => {
   assert.deepEqual(show(await body(PAGE("this.http.post('/v', { owner: { id: null } })"), POST_AT, "owner.id")), ["null@4"]);
   assert.deepEqual(show(await body(PAGE("this.http.post('/v', { items: [{ id: 1 }, { id: null }, {}] })"), POST_AT, "items[].id")), ["1@4", "null@4", "absent@4"]);
@@ -96,6 +105,12 @@ test("a function or a symbol is dropped from an object and is null in an array s
   assert.deepEqual(show(await body(lines, POST_AT, "b")), ["absent@4"]);
   assert.deepEqual(show(await body(lines, POST_AT, "c")), ["absent@4"]);
   assert.deepEqual(show(await body(lines, POST_AT, "list[]")), ["null@4", "null@4", "1@4"]);
+});
+
+test("a function or a symbol stays what it is through ?? and ||, and only the wire drops it", async () => {
+  const lines = PAGE("this.http.post('/v', { a: (() => 1) ?? 1, b: Symbol('s') || 1, c: (function () {}) || 1, d: null ?? (() => 1), list: [(() => 1) ?? 1, Symbol('s') || 1] })");
+  for (const name of ["a", "b", "c", "d"]) assert.deepEqual(show(await body(lines, POST_AT, name)), ["absent@4"], name);
+  assert.deepEqual(show(await body(lines, POST_AT, "list[]")), ["null@4", "null@4"]);
 });
 
 test("the operator selects on the JavaScript value and the wire serializes the selected one", async () => {
@@ -181,10 +196,62 @@ test("a parameter handed to another call, or aliased, is no longer what the call
   assert.deepEqual(show(await body(aliased, 5, "id", "Page.add")), ["frontier mutated@5"]);
 });
 
-test("a use of the value in the same statement after the request, or in straight-line code after it, is told apart", async () => {
-  const sameStatement = ["class Page {", "  constructor(private http: HttpClient) {}", "  add(vet: Vet) {", "    return this.http.post('/v', vet).pipe(catchError(this.handle('add', vet)))", "  }", "}"];
-  const [origin] = await body(sameStatement, 4, "id", "Page.add");
-  assert.equal(origin?.kind, "parameter");
+const withHandler = (handler: string, extra: readonly string[] = []) => [
+  "class Page {",
+  "  constructor(private http: HttpClient) {}",
+  "  add(vet: Vet) {",
+  "    return this.http.post('/v', vet).pipe(catchError(this.handle('add', vet)))",
+  "  }",
+  "  handle(operation: string, result: Vet) {",
+  `    ${handler}`,
+  "  }",
+  ...extra,
+  "}",
+];
+const withLocalHandler = (handler: string, extra: readonly string[] = []) => [
+  "class Page {",
+  "  constructor(private http: HttpClient) {}",
+  "  save() {",
+  "    const vet = { id: null }",
+  "    return this.http.post('/v', vet).pipe(catchError(this.handle('add', vet)))",
+  "  }",
+  "  handle(operation: string, result: Vet) {",
+  `    ${handler}`,
+  "  }",
+  ...extra,
+  "}",
+];
+const DEFERRED = "return (error: unknown) => of(result)";
+
+test("a call that receives the value before the request is sent keeps it exact only when its resolved body neither writes, aliases nor passes it on", async () => {
+  const [kept] = await body(withHandler(DEFERRED), 4, "id", "Page.add");
+  assert.equal(kept?.kind, "parameter");
+  assert.deepEqual(show(await body(withLocalHandler(DEFERRED), 5, "id")), ["null@4"]);
+  const passesOn = ["  pass(inner: Vet) {", "    return (error: unknown) => of(inner)", "  }"];
+  assert.equal((await body(withHandler("return this.pass(result)", passesOn), 4, "id", "Page.add"))[0]?.kind, "parameter");
+  assert.deepEqual(show(await body(withLocalHandler("return this.pass(result)", passesOn), 5, "id")), ["null@4"]);
+});
+
+test("a call that receives the value is a mutation when its body writes, aliases or passes it to code the reader cannot resolve, or when it cannot be resolved", async () => {
+  const writing = ["  write(inner: Vet) {", "    inner.id = 1", "    return inner", "  }"];
+  for (const [handler, extra] of [
+    ["result.id = 1; return (error: unknown) => of(result)", []],
+    ["this.last = result; return (error: unknown) => of(result)", []],
+    ["delete result.id; return (error: unknown) => of(result)", []],
+    ["result.count += 1; return (error: unknown) => of(result)", []],
+    ["const copy = result; return (error: unknown) => of(copy)", []],
+    ["audit(result); return (error: unknown) => of(result)", []],
+    ["return of(result)", []],
+    ["return this.write(result)", writing],
+  ] as const) {
+    assert.deepEqual(show(await body(withHandler(handler, extra), 4, "id", "Page.add")), ["frontier mutated@4"], handler);
+    assert.deepEqual(show(await body(withLocalHandler(handler, extra), 5, "id")), ["frontier mutated@5"], handler);
+  }
+  const unresolved = ["class Page {", "  constructor(private http: HttpClient) {}", "  add(vet: Vet) {", "    return this.http.post('/v', vet).pipe(catchError(handle('add', vet)))", "  }", "}"];
+  assert.deepEqual(show(await body(unresolved, 4, "id", "Page.add")), ["frontier mutated@4"]);
+});
+
+test("a use of the value before the request, or in code after it, is told apart", async () => {
   const later = ["class Page {", "  constructor(private http: HttpClient) {}", "  add(vet: Vet) {", "    const sent = this.http.post('/v', vet)", "    normalize(vet)", "    return sent", "  }", "}"];
   assert.deepEqual(show(await body(later, 4, "id", "Page.add")), ["frontier mutated@4"]);
   const before = ["class Page {", "  constructor(private http: HttpClient) {}", "  add(vet: Vet) {", "    return this.http.post(normalize(vet), vet)", "  }", "}"];
@@ -312,4 +379,31 @@ test("an interceptor the reader cannot read is a frontier at its registration", 
 test("a class-based interceptor the reader cannot resolve is a frontier at its registration", async () => {
   const config = source("c.ts", ["import { External } from 'some-library'", "export const providers = [{ provide: HTTP_INTERCEPTORS, useClass: External, multi: true }]"]);
   assert.deepEqual(await withInterceptors([config]), ["frontier untracked@2"]);
+});
+
+test("a helper that receives the request, or whose result is passed on, is followed into its declaration and judged like a clone", async () => {
+  const config = source("c.ts", ["import { swap } from './i'", "export const providers = [provideHttpClient(withInterceptors([swap]))]"]);
+  const replacing = source("i.ts", ["const rewrite = (req) => req.clone({ body: { id: 1 } })", "export const swap = (req, next) => next(rewrite(req))"]);
+  assert.deepEqual(await withInterceptors([replacing, config]), ["frontier untracked@1"]);
+  const keeping = source("i.ts", ["const tag = (req) => req.clone({ setHeaders: { A: 'b' } })", "export const swap = (req, next) => next(tag(req))"]);
+  assert.deepEqual(await withInterceptors([keeping, config]), ["null@4"]);
+  const nested = source("i.ts", ["const inner = (request) => new HttpRequest('POST', request.url, { id: 1 })", "const outer = (value) => inner(value)", "export const swap = (req, next) => next(outer(req))"]);
+  assert.deepEqual(await withInterceptors([nested, config]), ["frontier untracked@1"]);
+  const built = source("i.ts", ["const build = () => new HttpRequest('POST', '/x', { id: 1 })", "export const swap = (req, next) => next(build())"]);
+  assert.deepEqual(await withInterceptors([built, config]), ["frontier untracked@1"]);
+  const imported = source("i.ts", ["import { rewrite } from './h'", "export const swap = (req, next) => next(rewrite(req))"]);
+  const helper = source("h.ts", ["export function rewrite(req) {", "  return req.clone({ body: { id: 1 } })", "}"]);
+  assert.deepEqual(await withInterceptors([imported, helper, config]), ["frontier untracked@2"]);
+});
+
+test("a helper of a class-based interceptor is resolved as a method", async () => {
+  const swap = source("i.ts", ["export class Swap {", "  intercept(req, next) { return next.handle(this.rewrite(req)) }", "  rewrite(req) { return req.clone({ body: { id: 1 } }) }", "}"]);
+  const config = source("c.ts", ["import { Swap } from './i'", "export const providers = [{ provide: HTTP_INTERCEPTORS, useClass: Swap, multi: true }]"]);
+  assert.deepEqual(await withInterceptors([swap, config]), ["frontier untracked@3"]);
+});
+
+test("a call that receives the request and cannot be resolved is a frontier at the call", async () => {
+  const config = source("c.ts", ["import { swap } from './i'", "export const providers = [provideHttpClient(withInterceptors([swap]))]"]);
+  const unknown = source("i.ts", ["import { wrap } from 'some-library'", "export const swap = (req, next) => next(wrap(req))"]);
+  assert.deepEqual(await withInterceptors([unknown, config]), ["frontier untracked@2"]);
 });

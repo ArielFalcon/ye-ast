@@ -15,7 +15,7 @@ import { OriginWalker } from "./request-origins.walker.ts";
  */
 export function createRequestOriginReader(files: readonly SourceFile[]): RequestOriginReader {
   let prepared: Promise<{ program: Awaited<ReturnType<typeof buildProgram>>; bodyOf: ReturnType<typeof createRequestBodies>; walker: OriginWalker; replacements: Origin[] }> | undefined;
-  const prepare = () => (prepared ??= buildProgram(files).then((program) => ({ program, bodyOf: createRequestBodies(files), walker: new OriginWalker(), replacements: bodyReplacements(program) })));
+  const prepare = () => (prepared ??= buildProgram(files).then((program) => ({ program, bodyOf: createRequestBodies(files), walker: new OriginWalker(program), replacements: bodyReplacements(program) })));
 
   return {
     async ofBody(site, path) {

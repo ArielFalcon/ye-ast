@@ -4,15 +4,13 @@ import { RESOURCE_STATE_MEMBERS, type CarrierSite, type FlowFrontier, type FlowN
 import type { Absence, AccessStep, EqualityOperator, Literal, Predicate, UseEnd, UseOperation } from "../../domain/contracts/use-operation.ts";
 import type { FallbackGuard, Guard, TestedGuard, UntestedGuard } from "../../domain/contracts/verdict.ts";
 import type { Evidence, UnknownReason } from "../../domain/shared/fact.ts";
-import type { Origin, Program, Unit } from "./consumer-flow.index.ts";
+import type { Program, Unit } from "./consumer-flow.index.ts";
 import {
   assignedBinding,
   chainPath,
   declaredBinding,
   declaredScope,
   discardsValue,
-  declaringScope,
-  isDynamicName,
   isUndeclaredName,
   enclosingClass,
   enclosingFunction,
@@ -40,9 +38,10 @@ import {
   type FunctionNode,
   type NamedFunction,
 } from "./consumer-flow.syntax.ts";
-import { constructorParameters, lineOf, propertyOf, symbolOf, typeName, VERBS } from "./http-call-sites.adapter.ts";
+import { lineOf, propertyOf, symbolOf, typeName, VERBS } from "./http-call-sites.adapter.ts";
 import { FUNCTIONS, isModule, METHODS, type MethodResult, type MethodRow } from "./consumer-flow.callees.ts";
-import { baseOf, injectedClass, injectedInstance, lineage, memberDeclaration, methodDeclared, thisClass, type ClassRef } from "./consumer-flow.classes.ts";
+import { resolveFunction, type Resolved } from "./consumer-flow.resolution.ts";
+import { baseOf, injectedClass, injectedInstance, lineage, memberDeclaration, thisClass, type ClassRef } from "./consumer-flow.classes.ts";
 
 /** A value being followed: where the changed property sits in it, the steps taken, and the guards that hold on it. */
 interface Trail {
@@ -59,8 +58,6 @@ export interface Held<T> {
   pos: number;
   value: T;
 }
-
-type Resolved = { kind: "function"; file: string; named: NamedFunction } | { kind: "external" };
 
 const PRESENT: Predicate = { kind: "absence", operator: "!=", absence: "null" };
 const TRUTHY: Predicate = { kind: "truthy" };
@@ -949,73 +946,7 @@ export class Walker {
   }
 
   private resolveFunction(callee: ts.Expression): Resolved | undefined {
-    const expression = unwrap(callee);
-    if (ts.isIdentifier(expression)) return this.functionNamed(expression);
-    if (!ts.isPropertyAccessExpression(expression)) return undefined;
-    const cls = enclosingClass(expression);
-    const receiver = unwrap(expression.expression);
-    if (cls === undefined) return undefined;
-    if (receiver.kind === ts.SyntaxKind.ThisKeyword) return this.methodOf(this.unit.file, cls, expression.name.text);
-    const className = this.receiverClass(receiver, cls);
-    if (className === undefined) return undefined;
-    const owner = this.unit.classes.get(className);
-    if (owner !== undefined) return this.methodOf(this.unit.file, owner, expression.name.text);
-    const origin = this.unit.imports.has(className) ? this.program.index.origin(this.unit.file, className) : undefined;
-    return this.methodFromOrigin(origin, expression.name.text);
-  }
-
-  private methodFromOrigin(origin: Origin, method: string): Resolved | undefined {
-    if (origin === "external") return { kind: "external" };
-    const unit = origin === undefined ? undefined : this.program.index.units.get(origin.file);
-    const cls = origin === undefined ? undefined : unit?.classes.get(origin.name);
-    return unit === undefined || cls === undefined ? undefined : this.methodOf(unit.file, cls, method);
-  }
-
-  private functionNamed(identifier: ts.Identifier): Resolved | undefined {
-    if (isDynamicName(identifier)) return undefined;
-    const name = identifier.text;
-    const scope = declaringScope(identifier);
-    if (scope !== this.unit.tree) return this.localFunction(scope, name);
-    const local = this.unit.functions.get(name);
-    if (local !== undefined) return { kind: "function", file: this.unit.file, named: local };
-    if (!this.unit.imports.has(name)) return undefined;
-    const origin = this.program.index.origin(this.unit.file, name);
-    if (origin === "external") return { kind: "external" };
-    const named = origin === undefined ? undefined : this.program.index.units.get(origin.file)?.functions.get(origin.name);
-    return origin === undefined || named === undefined ? undefined : { kind: "function", file: origin.file, named };
-  }
-
-  /** The function a name declares in a block, or undefined when it is a parameter or a variable holding something else. */
-  private localFunction(scope: ts.Node, name: string): Resolved | undefined {
-    const statements = ts.isCaseBlock(scope) ? scope.clauses.flatMap((clause) => clause.statements) : ts.isBlock(scope) || ts.isModuleBlock(scope) ? scope.statements : undefined;
-    for (const statement of statements ?? []) {
-      const declared = ts.isFunctionDeclaration(statement) ? [statement] : ts.isVariableStatement(statement) ? statement.declarationList.declarations.map((declaration) => declaration.initializer) : [];
-      for (const candidate of declared) {
-        const named = candidate !== undefined && isFunctionNode(candidate) ? namedFunction(candidate) : undefined;
-        if (named?.name === name) return { kind: "function", file: this.unit.file, named };
-      }
-    }
-    return undefined;
-  }
-
-  private methodOf(file: string, cls: ts.ClassLikeDeclaration, name: string): Resolved | undefined {
-    const named = methodDeclared(cls, name);
-    return named === undefined ? undefined : { kind: "function", file, named };
-  }
-
-  /** The class a receiver is an instance of: a field or constructor parameter of the class that holds it by type or `inject(X)`. */
-  private receiverClass(receiver: ts.Expression, cls: ts.ClassLikeDeclaration): string | undefined {
-    const name = ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword ? receiver.name.text : ts.isIdentifier(receiver) ? receiver.text : undefined;
-    if (name === undefined) return undefined;
-    for (const member of cls.members) {
-      if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name) && member.name.text === name) {
-        const injected = member.initializer === undefined ? undefined : injectedClass(member.initializer);
-        return injected ?? (member.type === undefined ? undefined : typeName(member.type));
-      }
-    }
-    if (!ts.isClassDeclaration(cls)) return undefined;
-    const parameter = constructorParameters(cls).find((candidate) => ts.isIdentifier(candidate.name) && candidate.name.text === name);
-    return parameter?.type === undefined ? undefined : typeName(parameter.type);
+    return resolveFunction(this.program, this.unit, callee);
   }
 
   private routeHolders(cls: ts.ClassLikeDeclaration): ReadonlySet<string> {

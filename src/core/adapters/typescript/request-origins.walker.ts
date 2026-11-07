@@ -5,12 +5,11 @@ import type { BranchCondition, Origin, OriginFrontierReason, OriginTrail, Origin
 import { keepsLeft, wireOf, type WrittenValue } from "../../domain/languages/javascript.ts";
 import type { ArgumentOrigins } from "../../ports/request-origins.port.ts";
 import { memberDeclaration, thisClass } from "./consumer-flow.classes.ts";
+import type { Program } from "./consumer-flow.index.ts";
 import {
   assignedBinding,
   declaredBinding,
   declaredScope,
-  enclosingFunction,
-  enclosingLoop,
   isDynamicName,
   isFunctionNode,
   isNullishLiteral,
@@ -27,6 +26,7 @@ import {
   type FunctionNode,
 } from "./consumer-flow.syntax.ts";
 import { lineOf, type RequestBody } from "./http-call-sites.adapter.ts";
+import { createEscapes } from "./request-escapes.ts";
 
 /** A call to a wrapper method: inside the wrapper's body its parameters hold the arguments of that call, which are written in the caller. */
 interface Frame {
@@ -39,11 +39,13 @@ interface Frame {
 /** The object the walk reached does not write the property at all; apart from an absence the code writes, which replaces earlier writes. */
 type Lacks = OriginTrail & { kind: "lacks" };
 
-type Found = Origin | Lacks;
+/** A function or a symbol: the code holds it, so it passes `??` and `||` as any other value, and only the wire leaves it out. */
+type Dropped = OriginTrail & { kind: "dropped" };
+
+type Found = Origin | Lacks | Dropped;
 
 const FORM_MODELS: ReadonlySet<string> = new Set(["FormGroup", "FormControl", "FormArray", "UntypedFormGroup", "UntypedFormControl", "UntypedFormArray"]);
 const FORM_BUILDERS: ReadonlySet<string> = new Set(["group", "control", "array"]);
-const FLOWING_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set([ts.SyntaxKind.EqualsToken, ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken]);
 const ABSENT: OriginValue = { kind: "absent" };
 
 const placeOf = (node: ts.Node) => ({ path: node.getSourceFile().fileName, line: lineOf(node.getSourceFile(), node) });
@@ -51,10 +53,12 @@ const trailOf = (node: ts.Node): OriginTrail => ({ at: placeOf(node), hops: [], 
 const exact = (node: ts.Node, value: OriginValue): Origin => ({ kind: "exact", value, ...trailOf(node) });
 const frontier = (node: ts.Node, reason: OriginFrontierReason, detail?: string): Origin => ({ kind: "frontier", reason, ...(detail === undefined ? {} : { detail }), ...trailOf(node) });
 const lacks = (node: ts.Node): Lacks => ({ kind: "lacks", ...trailOf(node) });
+const dropped = (node: ts.Node): Dropped => ({ kind: "dropped", ...trailOf(node) });
+const SERIALIZER = "toJSON";
 
-/** An object that writes nothing there holds absence. */
+/** An object that writes nothing there holds absence, and so does a property the wire leaves out. */
 function close(found: readonly Found[]): Origin[] {
-  return found.map((item) => (item.kind === "lacks" ? { kind: "exact" as const, value: ABSENT, at: item.at, hops: item.hops, conditions: item.conditions } : item));
+  return found.map((item) => (item.kind === "lacks" || item.kind === "dropped" ? { kind: "exact" as const, value: ABSENT, at: item.at, hops: item.hops, conditions: item.conditions } : item));
 }
 
 /** The origins as the answer states them: what the wire carries for the values the walk selected. */
@@ -90,7 +94,12 @@ export class OriginWalker {
   private readonly memo = new WeakMap<ts.Node, Map<string, readonly Found[]>>();
   private readonly active = new Set<string>();
   private readonly nodes = new WeakMap<ts.Node, number>();
+  private readonly escapes: (read: ts.Expression) => boolean;
   private numbered = 0;
+
+  constructor(program: Program) {
+    this.escapes = createEscapes(program);
+  }
 
   /** The origins of the body a request call sends, at `path`. */
   ofBody(request: RequestBody, path: AccessPath, call: ts.CallExpression): Origin[] {
@@ -145,15 +154,15 @@ export class OriginWalker {
     if (ts.isObjectLiteralExpression(node)) return this.object(node, path, frame);
     if (ts.isArrayLiteralExpression(node)) return this.array(node, path, frame);
     if (node.kind === ts.SyntaxKind.ThisKeyword) return [frontier(node, "member", "this")];
-    if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return this.dropped(node, path);
+    if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return this.heldFunction(node, path);
     if (ts.isNewExpression(node)) return [frontier(node, "construction", node.expression.getText(node.getSourceFile()))];
     if (ts.isCallExpression(node)) return this.call(node, path, frame, body);
     return this.primitive(node, path);
   }
 
-  /** A function or a symbol has no JSON form: the property is left out, and an array slot holds null. */
-  private dropped(node: ts.Expression, path: AccessPath): readonly Found[] {
-    return path.length === 0 ? [exact(node, ABSENT)] : [frontier(node, "untracked", "not an object")];
+  /** A function or a symbol has no JSON form: the property is left out and an array slot holds null, but only where the walk settles it. */
+  private heldFunction(node: ts.Expression, path: AccessPath): readonly Found[] {
+    return path.length === 0 ? [dropped(node)] : [frontier(node, "untracked", "not an object")];
   }
 
   private primitive(node: ts.Expression, path: AccessPath): readonly Found[] {
@@ -192,7 +201,7 @@ export class OriginWalker {
 
   private call(node: ts.CallExpression, path: AccessPath, frame: Frame | undefined, body: boolean): readonly Found[] {
     const callee = unwrap(node.expression);
-    if (ts.isIdentifier(callee) && callee.text === "Symbol" && isUndeclaredName(callee)) return this.dropped(node, path);
+    if (ts.isIdentifier(callee) && callee.text === "Symbol" && isUndeclaredName(callee)) return this.heldFunction(node, path);
     if (ts.isPropertyAccessExpression(callee)) {
       const receiver = unwrap(callee.expression);
       if (callee.name.text === "stringify" && ts.isIdentifier(receiver) && receiver.text === "JSON" && isUndeclaredName(receiver)) {
@@ -206,7 +215,7 @@ export class OriginWalker {
   }
 
   private object(node: ts.ObjectLiteralExpression, path: AccessPath, frame: Frame | undefined): readonly Found[] {
-    if (node.properties.some((member) => member.name !== undefined && propertyNameText(member.name) === "toJSON")) return [frontier(node, "untracked", "toJSON")];
+    if (this.serializes(node, frame)) return [frontier(node, "untracked", SERIALIZER)];
     const [name, ...rest] = path;
     if (name === undefined) return [exact(node, { kind: "object" })];
     if (name === ELEMENT) return [frontier(node, "untracked", "element of an object")];
@@ -217,13 +226,25 @@ export class OriginWalker {
         continue;
       }
       const key = member.name === undefined ? undefined : propertyNameText(member.name);
-      if (key === undefined || (key === "__proto__" && ts.isPropertyAssignment(member))) state = [frontier(member, "untracked", "computed key")];
+      if (key === undefined) state = [frontier(member, "untracked", "computed key")];
       else if (key !== name) continue;
       else if (ts.isPropertyAssignment(member)) state = this.written(this.walk(member.initializer, rest, frame, false), rest);
       else if (ts.isShorthandPropertyAssignment(member)) state = this.written(this.walk(member.name, rest, frame, false), rest);
       else state = [frontier(member, "untracked", "accessor or method")];
     }
     return state;
+  }
+
+  /**
+   * Whether the literal serializes through code it carries: a `toJSON` member, a prototype it sets, or a spread of an
+   * object the walk sees carry one. That code answers for the whole object, so no write of a property can settle it.
+   */
+  private serializes(node: ts.ObjectLiteralExpression, frame: Frame | undefined): boolean {
+    return node.properties.some((member) => {
+      if (ts.isSpreadAssignment(member)) return !isNullishLiteral(member.expression) && this.walk(member.expression, [SERIALIZER], frame, false).some((item) => item.kind === "frontier" && item.detail === SERIALIZER);
+      const key = member.name === undefined ? undefined : propertyNameText(member.name);
+      return key === SERIALIZER || (key === "__proto__" && ts.isPropertyAssignment(member));
+    });
   }
 
   /** What a definite write of the first segment leaves for the rest of the path: the value written lacking it is absence, and replaces every earlier write. */
@@ -274,7 +295,7 @@ export class OriginWalker {
     const { reads, dynamic } = referencesOf(binding);
     const primitive = initializer !== undefined && ts.isIdentifier(declaration.name) && writtenValue(unwrap(initializer)) !== undefined;
     if (writesWithin(root, binding, 0, Infinity).length > 0 || mutationsWithin(root, binding, 0, () => true).length > 0) return [frontier(read, "mutated", "written")];
-    if (dynamic.length > 0 || (!primitive && reads.some((other) => other !== read && flowsOut(other) && mayRunBeforeSend(read, other)))) return [frontier(read, "mutated", "escapes")];
+    if (dynamic.length > 0 || (!primitive && reads.some((other) => other !== read && this.escapes(other)))) return [frontier(read, "mutated", "escapes")];
     if (initializer === undefined) return [frontier(read, "untracked", "no initializer")];
     return extend(this.walk(initializer, path, frame, body), { hop: { step: "assign", evidence: placeOf(declaration) } });
   }
@@ -286,7 +307,7 @@ export class OriginWalker {
     if (receiptOf(fn, index).hidden) return [frontier(read, "untracked", "arguments")];
     const binding = declaredBinding(declaration.name, fn);
     if (writesWithin(fn, binding, 0, Infinity).length > 0 || mutationsWithin(fn, binding, 0, () => true).length > 0) return [frontier(read, "mutated", "written")];
-    if (referencesOf(binding).reads.some((other) => other !== read && flowsOut(other) && mayRunBeforeSend(read, other))) return [frontier(read, "mutated", "escapes")];
+    if (referencesOf(binding).reads.some((other) => other !== read && this.escapes(other))) return [frontier(read, "mutated", "escapes")];
     for (let held = frame; held !== undefined; held = held.parent) {
       if (held.function === fn) return this.bound(held, declaration, index, path, body);
     }
@@ -315,6 +336,7 @@ export class OriginWalker {
 }
 
 function outcomeOf(operator: "??" | "||", left: Found): "keeps" | "fails" | "unknown" {
+  if (left.kind === "dropped") return "keeps";
   if (left.kind !== "exact") return "unknown";
   if (left.value.kind === "absent") return "fails";
   if (left.value.kind !== "literal") return "keeps";
@@ -352,53 +374,6 @@ function declarationOf(identifier: ts.Identifier): ts.Node | undefined {
     current = child;
   }
   return ts.isIdentifier(current) && current.getStart(tree) === binding.binds ? current.parent : undefined;
-}
-
-/**
- * Whether code at `other` may run between the creation of the request at `read` and its serialization: code before it, in
- * a loop around it, in another function, or in a later statement. What the same statement does after the read only builds
- * the callbacks of that request.
- */
-function mayRunBeforeSend(read: ts.Node, other: ts.Node): boolean {
-  if (enclosingFunction(read) !== enclosingFunction(other) || other.getStart() < read.getStart() || enclosingLoop(read, enclosingFunction(read) ?? read.getSourceFile()) !== undefined) return true;
-  return statementOf(read) !== statementOf(other);
-}
-
-function statementOf(node: ts.Node): ts.Node {
-  let current = node;
-  while (!(ts.isBlock(current.parent) || ts.isSourceFile(current.parent) || ts.isModuleBlock(current.parent) || ts.isCaseClause(current.parent) || ts.isDefaultClause(current.parent))) {
-    if (current.parent === undefined) return current;
-    current = current.parent;
-  }
-  return current;
-}
-
-/** Whether a read hands the variable's value, or a part of it, to code that may keep or change it. */
-function flowsOut(read: ts.Expression): boolean {
-  let top: ts.Node = read;
-  for (;;) {
-    const parent = top.parent;
-    const reachesInto = (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === top;
-    if (!reachesInto && !ts.isParenthesizedExpression(parent) && !ts.isNonNullExpression(parent) && !ts.isAsExpression(parent) && !ts.isSatisfiesExpression(parent)) break;
-    top = parent;
-  }
-  const parent = top.parent;
-  if (ts.isCallExpression(parent) || ts.isNewExpression(parent)) return true;
-  if (ts.isConditionalExpression(parent)) return parent.condition !== top;
-  if (ts.isBinaryExpression(parent)) return FLOWING_OPERATORS.has(parent.operatorToken.kind);
-  return (
-    ts.isReturnStatement(parent) ||
-    ts.isVariableDeclaration(parent) ||
-    ts.isArrowFunction(parent) ||
-    ts.isSpreadElement(parent) ||
-    ts.isSpreadAssignment(parent) ||
-    ts.isArrayLiteralExpression(parent) ||
-    ts.isPropertyAssignment(parent) ||
-    ts.isShorthandPropertyAssignment(parent) ||
-    ts.isAwaitExpression(parent) ||
-    ts.isYieldExpression(parent) ||
-    ts.isParameter(parent)
-  );
 }
 
 /** A form model: a field or variable declared as one of Angular's form classes or built by a form builder. */

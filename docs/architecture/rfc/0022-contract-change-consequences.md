@@ -460,15 +460,20 @@ or array as JSON, passes a string through, and sends `FormData`, `Blob`, `ArrayB
 format. A string body is followed only when it is a `JSON.stringify` of a followed value; any other format is a
 frontier. An interceptor registered through `withInterceptors` or `HTTP_INTERCEPTORS` that clones the request with a
 `body`, a spread or a computed key, or builds a new `HttpRequest`, makes every body of the application a frontier at
-that place; one that clones other fields keeps the body; one the reader cannot read is a frontier. Values are selected
-with JavaScript semantics and serialized only at the end (`NaN ?? 1` selects `NaN`, which the wire writes as `null`).
+that place; one that clones other fields keeps the body; one the reader cannot read is a frontier. A call that receives the request, or whose result is passed to
+`next`, is followed into its resolved declaration and judged the same way; an unresolved one is a frontier. Values are selected
+with JavaScript semantics and serialized only at the end (`NaN ?? 1` selects `NaN`, which the wire writes as `null`; `f ?? 1` with a function `f` selects `f`, which an
+object then leaves out).
 Under JSON serialization an `undefined`, a function or a symbol drops
-an object property and becomes `null` in an array slot, and a non-finite number becomes `null`; a `toJSON` on the value
-or an ancestor is a frontier. `JSON.stringify(x)` is the body's own serialization only along the chain that is the body
+an object property and becomes `null` in an array slot, and a non-finite number becomes `null`; a `toJSON` member, a
+prototype set with `__proto__:`, or a spread of an object carrying one answers for the whole serialized object, so a
+later write of a property never settles it. `JSON.stringify(x)` is the body's own serialization only along the chain that is the body
 itself (bindings, parameters, conditionals, `??`); inside an object property it is a string, so a deeper path is a
-frontier. Angular serializes the body when the request is subscribed, so an escape counts only when it can run before
-that; a call in the same statement after the request is built (`pipe(catchError(handle(vet)))`) is taken not to
-mutate the body, a limit syntax cannot prove.
+frontier. Angular serializes the body when the request is subscribed, so a value handed to a call before that may be
+changed by it, wherever the call sits in the statement. A hand-off ends exact provenance with `mutated` unless the
+callee is a function or method the snapshot resolves and its body, while it runs, neither writes, aliases nor passes
+the parameter on to code that does; a closure the callee only returns does not run then. A callee held in a field,
+imported from a package or otherwise unresolved is never proven.
 
 **Verdict per producer** (domain, pure). `incompatible` when an exact origin on a modelled branch writes a rejected wire
 value, with the value, its place, the chain from the call site and the branch conditions it holds under. `admits` when
