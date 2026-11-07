@@ -109,7 +109,9 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    the index matched the call by name, and TypeScript types structurally, so any object with that member may stand
    there (trace slice 3, S6). Trace takes it as a step only when the receiver's origin proves the class (a store-bound
    local of decision 7, or a member proof of the relations, such as an `inject(T)` local or a field's `FieldOrigin`), or
-   when the receiver's one annotation (for a field, a `#` or `private` one decision 9 admits) names a nominal class: a repository class that, or a class it extends through the heritage proof of
+   when the receiver's one annotation (for a field, a `#` or `private` one decision 9 admits; for a local every store
+   fills with one such field read, `const h = this.handler`, that field's, the copy counting as no escape of the field
+   while the local itself stays in the file's sight) names a nominal class: a repository class that, or a class it extends through the heritage proof of
    decision 9, declares a `private`, `protected` or `#` instance member, which TypeScript compares by declaration, so
    only an instance of it or of a subclass fits. The step is the method the class or its nearest ancestor declares;
    a subclass that overrides it is the step's dispatch cut (RFC-0013 R7). The rule holds only while every heritage of

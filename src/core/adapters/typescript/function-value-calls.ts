@@ -116,6 +116,12 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
       ...assignments.map((store) => (store.operator === undefined || !ASSIGNMENTS.includes(store.operator) ? undefined : store.value)),
     ];
     if (values.length === 0 || values.some((value) => value === undefined)) return undefined;
+    const reads = values.map((value) => unwrapped(value!));
+    const [read] = reads;
+    if (read !== undefined && isThisMember(read)) {
+      const same = reads.every((other) => isThisMember(other) && other.name.text === read.name.text && thisClassOf(other) === thisClassOf(read));
+      return same ? fieldAnnotationOf(read, new Set(reads)) : undefined;
+    }
     const kinds = values.map((value) => storedValue(value!, bindingOf, tree));
     const first = kinds[0];
     return first !== undefined && kinds.every((kind) => kind !== undefined && sameValue(kind, first)) ? first : undefined;
@@ -148,8 +154,12 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
     if (evals.some((call) => isInside(call, scope)) || storesOf(binding, name) === undefined || !staysLocal(binding, name)) return undefined;
     return annotated(declaration.type, tree);
   };
-  /** The type the enclosing class states for `this.<name>`, when it declares the name once, as an instance field or a constructor property. */
-  const fieldAnnotationOf = (access: ts.PropertyAccessExpression): ReceiverValue | undefined => {
+  /**
+   * The type the enclosing class states for `this.<name>`, when it declares the name once, as an instance field or a
+   * constructor property. `copies` are reads of the field that every store into a local binding stores, a local that
+   * itself stays in the file's sight, so the field's value reaches nothing else through them.
+   */
+  const fieldAnnotationOf = (access: ts.PropertyAccessExpression, copies: ReadonlySet<ts.Node> = new Set()): ReceiverValue | undefined => {
     const owner = thisClassOf(access);
     if (owner === undefined || evals.some((call) => isInside(call, owner))) return undefined;
     const name = access.name.text;
@@ -158,7 +168,7 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
       return member.name !== undefined && !ts.isComputedPropertyName(member.name) && member.name.text === name ? [member] : [];
     });
     const [field, ...others] = declared;
-    if (field === undefined || others.length > 0 || !isClassPrivate(field) || !fieldStaysLocal(owner, name)) return undefined;
+    if (field === undefined || others.length > 0 || !isClassPrivate(field) || !fieldStaysLocal(owner, name, copies)) return undefined;
     if (ts.isParameter(field)) return annotated(field.type, tree);
     const isStatic = ts.isPropertyDeclaration(field) && field.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword);
     return ts.isPropertyDeclaration(field) && !isStatic ? annotated(field.type, tree) : undefined;
@@ -199,10 +209,11 @@ function isInside(node: ts.Node, scope: ts.Node): boolean {
 
 /**
  * Whether every `this` the class writes for its own instance names one member, the class names the field through no
- * other receiver, and every `this.<name>` only reads one of the field's members or stores a value into the field: an
- * instance or a field passed, returned, copied, indexed or written through could have its members replaced.
+ * other receiver, and every `this.<name>` only reads one of the field's members, stores a value into the field or is one
+ * of `copies`: an instance or a field passed, returned, copied elsewhere, indexed or written through could have its
+ * members replaced.
  */
-function fieldStaysLocal(owner: ts.ClassLikeDeclaration, name: string): boolean {
+function fieldStaysLocal(owner: ts.ClassLikeDeclaration, name: string, copies: ReadonlySet<ts.Node>): boolean {
   let stays = true;
   const visit = (node: ts.Node): void => {
     if (!stays) return;
@@ -212,7 +223,7 @@ function fieldStaysLocal(owner: ts.ClassLikeDeclaration, name: string): boolean 
       const parent = node.parent;
       const read = ts.isPropertyAccessExpression(parent) && parent.expression === node && !isWritten(parent);
       const stored = ts.isBinaryExpression(parent) && parent.left === node && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken;
-      if (!read && !stored) stays = false;
+      if (!read && !stored && !copies.has(node)) stays = false;
     }
     node.forEachChild(visit);
   };

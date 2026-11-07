@@ -537,3 +537,27 @@ test("a field of a class whose own `this` escapes it, is computed into, assigned
   assert.deepEqual((await read(["import { Router } from '@angular/router';", "import { keep } from './keep';", ...classes])).receiverBindings, []);
   assert.deepEqual((await read(["import { Router } from '@angular/router';", "export class Page { private r: Router; run(): Page { this.r.navigate([]); return this; } }"])).receiverBindings, []);
 });
+
+test("a local every store fills with one private field of this is held by the field's annotation", async () => {
+  assert.deepEqual((await read([
+    "export class Page {",
+    "  private handler: ErrorHandler;",
+    "  run(): void {",
+    "    const local = this.handler;",
+    "    local.handle();",
+    "    this.handler.reset();",
+    "  }",
+    "}",
+  ])).receiverBindings, [
+    { line: 5, column: 5, receiver: "local", member: "handle", holds: { kind: "annotated", type: "ErrorHandler", line: 2, column: 20 } },
+  ]);
+});
+
+test("a copy of a protected field, of two fields, of a field copied elsewhere too, or one the local passes on, holds no annotation", async () => {
+  for (const lines of [
+    ["  protected handler: ErrorHandler;", "  run(): void { const local = this.handler; local.handle(); }"],
+    ["  private handler: ErrorHandler;", "  private other: ErrorHandler;", "  run(flag: boolean): void { let local = this.handler; if (flag) local = this.other; local.handle(); }"],
+    ["  private handler: ErrorHandler;", "  run(): void { const local = this.handler; const again = this.handler; local.handle(); again.handle(); }"],
+    ["  private handler: ErrorHandler;", "  run(): void { const local = this.handler; keep(local); local.handle(); }"],
+  ]) assert.deepEqual((await read(["export class Page {", ...lines, "}"])).receiverBindings.filter(({ receiver }) => receiver === "local"), [], lines.at(-1));
+});
