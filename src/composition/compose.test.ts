@@ -779,7 +779,7 @@ test("a trace over a real index takes no method as what runs on a receiver it se
   ].join("\n"));
   git("add", "-A");
   git("commit", "-q", "-m", "forms");
-  const { trace } = composeQueries({ scratchRoot });
+  const { trace } = composeQueries({ scratchRoot, indexCache: join(workspace, "index-cache") });
 
   const indexed = ["paren", "bang", "satisfied", "cast", "angle", "optional", "Holder.run"];
   for (const name of [...Object.keys(forms), "Holder.run"]) {
