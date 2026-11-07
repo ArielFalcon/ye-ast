@@ -744,11 +744,11 @@ test("an array callback written as a named function receives the element and the
   assert.deepEqual(frontiers(result), []);
 });
 
-test("a callback that gathers its parameters in a rest parameter is a frontier, never a binding of the array of arguments", async () => {
+test("a callback that gathers its parameters in a rest parameter is a frontier for the element and for the original array, never a binding of the array of arguments", async () => {
   const file = plain(["o.items.forEach((...args) => show(args[0].owner.name))"]);
   const result = await follow([file], paramO, "items[].owner");
 
-  assert.deepEqual([uses(result), frontiers(result)], [[], ["2 unmodelled-flow:parameter position"]]);
+  assert.deepEqual([uses(result), frontiers(result)], [[], ["2 unmodelled-flow:parameter position", "2 unmodelled-flow:parameter position"]]);
 });
 
 test("a callback expression the reader cannot resolve is one frontier at the call however many parameters it receives", async () => {
@@ -771,6 +771,82 @@ test("a template call enters the nearest declaration of the method name along th
     assert.deepEqual([uses(shadowed), frontiers(shadowed)], [[], [`${line} unmodelled-flow:component method is not a function`]]);
   }
   assert.deepEqual(uses(await follow([base, page], site("Arrow"), "owner")), ["9 owner.title|owner []"]);
+});
+
+test("a callback that reads its own arguments receives every value the call forwards: the positions no binding follows are frontiers at the callback, and an arrow function that reads none stays clean", async () => {
+  const file = source("p.ts", [
+    "function inspect() { show(arguments[2][0].owner.name) }",
+    "function use(o: Order) {",
+    "  o.items.forEach(inspect)",
+    "  o.items.forEach(function () { show(arguments[2][0].owner.name) })",
+    "  o.items.forEach(() => show(o.name))",
+    "}",
+  ]);
+  const result = await follow([file], { ...paramO, line: at(2) }, "items[].owner");
+
+  assert.deepEqual([uses(result), next(result), frontiers(result)], [[], [], ["3 unmodelled-flow:parameter position", "3 unmodelled-flow:parameter position", "4 unmodelled-flow:parameter position", "4 unmodelled-flow:parameter position"]]);
+});
+
+test("a function called directly that reads its own arguments is a frontier as well as a binding of the declared parameter", async () => {
+  const file = source("p.ts", ["function inspect(order) { show(arguments[0].owner.name) }", "function use(o: Order) {", "  inspect(o)", "}"]);
+  const result = await follow([file], { ...paramO, line: at(2) }, "owner");
+
+  assert.deepEqual([next(result), frontiers(result)], [["parameter inspect#0@1 owner"], ["3 unmodelled-flow:parameter position"]]);
+});
+
+test("a callback whose rest parameter starts at or before a forwarded position receives that value in the rest array: a frontier there, a binding for the parameters before it", async () => {
+  const file = source("p.ts", [
+    "function gather(item, ...rest) { show(rest[1][0].owner.name) }",
+    "function use(o: Order) {",
+    "  o.items.forEach(gather)",
+    "  o.items.forEach((item, ...rest) => show(rest[1][0].owner.name))",
+    "  o.items.forEach((item, index, ...rest) => show(item.owner.name))",
+    "}",
+  ]);
+  const result = await follow([file], { ...paramO, line: at(2) }, "items[].owner");
+
+  assert.deepEqual([uses(result), next(result), frontiers(result)], [["5 owner.name|owner []"], ["parameter gather#0@1 owner"], ["3 unmodelled-flow:parameter position", "4 unmodelled-flow:parameter position", "5 unmodelled-flow:parameter position"]]);
+});
+
+test("a template call enters a subclass member declared with a quoted or a literal bracketed name as the member it names: it shadows the base method", async () => {
+  const base = source("base.ts", ["export class Base {", "  label(order: Order) { return order.owner.name }", "}"]);
+  const page = reader(["class Quoted extends Base {", "  'label' = helper", "}", "class Bracketed extends Base {", "  ['label'] = helper", "}", "class Method extends Base {", "  'label'(order: Order) { return order.owner.title }", "}", "class BracketedMethod extends Base {", "  ['label'](order: Order) { return order.owner.id }", "}"], "import { Base } from './base'\n");
+  const site = (owner: string): CarrierSite => ({ kind: "method-parameter", repo: "repo", file: "page.ts", owner, method: "label", index: 0 });
+
+  for (const [owner, line] of [["Quoted", 3], ["Bracketed", 6]] as const) {
+    const shadowed = await follow([base, page], site(owner), "owner");
+    assert.deepEqual([uses(shadowed), frontiers(shadowed)], [[], [`${line} unmodelled-flow:component method is not a function`]]);
+  }
+  assert.deepEqual(uses(await follow([base, page], site("Method"), "owner")), ["9 owner.title|owner []"]);
+  assert.deepEqual(uses(await follow([base, page], site("BracketedMethod"), "owner")), ["12 owner.id|owner []"]);
+});
+
+test("a template call finds no method where a subclass member has a name computed from anything but a literal: any name may be it, so the base method is never read", async () => {
+  const base = source("base.ts", ["export class Base {", "  label(order: Order) { return order.owner.name }", "}"]);
+  const page = reader(["class Computed extends Base {", "  [key] = helper", "}"], "import { Base } from './base'\n");
+  const result = await follow([base, page], { kind: "method-parameter", repo: "repo", file: "page.ts", owner: "Computed", method: "label", index: 0 }, "owner");
+
+  assert.deepEqual([uses(result), frontiers(result)], [[], ["3 unmodelled-flow:component method is not a function"]]);
+});
+
+test("a member keyed by a well-known symbol never denotes a named member, so the inherited method is the one a template call enters", async () => {
+  const base = source("base.ts", ["export class Base {", "  label(order: Order) { return order.owner.name }", "}"]);
+  const page = reader(["class Listed extends Base {", "  [Symbol.iterator]() { return [][Symbol.iterator]() }", "}"], "import { Base } from './base'\n");
+  const result = await follow([base, page], { kind: "method-parameter", repo: "repo", file: "page.ts", owner: "Listed", method: "label", index: 0 }, "owner");
+
+  assert.deepEqual([uses(result), frontiers(result)], [["2 owner.name|owner []"], []]);
+});
+
+test("a static member lives on the constructor: it never shadows an instance method, and the instance method is the one a template call enters", async () => {
+  const base = source("base.ts", ["export class Base {", "  label(order: Order) { return order.owner.name }", "}"]);
+  const page = reader(
+    ["class Field extends Base {", "  static label = helper", "}", "class Both {", "  static label(order: Order) { return order.owner.title }", "  label(order: Order) { return order.owner.id }", "}"],
+    "import { Base } from './base'\n",
+  );
+  const site = (owner: string): CarrierSite => ({ kind: "method-parameter", repo: "repo", file: "page.ts", owner, method: "label", index: 0 });
+
+  assert.deepEqual(uses(await follow([base, page], site("Field"), "owner")), ["2 owner.name|owner []"]);
+  assert.deepEqual(uses(await follow([base, page], site("Both"), "owner")), ["7 owner.id|owner []"]);
 });
 
 test("a method of the callee table that holds no row for the carried value stays a frontier: an accumulator, an in-place replacement, a method the language's arrays do not hold", async () => {

@@ -30,6 +30,7 @@ import {
   isTransparent,
   mayNotFollow,
   namedFunction,
+  receiptOf,
   referencesOf,
   replacementOf,
   searchRoot,
@@ -200,7 +201,7 @@ export class Walker {
       return "lost";
     }
     for (const below of chain.slice(0, at)) {
-      const redeclared = memberDeclaration(below.cls, member);
+      const redeclared = memberDeclaration(below.cls, member, false);
       if (redeclared === undefined) continue;
       this.frontiers.push({ file: below.unit.file, pos: redeclared.getStart(below.unit.tree), value: { at: { path: below.unit.file, line: lineOf(below.unit.tree, redeclared) }, cause: "unmodelled-flow", reason: "unresolved", detail: "member redeclared", hops: [] } });
       return "lost";
@@ -680,15 +681,18 @@ export class Walker {
   }
 
   private bindLambda(fn: FunctionNode, index: number, t: Trail): void {
-    const parameter = fn.parameters[index];
-    if (parameter?.dotDotDotToken !== undefined) return this.frontier(fn, "unmodelled-flow", "parameter position", t);
+    const { parameter, hidden } = receiptOf(fn, index);
+    if (hidden) this.frontier(fn, "unmodelled-flow", "parameter position", t);
     if (parameter !== undefined) this.bind(parameter.name, fn, t);
   }
 
-  /** The value reaches the parameter at `index` of a callback that is not written inline; a callback that declares no such parameter never receives it. */
+  /** The value reaches the parameter at `index` of a callback that is not written inline; a callback that neither declares that parameter nor gathers or reads it never receives it. */
   private passToCallback(callee: ts.Expression, index: number, call: ts.Node, t: Trail): void {
     const target = this.resolveFunction(callee);
-    if (target?.kind === "function" && target.named.node.parameters.length <= index) return;
+    if (target?.kind === "function") {
+      const { parameter, hidden } = receiptOf(target.named.node, index);
+      if (parameter === undefined && !hidden) return;
+    }
     this.passTo(callee, index, call, t);
   }
 
@@ -713,8 +717,9 @@ export class Walker {
   private passTo(callee: ts.Expression, index: number, call: ts.Node, t: Trail): void {
     const target = this.resolveFunction(callee);
     if (target?.kind === "function") {
-      const parameter = target.named.node.parameters[index];
-      if (parameter === undefined || parameter.dotDotDotToken !== undefined) return this.frontier(call, "unmodelled-flow", "parameter position", t);
+      const { parameter, hidden } = receiptOf(target.named.node, index);
+      if (hidden || parameter === undefined) this.frontier(call, "unmodelled-flow", "parameter position", t);
+      if (parameter === undefined) return;
       const owner = this.program.index.units.get(target.file);
       if (owner === undefined) return this.frontier(call, "unmodelled-flow", "callee source", t);
       return this.leave(call, { kind: "parameter", repo: this.repo, file: target.file, symbol: target.named.name, line: lineOf(owner.tree, target.named.declaration), index }, t);

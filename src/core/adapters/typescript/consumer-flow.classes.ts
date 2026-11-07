@@ -1,7 +1,7 @@
 import ts from "typescript";
 import { constructorParameters, typeName } from "./http-call-sites.adapter.ts";
 import type { Program, Unit } from "./consumer-flow.index.ts";
-import { declaringScope, namedFunction, unwrap, type NamedFunction } from "./consumer-flow.syntax.ts";
+import { declaringScope, namedFunction, propertyNameText, unwrap, type NamedFunction } from "./consumer-flow.syntax.ts";
 
 /** A class of the snapshot with the unit that declares it. */
 export interface ClassRef {
@@ -35,22 +35,35 @@ export function lineage(program: Program, ref: ClassRef): ClassRef[] {
   return found;
 }
 
-export function memberDeclaration(cls: ts.ClassLikeDeclaration, name: string): ts.ClassElement | ts.ParameterDeclaration | undefined {
+/** A key read from `Symbol` (`[Symbol.iterator]`) is a symbol, which no string name ever equals. */
+function keyedBySymbol(name: ts.PropertyName): boolean {
+  if (!ts.isComputedPropertyName(name)) return false;
+  const key = unwrap(name.expression);
+  return ts.isPropertyAccessExpression(key) && ts.isIdentifier(key.expression) && key.expression.text === "Symbol";
+}
+
+const isStatic = (member: ts.ClassElement): boolean => ts.canHaveModifiers(member) && (ts.getModifiers(member)?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword) ?? false);
+
+/**
+ * The declaration that may be the member `name` denotes. Names are the language's: `render`, `'render'` and `['render']`
+ * are one; a name computed from anything else may denote any, so it is the declaration. Static members live on the
+ * constructor: `statics` selects the side, and a member of the other side never answers.
+ */
+export function memberDeclaration(cls: ts.ClassLikeDeclaration, name: string, statics?: boolean): ts.ClassElement | ts.ParameterDeclaration | undefined {
+  const named = cls.members.filter((member) => member.name !== undefined && (statics === undefined || isStatic(member) === statics));
   return (
-    cls.members.find((member) => member.name !== undefined && ts.isIdentifier(member.name) && member.name.text === name) ??
-    (ts.isClassDeclaration(cls) ? constructorParameters(cls).find((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name) : undefined)
+    named.find((member) => propertyNameText(member.name!) === undefined && !keyedBySymbol(member.name!)) ??
+    named.find((member) => propertyNameText(member.name!) === name) ??
+    (statics !== true && ts.isClassDeclaration(cls) ? constructorParameters(cls).find((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name) : undefined)
   );
 }
 
-/** The method a class declares under `name`: a method, or a property initialized with a function. */
+/** The method a class declares under `name` on its instances: a method, or a property initialized with a function. */
 export function methodDeclared(cls: ts.ClassLikeDeclaration, name: string): NamedFunction | undefined {
-  for (const member of cls.members) {
-    if (member.name === undefined || !ts.isIdentifier(member.name) || member.name.text !== name) continue;
-    const fn = ts.isMethodDeclaration(member) ? member : ts.isPropertyDeclaration(member) && member.initializer !== undefined && (ts.isArrowFunction(member.initializer) || ts.isFunctionExpression(member.initializer)) ? member.initializer : undefined;
-    const named = fn === undefined ? undefined : namedFunction(fn);
-    if (named !== undefined) return named;
-  }
-  return undefined;
+  const member = memberDeclaration(cls, name, false);
+  if (member === undefined || ts.isParameter(member) || member.name === undefined || propertyNameText(member.name) !== name) return undefined;
+  const fn = ts.isMethodDeclaration(member) ? member : ts.isPropertyDeclaration(member) && member.initializer !== undefined && (ts.isArrowFunction(member.initializer) || ts.isFunctionExpression(member.initializer)) ? member.initializer : undefined;
+  return fn === undefined ? undefined : namedFunction(fn);
 }
 
 export function injectedClass(expression: ts.Expression): string | undefined {

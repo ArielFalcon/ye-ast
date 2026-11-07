@@ -28,10 +28,50 @@ export function namedFunction(node: FunctionNode): NamedFunction | undefined {
   if (ts.isConstructorDeclaration(node)) return { node, name: "constructor", declaration: node };
   if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
     const holder = node.parent;
-    if ((ts.isVariableDeclaration(holder) || ts.isPropertyDeclaration(holder)) && holder.initializer === node && ts.isIdentifier(holder.name)) return { node, name: holder.name.text, declaration: holder };
+    const held = ts.isVariableDeclaration(holder) ? (ts.isIdentifier(holder.name) ? holder.name.text : undefined) : ts.isPropertyDeclaration(holder) ? propertyNameText(holder.name) : undefined;
+    if ((ts.isVariableDeclaration(holder) || ts.isPropertyDeclaration(holder)) && holder.initializer === node && held !== undefined) return { node, name: held, declaration: holder };
     return ts.isFunctionExpression(node) && node.name !== undefined ? { node, name: node.name.text, declaration: node } : undefined;
   }
-  return node.name !== undefined && ts.isIdentifier(node.name) ? { node, name: node.name.text, declaration: node } : undefined;
+  const name = node.name === undefined ? undefined : propertyNameText(node.name);
+  return name === undefined ? undefined : { node, name, declaration: node };
+}
+
+/** The name a property name denotes: an identifier, a literal, or a literal in brackets. Undefined where it is computed from anything else. */
+export function propertyNameText(name: ts.PropertyName): string | undefined {
+  if (!ts.isComputedPropertyName(name)) return name.text;
+  const key = unwrap(name.expression);
+  return ts.isStringLiteralLike(key) || ts.isNumericLiteral(key) ? key.text : undefined;
+}
+
+/** How a function receives the argument at `index`: `parameter` is the declared parameter that holds it, `hidden` that it is also readable where no binding follows it (a rest parameter, the function's own `arguments`). */
+export interface ParameterReceipt {
+  parameter?: ts.ParameterDeclaration;
+  hidden: boolean;
+}
+
+export function receiptOf(fn: FunctionNode, index: number): ParameterReceipt {
+  const last = fn.parameters[fn.parameters.length - 1];
+  const gathered = last?.dotDotDotToken !== undefined && fn.parameters.length - 1 <= index;
+  const parameter = gathered ? undefined : fn.parameters[index];
+  return { ...(parameter === undefined ? {} : { parameter }), hidden: gathered || readsArguments(fn) };
+}
+
+const argumentsReaders = new WeakMap<FunctionNode, boolean>();
+
+/** Whether the function reads its own `arguments`: an arrow function has none, and a nested function has its own. */
+function readsArguments(fn: FunctionNode): boolean {
+  if (ts.isArrowFunction(fn) || fn.body === undefined) return false;
+  let reads = argumentsReaders.get(fn);
+  if (reads === undefined) {
+    const visit = (node: ts.Node): boolean => {
+      if (ts.isIdentifier(node)) return node.text === "arguments" && !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node);
+      if (ts.isFunctionLike(node) && !ts.isArrowFunction(node)) return false;
+      return node.forEachChild(visit) === true;
+    };
+    reads = visit(fn.body);
+    argumentsReaders.set(fn, reads);
+  }
+  return reads;
 }
 
 export function enclosingFunction(node: ts.Node): FunctionNode | undefined {

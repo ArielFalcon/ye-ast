@@ -54,7 +54,7 @@ function followInput(repo: string, unit: Unit, site: Extract<CarrierSite, { kind
 function followMethodParameter(repo: string, program: Program, unit: Unit, site: Extract<CarrierSite, { kind: "method-parameter" }>, path: Carrier["path"]): FlowResult {
   const cls = unit.classes.get(site.owner);
   for (const held of cls === undefined ? [] : lineage(program, { unit, cls })) {
-    const declaration = memberDeclaration(held.cls, site.method);
+    const declaration = memberDeclaration(held.cls, site.method, false);
     if (declaration === undefined) continue;
     const method = methodDeclared(held.cls, site.method);
     if (method === undefined) {
