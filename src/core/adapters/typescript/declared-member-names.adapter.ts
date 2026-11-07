@@ -39,6 +39,16 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
         if (ts.isStringLiteralLike(name.expression) || ts.isNumericLiteral(name.expression)) names.add(name.expression.text);
       };
       const visit = (node: ts.Node): void => {
+        if (ts.isDecorator(node)) {
+          let scope: ts.Node | undefined = node.parent;
+          while (scope !== undefined && !ts.isClassLike(scope)) scope = scope.parent;
+          const owner = scope !== undefined && ts.isClassLike(scope) ? scope : undefined;
+          const index = owner === undefined ? -1 : owners.findLastIndex((place) => place.name === owner.name?.text && place.start === lineOf(owner));
+          const held = owners.splice(index + 1);
+          ts.forEachChild(node, visit);
+          owners.push(...held);
+          return;
+        }
         const name = (ts.isFunctionDeclaration(node) || ts.isClassLike(node) || ts.isMethodDeclaration(node) || ts.isGetAccessor(node) || ts.isSetAccessor(node) || ts.isPropertyDeclaration(node)) ? node.name
           : (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && (ts.isVariableDeclaration(node.parent) || ts.isPropertyAssignment(node.parent)) ? node.parent.name : undefined;
         const constructor = ts.isConstructorDeclaration(node);
