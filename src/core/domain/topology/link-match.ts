@@ -145,9 +145,13 @@ export function matchBehindGateway(target: HttpTarget, routes: readonly HttpRout
   return exactMatch(stripped, routes) ?? basePathMatch(stripped, routes);
 }
 
+export function linkOrigin(site: CallSite): Link["from"] {
+  return { repo: site.repo, file: site.file, line: site.line, ...(site.column === undefined ? {} : { column: site.column }), symbol: site.symbol };
+}
+
 function linkTo(site: CallSite, repo: string, match: Match): Link {
   const link: Omit<Link, "id"> = {
-    from: { repo: site.repo, file: site.file, line: site.line, ...(site.column === undefined ? {} : { column: site.column }), symbol: site.symbol },
+    from: linkOrigin(site),
     to: { repo, kind: match.route.kind, name: match.route.name, handler: match.route.handler },
     transport: "http",
     basis: match.basis,
@@ -264,7 +268,7 @@ function consumes(target: EventTarget, listener: Listener): boolean {
 
 function eventLinkTo(site: CallSite, repo: string, listener: Listener): Link {
   const link: Omit<Link, "id"> = {
-    from: { repo: site.repo, file: site.file, line: site.line, ...(site.column === undefined ? {} : { column: site.column }), symbol: site.symbol },
+    from: linkOrigin(site),
     to: { repo, kind: listener.kind, name: listener.name, handler: listener.handler },
     transport: "event",
     basis: "event-destination",

@@ -73,7 +73,8 @@ export interface CallSiteReader {
 /**
  * A call site with where its call starts on `site.line`, 0-based in the language parser's own count, or `declaration`
  * when the site is a client method a declaration states (Feign, `@HttpExchange`) rather than a call. No column when no
- * call was read (a source that does not parse). Only a trace reads it; the facts that report call sites never carry it.
+ * call was read (a source that does not parse). Only a trace reads it; call-site facts carry it 1-based as
+ * `CallSite.column`.
  */
 export interface PlacedCallSite {
   site: CallSite;

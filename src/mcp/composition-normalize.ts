@@ -451,10 +451,15 @@ function repoImpact(b: Builder, section: ReadContext, repo: string, prefix: stri
   value.unresolved.forEach((site, index) => b.part({ kind: "unresolved-call-site", site }, section.id, [`${prefix}/unresolved/${index}`]));
 }
 
+/** A call's exact place, shared by call sites, links and trace effects; a line without a column has none. */
+function callPlace(b: Builder, place: Place, path: string, line: number, column: number | undefined, read: ReadId, pointer: string): { column?: number; place?: EvidenceId } {
+  return column === undefined ? {} : { column, place: b.evidence(place, { path, line, column }, read, pointer) };
+}
+
 function callSite(b: Builder, section: ReadContext, repo: string, pointer: string, site: CallSite, disposition: "matched" | "unmatched" | "external"): void {
   const place = site.repo === repo ? section.here : b.placeOf(site.repo, section.id);
   const { file, line, column, endLine, target, ...rest } = site;
-  const location = { ...(column === undefined ? {} : { column, place: b.evidence(place, { path: file, line, column }, section.id, pointer) }), file: b.file(place, file, section.id, `${pointer}/file`), line, ...(endLine === undefined ? {} : { endLine }) };
+  const location = { ...callPlace(b, place, file, line, column, section.id, pointer), file: b.file(place, file, section.id, `${pointer}/file`), line, ...(endLine === undefined ? {} : { endLine }) };
   b.part({ kind: "call-site", site: { ...rest, location, target: b.finding(place, target, section.id, `${pointer}/target`) }, disposition }, section.id, [pointer]);
 }
 
@@ -463,9 +468,10 @@ function callSite(b: Builder, section: ReadContext, repo: string, pointer: strin
  * so one link read by two families is one `workspace-match` relation. `pointer` addresses the `Link` itself.
  */
 function linkData(b: Builder, root: ReadContext, { from, to, ...link }: Link, pointer: string, toPlace: Place = b.placeOf(to.repo, root.id)): LinkData {
+  const fromPlace = b.placeOf(from.repo, root.id);
   return {
     ...link,
-    from: { ...(from.column === undefined ? {} : { column: from.column, place: b.evidence(b.placeOf(from.repo, root.id), { path: from.file, line: from.line, column: from.column }, root.id, `${pointer}/from`) }), file: b.file(b.placeOf(from.repo, root.id), from.file, root.id, `${pointer}/from/file`), line: from.line, repo: from.repo, symbol: from.symbol },
+    from: { ...callPlace(b, fromPlace, from.file, from.line, from.column, root.id, `${pointer}/from`), file: b.file(fromPlace, from.file, root.id, `${pointer}/from/file`), line: from.line, repo: from.repo, symbol: from.symbol },
     to: { repo: to.repo, kind: to.kind, name: to.name, handler: b.anchor(toPlace, to.handler, root.id, `${pointer}/to/handler`, `${pointer}/to/handler/path`) },
   };
 }
@@ -548,7 +554,7 @@ function trace(b: Builder, root: ReadContext, value: TraceValue): void {
       ...(leaves === undefined ? {} : { leaves }),
       ...(step.external === undefined ? {} : { external: step.external }),
       ...(alternatives === undefined ? {} : { alternatives }),
-      ...(step.effects === undefined ? {} : { effects: step.effects.map((effect, k) => ({ ...effect, ...(effect.column === undefined ? {} : { place: b.evidence(root.here, { path: step.file, line: effect.line, column: effect.column }, root.id, `${pointer}/effects/${k}`) }) })) }),
+      ...(step.effects === undefined ? {} : { effects: step.effects.map((effect, k) => ({ ...effect, ...callPlace(b, root.here, step.file, effect.line, effect.column, root.id, `${pointer}/effects/${k}`) })) }),
     }, root.id, [pointer]);
   });
   value.readingPlan.ranges.forEach(({ file, start, end, steps }, index) => {

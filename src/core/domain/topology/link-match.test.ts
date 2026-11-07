@@ -259,3 +259,12 @@ test("an operation a contract declares lands on the route that serves it by an e
   assert.equal(matchDeclaredOperation(target("/other/{id}"), repositories([prefixed])), undefined);
   assert.deepEqual(matchDeclaredOperation(target("/api/orders/{id}"), [...repositories([prefixed]), ...repositories([prefixed], "billing")]), { ambiguous: ["billing", "orders"] });
 });
+
+test("an HTTP or event link starts at its call site's column only when the reader placed it", () => {
+  const http = site("orders");
+  const event = published("kafka", "orders.created");
+  const httpFrom = (call: CallSite) => matchCallSite(call, targetOf(call), repositories([route("GET", "/orders")]), []).links?.map(link => link.from.column);
+  const eventFrom = (call: CallSite) => matchEventCallSite(call, eventTargetOf(call), [{ repo: "orders", entrypoints: [listener("kafka", "orders.created")] }]).links?.map(link => link.from.column);
+
+  assert.deepEqual([httpFrom(http), httpFrom({ ...http, column: 12 }), eventFrom(event), eventFrom({ ...event, column: 5 })], [[undefined], [12], [undefined], [5]]);
+});

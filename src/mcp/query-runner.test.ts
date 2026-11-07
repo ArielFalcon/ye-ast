@@ -272,7 +272,6 @@ test("runner recovery equals the recovery the original tools publish", async () 
   }
 });
 
-
 test("the shared MCP dispatcher passes trace workspace sources and offline policy to the trace family", async () => {
   const { deps } = spies();
   const requests: unknown[] = [];

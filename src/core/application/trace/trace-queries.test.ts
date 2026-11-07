@@ -1313,7 +1313,6 @@ test("line-only call records settle only a unique site in their own body", async
   }
 });
 
-
 test("a workspace live trace forwards the root stale notice once and never substitutes a library notice", async () => {
   const fact = await factOf({ nodes: [SVC, RUN], edges: CONTAINS });
   const rootNotice = { stateId: "root-state", changed: [A] };

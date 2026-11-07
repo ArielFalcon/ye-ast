@@ -78,10 +78,10 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const selected = context.selectedSnapshots.find((snapshot) => snapshot.repo === request.repoId);
           const plan = context.plans.find((plan) => plan.kind === "read" && plan.at.repoId === request.repoId);
           const held = context.liveCaptures.get(request.repoId);
-          if (selected === undefined || (selected.kind === "live" && held === undefined) || (selected.kind === "sha" && (plan === undefined || plan.kind !== "read"))) return { ok: false as const, fault: { kind: "git-failed" as const, detail: "trace snapshot unavailable" } };
-          const at = selected.kind === "live"
-            ? { repo: held!.repo, live: true as const, revision: undefined }
-            : { repo: request.repo, source: plan!.kind === "read" ? plan!.at.source : request.repo, revision: selected.sha, live: undefined };
+          const at = selected?.kind === "live"
+            ? held === undefined ? undefined : { repo: held.repo, live: true as const, revision: undefined }
+            : selected?.kind === "sha" && plan?.kind === "read" ? { repo: request.repo, source: plan.at.source, revision: selected.sha, live: undefined } : undefined;
+          if (at === undefined) return { ok: false as const, fault: { kind: "git-failed" as const, detail: "trace snapshot unavailable" } };
           const trace = createTraceQueries({ ...deps, preparation: context.preparation, heldLive: () => held, librarySources: context.librarySources?.get(request.repoId) ?? [] });
           const answer = await trace.walk({ ...local, ...at });
           if (!answer.ok) return answer;

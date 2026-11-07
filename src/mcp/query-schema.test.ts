@@ -157,7 +157,6 @@ test("published select shapes offer exactly the owners some workspace branch of 
   }
 });
 
-
 test("trace and composed trace accept workspace sources and reject local live offline", () => {
   const args = { targets: [{ file: "src/a.ts", symbol: "run" }], workspace: { repos: [{ path: "/work/lib", revision: "v1" }] }, offline: true };
   assert.ok(SEMANTIC_INPUTS.trace.safeParse(args).success);

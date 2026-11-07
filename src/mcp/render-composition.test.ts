@@ -498,6 +498,11 @@ test("consequences: an unknown finding is named a consequence finding, and a use
   assert.match(details, /derived from the contract change GET \/api\/orders\/\{id\} customer/);
 });
 
+function relatesEffectToLink(result: ReturnType<typeof resultOf>): boolean {
+  const kindOf = (id: string) => result.graph.parts.find(p => p.id === id)?.kind;
+  return result.graph.connections.some(c => c.rule === "shared-support" && c.parts.some(id => kindOf(id) === "trace-step") && c.parts.some(id => kindOf(id) === "workspace-link"));
+}
+
 test("trace effects share call-place evidence with links across compatible sources", () => {
   const workspace = workspaceValue();
   const from = workspace.links[0]!.from;
@@ -508,12 +513,11 @@ test("trace effects share call-place evidence with links across compatible sourc
   });
   trace.read.fact.snapshot = snapshot;
   const result = resultOf([trace, sourceFixture("workspace", { value: workspace })]);
-  const shared = result.graph.connections.filter(c => c.rule === "shared-support" && new Set(c.supports.map(s => s.source)).size === 2);
-  assert.ok(shared.some(c => c.parts.some(id => result.graph.parts.find(p => p.id === id)?.kind === "trace-step") && c.parts.some(id => result.graph.parts.find(p => p.id === id)?.kind === "workspace-link")));
+  assert.equal(relatesEffectToLink(result), true);
   assert.match(renderComposition(resultOf([trace]), "summary"), /effects \(1\)/);
   if (trace.read.fact.status !== "unknown") trace.read.fact.value.steps[0]!.effects![0]!.column = 27;
   const shifted = resultOf([trace, sourceFixture("workspace", { value: workspace })]);
-  assert.equal(shifted.graph.connections.some(c => c.rule === "shared-support" && c.parts.some(id => shifted.graph.parts.find(p => p.id === id)?.kind === "trace-step") && c.parts.some(id => shifted.graph.parts.find(p => p.id === id)?.kind === "workspace-link")), false);
+  assert.equal(relatesEffectToLink(shifted), false);
 });
 
 test("line-only call places never relate a trace effect to a workspace link", () => {
@@ -521,5 +525,5 @@ test("line-only call places never relate a trace effect to a workspace link", ()
   const value = { roots: [], steps: [{ id: 0, depth: 0, file: "src/OrderService.java", symbol: "find", kind: "method", line: 31, effects: [{ kind: "http" as const, line: 34, target: { method: "GET" as const, path: "/a" } }] }], readingPlan: { ranges: [], lines: 0 }, cost: { expanded: 1 } };
   w.links = [{ ...w.links[0]!, from: { repo: "shop", file: "src/OrderService.java", line: 34, symbol: "other" } }];
   const result = resultOf([sourceFixture("trace", { value }), sourceFixture("workspace", { value: w })]);
-  assert.equal(result.graph.connections.some(c => c.rule === "shared-support" && c.parts.some(id => result.graph.parts.find(p => p.id === id)?.kind === "trace-step") && c.parts.some(id => result.graph.parts.find(p => p.id === id)?.kind === "workspace-link")), false);
+  assert.equal(relatesEffectToLink(result), false);
 });
