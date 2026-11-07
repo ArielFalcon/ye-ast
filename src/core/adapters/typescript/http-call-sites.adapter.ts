@@ -10,7 +10,7 @@ import { callUrl, joinedCallUrl, RUN_TIME_HOLE, type CallUrl } from "../../domai
 import { injectedClass } from "./angular-injection.ts";
 import { declarationCounts } from "./syntax-names.ts";
 import { defaultExportOf } from "./import-bindings.ts";
-import { bindingNames, constructorParameters, lineOf, propertyOf, thisClass, typeName } from "./syntax.ts";
+import { bindingNames, constructorParameters, hasModifier, lineOf, propertyOf, thisClass, typeName } from "./syntax.ts";
 import { ANONYMOUS_DEFAULT, recoveredModuleShape, type ModuleShape } from "./module-shape.ts";
 import { createDeclarationLookup, type DeclarationLookup } from "./declaration-lookup.ts";
 
@@ -1077,7 +1077,7 @@ function sourceBindings(source: ts.SourceFile): ReadonlySet<string> {
 }
 
 function isAmbient(node: ts.Node): boolean {
-  return ts.canHaveModifiers(node) && (ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) ?? false);
+  return hasModifier(node, ts.SyntaxKind.DeclareKeyword);
 }
 
 function mayOverrideEncoder(source: ts.SourceFile): boolean {

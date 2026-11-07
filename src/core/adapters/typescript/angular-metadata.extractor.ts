@@ -1,7 +1,7 @@
 import ts from "typescript";
-import { declarationCounts, isStatic } from "./syntax-names.ts";
+import { declarationCounts } from "./syntax-names.ts";
 import type { RawRouteFile } from "./angular-router.extractor.ts";
-import { lineOf, propertyOf, thisClass, unwrapped } from "./syntax.ts";
+import { hasModifier, isStatic, lineOf, propertyOf, thisClass, unwrapped } from "./syntax.ts";
 import { angularCoreExport, type FileNames } from "./angular-injection.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 
@@ -572,13 +572,13 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
     if (ts.isClassDeclaration(node) && node.name !== undefined && node.parent === sf) {
       const owner = node.name.text;
       const classLine = lineAt(node.name);
-      const hiddenModifier = (declaration: ts.HasModifiers): boolean => (ts.getModifiers(declaration) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword || modifier.kind === ts.SyntaxKind.ProtectedKeyword);
+      const hiddenModifier = (declaration: ts.HasModifiers): boolean => hasModifier(declaration, ts.SyntaxKind.PrivateKeyword) || hasModifier(declaration, ts.SyntaxKind.ProtectedKeyword);
       for (const member of node.members) {
         if (ts.isPropertyDeclaration(member) && (ts.isPrivateIdentifier(member.name) || (ts.isIdentifier(member.name) && hiddenModifier(member)))) result.hidden.add(`${owner}\0${classLine}\0${member.name.text}`);
         if (ts.isConstructorDeclaration(member)) for (const parameter of member.parameters) if (ts.isIdentifier(parameter.name) && hiddenModifier(parameter)) result.hidden.add(`${owner}\0${classLine}\0${parameter.name.text}`);
       }
       const byName = Map.groupBy(node.members.filter((m) => m.name !== undefined && ts.isIdentifier(m.name)), (m) => (m.name as ts.Identifier).text);
-      const cannotProveMembers = node.members.some((member) => member.name !== undefined && ts.isComputedPropertyName(member.name)) || (ts.getModifiers(node) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.AbstractKeyword);
+      const cannotProveMembers = node.members.some((member) => member.name !== undefined && ts.isComputedPropertyName(member.name)) || hasModifier(node, ts.SyntaxKind.AbstractKeyword);
       for (const [name, members] of byName) {
         if (members.length > 1) redeclared.add(key(node, name));
         if (cannotProveMembers) continue;

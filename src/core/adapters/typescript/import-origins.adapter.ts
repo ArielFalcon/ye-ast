@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { matchesReferenceKind, syntaxName } from "./reference-occurrence.ts";
-import { declarationCounts, declaredNames, isStatic, scriptGlobalNames } from "./syntax-names.ts";
+import { declarationCounts, declaredNames, scriptGlobalNames } from "./syntax-names.ts";
 import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
 import { bindFile, type BoundFile, type LexicalBinding } from "./lexical-bindings.ts";
@@ -16,7 +16,7 @@ import type { DeclaredType, ImportOriginSite, ImportOrigins, ReplacedRoots, Reso
 import { moduleResolverOf, packageOf, rememberedModuleResolver } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 import { moduleShape } from "./module-shape.ts";
-import { unwrapped } from "./syntax.ts";
+import { hasModifier, isStatic, unwrapped } from "./syntax.ts";
 import { createExportLookup, type ModuleShape } from "./declaration-lookup.ts";
 
 /** The names the pinned `typescript` declares, held once for the process rather than rebuilt per query. */
@@ -452,8 +452,7 @@ function withTypes(shape: ModuleShape | undefined, source: ts.SourceFile | undef
   for (const statement of source.statements) {
     if (!ts.isInterfaceDeclaration(statement) && !ts.isTypeAliasDeclaration(statement) && !ts.isEnumDeclaration(statement)) continue;
     declared.set(statement.name.text, NO_SPAN);
-    const modifiers = ts.getModifiers(statement) ?? [];
-    if (modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) exports.set(modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) ? "default" : statement.name.text, { local: statement.name.text });
+    if (hasModifier(statement, ts.SyntaxKind.ExportKeyword)) exports.set(hasModifier(statement, ts.SyntaxKind.DefaultKeyword) ? "default" : statement.name.text, { local: statement.name.text });
   }
   return { ...shape, declared, exports };
 }

@@ -2,7 +2,7 @@ import ts from "typescript";
 import { ELEMENT, type AccessPath } from "../../domain/contracts/access-path.ts";
 import type { JsonValue, Literal, Replacement } from "../../domain/contracts/use-operation.ts";
 import { bindFile } from "./lexical-bindings.ts";
-import { unwrapped } from "./syntax.ts";
+import { hasModifier, unwrapped } from "./syntax.ts";
 
 export type FunctionNode = ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration;
 
@@ -116,7 +116,7 @@ export function replacementOf(expression: ts.Expression): Replacement {
 }
 
 export function isAsyncOrGenerator(fn: FunctionNode): "async" | "generator" | undefined {
-  if (ts.getModifiers(fn)?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) === true) return "async";
+  if (hasModifier(fn, ts.SyntaxKind.AsyncKeyword)) return "async";
   return "asteriskToken" in fn && fn.asteriskToken !== undefined ? "generator" : undefined;
 }
 

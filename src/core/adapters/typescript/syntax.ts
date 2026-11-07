@@ -1,5 +1,4 @@
 import ts from "typescript";
-import { isStatic } from "./syntax-names.ts";
 
 /** The expression inside parentheses, type assertions and non-null, which leave its value unchanged. */
 export function unwrapped(expression: ts.Expression): ts.Expression {
@@ -10,6 +9,10 @@ export function unwrapped(expression: ts.Expression): ts.Expression {
 
 export function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
   return ts.canHaveModifiers(node) && (ts.getModifiers(node) ?? []).some((modifier) => modifier.kind === kind);
+}
+
+export function isStatic(member: ts.Node): boolean {
+  return hasModifier(member, ts.SyntaxKind.StaticKeyword);
 }
 
 /**

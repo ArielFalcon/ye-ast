@@ -56,6 +56,13 @@ const RULES: readonly Rule[] = [
     pending: [],
   },
   {
+    concept: "whether a TypeScript node carries a modifier",
+    pattern: /\bgetModifiers\(/,
+    /* module-dependencies fingerprints every modifier of a declaration. */
+    owners: ["typescript/syntax.ts", "typescript/module-dependencies.adapter.ts"],
+    pending: [],
+  },
+  {
     concept: "the value a TypeScript statement exports as default",
     pattern: /SyntaxKind\.DefaultKeyword/,
     /* module-dependencies fingerprints every modifier of a declaration; import-origins reads `export default interface`, a type. */

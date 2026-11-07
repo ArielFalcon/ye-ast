@@ -1,8 +1,7 @@
 import ts from "typescript";
 import type { FunctionValueCall, ReceiverBinding, ReceiverValue } from "../../ports/declared-member-names.port.ts";
 import { bindFile, type BoundFile, isDirectEval, type LexicalBinding } from "./lexical-bindings.ts";
-import { lineOf, thisClass, unwrapped } from "./syntax.ts";
-import { isStatic } from "./syntax-names.ts";
+import { hasModifier, isStatic, lineOf, thisClass, unwrapped } from "./syntax.ts";
 
 const LOGICAL_OPERATORS: readonly ts.SyntaxKind[] = [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken];
 /** Operators that store their right operand, or may: `a ??= f` leaves `a` holding `f` when it held nothing. */
@@ -291,7 +290,7 @@ const OBJECT_REFLECTION: ReadonlySet<string> = new Set(["assign", "definePropert
 function isClassPrivate(field: ts.Node): boolean {
   const name = ts.getNameOfDeclaration(field as ts.Declaration);
   if (name !== undefined && ts.isPrivateIdentifier(name)) return true;
-  return ts.canHaveModifiers(field) && (ts.getModifiers(field) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword);
+  return hasModifier(field, ts.SyntaxKind.PrivateKeyword);
 }
 
 function isAssignment(kind: ts.SyntaxKind): boolean {
