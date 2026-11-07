@@ -208,18 +208,18 @@ export function moduleResolverOf(sources: readonly SourceFile[], options?: { jso
  */
 export function rememberedModuleResolver(sources: readonly SourceFile[], facts: DerivedFacts): ModuleResolver {
   const resolver = moduleResolverOf(sources);
-  let snapshot: string | undefined;
+  let layout: string | undefined;
   const asked = new Map<string, Promise<ModuleResolution>>();
   return {
     resolve(from, specifier) {
       const key = JSON.stringify([from, specifier]);
       let held = asked.get(key);
       if (held === undefined) {
-        snapshot ??= facts.fingerprint({
+        layout ??= facts.fingerprint({
           paths: sources.map(({ path }) => path).toSorted(compareText),
           json: sources.filter(({ path }) => path.endsWith(".json")).map(({ path, content }) => [path, content]).toSorted(([a], [b]) => compareText(a!, b!)),
         });
-        held = facts.ofInputs("ts-module-resolution", { snapshot, from, specifier }, () => resolver.resolve(from, specifier));
+        held = facts.ofInputs("ts-module-resolution", { layout, from, specifier }, () => resolver.resolve(from, specifier));
         asked.set(key, held);
       }
       return held;

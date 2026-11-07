@@ -11,8 +11,7 @@ const NO_COUNTS: Counts = { hits: 0, misses: 0, admitted: 0, admittedBytes: 0, e
 
 /**
  * The derived facts of one snapshot read under `trust`, kept in the snapshot data cache (ADR-0035). A key names the
- * slot, the trust and the inputs, the content of a file by its digest; never a version, since the cache lives in one
- * process with fixed readers.
+ * slot, the trust and the inputs, a file's content by its digest.
  */
 export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, trust: TrustMode): DerivedFacts {
   const contentDigests = new WeakMap<SourceFile, string>();
