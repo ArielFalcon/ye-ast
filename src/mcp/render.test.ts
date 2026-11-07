@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderEntrypointMap, renderImpact, renderTrace, renderWorkspaceImpact } from "./render.ts";
+import { renderContractConsequences, renderEntrypointMap, renderImpact, renderTrace, renderWorkspaceImpact } from "./render.ts";
 import type { Fact } from "../core/domain/shared/fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
 import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
+import type { ConsequencesValue } from "../core/domain/contracts/consequence-fact.ts";
 
 const base = { schema: "0.12.0", snapshot: { repo: "shop", kind: "sha", sha: "a".repeat(40) }, producer: { name: "ye-ast", version: "1" }, inputs: { trust: "untrusted", scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "k", declaredConfig: {}, engines: {} }, evidence: [] };
 const cut = { kind: "depth", at: ["anchor", "place"], limit: 2 };
@@ -262,4 +263,70 @@ test("an unresolved trace call keeps its whole place when the path and the spell
   const fact = traceFact([{ kind: "unresolved-link", at: ["src/my dir/a.ts:15 (async (x) => x)().run", "src/b.ts:run"] }]);
   assert.ok(renderTrace(fact, "details").includes("    src/my dir/a.ts:15 (async (x) => x)().run (src/b.ts:run)"), renderTrace(fact, "details"));
   assert.ok(renderTrace(fact).includes("    run ×1 in 1 file → 1 candidate"), renderTrace(fact));
+});
+
+const HYPOTHESIS = { method: "GET", path: "/owners/{id}", target: "response", property: "name", change: "nullable" };
+const handler = { repo: "api", path: "src/OwnerController.java", symbol: "OwnerController.show", line: 30 };
+const useAt = (n: number, verdict: object) => ({ status: "complete", value: { repo: "web", link: { id: `l${n}`, basis: "exact", call: { file: "src/client.ts", line: 3, symbol: "load" }, handler }, verdict, operation: {}, path: "name", changed: "name", chain: [] }, evidence: [{ repo: "web", path: `src/use-${n}.ts`, line: n }] });
+
+/** Every hypothesis unknown but one, a change with no derived hypothesis for it, and a derivation cut: nothing here may read as safe. */
+function consequences(findings: object[]): Fact<ConsequencesValue> {
+  const derivation = { ...base, status: "partial", cuts: [{ kind: "deadline", at: ["src/Gone.java"] }], value: { gained: [], operations: { added: ["GET /new"], removed: [] }, frontiers: [
+    { status: "unknown", reason: "unresolved", kind: "unserved-operation", operation: "GET /pets", evidence: [{ repo: "api", path: "openapi.yaml", line: 12 }] },
+    { status: "unknown", reason: "source-unreadable", kind: "unreadable-contract", side: "base", evidence: [{ repo: "api", path: "openapi.yaml", line: 1 }] },
+  ] } };
+  const value = {
+    repositorySnapshots: [{ repo: "api", snapshot: base.snapshot }, { repo: "web", snapshot: { ...base.snapshot, repo: "web" } }],
+    answers: [
+      { hypothesis: HYPOTHESIS, oldContract: "present-and-non-null", status: "complete", findings },
+      { hypothesis: { ...HYPOTHESIS, path: "/vets" }, oldContract: "present-and-non-null", status: "unknown", reason: "no-project", detail: "no repository serves GET /vets" },
+    ],
+    change: { base: "main", head: "feature", snapshots: { base: "b".repeat(40), head: "c".repeat(40) }, derivation },
+  };
+  return { ...base, status: "partial", cuts: [{ kind: "section", at: ["change.derivation"] }], value } as unknown as Fact<ConsequencesValue>;
+}
+
+test("a contract consequences summary counts each answer's verdicts and keeps its unknown reasons, derivation cuts and frontier counts, while details lists every finding with its place", () => {
+  const verdicts = [{ kind: "incompatible", witness: "null", at: 1, failing: {}, capability: "member" }, { kind: "admits", guards: [] }, { kind: "review", reason: "consumed" }];
+  const findings = [
+    ...Array.from({ length: 12 }, (_, index) => useAt(index + 1, verdicts[index % 3]!)),
+    { status: "unknown", reason: "source-unreadable", evidence: [{ repo: "web", path: "src/broken.ts", line: 99 }] },
+  ];
+  const fact = consequences(findings);
+  const summary = renderContractConsequences(fact, "summary");
+  const details = renderContractConsequences(fact, "details");
+
+  for (const text of [summary, details]) {
+    assert.match(text, /unknown \(no-project\): no repository serves GET \/vets/);
+    assert.match(text, /status: partial \(cuts: 1 deadline\)/);
+    assert.match(text, /operations added \(1\): GET \/new/);
+    assert.match(text, /unserved-operation \(unresolved\)/);
+    assert.match(text, /unreadable-contract \(source-unreadable\)/);
+    assert.match(text, /status: partial \(cuts: 1 section: change.derivation\)/);
+  }
+  assert.match(summary, /13 findings: 4 admits, 4 incompatible, 4 review, 1 unknown \(source-unreadable\)/);
+  assert.doesNotMatch(summary, /src\/use-1\.ts/);
+  assert.match(summary, /frontiers \(2\): 1 unreadable-contract \(source-unreadable\), 1 unserved-operation \(unresolved\)/);
+  for (let n = 1; n <= 12; n++) assert.ok(details.includes(`at web:src/use-${n}.ts:${n};`), `finding ${n}`);
+  assert.ok(details.includes("at web:src/broken.ts:99"));
+  assert.ok(details.includes("api:openapi.yaml:12"));
+  assert.ok(Buffer.byteLength(summary) <= Buffer.byteLength(details));
+});
+
+test("a contract consequences answer with no findings says so and an unknown fact keeps only its header", () => {
+  const empty = consequences([]);
+  assert.match(renderContractConsequences(empty, "summary"), /no findings/);
+  const unknown = { ...base, status: "unknown", reason: "index-unavailable", evidence: [] } as unknown as Fact<ConsequencesValue>;
+  const text = renderContractConsequences(unknown, "details");
+  assert.match(text, /status: unknown \(index-unavailable\)/);
+  assert.doesNotMatch(text, /answers \(/);
+});
+
+test("a contract consequences change whose derivation could not be computed keeps its reason and the answers beside it", () => {
+  const fact = consequences([]);
+  const change = (fact as unknown as { value: { change: { derivation: unknown } } }).value.change;
+  change.derivation = { ...base, status: "unknown", reason: "revision-unavailable", evidence: [] };
+  const text = renderContractConsequences(fact, "summary");
+  assert.match(text, /derivation:\n  status: unknown \(revision-unavailable\)/);
+  assert.match(text, /unknown \(no-project\): no repository serves GET \/vets/);
 });

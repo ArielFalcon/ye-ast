@@ -14,6 +14,7 @@ import type { FactRead, WorkspaceRequest, WorkspaceValue } from "../core/ports/w
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import type { WorkspaceCallersRequest, WorkspaceImpactValue, WorkspaceOfChangeRequest } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionsRequest, DecisionValue } from "../core/ports/decision-queries.port.ts";
+import type { ContractConsequencesQueries } from "../core/ports/contract-consequences-queries.port.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import { repositoryCatalog, type RepositoryBinding } from "./repository-targeting.ts";
 import { executeQuery, type ExecutedSource, type QueryExecutionDeps, type QueryFault } from "./query-runner.ts";
@@ -250,7 +251,7 @@ test("an unaltered read has an empty guard", async () => {
 
 test("runner recovery equals the recovery the original tools publish", async () => {
   const { deps } = spies();
-  const server = createMcpServer({ ...deps, version: "0", repository: SHOP });
+  const server = createMcpServer({ ...deps, contractConsequences: {} as ContractConsequencesQueries, version: "0", repository: SHOP });
   const session = await openSession(server);
   try {
     const cases: [SemanticQuery, Record<string, unknown>][] = [

@@ -5,6 +5,7 @@ import { SEMANTIC_INPUTS, TOOL_INPUTS } from "./query-schema.ts";
 import type { ToolFamily } from "./presentation.ts";
 
 const SHA = "a".repeat(40);
+const HYPOTHESIS = { method: "GET", path: "/owners/{id}", target: "response", property: "name", change: "nullable" };
 const FAMILIES = Object.keys(SEMANTIC_INPUTS) as ToolFamily[];
 const MINIMAL: Record<ToolFamily, Record<string, unknown>> = {
   entrypoints: {},
@@ -15,6 +16,7 @@ const MINIMAL: Record<ToolFamily, Record<string, unknown>> = {
   trace: { targets: [{ file: "src/a.ts", symbol: "run" }] },
   workspace: {},
   decisions: {},
+  contract_consequences: { hypotheses: [HYPOTHESIS] },
 };
 const RECOVERABLE = ["entrypoints", "callers", "impact"] as const;
 const accepts = (family: ToolFamily, args: unknown, schemas = SEMANTIC_INPUTS) => schemas[family].safeParse(args).success;
@@ -70,6 +72,30 @@ test("semantic and tool schemas share the original cross-field rules", () => {
   }
 });
 
+test("contractConsequences takes exactly one subject and refuses what only the other subject allows", () => {
+  const cases: [Record<string, unknown>, boolean][] = [
+    [{ hypotheses: [HYPOTHESIS, { ...HYPOTHESIS, target: "request", change: [{ type: "string" }, "required"] }] }, true],
+    [{ base: "main" }, true],
+    [{ base: "main", head: "feature" }, true],
+    [{ hypotheses: [HYPOTHESIS], revision: "main" }, true],
+    [{ hypotheses: [HYPOTHESIS], live: true }, true],
+    [{ hypotheses: [HYPOTHESIS], workspace: { repos: [{ path: "/w/a", id: "a" }] }, scope: { include: ["src/**"] } }, true],
+    [{}, false],
+    [{ hypotheses: [] }, false],
+    [{ hypotheses: [HYPOTHESIS], base: "main" }, false],
+    [{ hypotheses: [{ ...HYPOTHESIS, extra: 1 }] }, false],
+    [{ hypotheses: [{ ...HYPOTHESIS, change: [] }] }, false],
+    [{ head: "feature", hypotheses: [HYPOTHESIS] }, false],
+    [{ base: "main", revision: "main" }, false],
+    [{ base: "main", live: true }, false],
+    [{ hypotheses: [HYPOTHESIS], live: true, revision: "main" }, false],
+    [{ base: "main", select: { kind: "cut-places" } }, false],
+  ];
+  for (const schemas of [SEMANTIC_INPUTS, TOOL_INPUTS]) {
+    for (const [args, expected] of cases) assert.equal(accepts("contract_consequences", args, schemas), expected, JSON.stringify(args));
+  }
+});
+
 test("tool schemas default mode to summary; semantic schemas carry no presentation", () => {
   const parsed = TOOL_INPUTS.outline.parse(MINIMAL.outline);
   assert.equal(parsed.mode, "summary");
@@ -96,6 +122,11 @@ test("each rejected cross-field constraint is reported at the control or field a
     ["callers", { live: true, offline: true }, "offline", "offline-requires-workspace"],
     ["entrypoints", { live: true, revision: "main" }, "revision", "live-excludes"],
     ["outline", { files: undefined }, "files", "one-subject"],
+    ["contract_consequences", { hypotheses: undefined }, "hypotheses", "one-subject"],
+    ["contract_consequences", { base: "main" }, "hypotheses", "one-subject"],
+    ["contract_consequences", { hypotheses: undefined, base: "main", head: "x", revision: "main" }, "revision", "revision-requires-hypotheses"],
+    ["contract_consequences", { head: "x" }, "head", "head-requires-base"],
+    ["contract_consequences", { hypotheses: undefined, base: "main", live: true }, "base", "live-excludes"],
   ];
   for (const [family, args, path, constraint] of cases) {
     const result = TOOL_INPUTS[family].safeParse({ ...MINIMAL[family], ...args });

@@ -10,6 +10,9 @@ import type { OutlineRequest, OutlineSelector } from "../core/ports/outline-quer
 import { ENTRYPOINT_KINDS, mixesTargetKinds, TRACE_BOUND_FIELDS, type TraceRequest, type TraceTarget } from "../core/ports/trace-queries.port.ts";
 import type { WorkspaceRequest } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionsRequest } from "../core/ports/decision-queries.port.ts";
+import type { ChangeRequest, HypothesesRequest } from "../core/ports/contract-consequences-queries.port.ts";
+import type { ChangeEntryInput, ChangeInput } from "../core/domain/contracts/change.ts";
+import type { HypothesisInput } from "../core/domain/contracts/hypothesis.ts";
 import type { WorkspaceRepositoryRequest } from "../core/ports/workspace-repos.port.ts";
 import { isId, isRecord } from "./guards.ts";
 import { isTrustMode, type TrustMode } from "../core/domain/shared/fact.ts";
@@ -217,6 +220,40 @@ function workspaceFields(p: Params): Omit<WorkspaceRequest, "signal"> {
 
 export function readDecisions(params: unknown): Omit<DecisionsRequest, "signal"> {
   return workspaceFields(only(params, ["repo", "repos", "gateways", "scope", "offline"]));
+}
+
+const WORKSPACE_PARAMS = ["repo", "repos", "gateways", "scope", "offline", "replay"] as const;
+
+/** One or more written hypotheses over a workspace; an empty list is refused here as at every surface. */
+export function readHypotheses(params: unknown): Omit<HypothesesRequest, "signal"> {
+  const p = only(params, [...WORKSPACE_PARAMS, "hypotheses"]);
+  return { ...workspaceFields(p), hypotheses: list(p, "hypotheses", hypothesisOf) };
+}
+
+/** A change between two revisions, answered at its head on the bound repository. */
+export function readChange(params: unknown): Omit<ChangeRequest, "signal"> {
+  const p = only(params, [...WORKSPACE_PARAMS, "base", "head"]);
+  return { ...workspaceFields(p), base: text(p, "base"), head: text(p, "head") };
+}
+
+function hypothesisOf(value: unknown): HypothesisInput {
+  if (!isRecord(value)) throw new InvalidParamsError("a hypothesis must be an object");
+  const fields = only(value, ["method", "path", "target", "property", "change"]);
+  if ("deadlineMs" in fields) throw new InvalidParamsError("unknown param deadlineMs");
+  return { method: text(fields, "method"), path: text(fields, "path"), target: text(fields, "target"), property: text(fields, "property"), change: changeOf(fields.change) };
+}
+
+function changeOf(value: unknown): ChangeInput {
+  if (Array.isArray(value)) {
+    if (value.length === 0) throw new InvalidParamsError("change must not be an empty list");
+    return value.map(changeEntryOf);
+  }
+  return changeEntryOf(value);
+}
+
+function changeEntryOf(value: unknown): ChangeEntryInput {
+  if (typeof value === "string" || (isRecord(value) && !Array.isArray(value))) return value;
+  throw new InvalidParamsError("a change is an entry name or object, or a list of them");
 }
 
 export function readTrustMode(params: unknown): TrustMode {

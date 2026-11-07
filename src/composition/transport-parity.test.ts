@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import { run } from "../cli/main.ts";
 import { impactFact, type ImpactBudget } from "../core/domain/impact/impact-fact.ts";
 import { declaredScope } from "../core/domain/map/entrypoint-map.ts";
-import { SCHEMA, type FactBase } from "../core/domain/shared/fact.ts";
+import { SCHEMA, type Fact, type FactBase } from "../core/domain/shared/fact.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
@@ -13,9 +13,11 @@ import type { TraceBudget, TraceQueries } from "../core/ports/trace-queries.port
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
+import type { ChangeRequest, ContractConsequencesQueries, HypothesesRequest } from "../core/ports/contract-consequences-queries.port.ts";
+import type { ConsequencesValue } from "../core/domain/contracts/consequence-fact.ts";
 import type { Install } from "../core/ports/install.port.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
-import { createMcpServer } from "../mcp/server.ts";
+import { createMcpServer, RESULT_JSON_LABEL } from "../mcp/server.ts";
 import { openSession, type ToolResult } from "../mcp/test-session.testing.ts";
 import { serveQueries } from "../protocol/query-server.ts";
 
@@ -68,7 +70,7 @@ async function throughCli(args: readonly string[], budgets: (ImpactBudget | unde
     impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries,
     outline: {} as OutlineQueries, trace: {} as TraceQueries,
     workspace: {} as WorkspaceQueries,
-    decisions: {} as DecisionQueries,
+    decisions: {} as DecisionQueries, contractConsequences: {} as unknown as ContractConsequencesQueries,
     install,
     mcpCommand: ["/bin/ye-ast"],
     redaction,
@@ -87,7 +89,7 @@ async function throughProtocol(budget: unknown, budgets: (ImpactBudget | undefin
     JSON.stringify({ jsonrpc: "2.0", id: 2, method: "impact.ofChange", params: { repo: REPO, repoId: "shop", base: "HEAD", head: "HEAD", budget } }),
   ];
   await serveQueries(
-    { version: "0.0.0", entrypoints, impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
+    { version: "0.0.0", entrypoints, impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, contractConsequences: {} as unknown as ContractConsequencesQueries, redaction },
     { input: Readable.from(lines.map((line) => `${line}\n`)), output: { write: (chunk: string) => void (written += chunk) } },
   );
   const answers = written.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { id?: number; result?: unknown; error?: unknown });
@@ -106,7 +108,7 @@ async function throughMcp(budget: unknown, budgets: (ImpactBudget | undefined)[]
     outline: {} as OutlineQueries, trace: {} as TraceQueries,
     workspace: { outwardNames: async () => ({ ok: true, value: { fact: FACT } } as never) } as unknown as WorkspaceQueries,
     workspaceImpact: {} as unknown as WorkspaceImpactQueries,
-    decisions: {} as unknown as DecisionQueries,
+    decisions: {} as unknown as DecisionQueries, contractConsequences: {} as unknown as ContractConsequencesQueries,
     redaction,
     repository: { path: REPO, repoId: "shop" },
   }));
@@ -161,7 +163,7 @@ test("every surface that names a trust mode refuses one the domain does not know
     impact: family().impact,
     outline: {} as OutlineQueries, trace: {} as TraceQueries,
     workspace: {} as WorkspaceQueries,
-    decisions: {} as DecisionQueries,
+    decisions: {} as DecisionQueries, contractConsequences: {} as unknown as ContractConsequencesQueries,
     install,
     mcpCommand: ["/bin/ye-ast"],
     redaction,
@@ -172,7 +174,7 @@ test("every surface that names a trust mode refuses one the domain does not know
 
   let written = "";
   await serveQueries(
-    { version: "0.0.0", entrypoints, impact: family().impact, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
+    { version: "0.0.0", entrypoints, impact: family().impact, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, contractConsequences: {} as unknown as ContractConsequencesQueries, redaction },
     {
       input: Readable.from([`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "trust.declare", params: { mode: "sometimes" } })}\n`]),
       output: { write: (chunk: string) => void (written += chunk) },
@@ -201,14 +203,14 @@ test("the three transports accept the trace's own bounds and refuse the caller-c
     const mcp: (TraceBudget | undefined)[] = [];
 
     const cliCode = await run(["trace", ...flags, REPO, "src/a.ts:run"], { out: () => undefined, err: () => undefined }, {
-      version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceFamily(cli), workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries,
+      version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceFamily(cli), workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, contractConsequences: {} as unknown as ContractConsequencesQueries,
       install, mcpCommand: ["/bin/ye-ast"], redaction,
       canonicalRepositoryRoot: async (path: string) => ({ ok: true, value: path }), repositoryName: async () => ({ ok: true, value: "repo" }), signal: new AbortController().signal,
     });
 
     let written = "";
     await serveQueries(
-      { version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceFamily(protocol), workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
+      { version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceFamily(protocol), workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, contractConsequences: {} as unknown as ContractConsequencesQueries, redaction },
       {
         input: Readable.from([
           `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "trust.declare", params: { mode: "untrusted" } })}\n`,
@@ -221,7 +223,7 @@ test("the three transports accept the trace's own bounds and refuse the caller-c
 
     const session = await openSession(createMcpServer({
       digest: createSha256Digest(), version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceFamily(mcp),
-      workspace: {} as WorkspaceQueries, workspaceImpact: {} as WorkspaceImpactQueries, decisions: {} as DecisionQueries, redaction, repository: { path: REPO, repoId: "shop" },
+      workspace: {} as WorkspaceQueries, workspaceImpact: {} as WorkspaceImpactQueries, decisions: {} as DecisionQueries, contractConsequences: {} as unknown as ContractConsequencesQueries, redaction, repository: { path: REPO, repoId: "shop" },
     }));
     const result = await session.callTool("ye_ast_trace", { targets: [{ file: "src/a.ts", symbol: "run" }], budget }).finally(() => session.close());
 
@@ -240,13 +242,13 @@ async function traceThroughEach(cliTargets: readonly string[], targets: readonly
   const [cli, protocol, mcp]: [unknown[], unknown[], unknown[]] = [[], [], []];
   const stderr: string[] = [];
   const cliCode = await run(["trace", REPO, ...cliTargets], { out: () => undefined, err: (line: string) => void stderr.push(line) }, {
-    version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceTargets(cli, answer), workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries,
+    version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceTargets(cli, answer), workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, contractConsequences: {} as unknown as ContractConsequencesQueries,
     install, mcpCommand: ["/bin/ye-ast"], redaction,
     canonicalRepositoryRoot: async (path: string) => ({ ok: true, value: path }), repositoryName: async () => ({ ok: true, value: "repo" }), signal: new AbortController().signal,
   });
   let written = "";
   await serveQueries(
-    { version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceTargets(protocol, answer), workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
+    { version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceTargets(protocol, answer), workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, contractConsequences: {} as unknown as ContractConsequencesQueries, redaction },
     {
       input: Readable.from([
         `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "trust.declare", params: { mode: "untrusted" } })}\n`,
@@ -258,7 +260,7 @@ async function traceThroughEach(cliTargets: readonly string[], targets: readonly
   const reply = written.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { id?: number; error?: { code: number; data?: unknown } }).find((message) => message.id === 2);
   const session = await openSession(createMcpServer({
     digest: createSha256Digest(), version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceTargets(mcp, answer),
-    workspace: {} as WorkspaceQueries, workspaceImpact: {} as WorkspaceImpactQueries, decisions: {} as DecisionQueries, redaction, repository: { path: REPO, repoId: "shop" },
+    workspace: {} as WorkspaceQueries, workspaceImpact: {} as WorkspaceImpactQueries, decisions: {} as DecisionQueries, contractConsequences: {} as unknown as ContractConsequencesQueries, redaction, repository: { path: REPO, repoId: "shop" },
   }));
   const result = (await session.callTool("ye_ast_trace", { targets }).finally(() => session.close())) as ToolResult;
   return { asked: [cli, protocol, mcp], cliCode, stderr, reply, result };
@@ -294,4 +296,105 @@ test("declaration targets together with entrypoint targets are refused before an
   assert.deepEqual(shape(mixed.result), shape(badKind.result));
   assert.equal(shape(mixed.result)[0], true);
   assert.deepEqual(mixed.asked, [[], [], []]);
+});
+
+const HYPOTHESIS = { method: "GET", path: "/owners/{id}", target: "response", property: "name", change: "nullable" };
+
+/** Every requested hypothesis unknown: the composite is still partial and keeps each one with its reason (RFC-0023 status table). */
+const ALL_UNKNOWN = {
+  ...BASE,
+  status: "partial",
+  cuts: [{ kind: "section", at: ["answers.0"] }, { kind: "section", at: ["answers.1"] }],
+  value: {
+    repositorySnapshots: [{ repo: "shop", snapshot: BASE.snapshot }],
+    answers: [HYPOTHESIS, { ...HYPOTHESIS, path: "/vets" }].map((hypothesis) => ({ hypothesis, oldContract: "present-and-non-null", status: "unknown", reason: "no-project", detail: "no repository serves it" })),
+  },
+} as unknown as Fact<ConsequencesValue>;
+
+/** Both revisions read and compared with no delta: no hypothesis derived, nothing cut, and the change kept. */
+const NO_DERIVED = {
+  ...BASE,
+  status: "complete",
+  value: {
+    repositorySnapshots: [{ repo: "shop", snapshot: BASE.snapshot }],
+    answers: [],
+    change: { base: "main", head: "HEAD", snapshots: { base: "b".repeat(40), head: "c".repeat(40) }, derivation: { ...BASE, status: "complete", value: { gained: [], operations: { added: [], removed: [] }, frontiers: [] } } },
+  },
+} as unknown as Fact<ConsequencesValue>;
+
+type Subject = { hypotheses: readonly object[] } | { base: string };
+type Outcome = { accepted: boolean; requests: (HypothesesRequest | ChangeRequest)[]; fact?: unknown };
+
+function consequencesPort(fact: Fact<ConsequencesValue>, requests: (HypothesesRequest | ChangeRequest)[]): ContractConsequencesQueries {
+  return {
+    ofHypotheses: async (request) => (requests.push(request), { ok: true, value: fact }),
+    ofChange: async (request) => (requests.push(request), { ok: true, value: fact }),
+  };
+}
+
+async function consequencesThroughCli(subject: Subject, fact: Fact<ConsequencesValue>): Promise<Outcome> {
+  const requests: Outcome["requests"] = [];
+  const out: string[] = [];
+  const flags = "hypotheses" in subject ? subject.hypotheses.flatMap((hypothesis) => ["--hypothesis", JSON.stringify(hypothesis)]) : ["--base", subject.base];
+  const code = await run(["contract-consequences", ...flags, REPO], { out: (line) => void out.push(line), err: () => undefined }, {
+    version: "0.0.0", entrypoints, impact: family().impact, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries,
+    contractConsequences: consequencesPort(fact, requests), install, mcpCommand: ["/bin/ye-ast"], redaction,
+    canonicalRepositoryRoot: async (path: string) => ({ ok: true, value: path }), repositoryName: async () => ({ ok: true, value: "shop" }), signal: new AbortController().signal,
+  });
+  return { accepted: code === 0, requests, ...(code === 0 ? { fact: JSON.parse(out.join("\n")) } : {}) };
+}
+
+async function consequencesThroughProtocol(subject: Subject, fact: Fact<ConsequencesValue>): Promise<Outcome> {
+  const requests: Outcome["requests"] = [];
+  let written = "";
+  const repo = { path: REPO, id: "shop" };
+  const call = "hypotheses" in subject
+    ? { method: "contractConsequences.ofHypotheses", params: { repo: { ...repo, revision: "HEAD" }, hypotheses: subject.hypotheses } }
+    : { method: "contractConsequences.ofChange", params: { repo, base: subject.base, head: "HEAD" } };
+  await serveQueries(
+    { version: "0.0.0", entrypoints, impact: family().impact, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, contractConsequences: consequencesPort(fact, requests), redaction },
+    { input: Readable.from([JSON.stringify({ jsonrpc: "2.0", id: 1, method: "trust.declare", params: { mode: "untrusted" } }), JSON.stringify({ jsonrpc: "2.0", id: 2, ...call })].map((line) => `${line}\n`)), output: { write: (chunk: string) => void (written += chunk) } },
+  );
+  const answer = written.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { id?: number; result?: unknown; error?: unknown }).find((message) => message.id === 2);
+  assert.ok(answer, "the protocol answered the query");
+  return { accepted: answer.error === undefined, requests, ...(answer.error === undefined ? { fact: answer.result } : {}) };
+}
+
+async function consequencesThroughMcp(subject: Subject, fact: Fact<ConsequencesValue>): Promise<Outcome> {
+  const requests: Outcome["requests"] = [];
+  const session = await openSession(createMcpServer({
+    digest: createSha256Digest(), version: "0.0.0", entrypoints, impact: family().impact, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace: {} as WorkspaceQueries,
+    workspaceImpact: {} as unknown as WorkspaceImpactQueries, decisions: {} as unknown as DecisionQueries, contractConsequences: consequencesPort(fact, requests), redaction, repository: { path: REPO, repoId: "shop" },
+  }));
+  try {
+    const result = await session.callTool("ye_ast_contract_consequences", { ...subject, mode: "full" }) as ToolResult;
+    if (result.isError === true) return { accepted: false, requests };
+    const text = (result.content as { text: string }[])[0]!.text;
+    return { accepted: true, requests, fact: JSON.parse(text.slice(text.lastIndexOf(`\n${RESULT_JSON_LABEL}`) + 1 + RESULT_JSON_LABEL.length)) };
+  } finally {
+    await session.close();
+  }
+}
+
+test("the three transports answer the contract consequences family alike: the same subject reaches the port, an empty list is refused, and nothing an answer holds is dropped", async () => {
+  const cases: { label: string; subject: Subject; fact: Fact<ConsequencesValue>; accepted: boolean }[] = [
+    { label: "every hypothesis unknown", subject: { hypotheses: [HYPOTHESIS, { ...HYPOTHESIS, path: "/vets" }] }, fact: ALL_UNKNOWN, accepted: true },
+    { label: "a change with no derived hypothesis", subject: { base: "main" }, fact: NO_DERIVED, accepted: true },
+    { label: "an empty hypothesis list", subject: { hypotheses: [] }, fact: ALL_UNKNOWN, accepted: false },
+  ];
+  for (const { label, subject, fact, accepted } of cases) {
+    const outcomes = [await consequencesThroughCli(subject, fact), await consequencesThroughProtocol(subject, fact), await consequencesThroughMcp(subject, fact)];
+    assert.deepEqual(outcomes.map((outcome) => outcome.accepted), [accepted, accepted, accepted], `${label}: the three transports agree`);
+    if (!accepted) {
+      assert.deepEqual(outcomes.flatMap((outcome) => outcome.requests), [], `${label}: a refusal reaches no port`);
+      continue;
+    }
+    const subjects = outcomes.map(({ requests }) => requests.map((request) => ("hypotheses" in request ? request.hypotheses : [request.base, request.head])));
+    assert.deepEqual(subjects[1], subjects[0], `${label}: protocol hands the port what the CLI does`);
+    assert.deepEqual(subjects[2], subjects[0], `${label}: MCP hands the port what the CLI does`);
+    const [cli, protocol, mcp] = outcomes.map(({ fact: answered }) => answered as { status: string; value: unknown });
+    assert.deepEqual(protocol, JSON.parse(JSON.stringify(fact)), `${label}: protocol serializes the fact whole`);
+    assert.deepEqual(cli, protocol, `${label}: CLI prints the same fact`);
+    assert.deepEqual([mcp!.status, mcp!.value], [fact.status, JSON.parse(JSON.stringify(fact.status === "unknown" ? undefined : fact.value))], `${label}: MCP full keeps status and value`);
+  }
 });

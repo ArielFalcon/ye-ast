@@ -16,6 +16,7 @@ import { hasUnprovedUses } from "../core/domain/outline/outline-uses.ts";
 import type { ExternalCalls, TraceStep, TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
+import type { ChangeFrontier, ConsequenceFinding, ConsequencesValue, HypothesisAnswer, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { Cut, Evidence, Fact, Finding, SnapshotRef, WalkBounds } from "../core/domain/shared/fact.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
@@ -1648,3 +1649,77 @@ export function renderDecisions(fact: Fact<DecisionValue>, detail: ResponseMode 
   return lines.join("\n");
 }
 
+
+const CONSEQUENCES_FULL_GUIDE = "Match value.answers by index (the order asked, or sorted by operation and property for a change) and check each answer's status, reason and cuts; findings[].value.chain and verdict.witness hold the chains and witnesses, and an unknown finding carries its reason and places. A change's value.change.derivation holds the gained guarantees, the operations added and removed, and the derivation frontiers; value.repositorySnapshots names the snapshot of every repository read.";
+
+/** The counted text when it is no longer than listing what it counts, the listing otherwise; a tie keeps the count (RFC-0017 section 1). Details always lists. */
+function elided(counts: readonly string[], listing: readonly string[], detail: ResponseMode): string[] {
+  return detail === "details" || size(listing) < size(counts) ? [...listing] : [...counts];
+}
+
+function hypothesisText(hypothesis: HypothesisAnswer["hypothesis"]): string {
+  const entries = (Array.isArray(hypothesis.change) ? hypothesis.change : [hypothesis.change]) as readonly unknown[];
+  return `${hypothesis.method} ${hypothesis.path} ${hypothesis.target} ${hypothesis.property} ${entries.map((entry) => (typeof entry === "string" ? entry : canonicalJson(entry))).join(" + ")}`;
+}
+
+function countedBy(labels: readonly string[]): string {
+  return [...Map.groupBy(labels, (label) => label)].toSorted(([a, ofA], [b, ofB]) => ofB.length - ofA.length || compareText(a, b)).map(([label, group]) => `${group.length} ${label}`).join(", ");
+}
+
+const findingKind = (finding: ConsequenceFinding<UseConsequence | ProducerConsequence>): string =>
+  finding.status === "unknown" ? `unknown (${finding.reason})` : finding.value.verdict.kind;
+
+function findingLine(finding: ConsequenceFinding<UseConsequence | ProducerConsequence>): string {
+  const places = finding.evidence.map(repositoryEvidenceText).join(", ");
+  if (finding.status === "unknown") return `    - unknown (${finding.reason})${places === "" ? "" : ` at ${places}`}`;
+  const { value } = finding;
+  const call = `${value.link.call.file}:${value.link.call.line} ${value.link.call.symbol} -> ${value.link.handler.repo}:${placeText(value.link.handler.path, value.link.handler.line)} ${value.link.handler.symbol}`;
+  if ("operation" in value) {
+    const { verdict } = value;
+    return `    - use ${verdict.kind}${verdict.kind === "review" ? ` (${verdict.reason})` : ""} at ${places}; reads ${value.path}, changed ${value.changed}; via ${call}${verdict.kind === "incompatible" ? `; witness ${verdict.witness}` : ""}`;
+  }
+  const { verdict } = value;
+  const witness = verdict.kind === "incompatible" ? `; witness ${verdict.witness.value} at ${verdict.witness.at.path}:${verdict.witness.at.line}` : "";
+  return `    - producer ${verdict.kind}${verdict.kind === "review" ? ` (${verdict.reason})` : ""} at ${places || value.repo}; writes ${value.path}; via ${call}${witness}`;
+}
+
+function answerLines(answer: HypothesisAnswer, index: number, detail: ResponseMode): string[] {
+  const head = `  ${index + 1}. ${hypothesisText(answer.hypothesis)}`;
+  if (answer.status === "unknown") return [`${head}: unknown (${answer.reason}): ${answer.detail}`];
+  const status = answer.status === "partial" ? `partial (cuts: ${cutsByKind(answer.cuts).map(([kind, cuts]) => `${cuts.length} ${kind}`).join(", ")})` : "complete";
+  const open = `${head}: ${status}${answer.silent === undefined ? "" : `; ${answer.silent} silent uses`}`;
+  const listing = [open, ...(answer.findings.length === 0 ? ["    (no findings)"] : answer.findings.map(findingLine))];
+  const counts = [`${open}; ${answer.findings.length === 0 ? "no findings" : `${answer.findings.length} findings: ${countedBy(answer.findings.map(findingKind))}`}${answer.findings.length === 0 ? "" : `; ${categoryRecovery({ details: "lists each with its place", full: "retains the chains and witnesses" })}`}`];
+  return elided(counts, listing, detail);
+}
+
+function frontierLine(frontier: ChangeFrontier): string {
+  const subject = [frontier.operation, frontier.property, frontier.side === undefined ? undefined : `at ${frontier.side}`].filter((part) => part !== undefined).join(" ");
+  return `    - ${frontier.kind} (${frontier.reason})${subject === "" ? "" : ` ${subject}`}${frontier.detail === undefined ? "" : `: ${frontier.detail}`}${frontier.evidence.length === 0 ? "" : ` at ${frontier.evidence.map(repositoryEvidenceText).join(", ")}`}`;
+}
+
+function derivationLines(value: NonNullable<ConsequencesValue["change"]>, detail: ResponseMode): string[] {
+  const { derivation } = value;
+  const lines = [`change: ${value.base} -> ${value.head} (commits ${value.snapshots.base} -> ${value.snapshots.head})`, "derivation:", ...statusLines(derivation, "  ")];
+  if (derivation.status === "unknown") return lines;
+  const { gained, operations, frontiers } = derivation.value;
+  const gainedListing = [`  gained guarantees (${gained.length}):`, ...gained.map((item) => `    - ${item.operation} ${item.property} (${item.retired}) at ${repositoryEvidenceText(item.places.head)}`)];
+  lines.push(...(gained.length === 0 ? [`  gained guarantees (0):`] : elided([`  gained guarantees (${gained.length}): ${categoryRecovery({ details: "lists them" })}`], gainedListing, detail)));
+  lines.push(`  operations added (${operations.added.length}): ${operations.added.join(", ")}`.trimEnd(), `  operations removed (${operations.removed.length}): ${operations.removed.join(", ")}`.trimEnd());
+  const counts = [`  frontiers (${frontiers.length}): ${countedBy(frontiers.map((frontier) => `${frontier.kind} (${frontier.reason})`))}; ${categoryRecovery({ details: "lists them with their places" })}`];
+  lines.push(...(frontiers.length === 0 ? ["  frontiers (0):"] : elided(counts, [`  frontiers (${frontiers.length}):`, ...frontiers.map(frontierLine)], detail)));
+  return lines;
+}
+
+/** One composite answer: the hypotheses (or the change) of one workspace read, each with its verdicts and the places it could not follow. */
+export function renderContractConsequences(fact: Fact<ConsequencesValue>, detail: ResponseMode = "summary"): string {
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : CONSEQUENCES_FULL_GUIDE;
+  const lines = headerLines(fact);
+  if (fact.status === "unknown") return lines.join("\n");
+  const { value } = fact;
+  lines.push(counted("repositories", value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
+  if (value.change !== undefined) lines.push(...derivationLines(value.change, detail));
+  lines.push(`answers (${value.answers.length}):`, ...(value.answers.length === 0 ? [NONE] : value.answers.flatMap((answer, index) => answerLines(answer, index, detail))));
+  lines.push(...cutsBlock(cutsOf(fact), detail));
+  return lines.join("\n");
+}

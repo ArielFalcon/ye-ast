@@ -14,6 +14,8 @@ import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { FactRead, WorkspaceQueries, WorkspaceRequest, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../core/ports/decision-queries.port.ts";
+import type { ChangeRequest, ConsequencesFault, ContractConsequencesQueries, HypothesesRequest } from "../core/ports/contract-consequences-queries.port.ts";
+import type { ConsequencesValue } from "../core/domain/contracts/consequence-fact.ts";
 import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
@@ -98,6 +100,7 @@ function setup(answer: Result<EntrypointMapFact, VcsFault | LiveFault> = { ok: t
       trace: { walk: async () => unanswered } as TraceQueries,
       workspace: { outwardNames: async () => unanswered } as WorkspaceQueries,
       decisions: { decisions: async () => unanswered } as DecisionQueries,
+      contractConsequences: { ofHypotheses: async () => unanswered, ofChange: async () => unanswered } as unknown as ContractConsequencesQueries,
       install,
       mcpCommand: ["npx", "--yes", "tsx", MCP_ENTRYPOINT],
       redaction,
@@ -225,6 +228,20 @@ function setupDecisions(answer?: Result<FactRead<DecisionValue>, WorkspaceFault>
   };
   return { ...base, requests, deps: { ...base.deps, decisions } };
 }
+
+const CONSEQUENCES_FACT: Fact<ConsequencesValue> = { ...BASE, status: "complete", value: { repositorySnapshots: [], answers: [] } };
+
+function setupConsequences(answer: Result<Fact<ConsequencesValue>, ConsequencesFault> = { ok: true, value: CONSEQUENCES_FACT }) {
+  const base = setup();
+  const requests: (HypothesesRequest | ChangeRequest)[] = [];
+  const contractConsequences: ContractConsequencesQueries = {
+    ofHypotheses: async (request) => (requests.push(request), answer),
+    ofChange: async (request) => (requests.push(request), answer),
+  };
+  return { ...base, requests, deps: { ...base.deps, contractConsequences } };
+}
+
+const HYPOTHESIS = { method: "GET", path: "/owners/{id}", target: "response", property: "name", change: "nullable" };
 
 function setupImporters(answer: Result<Fact<ImportersValue>, VcsFault | LiveFault> = { ok: true, value: IMPORTERS }) {
   const base = setup();
@@ -595,7 +612,7 @@ test("the usage names the workspace and decisions commands, and the scope help n
   const help = io.stdout.join("\n");
   assert.match(help, /ye-ast workspace \[--revision <rev>\] \[--repo-id <id>\] \[--offline\] \[scope\] <repo>/);
   assert.match(help, /ye-ast decisions \[--revision <rev>\] \[--repo-id <id>\] \[--offline\] \[scope\] <repo>/);
-  assert.match(help, /importers, outline, trace, workspace and decisions/);
+  assert.match(help, /importers, outline, trace, workspace, decisions and contract-consequences/);
   assert.match(help, /--offline:/);
   assert.match(help, /--changed <glob>/);
 });
@@ -1123,4 +1140,47 @@ test("a non-aborted naming fault keeps the existing basename fallback", async ()
   const deps = { ...base, canonicalRepositoryRoot: async (path: string): Promise<Result<string, VcsFault>> => ({ ok: true, value: path }), repositoryName: async (): Promise<Result<string, VcsFault>> => ({ ok: false, fault: { kind: "git-failed", detail: "unavailable" } }) };
   await run(BATCH_ARGS, io, deps);
   assert.equal(batches[0]?.launch.id, "launch root");
+});
+
+test("contract-consequences asks for one subject on the persisted workspace, binds a change at its head, and prints the fact", async () => {
+  const request = { ...HYPOTHESIS, target: "request", change: [{ type: "string" }, "required"] };
+  const hypotheses = setupConsequences();
+  assert.equal(await run(["contract-consequences", "--hypothesis", JSON.stringify(HYPOTHESIS), "--hypothesis", JSON.stringify(request), "--revision", "v1", "--repo-id", "shop", "--include", "src/**", "some/checkout"], hypotheses.io, hypotheses.deps), EXIT_CODE.ok);
+  assert.deepEqual(JSON.parse(hypotheses.io.stdout.join("\n")), CONSEQUENCES_FACT);
+  assert.deepEqual(hypotheses.requests, [{ repo: { path: resolve("some/checkout"), id: "shop", revision: "v1" }, hypotheses: [HYPOTHESIS, request], scope: { include: ["src/**"] }, signal: hypotheses.signal }]);
+
+  const change = setupConsequences();
+  assert.equal(await run(["contract-consequences", "--base", "main", "some/checkout"], change.io, change.deps), EXIT_CODE.ok);
+  // A bound revision other than the head is a contradiction the use case refuses, so a change binds none.
+  assert.deepEqual(change.requests, [{ repo: { path: resolve("some/checkout"), id: "checkout" }, base: "main", head: "HEAD", signal: change.signal }]);
+});
+
+test("a contract-consequences fault is one stderr line with its kind and exits query-failed", async () => {
+  const faults: ConsequencesFault[] = [
+    { kind: "invalid-hypothesis", detail: "hypotheses[0]: invalid method", index: 0, refusal: { kind: "invalid-method", detail: "FETCH" } },
+    { kind: "contradictory-revisions", detail: `bound to ${SECRET}` },
+  ];
+  for (const fault of faults) {
+    const { io, deps } = setupConsequences({ ok: false, fault });
+    assert.equal(await run(["contract-consequences", "--base", "main", "."], io, deps), EXIT_CODE.queryFailed);
+    assert.deepEqual(io.stderr, [`ye-ast: ${fault.kind}: ${fault.detail.replaceAll(SECRET, REDACTED)}`]);
+    assert.deepEqual(io.stdout, []);
+  }
+});
+
+test("contract-consequences without exactly one subject, or with a flag only the other subject takes, is a usage error and asks nothing", async () => {
+  const hypothesis = JSON.stringify(HYPOTHESIS);
+  for (const tail of [
+    ["."],
+    ["--hypothesis", hypothesis, "--base", "main", "."],
+    ["--hypothesis", hypothesis, "--head", "x", "."],
+    ["--base", "main", "--revision", "v1", "."],
+    ["--hypothesis", "{not json", "."],
+    ["--hypothesis", JSON.stringify({ ...HYPOTHESIS, change: [] }), "."],
+    ["--hypothesis", JSON.stringify({ ...HYPOTHESIS, extra: 1 }), "."],
+    ["--hypothesis", JSON.stringify({ method: "GET" }), "."],
+    ["--hypothesis", JSON.stringify([HYPOTHESIS]), "."],
+    ["--base", "main", "--live", "."],
+    ["--hypothesis", hypothesis, "a", "b"],
+  ]) await refuses(["contract-consequences", ...tail], setupConsequences);
 });

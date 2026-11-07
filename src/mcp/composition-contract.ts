@@ -64,7 +64,7 @@ export type SourceBranch = "local" | "workspace";
 /** The family of a source, with `branch` only for impact and callers. */
 export type SourceFamilyRef =
   | { family: "impact" | "callers"; branch: SourceBranch }
-  | { family: Exclude<ToolFamily, "impact" | "callers"> };
+  | { family: Exclude<ToolFamily, "impact" | "callers" | "contract_consequences"> }; // compose joins contract_consequences in U3 (RFC-0023 Delivery 3)
 
 /**
  * A source as the evidence set holds it. `snapshotVector` is the complete current vector sorted by repo; `analysis` is

@@ -12,6 +12,8 @@ export const METHOD = {
   traceWalk: "trace.walk",
   workspaceOutwardNames: "workspace.outwardNames",
   decisionsDecisions: "decisions.decisions",
+  contractConsequencesOfHypotheses: "contractConsequences.ofHypotheses",
+  contractConsequencesOfChange: "contractConsequences.ofChange",
 } as const;
 
 /** The closed set of answers a call can fail with: JSON-RPC's own, one per fault family of the ports, and the protocol's. */
@@ -45,6 +47,8 @@ export const ERROR_CODE = {
   "live-mirror-failed": -32021,
   "top-level-line": -32022,
   "unknown-entrypoint": -32023,
+  "invalid-hypothesis": -32024,
+  "contradictory-revisions": -32025,
 } as const;
 
 export type ErrorKind = keyof typeof ERROR_CODE;

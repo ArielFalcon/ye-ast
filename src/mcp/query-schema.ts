@@ -216,6 +216,41 @@ const impactFields = {
   budget,
 };
 const crossingFields = { workspace, replay: replaySchema.optional() };
+
+const changeEntry = z.union([z.string(), z.record(z.string(), z.unknown())]);
+const hypothesis = z.strictObject({
+  method: z.string().describe("HTTP method of the operation, e.g. GET."),
+  path: z.string().describe("Operation path starting with /, as the contract states it, e.g. /owners/{id}."),
+  target: z.string().describe("response: what the handler returns; request: what the handler reads from the body."),
+  property: z.string().describe("Access path of the changed property from the body root; [] marks array elements, e.g. pets[].name."),
+  change: z.union([changeEntry, z.array(changeEntry).min(1)]).describe("One change entry or a non-empty list on the same property: a name (nullable, optional, removed; required, non-nullable for a request) or an object ({renamed}, {type}, {values}, {wrapped}, {meaning})."),
+});
+const consequencesFields = {
+  repo,
+  workspace: workspace.describe("Repositories read with the selected one; omit for the persisted workspace (else the selected repo only); repos supplies other clones. Always prepared once per call."),
+  scope,
+  hypotheses: z.array(hypothesis).min(1).optional().describe("One or more written contract changes to answer together; exclusive with base."),
+  base: z.string().min(1).optional().describe("Comparison ref: derives the hypotheses from the contract change between base and head and answers them at head. Exclusive with hypotheses."),
+  head: z.string().min(1).optional().describe("Change commit/ref with base; default HEAD."),
+  revision: z.string().min(1).optional().describe("Commit/ref for this repo with hypotheses; default HEAD."),
+  live: z.boolean().optional().describe("With hypotheses: read trusted staged, unstaged and untracked changes; not with revision."),
+};
+/** Exactly one subject, and each of `head` and `revision` only beside the subject that reads it; `live` is excluded by `liveSchema`. */
+function consequencesIssues(value: { hypotheses?: unknown; base?: unknown; head?: unknown; revision?: unknown }): FieldIssue[] {
+  const issues: FieldIssue[] = [];
+  if ((value.hypotheses === undefined) === (value.base === undefined)) issues.push({ constraint: "one-subject", path: ["hypotheses"], message: "give exactly one of hypotheses and base" });
+  if (value.head !== undefined && value.base === undefined) issues.push({ constraint: "head-requires-base", path: ["head"], message: "head applies to a change: give base, or omit head" });
+  if (value.revision !== undefined && value.base !== undefined) issues.push({ constraint: "revision-requires-hypotheses", path: ["revision"], message: "revision applies to hypotheses; a change reads head" });
+  return issues;
+}
+const consequencesConstraints: CrossField = crossField(liveExclusion("revision"), liveExclusion("base"), {
+  dependentRequired: { head: ["base"] },
+  dependentSchemas: { base: { not: { anyOf: [{ required: ["hypotheses"] }, { required: ["revision"] }] } } },
+  if: { not: { required: ["base"] } },
+  then: { required: ["hypotheses"] },
+});
+const consequencesInput = <S extends z.ZodRawShape>(shape: S) =>
+  liveSchema({ ...consequencesFields, ...shape }, ["revision", "base"]).superRefine(reportIssues(consequencesIssues)).meta(consequencesConstraints);
 const fileFields = { repo, revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope };
 const outlineFields = {
   repo, revision, live,
@@ -247,6 +282,7 @@ export const SEMANTIC_INPUTS = {
   trace: liveSchema(traceFields, ["revision"]),
   workspace: liveSchema(workspaceFields, ["revision"]),
   decisions: liveSchema(workspaceFields, ["revision"]),
+  contract_consequences: consequencesInput({}),
 } satisfies Record<ToolFamily, z.ZodType>;
 
 /** The inputs each original tool publishes and validates: the semantic fields plus presentation and recovery controls. */
@@ -267,13 +303,19 @@ export const TOOL_INPUTS = {
   trace: liveSchema({ ...traceFields, mode }, ["revision"]),
   workspace: liveSchema({ ...workspaceFields, mode }, ["revision"]),
   decisions: liveSchema({ ...workspaceFields, mode }, ["revision"]),
+  contract_consequences: consequencesInput({ mode }),
 } satisfies Record<ToolFamily, z.ZodType>;
 
 export type QueryName = `ye_ast_${ToolFamily}`;
 export type SemanticArguments<F extends ToolFamily> = z.infer<(typeof SEMANTIC_INPUTS)[F]>;
 export type ToolArguments<F extends ToolFamily> = z.infer<(typeof TOOL_INPUTS)[F]>;
-export type SemanticQuery = { [F in ToolFamily]: { name: `ye_ast_${F}`; arguments: SemanticArguments<F> } }[ToolFamily];
-export type SemanticQueryOf<F extends ToolFamily> = Extract<SemanticQuery, { name: `ye_ast_${F}` }>;
+type AnySemanticQuery = { [F in ToolFamily]: { name: `ye_ast_${F}`; arguments: SemanticArguments<F> } }[ToolFamily];
+/** The queries compose runs; contract_consequences joins in U3 (RFC-0023 Delivery 3). */
+export type SemanticQuery = Exclude<AnySemanticQuery, { name: "ye_ast_contract_consequences" }>;
+export type ConsequencesQuery = Extract<AnySemanticQuery, { name: "ye_ast_contract_consequences" }>;
+/** Every query a tool answers: the composed ones and contract_consequences. */
+export type ToolQuery = SemanticQuery | ConsequencesQuery;
+export type SemanticQueryOf<F extends ToolFamily> = Extract<AnySemanticQuery, { name: `ye_ast_${F}` }>;
 
 /** The family a query name addresses. */
 export function familyOf(name: QueryName): ToolFamily {
@@ -287,5 +329,5 @@ export type RecoverableFamily = "entrypoints" | "impact" | "callers";
  * The runtime schema of `ye_ast_compose` (composition-schema.ts) must accept exactly these shapes.
  */
 export type ComposeQuery = {
-  [F in ToolFamily]: { name: `ye_ast_${F}`; arguments: SemanticArguments<F> } & (F extends RecoverableFamily ? { expect?: `mcp-r1:${string}` } : { expect?: never });
-}[ToolFamily];
+  [F in Exclude<ToolFamily, "contract_consequences">]: { name: `ye_ast_${F}`; arguments: SemanticArguments<F> } & (F extends RecoverableFamily ? { expect?: `mcp-r1:${string}` } : { expect?: never });
+}[Exclude<ToolFamily, "contract_consequences">]; // compose joins contract_consequences in U3 (RFC-0023 Delivery 3)

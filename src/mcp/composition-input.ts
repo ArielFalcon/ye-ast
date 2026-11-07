@@ -22,10 +22,13 @@ export const COMPOSE_LIMITS = {
 const sourceExpect = compositionIdSchema("mcp-r1").describe("Assert this source's complete public resultIdentity, as the original tool's expect does.");
 const compositionExpect = compositionIdSchema("mcp-c1").describe("Assert the identity of the whole composition (verification.identity).");
 
+/** The families compose runs; contractConsequences joins in U3 (RFC-0023 Delivery 3). */
+type ComposedFamily = Exclude<ToolFamily, "contract_consequences">;
+
 function recoverable<F extends RecoverableFamily>(family: F) {
   return z.strictObject({ name: z.literal(`ye_ast_${family}` as const), arguments: SEMANTIC_INPUTS[family], expect: sourceExpect.exactOptional() });
 }
-function fresh<F extends Exclude<ToolFamily, RecoverableFamily>>(family: F) {
+function fresh<F extends Exclude<ComposedFamily, RecoverableFamily>>(family: F) {
   return z.strictObject({ name: z.literal(`ye_ast_${family}` as const), arguments: SEMANTIC_INPUTS[family] });
 }
 

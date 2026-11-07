@@ -9,6 +9,7 @@ import type { WorkspaceQueries, WorkspaceRead } from "../core/ports/workspace-qu
 import { SCHEMA } from "../core/domain/shared/fact.ts";
 import { REDACTED } from "../core/ports/redaction.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
+import type { ContractConsequencesQueries } from "../core/ports/contract-consequences-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import { ERROR_CODE, METHOD, PROTOCOL } from "./protocol.ts";
 import { connectQueryClient, ConnectionClosedError, ProtocolMismatchError, QueryError } from "./query-client.ts";
@@ -27,7 +28,7 @@ const PARAMS = { repo: "/work/shop", repoId: "shop", revision: "HEAD" };
 function pair(map: EntrypointQueries["map"], workspace: WorkspaceQueries = {} as WorkspaceQueries, redaction: Redaction = identity): { streams: { input: PassThrough; output: PassThrough }; written: string[]; done: Promise<void> } {
   const toServer = new PassThrough();
   const toClient = new PassThrough();
-  const deps: QueryServerDeps = { version: "1.2.3", redaction, entrypoints: { map }, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace, decisions: {} as DecisionQueries };
+  const deps: QueryServerDeps = { version: "1.2.3", redaction, entrypoints: { map }, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace, decisions: {} as DecisionQueries, contractConsequences: {} as ContractConsequencesQueries };
   const written: string[] = [];
   toServer.on("data", (chunk: Buffer) => written.push(chunk.toString()));
   return { streams: { input: toClient, output: toServer }, written, done: serveQueries(deps, { input: toServer, output: toClient }) };

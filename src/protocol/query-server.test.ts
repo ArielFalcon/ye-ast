@@ -7,6 +7,7 @@ import type { ImpactFault, ImpactQueries } from "../core/ports/impact-queries.po
 import type { OutlineFault, OutlineQueries } from "../core/ports/outline-queries.port.ts";
 import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
+import type { ContractConsequencesQueries } from "../core/ports/contract-consequences-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { Result } from "../core/domain/shared/result.ts";
@@ -58,6 +59,7 @@ function fakes(): Fakes {
     trace: { walk: answer("walk") } as TraceQueries,
     workspace: { outwardNames: answer("outwardNames") } as WorkspaceQueries,
     decisions: { decisions: answer("decisions") } as DecisionQueries,
+    contractConsequences: { ofHypotheses: answer("ofHypotheses"), ofChange: answer("consequencesOfChange") } as unknown as ContractConsequencesQueries,
   };
   return { deps, calls, behave: (operation, behavior) => void behaviors.set(operation, behavior) };
 }
@@ -199,6 +201,16 @@ const OPERATIONS = [
     },
   },
   { method: METHOD.decisionsDecisions, operation: "decisions", params: { repo: { path: "/work/shop", id: "shop" }, offline: false } },
+  {
+    method: METHOD.contractConsequencesOfHypotheses,
+    operation: "ofHypotheses",
+    params: {
+      repo: { path: "/work/shop", id: "shop", revision: "v2" },
+      repos: [{ path: "/work/web", id: "web" }],
+      hypotheses: [{ method: "GET", path: "/owners/{id}", target: "response", property: "name", change: "nullable" }, { method: "PUT", path: "/owners", target: "request", property: "tags", change: [{ type: "string" }, "required"] }],
+    },
+  },
+  { method: METHOD.contractConsequencesOfChange, operation: "consequencesOfChange", params: { repo: { path: "/work/shop", id: "shop" }, base: "main", head: "feature", gateways: [{ prefix: "api", repo: "shop" }] } },
 ] as const;
 
 for (const { method, operation, params } of OPERATIONS) {
@@ -800,6 +812,50 @@ test("each live fault is typed and its safe, secret or path diagnostic is handle
         assert.equal(answer.error?.data.kind, kind);
         assert.equal(answer.error?.message, expected);
       }
+    }
+  } finally { session.end(); await session.done; }
+});
+
+test("the contractConsequences methods refuse an empty or malformed hypothesis list, and a change without its revisions, before any query starts", async () => {
+  const { deps, calls } = fakes();
+  const session = await untrusted(deps);
+  const repo = { path: "/work/shop", id: "shop" };
+  const hypothesis = { method: "GET", path: "/o", target: "response", property: "name", change: "nullable" };
+  const invalid: [string, unknown][] = [
+    [METHOD.contractConsequencesOfHypotheses, { repo }],
+    [METHOD.contractConsequencesOfHypotheses, { repo, hypotheses: [] }],
+    [METHOD.contractConsequencesOfHypotheses, { repo, hypotheses: ["GET /o"] }],
+    [METHOD.contractConsequencesOfHypotheses, { repo, hypotheses: [{ ...hypothesis, extra: 1 }] }],
+    [METHOD.contractConsequencesOfHypotheses, { repo, hypotheses: [{ ...hypothesis, method: "" }] }],
+    [METHOD.contractConsequencesOfHypotheses, { repo, hypotheses: [{ ...hypothesis, change: [] }] }],
+    [METHOD.contractConsequencesOfHypotheses, { repo, hypotheses: [{ ...hypothesis, change: 3 }] }],
+    [METHOD.contractConsequencesOfHypotheses, { repo, hypotheses: [hypothesis], base: "main" }],
+    [METHOD.contractConsequencesOfChange, { repo, base: "main" }],
+    [METHOD.contractConsequencesOfChange, { repo, head: "feature" }],
+    [METHOD.contractConsequencesOfChange, { repo, base: "main", head: "feature", hypotheses: [hypothesis] }],
+  ];
+  try {
+    for (const [index, [method, params]] of invalid.entries()) session.send(request(index + 1, method, params));
+    for (const [index] of invalid.entries()) assert.equal((await session.receive()).error?.code, ERROR_CODE["invalid-params"], `case ${index}`);
+    assert.deepEqual(calls, []);
+  } finally { session.end(); await session.done; }
+});
+
+test("the contractConsequences fault kinds have their own codes and an invalid hypothesis names its index", async () => {
+  const { deps, behave } = fakes();
+  const faults = [
+    { kind: "invalid-hypothesis", detail: "hypotheses[1]: invalid method", index: 1, refusal: { kind: "invalid-method", detail: `FETCH ${SECRET}` } },
+    { kind: "contradictory-revisions", detail: "bound to another commit" },
+  ] as const;
+  const session = await untrusted(deps);
+  try {
+    for (const [index, fault] of faults.entries()) {
+      behave("consequencesOfChange", async () => ({ ok: false, fault } as never));
+      session.send(request(index + 1, METHOD.contractConsequencesOfChange, { repo: { path: "/work/shop" }, base: "main", head: "main" }));
+      const { error } = await session.receive();
+      assert.equal(error?.code, ERROR_CODE[fault.kind]);
+      assert.equal(error?.data.kind, fault.kind);
+      if (fault.kind === "invalid-hypothesis") assert.deepEqual(error?.data, { kind: fault.kind, index: 1, refusal: { kind: "invalid-method", detail: `FETCH ${REDACTED}` } });
     }
   } finally { session.end(); await session.done; }
 });

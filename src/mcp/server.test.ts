@@ -21,9 +21,11 @@ import type { WorkspaceFault, WorkspaceSection } from "../core/ports/workspace-r
 import type { WorkspaceCallersRequest, WorkspaceImpactQueries, WorkspaceImpactValue, WorkspaceOfChangeRequest } from "../core/ports/workspace-impact-queries.port.ts";
 import type { RepoImpact } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../core/ports/decision-queries.port.ts";
+import type { ConsequencesValue } from "../core/domain/contracts/consequence-fact.ts";
+import type { ChangeRequest, ConsequencesFault, ContractConsequencesQueries, HypothesesRequest } from "../core/ports/contract-consequences-queries.port.ts";
 import type { OutwardName } from "../core/domain/topology/outward-name.ts";
 import type { FactRead, WorkspaceRefresh } from "../core/ports/workspace-queries.port.ts";
-import { createMcpServer, FAULT_META, RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, TRACE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT } from "./server.ts";
+import { createMcpServer, FAULT_META, RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, TRACE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT, CONTRACT_CONSEQUENCES_OUTPUT } from "./server.ts";
 
 function resultFields(result: any): any {
   const text = result.content?.[0]?.text;
@@ -32,7 +34,7 @@ function resultFields(result: any): any {
   assert.notEqual(at, -1);
   return { text: text.slice(0, at), ...JSON.parse(text.slice(at + 1 + RESULT_JSON_LABEL.length)) };
 }
-import { openSession, type Session } from "./test-session.testing.ts";
+import { openSession, type Session, type ToolResult } from "./test-session.testing.ts";
 import { CONSUMER_ROUTES } from "./test-consumer-routes.testing.ts";
 import { createHash } from "node:crypto";
 import { encodeCursor, selectionDigest } from "./evidence-cursor.ts";
@@ -232,6 +234,8 @@ interface Calls {
   outline: OutlineRequest[];
   trace: TraceRequest[];
   decisions: DecisionsRequest[];
+  hypotheses: HypothesesRequest[];
+  changes: ChangeRequest[];
 }
 
 interface Answers {
@@ -245,10 +249,11 @@ interface Answers {
   decisions: (request: DecisionsRequest) => Promise<Result<FactRead<DecisionValue>, WorkspaceFault>>;
   workspaceCallers: (request: WorkspaceCallersRequest) => Promise<Result<FactRead<WorkspaceImpactValue>, WorkspaceFault>>;
   workspaceOfChange: (request: WorkspaceOfChangeRequest) => Promise<Result<FactRead<WorkspaceImpactValue>, WorkspaceFault>>;
+  consequences: (request: HypothesesRequest | ChangeRequest) => Promise<Result<Fact<ConsequencesValue>, ConsequencesFault>>;
 }
 
 async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh, repositories?: readonly { path: string; repoId: string }[], repository = REPOSITORY, redaction: Redaction = fakeRedaction): Promise<{ session: Session; calls: Calls }> {
-  const calls: Calls = { map: [], ofChange: [], callers: [], importers: [], outline: [], trace: [], workspaceCallers: [], workspaceOfChange: [], workspaceReads: [], decisions: [] };
+  const calls: Calls = { map: [], ofChange: [], callers: [], importers: [], outline: [], trace: [], workspaceCallers: [], workspaceOfChange: [], workspaceReads: [], decisions: [], hypotheses: [], changes: [] };
   /** A fact with the sidecar a read that refreshed something carries, and without one when it refreshed nothing. */
   const read = <T>(fact: Fact<T>): FactRead<T> => (refresh === undefined ? { fact } : { fact, refresh });
   const forRepo = <T>(fact: Fact<T>, repoId: string): Fact<T> => ({ ...fact, snapshot: { ...fact.snapshot, repo: repoId } });
@@ -306,7 +311,12 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh,
       return (answers.decisions ?? (async (r) => ({ ok: true, value: read(forRepo(decisionFact(), r.repo.id!)) })))(request);
     },
   };
-  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, outline, trace, workspace, workspaceImpact, decisions, digest: { of: (value) => createHash("sha256").update(value).digest("hex") }, redaction, repository, ...(repositories === undefined ? {} : { repositories }) });
+  const consequences = (fact: Fact<ConsequencesValue>) => answers.consequences ?? (async () => ({ ok: true as const, value: fact }));
+  const contractConsequences: ContractConsequencesQueries = {
+    ofHypotheses: (request) => (calls.hypotheses.push(request), consequences(forRepo({ ...base(), status: "complete", value: { repositorySnapshots: [], answers: [] } }, request.repo.id!))(request)),
+    ofChange: (request) => (calls.changes.push(request), consequences(forRepo({ ...base(), status: "complete", value: { repositorySnapshots: [], answers: [] } }, request.repo.id!))(request)),
+  };
+  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, outline, trace, workspace, workspaceImpact, decisions, contractConsequences, digest: { of: (value) => createHash("sha256").update(value).digest("hex") }, redaction, repository, ...(repositories === undefined ? {} : { repositories }) });
   return { session: await openSession(server), calls };
 }
 
@@ -615,6 +625,7 @@ const TOOL_CALLS: [string, Record<string, unknown>][] = [
   ["ye_ast_trace", { targets: [{ file: "src/Order.java", symbol: "total" }] }],
   ["ye_ast_workspace", {}],
   ["ye_ast_decisions", {}],
+  ["ye_ast_contract_consequences", { hypotheses: [{ method: "GET", path: "/owners/{id}", target: "response", property: "name", change: "nullable" }] }],
 ];
 
 test("every tool delivers mode receipts and a full fact", async () => {
@@ -904,10 +915,10 @@ test("a trace refuses the caller-count bound before any walk", async () => {
   await session.close();
 });
 
-test("lists eight query families and the composition operation", async () => {
+test("lists nine query families and the composition operation", async () => {
   const { session } = await setup();
   const tools = await session.listTools();
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["ye_ast_callers", "ye_ast_compose", "ye_ast_decisions", "ye_ast_entrypoints", "ye_ast_impact", "ye_ast_importers", "ye_ast_outline", "ye_ast_trace", "ye_ast_workspace"]);
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["ye_ast_callers", "ye_ast_compose", "ye_ast_contract_consequences", "ye_ast_decisions", "ye_ast_entrypoints", "ye_ast_impact", "ye_ast_importers", "ye_ast_outline", "ye_ast_trace", "ye_ast_workspace"]);
   for (const tool of tools) {
     assert.ok((tool.description ?? "").length > 0, tool.name);
     if (tool.name === "ye_ast_compose") {
@@ -1100,8 +1111,8 @@ test("malformed success is rejected by server runtime validation", async () => {
 
 test("output schemas validate real receipts and family payloads and reject broken required fields", async () => {
   const { session } = await setup();
-  const schemas = [ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, TRACE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT];
-  const fields = ["entrypoints", "seeds", "seeds", "files", "files", "steps", "sections", "decisions"];
+  const schemas = [ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, TRACE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT, CONTRACT_CONSEQUENCES_OUTPUT];
+  const fields = ["entrypoints", "seeds", "seeds", "files", "files", "steps", "sections", "decisions", "answers"];
   try {
     const tools = await session.listTools();
     assert.deepEqual(TOOL_CALLS.map(([name]) => name).toSorted(), tools.filter(({ name }) => name !== "ye_ast_compose").map(({ name }) => name).toSorted());
@@ -4420,5 +4431,67 @@ test("every printed selector example executes through its recovery recipe, and p
       }
     }
     assert.ok(continued > 0);
+  } finally { await session.close(); }
+});
+
+const HYPOTHESIS = { method: "GET", path: "/owners/{id}", target: "response", property: "name", change: "nullable" };
+
+test("contract consequences hands the port a bound repository, a nested workspace and exactly one subject, and pins a change at its head", async () => {
+  const { session, calls } = await setup();
+  const workspace = { repos: [{ path: "/work/web", id: "web" }], gateways: [{ prefix: "api", repo: "shop" }] };
+  const scope = { include: ["src/**"] };
+  try {
+    assert.notEqual((await session.callTool("ye_ast_contract_consequences", { hypotheses: [HYPOTHESIS], workspace, scope, revision: "v1" }) as ToolResult).isError, true);
+    assert.notEqual((await session.callTool("ye_ast_contract_consequences", { hypotheses: [HYPOTHESIS], live: true }) as ToolResult).isError, true);
+    assert.notEqual((await session.callTool("ye_ast_contract_consequences", { base: "main", head: "feature", workspace }) as ToolResult).isError, true);
+    assert.notEqual((await session.callTool("ye_ast_contract_consequences", { base: "main" }) as ToolResult).isError, true);
+    const [pinned, live] = calls.hypotheses;
+    const [change, defaulted] = calls.changes;
+    assert.deepEqual(pinned?.repo, { path: "/work/shop", id: "shop", revision: "v1" });
+    assert.deepEqual([pinned?.hypotheses, pinned?.repos, pinned?.gateways, pinned?.scope], [[HYPOTHESIS], workspace.repos, workspace.gateways, scope]);
+    assert.deepEqual(live?.repo, { path: "/work/shop", id: "shop", live: true });
+    // The use case refuses a bound revision that is not the head, so a change binds the repository to none.
+    assert.deepEqual([change?.repo, change?.base, change?.head], [{ path: "/work/shop", id: "shop" }, "main", "feature"]);
+    assert.deepEqual([defaulted?.base, defaulted?.head], ["main", "HEAD"]);
+    assert.equal(calls.hypotheses.length + calls.changes.length, 4);
+    for (const refused of [{}, { hypotheses: [] }, { hypotheses: [HYPOTHESIS], base: "main" }]) {
+      assert.equal((await session.callTool("ye_ast_contract_consequences", refused) as ToolResult).isError, true);
+    }
+    assert.equal(calls.hypotheses.length + calls.changes.length, 4, "a refused argument list never reaches the port");
+  } finally { await session.close(); }
+});
+
+test("contract consequences publishes its faults by kind with the index of the refused hypothesis, and a fresh family takes no recovery controls", async () => {
+  const faults: ConsequencesFault[] = [
+    { kind: "invalid-hypothesis", detail: "hypotheses[1] refused", index: 1, refusal: { kind: "invalid-method", detail: "FETCH" } },
+    { kind: "contradictory-revisions", detail: "bound to another commit" },
+  ];
+  for (const fault of faults) {
+    const { session } = await setup({ consequences: async () => ({ ok: false, fault }) });
+    try {
+      const result = await session.callTool("ye_ast_contract_consequences", { hypotheses: [HYPOTHESIS] }) as ToolResult;
+      assert.equal(result.isError, true);
+      assert.deepEqual(result._meta?.[FAULT_META], fault);
+      const tool = (await session.listTools()).find(({ name }) => name === "ye_ast_contract_consequences");
+      const properties = Object.keys((tool!.inputSchema as { properties: object }).properties);
+      assert.ok(["select", "page", "expect"].every((control) => !properties.includes(control)));
+      assert.ok(["hypotheses", "base", "head", "revision", "live", "workspace", "scope", "mode", "repo"].every((field) => properties.includes(field)));
+    } finally { await session.close(); }
+  }
+});
+
+test("contract consequences full mode delivers every answer with its chains and witnesses, whatever the text elides", async () => {
+  const chain = [{ step: "call", evidence: { repo: "web", path: "src/client.ts", line: 3 } }];
+  const finding = { status: "complete", value: { repo: "web", link: { id: "l", basis: "exact", call: { file: "src/client.ts", line: 3, symbol: "load" }, handler: { repo: "shop", path: "src/Owner.java", symbol: "show", line: 9 } }, verdict: { kind: "incompatible", witness: "null", at: 1, failing: {}, capability: "member" }, operation: {}, path: "name", changed: "name", chain }, evidence: [{ repo: "web", path: "src/use.ts", line: 5 }] };
+  const value = { repositorySnapshots: [{ repo: "shop", snapshot: base().snapshot }], answers: [{ hypothesis: HYPOTHESIS, oldContract: "present-and-non-null", status: "complete", findings: [finding] }, { hypothesis: { ...HYPOTHESIS, path: "/none" }, oldContract: "present-and-non-null", status: "unknown", reason: "no-project", detail: "served by no repository" }] };
+  const fact = { ...base(), status: "partial", cuts: [{ kind: "section", at: ["answers.1"] }], value } as unknown as Fact<ConsequencesValue>;
+  const { session } = await setup({ consequences: async () => ({ ok: true, value: fact }) });
+  try {
+    const full = resultFields(await session.callTool("ye_ast_contract_consequences", { hypotheses: [HYPOTHESIS], mode: "full" }));
+    assert.deepEqual(full.value, JSON.parse(JSON.stringify(value)));
+    assert.equal(full.status, "partial");
+    const summary = resultFields(await session.callTool("ye_ast_contract_consequences", { hypotheses: [HYPOTHESIS] }));
+    assert.equal(summary.value, undefined);
+    assert.match(summary.text, /unknown \(no-project\)/);
   } finally { await session.close(); }
 });

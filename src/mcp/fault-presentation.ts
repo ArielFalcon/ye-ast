@@ -1,7 +1,7 @@
 import { unknownTargetKey } from "../core/ports/impact-queries.port.ts";
 import type { ToolFamily } from "./presentation.ts";
 import type { QueryFault } from "./query-runner.ts";
-import { familyOf, type SemanticQuery } from "./query-schema.ts";
+import { familyOf, type ToolQuery } from "./query-schema.ts";
 import type { ComposeFault, SourceIdentityCause, UnavailableReason } from "./composition-contract.ts";
 import type { SelectionFault } from "./select-evidence.ts";
 import type { SourceVerificationFault } from "./evidence-cursor.ts";
@@ -23,6 +23,8 @@ export type FaultQueryContext = {
   live: boolean;
   /** Outline's subject form. */
   subject?: "files" | "focus";
+  /** A contract_consequences read of a change between revisions: it names `base` and `head`, as impact does. */
+  change?: true;
   workspace: boolean;
   /** Explicit member paths supplied by the request. */
   members: boolean;
@@ -34,14 +36,15 @@ export type FaultQueryContext = {
 
 export type FaultControls = { select?: unknown; page?: { cursor?: string | undefined } | undefined; expect?: unknown };
 
-export function faultContext(query: SemanticQuery, controls: FaultControls = {}): FaultQueryContext {
-  const args: { live?: boolean | undefined; workspace?: { repos?: unknown } | undefined; repos?: unknown; replay?: unknown; focus?: unknown } = query.arguments;
+export function faultContext(query: ToolQuery, controls: FaultControls = {}): FaultQueryContext {
+  const args: { live?: boolean | undefined; workspace?: { repos?: unknown } | undefined; repos?: unknown; replay?: unknown; focus?: unknown; base?: unknown; hypotheses?: unknown } = query.arguments;
   const family = familyOf(query.name);
   return {
     family,
     live: args.live === true,
     ...(family === "outline" ? { subject: args.focus === undefined ? "files" as const : "focus" as const } : {}),
-    workspace: args.workspace !== undefined || family === "workspace" || family === "decisions",
+    ...(family === "contract_consequences" && args.base !== undefined ? { change: true as const } : {}),
+    workspace: args.workspace !== undefined || family === "workspace" || family === "decisions" || family === "contract_consequences",
     members: args.workspace?.repos !== undefined || args.repos !== undefined,
     replay: args.replay !== undefined,
     select: controls.select !== undefined,
@@ -94,7 +97,12 @@ function declarationText(entry: { file: string; candidates: readonly string[] })
 
 /** The argument that selects the commit read. */
 function commitArgument(query: FaultQueryContext | undefined): string {
-  return query === undefined ? "the selected commit" : query.family === "impact" ? "head" : "revision";
+  return query === undefined ? "the selected commit" : readsChange(query) ? "head" : "revision";
+}
+
+/** Impact and a contract_consequences change read two commits, base and head. */
+function readsChange(query: FaultQueryContext): boolean {
+  return query.family === "impact" || query.change === true;
 }
 
 function membersArgument(query: FaultQueryContext | undefined): string {
@@ -108,12 +116,12 @@ function omitLive(query: FaultQueryContext | undefined): string {
 function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-fault" }>, query: FaultQueryContext | undefined): string | undefined {
   switch (fault.kind) {
     case "unknown-revision": {
-      const argument = query?.family === "impact" ? (query.live ? "base" : "base or head") : commitArgument(query);
+      const argument = query !== undefined && readsChange(query) ? (query.live ? "base" : "base or head") : commitArgument(query);
       const member = query?.members
         ? `Also check ${membersArgument(query)}[].revision.`
         : query?.workspace ? "Also check persisted workspace member revisions in the host configuration." : undefined;
       return [
-        `${argument} must resolve to a local commit: pass a branch, tag or sha the owning clone holds${query?.family === "impact" ? "" : ", or omit it to read HEAD"}.`,
+        `${argument} must resolve to a local commit: pass a branch, tag or sha the owning clone holds${query !== undefined && readsChange(query) ? "" : ", or omit it to read HEAD"}.`,
         ...(member === undefined ? [] : [member, "This fault does not identify which repository's revision failed."]),
       ].join(" ");
     }
@@ -128,7 +136,7 @@ function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-faul
           ? "Check the selected repository registration and persisted workspace member roots. This fault does not identify which one failed; correct the corresponding host configuration."
           : "The selected repository registration must point to its clone root; correct its host configuration.";
     case "object-missing":
-      return `This clone lacks the Git objects of ${query?.family === "impact" ? "base, head or their merge base" : commitArgument(query)}: fetch them into the clone or choose a commit it holds. ye-ast never downloads.`;
+      return `This clone lacks the Git objects of ${query?.family === "impact" ? "base, head or their merge base" : query?.change === true ? "base or head" : commitArgument(query)}: fetch them into the clone or choose a commit it holds. ye-ast never downloads.`;
     case "live-requires-trusted":
       if (query?.workspace || query?.members) {
         const members = query.members ? `${membersArgument(query)} member live selectors` : "persisted workspace member live selectors";
@@ -197,6 +205,10 @@ function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-faul
       return "Copy select's coordinates and owner from a details or full answer of this same query; indices are zero-based.";
     case "ambiguous-selection":
       return "Add the owner or coordinates that tell the matching records apart, as a details or full answer of this query prints them.";
+    case "invalid-hypothesis":
+      return `Correct hypotheses[${fault.index}] and resend them all: nothing is answered while one is refused. method is an HTTP verb, path starts with /, target is response or request, property is an access path such as pets[].name, and change is an entry the target supports.`;
+    case "contradictory-revisions":
+      return "A change is answered at its head commit, never on the working tree: name the commit with head, and omit live and any other revision for the bound repository.";
     case "composition-request-too-large":
       return "Split the queries over several ye_ast_compose calls or shorten their arguments; each call reruns its queries independently.";
     case "composition-conflicting-expectations":

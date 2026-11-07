@@ -13,13 +13,13 @@ import type { ResponseMode, ResponseRenderer, ToolFamily } from "./presentation.
 import { TRUST_MODES } from "../core/domain/shared/fact.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import type { Fact } from "../core/domain/shared/fact.ts";
-import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type ComposeQuery, type SemanticQuery, type ToolArguments } from "./query-schema.ts";
-import { executeQuery, type ExecutedSource, type PublicRead, type QueryExecutionDeps } from "./query-runner.ts";
+import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type ComposeQuery, type ToolArguments, type ToolQuery } from "./query-schema.ts";
+import { executeQuery, type ConsequencesExecutionDeps, type PresentedSource, type PublicRead } from "./query-runner.ts";
 import { COMPOSE_INPUT, COMPOSE_OUTPUT } from "./composition-schema.ts";
 import { runComposition } from "./compose-request.ts";
 import { composeFull, composeReceipt, renderComposition } from "./render-composition.ts";
 import { controlFault, faultContext, renderFault, type CodedFault, type FaultQueryContext, type PublicFault } from "./fault-presentation.ts";
-import { renderDecisions, renderEntrypointMap, renderImpact, renderImporters, renderOutline, renderRefresh, renderTrace, renderStale, renderWorkspace, renderWorkspaceImpact } from "./render.ts";
+import { renderContractConsequences, renderDecisions, renderEntrypointMap, renderImpact, renderImporters, renderOutline, renderRefresh, renderTrace, renderStale, renderWorkspace, renderWorkspaceImpact } from "./render.ts";
 
 /** The key of the result's `_meta` that carries a stale notice. */
 const LIVE_META = "ye-ast/live";
@@ -39,7 +39,7 @@ function delivered(text: string, fields: Record<string, unknown>, meta: Record<s
   };
 }
 
-export interface McpDeps extends QueryExecutionDeps {
+export interface McpDeps extends ConsequencesExecutionDeps {
   version: string;
   /** Default repository binding, plus additional host-declared targets. */
   repository: RepositoryBinding;
@@ -59,6 +59,7 @@ When to call:
 - ye_ast_trace: what a declaration executes, in source order, with a reading plan of the spans to open; call it before reading a flow file by file.
 - ye_ast_workspace: which other repositories this one names (HTTP, messaging, dependencies), to choose clones.
 - ye_ast_decisions: workspace configuration gaps with evidence-backed options; it writes nothing.
+- ye_ast_contract_consequences: before changing a response or request contract, or to see what a diff of contracts breaks.
 - ye_ast_compose: 1..16 of these queries in one call, merging shared entities. Queries rerun; nothing is stored and captures are not atomic, so obtain dependent coordinates first.
 
 Reading answers: complete is relative to the declared scope, supported constructs and change selection; partial keeps known findings and lists cuts (where coverage stopped; per-repository sections and file reads can have their own limits); unknown never means no impact. TypeScript tests are not indexed; template bindings are not resolved. References need not be calls or edits; confidence measures resolution, not safety; entrypoint origins are associations, not complete call chains. Content carries presentation text (summary and details findings, full navigation), then a "result JSON:" line with the result fields. Recovery is the recovery field.
@@ -283,6 +284,24 @@ const shapes = {
     unserved: z.array(repoOutwardName),
   }),
   decisions: z.looseObject({ decisions: z.array(decision), repositories: snapshots, source: z.string() }),
+  contract_consequences: z.looseObject({
+    repositorySnapshots: snapshots,
+    answers: z.array(z.looseObject({
+      hypothesis: z.looseObject({ method: z.string(), path: z.string(), target: z.string(), property: z.string() }),
+      status: z.enum(["complete", "partial", "unknown"]),
+      findings: z.array(z.looseObject({ status: z.enum(["complete", "unknown"]), evidence: z.array(repositoryEvidence) })).optional(),
+    })),
+    change: z.looseObject({
+      base: z.string(),
+      head: z.string(),
+      snapshots: z.looseObject({ base: z.string(), head: z.string() }),
+      derivation: factOf(z.looseObject({
+        gained: z.array(z.looseObject({ operation: z.string(), property: z.string() })),
+        operations: z.looseObject({ added: strings, removed: strings }),
+        frontiers: z.array(z.looseObject({ kind: z.string(), reason: z.string(), evidence: z.array(repositoryEvidence) })),
+      })),
+    }).optional(),
+  }),
 };
 /** Validate the envelope and public containers used by navigation; domain unions remain owned by the core. */
 function outputFor(value: z.ZodType, recovery?: z.ZodType) {
@@ -318,7 +337,8 @@ export const OUTLINE_OUTPUT = outputFor(shapes.outline);
 export const TRACE_OUTPUT = outputFor(shapes.trace);
 export const WORKSPACE_OUTPUT = outputFor(shapes.workspace);
 export const DECISIONS_OUTPUT = outputFor(shapes.decisions);
-const OUTPUTS: Readonly<Record<ToolFamily, z.ZodType>> = { entrypoints: ENTRYPOINTS_OUTPUT, impact: IMPACT_OUTPUT, callers: CALLERS_OUTPUT, importers: IMPORTERS_OUTPUT, outline: OUTLINE_OUTPUT, trace: TRACE_OUTPUT, workspace: WORKSPACE_OUTPUT, decisions: DECISIONS_OUTPUT };
+export const CONTRACT_CONSEQUENCES_OUTPUT = outputFor(shapes.contract_consequences);
+const OUTPUTS: Readonly<Record<ToolFamily, z.ZodType>> = { entrypoints: ENTRYPOINTS_OUTPUT, impact: IMPACT_OUTPUT, callers: CALLERS_OUTPUT, importers: IMPORTERS_OUTPUT, outline: OUTLINE_OUTPUT, trace: TRACE_OUTPUT, workspace: WORKSPACE_OUTPUT, decisions: DECISIONS_OUTPUT, contract_consequences: CONTRACT_CONSEQUENCES_OUTPUT };
 
 type Refusal = (fault: CodedFault) => CallToolResult;
 type Controls = { tool: "entrypoints" | "impact" | "callers"; select?: EvidenceSelection | undefined; page?: { limit: number; cursor?: string | undefined } | undefined; expect?: string | undefined };
@@ -340,7 +360,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
    * summary/details carry a minimal receipt and convey response-level limits in their text. Every success is validated
    * before delivery in content.
    */
-  async function answer(query: SemanticQuery, mode: ResponseMode, signal: AbortSignal, controls?: Controls): Promise<CallToolResult> {
+  async function answer(query: ToolQuery, mode: ResponseMode, signal: AbortSignal, controls?: Controls): Promise<CallToolResult> {
     const context = faultContext(query, controls);
     const selectionFailure = (fault: CodedFault): CallToolResult => failure(controlFault(fault), context);
     try {
@@ -364,7 +384,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
   }
 
   /** The renderer and selection source of each public payload; the dispatch itself lives in the runner. */
-  function present(source: ExecutedSource, mode: ResponseMode, controls: Controls | undefined, cursor: CursorV1 | undefined, selectionFailure: Refusal): CallToolResult {
+  function present(source: PresentedSource, mode: ResponseMode, controls: Controls | undefined, cursor: CursorV1 | undefined, selectionFailure: Refusal): CallToolResult {
     switch (source.family) {
       case "entrypoints":
         return respond(source, source.read, true, renderEntrypointMap, mode, controls, cursor, selectionFailure, (fact) => ({ kind: "entrypoints", fact }));
@@ -383,11 +403,13 @@ export function createMcpServer(deps: McpDeps): McpServer {
         return respond(source, source.read, false, renderWorkspace, mode, controls, cursor, selectionFailure);
       case "decisions":
         return respond(source, source.read, false, renderDecisions, mode, controls, cursor, selectionFailure);
+      case "contract_consequences":
+        return respond(source, source.read, false, renderContractConsequences, mode, controls, cursor, selectionFailure);
     }
   }
 
   function respond<V>(
-    source: ExecutedSource,
+    source: PresentedSource,
     read: PublicRead<V>,
     local: boolean,
     render: ResponseRenderer<V>,
@@ -643,6 +665,17 @@ export function createMcpServer(deps: McpDeps): McpServer {
       annotations,
     },
     ({ mode, ...semantic }: ToolArguments<"decisions">, ctx) => answer({ name: "ye_ast_decisions", arguments: semantic }, mode, ctx.mcpReq.signal),
+  );
+
+  server.registerTool(
+    "ye_ast_contract_consequences",
+    {
+      title: "Consequences of a contract change",
+      description: "Assess how hypothetical or committed HTTP request/response contract changes affect consumers and request producers, with code evidence and explicit unknowns.",
+      inputSchema: compactInput(TOOL_INPUTS.contract_consequences),
+      annotations,
+    },
+    ({ mode, ...semantic }: ToolArguments<"contract_consequences">, ctx) => answer({ name: "ye_ast_contract_consequences", arguments: semantic }, mode, ctx.mcpReq.signal),
   );
 
   return server;

@@ -20,6 +20,7 @@ function discoveryServer() {
     trace: unused<McpDeps["trace"]>(),
     workspace: unused<McpDeps["workspace"]>(),
     workspaceImpact: unused<McpDeps["workspaceImpact"]>(),
+    contractConsequences: unused<McpDeps["contractConsequences"]>(),
     decisions: unused<McpDeps["decisions"]>(),
     digest: unused<McpDeps["digest"]>(),
     version: "0",
@@ -41,7 +42,7 @@ test("catalogue advertises useful guides within budget", async () => {
     const bytes = Buffer.byteLength(JSON.stringify({ tools }));
     const outputs = tools.reduce((sum, tool) => sum + (tool.outputSchema === undefined ? 0 : Buffer.byteLength(JSON.stringify(tool.outputSchema))), 0);
     console.log(`discovery bytes: ${bytes}; input schema bytes: ${Buffer.byteLength(JSON.stringify(tools.map(tool => tool.inputSchema)))}; output schema bytes: ${outputs}; instructions chars: ${session.instructions?.length}`);
-    assert.ok((session.instructions?.length ?? Infinity) <= 4050);
+    assert.ok((session.instructions?.length ?? Infinity) <= 4200);
     assert.match(session.instructions!, /supply select and page together/);
     for (const rule of [
       /Content carries presentation text[^\n]*result JSON/,
@@ -55,7 +56,7 @@ test("catalogue advertises useful guides within budget", async () => {
     ]) assert.match(session.instructions!, rule);
 
     const originals = tools.filter(tool => tool.name !== "ye_ast_compose");
-    assert.ok(Buffer.byteLength(JSON.stringify({ tools: originals })) <= 36_100);
+    assert.ok(Buffer.byteLength(JSON.stringify({ tools: originals })) <= 41_000);
     assert.equal(outputs, 0);
     const compose = tools.find(tool => tool.name === "ye_ast_compose");
     assert.ok(compose);
@@ -75,7 +76,7 @@ test("catalogue advertises useful guides within budget", async () => {
       assert.equal(tool.inputSchema.type, "object");
       assert.ok(Object.keys(tool.inputSchema.properties ?? {}).length > 0);
       new AjvJsonSchemaValidator().getValidator(tool.inputSchema);
-      assert.equal(createHash("sha256").update(JSON.stringify(canonicalConstraints(tool.inputSchema))).digest("hex"), INPUT_CONSTRAINTS[tool.name], `${tool.name}: argument contract`);
+      assert.equal(createHash("sha256").update(JSON.stringify(canonicalConstraints(tool.inputSchema))).digest("hex"), { ...INPUT_CONSTRAINTS, ...CONSEQUENCES_CONSTRAINTS }[tool.name], `${tool.name}: argument contract`);
       for (const key of ["allOf", "anyOf", "oneOf"]) {
         assert.equal(key in tool.inputSchema, false, `${tool.name}: ${key}`);
       }
@@ -90,6 +91,7 @@ test("listed input schemas reject exactly the cross-field combinations the runti
     const tools = new Map((await session.listTools()).map((tool) => [tool.name, tool.inputSchema]));
     const replay = { version: 1, declaration: `ws-r1:${"c".repeat(64)}`, snapshots: [{ repo: "shop", kind: "sha", sha: "a".repeat(40) }] };
     const targets = [{ file: "src/S.java", symbol: "S.find" }];
+    const hypothesis = { method: "GET", path: "/o", target: "response", property: "name", change: "nullable" };
     const cut = (owner: object) => ({ kind: "cut-places", owner, cutIndex: 0 });
     const handler = (owner: object) => ({ kind: "handler-origins", owner, handler: { path: "a", symbol: "h", line: 1 } });
     const page = { limit: 1 };
@@ -121,6 +123,17 @@ test("listed input schemas reject exactly the cross-field combinations the runti
       ["workspace", { live: true, revision: "main" }, false],
       ["workspace", { repos: [{ path: "/w/a", live: true, revision: "main" }] }, false],
       ["workspace", { repos: [{ path: "/w/a", live: true }] }, true],
+      ["contract_consequences", { hypotheses: [hypothesis] }, true],
+      ["contract_consequences", { hypotheses: [hypothesis], live: true }, true],
+      ["contract_consequences", { base: "main", head: "x" }, true],
+      ["contract_consequences", {}, false],
+      ["contract_consequences", { hypotheses: [] }, false],
+      ["contract_consequences", { hypotheses: [hypothesis], base: "main" }, false],
+      ["contract_consequences", { hypotheses: [hypothesis], head: "x" }, false],
+      ["contract_consequences", { base: "main", revision: "main" }, false],
+      ["contract_consequences", { base: "main", live: true }, false],
+      ["contract_consequences", { base: "main", live: false }, true],
+      ["contract_consequences", { hypotheses: [hypothesis], live: true, revision: "main" }, false],
     ];
     for (const [family, args, expected] of cases) {
       const listed = new AjvJsonSchemaValidator().getValidator(tools.get(`ye_ast_${family}`)!)(args).valid;
@@ -157,6 +170,8 @@ const INPUT_CONSTRAINTS: Record<string, string> = {
   ye_ast_workspace: "a3eb1c0ee1dbf6c86080e0215b48283bcd1d26de492fbd78d558ba49b2ee7cda",
   ye_ast_decisions: "a3eb1c0ee1dbf6c86080e0215b48283bcd1d26de492fbd78d558ba49b2ee7cda",
 };
+/** Compose does not run contract_consequences until U3, so its contract is pinned apart from the composed families. */
+const CONSEQUENCES_CONSTRAINTS: Record<string, string> = { ye_ast_contract_consequences: "6e05e8d94599268d755e79a4df04adfc3340e1140c84f0b32b31d968a93baf4d" };
 const COMPOSE_CONSTRAINTS = "75fcd7d1645e4da54259244b4fbf1755f06fcf59fb07d1bb9dc4e4281d8e66e5";
 function canonicalConstraints(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalConstraints);

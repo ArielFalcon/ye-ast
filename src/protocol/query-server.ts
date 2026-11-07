@@ -6,12 +6,13 @@ import type { OutlineFault, OutlineQueries } from "../core/ports/outline-queries
 import type { TraceFault, TraceQueries } from "../core/ports/trace-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
+import type { ConsequencesFault, ContractConsequencesQueries } from "../core/ports/contract-consequences-queries.port.ts";
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import { isLiveFault } from "../core/ports/live-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import { isId, isRecord } from "./guards.ts";
 import { readLines } from "./lines.ts";
-import { deadlineOf, InvalidParamsError, readCallers, readCancelledId, readDecisions, readImporters, readMap, readOfChange, readOutline, readTrace, readTrustMode, readWorkspace } from "./params.ts";
+import { deadlineOf, InvalidParamsError, readCallers, readCancelledId, readChange, readDecisions, readHypotheses, readImporters, readMap, readOfChange, readOutline, readTrace, readTrustMode, readWorkspace } from "./params.ts";
 import { ERROR_CODE, METHOD, PROTOCOL, type ErrorKind, type RequestId } from "./protocol.ts";
 
 /** What a host may ask of ye-ast: the read query families only, so no write is reachable through the protocol. */
@@ -23,6 +24,7 @@ export interface QueryServerDeps {
   trace: TraceQueries;
   workspace: WorkspaceQueries;
   decisions: DecisionQueries;
+  contractConsequences: ContractConsequencesQueries;
   redaction: Redaction;
 }
 
@@ -33,7 +35,7 @@ export interface QueryServerStreams {
   signal?: AbortSignal;
 }
 
-type Call = (signal: AbortSignal) => Promise<Result<unknown, ImpactFault | OutlineFault | WorkspaceFault | TraceFault>>;
+type Call = (signal: AbortSignal) => Promise<Result<unknown, ImpactFault | OutlineFault | WorkspaceFault | TraceFault | ConsequencesFault>>;
 
 /** Each operation reads and validates its params up front, so an invalid one is answered before any work starts. */
 const OPERATIONS = new Map<string, (deps: QueryServerDeps, params: unknown) => Call>([
@@ -93,6 +95,20 @@ const OPERATIONS = new Map<string, (deps: QueryServerDeps, params: unknown) => C
       return (signal) => deps.decisions.decisions({ ...request, signal });
     },
   ],
+  [
+    METHOD.contractConsequencesOfHypotheses,
+    (deps, params) => {
+      const request = readHypotheses(params);
+      return (signal) => deps.contractConsequences.ofHypotheses({ ...request, signal });
+    },
+  ],
+  [
+    METHOD.contractConsequencesOfChange,
+    (deps, params) => {
+      const request = readChange(params);
+      return (signal) => deps.contractConsequences.ofChange({ ...request, signal });
+    },
+  ],
 ]);
 
 function firstLine(text: string): string {
@@ -146,7 +162,7 @@ export async function serveQueries(deps: QueryServerDeps, streams: QueryServerSt
       if (fault.kind === "aborted" && timedOut) return fail(id, "deadline", `the deadline of ${deadline} ms elapsed`);
       if (isLiveFault(fault)) return fail(id, fault.kind, /[\\/]/.test(fault.detail) ? "[path omitted]" : redaction.redact(fault.detail.trim()));
       const safeCaptureText = (text: string): string => /[\\/]/.test(text) ? "[path omitted]" : redaction.redact(text);
-      const data = fault.kind === "unknown-symbol" || fault.kind === "top-level-line" || fault.kind === "unknown-entrypoint" ? { entries: redaction.redactValue(fault.entries) } : fault.kind === "unknown-change-path" ? { globs: redaction.redactValue(fault.globs) } : fault.kind === "workspace-capture-unavailable" ? { repo: redaction.redact(fault.repo), cause: { kind: fault.cause.kind, detail: safeCaptureText(fault.cause.detail) } } : {};
+      const data = fault.kind === "unknown-symbol" || fault.kind === "top-level-line" || fault.kind === "unknown-entrypoint" ? { entries: redaction.redactValue(fault.entries) } : fault.kind === "unknown-change-path" ? { globs: redaction.redactValue(fault.globs) } : fault.kind === "invalid-hypothesis" ? { index: fault.index, refusal: redaction.redactValue(fault.refusal) } : fault.kind === "workspace-capture-unavailable" ? { repo: redaction.redact(fault.repo), cause: { kind: fault.cause.kind, detail: safeCaptureText(fault.cause.detail) } } : {};
       fail(id, fault.kind, fault.kind === "workspace-capture-unavailable" ? safeCaptureText(fault.detail.trim()) : redaction.redact(fault.detail.trim()), data);
     } catch (error) {
       fail(id, "internal-error", firstLine(redaction.redactError(error)));

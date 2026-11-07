@@ -14,6 +14,8 @@ import { ENTRYPOINT_KINDS, type EntrypointTarget, type TraceFault, type TraceQue
 import type { WorkspaceQueries, WorkspaceRequest } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import type { DecisionQueries, DecisionsRequest } from "../core/ports/decision-queries.port.ts";
+import type { ChangeRequest, ConsequencesFault, ContractConsequencesQueries, HypothesesRequest } from "../core/ports/contract-consequences-queries.port.ts";
+import type { HypothesisInput } from "../core/domain/contracts/hypothesis.ts";
 import { isTrustMode } from "../core/domain/shared/fact.ts";
 import { FIXED_LAYER_DIRECTORY } from "../core/ports/fixed-layer-store.port.ts";
 import type { Install, InstallOutcome, InstallRequest, BatchInstallRequest, BatchInstallReport } from "../core/ports/install.port.ts";
@@ -42,6 +44,7 @@ export interface CliDeps {
   trace: TraceQueries;
   workspace: WorkspaceQueries;
   decisions: DecisionQueries;
+  contractConsequences: ContractConsequencesQueries;
   install: Install;
   /** The command that starts this build of ye-ast; `init` appends `mcp <repo>` and prints it as the MCP registration. */
   mcpCommand: readonly string[];
@@ -68,6 +71,8 @@ const USAGE = [
   "       ye-ast trace [--revision <rev> | --live] [--repo-id <id>] [scope] [--depth <n>] [--expansions <n>] [--entrypoint <kind>:<name>]... <repo> [<file>:<symbol> | <file>:<start>-<end>] ...   (declarations or entrypoints, not both: what they execute, in source order, with a reading plan)",
   "       ye-ast workspace [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast decisions [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
+  "       ye-ast contract-consequences --hypothesis <json> [--hypothesis <json>]... [--revision <rev>] [--repo-id <id>] [scope] <repo>",
+  "       ye-ast contract-consequences --base <rev> [--head <rev>] [--repo-id <id>] [scope] <repo>",
   "       ye-ast init --trust trusted|untrusted [--workspace <file>] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration)",
   "       ye-ast init --trust trusted|untrusted [--workspace <file>] --repo <id> <path> [--repo <id> <path>]... <launch-repo>",
   "       ye-ast serve   (the query protocol, JSON-RPC 2.0, one message per line on stdin/stdout)",
@@ -77,14 +82,15 @@ const USAGE = [
   "--focus: outline only, repeatable, instead of files: <file>:<symbol> selects the declarations whose dotted containment path ends with it at whole names (Class.member, or a bare name at any depth); <file>:<line> the innermost declaration holding that line. Each match comes with its containers, how many of the file's declarations were left out, and what its own body uses outside itself (a declaration, a package or a global, with the lines of each use; an unproved use is a cut), without imports",
   "--entrypoint: trace only, repeatable, instead of declarations: an entrypoint of the map at the same revision, by its kind (http-route, ui-route, listener, job) and its name as the map prints it, split at the first colon (http-route:POST /orders, ui-route:/orders/:id); it starts at the handler of every entrypoint of that kind and name, a UI route at its component, and a name the map does not hold is the unknown-entrypoint fault listing the names of that kind",
   "--offline: reads every repository from its own clone and refreshes no declared remote, as under untrusted; only workspace and decisions take it",
-  "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers, importers, outline, trace, workspace and decisions; without --include every path is included; --exclude wins)",
+  "--hypothesis: contract-consequences only, repeatable, instead of --base: one hypothesis as JSON, { \"method\", \"path\", \"target\": \"response\"|\"request\", \"property\", \"change\" } where change is one entry or a non-empty list (nullable, optional, removed, required, non-nullable, or an object such as {\"type\": \"string\"}); the workspace is the one init persisted, as the workspace command reads it; a change is answered at its head commit and never on the working tree",
+  "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers, importers, outline, trace, workspace, decisions and contract-consequences; without --include every path is included; --exclude wins)",
   "changed: [--changed <glob>]...   (impact only: globs over the changed paths; only the change's paths they select seed the walk, while the repository is read whole, so callers outside them are known; a glob that selects no changed path is an error)",
   "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default; trace takes no --hub-fan-in, which counts callers)",
   "workspace: --workspace <file>   (the workspace init persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\", \"remote\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository, and a remote is the source of truth a trusted repository's queries refresh into ye-ast's own mirror)",
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
 ].join("\n");
 
-type Query = () => Promise<Result<unknown, ImpactFault | OutlineFault | WorkspaceFault | TraceFault>>;
+type Query = () => Promise<Result<unknown, ImpactFault | OutlineFault | WorkspaceFault | TraceFault | ConsequencesFault>>;
 
 /** The stale notice a live query reports once its answer is built, when the working tree moved. */
 interface StaleWatch {
@@ -130,7 +136,7 @@ export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Pr
 }
 
 /** Every line a fault prints: the kind and detail, then the symbol each entry named and what its file declares. */
-function faultText(fault: ImpactFault | OutlineFault | WorkspaceFault | TraceFault, redaction: Redaction): string[] {
+function faultText(fault: ImpactFault | OutlineFault | WorkspaceFault | TraceFault | ConsequencesFault, redaction: Redaction): string[] {
   const entries =
     fault.kind === "unknown-symbol" ? fault.entries.map((entry) => `  - ${unknownTargetKey(entry)}: ${declarationText(entry)}`)
     : fault.kind === "top-level-line" ? fault.entries.map((entry) => `  - ${entry.file}:${entry.line}: ${declarationText(entry)}`)
@@ -335,6 +341,10 @@ async function queryOf(command: string | undefined, args: readonly string[], dep
     case "decisions": {
       const request = await parseDecisionsRequest(args, deps);
       return request && (() => deps.decisions.decisions({ ...request, signal }));
+    }
+    case "contract-consequences": {
+      const request = await parseConsequencesRequest(args, deps);
+      return request && (() => "hypotheses" in request ? deps.contractConsequences.ofHypotheses({ ...request, signal }) : deps.contractConsequences.ofChange({ ...request, signal }));
     }
     default:
       return undefined;
@@ -560,6 +570,49 @@ async function parseWorkspaceRequest(args: readonly string[], deps: RepositoryNa
     if (path === undefined || extra.length > 0 || scope === undefined) return undefined;
     const { repo, repoId } = await repositoryOf(deps, path, values["repo-id"]);
     return { repo: { path: repo, id: repoId, revision: values.revision ?? DEFAULT_REVISION }, ...scope, ...(values.offline === true ? { offline: true } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Exactly the five hypothesis fields, four of them text and `change` an entry or a non-empty list of entries; the domain refuses the rest as a fault. */
+function parseHypothesis(text: string): HypothesisInput | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const fields = value as Record<string, unknown>;
+  const entry = (item: unknown): boolean => typeof item === "string" || (item !== null && typeof item === "object" && !Array.isArray(item));
+  const keys = Object.keys(fields);
+  const change = fields.change;
+  if (keys.length !== 5 || !["method", "path", "target", "property", "change"].every((key) => keys.includes(key))) return undefined;
+  if (!["method", "path", "target", "property"].every((key) => typeof fields[key] === "string" && fields[key] !== "")) return undefined;
+  if (!(Array.isArray(change) ? change.length > 0 && change.every(entry) : entry(change))) return undefined;
+  return fields as unknown as HypothesisInput;
+}
+
+/** Hypotheses, or a change between revisions: exactly one, and each of `--revision` and `--head` only beside the subject that reads it. */
+async function parseConsequencesRequest(args: readonly string[], deps: RepositoryNaming): Promise<(HypothesesRequest | ChangeRequest) | undefined> {
+  try {
+    const { values, positionals } = parseArgs({
+      args: [...args],
+      options: { hypothesis: { type: "string", multiple: true }, base: { type: "string" }, head: { type: "string" }, revision: { type: "string" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS },
+      allowPositionals: true,
+    });
+    const [path, ...extra] = positionals;
+    const scope = parseScope(values);
+    if (path === undefined || extra.length > 0 || scope === undefined || (values.hypothesis === undefined) === (values.base === undefined)) return undefined;
+    const { repo, repoId } = await repositoryOf(deps, path, values["repo-id"]);
+    if (values.base !== undefined) {
+      if (values.revision !== undefined) return undefined;
+      return { repo: { path: repo, id: repoId }, base: values.base, head: values.head ?? DEFAULT_REVISION, ...scope };
+    }
+    const hypotheses = values.hypothesis!.map(parseHypothesis);
+    if (values.head !== undefined || hypotheses.some((hypothesis) => hypothesis === undefined)) return undefined;
+    return { repo: { path: repo, id: repoId, revision: values.revision ?? DEFAULT_REVISION }, hypotheses: hypotheses as HypothesisInput[], ...scope };
   } catch {
     return undefined;
   }
