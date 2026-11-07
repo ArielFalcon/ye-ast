@@ -3,8 +3,7 @@ import { isJavaSource } from "../../domain/languages/java.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredType, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { withJavaSources } from "./java-project.ts";
-import { enclosingType } from "./java-root-bindings.ts";
+import { enclosingType, withJavaSources } from "./java-project.ts";
 import { createJavaProject, qualifiedTypeName, typeVariableAround, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: DeclaredType = { kind: "unknown" };

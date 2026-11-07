@@ -41,7 +41,7 @@ const RULES: readonly Rule[] = [
     concept: "the class `this` denotes",
     pattern: /(?:function|const)\s+(?:enclosingClass\w*|thisClass\w*|ownerOfThis)\b/,
     owners: ["typescript/syntax.ts"],
-    pending: ["spring/java-receiver-methods.ts", "typescript/http-call-sites.adapter.ts"],
+    pending: ["typescript/http-call-sites.adapter.ts"],
   },
   {
     concept: "recognizing Angular's inject by its spelling instead of its import (the owner is angular-injection.ts)",
@@ -61,6 +61,12 @@ const RULES: readonly Rule[] = [
     /* The tree-sitter readers parse one file at a time for a per-file answer and build no project. */
     owners: ["spring/java-project.ts", "tree-sitter/java-member-names.adapter.ts", "tree-sitter/java-records.adapter.ts", "tree-sitter/java-trivia.adapter.ts"],
     pending: ["spring/java-imports.adapter.ts", "spring/spring-payload-shapes.adapter.ts"],
+  },
+  {
+    concept: "the Java type `this` and `super` denote, read from the type body around a node",
+    pattern: /enclosingBody\([^)]*\)\??\.parent/,
+    owners: ["spring/java-project.ts"],
+    pending: [],
   },
 ];
 

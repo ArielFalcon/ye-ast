@@ -4,8 +4,8 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { withJavaSources } from "./java-project.ts";
-import { createJavaProject, qualifiedTypeName, typeVariableAround, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { enclosingType, thisType, withJavaSources } from "./java-project.ts";
+import { createJavaProject, qualifiedTypeName, typeVariableAround, type JavaFile, type JavaProject } from "./java-symbols.ts";
 
 const UNKNOWN: RootBinding = { kind: "unknown" };
 /** Links of a chain whose first name is the root: a member access, a call on a receiver, a qualified name. */
@@ -46,7 +46,7 @@ function bindingAt(site: UseSite, file: JavaFile, project: JavaProject): RootBin
   const member = chainNames(whole)[1];
   if (head.type === "this") return { kind: "this", ...(member === undefined ? {} : { member }) };
   if (head.type === "super") {
-    const base = enclosingType(head, file, project)?.node.childForFieldName("superclass")?.namedChildren[0];
+    const base = thisType(head, file, project)?.node.childForFieldName("superclass")?.namedChildren[0];
     return base === undefined || base === null ? UNKNOWN : typeBinding(headOf(base), file, project, site.owner);
   }
   if (head.parent?.type === "method_invocation" && head.parent.childForFieldName("object") === null) return staticImport(head.text, file, project) ?? { kind: "this", member: head.text };
@@ -144,10 +144,6 @@ function chainNames(node: Node): string[] {
 function fieldIn(name: Node): boolean {
   for (let body = enclosingBody(name); body !== undefined; body = enclosingBody(body)) if (fieldsOf(body).some((declarator) => declarator.childForFieldName("name")?.text === name.text)) return true;
   return false;
-}
-
-export function enclosingType(node: Node, file: JavaFile, project: JavaProject): TypeDecl | undefined {
-  return project.types.filter((type) => type.file === file && type.node.startIndex <= node.startIndex && node.endIndex <= type.node.endIndex).sort((a, b) => b.node.startIndex - a.node.startIndex)[0];
 }
 
 /** A method a static import names: of a type the sources declare, or of one under a platform package. */
