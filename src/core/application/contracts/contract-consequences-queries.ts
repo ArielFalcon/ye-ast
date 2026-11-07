@@ -16,6 +16,7 @@ import type { ConsumerSession, ConsumerSources, PreparedWorkspace } from "../../
 import type { RequestOriginReader } from "../../ports/request-origins.port.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { isCallOf } from "./consumer-sources.ts";
+import { httpRouteName } from "../../domain/entrypoints/http-route.ts";
 
 /** The bases that say the call reaches this operation; the others say it may, and are reported where they stop. */
 const QUALIFIED_BASES: ReadonlySet<LinkBasis> = new Set(["exact", "base-path"]);
@@ -103,7 +104,7 @@ export async function answerOn(workspace: PreparedWorkspace, base: FactBase, hyp
   const unknown = (reason: UnknownReason, detail: string): Answered => ({ answer: { ...stated, findings: [], status: "unknown", reason, detail }, sites: [] });
   const session = await workspace.session(hypothesis);
   if (!session.ok) return unknown("source-unreadable", session.fault.detail);
-  const operation = `${hypothesis.method} ${hypothesis.path}`;
+  const operation = httpRouteName({ method: hypothesis.method, path: hypothesis.path });
   const selected = selectCalls(session.value, operation);
   if (!selected.ok) return unknown("unresolved", selected.fault);
   const followed = hypothesis.target === "response" ? consequencesOf(session.value, selected.value, hypothesis) : await producersOf(session.value, selected.value, hypothesis);

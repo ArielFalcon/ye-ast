@@ -28,7 +28,7 @@ import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import { ABORTED, declaredTrustOf, withScratch } from "../snapshot/read-snapshot.ts";
 import type { WorkspaceReadOperation } from "../topology/workspace-operation.ts";
 import type { WorkspaceSnapshotContext } from "../topology/workspace-snapshots.ts";
-import type { Handler, HttpMethod } from "../../domain/entrypoints/http-route.ts";
+import { httpRouteName, type Handler, type HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { entrypointsOf } from "../topology/workspace-join.ts";
 import { callersOfFunction, occurrencesOfMember } from "./consumer-callers.ts";
 import { createConsumerTemplateReader } from "./consumer-templates.ts";
@@ -119,7 +119,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
           };
 
           const session = async (hypothesis: Hypothesis): Promise<Result<ConsumerSession, WorkspaceFault>> => {
-            const operation = `${hypothesis.method} ${hypothesis.path}`;
+            const operation = httpRouteName({ method: hypothesis.method, path: hypothesis.path });
             const join = (workspaceJoin ??= joinHttpCalls(fact.value.repositories, entrypointsOfWorkspace(), fact.value.workspace.gateways));
             const callers = new Set(join.links.filter((link) => isCallOf(link, operation)).map((link) => link.from.repo));
 
@@ -230,10 +230,10 @@ function servingOperation(declared: { method: HttpMethod; path: string }, entryp
   return { kind: "served", method: matched.route.method, path: matched.route.path };
 }
 
-function httpRouteName(link: Link): string | undefined {
+function reachedRouteName(link: Link): string | undefined {
   return link.transport === "http" && link.to.kind === "http-route" ? link.to.name : undefined;
 }
 
 export function isCallOf(link: Link, operation: string): boolean {
-  return httpRouteName(link) === operation;
+  return reachedRouteName(link) === operation;
 }
