@@ -145,7 +145,10 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
                   const reading = reached.get(repo);
                   return callersOfFunction(reading?.graph, reading?.inbound, declaration);
                 },
-                memberOccurrences: () => occurrencesOfMember(),
+                memberOccurrences: ({ repo, ...member }) => {
+                  const reading = reached.get(repo);
+                  return occurrencesOfMember(reading?.graph, reading?.inbound, member);
+                },
                 flow: { follow: (carrier) => reached.get(carrier.site.repo)?.flow.follow(carrier) ?? sourceUnreadable(carrier.site) },
                 templates: { follow: (carrier) => reached.get(carrier.site.repo)?.templates.follow(carrier) ?? sourceUnreadable(carrier.site) },
               },
