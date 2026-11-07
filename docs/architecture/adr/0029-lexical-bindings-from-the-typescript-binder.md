@@ -76,7 +76,8 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    dynamic scope, a deeper chain, a source that does not parse) proves nothing about any type, so every annotation stays
    unknown in that snapshot. A type declared nowhere (generated code) stays unknown. A field annotation (`this.r`) holds
    only for a field the language keeps inside its class, a `#name` or a TypeScript `private` field or constructor
-   parameter property, while the class's `this` never escapes and the class names the field through no other receiver;
+   parameter property, while the class's `this` never escapes and the class names the field through no other receiver
+   (a key no literal states, a rest or a reflecting call on another receiver may name every field, and is not resolved);
    a `protected`, `public` or unmodified field stays unknown, since a subclass, a superclass method or another module
    could write it, and no class hierarchy is read across files. The leaf's evidence is the module or the global it is rooted at, as for every other
    leaf; the answer gains no field, so the declared type itself is not written.

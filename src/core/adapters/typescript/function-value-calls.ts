@@ -231,16 +231,38 @@ function isWritten(access: ts.Expression): boolean {
   return ts.isDeleteExpression(parent);
 }
 
-/** A member access, a literal element access or a destructured key that names `name` on any receiver. */
+/**
+ * Whether a member access, an element access, a destructured key or a reflecting call may name `name` on its receiver: a
+ * key no string or numeric literal states, a rest element and a reflecting call without such a key may name every member.
+ */
 function namesMember(node: ts.Node, name: string): boolean {
   if (ts.isPropertyAccessExpression(node)) return node.name.text === name;
-  if (ts.isElementAccessExpression(node)) return ts.isStringLiteralLike(node.argumentExpression) && node.argumentExpression.text === name;
+  if (ts.isElementAccessExpression(node)) return keyMayName(node.argumentExpression, name);
   if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) {
+    if (node.dotDotDotToken !== undefined) return true;
     const key = node.propertyName ?? node.name;
-    return (ts.isIdentifier(key) || ts.isStringLiteralLike(key)) && key.text === name;
+    if (ts.isComputedPropertyName(key)) return keyMayName(key.expression, name);
+    return (ts.isIdentifier(key) || ts.isStringLiteralLike(key) || ts.isNumericLiteral(key)) && key.text === name;
+  }
+  if (ts.isCallExpression(node) && isReflectingCall(node.expression)) {
+    const key = node.arguments[1];
+    return key === undefined || keyMayName(key, name);
   }
   return false;
 }
+
+function keyMayName(key: ts.Expression, name: string): boolean {
+  return !(ts.isStringLiteralLike(key) || ts.isNumericLiteral(key)) || key.text === name;
+}
+
+/** `Reflect.<any>(target, key, ...)` and the `Object` functions that read or write a target's members by key or by source. */
+function isReflectingCall(callee: ts.Expression): boolean {
+  if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression)) return false;
+  if (callee.expression.text === "Reflect") return true;
+  return callee.expression.text === "Object" && OBJECT_REFLECTION.has(callee.name.text);
+}
+
+const OBJECT_REFLECTION: ReadonlySet<string> = new Set(["assign", "defineProperty", "defineProperties", "getOwnPropertyDescriptor", "getOwnPropertyDescriptors"]);
 
 /** A field only its own class can reach: a `#name`, or one TypeScript declares `private`. */
 function isClassPrivate(field: ts.Node): boolean {

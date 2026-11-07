@@ -464,6 +464,30 @@ test("a private field the class reaches through another receiver than its own `t
   ])).receiverBindings, []);
 });
 
+test("a private field of a class that indexes, destructures or reflects on another receiver by a key no literal states is held by no annotation", async () => {
+  const reaches = [
+    "static mutate(other: Page0): void { const key = 'cache'; other[key].get = keep; }",
+    "static mutate(other: Page1): void { other[`cache`].get = keep; }",
+    "static mutate(other: Page2, key: string): void { other[String(key)].get = keep; }",
+    "static mutate(other: Page3, key: 'cache'): void { const { [key]: found } = other; found.get = keep; }",
+    "static mutate(other: Page4): void { const { ...rest } = other; keep(rest); }",
+    "static mutate(other: Page5, key: string): void { Reflect.get(other, key).get = keep; }",
+    "static mutate(other: Page6, key: string): void { Reflect.set(other, key, keep); }",
+    "static mutate(other: Page7, key: string): void { Object.defineProperty(other, key, { value: keep }); }",
+    "run2(): void { const patch = function (this: Page8) { const key = 'cache'; this[key].get = keep; }; keep(patch); }",
+  ];
+  const classes = reaches.map((reach, index) => `export class Page${index} { private cache: Map<string, string> = new Map(); run(): void { this.cache.get('k'); } ${reach} }`);
+  assert.deepEqual((await read(["import { keep } from './keep';", ...classes])).receiverBindings, []);
+  assert.deepEqual((await read([
+    "import { keep } from './keep';",
+    "export class Page { constructor(private cache: Map<string, string>) {} run(): void { this.cache.get('k'); } static mutate(other: Page): void { const key = 'cache'; other[key].get = keep; } }",
+  ])).receiverBindings, []);
+  assert.deepEqual((await read([
+    "import { keep } from './keep';",
+    "export class Page { private cache: Map<string, string> = new Map(); run(): void { this.cache.get('k'); } static mutate(other: { [key: string]: Map<string, string> }): void { other['labels'].get = keep; other[0].get = keep; Reflect.get(other, 'labels'); } }",
+  ])).receiverBindings.map(({ receiver }) => receiver), ["cache"]);
+});
+
 test("a field of a class whose own `this` escapes it, is computed into, assigned into or destructured is held by no annotation", async () => {
   const escapes = [
     "const self = this; self.r.navigate = keep;",
