@@ -283,7 +283,7 @@ test("a call the receiver's declared type names steps at that method, whatever m
   assert.deepEqual(valueOf(proven).steps[0]?.leaves?.map(({ file, start }) => [file, start]), [[B, 3], [B, 11]]);
   assert.deepEqual(cutsOf(unplaced), [
     ["unresolved-link", ["src/a.ts:10 this.repo.find", "src/b.ts::find"]],
-    ["unresolved-link", ["src/a.ts:9 save", "src/b.ts::save"]],
+    ["unresolved-link", ["src/a.ts:9 save", "src/b.ts:3 save", "src/b.ts:7 save"]],
   ]);
 });
 
@@ -1309,4 +1309,18 @@ test("line-only call records settle only a unique site in their own body", async
       assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["run"]);
     }
   }
+});
+
+test("an unresolved Java this call uses the receiver proof before the own-member name shortcut", async () => {
+  const file = "src/Svc.java";
+  const save = fakeNode("save", "method", file, 25, 28);
+  const fact = await factOf({
+    nodes: [{ ...SVC, file }, { ...RUN, file }, save],
+    edges: [...CONTAINS, { from: "Svc", to: "save", kind: "contains" }],
+    unresolved: [{ from: "run", name: "this.save", kind: "calls", file, line: 9, column: 4 }],
+    receivers: { save: { kind: "unproven" } },
+  }, [{ file, symbol: "run" }]);
+  assert.equal(fact.status, "partial");
+  assert.deepEqual(valueOf(fact).steps.map((step) => [step.symbol, step.leaves ?? []]), [["run", []]]);
+  assert.ok(cutsOf(fact).some(([kind]) => kind === "unresolved-link"));
 });

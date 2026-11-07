@@ -781,3 +781,5 @@ Static Java member selection reuses `JavaProject.hierarchy` with the existing st
 does not erase a proven private helper or the declaration a receiver names; R7 still cuts the unproven runtime
 implementation. Unread parents remain explicit hierarchy gaps. The default hierarchy reading used outside trace
 is unchanged.
+
+Unresolved Java `this.member` calls also pass through that receiver selection. The own-member name shortcut is not a Java overload proof.

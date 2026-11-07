@@ -1,6 +1,7 @@
 import { declarationSpan, executesInBody, owningBody } from "../../domain/trace/owning-body.ts";
 import { callsByOwner, matchOwnedCall, positionedBodies, type OwnedCall } from "./syntax-calls.ts";
 import { isSeedable } from "../../domain/change/seeds.ts";
+import { isJavaSource } from "../../domain/languages/java.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { CALL_EDGE_KINDS, FIELD_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor, placeAt } from "../../domain/impact/impact-cuts.ts";
@@ -560,7 +561,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     }
     for (const reference of unsettledBy([...indexed, ...missing], called)) {
       const own = ownMemberOf(reference.name);
-      const members = own === undefined ? [] : uses.ownMembers(node, own, ["method"]);
+      const members = own === undefined || isJavaSource(reference.file) ? [] : uses.ownMembers(node, own, ["method"]);
       if (members.length === 1) children.push(childAt(members[0]!, reference.line, reference.column, reference.name, "own-member"));
       else if (members.length > 1) cuts.push(unresolvedAt(reference, members));
       else {
