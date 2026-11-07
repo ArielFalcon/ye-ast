@@ -56,6 +56,13 @@ const RULES: readonly Rule[] = [
     pending: [],
   },
   {
+    concept: "the value a TypeScript statement exports as default",
+    pattern: /SyntaxKind\.DefaultKeyword/,
+    /* module-dependencies fingerprints every modifier of a declaration; import-origins reads `export default interface`, a type. */
+    owners: ["typescript/import-bindings.ts", "typescript/module-dependencies.adapter.ts", "typescript/import-origins.adapter.ts"],
+    pending: [],
+  },
+  {
     concept: "whether a TypeScript file parsed without syntax errors",
     pattern: /\.parseDiagnostics\b/,
     owners: ["typescript/syntax.ts"],

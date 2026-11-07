@@ -9,7 +9,8 @@ import { buildDefines, type BuildDefines } from "./url-define.ts";
 import { callUrl, joinedCallUrl, RUN_TIME_HOLE, type CallUrl } from "../../domain/topology/path-template.ts";
 import { injectedClass } from "./angular-injection.ts";
 import { declarationCounts } from "./syntax-names.ts";
-import { bindingNames, constructorParameters, hasModifier, lineOf, propertyOf, thisClass, typeName } from "./syntax.ts";
+import { defaultExportOf } from "./import-bindings.ts";
+import { bindingNames, constructorParameters, lineOf, propertyOf, thisClass, typeName } from "./syntax.ts";
 import { ANONYMOUS_DEFAULT, recoveredModuleShape, type ModuleShape } from "./module-shape.ts";
 import { createDeclarationLookup, type DeclarationLookup } from "./declaration-lookup.ts";
 
@@ -153,17 +154,14 @@ function describe(file: SourceFile): FileShape {
   const module = recoveredModuleShape(source);
   const shape: FileShape = { source, declared: declarationCounts(source), bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), module, imports: module.imports, classes: new Map(), enums: new Map() };
   for (const statement of source.statements) {
-    if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
-      shape.defaultExport = statement.expression;
-      continue;
-    }
+    const held = defaultExportOf(statement);
+    if (held !== undefined) shape.defaultExport = held;
     if (ts.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) {
         if (ts.isIdentifier(declaration.name) && declaration.initializer !== undefined) shape.consts.set(declaration.name.text, declaration.initializer);
       }
       continue;
     }
-    if ((ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) && hasModifier(statement, ts.SyntaxKind.ExportKeyword) && hasModifier(statement, ts.SyntaxKind.DefaultKeyword)) shape.defaultExport = statement;
     if (ts.isClassDeclaration(statement) && statement.name !== undefined) shape.classes.set(statement.name.text, statement);
     if (ts.isEnumDeclaration(statement)) shape.enums.set(statement.name.text, statement);
   }

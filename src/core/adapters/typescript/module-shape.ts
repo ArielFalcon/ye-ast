@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { moduleStatement } from "./import-bindings.ts";
+import { defaultExportOf, moduleStatement } from "./import-bindings.ts";
 import { hasModifier, hasSyntaxErrors } from "./syntax.ts";
 
 /** The lines a declaration spans in its file. */
@@ -55,10 +55,11 @@ export function recoveredModuleShape(tree: ts.SourceFile): ModuleShape {
   };
   const declare = (name: ts.Identifier, statement: ts.Statement, node: ts.Node = statement): void => {
     shape.declared.set(name.text, { line: line(name.getStart(tree)), endLine: line(node.end) });
-    if (!hasModifier(statement, ts.SyntaxKind.ExportKeyword)) return;
-    shape.exports.set(hasModifier(statement, ts.SyntaxKind.DefaultKeyword) ? "default" : name.text, { local: name.text });
+    if (hasModifier(statement, ts.SyntaxKind.ExportKeyword) && defaultExportOf(statement) === undefined) shape.exports.set(name.text, { local: name.text });
   };
   for (const statement of tree.statements) {
+    const held = defaultExportOf(statement);
+    if (held !== undefined) shape.exports.set("default", { local: ts.isIdentifier(held) ? held.text : ts.isExpression(held) ? ANONYMOUS_DEFAULT : (held.name?.text ?? ANONYMOUS_DEFAULT) });
     const read = moduleStatement(statement, tree);
     if (read !== undefined) {
       if (read.specifier === undefined || read.form === "import-equals") continue;
@@ -71,8 +72,6 @@ export function recoveredModuleShape(tree: ts.SourceFile): ModuleShape {
       if (statement.exportClause !== undefined && ts.isNamedExports(statement.exportClause)) {
         for (const element of statement.exportClause.elements) shape.exports.set(element.name.text, { local: (element.propertyName ?? element.name).text });
       }
-    } else if (ts.isExportAssignment(statement)) {
-      if (!statement.isExportEquals) shape.exports.set("default", { local: ts.isIdentifier(statement.expression) ? statement.expression.text : ANONYMOUS_DEFAULT });
     } else if (ts.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) if (ts.isIdentifier(declaration.name)) declare(declaration.name, statement, declaration);
     } else if (ts.isEnumDeclaration(statement)) {
@@ -80,8 +79,6 @@ export function recoveredModuleShape(tree: ts.SourceFile): ModuleShape {
     } else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name) {
       declare(statement.name, statement);
       if (ts.isClassDeclaration(statement)) shape.classes.add(statement.name.text);
-    } else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && hasModifier(statement, ts.SyntaxKind.ExportKeyword) && hasModifier(statement, ts.SyntaxKind.DefaultKeyword)) {
-      shape.exports.set("default", { local: ANONYMOUS_DEFAULT });
     }
   }
   return shape;
