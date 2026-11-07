@@ -405,12 +405,6 @@ function parameterNames(parameters: readonly ts.ParameterDeclaration[]): RunTime
   return new Set(parameters.flatMap((parameter) => bindingNames(parameter.name)));
 }
 
-/** The names a function or method binds, and what the variables it declares are initialized to. */
-function scopeOf(declaration: ts.MethodDeclaration | ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression): Scope {
-  const point = declaration.body ?? declaration;
-  return lexicalScope(point, true);
-}
-
 /**
  * The lexical bindings visible at a call, with inner declarations taking precedence over outer declarations.
  */
@@ -418,8 +412,8 @@ function scopeOfCall(call: ts.CallExpression): Scope {
   return lexicalScope(call);
 }
 
-function lexicalScope(point: ts.Node, includePoint = false): Scope {
-  const node = includePoint ? point : point.parent;
+function lexicalScope(point: ts.Node): Scope {
+  const node = point.parent;
   if (node === undefined || ts.isSourceFile(node)) return NO_SCOPE;
   const cached = LEXICAL_SCOPES.get(node);
   if (cached !== undefined) return cached;
