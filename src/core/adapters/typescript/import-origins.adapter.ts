@@ -15,7 +15,7 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import type { DeclaredType, ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { moduleResolverOf, packageOf, rememberedModuleResolver } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
-import { parseAngularRouteFile } from "./angular-router.extractor.ts";
+import { readAngularRouteFile } from "./angular-router.extractor.ts";
 import { createExportLookup, type ModuleShape } from "./declaration-lookup.ts";
 
 /** The names the pinned `typescript` declares, held once for the process rather than rebuilt per query. */
@@ -53,10 +53,20 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
   const modules = facts === undefined ? moduleResolverOf(sources) : rememberedModuleResolver(sources, facts);
   /** What `derive` reads from one file alone, kept between readers when facts are given (ADR-0035). */
   const derivedOf = <T>(slot: string, path: string, derive: () => T): T => (facts === undefined ? derive() : facts.ofFile(slot, files.get(path)!, derive));
+  const trees = new Map<string, ts.SourceFile>();
+  /** Every syntax tree the reader reads, parsed once for its life through `parse`. */
+  const treeOf = (path: string): ts.SourceFile => {
+    let tree = trees.get(path);
+    if (tree === undefined) {
+      tree = parse(files.get(path)!);
+      trees.set(path, tree);
+    }
+    return tree;
+  };
   /** What each file exports, read once and only when a namespace member asks. */
   const moduleShapes = new Map<string, ModuleShape | undefined>();
   function moduleShapeOf(file: string): ModuleShape | undefined {
-    if (!moduleShapes.has(file)) moduleShapes.set(file, texts.has(file) && isTypeScriptSource(file) ? parseAngularRouteFile(file, texts.get(file)!) : undefined);
+    if (!moduleShapes.has(file)) moduleShapes.set(file, texts.has(file) && isTypeScriptSource(file) ? readAngularRouteFile(treeOf(file)) : undefined);
     return moduleShapes.get(file);
   }
   const resolvedFile = async (from: string, specifier: string): Promise<string | undefined> => {
@@ -71,26 +81,20 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
     return typeShapes.get(file);
   }, resolvedFile);
   const shapes = new Map<string, FileShape>();
-  const parameterStarts = new Map<string, ReadonlySet<number>>();
-  /** A file is bound once for the life of the reader, and only the places of its parameter uses are kept (ADR-0029). */
-  const isParameterUse: ParameterUse = (source, text, identifier) => {
-    let starts = parameterStarts.get(source.fileName);
-    if (starts === undefined) {
-      starts = new Set(derivedOf("ts-parameter-uses", source.fileName, () => [...parameterUses(source.fileName, text)]));
-      parameterStarts.set(source.fileName, starts);
+  const starts = new Map<string, ReadonlySet<number>>();
+  /** The name starts one binding of a file proves, read once per file for the life of the reader (ADR-0029). */
+  const startsOf = (slot: string, path: string, read: () => Iterable<number>): ReadonlySet<number> => {
+    const key = `${slot}\u0000${path}`;
+    let held = starts.get(key);
+    if (held === undefined) {
+      held = new Set(derivedOf(slot, path, () => [...read()]));
+      starts.set(key, held);
     }
-    return starts.has(identifier.getStart(source));
+    return held;
   };
-  const dynamicStarts = new Map<string, ReadonlySet<number>>();
+  const isParameterUse: ParameterUse = (source, text, identifier) => startsOf("ts-parameter-uses", source.fileName, () => parameterUses(source.fileName, text)).has(identifier.getStart(source));
   /** A name a `with` body or a direct `eval` may rebind proves no origin; only a file that has either is bound for it. */
-  const isDynamicUse: ParameterUse = (source, text, identifier) => {
-    let starts = dynamicStarts.get(source.fileName);
-    if (starts === undefined) {
-      starts = DYNAMIC_SCOPE.test(text) ? new Set(derivedOf("ts-dynamic-uses", source.fileName, () => [...dynamicUses(source.fileName, text)])) : new Set<number>();
-      dynamicStarts.set(source.fileName, starts);
-    }
-    return starts.has(identifier.getStart(source));
-  };
+  const isDynamicUse: ParameterUse = (source, text, identifier) => startsOf("ts-dynamic-uses", source.fileName, () => (DYNAMIC_SCOPE.test(text) ? dynamicUses(source.fileName, text) : [])).has(identifier.getStart(source));
   const bindsOncePerFile = (): ((path: string) => BoundFile) => {
     const bound = new Map<string, BoundFile>();
     return (path) => {
@@ -103,7 +107,7 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
   const indexOf = (file: string): { index: FileIndex; text: string } | undefined => {
     const text = texts.get(file);
     if (text === undefined || !isTypeScriptSource(file)) return undefined;
-    if (!indexes.has(file)) indexes.set(file, indexed(parse(files.get(file)!)));
+    if (!indexes.has(file)) indexes.set(file, indexed(treeOf(file)));
     const index = indexes.get(file);
     return index === undefined ? undefined : { index, text };
   };
@@ -115,7 +119,7 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
     let held = shapes.get(file);
     if (held === undefined) {
       const text = texts.get(file);
-      held = text === undefined || !isTypeScriptSource(file) ? { bindings: new Map<string, string>(), declared: new Set<string>() } : describeTree(parseShared(files.get(file)!));
+      held = text === undefined || !isTypeScriptSource(file) ? { bindings: new Map<string, string>(), declared: new Set<string>() } : (indexOf(file)?.index.shape ?? describeTree(treeOf(file)));
       shapes.set(file, held);
     }
     return held;
@@ -134,7 +138,7 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
       const augments = path.endsWith(".d.ts") || text.includes("declare global");
       if (!augments && !isTypeScriptSource(path)) continue;
       const declared = derivedOf("ts-script-globals", path, () => {
-        const tree = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, false);
+        const tree = treeOf(path);
         return [...(augments ? declaredNames(tree) : ts.isExternalModule(tree) ? [] : scriptGlobalNames(tree))];
       });
       for (const name of declared) names.add(name);
@@ -152,7 +156,7 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
       if (!isTypeScriptSource(path)) continue;
       const own = derivedOf("ts-written-roots", path, () => {
         const into: WrittenRoots = { paths: new Map(), packages: new Set() };
-        addWrittenRoots(path, text, ts.createSourceFile(path, text, ts.ScriptTarget.Latest, false), into, (name) => LIB_GLOBALS.has(name));
+        addWrittenRoots(path, text, treeOf(path), into, (name) => LIB_GLOBALS.has(name));
         return { paths: [...into.paths], packages: [...into.packages] };
       });
       for (const [key, segments] of own.paths) written.paths.set(key, segments);
