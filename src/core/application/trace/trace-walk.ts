@@ -383,12 +383,13 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   });
 
   /** The members of a class root that run code, by their declaration: methods, and properties or fields whose initializer makes calls. */
-  const syntaxCallsIn = memoizedBy((file: string) => file, async (file) => callsByOwner((await syntaxOf(file)).calls ?? [], store.symbolsInFiles([file]), (await syntaxOf(file)).functionValues));
-
-  const rawBodiesIn = memoizedBy((file: string) => file, async (file) => {
-    const declarations = store.symbolsInFiles([file]);
-    return positionedBodies(declarations, (await syntaxOf(file)).calls ?? []).map((body) => declarations.find((symbol) => symbol.id === body.id)!).map((symbol) => ({ ...symbol, ...declarationSpan(symbol) }));
+  const syntaxCallsIn = memoizedBy((file: string) => file, async (file) => {
+    const syntax = await syntaxOf(file);
+    return callsByOwner(syntax.calls ?? [], store.symbolsInFiles([file]), syntax.functionValues);
   });
+
+  const indexedBodiesIn = memoizedBy((file: string) => file, async (file) =>
+    positionedBodies(store.symbolsInFiles([file]), (await syntaxOf(file)).calls ?? []).map((body) => ({ ...body, ...declarationSpan(body) })));
 
   const membersOf = async (node: GraphSymbol): Promise<Child[]> => {
     if (!CLASS_KINDS.includes(node.kind)) return [];
@@ -438,30 +439,31 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const owned = (await syntaxCallsIn(node.file)).get(node.id) ?? [];
     const accounted = new Set<OwnedCall>();
     const unplaced: GraphUnresolvedReference[] = [];
-    const rawBodies = await rawBodiesIn(node.file);
-    const matched = (line: number | null, column: number | null, name: string) => {
-      const owner = line === null || column === null || !Number.isFinite(column) ? undefined : owningBody(rawBodies, { line, column });
-      return owner !== undefined && owner.id !== node.id ? undefined : matchOwnedCall(owned, line, column, name);
-    };
-    const insideValue = (line: number | null, column: number | null, name: string): boolean => {
+    const indexedBodies = await indexedBodiesIn(node.file);
+    const reconciled = (line: number | null, column: number | null, name: string): boolean => {
+      if (syntax.calls === undefined) return false;
       const site = matchOwnedCall(owned, line, column, name);
-      return site !== undefined ? site.deferred === true : line !== null && column !== null && !executesInBody(declarationSpan(node), syntax.functionValues, { line, column });
+      return site !== undefined ? site.deferred !== true : line === null || column === null || executesInBody(declarationSpan(node), syntax.functionValues, { line, column });
+    };
+    const accountedSite = (line: number | null, column: number | null, name: string): OwnedCall | undefined => {
+      const owner = line === null || column === null || !Number.isFinite(column) ? undefined : owningBody(indexedBodies, { line, column });
+      const site = owner !== undefined && owner.id !== node.id ? undefined : matchOwnedCall(owned, line, column, name);
+      if (site !== undefined) accounted.add(site);
+      return site;
     };
     const called = uses.followed(node, calls).flatMap((followed) => {
-      if (syntax.calls === undefined || insideValue(followed.edge.line, followed.edge.column, followed.target.name)) return [followed];
-      const site = matched(followed.edge.line, followed.edge.column, followed.target.name);
+      if (!reconciled(followed.edge.line, followed.edge.column, followed.target.name)) return [followed];
+      const site = accountedSite(followed.edge.line, followed.edge.column, followed.target.name);
       if (site === undefined) {
         unplaced.push({ from: node.id, file: node.file, line: followed.edge.line ?? node.startLine, column: followed.edge.column ?? 0, name: followed.target.name, kind: followed.edge.kind, candidates: [] });
         return [];
       }
-      accounted.add(site);
       return [{ ...followed, edge: { ...followed.edge, line: site.line, column: site.column - 1 } }];
     });
     const indexed = callsFrom(node).flatMap((reference) => {
-      if (syntax.calls === undefined || insideValue(reference.line, reference.column, reference.name)) return [reference];
-      const site = matched(reference.line, reference.column, reference.name);
+      if (!reconciled(reference.line, reference.column, reference.name)) return [reference];
+      const site = accountedSite(reference.line, reference.column, reference.name);
       if (site === undefined) { unplaced.push(reference); return []; }
-      accounted.add(site);
       return [{ ...reference, line: site.line, column: site.column - 1 }];
     });
     const passed = uses.followed(node, values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));

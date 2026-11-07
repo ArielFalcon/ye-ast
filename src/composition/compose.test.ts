@@ -1909,15 +1909,6 @@ test("missing syntax calls use the same import, ambient, receiver and repository
   assert.ok(unknown.value.cuts.some((cut) => cut.at[0] === "src/settlement.ts:7 x.map"));
 });
 
-test("a same-line homonymous method never inherits another body's inventoried calls", async () => {
-  writeFileSync(join(repo, "src/same.ts"), 'export class A { run(){ this.foo`x`; } foo(){ aOnly(); } } export class B { run(){} foo(){ bOnly(); } }');
-  git("add", "-A"); git("commit", "-qm", "same line");
-  const { trace } = composeQueries({ scratchRoot });
-  const answer = await trace.walk({ repo, repoId: "same", revision: "HEAD", targets: [{ file: "src/same.ts", symbol: "B.run" }] });
-  assert.ok(answer.ok && answer.value.status === "complete", JSON.stringify(answer));
-  assert.deepEqual(answer.value.value.steps.map(({ symbol }) => symbol), ["run"]);
-});
-
 test("same-line body ownership preserves class, nested, arrow, tagged and optional call boundaries", async () => {
   const cases = [
     ['classes', 'export class A { run(){ this.foo(); } foo(){ aOnly(); } } export class B { run(){} foo(){ bOnly(); } }', 'B.run', 'A.run'],
@@ -1941,7 +1932,6 @@ test("same-line body ownership preserves class, nested, arrow, tagged and option
     assert.ok(!present.value.cuts.some((cut) => cut.at[0]?.includes(' bOnly')), name);
   }
 });
-
 
 test("an uninvoked function value contributes no inventoried calls to its enclosing body", async () => {
   writeFileSync(join(repo, "src/deferred.ts"), 'function ignore(cb:()=>void){} export function entry(){ ignore(() => [1].map(x=>x)); }');
@@ -1973,7 +1963,6 @@ test("inventory respects deferred values and preserves an index-declared functio
     assert.equal(names.includes("[1].map"), immediate, name);
   }
 });
-
 
 test("indexed callback obligations survive inventory exclusion", async () => {
   const rows = [

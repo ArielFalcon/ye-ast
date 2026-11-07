@@ -7,6 +7,7 @@ type SyntaxScope = SyntaxCall["owners"][number];
 type PositionedBody = GraphSymbol & SourceSpan & { scope?: SyntaxScope };
 export type OwnedCall = SyntaxCall & { ambiguous?: true; deferred?: true };
 const BODY_KINDS: readonly string[] = ["function", "method", "class", "component", "property", "field"];
+const VALUE_KINDS: readonly string[] = ["constant", "variable"];
 const scopeSpan = (scope: SyntaxScope): SourceSpan => ({ start: { line: scope.start, column: scope.startColumn }, end: { line: scope.endLine, column: scope.endColumn } });
 const spanKey = (span: SourceSpan): string => `${span.start.line}:${span.start.column}:${span.end.line}:${span.end.column}`;
 const scopeKey = (scope: SyntaxScope): string => spanKey(scopeSpan(scope));
@@ -14,14 +15,14 @@ const scopeKey = (scope: SyntaxScope): string => spanKey(scopeSpan(scope));
 export function positionedBodies(declarations: readonly GraphSymbol[], calls: readonly SyntaxCall[]): PositionedBody[] {
   const scopes = [...new Map(calls.flatMap((call) => call.owners).map((scope) => [scopeKey(scope), { ...scopeSpan(scope), scope }])).values()];
   return declarations.flatMap((symbol): PositionedBody[] => {
-    if ((!BODY_KINDS.includes(symbol.kind) && !["constant", "variable"].includes(symbol.kind))) return [];
+    if (!BODY_KINDS.includes(symbol.kind) && !VALUE_KINDS.includes(symbol.kind)) return [];
     const indexed = { ...symbol, ...declarationSpan(symbol) };
     const atStart = owningBody(scopes, { line: symbol.startLine, column: symbol.startColumn });
     const anchors = scopes.filter(({ scope }) => scope.nameLine === symbol.startLine && scope.nameColumn === symbol.startColumn);
     const header = atStart !== undefined && ((atStart.start.line === symbol.startLine && atStart.start.column === symbol.startColumn) ||
       symbol.startLine < atStart.scope.nameLine || (symbol.startLine === atStart.scope.nameLine && symbol.startColumn <= atStart.scope.nameColumn));
     const scope = anchors.length === 1 ? anchors[0] : header ? atStart : undefined;
-    const initializer = ["constant", "variable"].includes(symbol.kind) && !declarations.some((other) => other.id !== symbol.id && ["function", "method"].includes(other.kind) && containsPosition(declarationSpan(other), { line: symbol.startLine, column: symbol.startColumn }));
+    const initializer = VALUE_KINDS.includes(symbol.kind) && !declarations.some((other) => other.id !== symbol.id && ["function", "method"].includes(other.kind) && containsPosition(declarationSpan(other), { line: symbol.startLine, column: symbol.startColumn }));
     if (!BODY_KINDS.includes(symbol.kind) && scope === undefined && !initializer) return [];
     return [{ ...indexed, ...(scope === undefined ? {} : { ...scopeSpan(scope.scope), scope: scope.scope }) }];
   });

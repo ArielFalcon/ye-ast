@@ -1,11 +1,10 @@
-import type { SourceSpan } from "../../domain/trace/owning-body.ts";
 import type { Node } from "web-tree-sitter";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
-import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, FunctionValueCall, SyntaxCall } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, FunctionValueCall, ReceiverBinding, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import { isFunctionValueNode, javaFunctionValueCalls } from "./java-function-value-calls.ts";
+import type { SourceSpan } from "../../domain/trace/owning-body.ts";
 import { javaReceiverBindings } from "./java-receiver-bindings.ts";
-import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { JavaParser } from "./java-parser.adapter.ts";
 
 const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
@@ -83,7 +82,7 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
   };
 }
 
-/** The methods of a class declared in place run only when something calls them. */
+/** The body of a class a `new` expression declares in place: its methods run only when something calls them. */
 function isAnonymousClassBody(node: Node): boolean {
   return node.type === "class_body" && node.parent?.type === "object_creation_expression";
 }

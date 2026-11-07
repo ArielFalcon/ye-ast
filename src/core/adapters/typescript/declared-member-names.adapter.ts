@@ -1,9 +1,10 @@
-import type { SourcePosition, SourceSpan } from "../../domain/trace/owning-body.ts";
 import ts from "typescript";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import { annotated, isFunctionValueNode, localReceivers } from "./function-value-calls.ts";
+import { lineOf } from "./http-call-sites.adapter.ts";
+import type { SourcePosition, SourceSpan } from "../../domain/trace/owning-body.ts";
 import { isStatic } from "./syntax-names.ts";
 import { unwrapped } from "./lexical-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
@@ -27,12 +28,11 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
       const callables: DeclaredCallable[] = [];
       const calls: SyntaxCall[] = [];
       const owners: SyntaxCall["owners"][number][] = [];
-      const lineOf = (node: ts.Node): number => tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1;
       const callable = (node: ts.FunctionDeclaration | ts.MethodDeclaration | ts.MethodSignature, overridable: boolean): void => {
         if (node.name === undefined) return;
         const body = !ts.isMethodSignature(node) && node.body !== undefined;
         const returns = annotated(node.type, tree);
-        callables.push({ name: node.name.getText(tree), start: lineOf(node), nameLine: lineOf(node.name), body, overridable, ...(returns === undefined ? {} : { returns }) });
+        callables.push({ name: node.name.getText(tree), start: lineOf(tree, node), nameLine: lineOf(tree, node.name), body, overridable, ...(returns === undefined ? {} : { returns }) });
       };
       const add = (name: ts.PropertyName | ts.BindingName | undefined): void => {
         if (name === undefined || ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) return;
@@ -50,7 +50,7 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
           let scope: ts.Node | undefined = node.parent;
           while (scope !== undefined && !ts.isClassLike(scope)) scope = scope.parent;
           const owner = scope !== undefined && ts.isClassLike(scope) ? scope : undefined;
-          const index = owner === undefined ? -1 : owners.findLastIndex((place) => place.name === owner.name?.text && place.start === lineOf(owner));
+          const index = owner === undefined ? -1 : owners.findLastIndex((place) => place.name === owner.name?.text && place.start === lineOf(tree, owner));
           const held = owners.splice(index + 1);
           ts.forEachChild(node, visit);
           owners.push(...held);
@@ -60,24 +60,29 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
           : (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && (ts.isVariableDeclaration(node.parent) || ts.isPropertyAssignment(node.parent)) ? node.parent.name : undefined;
         const constructor = ts.isConstructorDeclaration(node);
         const owns = ts.isFunctionLike(node) || constructor || (name !== undefined && (ts.isIdentifier(name) || ts.isPrivateIdentifier(name) || ts.isStringLiteralLike(name)));
-        if (owns) owners.push({ name: constructor ? "constructor" : (name?.getText(tree) ?? "").replace(/^['"]|['"]$/g, ""), start: lineOf(node), nameLine: name === undefined ? lineOf(node) : lineOf(name), nameColumn: tree.getLineAndCharacterOfPosition((name ?? node).getStart(tree)).character, startColumn: tree.getLineAndCharacterOfPosition(node.getStart(tree)).character, endLine: tree.getLineAndCharacterOfPosition(node.getEnd()).line + 1, endColumn: tree.getLineAndCharacterOfPosition(node.getEnd()).character });
+        if (owns) {
+          const start = positionOf(node.getStart(tree));
+          const named = positionOf((name ?? node).getStart(tree));
+          const end = positionOf(node.getEnd());
+          owners.push({ name: constructor ? "constructor" : (name?.getText(tree) ?? "").replace(/^['"]|['"]$/g, ""), start: start.line, nameLine: named.line, nameColumn: named.column, startColumn: start.column, endLine: end.line, endColumn: end.column });
+        }
         if (ts.isFunctionDeclaration(node)) callable(node, false);
         if (isDeclareOnly(node)) { if (owns) owners.pop(); return; }
         if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node)) {
-          const point = tree.getLineAndCharacterOfPosition(node.getStart(tree));
+          const point = positionOf(node.getStart(tree));
           const written = ts.isTaggedTemplateExpression(node) ? node.tag : node.expression;
           const expression = unwrapped(written);
           const callee = ts.isIdentifier(expression) ? expression.text : ts.isPropertyAccessExpression(expression) ? expression.name.text : undefined;
           const anchors = [];
           let at: ts.Node | undefined = node;
           while (at !== undefined && !ts.isFunctionLike(at) && !ts.isClassLike(at) && !ts.isBlock(at) && !ts.isSourceFile(at)) {
-            const position = tree.getLineAndCharacterOfPosition(at.getStart(tree));
-            anchors.push({ line: position.line + 1, column: position.character + 1 });
+            const position = positionOf(at.getStart(tree));
+            anchors.push({ line: position.line, column: position.column + 1 });
             at = at.parent;
           }
-          const namePosition = tree.getLineAndCharacterOfPosition((ts.isPropertyAccessExpression(expression) ? expression.name : written).getStart(tree));
-          anchors.push({ line: namePosition.line + 1, column: namePosition.character + 1 });
-          calls.push({ anchors, kind: ts.isNewExpression(node) ? "instantiates" : "calls", line: point.line + 1, column: point.character + 1, name: written.getText(tree), ...(callee === undefined ? {} : { callee }), owners: [...owners] });
+          const namePosition = positionOf((ts.isPropertyAccessExpression(expression) ? expression.name : written).getStart(tree));
+          anchors.push({ line: namePosition.line, column: namePosition.column + 1 });
+          calls.push({ anchors, kind: ts.isNewExpression(node) ? "instantiates" : "calls", line: point.line, column: point.column + 1, name: written.getText(tree), ...(callee === undefined ? {} : { callee }), owners: [...owners] });
         }
         if (ts.isMethodDeclaration(node) && ts.isClassLike(node.parent)) callable(node, isOverridable(node));
         if (ts.isMethodSignature(node) && ts.isInterfaceDeclaration(node.parent)) callable(node, true);
