@@ -616,7 +616,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_importers",
     {
       title: "Importers of files",
-      description: "Use before moving, renaming or deleting a file or changing its exports: lists static, reexport, dynamic and type importers, users and unresolved names; details lists each path once with its categories and positions, and users without a module category are additional. Import edges do not prove declaration use; unresolved names prove neither dependencies nor affected files. TypeScript includes alias/barrel edges and exported test consumers; omitted live tests yield partial. For declarations use ye_ast_callers.",
+      description: "Use before moving, renaming or deleting a file or changing its exports: lists static, reexport, dynamic and type importers, users and unresolved names; details lists each path once with its categories and positions, and users without a module category are additional. Import edges do not prove declaration use; unresolved names, including files that only call by a name match, prove neither dependencies nor affected files. TypeScript includes alias/barrel edges and exported test consumers; omitted live tests yield partial. For declarations use ye_ast_callers.",
       inputSchema: compactInput(TOOL_INPUTS.importers),
       annotations,
     },
@@ -627,7 +627,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_outline",
     {
       title: "Shape of files",
-      description: "Use to choose line ranges before reading or targeting code: indexed declaration spans and imports of files, without source. Each import gives its target (repository file, package, or unresolved with a reason) and the names it binds, with their proven declaration and line. Members nest under their contains edge; others stay top level. Instead of files, focus on declarations: {file, symbol} takes a dotted path (Class.member, a bare name at any depth), {file, line} the innermost declaration holding the line; a match gives its containers, subtree, omitted count and uses outside its body (file:line, package, global, else a cut), no imports. Its path works verbatim in ye_ast_callers; for callers too, use ye_ast_compose. Unavailable files report cuts, not empty lists. Match revision/live to the source you inspect.",
+      description: "Use to choose line ranges before reading or targeting code: indexed declaration spans and imports of files, without source. Each import gives its target (repository file, package, or unresolved with a reason) and the names it binds, with their proven declaration and line. Members nest under their contains edge; others stay top level. Instead of files, focus on declarations: {file, symbol} takes a dotted path (Class.member, a bare name at any depth), {file, line} the innermost declaration holding the line; a match gives its containers, subtree, omitted count and uses outside its body (file:line, package, global, else a cut, as for a call matched by name alone), no imports. Its path works verbatim in ye_ast_callers; for callers too, use ye_ast_compose. Unavailable files report cuts, not empty lists. Match revision/live to the source you inspect.",
       inputSchema: compactInput(TOOL_INPUTS.outline),
       annotations,
     },

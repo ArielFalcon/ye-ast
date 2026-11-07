@@ -9,9 +9,12 @@ export interface ImportedFile {
   reexporters?: readonly string[];
   dynamicImporters?: readonly string[];
   typeImporters?: readonly string[];
-  /** Files with an edge of any kind but containment into the file or a symbol it declares, test files included. */
+  /** Files with an edge of any kind but containment and a name match into the file or a symbol it declares, test files included. */
   users: readonly string[];
-  /** Files holding a reference the index could not resolve that names the file or a symbol it declares. */
+  /**
+   * Files holding a reference the index could not resolve that names the file or a symbol it declares, or whose only
+   * dependence on it is an edge the index matched by name alone (ADR-0035).
+   */
   unresolvedNamers: readonly string[];
 }
 

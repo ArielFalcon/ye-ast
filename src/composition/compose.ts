@@ -280,7 +280,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...trust,
     sourceSelection: isWritten,
   };
-  const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders: [moduleDependencies, javaImports], unmodelled, importOrigins });
+  const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders: [moduleDependencies, javaImports], unmodelled, importOrigins, memberNames });
   const outline = measurement === undefined ? bareOutline : measuredOutline(bareOutline, measurement);
   const bareTrace = createTraceQueries({
     ...snapshotCache,
@@ -338,7 +338,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     } });
     return measurement === undefined ? operationImpact : measuredImpact(operationImpact, measurement);
   } });
-  const consumerSources = composeConsumerSources({ operation, heads: headDeps, digest, engines: { ...headDeps.engines, ...impactDeps.angularEngines }, importOrigins });
+  const consumerSources = composeConsumerSources({ operation, heads: headDeps, digest, engines: { ...headDeps.engines, ...impactDeps.angularEngines }, importOrigins, memberNames, modules: moduleDependencies });
   const bareContractConsequences = composeContractConsequences({ sources: consumerSources, heads: headDeps, contracts });
   const contractConsequences = measurement === undefined ? bareContractConsequences : measuredContractConsequences(bareContractConsequences, measurement);
   const bareDecisions = createCapturedDecisionQueries({ operation, defaults, vcs, digest });

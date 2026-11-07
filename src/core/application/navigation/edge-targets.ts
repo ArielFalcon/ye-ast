@@ -5,7 +5,7 @@ import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import { joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
-import type { DeclaredMemberNames, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredMemberNames, DeclaredMemberNamesReader, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
@@ -62,6 +62,19 @@ export interface ReceiverProofs {
 
 /** The syntax of a source no reader parses: it states nothing. */
 export const NOTHING_DECLARED: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
+
+/** No relation proof: for a family that reads no Angular relations, only a receiver's syntax binds it. */
+export const SYNTAX_ONLY: ReceiverProofs = { fields: [], locals: [] };
+
+/** What each of `sources` states in its syntax; nothing without a reader. */
+export function syntaxOfSources(reader: DeclaredMemberNamesReader | undefined, sources: readonly SourceFile[]): EdgeTargetsDeps["syntaxOf"] {
+  if (reader === undefined) return undefined;
+  const byPath = new Map(sources.map((file) => [file.path, file]));
+  return async (path) => {
+    const file = byPath.get(path);
+    return file === undefined ? NOTHING_DECLARED : reader.memberNames(file);
+  };
+}
 
 /** A graph edge with both of its ends. */
 export interface FollowedEdge {

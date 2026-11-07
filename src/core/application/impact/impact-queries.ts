@@ -51,10 +51,9 @@ import { referenceProofsOf, unresolvedOf, type ReferenceProofs } from "./referen
 import { unresolvedReferencesIn } from "../navigation/declaration-uses.ts";
 import { walkImpact, type Walk } from "./walk.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
-import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
-import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import { createEdgeTargets, edgeKey, NOTHING_DECLARED, type EdgeTargets, type EdgeTargetsDeps, type FollowedEdge } from "../navigation/edge-targets.ts";
+import { createEdgeTargets, edgeKey, SYNTAX_ONLY, syntaxOfSources, type EdgeTargets, type EdgeTargetsDeps, type FollowedEdge } from "../navigation/edge-targets.ts";
 import { combinedModuleReader } from "../navigation/module-readers.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, targetKey } from "../navigation/root-selection.ts";
@@ -213,7 +212,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           const modules = deps.moduleDependencies === undefined ? undefined : await moduleDependenciesOf(deps.moduleDependencies, head.prepared, headTree, request.signal);
           if (request.signal?.aborted) return ABORTED;
           const origins = deps.importOrigins?.(headTree.sources);
-          const read = await readImporters(store, covered, references, modules, origins === undefined ? undefined : createEdgeTargets({ origins, store, modules }), request.signal);
+          const read = await readImporters(store, covered, references, modules, origins === undefined ? undefined : createEdgeTargets({ origins, store, modules, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources), proofs: async () => SYNTAX_ONLY }), request.signal);
           if (request.signal?.aborted) return ABORTED;
           const moduleOnly = new Set(modules?.files.filter((file) => file.moduleOnly).map((file) => file.file));
           const loadPlaces = await deps.dynamicLoads.extract(headTree.sources);
@@ -445,16 +444,6 @@ function unknownFact(base: FactBase, reason: "index-unavailable" | "source-unrea
 
 
 /** Which of `files` the graph cannot place, read from the head's own sources of those files only. */
-/** What each of `sources` states in its syntax; nothing without a reader. */
-function syntaxOfSources(reader: DeclaredMemberNamesReader | undefined, sources: readonly SourceFile[]): EdgeTargetsDeps["syntaxOf"] {
-  if (reader === undefined) return undefined;
-  const byPath = new Map(sources.map((file) => [file.path, file]));
-  return async (path): Promise<DeclaredMemberNames> => {
-    const file = byPath.get(path);
-    return file === undefined ? NOTHING_DECLARED : reader.memberNames(file);
-  };
-}
-
 async function unmodelledIn(deps: ImpactQueriesDeps, headTree: CommitExtraction, files: readonly string[]): Promise<readonly string[]> {
   if (deps.unmodelled === undefined) return [];
   const asked = new Set(files);

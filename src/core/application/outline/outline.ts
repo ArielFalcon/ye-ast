@@ -13,7 +13,7 @@ import type { OutlineSelector, TopLevelLineFault } from "../../ports/outline-que
 import type { ImportOrigins } from "../../ports/import-origins.port.ts";
 import { outlineUses, unprovedUseCuts } from "../../domain/outline/outline-uses.ts";
 import { createDeclarationUses, usesOf } from "../navigation/declaration-uses.ts";
-import { createEdgeTargets } from "../navigation/edge-targets.ts";
+import { createEdgeTargets, SYNTAX_ONLY, type EdgeTargetsDeps } from "../navigation/edge-targets.ts";
 import { createGraphNavigation } from "../navigation/graph-navigation.ts";
 
 export interface ListingRead {
@@ -131,11 +131,11 @@ function focused(file: string, selector: string, branch: DeclarationBranch<Graph
 
 /**
  * Each focused declaration with what its own body uses, and one `unresolved-link` cut per name it uses that no binding
- * proves. A declaration two selectors match is read once.
+ * proves, a call the index matched by name alone included (ADR-0035). A declaration two selectors match is read once.
  */
-export async function focusWithUses(store: CodeGraphReader, read: FocusRead, origins: ImportOrigins, modules: ModuleDependencies, signal: AbortSignal | undefined): Promise<{ focus: OutlineFocus[]; cuts: Cut[] } | "aborted"> {
+export async function focusWithUses(store: CodeGraphReader, read: FocusRead, origins: ImportOrigins, modules: ModuleDependencies, syntaxOf: EdgeTargetsDeps["syntaxOf"], signal: AbortSignal | undefined): Promise<{ focus: OutlineFocus[]; cuts: Cut[] } | "aborted"> {
   const navigation = createGraphNavigation(store, () => false);
-  const input = { store, navigation, uses: createDeclarationUses(store, navigation), targets: createEdgeTargets({ origins, store, modules }), origins, ...(signal === undefined ? {} : { signal }) };
+  const input = { store, navigation, uses: createDeclarationUses(store, navigation), targets: createEdgeTargets({ origins, store, modules, syntaxOf, proofs: async () => SYNTAX_ONLY }), origins, ...(signal === undefined ? {} : { signal }) };
   const settled = new Map<GraphSymbol["id"], { uses: readonly OutlineUse[]; cuts: Cut[] }>();
   const focus: OutlineFocus[] = [];
   for (const [index, entry] of read.value.focus.entries()) {

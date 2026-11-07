@@ -285,8 +285,8 @@ interface ImportersValue { files: ImportedFile[] }
 interface ImportedFile {
   file: string;
   importers: string[];        // files with an `imports` edge into the file or a symbol it declares, tests included
-  users: string[];            // files with an edge of any kind but `contains` into them, tests included
-  unresolvedNamers: string[]; // files with an unresolved reference naming the file's stem or a symbol it declares
+  users: string[];            // files with an edge of any kind but `contains` into them, tests included, a name match excepted
+  unresolvedNamers: string[]; // files with an unresolved reference naming the file's stem or a symbol it declares, or whose only edges into it are name matches (ADR-0035)
 }
 ```
 

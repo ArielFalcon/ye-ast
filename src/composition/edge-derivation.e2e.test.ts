@@ -8,6 +8,7 @@ import { composeQueries } from "./compose.ts";
 import { EDGE_POLICY } from "../core/domain/impact/edge-policy.ts";
 import type { ImpactedSymbol, ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { Fact } from "../core/domain/shared/fact.ts";
+import { hasUnprovedUses } from "../core/domain/outline/outline-uses.ts";
 
 /**
  * `Store` declares the only `get` and `save` of the repository, so the index matches every call of those names to it.
@@ -42,20 +43,23 @@ let root: string;
 let repo: string;
 let scratchRoot: string;
 
+async function commitFiles(directory: string, files: Record<string, string>): Promise<void> {
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "test@example.com", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "test@example.com" };
+  for (const [path, text] of Object.entries(files)) {
+    await mkdir(dirname(join(directory, path)), { recursive: true });
+    await writeFile(join(directory, path), text);
+  }
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: directory, env });
+  execFileSync("git", ["add", "."], { cwd: directory, env });
+  execFileSync("git", ["commit", "-qm", "fixture"], { cwd: directory, env });
+}
+
 before(async () => {
   root = await mkdtemp(join(tmpdir(), "ye-ast-edge-derivation-"));
   repo = join(root, "repo");
   scratchRoot = join(root, "scratch");
-  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "test@example.com", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "test@example.com" };
-  await mkdir(repo);
   await mkdir(scratchRoot);
-  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo, env });
-  for (const [path, text] of Object.entries(FILES)) {
-    await mkdir(dirname(join(repo, path)), { recursive: true });
-    await writeFile(join(repo, path), text);
-  }
-  execFileSync("git", ["add", "."], { cwd: repo, env });
-  execFileSync("git", ["commit", "-qm", "fixture"], { cwd: repo, env });
+  await commitFiles(repo, FILES);
 });
 
 after(async () => {
@@ -133,6 +137,63 @@ test("a call of a function, of a static method and of the class's own method sta
   }
 });
 
+test("a file whose only use of another is a name match is a namer of it, not a user, while a file reached by bound calls keeps its users", async () => {
+  const result = await composeQueries({ scratchRoot }).impact.importers({ repo, repoId: "edge-derivation", revision: "HEAD", files: ["src/helpers.ts", "src/store.ts"] });
+
+  assert.ok(result.ok && result.value.status !== "unknown");
+  assert.deepEqual(result.value.value.files.map(({ file, users, unresolvedNamers }) => ({ file, users, unresolvedNamers })), [
+    { file: "src/helpers.ts", users: ["src/plain.ts"], unresolvedNamers: [] },
+    { file: "src/store.ts", users: ["src/deep.ts", "src/escaping.ts", "src/injected.ts", "src/typed.ts"], unresolvedNamers: ["src/injected.ts", "src/route-reader.ts", "src/saver.ts"] },
+  ]);
+});
+
+test("a use the index matched by name alone is no declared use of a focused body but a name no binding proves, while a bound call stays a use", async () => {
+  const answer = await composeQueries({ scratchRoot }).outline.outline({ repo, repoId: "edge-derivation", revision: "HEAD", focus: [{ file: "src/route-reader.ts", symbol: "RouteReader.id" }, { file: "src/deep.ts", symbol: "Deep.run" }, { file: "src/use-parser.ts", symbol: "parseAll" }, { file: "src/typed.ts", symbol: "Typed.read" }] });
+
+  assert.ok(answer.ok && answer.value.status !== "unknown", JSON.stringify(answer));
+  const cuts = answer.value.status === "partial" ? answer.value.cuts : [];
+  assert.deepEqual(
+    answer.value.value.focus?.map((entry) => ({ file: entry.file, uses: (entry.uses ?? []).map((use) => ("declaration" in use ? `${use.declaration.file}:${use.declaration.name}` : "outside")), unproved: hasUnprovedUses(cuts, entry.file, entry.path) })),
+    [
+      { file: "src/deep.ts", uses: [], unproved: true },
+      { file: "src/route-reader.ts", uses: [], unproved: true },
+      { file: "src/typed.ts", uses: ["src/store.ts:get"], unproved: false },
+      { file: "src/use-parser.ts", uses: [], unproved: true },
+    ],
+  );
+});
+
 function pick(symbol: ImpactedSymbol | undefined): { confidence: number; derivation: unknown } | undefined {
   return symbol === undefined ? undefined : { confidence: symbol.confidence, derivation: symbol.via?.derivation };
 }
+
+const API = {
+  "src/main/java/shop/Main.java": "package shop;\n\nimport org.springframework.boot.autoconfigure.SpringBootApplication;\n\n@SpringBootApplication\nclass Main {}\n",
+  "src/main/java/shop/OrdersController.java": "package shop;\n\nimport org.springframework.web.bind.annotation.GetMapping;\nimport org.springframework.web.bind.annotation.PathVariable;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\nclass OrdersController {\n  @GetMapping(\"/api/orders/{id}\")\n  public String one(@PathVariable long id) { return \"\"; }\n}\n",
+};
+
+/** `OrderService.fetchOrder` returns the response; `OrderView` calls it on a field its annotation binds, `report` on an unannotated parameter the index matches by name. */
+const WEB = {
+  "package.json": JSON.stringify({ dependencies: { "@angular/core": "^21.0.0", "@angular/common": "^21.0.0" } }),
+  "src/app/order.service.ts": "import { HttpClient } from '@angular/common/http';\nimport { Injectable, inject } from '@angular/core';\n\n@Injectable({ providedIn: 'root' })\nexport class OrderService {\n  private http = inject(HttpClient);\n\n  fetchOrder(id: number) {\n    return this.http.get<{ customer: { name: string } }>(`/api/orders/${id}`);\n  }\n}\n",
+  "src/app/order-view.ts": "import { OrderService } from './order.service';\n\nexport class OrderView {\n  constructor(private orders: OrderService) {}\n\n  show(): void {\n    this.orders.fetchOrder(1).subscribe((order) => console.log(order.customer.name));\n  }\n}\n",
+  "src/app/report.ts": "export function report(source: any): void {\n  source.fetchOrder(2).subscribe((order: any) => console.log(order.customer.name));\n}\n",
+};
+
+test("a caller the index matched by name alone is an ambiguous caller of a consumer, while a caller its annotation binds is followed", async () => {
+  const roots = { api: join(root, "api"), web: join(root, "web") };
+  for (const [name, files] of [["api", API], ["web", WEB]] as const) await commitFiles(roots[name], files);
+
+  const result = await composeQueries({ scratchRoot }).contractConsequences.ofHypotheses({
+    repo: { path: roots.api, id: "api" },
+    repos: [{ path: roots.web, id: "web" }],
+    hypotheses: [{ method: "GET", path: "/api/orders/{id}", target: "response", property: "customer", change: "removed" }],
+  });
+
+  assert.ok(result.ok && result.value.status !== "unknown");
+  const findings = result.value.value.answers.flatMap((answer) => answer.findings);
+  assert.deepEqual(
+    findings.map((finding) => (finding.status === "complete" ? `${finding.value.verdict.kind}@${finding.evidence.at(-1)?.path}` : `${finding.evidence.at(-1)?.via}@${finding.evidence.at(-1)?.path}`)).sort(),
+    ["ambiguous-caller@src/app/report.ts", "incompatible@src/app/order-view.ts"],
+  );
+});

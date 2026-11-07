@@ -46,9 +46,13 @@ of them contradicted.
    down a chain (`this.f.g.m`) is bound by nothing.
 3. A `proven` edge counts as ye-ast's own proofs do, confidence 1. Any other settled edge is a `name-match` and counts as
    a heuristic edge without a score, whatever score codegraph gave it. No settled edge is dropped.
-4. Every dependence the impact walk reports carries its derivation: `proven`, `resolved` (the index through a binding or a
+4. The families that read no Angular relations, `importers` and `outline`, settle such an edge by the receiver's syntax
+   alone (its one store or declared annotation): a file whose only edges into another are name matches is one of its
+   `unresolvedNamers`, and a focused body's name-matched call is an `unresolved-link` cut, never a declared use. In a
+   consequences reading a name-matched caller is an `ambiguous-caller` frontier, never followed.
+5. Every dependence the impact walk reports carries its derivation: `proven`, `resolved` (the index through a binding or a
    structure ye-ast accepts) or `name-match` (a heuristic edge, or rule 3).
-5. codegraph's resolution strategy is not part of any answer.
+6. codegraph's resolution strategy is not part of any answer.
 
 ## Consequences
 
@@ -56,7 +60,10 @@ of them contradicted.
   through it is no surer than it.
 - 91 true edges on the corpus drop to 0.3: values ye-ast cannot bind, such as a local copied from a field
   (`const h = this.handler; h.m()`) or an unannotated parameter.
-- Settling reads each source's syntax once per query, in the families that settle.
+- Settling reads each source's syntax once per query, in the families that settle; a consequences reading settles every
+  call edge of its TypeScript sources once, since its callers are asked synchronously.
+- A file that reaches another only through a field's or an `inject()` local's origin, and imports nothing of it, is
+  listed by `importers` as a namer: those families read no relations.
 
 ## Not decided here
 

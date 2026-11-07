@@ -8,7 +8,7 @@ import { createGraphNavigation } from "../navigation/graph-navigation.ts";
 /**
  * The places the function declared at `line` of `file` is depended on, as the impact families see them: the graph's
  * edges with the calls made through injected fields and locals, one occurrence each. A dependence that is not a call the
- * graph resolved (a reference, a dispatch, a receiver a provider may replace, a guessed edge) stays in the answer, unproven.
+ * graph resolved (a reference, a dispatch, a receiver a provider may replace, a name match) stays in the answer, unproven.
  */
 export function callersOfFunction(store: CodeGraphReader | undefined, inbound: InboundOccurrences | undefined, declaration: { file: string; symbol: string; line: number }): ConsumerCallers {
   if (store === undefined || inbound === undefined) return { kind: "unavailable" };
@@ -23,7 +23,7 @@ export function callersOfFunction(store: CodeGraphReader | undefined, inbound: I
 /**
  * The places the member `member` of the class `owner` declared in `file` is depended on. The graph places an occurrence
  * on a line, never on a column, so `column` is 1 and the reader looks at every read of the member on that line. The
- * receiver is what the graph resolved: an occurrence it only guessed, or whose receiver a provider may replace, is
+ * receiver is what the graph resolved: an occurrence it only matched by name, or whose receiver a provider may replace, is
  * `other`; one inside the owner or a subtype is `this`; a template's is `template`; any other resolved one is `injected`
  * for the reader to confirm from the code. The graph lists no read through a field that holds a subtype of the owner, as
  * a subtype may override the member, so the references that name the member through a field, in the classes that
@@ -41,7 +41,7 @@ export function occurrencesOfMember(store: CodeGraphReader | undefined, inbound:
   for (const symbol of declared) {
     for (const occurrence of inbound.occurrencesOf(symbol)) {
       const receiver: MemberReceiver =
-        occurrence.resource !== undefined ? "template" : occurrence.provenance === "heuristic" || occurrence.bridge !== undefined || occurrence.substitutes !== undefined ? "other" : family.some((type) => isInside(occurrence.from, type)) ? "this" : "injected";
+        occurrence.resource !== undefined ? "template" : occurrence.derivation === "name-match" || occurrence.bridge !== undefined || occurrence.substitutes !== undefined ? "other" : family.some((type) => isInside(occurrence.from, type)) ? "this" : "injected";
       const place: ConsumerMemberOccurrence = { file: occurrence.from.file, line: occurrence.line ?? occurrence.from.startLine, column: 1, ...(occurrence.resource === undefined ? {} : { resource: occurrence.resource }), receiver };
       found.set(JSON.stringify([place.file, place.resource ?? null, place.line, receiver]), place);
     }
@@ -66,7 +66,7 @@ function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
 
 function callerOf(occurrence: InboundOccurrence): ConsumerCaller {
   const kind = occurrence.basis === "call" ? "call" : occurrence.basis === "reference" ? "reference" : "other";
-  const provenance = occurrence.provenance === "heuristic" ? "heuristic" : "resolved";
+  const provenance = occurrence.derivation === "name-match" ? "heuristic" : "resolved";
   return {
     file: occurrence.from.file,
     line: occurrence.from.startLine,
