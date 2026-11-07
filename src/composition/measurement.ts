@@ -115,38 +115,35 @@ export function measuredIndexDiscard(deps: MeasurementDeps): (discard: IndexDisc
   };
 }
 
+/** `port` with each of `methods` called through `around`; the other methods are the port's own. */
+function aroundMethods<T extends object>(port: T, methods: readonly string[], around: (method: string, call: () => unknown) => unknown): T {
+  const wrapped: T = Object.create(port);
+  for (const method of methods) {
+    const call = port[method as keyof T];
+    if (typeof call !== "function") continue;
+    Object.defineProperty(wrapped, method, { value: (...args: unknown[]) => around(method, () => call.apply(port, args)) });
+  }
+  return wrapped;
+}
+
 /**
  * A port whose named methods each write one stage line: the readers a request runs over the whole snapshot, so a host
  * can tell which of them its time went to. Lines carry no request id; under concurrent requests they interleave.
  */
-/** One `derived-facts` line per call of `reader` that found or derived a fact (ADR-0035): what it kept, and what the cache holds after. */
-export function measuredDerivedFacts<T extends object>(port: T, facts: DerivedFacts, reader: string, deps: MeasurementDeps): T {
-  const measuredPort: T = Object.create(port);
-  for (const method of Object.keys(port) as (keyof T & string)[]) {
-    const call = port[method];
-    if (typeof call !== "function") continue;
-    Object.defineProperty(measuredPort, method, {
-      value: async (...args: unknown[]) => {
-        try {
-          return await call.apply(port, args);
-        } finally {
-          const tally = facts.drain();
-          if (tally.hits + tally.misses > 0) reportBestEffort({ event: "derived-facts", reader, hits: tally.hits, misses: tally.misses, admitted: tally.admitted, admitted_bytes: tally.admittedBytes, evicted: tally.evicted, skipped: tally.skipped, fact_bytes: tally.factBytes, retained_bytes: tally.retainedBytes }, deps);
-        }
-      },
-    });
-  }
-  return measuredPort;
+export function measuredStages<T extends object>(port: T, stages: { readonly [K in keyof T]?: string }, deps: MeasurementDeps): T {
+  return aroundMethods(port, Object.keys(stages), (method, call) => measuredStage(stages[method as keyof T]!, call, deps));
 }
 
-export function measuredStages<T extends object>(port: T, stages: { readonly [K in keyof T]?: string }, deps: MeasurementDeps): T {
-  const measuredPort: T = Object.create(port);
-  for (const [method, stage] of Object.entries(stages) as [keyof T & string, string][]) {
-    const call = port[method];
-    if (typeof call !== "function") continue;
-    Object.defineProperty(measuredPort, method, { value: (...args: unknown[]) => measuredStage(stage, () => call.apply(port, args), deps) });
-  }
-  return measuredPort;
+/** One `derived-facts` line per call of `reader` that found or derived a fact (ADR-0035): what it kept, and what the cache holds after. */
+export function measuredDerivedFacts<T extends object>(port: T, facts: DerivedFacts, reader: string, deps: MeasurementDeps): T {
+  return aroundMethods(port, Object.keys(port), async (_, call) => {
+    try {
+      return await call();
+    } finally {
+      const tally = facts.drain();
+      if (tally.hits + tally.misses > 0) reportBestEffort({ event: "derived-facts", reader, hits: tally.hits, misses: tally.misses, admitted: tally.admitted, admitted_bytes: tally.admittedBytes, evicted: tally.evicted, skipped: tally.skipped, fact_bytes: tally.factBytes, retained_bytes: tally.retainedBytes }, deps);
+    }
+  });
 }
 
 /** One stage line per call, synchronous or not: `ok`, `threw`, or the kind of the fault a result answered. */
