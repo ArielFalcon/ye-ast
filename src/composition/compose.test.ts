@@ -810,8 +810,8 @@ test("a Java trace keeps a call a cut when a dynamic proxy may implement its pla
   assert.deepEqual(await javaTraceCuts("kotlin", { "Use.java": kotlin, "Repo.kt": "class Repo: Runnable { override fun run() { println(\"repo\") } }\n" }), [["unresolved-link", "Use.java:2 task.run", "Use.java::Other.run"], ["no-extractor", "Repo.kt"]]);
 });
 
-/** The status, cuts and steps (symbol and external calls) a trace of `target` gives over a fresh repository holding `files`. */
-async function traceOf(name: string, files: Readonly<Record<string, string>>, target = { file: "Use.java", symbol: "Use.entry" }) {
+/** A fresh repository under the workspace holding `files` in one commit. */
+function committedRepository(name: string, files: Readonly<Record<string, string>>): string {
   const root = join(workspace, name);
   mkdirSync(root);
   const run = (...args: string[]): string => execFileSync("git", args, { cwd: root, env: GIT_ENV, encoding: "utf8" }).trim();
@@ -819,7 +819,20 @@ async function traceOf(name: string, files: Readonly<Record<string, string>>, ta
   for (const [file, content] of Object.entries(files)) writeFileSync(join(root, file), content);
   run("add", "-A");
   run("commit", "-q", "-m", name);
-  const answer = await composeQueries({ scratchRoot }).trace.walk({ repo: root, repoId: name, revision: "HEAD", targets: [target] });
+  return root;
+}
+
+/** The status, the symbols at depth one or more and the cuts the callers query gives for `target` over a fresh repository holding `files`. */
+async function callersOf(name: string, files: Readonly<Record<string, string>>, target: { file: string; symbol: string }) {
+  const answer = await composeQueries({ scratchRoot }).impact.callers({ repo: committedRepository(name, files), repoId: name, revision: "HEAD", targets: [target] });
+  assert.ok(answer.ok);
+  const { status } = answer.value;
+  return { status, callers: status === "unknown" ? [] : answer.value.value.symbols.filter((symbol) => symbol.depth > 0).map((symbol) => symbol.symbol), cuts: status === "partial" ? answer.value.cuts.map((cut) => [cut.kind, ...cut.at]) : [] };
+}
+
+/** The status, cuts and steps (symbol and external calls) a trace of `target` gives over a fresh repository holding `files`. */
+async function traceOf(name: string, files: Readonly<Record<string, string>>, target = { file: "Use.java", symbol: "Use.entry" }) {
+  const answer = await composeQueries({ scratchRoot }).trace.walk({ repo: committedRepository(name, files), repoId: name, revision: "HEAD", targets: [target] });
   assert.ok(answer.ok);
   const { status } = answer.value;
   return { status, cuts: status === "partial" ? answer.value.cuts.map((cut) => [cut.kind, ...cut.at]) : [], steps: status === "unknown" ? [] : answer.value.value.steps.map((step) => [step.symbol, step.external ?? null]) };
@@ -843,6 +856,16 @@ test("a TypeScript trace settles a call by its package or global root only when 
 
   assert.deepEqual(await traceOf("tslogger", { "package.json": manifest, "use.ts": logger }, { file: "use.ts", symbol: "entry" }), { status: "partial", cuts: [["unresolved-link", "use.ts:7 other.logger.flush", "use.ts::Sink.flush"]], steps: [["entry", [{ kind: "import", module: "other-lib", names: ["other.setLogger"] }]]] });
   assert.deepEqual(await traceOf("tsdom", { "package.json": manifest, "use.ts": dom }, { file: "use.ts", symbol: "entry" }), { status: "complete", cuts: [], steps: [["entry", [{ kind: "unnamed", names: ["document.body.appendChild"] }]]] });
+});
+
+test("callers never settles a call by a package, global or platform root the call reads past", async () => {
+  const stream = ["class RepoStream extends java.io.PrintStream {", "  RepoStream() { super(new java.io.ByteArrayOutputStream()); }", "  public void println(String text) { System.err.println(\"REPOSITORY_PRINTLN\"); }", "}", ""];
+  const qualified = ["import java.lang.System;", "public class Use {", "  public void entry() { java.lang.System.out.println(\"x\"); }", "  public static void main(String[] args) {", "    System.setOut(new RepoStream());", "    new Use().entry();", "  }", "}", ...stream].join("\n");
+  const manifest = JSON.stringify({ name: "use", dependencies: { "other-lib": "1.0.0" } });
+  const logger = ["import * as other from \"other-lib\";", "class Sink {", "  flush(): void { console.log(\"REPOSITORY_FLUSH\"); }", "}", "export function entry(): void {", "  other.setLogger(new Sink());", "  other.logger.flush();", "}", ""].join("\n");
+
+  assert.deepEqual(await callersOf("callersqualified", { "Use.java": qualified }, { file: "Use.java", symbol: "RepoStream.println" }), { status: "partial", callers: ["Use", "entry"], cuts: [["unresolved-link", "Use.java", "Use.java:11 System.err.println", "Use.java:6 new Use().entry"]] });
+  assert.deepEqual(await callersOf("callerslogger", { "package.json": manifest, "use.ts": logger }, { file: "use.ts", symbol: "Sink.flush" }), { status: "partial", callers: [], cuts: [["unresolved-link", "use.ts", "use.ts:7 other.logger.flush"]] });
 });
 
 /** Repository functions named like library members, so a member call settled by its name alone is a cut. */
