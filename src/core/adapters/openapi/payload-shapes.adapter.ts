@@ -135,13 +135,19 @@ function createReader(referenced: ReferencedDocuments, place: Evidence, document
   const shapes = new Map<string, Shape>();
   const unknown = (via: string): UnknownShape => ({ kind: "unknown", reason: "unresolved", evidence: [{ ...place, via }] });
 
+  /**
+   * The schema a written one names through its references. A keyword beside a reference reads as the target only when
+   * the target, in the same file, states it with the same value: then ignoring it (OpenAPI 3.0) and combining it with the
+   * target (3.1) agree. Any other keyword beside a reference leaves the place unknown.
+   */
   function resolve(file: string, written: unknown): Located | UnknownShape {
     let current: Located = { file, node: written };
     const followed = new Set<string>();
     while (isRecord(current.node) && typeof current.node.$ref === "string") {
-      const ref = current.node.$ref;
-      if (Object.keys(current.node).some((key) => key !== "$ref" && !DOCUMENTATION.has(key))) return unknown(`reference with siblings ${ref}`);
+      const { $ref: ref, ...beside } = current.node;
       const target = targetOf(current.file, ref, referenced);
+      const restated = (keyword: string) => "node" in target && target.file === current.file && isRecord(target.node) && canonicalJson(target.node[keyword]) === canonicalJson(beside[keyword]);
+      if (Object.keys(beside).some((keyword) => !DOCUMENTATION.has(keyword) && !restated(keyword))) return unknown(`reference with siblings ${ref}`);
       if ("unresolved" in target) {
         if (target.unresolved.file !== undefined) files.add(target.unresolved.file);
         return unknown(`unresolved reference ${ref}`);

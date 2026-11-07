@@ -185,6 +185,16 @@ test("oneOf, anyOf, not, a schema in additionalProperties, a reference that cann
   assert.equal(property(root, "f").shape.kind, "known");
 });
 
+test("a sibling of a reference that its target states with the same value reads as the target; one that differs, or a target in another file, stays unknown", () => {
+  const types: SourceFile = { path: "api/types.yml", content: JSON.stringify({ Pet: { type: "object", properties: { id: STRING } } }) };
+  const root = rootOf([
+    document({ Root: { type: "object", properties: { same: { $ref: "#/components/schemas/Pet", type: "object" }, other: { $ref: "#/components/schemas/Pet", type: "string" }, away: { $ref: "types.yml#/Pet", type: "object" } } }, Pet: { type: "object", properties: { id: STRING } } }),
+    types,
+  ]).shape;
+  assert.deepEqual(["same", "other", "away"].map((name) => property(root, name).shape.kind), ["known", "unknown", "unknown"]);
+  assert.deepEqual(fields(property(root, "same").shape), [["id", false]]);
+});
+
 test("an allOf of open object branches with disjoint or identical properties is their merge: open, every property, every required name", () => {
   const root = known(rootOf([document({ Root: { allOf: [{ $ref: "#/components/schemas/Base" }, { type: "object", required: ["name"], properties: { name: STRING, id: STRING } }] }, Base: { type: "object", required: ["id"], properties: { id: STRING } } })]).shape);
   assert.equal(root.object!.open, true);

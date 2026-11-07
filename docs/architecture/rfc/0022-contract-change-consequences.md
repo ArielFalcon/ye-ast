@@ -365,8 +365,11 @@ every path that reaches it (`billing.city` and `shipping.city` both). A path tha
   `properties`, `additionalProperties` (open unless `false`), `items`. `allOf` is read only when every branch is an
   open object schema (no `additionalProperties: false`, since a closed branch forbids what the other branches declare)
   and the branches declare disjoint properties or the same one identically: the result is open, declares every
-  branch's properties and requires every branch's required names. Any other `allOf`, and `oneOf`, `anyOf`, `not`, a
-  schema in `additionalProperties`, are `unknown` at that place. An operation whose success responses or media types do not all
+  branch's properties and requires every branch's required names. A keyword beside a `$ref` reads as the target only
+  when the target, in the same file, states it with the same value (`type: object` beside an object schema): ignoring
+  it (3.0) and combining it with the target (3.1) then agree. Any other keyword beside a `$ref` (`nullable: true` beside
+  a schema that does not say it), any other `allOf`, and `oneOf`, `anyOf`, `not`, a schema in `additionalProperties`,
+  are `unknown` at that place. An operation whose success responses or media types do not all
   declare the same schema (a `200` body beside a `204` without one) is `unknown` at its root.
 - Spring handlers of operations no contract document declares, under Jackson's default configuration: the handler's
   return type, unwrapping `ResponseEntity<T>` and `Optional<T>`; collections and arrays are arrays of their element. A

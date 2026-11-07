@@ -119,6 +119,20 @@ Across the pairs, 9 references of a schema point at another schema at the head; 
 and are classified as any change is. 16 places moved between an inline schema and a reference; 5 keep the structure.
 None of the 44 `response-error-changed` differences is a rename alone (36 change a schema, 8 a status code).
 
+## Keywords beside a reference
+
+Before, a reference with any keyword beside it other than documentation was `unknown` at its place: 100 of the 134
+response `unknown-shape` frontiers on the 93 pairs. Of those, 84 were `type: object` beside a reference to an object
+schema of the same file (`GeoFeature.properties` and `GeoFeature.geometry` in the restaurants service), which every
+reading of the document agrees on; they read as the target now. That exposed 3 differences, each checked against the
+documents: `response-property-enum-value-added` at `features[].properties.cuisineType` of `GET
+/restaurants/countries/{countryCode}`, where `CuisineType` gained values (`10f284b6..a3a5a8cd` nine, `a3a5a8cd..f651bcc8`
+`FUSION`, `85eac321..81b268a3` `KOREAN`), each with its hypothesis. Nothing else changed.
+
+The 16 left are `nullable: true` beside `$ref: '#/components/schemas/GeolocationArea'` at `UserGeolocation.country` and
+`UserGeolocation.region` of the users service, an OpenAPI 3.1.1 document. OpenAPI 3.0 ignores the keyword, 3.1 combines
+it with the target (which admits no `null`), and code generators commonly honour it, so the place stays `unknown`.
+
 ## What the probe changed in the design
 
 - Extensions were first read as documentation. The corpus showed generator extensions that change what the wire
