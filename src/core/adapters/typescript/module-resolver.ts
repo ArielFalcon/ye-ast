@@ -179,3 +179,22 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
     },
   };
 }
+
+const resolvers = new WeakMap<readonly SourceFile[], Map<boolean, ModuleResolver>>();
+
+/** The resolver of a source list, read from that list alone: every reader of the list shares its resolutions. */
+export function moduleResolverOf(sources: readonly SourceFile[], options?: { jsonModules?: boolean }): ModuleResolver {
+  const jsonModules = options?.jsonModules === true;
+  let byOption = resolvers.get(sources);
+  if (byOption === undefined) {
+    byOption = new Map();
+    resolvers.set(sources, byOption);
+  }
+  let resolver = byOption.get(jsonModules);
+  if (resolver === undefined) {
+    const texts = new Map(sources.map(({ path, content }) => [path, content]));
+    resolver = createModuleResolver(async (file) => texts.get(file), manifestPackages(sources), { jsonModules });
+    byOption.set(jsonModules, resolver);
+  }
+  return resolver;
+}

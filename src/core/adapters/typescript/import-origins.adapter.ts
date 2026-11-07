@@ -12,7 +12,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { readsPastRoot, type RootOrigin } from "../../domain/impact/edge-policy.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { DeclaredType, ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
-import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
+import { moduleResolverOf, packageOf } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 import { parseAngularRouteFile } from "./angular-router.extractor.ts";
 import { createExportLookup, type ModuleShape } from "./declaration-lookup.ts";
@@ -49,7 +49,7 @@ const parseShared: ParseSource = (file) => sourceTree(file, ts.ScriptTarget.Late
 export function createImportOrigins(sources: readonly SourceFile[], parse: ParseSource = parseShared): ImportOrigins {
   const texts = new Map(sources.map((file) => [file.path, file.content]));
   const files = new Map(sources.map((file) => [file.path, file]));
-  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(sources));
+  const modules = moduleResolverOf(sources);
   /** What each file exports, read once and only when a namespace member asks. */
   const moduleShapes = new Map<string, ModuleShape | undefined>();
   function moduleShapeOf(file: string): ModuleShape | undefined {

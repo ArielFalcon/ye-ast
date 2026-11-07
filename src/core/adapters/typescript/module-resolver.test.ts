@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createModuleResolver, manifestDependencies, manifestPackages } from "./module-resolver.ts";
+import { createModuleResolver, manifestDependencies, manifestPackages, moduleResolverOf } from "./module-resolver.ts";
 
 const NO_PACKAGES = { dependencies: new Set<string>(), declared: new Set<string>() };
 
@@ -104,4 +104,16 @@ test("explicit JSON resources resolve only when opted in and present", async () 
   const defaultResolver = createModuleResolver(read, NO_PACKAGES);
   assert.ok("unresolved" in await defaultResolver.resolve("src/app.ts", "../data/config.json"));
   assert.ok("unresolved" in await defaultResolver.resolve("src/app.ts", "@data/config.json"));
+});
+
+test("every reader of one source list shares its resolver per option, and answers as a resolver of its own would", async () => {
+  const sources = [{ path: "src/a.ts", content: "" }, { path: "src/b.ts", content: "" }, { path: "data.json", content: "{}" }];
+  const shared = moduleResolverOf(sources);
+  assert.equal(moduleResolverOf(sources), shared);
+  assert.notEqual(moduleResolverOf(sources, { jsonModules: true }), shared);
+  assert.equal(moduleResolverOf(sources, { jsonModules: true }), moduleResolverOf(sources, { jsonModules: true }));
+  assert.notEqual(moduleResolverOf([...sources]), shared);
+  assert.deepEqual(await shared.resolve("src/a.ts", "./b"), { file: "src/b.ts" });
+  assert.deepEqual(await moduleResolverOf(sources, { jsonModules: true }).resolve("src/a.ts", "../data.json"), { file: "data.json" });
+  assert.deepEqual(await shared.resolve("src/a.ts", "../data.json"), await createModuleResolver(async (file) => sources.find((source) => source.path === file)?.content, manifestPackages(sources)).resolve("src/a.ts", "../data.json"));
 });
