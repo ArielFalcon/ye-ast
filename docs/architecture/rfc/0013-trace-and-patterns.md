@@ -774,3 +774,58 @@ Overloads, multiple inherited declarations, varargs, open type parameters or unp
 produce a data-effect cut when owned by an expanded body, never read/write or combined annotations. Fixed framework
 API rows retain the access their vocabulary declares for the overloads they cover. The baseline local-class false
 `complete` is outside this correction; wildcard-import coverage remains advisory. SCHEMA is unchanged.
+
+
+#### Identity correction measurements and every removed effect
+
+Compared with `ac6c13b9`, correction code `2b39f6e7`, using the same pinned inputs and all 111 traces, untrusted.
+The final workload was partitioned into the first 75 class traces and the remaining 36 traces plus the differential;
+every selected case exited 0. Earlier attempts and the superseded duplicate remainder were preserved, not scored.
+Scratch: `/tmp/ye-ast-data-correction.8QQI7B` (`before/`, `final/`, `rest/`, `comparison.json`, `binding-drops.json`).
+
+| Repository shape | Traces | Data before → after | Data cuts after | Summary bytes before → after |
+|---|---:|---:|---:|---:|
+| Frontend A | 15 | 0 → 0 | 0 | 17,838 → 17,838 |
+| REST backend | 15 | 74 → 67 | 7 | 33,092 → 32,235 |
+| Frontend B | 15 | 0 → 0 | 0 | 14,040 → 14,040 |
+| MyBatis backend | 15 | 0 → 0 | 0 | 25,316 → 25,316 |
+| Commerce backend | 15 | 21 → 16 | 7 | 77,217 → 76,343 |
+| Acceptance service | 15 | 3 → 3 | 0 | 29,725 → 29,725 |
+| Acceptance frontend | 15 | 0 → 0 | 0 | 50,106 → 50,106 |
+| Engine | 2 | 0 → 0 | 0 | 45,023 → 45,023 |
+| Acceptance service traces | 2 | 0 → 0 | 0 | 5,551 → 5,551 |
+| Acceptance frontend traces | 2 | 0 → 0 | 0 | 16,339 → 16,339 |
+
+The 12 removed effect occurrences become cuts; these are conservative coverage reductions imposed by the existing
+shared receiver proof, not 12 independently confirmed false real-application accesses. Case A is the shared private-field
+guard: `JdbcVisitRepositoryImpl` also accesses its template through `JdbcVisitRepositoryImpl.this` (lines 158, 163, 169),
+so the reader cannot prove exclusive `this` ownership. Case B is a protected field. Case C is the shared bare-field guard:
+the type body declares a same-named constructor parameter, so the reader retains an unproven field candidate rather
+than assuming the value binding. This does not claim that the constructor parameter is actually in scope at the call.
+
+| Probe root | Removed call | Operation | Reason |
+|---|---|---|---|
+| JdbcVisitRepositoryImpl | JdbcVisitRepositoryImpl.java:88 | queryForObject | A: private template ownership unproven |
+| JdbcVisitRepositoryImpl | JdbcVisitRepositoryImpl.java:93 | query | A: private template ownership unproven |
+| JdbcVisitRepositoryImpl | JdbcVisitRepositoryImpl.java:110 | queryForObject | A: private template ownership unproven |
+| JdbcVisitRepositoryImpl | JdbcVisitRepositoryImpl.java:123 | query | A: private template ownership unproven |
+| JdbcVisitRepositoryImpl | JdbcVisitRepositoryImpl.java:131 | executeAndReturnKey | B: protected insertVisit field |
+| JdbcVisitRepositoryImpl | JdbcVisitRepositoryImpl.java:134 | update | A: private template ownership unproven |
+| JdbcVisitRepositoryImpl | JdbcVisitRepositoryImpl.java:144 | update | A: private template ownership unproven |
+| OrderFacadeImpl | ProductAttributeServiceImpl.java:39 | findOne | C: same-named constructor parameter in the type body |
+| ShoppingCartFacadeImpl | ProductAttributeServiceImpl.java:39 | findOne | C: same-named constructor parameter in the type body |
+| ShippingServiceImpl | MerchantConfigurationServiceImpl.java:61 | getOne | C: same-named constructor parameter in the type body |
+| OrderServiceImpl | OrderServiceImpl.java:551 | findOne | C: same-named constructor parameter in the type body |
+| PaymentServiceImpl | MerchantConfigurationServiceImpl.java:61 | getOne | C: same-named constructor parameter in the type body |
+
+Two additional cuts, not removed effects, are `OrderServiceImpl.java:558` (`listByStore`) and `:563` (`listOrders`):
+the custom repository calls now retain the same unproven receiver boundary; neither claims read/write.
+All 86 retained effects preserve their operation, access and target exactly. No new effect or target change occurred.
+105/111 raw trace records are identical; removing data effects/cuts from both versions makes all 111 structured facts
+equal. The 14-command differential is byte-identical in stdout, stderr and exit code, all exit 0.
+Summary UTF-8 text: 314,247 → 312,516 bytes (-1,731, -0.55%).
+
+Four exact review fixtures compile against the cached Spring/JPA jars (`javac` exit 0) and pass real trace tests.
+The lexical table covers parameters, enhanced-for variables, typed lambda parameters, catch variables and inner fields.
+Six type-correct break-proof mutations were caught. Final Node 24.22.2 `npm run check`, run once for the correction:
+3720 tests, 3720 pass, 0 fail; typecheck and arch:check pass. Catalogue: 36,100 bytes; SCHEMA unchanged.
