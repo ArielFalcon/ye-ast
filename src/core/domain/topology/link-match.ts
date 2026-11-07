@@ -189,6 +189,11 @@ export function prefixOf(target: HttpTarget): string | undefined {
   return prefixText(target.path);
 }
 
+/** The host a call names: the origin its URL states, or the service its client declares. */
+export function hostOf(target: HttpTarget): string | undefined {
+  return callTemplate({ path: target.path }).origin ?? target.base;
+}
+
 /** The routes a call takes once its gateway prefix is removed, by equal paths and configured base paths: one, or several equally. */
 export function servedBehindGateway(target: HttpTarget, routes: readonly HttpRoute[]): readonly HttpRoute[] {
   const landing = behindGatewayRung(callTemplate({ path: target.path }), target.method, routes);

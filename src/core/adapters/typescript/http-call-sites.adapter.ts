@@ -6,7 +6,7 @@ import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { moduleResolverOf, type ModuleResolver } from "./module-resolver.ts";
 import { buildDefines, type BuildDefines } from "./url-define.ts";
-import { callUrl, joinedCallUrl, RUN_TIME_HOLE, type CallUrl } from "../../domain/topology/path-template.ts";
+import { callUrl, joinedCallUrl, RUN_TIME_HOLE, urlText } from "../../domain/topology/path-template.ts";
 import { injectedClass } from "./angular-injection.ts";
 import { declarationCounts } from "./syntax-names.ts";
 import { defaultExportOf } from "./import-bindings.ts";
@@ -648,8 +648,8 @@ class Reader {
     const own = callUrl(path);
     const base = own.origin === undefined ? await this.baseUrl(shape, call) : undefined;
     if (base === UNDECIDED) return { ...unknown, stated: { method, path: namedHoles(own.path) } };
-    const url: CallUrl = base === undefined ? own : joinedCallUrl(base, path);
-    return { target: { status: "complete", value: { method, path: namedHoles(url.path), ...(url.origin === undefined ? {} : { base: url.origin }) }, evidence: unknown.target.evidence } };
+    const url = base === undefined ? own : joinedCallUrl(base, path);
+    return { target: { status: "complete", value: { method, path: urlText({ ...url, path: namedHoles(url.path) }) }, evidence: unknown.target.evidence } };
   }
 
   /** The base URL the call's options declare: undefined when they declare none, `UNDECIDED` when the snapshot does not decide it. */
