@@ -562,9 +562,9 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
 - The link map (`ye_ast_workspace`, fact schema `0.18.0`): the workspace answer runs the same join as the workspace
   impact, from one module (`workspace-join.ts`), over every call site of every repository read, and answers each `Link`
   it admits once, sorted by id, with no walk: no `direction`, no `reach`. The call sites it reaches without a link are
-  `unlinked`, `unmatched` (a declared service none of whose routes takes the call) or `ambiguous` (several entrypoints at
-  one rung, with the repositories), and an ambiguous one is also an `unresolved-link` cut of its section, as in the
-  impact. `workspace.gateways` is the gateways in force, declared (`gateway-prefix`) and inferred (`route-overlap`).
+  `unlinked`, `unmatched` (no route takes the call and it names no host, or it names a declared service), `ambiguous`
+  (several entrypoints at one rung, with the repositories and, for HTTP, the routes) or `could-match` (a run-time value
+  could still route it, row 4), and an ambiguous or could-match one is also a cut of its section, as in the impact. `workspace.gateways` is the gateways in force, declared (`gateway-prefix`) and inferred (`route-overlap`).
   A published destination is an outward name of kind `destination`; the repositories that serve it are those the join
   linked or found ambiguous for it, with basis `event-destination`, never a name compared with an identity. Composed
   with `ye_ast_callers` or `ye_ast_impact` over the same snapshots, a link both admit is one `workspace-match` relation
