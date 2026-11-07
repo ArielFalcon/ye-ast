@@ -41,11 +41,11 @@ interface ReadFile {
  * may only return a subtype, which dispatch covers. No method, beyond what `dispatchTargets` refuses, when the type is a
  * type variable, an enum or an annotation type; when a type at or above it is outside the repository, whose members the
  * sources do not state; when its members of the name, its own and inherited, are not exactly one signature of the call's
- * arity with no varargs and no private declaration, or the name is one of `Object`'s methods; when the call sits in an
+ * arity with no varargs and no inherited private declaration, or the name is one of `Object`'s methods; when the call sits in an
  * anonymous or a local class; when a source holds an annotation by which a processor adds overloads or rewrites calls
- * (`CALL_REWRITING_ANNOTATIONS`); and when the declared hierarchy does not settle the member. Dispatch is a separate trace obligation. `unproven` only when a source may make a value of a declared type run code no source shows (a source
- * that does not parse, a JVM language no extractor reads, a JDK API that implements an interface at run time) and the
- * call's receiver is a value it reads; otherwise the call is `unknown`.
+ * (`CALL_REWRITING_ANNOTATIONS`); or when the declared hierarchy does not settle the member. Declaration selection and
+ * runtime dispatch are separate obligations. An unproven value receiver or declared repository member remains a cut;
+ * no name-only index target proves it. Non-Java and non-invocation sites remain unknown.
  */
 export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[]): ImportOrigins["receiverMethods"] {
   const java = sources.filter(({ path }) => isJavaSource(path));
@@ -115,7 +115,7 @@ function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) 
     const binding = source.bindings.get(callKey(invocation.startPosition.row + 1, invocation.startPosition.column + 1, invocation.childForFieldName("name")?.text ?? ""));
     const receiver = object.type === "identifier" ? object.text : object.type === "field_access" ? object.childForFieldName("field")?.text : undefined;
     if (binding === undefined || binding.receiver !== receiver || binding.holds.kind !== "annotated") {
-      return object.type === "identifier" ? repositoryType(object, source.file, object) : undefined;
+      return object.type === "identifier" && localBinding(object) === undefined && !fieldAround(object, source.file, project) ? repositoryType(object, source.file, object) : undefined;
     }
     const name = annotationAt(source.file.root, binding.holds.line, binding.holds.column, binding.holds.type);
     return name === undefined ? undefined : repositoryType(name, source.file, name);
@@ -193,7 +193,7 @@ function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) 
       if (object === null) return false;
       if (object.type === "method_invocation" || object.type === "field_access") return true;
       if (object.type !== "identifier") return false;
-      if (localBinding(object) !== undefined || fieldAround(object)) return true;
+      if (localBinding(object) !== undefined || fieldAround(object, file, project)) return true;
       const named = resolve(object, file, project, enclosingType(object, file, project), object);
       return named === undefined;
     },
@@ -210,10 +210,16 @@ function namesAnyDynamicImplementation(file: JavaFile, project: JavaProject): bo
   return false;
 }
 
-/** Whether a type body around the identifier declares a field of its name. */
-function fieldAround(identifier: Node): boolean {
+/** Whether a lexical type or its hierarchy declares, or may supply, a field of the name. */
+function fieldAround(identifier: Node, file: JavaFile, project: JavaProject): boolean {
   for (let body = enclosingBody(identifier); body !== undefined; body = enclosingBody(body)) if (fieldsOf(body).some((declarator) => declarator.childForFieldName("name")?.text === identifier.text)) return true;
-  return false;
+  const type = enclosingType(identifier, file, project);
+  if (type === undefined) return false;
+  const above = project.hierarchy(type);
+  return above.gaps.length > 0 || above.types.some((owner) => {
+    const body = owner.node.childForFieldName("body");
+    return body !== null && fieldsOf(body).some((declarator) => declarator.childForFieldName("name")?.text === identifier.text);
+  });
 }
 
 function rewritesCalls(root: Node): boolean {

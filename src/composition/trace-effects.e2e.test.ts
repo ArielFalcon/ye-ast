@@ -284,14 +284,18 @@ test("Java inherited members follow the declared receiver instead of a sibling n
     "src/base/Port.java": `package base; public interface Port<T> { void create(T value); }`,
     "src/left/Left.java": `package left; public interface Left extends base.Port<String> { }`,
     "src/right/Right.java": `package right; public interface Right extends base.Port<Integer> { void create(Integer value); }`,
-    "src/base/Base.java": `package base; public class Base { public void create(String value) { } }`,
+    "src/base/Base.java": `package base; public class Base { public Other Left; public void create(String value) { } }`,
+    "src/base/Other.java": `package base; public class Other { public void create(String value) {} }`,
     "src/Flow.java": `import left.Left;
 class Flow extends base.Base {
   Left receiver;
   Flow(Left receiver) { this.receiver = receiver; }
   void run() { receiver.create("value"); this.create("value"); }
   <T extends Left> void unknown(T value) { value.create("value"); }
+  void shadow() { var Left = new Other(); Left.create("value"); }
+  void inheritedShadow() { Left.create("value"); }
 }
+class Other { void create(String value) {} }
 `,
   });
   const result = await trace("src/Flow.java:Flow.run");
@@ -303,6 +307,13 @@ class Flow extends base.Base {
   const unknown = await trace("src/Flow.java:Flow.unknown");
   assert.equal(unknown.status, "partial");
   assert.deepEqual(unknown.value.steps.map((step) => step.symbol), ["unknown"]);
+  const shadow = await trace("src/Flow.java:Flow.shadow");
+  assert.equal(shadow.status, "partial");
+  assert.ok(!shadow.value.steps.some((step) => step.symbol === "create"));
+  assert.ok(!shadow.value.steps.flatMap((step) => step.leaves ?? []).some((leaf) => leaf.symbol === "create"));
+  const inheritedShadow = await trace("src/Flow.java:Flow.inheritedShadow");
+  assert.equal(inheritedShadow.status, "partial");
+  assert.ok(!inheritedShadow.value.steps.some((step) => step.symbol === "create"));
 });
 
 test("a Java client method root retains its own effect or effect cut even when another method calls it", async () => {
