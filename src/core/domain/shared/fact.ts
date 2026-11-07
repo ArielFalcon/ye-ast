@@ -65,8 +65,11 @@ export interface DeclaredConfig {
   focus?: readonly string[];
   /** The globs over the changed paths `impact.ofChange` was asked to seed from, in their fixed order. */
   changed?: readonly string[];
-  /** The contract change `contracts.consequences` was asked about, normalized as `<METHOD> <path> <target> <property> <change>`. */
-  hypothesis?: string;
+  /** The hypotheses `contractConsequences.ofHypotheses` was asked about, each normalized as `<METHOD> <path> <target> <property> <change>`, in the order asked. */
+  hypotheses?: readonly string[];
+  /** The revisions `contractConsequences.ofChange` was asked to compare, as asked. */
+  base?: string;
+  head?: string;
   /** What the export may take from a commit, when the host bounded it. */
   exportBudget?: { maxEntries: number; maxBytes: number };
 }

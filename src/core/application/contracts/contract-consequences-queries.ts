@@ -1,17 +1,17 @@
 import { formatAccessPath, relatePaths, type AccessPath } from "../../domain/contracts/access-path.ts";
-import { OLD_ACCEPTANCE, OLD_GUARANTEE, type ConsequencesValue, type ProducerConsequence, type UseConsequence } from "../../domain/contracts/consequence-fact.ts";
+import { consequencesFact, OLD_ACCEPTANCE, OLD_GUARANTEE, type AnswerBody, type ConsequenceFinding, type ConsequencesValue, type HypothesisAnswer, type LocatedHop, type ProducerConsequence, type UseConsequence } from "../../domain/contracts/consequence-fact.ts";
 import { writtenChange } from "../../domain/contracts/change.ts";
 import { carrierKey, siteFile, siteLine, type Carrier, type CarrierSite, type FlowFrontier, type FlowNext, type FlowResult, type Hop } from "../../domain/contracts/consumer-flow.ts";
-import { parseHypothesis, type Hypothesis, type HypothesisRefusal, type RequestHypothesis, type ResponseHypothesis } from "../../domain/contracts/hypothesis.ts";
+import { formatHypothesis, parseHypothesis, type Hypothesis, type RequestHypothesis, type ResponseHypothesis } from "../../domain/contracts/hypothesis.ts";
 import { writtenRequestChange } from "../../domain/contracts/request-change.ts";
 import { decideProducer, type Origin, type SettledOrigin } from "../../domain/contracts/request-origin.ts";
 import { decideUse } from "../../domain/contracts/verdict.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import { withCuts, type Cut, type Evidence, type Fact, type Finding } from "../../domain/shared/fact.ts";
+import { withCuts, type Evidence, type Fact, type FactBase, type UnknownReason } from "../../domain/shared/fact.ts";
 import type { Link, LinkBasis } from "../../domain/topology/link.ts";
 import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
-import type { ConsequencesFault, ContractConsequencesQueries } from "../../ports/contract-consequences-queries.port.ts";
+import type { ContractConsequencesQueries } from "../../ports/contract-consequences-queries.port.ts";
 import type { ConsumerSession, ConsumerSources, PreparedWorkspace } from "../../ports/consumer-sources.port.ts";
 import type { RequestOriginReader } from "../../ports/request-origins.port.ts";
 import type { Result } from "../../domain/shared/result.ts";
@@ -22,6 +22,8 @@ const QUALIFIED_BASES: ReadonlySet<LinkBasis> = new Set(["exact", "base-path", "
 
 export interface ContractConsequencesQueriesDeps {
   sources: ConsumerSources;
+  /** The operation that answers a change, which derives its hypotheses and answers them with `answerOn`. */
+  ofChange: ContractConsequencesQueries["ofChange"];
 }
 
 /**
@@ -44,46 +46,82 @@ interface Pending {
 }
 
 const located = (evidence: Evidence, repo: string): RepositoryEvidence => ({ ...evidence, repo });
+const locatedHops = (hops: readonly Hop[], repo: string): LocatedHop[] => hops.map((hop) => ({ ...hop, evidence: located(hop.evidence, repo) }));
 
-export function createContractConsequencesQueries({ sources }: ContractConsequencesQueriesDeps): ContractConsequencesQueries {
-  const consequencesOfEach: ContractConsequencesQueries["consequencesOfEach"] = async ({ hypotheses, ...workspace }) => {
-    const parsed = hypotheses.map(parseHypothesis);
-    const invalid = (refusal: HypothesisRefusal): Answer => ({ ok: false, fault: { kind: "invalid-hypothesis", detail: refusal.detail, refusal } });
-    if (!parsed.some((hypothesis) => hypothesis.ok)) return { ok: true, value: parsed.flatMap((hypothesis) => (hypothesis.ok ? [] : [invalid(hypothesis.fault)])) };
-    return sources.withWorkspace(workspace, async (prepared) => {
-      const answers: Answer[] = [];
-      for (const hypothesis of parsed) answers.push(hypothesis.ok ? await consequencesOn(prepared, hypothesis.value) : invalid(hypothesis.fault));
-      return answers;
-    });
-  };
+export function createContractConsequencesQueries({ sources, ofChange }: ContractConsequencesQueriesDeps): ContractConsequencesQueries {
   return {
-    async consequences({ hypothesis, ...workspace }) {
-      const answers = await consequencesOfEach({ ...workspace, hypotheses: [hypothesis] });
-      return answers.ok ? answers.value[0]! : answers;
+    async ofHypotheses({ hypotheses, ...workspace }) {
+      const parsed: Hypothesis[] = [];
+      for (const [index, input] of hypotheses.entries()) {
+        const hypothesis = parseHypothesis(input);
+        if (!hypothesis.ok) return { ok: false, fault: { kind: "invalid-hypothesis", detail: hypothesis.fault.detail, index, refusal: hypothesis.fault } };
+        parsed.push(hypothesis.value);
+      }
+      return sources.withWorkspace(workspace, async (prepared) => {
+        const base = prepared.base({ hypotheses: parsed.map(formatHypothesis) });
+        const answered: Answered[] = [];
+        for (const hypothesis of parsed) answered.push(await answerOn(prepared, base, hypothesis));
+        return assemble(prepared, base, answered);
+      });
     },
-    consequencesOfEach,
+    ofChange,
   };
 }
 
-type Answer = Result<Fact<ConsequencesValue>, ConsequencesFault>;
+/** One hypothesis answered, and the call sites its answer searched. */
+export interface Answered {
+  answer: HypothesisAnswer;
+  sites: readonly RepositoryEvidence[];
+}
+
+/** The composite fact of the answers, whose evidence is every call site they searched. */
+export function assemble(workspace: PreparedWorkspace, base: FactBase, answered: readonly Answered[], change?: ConsequencesValue["change"]): Fact<ConsequencesValue> {
+  const sites = [...new Map(answered.flatMap((one) => one.sites).map((place) => [canonicalJson(place), place])).values()].sort((a, b) => compareEvidence(a, b) || compareText(a.repo, b.repo));
+  const value: ConsequencesValue = { repositorySnapshots: workspace.repositorySnapshots, answers: answered.map(({ answer }) => answer), ...(change === undefined ? {} : { change }) };
+  return consequencesFact({ ...base, evidence: sites }, value);
+}
+
+const assumedOf = (hypothesis: Hypothesis): Pick<AnswerBody, "hypothesis" | "oldContract"> =>
+  hypothesis.target === "response"
+    ? {
+        hypothesis: {
+          method: hypothesis.method,
+          path: hypothesis.path,
+          target: hypothesis.target,
+          property: formatAccessPath(hypothesis.property),
+          change: writtenChange(hypothesis.change),
+          ...(hypothesis.change.renamedTo === undefined ? {} : { renamedTo: formatAccessPath(hypothesis.change.renamedTo) }),
+          ...(hypothesis.change.elementsAt === undefined ? {} : { elementsAt: formatAccessPath(hypothesis.change.elementsAt) }),
+        },
+        oldContract: hypothesis.change.oldGuarantee ?? OLD_GUARANTEE,
+      }
+    : { hypothesis: { method: hypothesis.method, path: hypothesis.path, target: hypothesis.target, property: formatAccessPath(hypothesis.property), change: writtenRequestChange(hypothesis.change) }, oldContract: OLD_ACCEPTANCE };
 
 /** The consequences of one hypothesis on a workspace already prepared, so a caller with several hypotheses prepares once. */
-export async function consequencesOn(workspace: PreparedWorkspace, hypothesis: Hypothesis): Promise<Answer> {
+export async function answerOn(workspace: PreparedWorkspace, base: FactBase, hypothesis: Hypothesis, derivedFrom?: AnswerBody["derivedFrom"]): Promise<Answered> {
+  const stated = { ...assumedOf(hypothesis), ...(derivedFrom === undefined ? {} : { derivedFrom }) };
+  const unknown = (reason: UnknownReason, detail: string): Answered => ({ answer: { ...stated, findings: [], status: "unknown", reason, detail }, sites: [] });
   const session = await workspace.session(hypothesis);
-  if (!session.ok) return session;
-  if (hypothesis.target === "response") return consequencesOf(session.value, hypothesis);
-  return producersOf(session.value, hypothesis, session.value.requestOrigins);
+  if (!session.ok) return unknown("source-unreadable", session.fault.detail);
+  const operation = `${hypothesis.method} ${hypothesis.path}`;
+  const selected = selectCalls(session.value, operation);
+  if (!selected.ok) return unknown("unresolved", selected.fault);
+  const followed = hypothesis.target === "response" ? consequencesOf(session.value, selected.value, hypothesis) : await producersOf(session.value, selected.value, hypothesis);
+  const body: AnswerBody = { ...stated, ...followed };
+  const sealed = withCuts(base, body, workspace.cuts);
+  return { answer: sealed.status === "partial" ? { ...body, status: "partial", cuts: sealed.cuts } : { ...body, status: "complete" }, sites: selected.value.sites.toSorted(compareEvidence) };
 }
 
 /** The HTTP call sites that call an operation: the qualified links to follow, and everything else about the join as items of its own. */
 interface CallSelection {
   qualified: Link[];
-  findings: Finding<UseConsequence | ProducerConsequence>[];
+  findings: ConsequenceFinding<UseConsequence | ProducerConsequence>[];
   sites: RepositoryEvidence[];
 }
 
-function selectCalls(session: ConsumerSession, operation: string): Result<CallSelection, ConsequencesFault> {
-  if (session.serving.length === 0) return { ok: false, fault: { kind: "unknown-operation", detail: `no repository of the workspace serves ${operation}`, operation } };
+/** An operation no repository serves has no contract to change, so the hypothesis is unknown rather than a fault. */
+function selectCalls(session: ConsumerSession, operation: string): Result<CallSelection, string> {
+  if (session.serving.length === 0) return { ok: false, fault: `no repository of the workspace serves ${operation}` };
   const findings: CallSelection["findings"] = [];
   const qualified: Link[] = [];
   const sites: RepositoryEvidence[] = [];
@@ -115,12 +153,9 @@ function selectCalls(session: ConsumerSession, operation: string): Result<CallSe
   return { ok: true, value: { qualified, findings, sites } };
 }
 
-function consequencesOf(session: ConsumerSession, hypothesis: ResponseHypothesis): Result<Fact<ConsequencesValue>, ConsequencesFault> {
-  const selected = selectCalls(session, `${hypothesis.method} ${hypothesis.path}`);
-  if (!selected.ok) return selected;
-  const { findings, sites } = selected.value;
-  const cuts: Cut[] = [...session.cuts];
-  const queue: Pending[] = selected.value.qualified.map((link) => {
+function consequencesOf(session: ConsumerSession, selected: CallSelection, hypothesis: ResponseHypothesis): Pick<AnswerBody, "findings" | "silent"> {
+  const { findings } = selected;
+  const queue: Pending[] = selected.qualified.map((link) => {
     const { from, basis } = link;
     return { carrier: { site: { kind: "call-site", ...from }, path: hypothesis.property }, chain: [{ step: "http-call", evidence: { path: from.file, line: from.line, via: `basis:${basis}` } }], link, entries: [] };
   });
@@ -154,7 +189,7 @@ function consequencesOf(session: ConsumerSession, hypothesis: ResponseHypothesis
         operation: use.operation,
         path: formatAccessPath(use.path),
         changed: formatAccessPath(use.changed),
-        chain: [...chain, ...use.hops],
+        chain: locatedHops([...chain, ...use.hops], repo),
       };
       findings.push({ status: "complete", evidence, value });
     }
@@ -176,21 +211,7 @@ function consequencesOf(session: ConsumerSession, hypothesis: ResponseHypothesis
     }
   }
 
-  const value: ConsequencesValue = {
-    hypothesis: {
-      method: hypothesis.method,
-      path: hypothesis.path,
-      target: hypothesis.target,
-      property: formatAccessPath(hypothesis.property),
-      change: writtenChange(hypothesis.change),
-      ...(hypothesis.change.renamedTo === undefined ? {} : { renamedTo: formatAccessPath(hypothesis.change.renamedTo) }),
-      ...(hypothesis.change.elementsAt === undefined ? {} : { elementsAt: formatAccessPath(hypothesis.change.elementsAt) }),
-    },
-    assumedOldGuarantee: hypothesis.change.oldGuarantee ?? OLD_GUARANTEE,
-    ...(hypothesis.change.values === undefined ? {} : { silent }),
-    findings: findings.sort(compareFindings),
-  };
-  return { ok: true, value: withCuts({ ...session.base, evidence: sites.sort(compareEvidence) }, value, cuts) };
+  return { ...(hypothesis.change.values === undefined ? {} : { silent }), findings: findings.sort(compareFindings) };
 }
 
 const linkOf = (link: Link): UseConsequence["link"] => ({ id: link.id, basis: link.basis, call: { file: link.from.file, line: link.from.line, symbol: link.from.symbol }, handler: { repo: link.to.repo, ...link.to.handler } });
@@ -199,20 +220,13 @@ const linkOf = (link: Link): UseConsequence["link"] => ({ id: link.id, basis: li
  * The producers of a request body: each qualified HTTP call site that sends the operation's request, with what it can
  * write at the changed property, followed backward from the call through the callers of the functions that pass it on.
  */
-async function producersOf(session: ConsumerSession, hypothesis: RequestHypothesis, readerOf: (repo: string) => RequestOriginReader | undefined): Promise<Answer> {
-  const selected = selectCalls(session, `${hypothesis.method} ${hypothesis.path}`);
-  if (!selected.ok) return selected;
-  const { findings, sites } = selected.value;
-  for (const link of selected.value.qualified) findings.push(...(await producerOf(session, link, hypothesis, readerOf(link.from.repo))));
-  const value: ConsequencesValue = {
-    hypothesis: { method: hypothesis.method, path: hypothesis.path, target: hypothesis.target, property: formatAccessPath(hypothesis.property), change: writtenRequestChange(hypothesis.change) },
-    assumedOldGuarantee: OLD_ACCEPTANCE,
-    findings: findings.sort(compareFindings),
-  };
-  return { ok: true, value: withCuts({ ...session.base, evidence: sites.sort(compareEvidence) }, value, [...session.cuts]) };
+async function producersOf(session: ConsumerSession, selected: CallSelection, hypothesis: RequestHypothesis): Promise<Pick<AnswerBody, "findings">> {
+  const { findings } = selected;
+  for (const link of selected.qualified) findings.push(...(await producerOf(session, link, hypothesis, session.requestOrigins(link.from.repo))));
+  return { findings: findings.sort(compareFindings) };
 }
 
-async function producerOf(session: ConsumerSession, link: Link, hypothesis: RequestHypothesis, reader: RequestOriginReader | undefined): Promise<Finding<ProducerConsequence>[]> {
+async function producerOf(session: ConsumerSession, link: Link, hypothesis: RequestHypothesis, reader: RequestOriginReader | undefined): Promise<ConsequenceFinding<ProducerConsequence>[]> {
   const { from, basis } = link;
   const repo = from.repo;
   const call: Hop = { step: "http-call", evidence: { path: from.file, line: from.line, via: `basis:${basis}` } };
@@ -227,12 +241,12 @@ async function producerOf(session: ConsumerSession, link: Link, hypothesis: Requ
   }
   const verdict = decideProducer(settled, hypothesis.change.rejected);
   const witness = verdict.kind === "incompatible" ? verdict.witness : undefined;
-  const decided: Finding<ProducerConsequence> = {
+  const decided: ConsequenceFinding<ProducerConsequence> = {
     status: "complete",
     evidence: [located({ path: from.file, line: from.line }, repo), ...(witness === undefined ? [] : [located(witness.at, repo)])],
-    value: { repo, link: linkOf(link), verdict, path: formatAccessPath(hypothesis.property), chain: [call, ...(witness?.hops ?? [])] },
+    value: { repo, link: linkOf(link), verdict, path: formatAccessPath(hypothesis.property), chain: locatedHops([call, ...(witness?.hops ?? [])], repo) },
   };
-  const frontiers = settled.flatMap((origin): Finding<ProducerConsequence>[] => {
+  const frontiers = settled.flatMap((origin): ConsequenceFinding<ProducerConsequence>[] => {
     if (origin.kind !== "frontier") return [];
     const via = origin.detail === undefined ? origin.reason : `${origin.reason}:${origin.detail}`;
     return [{ status: "unknown", reason: "unresolved", evidence: [call, ...origin.hops].map((hop) => located(hop.evidence, repo)).concat(located({ ...origin.at, via }, repo)) }];
@@ -357,7 +371,7 @@ function entriesAfter({ site }: Carrier, { carrier, hops, returnsTo }: FlowNext,
   return entries.some((held) => canonicalJson(held) === canonicalJson(entry)) ? "recursion" : [...entries, entry];
 }
 
-function frontierItem(frontier: FlowFrontier, chain: readonly Hop[], repo: string): Finding<UseConsequence> {
+function frontierItem(frontier: FlowFrontier, chain: readonly Hop[], repo: string): ConsequenceFinding<UseConsequence> {
   const via = frontier.detail === undefined ? frontier.cause : `${frontier.cause}:${frontier.detail}`;
   return { status: "unknown", reason: frontier.reason, evidence: [...chain, ...frontier.hops].map((hop) => located(hop.evidence, repo)).concat(located({ ...frontier.at, via }, repo)) };
 }
@@ -371,7 +385,7 @@ function compareEvidence(a: Evidence, b: Evidence): number {
   return compareText(a.path, b.path) || a.line - b.line;
 }
 
-function compareFindings(a: Finding<UseConsequence | ProducerConsequence>, b: Finding<UseConsequence | ProducerConsequence>): number {
-  const where = (finding: Finding<UseConsequence | ProducerConsequence>) => (finding.status === "complete" ? finding.evidence[0] : finding.evidence.at(-1))!;
+function compareFindings(a: ConsequenceFinding<UseConsequence | ProducerConsequence>, b: ConsequenceFinding<UseConsequence | ProducerConsequence>): number {
+  const where = (finding: ConsequenceFinding<UseConsequence | ProducerConsequence>) => (finding.status === "complete" ? finding.evidence[0] : finding.evidence.at(-1))!;
   return compareEvidence(where(a), where(b)) || Number(a.status === "unknown") - Number(b.status === "unknown") || compareText(canonicalJson(a), canonicalJson(b));
 }

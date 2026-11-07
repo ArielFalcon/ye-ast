@@ -1,6 +1,6 @@
 import type { Handler, HttpMethod } from "../domain/entrypoints/http-route.ts";
 import type { Hypothesis } from "../domain/contracts/hypothesis.ts";
-import type { Cut, FactBase } from "../domain/shared/fact.ts";
+import type { Cut, DeclaredConfig, FactBase, SnapshotRef } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { Link } from "../domain/topology/link.ts";
 import type { ConsumerFlowReader } from "./consumer-flow.port.ts";
@@ -49,8 +49,6 @@ export type ConsumerMemberOccurrences = { kind: "unavailable" } | { kind: "unres
 
 /** The answers of a workspace to one hypothesis: what the hypothesis selects, and what the workspace holds whatever the hypothesis. */
 export interface ConsumerSession {
-  /** The fact envelope of the answer; its config declares the hypothesis. */
-  base: FactBase;
   /** The links of the HTTP call sites that one repository serves alone, matched over every repository of the workspace including their own. */
   links: readonly Link[];
   /** The repositories that serve the operation asked about, with the handler that does. */
@@ -59,8 +57,6 @@ export interface ConsumerSession {
   unresolvedCalls: readonly { repo: string; file: string; line: number; symbol: string }[];
   /** The HTTP call sites that reach a route of the operation in more than one repository, which the join does not pick between. */
   ambiguousCalls: readonly { from: Link["from"]; repos: readonly string[] }[];
-  /** What the reading of the snapshots already cut, such as an export budget. */
-  cuts: readonly Cut[];
   /** The callers of a function of a repository: the code graph's, with the calls made through injected fields and locals. */
   callers(declaration: { repo: string; file: string; symbol: string; line: number }): ConsumerCallers;
   /** The places a member of a class of a repository is read, with the receiver each goes through. */
@@ -76,6 +72,12 @@ export type ServingOperation = { kind: "served"; method: HttpMethod; path: strin
 
 /** A workspace read once for a set of hypotheses: everything a hypothesis does not change. */
 export interface PreparedWorkspace {
+  /** The fact envelope of an answer over this workspace; its config declares what was asked. */
+  base(asked: Pick<DeclaredConfig, "hypotheses" | "base" | "head">): FactBase;
+  /** Each repository the workspace read resolved, with its snapshot, sorted by repository. */
+  repositorySnapshots: readonly { repo: string; snapshot: SnapshotRef }[];
+  /** What the reading of the snapshots already cut, such as an export budget. */
+  cuts: readonly Cut[];
   /** The session of one hypothesis on this workspace; it stays valid until the holder of the workspace releases it. */
   session(hypothesis: Hypothesis): Promise<Result<ConsumerSession, WorkspaceFault>>;
 }

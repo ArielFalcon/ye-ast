@@ -57,10 +57,7 @@ import { createAngularDeclarationReader } from "../core/adapters/typescript/angu
 import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
 import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loads.adapter.ts";
 import { composeAngularRelations } from "./angular-relations.ts";
-import { composeConsumerSources } from "./consumer-queries.ts";
-import { composeContractChangeQueries } from "./contract-change-queries.ts";
-import { createContractConsequencesQueries } from "../core/application/contracts/contract-consequences-queries.ts";
-import type { ContractChangeQueries } from "../core/ports/contract-change-queries.port.ts";
+import { composeConsumerSources, composeContractConsequences } from "./consumer-queries.ts";
 import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { CallSite, CallSiteReader, PlacedCallSiteReader } from "../core/domain/topology/call-site.ts";
@@ -84,7 +81,7 @@ import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
-import { measuredDecisions, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredTrace, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
+import { measuredContractConsequences, measuredDecisions, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredTrace, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
 
 const PRODUCER_NAME = "ye-ast";
 export const LIVE_STAGING_VERSION = `${STAGING_RULES_VERSION}:${WRITTEN_UNIVERSE_VERSION}`;
@@ -135,10 +132,8 @@ export interface ComposedQueries {
   trace: TraceQueries;
   workspace: WorkspaceQueries;
   workspaceImpact: WorkspaceImpactQueries;
-  /** What changing one property of an operation's response does to the code that consumes it (RFC-0022); a library surface only. */
+  /** What changing the contract of an operation, by hypothesis or between two revisions, does to the code that consumes it (RFC-0022, RFC-0023); a library surface only until the MCP, CLI and protocol expose it. */
   contractConsequences: ContractConsequencesQueries;
-  /** What a change between two revisions did to the responses of the operations and what consumes them at the head (RFC-0022 P4); a library surface only. */
-  contractChanges: ContractChangeQueries;
   decisions: DecisionQueries;
   redaction: Redaction;
   /** The name a repository answers to: the directory name of its main worktree, which every linked worktree shares. */
@@ -342,11 +337,11 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     return measurement === undefined ? operationImpact : measuredImpact(operationImpact, measurement);
   } });
   const consumerSources = composeConsumerSources({ operation, heads: headDeps, digest, engines: { ...headDeps.engines, ...impactDeps.angularEngines }, importOrigins });
-  const contractConsequences = createContractConsequencesQueries({ sources: consumerSources });
-  const contractChanges = composeContractChangeQueries({ sources: consumerSources, heads: headDeps, contracts });
+  const bareContractConsequences = composeContractConsequences({ sources: consumerSources, heads: headDeps, contracts });
+  const contractConsequences = measurement === undefined ? bareContractConsequences : measuredContractConsequences(bareContractConsequences, measurement);
   const bareDecisions = createCapturedDecisionQueries({ operation, defaults, vcs, digest });
   const decisions = measurement === undefined ? bareDecisions : measuredDecisions(bareDecisions, measurement);
-  return { version, entrypoints, impact, outline, trace, workspace, workspaceImpact, contractConsequences, contractChanges, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
+  return { version, entrypoints, impact, outline, trace, workspace, workspaceImpact, contractConsequences, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
 }
 
 export function composeCli(options: CompositionOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {

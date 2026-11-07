@@ -1,21 +1,20 @@
 import { formatAccessPath } from "../../domain/contracts/access-path.ts";
-import { writtenChange } from "../../domain/contracts/change.ts";
-import type { ConsequencesValue } from "../../domain/contracts/consequence-fact.ts";
+import type { ChangeFrontier, ConsequencesValue, DerivationValue } from "../../domain/contracts/consequence-fact.ts";
 import type { ResponseHypothesis } from "../../domain/contracts/hypothesis.ts";
 import type { OperationShape } from "../../domain/contracts/payload-shape.ts";
-import { deriveChanges } from "../../domain/contracts/shape-derivation.ts";
+import { deriveChanges, type DerivationFrontier, type RetiredValue } from "../../domain/contracts/shape-derivation.ts";
 import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { Cut, Evidence, Fact } from "../../domain/shared/fact.ts";
+import { withCuts, type Evidence, type UnknownReason } from "../../domain/shared/fact.ts";
+import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
 import type { Result } from "../../domain/shared/result.ts";
-import type { ChangeFrontier, ContractChangeFault, ContractChangeQueries, DerivedConsequences, GainedGuaranteeItem } from "../../ports/contract-change-queries.port.ts";
-import type { ConsequencesFault } from "../../ports/contract-consequences-queries.port.ts";
+import type { ConsequencesFault, ContractConsequencesQueries } from "../../ports/contract-consequences-queries.port.ts";
 import type { ConsumerSources, ServingWorkspace, ServingOperation } from "../../ports/consumer-sources.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PayloadShapes } from "../../ports/payload-shapes.port.ts";
 import type { RevisionSources } from "../../ports/revision-sources.port.ts";
 import type { WorkspaceRequest } from "../../ports/workspace-queries.port.ts";
-import { consequencesOn } from "./contract-consequences-queries.ts";
+import { answerOn, assemble, type Answered } from "./contract-consequences-queries.ts";
 
 export interface ContractChangeDeps {
   sources: ConsumerSources;
@@ -24,46 +23,67 @@ export interface ContractChangeDeps {
   shapes: readonly PayloadShapes[];
 }
 
-export function createContractChangeQueries({ sources, revisions, shapes }: ContractChangeDeps): ContractChangeQueries {
-  return {
-    async consequencesOfChange({ workspace, base, head }) {
-      if (workspace.repo.live === true) return contradiction("the consequences of a change between revisions are answered on its head commit, never on the working tree");
-      const baseSha = await revisions.resolve(workspace, base);
-      if (!baseSha.ok) return baseSha;
-      const headSha = await revisions.resolve(workspace, head);
-      if (!headSha.ok) return headSha;
-      if (workspace.repo.revision !== undefined) {
-        const bound = await revisions.resolve(workspace, workspace.repo.revision);
-        if (!bound.ok) return bound;
-        if (bound.value !== headSha.value) return contradiction(`the workspace is bound to ${workspace.repo.revision} (${bound.value}) but the head of the change is ${head} (${headSha.value})`);
-      }
-      const pinned: WorkspaceRequest = { ...workspace, repo: { ...workspace.repo, revision: headSha.value } };
+/**
+ * What a change between two revisions did to the response of each operation, from the contract both revisions state, and
+ * what depends on it at the head: the hypotheses the change derives are answered on the one workspace this call prepares.
+ */
+export function createContractChange({ sources, revisions, shapes }: ContractChangeDeps): ContractConsequencesQueries["ofChange"] {
+  return async ({ base, head, ...workspace }) => {
+    if (workspace.repo.live === true) return contradiction("the consequences of a change between revisions are answered on its head commit, never on the working tree");
+    const baseSha = await revisions.resolve(workspace, base);
+    if (!baseSha.ok) return baseSha;
+    const headSha = await revisions.resolve(workspace, head);
+    if (!headSha.ok) return headSha;
+    if (workspace.repo.revision !== undefined) {
+      const bound = await revisions.resolve(workspace, workspace.repo.revision);
+      if (!bound.ok) return bound;
+      if (bound.value !== headSha.value) return contradiction(`the workspace is bound to ${workspace.repo.revision} (${bound.value}) but the head of the change is ${head} (${headSha.value})`);
+    }
+    const pinned: WorkspaceRequest = { ...workspace, repo: { ...workspace.repo, revision: headSha.value } };
+    return sources.withWorkspace(pinned, async (prepared) => {
+      const factBase = prepared.base({ base, head });
+      const place = (evidence: Evidence): RepositoryEvidence => ({ ...evidence, repo: factBase.snapshot.repo });
+      const derivationBase = { ...factBase, evidence: [] };
       const before = await revisions.filesAt(pinned, baseSha.value);
-      if (!before.ok) return before;
       const after = await revisions.filesAt(pinned, headSha.value);
-      if (!after.ok) return after;
-      const snapshots = { base: baseSha.value, head: headSha.value };
-      const cuts = mergedCuts([...before.value.cuts, ...after.value.cuts]);
-      if (!sourcesDiffer(before.value.files, after.value.files)) return { ok: true, value: { base, head, snapshots, derived: [], gained: [], frontiers: [], operations: { added: [], removed: [] }, cuts } };
-      const answered = await sources.withWorkspace(pinned, async (prepared) => {
+      const answered: Answered[] = [];
+      let derivation: NonNullable<ConsequencesValue["change"]>["derivation"] = { ...derivationBase, status: "unknown", reason: "revision-unavailable" };
+      if (before.ok && after.ok) {
         const plan = planChange(before.value.files, after.value.files, shapes, prepared.serving);
-        const results: Result<Fact<ConsequencesValue>, ConsequencesFault>[] = [];
-        for (const { hypothesis } of plan.hypotheses) results.push(await consequencesOn(prepared, hypothesis));
-        return { plan, results };
-      });
-      if (!answered.ok) return answered;
-      const { plan, results } = answered.value;
-      const derived = plan.hypotheses.map(({ hypothesis, operation, property, places }, index): DerivedConsequences => ({ operation, property, change: writtenChange(hypothesis.change), places, consequences: results[index]! }));
-      return { ok: true, value: { base, head, snapshots, derived, gained: plan.gained, frontiers: plan.frontiers, operations: plan.operations, cuts } };
-    },
+        for (const { hypothesis, operation, property, places } of plan.hypotheses) answered.push(await answerOn(prepared, factBase, hypothesis, { operation, property, places: { base: place(places.base), head: place(places.head) } }));
+        const value: DerivationValue = {
+          gained: plan.gained.map(({ places, ...gained }) => ({ ...gained, places: { base: place(places.base), head: place(places.head) } })),
+          operations: plan.operations,
+          frontiers: plan.frontiers.map(({ evidence, reason, ...frontier }): ChangeFrontier => ({ status: "unknown", reason: reason ?? defaultReason(frontier.kind), ...frontier, evidence: evidence.map(place) })),
+        };
+        derivation = withCuts(derivationBase, value, [...prepared.cuts, ...before.value.cuts, ...after.value.cuts]);
+      }
+      return assemble(prepared, factBase, answered, { base, head, snapshots: { base: baseSha.value, head: headSha.value }, derivation });
+    });
   };
 }
 
-const contradiction = (detail: string): Result<never, ContractChangeFault> => ({ ok: false, fault: { kind: "contradictory-revisions", detail } });
+const defaultReason = (kind: ChangeFrontier["kind"]): UnknownReason => (kind === "unreadable-contract" ? "source-unreadable" : "unresolved");
 
-function mergedCuts(cuts: readonly Cut[]): Cut[] {
-  const unique = new Map(cuts.map((cut) => [JSON.stringify([cut.kind, cut.at, cut.limit]), cut]));
-  return [...unique.values()].sort((a, b) => compareText(a.kind, b.kind) || compareText(a.at.join("\0"), b.at.join("\0")));
+const contradiction = (detail: string): Result<never, ConsequencesFault> => ({ ok: false, fault: { kind: "contradictory-revisions", detail } });
+
+/** A guarantee the head gives that the base did not, before it is placed in a repository. */
+interface PlannedGain {
+  operation: string;
+  property: string;
+  retired: RetiredValue;
+  places: { base: Evidence; head: Evidence };
+}
+
+/** A place the change could not be derived at, before it is placed in a repository. */
+interface PlannedFrontier {
+  kind: DerivationFrontier["kind"] | "ambiguous-operation" | "unserved-operation" | "unreadable-contract";
+  operation?: string;
+  property?: string;
+  side?: "base" | "head";
+  reason?: UnknownReason;
+  detail?: string;
+  evidence: readonly Evidence[];
 }
 
 export interface PlannedHypothesis {
@@ -75,8 +95,8 @@ export interface PlannedHypothesis {
 
 export interface ChangePlan {
   hypotheses: readonly PlannedHypothesis[];
-  gained: readonly GainedGuaranteeItem[];
-  frontiers: readonly ChangeFrontier[];
+  gained: readonly PlannedGain[];
+  frontiers: readonly PlannedFrontier[];
   operations: { added: readonly string[]; removed: readonly string[] };
 }
 
@@ -104,8 +124,8 @@ interface Reading {
  */
 export function planChange(baseFiles: readonly SourceFile[], headFiles: readonly SourceFile[], shapes: readonly PayloadShapes[], serving: ServingWorkspace["serving"]): ChangePlan {
   const hypotheses: PlannedHypothesis[] = [];
-  const gained: GainedGuaranteeItem[] = [];
-  const frontiers: ChangeFrontier[] = [];
+  const gained: PlannedGain[] = [];
+  const frontiers: PlannedFrontier[] = [];
   const operations = { added: [] as string[], removed: [] as string[] };
   if (!sourcesDiffer(baseFiles, headFiles)) return { hypotheses, gained, frontiers, operations };
   const before = read(baseFiles, shapes, serving);
@@ -140,7 +160,7 @@ export function planChange(baseFiles: readonly SourceFile[], headFiles: readonly
 }
 
 /** Why an operation cannot be followed from its entries, when it cannot: declared more than once, undecided servers, or not exactly one route that serves it. */
-function undecidedOperation(entries: readonly Held[], repeated: boolean): Pick<ChangeFrontier, "kind" | "detail"> | undefined {
+function undecidedOperation(entries: readonly Held[], repeated: boolean): Pick<PlannedFrontier, "kind" | "detail"> | undefined {
   if (repeated) return { kind: "ambiguous-operation", detail: "declared more than once" };
   if (entries.some(({ shape }) => shape.basePath === undefined)) return { kind: "ambiguous-operation", detail: "servers disagree" };
   const several = entries.find(({ unserved }) => unserved?.kind === "ambiguous")?.unserved;

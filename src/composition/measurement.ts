@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import type { SnapshotCacheEvent } from "../core/application/snapshot/snapshot-data-cache.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import { INDEX_STORE_DIRECTORY, type CodeGraph } from "../core/ports/code-graph.port.ts";
+import type { ContractConsequencesQueries } from "../core/ports/contract-consequences-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
 import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
@@ -49,6 +50,13 @@ export function measuredTrace(queries: TraceQueries, deps: MeasurementDeps): Tra
 
 export function measuredWorkspace(queries: WorkspaceQueries, deps: MeasurementDeps): WorkspaceQueries {
   return { outwardNames: (request) => measured("workspace.outwardNames", () => queries.outwardNames(request), deps) };
+}
+
+export function measuredContractConsequences(queries: ContractConsequencesQueries, deps: MeasurementDeps): ContractConsequencesQueries {
+  return {
+    ofHypotheses: (request) => measured("contractConsequences.ofHypotheses", () => queries.ofHypotheses(request), deps),
+    ofChange: (request) => measured("contractConsequences.ofChange", () => queries.ofChange(request), deps),
+  };
 }
 
 export function measuredDecisions(queries: DecisionQueries, deps: MeasurementDeps): DecisionQueries {

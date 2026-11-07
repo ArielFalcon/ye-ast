@@ -5,30 +5,36 @@ import type { Result } from "../domain/shared/result.ts";
 import type { WorkspaceRequest } from "./workspace-queries.port.ts";
 import type { WorkspaceFault } from "./workspace-repos.port.ts";
 
-export interface ConsequencesRequest extends WorkspaceRequest {
-  hypothesis: HypothesisInput;
+/** One or more written hypotheses, answered together on one workspace. */
+export interface HypothesesRequest extends WorkspaceRequest {
+  hypotheses: readonly HypothesisInput[];
 }
 
-export interface EachConsequencesRequest extends WorkspaceRequest {
-  hypotheses: readonly HypothesisInput[];
+/** A change between two revisions of the bound repository, at its `head`, never live. */
+export interface ChangeRequest extends WorkspaceRequest {
+  base: string;
+  head: string;
 }
 
 export type ConsequencesFault =
   | WorkspaceFault
-  | { kind: "invalid-hypothesis"; detail: string; refusal: HypothesisRefusal }
-  /** No repository of the workspace serves the operation, so there is no contract to change. */
-  | { kind: "unknown-operation"; detail: string; operation: string };
+  /** The hypothesis at `index` of the request is refused, so nothing is answered. */
+  | { kind: "invalid-hypothesis"; detail: string; index: number; refusal: HypothesisRefusal }
+  | { kind: "contradictory-revisions"; detail: string };
 
 export interface ContractConsequencesQueries {
   /**
-   * Follows the response of one operation from each call site that a qualified link joins to it, to the code that uses the
-   * changed property, and gives each use a verdict with the chain that proves it. A place where the flow cannot be
-   * followed is an `unknown` item with its location and cause; an answer without items is never "safe" on its own.
+   * Follows the response of each operation from each call site that a qualified link joins to it, to the code that uses
+   * the changed property, and gives each use a verdict with the chain that proves it; a request hypothesis follows the
+   * producers of the body instead. Answers come in the order asked. A hypothesis no repository serves is an `unknown`
+   * answer, and a place where a flow cannot be followed is an `unknown` finding with its location and cause: an
+   * answer without findings is never "safe" on its own.
    */
-  consequences(request: ConsequencesRequest): Promise<Result<Fact<ConsequencesValue>, ConsequencesFault>>;
+  ofHypotheses(request: HypothesesRequest): Promise<Result<Fact<ConsequencesValue>, ConsequencesFault>>;
   /**
-   * The consequences of several hypotheses on one workspace, prepared once and released when the last one is answered;
-   * answers come in the order asked. A workspace that cannot be read fails them all; an invalid hypothesis is its own fault.
+   * What a change between two revisions did to the response of each operation, from the contract both revisions state,
+   * and what depends on it at the head. An operation or place whose shape cannot be stated is a frontier of the
+   * derivation, never silence.
    */
-  consequencesOfEach(request: EachConsequencesRequest): Promise<Result<readonly Result<Fact<ConsequencesValue>, ConsequencesFault>[], WorkspaceFault>>;
+  ofChange(request: ChangeRequest): Promise<Result<Fact<ConsequencesValue>, ConsequencesFault>>;
 }

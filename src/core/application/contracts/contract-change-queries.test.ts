@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { KnownShape, OperationShape, Shape, ShapeProperty, ValueSet } from "../../domain/contracts/payload-shape.ts";
-import type { Cut, Finding } from "../../domain/shared/fact.ts";
+import type { Cut, FactBase, Finding } from "../../domain/shared/fact.ts";
 import type { ConsumerSession, ConsumerSources, ServingWorkspace, ServingOperation } from "../../ports/consumer-sources.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PayloadShapes } from "../../ports/payload-shapes.port.ts";
 import type { WorkspaceRequest } from "../../ports/workspace-queries.port.ts";
 import type { RevisionSources } from "../../ports/revision-sources.port.ts";
-import { createContractChangeQueries, planChange } from "./contract-change-queries.ts";
+import { createContractChange, planChange } from "./contract-change-queries.ts";
+import { createContractConsequencesQueries } from "./contract-consequences-queries.ts";
 
 const set = (overrides: Partial<ValueSet> = {}): ValueSet => ({ literals: { boolean: [], number: [], string: [] }, array: false, object: false, null: false, absent: false, ...overrides });
 const TEXT: KnownShape = { kind: "known", values: set({ literals: { boolean: [], number: [], string: "every" } }) };
@@ -168,72 +169,160 @@ test("a gained guarantee is listed with its operation, property and places; a pl
   assert.deepEqual(plan.frontiers[0]!.evidence, unknown.evidence);
 });
 
+const BASE: FactBase = {
+  schema: "0.21.0",
+  snapshot: { repo: "web", kind: "sha", sha: "a".repeat(40) },
+  producer: { name: "ye-ast", version: "0.0.0" },
+  inputs: { trust: "untrusted", scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "k", declaredConfig: {}, engines: {} },
+  evidence: [],
+};
+const SNAPSHOTS = [{ repo: "web", snapshot: BASE.snapshot }];
 const REQUEST = { repo: { repo: "web", path: "/work/web" } as WorkspaceRequest["repo"] } as WorkspaceRequest;
 
+interface Options {
+  /** A server of the operations is in the workspace, so a hypothesis is answered instead of unknown. */
+  served?: boolean;
+  /** The commits whose sources cannot be read. */
+  unreadable?: readonly string[];
+  workspaceCuts?: readonly Cut[];
+}
+
 /** `refs` names the commit a revision resolves to (itself when absent); `files` holds the sources per commit. */
-function setup(files: Record<string, readonly SourceFile[]>, refs: Record<string, string> = {}, cuts: Record<string, readonly Cut[]> = {}) {
+function setup(files: Record<string, readonly SourceFile[]>, refs: Record<string, string> = {}, cuts: Record<string, readonly Cut[]> = {}, options: Options = {}) {
   const events: string[] = [];
   const opened: WorkspaceRequest[] = [];
   const shaOf = (revision: string): string => refs[revision] ?? revision;
   const revisions: RevisionSources = {
     resolve: async (_, revision) => (files[shaOf(revision)] === undefined ? { ok: false, fault: { kind: "unknown-revision", detail: revision } } : { ok: true, value: shaOf(revision) }),
-    filesAt: async (request, sha) => (events.push(`read ${sha} at ${request.repo.revision}`), { ok: true, value: { files: files[sha]!, cuts: cuts[sha] ?? [] } }),
+    filesAt: async (request, sha) => (events.push(`read ${sha} at ${request.repo.revision}`), options.unreadable?.includes(sha) === true ? { ok: false, fault: { kind: "git-failed", detail: sha } } : { ok: true, value: { files: files[sha]!, cuts: cuts[sha] ?? [] } }),
   };
-  const session = { serving: [] } as unknown as ConsumerSession;
+  const session = { serving: options.served === true ? [{ repo: "api", handler: { path: "Pets.java", symbol: "list", line: 3 } }] : [], links: [], unresolvedCalls: [], ambiguousCalls: [] } as unknown as ConsumerSession;
   const sources: ConsumerSources = {
     withWorkspace: async (request, run) => {
       events.push("open");
       opened.push(request);
-      const value = await run({ serving: asWritten, session: async (hypothesis) => (events.push(`session ${hypothesis.method} ${hypothesis.path} ${hypothesis.property.join(".")}`), { ok: true, value: session }) });
+      const value = await run({
+        base: (declared) => ({ ...BASE, inputs: { ...BASE.inputs, declaredConfig: declared } }),
+        repositorySnapshots: SNAPSHOTS,
+        cuts: options.workspaceCuts ?? [],
+        serving: asWritten,
+        session: async (hypothesis) => (events.push(`session ${hypothesis.method} ${hypothesis.path} ${hypothesis.property.join(".")}`), { ok: true, value: session }),
+      });
       events.push("close");
       return { ok: true, value };
     },
   };
-  return { events, opened, queries: createContractChangeQueries({ sources, revisions, shapes: [reader("declared")] }) };
+  const queries = createContractConsequencesQueries({ sources, ofChange: createContractChange({ sources, revisions, shapes: [reader("declared")] }) });
+  const ask = async (request: WorkspaceRequest = REQUEST, base = "base", head = "head") => queries.ofChange({ ...request, base, head });
+  return { events, opened, queries, ask };
 }
 
-test("the consequences of every derived hypothesis are answered on one prepared workspace, in order, and an operation nothing serves stays an answer of its own", async () => {
-  const { events, queries } = setup({ base: [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_BASE }])], head: [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_HEAD }])] });
-  const answer = await queries.consequencesOfChange({ workspace: REQUEST, base: "base", head: "head" });
-  assert.ok(answer.ok);
-  assert.deepEqual(events.filter((event) => !event.startsWith("read")), ["open", "session GET /pets city", "session GET /pets zip", "close"]);
-  assert.deepEqual(answer.value.derived.map(({ operation, property: at, change, consequences }) => [operation, at, change, !consequences.ok && consequences.fault.kind]), [["GET /pets", "city", "nullable", "unknown-operation"], ["GET /pets", "zip", "nullable", "unknown-operation"]]);
-  assert.deepEqual([answer.value.base, answer.value.head, answer.value.snapshots], ["base", "head", { base: "base", head: "head" }]);
-});
+/** The composite a change answers, which is never a global unknown while the workspace is read. */
+async function composite(answered: ReturnType<ReturnType<typeof setup>["ask"]>) {
+  const answer = await answered;
+  assert.ok(answer.ok && answer.value.status !== "unknown");
+  const { change } = answer.value.value;
+  assert.ok(change !== undefined);
+  return { fact: answer.value, value: answer.value.value, change };
+}
 
-test("a change that derives no hypothesis never opens the workspace, and an unreadable revision is the fault of the answer", async () => {
-  const same = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_BASE }])];
-  const { events, queries } = setup({ base: same, head: same });
-  const answer = await queries.consequencesOfChange({ workspace: REQUEST, base: "base", head: "head" });
-  assert.deepEqual([answer.ok && answer.value.derived, events.includes("open")], [[], false]);
-  const missing = await queries.consequencesOfChange({ workspace: REQUEST, base: "base", head: "gone" });
-  assert.deepEqual([missing.ok, !missing.ok && missing.fault.kind, events.includes("open")], [false, "unknown-revision", false]);
-});
+const sectionCuts = (fact: { status: string; cuts?: readonly Cut[] }) => (fact.status === "partial" ? fact.cuts!.map((cut) => cut.at.join()) : []);
 
 const CHANGED = { base: [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_BASE }])], head: [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_HEAD }])] };
 
+test("the hypotheses a change derives are answered on one preparation in the order of operation then property, each stating what it derived from and where, and the composite names what it read", async () => {
+  const base = [fileOf("api/openapi.json", [{ path: "/zoo", shape: PET_BASE }, { path: "/pets", shape: PET_BASE }])];
+  const head = [fileOf("api/openapi.json", [{ path: "/zoo", shape: PET_HEAD }, { path: "/pets", shape: PET_HEAD }])];
+  const { events, ask } = setup({ base, head });
+
+  const { fact, value, change } = await composite(ask());
+
+  assert.deepEqual(events.filter((event) => !event.startsWith("read")), ["open", "session GET /pets city", "session GET /pets zip", "session GET /zoo city", "session GET /zoo zip", "close"]);
+  assert.deepEqual(value.answers.map(({ derivedFrom }) => [derivedFrom?.operation, derivedFrom?.property]), [["GET /pets", "city"], ["GET /pets", "zip"], ["GET /zoo", "city"], ["GET /zoo", "zip"]]);
+  assert.deepEqual(value.answers[0]!.derivedFrom!.places, { base: { path: "api/openapi.json", line: 2, via: "declared", repo: "web" }, head: { path: "api/openapi.json", line: 2, via: "declared", repo: "web" } });
+  assert.deepEqual(value.answers[0]!.oldContract, TEXT.values);
+  assert.deepEqual([change.base, change.head, change.snapshots], ["base", "head", { base: "base", head: "head" }]);
+  assert.deepEqual([fact.inputs.declaredConfig.base, fact.inputs.declaredConfig.head, value.repositorySnapshots], ["base", "head", SNAPSHOTS]);
+  assert.equal(change.derivation.status, "complete");
+  assert.deepEqual([fact.status, sectionCuts(fact)], ["partial", ["answers.0", "answers.1", "answers.2", "answers.3"]]);
+});
+
+test("both revisions read and compared with nothing derived is a complete composite that still holds the change, and a frontier it recorded makes it visible without making it partial", async () => {
+  const same = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_BASE }])];
+  const nothing = await composite(setup({ base: same, head: same }).ask());
+  assert.deepEqual([nothing.fact.status, nothing.value.answers, nothing.change.derivation.status, nothing.change.snapshots], ["complete", [], "complete", { base: "base", head: "head" }]);
+
+  const ambiguous = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_BASE }, { path: "/pets", shape: PET_BASE }])];
+  const recorded = await composite(setup({ base: ambiguous, head: [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_HEAD }, { path: "/pets", shape: PET_HEAD }])] }).ask());
+  assert.deepEqual([recorded.fact.status, recorded.value.answers, recorded.change.derivation.status], ["complete", [], "complete"]);
+  assert.ok(recorded.change.derivation.status === "complete");
+  assert.deepEqual(recorded.change.derivation.value.frontiers.map(({ kind, operation, evidence }) => [kind, operation, evidence.map((place) => place.repo)]), [["ambiguous-operation", "GET /pets", ["web", "web", "web", "web"]]]);
+});
+
+test("complete answers beside a derivation that records frontiers are a complete composite, with the frontiers placed in their repository", async () => {
+  const unknown: Shape = { kind: "unknown", reason: "unresolved", evidence: [{ path: "api/openapi.json", line: 1, via: "oneOf" }] };
+  const base = [fileOf("api/openapi.json", [{ path: "/pets", shape: object(property("city", TEXT), property("owner", TEXT)) }])];
+  const head = [fileOf("api/openapi.json", [{ path: "/pets", shape: object(property("city", NULLABLE_TEXT), property("owner", unknown)) }])];
+
+  const { fact, value, change } = await composite(setup({ base, head }, {}, {}, { served: true }).ask());
+
+  assert.deepEqual(value.answers.map((answer) => answer.status), ["complete"]);
+  assert.ok(change.derivation.status === "complete");
+  assert.deepEqual(change.derivation.value.frontiers.map(({ kind, status, reason, evidence }) => [kind, status, reason, evidence]), [["unknown-shape", "unknown", "unresolved", [{ path: "api/openapi.json", line: 1, via: "oneOf", repo: "web" }]]]);
+  assert.equal(fact.status, "complete");
+});
+
+test("what reading either revision left out stays on the derivation, once and sorted, and makes the composite partial with the derivation as its only cut, with or without a derived hypothesis", async () => {
+  const cut = (kind: Cut["kind"], path: string): Cut => ({ kind, at: [path] });
+  const cuts = { base: [cut("not-exported", "b.java"), cut("not-exported", "a.java")], head: [cut("not-exported", "a.java"), cut("caller-budget", "z.json")] };
+  const expected = [cut("caller-budget", "z.json"), cut("not-exported", "a.java"), cut("not-exported", "b.java")];
+  const same = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_BASE }])];
+
+  for (const files of [{ base: same, head: same }, CHANGED]) {
+    const { fact, value, change } = await composite(setup(files, {}, cuts, { served: true }).ask());
+    assert.ok(change.derivation.status === "partial");
+    assert.deepEqual(change.derivation.cuts, expected);
+    assert.deepEqual([fact.status, sectionCuts(fact)], ["partial", ["change.derivation"]]);
+    assert.ok(value.answers.every((answer) => answer.status === "complete"));
+  }
+});
+
+test("a cut of the workspace read reaches the derivation, so a change with nothing derived is not complete over a workspace that was cut", async () => {
+  const same = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_BASE }])];
+  const cut: Cut = { kind: "not-exported", at: ["big.java"] };
+
+  const { fact, change } = await composite(setup({ base: same, head: same }, {}, {}, { workspaceCuts: [cut] }).ask());
+
+  assert.ok(change.derivation.status === "partial");
+  assert.deepEqual(change.derivation.cuts, [cut]);
+  assert.equal(fact.status, "partial");
+});
+
+test("a revision whose sources cannot be read leaves the derivation unknown with its reason, the composite partial and the change retained", async () => {
+  const { fact, value, change } = await composite(setup({ base: CHANGED.base, head: CHANGED.head }, {}, {}, { unreadable: ["head"] }).ask());
+
+  assert.ok(change.derivation.status === "unknown");
+  assert.equal(change.derivation.reason, "revision-unavailable");
+  assert.deepEqual([fact.status, sectionCuts(fact), value.answers, change.snapshots], ["partial", ["change.derivation"], [], { base: "base", head: "head" }]);
+});
+
 test("both revisions are read at the commits they resolve to, and the consequences are answered on the head commit even when the request names a ref that moves", async () => {
-  const { events, opened, queries } = setup({ b1: CHANGED.base, h1: CHANGED.head }, { base: "b1", head: "h1", main: "h1" });
-  const request = { ...REQUEST, repo: { ...REQUEST.repo, revision: "main" } } as WorkspaceRequest;
-  const answer = await queries.consequencesOfChange({ workspace: request, base: "base", head: "head" });
-  assert.ok(answer.ok);
+  const { events, opened, ask } = setup({ b1: CHANGED.base, h1: CHANGED.head }, { base: "b1", head: "h1", main: "h1" });
+
+  const { change } = await composite(ask({ ...REQUEST, repo: { ...REQUEST.repo, revision: "main" } } as WorkspaceRequest));
+
   assert.deepEqual(events.filter((event) => event.startsWith("read")), ["read b1 at h1", "read h1 at h1"]);
   assert.deepEqual(opened.map(({ repo }) => repo.revision), ["h1"]);
-  assert.deepEqual(answer.value.snapshots, { base: "b1", head: "h1" });
+  assert.deepEqual(change.snapshots, { base: "b1", head: "h1" });
 });
 
-test("a workspace bound to another commit than the head of the change, or read live, is refused before anything is read", async () => {
-  const { events, queries } = setup({ b1: CHANGED.base, h1: CHANGED.head, h2: CHANGED.head }, { base: "b1", head: "h1", main: "h2" });
-  const moved = await queries.consequencesOfChange({ workspace: { ...REQUEST, repo: { ...REQUEST.repo, revision: "main" } } as WorkspaceRequest, base: "base", head: "head" });
-  const live = await queries.consequencesOfChange({ workspace: { ...REQUEST, repo: { ...REQUEST.repo, live: true } } as WorkspaceRequest, base: "base", head: "head" });
-  assert.deepEqual([moved.ok, !moved.ok && moved.fault.kind, live.ok, !live.ok && live.fault.kind], [false, "contradictory-revisions", false, "contradictory-revisions"]);
+test("a revision that does not resolve, a workspace bound to another commit than the head, or one read live, is refused before anything is read", async () => {
+  const { events, ask } = setup({ b1: CHANGED.base, h1: CHANGED.head, h2: CHANGED.head }, { base: "b1", head: "h1", main: "h2" });
+
+  const missing = await ask(REQUEST, "base", "gone");
+  const moved = await ask({ ...REQUEST, repo: { ...REQUEST.repo, revision: "main" } } as WorkspaceRequest);
+  const live = await ask({ ...REQUEST, repo: { ...REQUEST.repo, live: true } } as WorkspaceRequest);
+
+  assert.deepEqual([missing, moved, live].map((answer) => !answer.ok && answer.fault.kind), ["unknown-revision", "contradictory-revisions", "contradictory-revisions"]);
   assert.deepEqual(events, []);
-});
-
-test("what reading either revision left out is carried once, sorted, beside the derivation", async () => {
-  const cut = (kind: Cut["kind"], path: string): Cut => ({ kind, at: [path] });
-  const { queries } = setup({ base: CHANGED.base, head: CHANGED.head }, {}, { base: [cut("not-exported", "b.java"), cut("not-exported", "a.java")], head: [cut("not-exported", "a.java"), cut("caller-budget", "z.json")] });
-  const answer = await queries.consequencesOfChange({ workspace: REQUEST, base: "base", head: "head" });
-  assert.ok(answer.ok);
-  assert.deepEqual(answer.value.cuts, [cut("caller-budget", "z.json"), cut("not-exported", "a.java"), cut("not-exported", "b.java")]);
 });

@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ConsequencesValue } from "../core/domain/contracts/consequence-fact.ts";
-import type { Finding } from "../core/domain/shared/fact.ts";
+import type { HypothesisAnswer } from "../core/domain/contracts/consequence-fact.ts";
 import { composeQueries } from "./compose.ts";
 
 const GIT_ENV = {
@@ -126,21 +125,23 @@ function workspace(): void {
 }
 
 function ask(change: string, repos: readonly string[] = ["web"], path = "/api/orders/{id}", bound = "api") {
-  return composeQueries({ scratchRoot }).contractConsequences.consequences({
+  return composeQueries({ scratchRoot }).contractConsequences.ofHypotheses({
     repo: { path: join(root, bound), id: bound },
     repos: repos.map((id) => ({ path: join(root, id), id })),
-    hypothesis: { method: "GET", path, target: "response", property: "customer", change },
+    hypotheses: [{ method: "GET", path, target: "response", property: "customer", change }],
   });
 }
 
 async function consequences(change: string, repos: readonly string[] = ["web"], path = "/api/orders/{id}", bound = "api") {
   const result = await ask(change, repos, path, bound);
   assert.ok(result.ok, JSON.stringify(result));
-  assert.notEqual(result.value.status, "unknown");
-  if (result.value.status === "unknown") throw new Error("unknown");  return result.value;
+  if (result.value.status === "unknown") throw new Error("unknown");
+  const [answer] = result.value.value.answers;
+  assert.ok(answer !== undefined);
+  return { status: result.value.status, inputs: result.value.inputs, snapshots: result.value.value.repositorySnapshots, value: answer };
 }
 
-const used = (value: ConsequencesValue, line: number) => {
+const used = (value: HypothesisAnswer, line: number) => {
   const found = value.findings.find((finding) => finding.status === "complete" && finding.evidence[0]?.line === line);
   return found?.status === "complete" ? found.value : undefined;
 };
@@ -178,14 +179,15 @@ test("the same flow under a removed property sends the guarded read to review, b
   assert.equal(used(fact.value, lineOf(TEMPLATE, "order.customer.name"))?.verdict.kind, "incompatible");
 });
 
-test("the answer declares the hypothesis in its config and leaves no scratch behind", async () => {
+test("the answer declares the hypothesis in its config, names the snapshot of every repository it read and leaves no scratch behind", async () => {
   workspace();
 
   const nullable = await consequences("nullable");
   const removed = await consequences("removed");
 
-  assert.equal(nullable.inputs.declaredConfig.hypothesis, "GET /api/orders/{id} response customer nullable");
+  assert.deepEqual(nullable.inputs.declaredConfig.hypotheses, ["GET /api/orders/{id} response customer nullable"]);
   assert.notEqual(nullable.inputs.config, removed.inputs.config);
+  assert.deepEqual(nullable.snapshots.map(({ repo }) => repo), ["api", "web"]);
   assert.deepEqual(readdirSync(scratchRoot), []);
 });
 
@@ -221,13 +223,13 @@ test("an operation served but with no call site linked to it is one unknown item
   assert.deepEqual(item.evidence.map(({ path, line, via }) => [path, line, via]), [["src/main/java/shop/OrdersController.java", lineOf(CONTROLLER, "@GetMapping("), "no-call-site"]]);
 });
 
-test("an operation no repository of the workspace serves is a typed fault, not an empty fact", async () => {
+test("an operation no repository of the workspace serves is an unknown answer in a partial composite, not a fault and not an empty fact", async () => {
   workspace();
 
   const result = await ask("nullable", ["web"], "/api/customers/{id}");
 
-  assert.ok(!result.ok);
-  assert.equal(result.fault.kind, "unknown-operation");
+  assert.ok(result.ok && result.value.status === "partial");
+  assert.deepEqual(result.value.value.answers.map((answer) => answer.status), ["unknown"]);
 });
 
 test("a value kept in a service field is not followed into a template: a class that is not a component has none", async () => {
@@ -274,4 +276,159 @@ test("a call site whose URL no read can evaluate is listed beside the missing li
     [SERVICE_FILE, lineOf(dynamic, "this.http.get"), "unresolved-call-site", "web"],
     ["src/main/java/shop/OrdersController.java", lineOf(CONTROLLER, "@GetMapping("), "no-call-site", "api"],
   ]);
+});
+
+// A change between two revisions.
+
+const DOCUMENT_FILE = "src/main/resources/openapi/api.json";
+
+const DOCUMENT = (customer: Record<string, unknown>): string => JSON.stringify({
+  openapi: "3.0.3",
+  info: { title: "Shop", version: "1" },
+  servers: [{ url: "http://localhost:8080/api" }],
+  paths: { "/orders/{id}": { get: { operationId: "findOrder", responses: { 200: { description: "ok", content: { "application/json": { schema: { $ref: "#/components/schemas/Order" } } } } } } } },
+  components: { schemas: { Order: { type: "object", required: ["id", "customer"], properties: { id: { type: "integer" }, customer } } } },
+}, null, 2);
+
+const CUSTOMER = { type: "object", required: ["name"], properties: { name: { type: "string" } } };
+
+const ORDER = (annotation: string): string => `package shop;
+
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
+public class Order {
+  private long id;
+  private Customer customer;
+
+  public long getId() { return id; }
+  ${annotation}
+  public Customer getCustomer() { return customer; }
+}
+`;
+
+const CUSTOMER_CLASS = `package shop;
+
+public class Customer {
+  private String name;
+
+  public String getName() { return name; }
+}
+`;
+
+
+const CONTROLLER_RETURNING = (returns: string): string => CONTROLLER.replace('public String find(@PathVariable long id) { return ""; }', `public ${returns} find(@PathVariable long id) { return null; }`);
+
+const git = (repo: string, ...args: string[]): string => execFileSync("git", args, { cwd: join(root, repo), env: GIT_ENV, encoding: "utf8" }).trim();
+
+function writeFiles(repo: string, files: Readonly<Record<string, string>>): void {
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, repo, path)), { recursive: true });
+    writeFileSync(join(root, repo, path), content);
+  }
+}
+
+/** Commits the files and answers the commit's sha. */
+function commitAt(repo: string, files: Readonly<Record<string, string>>): string {
+  writeFiles(repo, files);
+  if (!existsSync(join(root, repo, ".git"))) git(repo, "init", "-q", "-b", "main");
+  git(repo, "add", "-A");
+  git(repo, "commit", "-q", "-m", "change");
+  return git(repo, "rev-parse", "HEAD");
+}
+
+async function changeOfOrders(base: string, head: string) {
+  const answer = await composeQueries({ scratchRoot }).contractConsequences.ofChange({
+    repo: { path: join(root, "api"), id: "api" },
+    repos: [{ path: join(root, "web"), id: "web" }],
+    base,
+    head,
+  });
+  assert.ok(answer.ok, JSON.stringify(answer));
+  assert.notEqual(answer.value.status, "unknown");
+  if (answer.value.status === "unknown") throw new Error("unknown");
+  const { change } = answer.value.value;
+  assert.ok(change !== undefined && change.derivation.status !== "unknown");
+  const { derivation } = change;
+  const derived = answer.value.value.answers.map((one) => ({ operation: one.derivedFrom!.operation, property: one.derivedFrom!.property, change: one.hypothesis.change, places: one.derivedFrom!.places, answer: one }));
+  return { fact: answer.value, snapshots: change.snapshots, derived, derivation };
+}
+
+test("an OpenAPI schema that makes a property nullable derives the hypothesis between the two commits and answers it against the consumer that reads through it", async () => {
+  const base = commitAt("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER_RETURNING("String"), [DOCUMENT_FILE]: DOCUMENT(CUSTOMER) });
+  const head = commitAt("api", { [DOCUMENT_FILE]: DOCUMENT({ ...CUSTOMER, nullable: true }) });
+  commit("web", WEB);
+
+  const change = await changeOfOrders(base, head);
+
+  assert.deepEqual(change.snapshots, { base, head });
+  assert.deepEqual(change.derived.map(({ operation, property, change: kind }) => [operation, property, kind]), [["GET /api/orders/{id}", "customer", "nullable"]]);
+  assert.deepEqual(change.derived[0]!.places.head.path, DOCUMENT_FILE);
+  const unguarded = change.derived[0]!.answer.findings.find((finding) => finding.status === "complete" && finding.evidence[0]?.line === lineOf(TEMPLATE, "order.customer.name"));
+  assert.equal(unguarded?.status === "complete" && unguarded.value.verdict.kind, "incompatible");
+  assert.deepEqual([change.derivation.value.frontiers, change.derivation.status, change.fact.status], [[], "complete", "complete"]);
+  assert.deepEqual(readdirSync(scratchRoot), []);
+});
+
+test("a Spring DTO that stops serializing a property derives the hypothesis when the repository declares no document", async () => {
+  const files = (annotation: string) => ({ "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER_RETURNING("Order"), "src/main/java/shop/Order.java": ORDER(annotation), "src/main/java/shop/Customer.java": CUSTOMER_CLASS });
+  const base = commitAt("api", files(""));
+  const head = commitAt("api", files("@JsonIgnore"));
+  commit("web", WEB);
+
+  const change = await changeOfOrders(base, head);
+
+  assert.deepEqual(change.derived.map(({ operation, property, change: kind }) => [operation, property, kind]), [["GET /api/orders/{id}", "customer", "removed"]]);
+  assert.deepEqual(change.derived[0]!.places.head.path, "src/main/java/shop/OrdersController.java");
+  const unguarded = change.derived[0]!.answer.findings.find((finding) => finding.status === "complete" && finding.evidence[0]?.line === lineOf(TEMPLATE, "order.customer.name"));
+  assert.equal(unguarded?.status === "complete" && unguarded.value.verdict.kind, "incompatible");
+});
+
+test("an untrusted repository is read from its commits: an uncommitted edit of the working tree changes nothing", async () => {
+  const base = commitAt("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER_RETURNING("String"), [DOCUMENT_FILE]: DOCUMENT(CUSTOMER) });
+  const head = commitAt("api", { [DOCUMENT_FILE]: DOCUMENT({ ...CUSTOMER, nullable: true }) });
+  commit("web", WEB);
+  writeFiles("api", { [DOCUMENT_FILE]: DOCUMENT({ type: "string" }) });
+
+  const change = await changeOfOrders(base, head);
+
+  assert.deepEqual(change.derived.map(({ property, change: kind }) => [property, kind]), [["customer", "nullable"]]);
+});
+
+test("a schema a document references from outside the contract directory is part of the revision, so changing only that schema derives the hypothesis", async () => {
+  const document = JSON.parse(DOCUMENT(CUSTOMER));
+  document.paths["/orders/{id}"].get.responses[200].content["application/json"].schema = { $ref: "../../schemas/order.json" };
+  const schema = (customer: Record<string, unknown>) => JSON.stringify({ type: "object", required: ["customer"], properties: { customer } });
+  const base = commitAt("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER_RETURNING("String"), [DOCUMENT_FILE]: JSON.stringify(document), "src/main/schemas/order.json": schema(CUSTOMER) });
+  const head = commitAt("api", { "src/main/schemas/order.json": schema({ ...CUSTOMER, nullable: true }) });
+  commit("web", WEB);
+
+  const change = await changeOfOrders(base, head);
+
+  assert.deepEqual(change.derived.map(({ operation, property, change: kind }) => [operation, property, kind]), [["GET /api/orders/{id}", "customer", "nullable"]]);
+});
+
+test("a referenced schema the base revision does not hold is a frontier of the operation, never an unchanged one", async () => {
+  const document = JSON.parse(DOCUMENT(CUSTOMER));
+  document.paths["/orders/{id}"].get.responses[200].content["application/json"].schema = { $ref: "../../schemas/order.json" };
+  const base = commitAt("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER_RETURNING("String"), [DOCUMENT_FILE]: JSON.stringify(document) });
+  const head = commitAt("api", { "src/main/schemas/order.json": JSON.stringify({ type: "object", properties: { customer: CUSTOMER } }) });
+  commit("web", WEB);
+
+  const change = await changeOfOrders(base, head);
+
+  assert.deepEqual(change.derived, []);
+  assert.deepEqual(change.derivation.value.frontiers.map(({ kind, operation, side, reason }) => [kind, operation, side, reason]), [["unknown-shape", "GET /api/orders/{id}", "base", "unresolved"]]);
+  assert.deepEqual(change.derivation.value.frontiers[0]!.evidence[0], { path: DOCUMENT_FILE, line: 1, via: "unresolved reference ../../schemas/order.json", repo: "api" });
+});
+
+test("a document operation is named as the handler that serves it names it: a configured context path is not part of the hypothesis", async () => {
+  const handler = CONTROLLER_RETURNING("String").replace("/api/orders", "/orders");
+  const base = commitAt("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": handler, "src/main/resources/application.properties": "server.servlet.context-path=/api\n", [DOCUMENT_FILE]: DOCUMENT(CUSTOMER) });
+  const head = commitAt("api", { [DOCUMENT_FILE]: DOCUMENT({ ...CUSTOMER, nullable: true }) });
+  commit("web", WEB);
+
+  const change = await changeOfOrders(base, head);
+
+  assert.deepEqual(change.derived.map(({ operation, property }) => [operation, property]), [["GET /orders/{id}", "customer"]]);
+  assert.notEqual(change.derived[0]!.answer.status, "unknown");
 });

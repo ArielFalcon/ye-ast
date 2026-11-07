@@ -2,21 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseAccessPath } from "../../domain/contracts/access-path.ts";
 import { carrierKey, NO_FLOW, type Carrier, type FlowResult, type FlowUse } from "../../domain/contracts/consumer-flow.ts";
-import { derivedChange } from "../../domain/contracts/change.ts";
-import { formatHypothesis, parseHypothesis, type HypothesisInput } from "../../domain/contracts/hypothesis.ts";
-import type { ValueSet } from "../../domain/contracts/payload-shape.ts";
+import { type HypothesisInput } from "../../domain/contracts/hypothesis.ts";
 import type { Predicate } from "../../domain/contracts/use-operation.ts";
 import type { TestedGuard, UseOperation } from "../../domain/contracts/verdict.ts";
-import type { FactBase } from "../../domain/shared/fact.ts";
+import type { Cut, FactBase } from "../../domain/shared/fact.ts";
 import type { Link } from "../../domain/topology/link.ts";
-import type { ConsequencesRequest, ContractConsequencesQueries } from "../../ports/contract-consequences-queries.port.ts";
-import type { ConsumerCaller, ConsumerCallers, ConsumerMemberOccurrences, ConsumerSession, PreparedWorkspace, ServingWorkspace } from "../../ports/consumer-sources.port.ts";
+import type { HypothesesRequest, ContractConsequencesQueries } from "../../ports/contract-consequences-queries.port.ts";
+import type { ConsumerCaller, ConsumerCallers, ConsumerMemberOccurrences, ConsumerSession, ServingWorkspace } from "../../ports/consumer-sources.port.ts";
 import type { Origin } from "../../domain/contracts/request-origin.ts";
 import type { ArgumentOrigins, RequestOriginReader } from "../../ports/request-origins.port.ts";
-import { consequencesOn, createContractConsequencesQueries } from "./contract-consequences-queries.ts";
+import { createContractConsequencesQueries } from "./contract-consequences-queries.ts";
 
 const path = (text: string) => parseAccessPath(text)!;
 const OPERATION = "GET /owners/{id}";
+const SNAPSHOTS = [{ repo: "api", snapshot: { repo: "api", kind: "sha" as const, sha: "b".repeat(40) } }, { repo: "web", snapshot: { repo: "web", kind: "sha" as const, sha: "a".repeat(40) } }];
 
 const BASE: FactBase = {
   schema: "0.21.0",
@@ -65,6 +64,9 @@ interface Setup {
   method?: string;
   path?: string;
   origins?: Record<string, RequestOriginReader>;
+  cuts?: readonly Cut[];
+  /** The workspace cannot prepare a session for the hypothesis. */
+  sessionFault?: string;
 }
 
 function setup(options: Setup = {}) {
@@ -74,12 +76,10 @@ function setup(options: Setup = {}) {
   const asked: string[] = [];
   let preparations = 0;
   const session: ConsumerSession = {
-    base: BASE,
     links: options.links ?? [link()],
     serving: options.serving ?? [{ repo: "api", handler: { path: "Owners.java", symbol: "get", line: 5 } }],
     unresolvedCalls: options.unresolvedCalls ?? [],
     ambiguousCalls: options.ambiguousCalls ?? [],
-    cuts: [],
     callers: (declaration) => (asked.push(declaration.symbol), options.callers?.[declaration.symbol] ?? { kind: "found", callers: [] }),
     memberOccurrences: ({ member }) => options.members?.[member] ?? { kind: "found", occurrences: [] },
     flow: { follow: (carrier) => (followed.push(carrier), options.flow?.[carrierKey(carrier.site)] ?? NO_FLOW) },
@@ -87,9 +87,12 @@ function setup(options: Setup = {}) {
     requestOrigins: (repo) => options.origins?.[repo],
   };
   const workspace: ServingWorkspace = {
+    base: (declared) => ({ ...BASE, inputs: { ...BASE.inputs, declaredConfig: declared } }),
+    repositorySnapshots: SNAPSHOTS,
+    cuts: options.cuts ?? [],
     session: async (hypothesis) => {
       opened.push(hypothesis.property.join("."));
-      return { ok: true, value: session };
+      return options.sessionFault === undefined ? { ok: true, value: session } : { ok: false, fault: { kind: "git-failed", detail: options.sessionFault } };
     },
     serving: () => ({ kind: "unserved" }),
   };
@@ -100,37 +103,44 @@ function setup(options: Setup = {}) {
         value: await run(workspace),
       }),
     },
+    ofChange: async () => assert.fail("a hypothesis is answered without deriving a change"),
   });
-  const request: ConsequencesRequest = { repo: { repo: "web", path: "/work/web" } as ConsequencesRequest["repo"], hypothesis: { method: options.method ?? "get", path: options.path ?? "/owners/{id}", target: options.target ?? "response", property: options.property ?? "address", change: options.change ?? "nullable" } };
+  const hypothesis: HypothesisInput = { method: options.method ?? "get", path: options.path ?? "/owners/{id}", target: options.target ?? "response", property: options.property ?? "address", change: options.change ?? "nullable" };
+  const request: HypothesesRequest = { repo: { repo: "web", path: "/work/web" } as HypothesesRequest["repo"], hypotheses: [hypothesis] };
   const ask = async () => {
-    const answer = await queries.consequences(request);
+    const answer = await queries.ofHypotheses(request);
     assert.ok(answer.ok);
     assert.notEqual(answer.value.status, "unknown");
-    return answer.value as Exclude<typeof answer.value, { status: "unknown" }>;
+    if (answer.value.status === "unknown") throw new Error("unknown");
+    const [only] = answer.value.value.answers;
+    assert.ok(only !== undefined);
+    return { status: answer.value.status, evidence: answer.value.evidence, inputs: answer.value.inputs, value: only };
   };
-  return { ask, followed, templated, opened, asked, queries, request, session, preparations: () => preparations };
+  return { ask, followed, templated, opened, asked, queries, request, hypothesis, session, preparations: () => preparations };
 }
 
 const verdictsOf = (fact: Awaited<ReturnType<ReturnType<typeof setup>["ask"]>>) => fact.value.findings.map((finding) => (finding.status === "complete" ? finding.value.verdict.kind : finding.evidence.at(-1)?.via));
 
-test("hypotheses asked together share one prepared workspace and are answered in the order asked, an invalid one with its own fault", async () => {
-  const { queries, request, opened, preparations } = setup();
-  const { hypothesis, ...workspace } = request;
-  const answers = await queries.consequencesOfEach({ ...workspace, hypotheses: [{ ...hypothesis, property: "phone" }, { ...hypothesis, change: "bogus" as HypothesisInput["change"] }, hypothesis] });
+test("hypotheses asked together share one prepared workspace, are answered in the order asked and declare their normalized form in the config", async () => {
+  const { queries, request, hypothesis, opened, preparations } = setup();
 
-  assert.ok(answers.ok);
-  assert.deepEqual(answers.value.map((answer) => (!answer.ok ? answer.fault.kind : answer.value.status === "unknown" ? "unknown" : answer.value.value.hypothesis.property)), ["phone", "invalid-hypothesis", "address"]);
-  assert.deepEqual(opened, ["phone", "address"]);
+  const answer = await queries.ofHypotheses({ ...request, hypotheses: [{ ...hypothesis, property: "phone" }, hypothesis, { ...hypothesis, property: "name", method: "post" }] });
+
+  assert.ok(answer.ok && answer.value.status !== "unknown");
+  assert.deepEqual(answer.value.value.answers.map((one) => one.hypothesis.property), ["phone", "address", "name"]);
+  assert.deepEqual(answer.value.inputs.declaredConfig.hypotheses, ["GET /owners/{id} response phone nullable", "GET /owners/{id} response address nullable", "POST /owners/{id} response name nullable"]);
+  assert.deepEqual(opened, ["phone", "address", "name"]);
   assert.equal(preparations(), 1);
+  assert.deepEqual(answer.value.value.repositorySnapshots, SNAPSHOTS);
 });
 
-test("hypotheses that are all invalid are answered without preparing the workspace", async () => {
-  const { queries, request, preparations } = setup();
-  const { hypothesis, ...workspace } = request;
-  const answers = await queries.consequencesOfEach({ ...workspace, hypotheses: [{ ...hypothesis, change: "bogus" as HypothesisInput["change"] }] });
+test("an invalid hypothesis refuses the whole call with its index, before the workspace is prepared", async () => {
+  const { queries, request, hypothesis, preparations } = setup();
 
-  assert.ok(answers.ok);
-  assert.deepEqual(answers.value.map((answer) => !answer.ok && answer.fault.kind), ["invalid-hypothesis"]);
+  const answer = await queries.ofHypotheses({ ...request, hypotheses: [hypothesis, hypothesis, { ...hypothesis, change: "bogus" as HypothesisInput["change"] }] });
+
+  assert.ok(!answer.ok && answer.fault.kind === "invalid-hypothesis");
+  assert.equal(answer.fault.index, 2);
   assert.equal(preparations(), 0);
 });
 
@@ -150,37 +160,8 @@ test("the answer echoes the normalized hypothesis and the old guarantee it assum
   const fact = await setup({ property: "[].address" }).ask();
 
   assert.deepEqual(fact.value.hypothesis, { method: "GET", path: "/owners/{id}", target: "response", property: "[].address", change: "nullable" });
-  assert.equal(fact.value.assumedOldGuarantee, "present-and-non-null");
+  assert.equal(fact.value.oldContract, "present-and-non-null");
   assert.deepEqual(fact.value.findings, []);
-});
-
-test("several hypotheses are answered on one prepared workspace, each from the session it asks for", async () => {
-  const { session } = setup();
-  const asked: string[] = [];
-  const workspace: PreparedWorkspace = { session: async (hypothesis) => (asked.push(formatHypothesis(hypothesis)), { ok: true, value: session }) };
-  const hypotheses = [{ property: "address", change: "nullable" }, { property: "name", change: "optional" }].map((written) => {
-    const parsed = parseHypothesis({ method: "GET", path: "/owners/{id}", target: "response", ...written });
-    assert.ok(parsed.ok);
-    return parsed.value;
-  });
-
-  const answers = [];
-  for (const hypothesis of hypotheses) answers.push(await consequencesOn(workspace, hypothesis));
-
-  assert.deepEqual(asked, ["GET /owners/{id} response address nullable", "GET /owners/{id} response name optional"]);
-  assert.deepEqual(answers.map((answer) => answer.ok && answer.value.status !== "unknown" && [answer.value.value.hypothesis.property, answer.value.value.hypothesis.change]), [["address", "nullable"], ["name", "optional"]]);
-});
-
-test("a hypothesis derived from a diff states the old guarantee it was derived from instead of the assumed one", async () => {
-  const oldGuarantee: ValueSet = { literals: { boolean: [], number: [], string: "every" }, array: false, object: false, null: false, absent: false };
-  const change = derivedChange({ introduced: ["null"], added: [], retired: [], alwaysAbsent: false, oldGuarantee });
-  assert.ok(change.ok);
-  const { session } = setup();
-
-  const answer = await consequencesOn({ session: async () => ({ ok: true, value: session }) }, { method: "GET", path: "/owners/{id}", target: "response", property: path("address"), change: change.value });
-
-  assert.ok(answer.ok && answer.value.status !== "unknown");
-  assert.deepEqual(answer.value.value.assumedOldGuarantee, oldGuarantee);
 });
 
 test("an optional property is admitted behind a test that excludes undefined, not behind one that excludes only null, with undefined as the witness", async () => {
@@ -247,16 +228,6 @@ test("an admitted use names in its evidence every guard that kept an introduced 
   assert.ok(admitted?.status === "complete");
   assert.deepEqual(admitted.value.verdict, { kind: "admits", guards: [nullTest, undefinedTest] });
   assert.deepEqual(admitted.evidence.map((place) => place.line), [30, 28, 29]);
-});
-
-test("an invalid hypothesis is refused before any snapshot is read", async () => {
-  const { queries, request, opened } = setup();
-
-  const answer = await queries.consequences({ ...request, hypothesis: { ...request.hypothesis, change: "renamed" } });
-
-  assert.ok(!answer.ok);
-  assert.equal(answer.fault.kind, "invalid-hypothesis");
-  assert.deepEqual(opened, []);
 });
 
 test("only the call sites of the asked operation are followed: a shared type connects nothing", async () => {
@@ -331,13 +302,6 @@ test("an operation served but with no call site linked is one unknown item at it
 
   assert.deepEqual(verdictsOf(fact), ["no-call-site"]);
   assert.deepEqual(fact.value.findings[0]?.evidence.map(({ path, line }) => [path, line]), [["Owners.java", 5]]);
-});
-
-test("an operation no repository serves is a typed fault", async () => {
-  const answer = await setup({ serving: [] }).queries.consequences(setup().request);
-
-  assert.ok(!answer.ok);
-  assert.equal(answer.fault.kind, "unknown-operation");
 });
 
 test("a flow that loops back to a boundary already followed terminates, following it once", async () => {
@@ -734,7 +698,7 @@ test("the answer echoes the normalized request hypothesis and the old acceptance
   const fact = await requestSetup({ reader, change: ["non-nullable", "required"] }).ask();
 
   assert.deepEqual(fact.value.hypothesis, { method: "POST", path: "/vets", target: "request", property: "id", change: ["required", "non-nullable"] });
-  assert.equal(fact.value.assumedOldGuarantee, "accepts-the-rejected");
+  assert.equal(fact.value.oldContract, "accepts-the-rejected");
 });
 
 test("a producer with no origin is never admitted, and neither is one that has an origin it cannot follow", async () => {
@@ -840,14 +804,6 @@ test("a call site whose link is not qualified is reported with its basis and nev
   assert.deepEqual(fact.evidence.map((place) => place.line), [10, 30]);
 });
 
-test("a request hypothesis on an operation nobody serves is the same typed fault as a response one", async () => {
-  const { queries, request } = requestSetup({ serving: [] });
-
-  const answer = await queries.consequences(request);
-
-  assert.ok(!answer.ok && answer.fault.kind === "unknown-operation");
-});
-
 test("a response hypothesis follows the flow and never asks for a request origin", async () => {
   const { reader, asked } = readerFor({});
   const flow = { [carrierKey(siteOf())]: { uses: [use(30, { operation: READ })], next: [], frontiers: [] } };
@@ -856,4 +812,50 @@ test("a response hypothesis follows the flow and never asks for a request origin
 
   assert.deepEqual(verdictsOf(fact), ["incompatible"]);
   assert.deepEqual(asked, []);
+});
+
+const statusesOf = async (queries: ContractConsequencesQueries, request: HypothesesRequest) => {
+  const answer = await queries.ofHypotheses(request);
+  assert.ok(answer.ok && answer.value.status !== "unknown");
+  return answer.value;
+};
+
+test("a hypothesis no repository serves is an unknown answer inside a partial composite, whatever its target", async () => {
+  const { queries, request, hypothesis } = setup({ serving: [] });
+
+  const unserved = await statusesOf(queries, { ...request, hypotheses: [hypothesis, { ...hypothesis, method: "post", path: "/vets", target: "request", property: "id", change: "non-nullable" }] });
+
+  assert.equal(unserved.status, "partial");
+  assert.deepEqual(unserved.value.answers.map((answer) => answer.status === "unknown" && answer.reason), ["unresolved", "unresolved"]);
+  assert.deepEqual(unserved.value.answers.map((answer) => answer.findings), [[], []]);
+  assert.deepEqual(unserved.value.answers.map((answer) => answer.hypothesis.target), ["response", "request"]);
+  assert.equal(unserved.status === "partial" && unserved.cuts.length, 2);
+});
+
+test("a workspace that cannot prepare the session of one hypothesis leaves that answer unknown, never a fault of the call", async () => {
+  const { queries, request } = setup({ sessionFault: "export failed" });
+
+  const unreadable = await statusesOf(queries, request);
+
+  assert.equal(unreadable.status, "partial");
+  assert.deepEqual(unreadable.value.answers.map((answer) => answer.status === "unknown" && answer.reason), ["source-unreadable"]);
+});
+
+test("each answer that is not complete is one section cut of the composite, and the workspace's own cuts reach every answer", async () => {
+  const cut: Cut = { kind: "not-exported", at: ["big.ts"] };
+  const { queries, request, hypothesis } = setup({ cuts: [cut] });
+
+  const fact = await statusesOf(queries, { ...request, hypotheses: [hypothesis, { ...hypothesis, property: "name" }] });
+
+  assert.deepEqual(fact.value.answers.map((answer) => answer.status === "partial" && answer.cuts), [[cut], [cut]]);
+  assert.deepEqual(fact.status === "partial" && fact.cuts, [{ kind: "section", at: ["answers.0"] }, { kind: "section", at: ["answers.1"] }]);
+});
+
+test("every hop and finding of an answer carries the repository it happened in", async () => {
+  const flow = { [carrierKey(siteOf())]: { uses: [use(30, { operation: READ })], next: [], frontiers: [{ at: { path: "src/page.ts", line: 9 }, cause: "unmodelled-flow" as const, reason: "unresolved" as const, hops: [{ step: "assign" as const, evidence: { path: "src/page.ts", line: 8 } }] }] } };
+  const fact = await setup({ flow }).ask();
+
+  const places = fact.value.findings.flatMap((finding) => [...finding.evidence, ...(finding.status === "complete" ? finding.value.chain.map((hop) => hop.evidence) : [])]);
+  assert.ok(places.length >= 5);
+  assert.deepEqual(places.map((place) => place.repo), places.map(() => "web"));
 });

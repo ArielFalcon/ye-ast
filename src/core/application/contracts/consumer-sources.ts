@@ -1,5 +1,5 @@
 import { sourceUnreadable } from "../../domain/contracts/consumer-flow.ts";
-import { formatHypothesis, type Hypothesis } from "../../domain/contracts/hypothesis.ts";
+import type { Hypothesis } from "../../domain/contracts/hypothesis.ts";
 import { provenanceOf, sortedEngines } from "../../domain/shared/fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Result } from "../../domain/shared/result.ts";
@@ -12,7 +12,7 @@ import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
 import type { InboundOccurrences } from "../impact/inbound-edges.ts";
 import type { ConsumerFlowReader } from "../../ports/consumer-flow.port.ts";
 import type { RequestOriginReader } from "../../ports/request-origins.port.ts";
-import type { ConsumerSession, ConsumerSources, ServingOperation } from "../../ports/consumer-sources.port.ts";
+import type { ConsumerSession, ConsumerSources, PreparedWorkspace, ServingOperation } from "../../ports/consumer-sources.port.ts";
 import type { ConsumerTemplateReader } from "../../ports/consumer-template.port.ts";
 import type { TemplateFlowReader } from "../../ports/consumer-template-flow.port.ts";
 import type { WorkspaceFault, WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
@@ -131,23 +131,13 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
               reached.set(plan.at.repoId, reading.value);
             }
 
-            const { schema, snapshot, producer, inputs } = fact;
-            const base = compositeBase(
-              { schema, snapshot, producer, inputs, evidence: [] },
-              Object.entries(fact.value.sections).map(([repo, section]) => ({ kind: `discovery:${repo}`, fact: provenanceOf(section) })),
-              fact.value.workspace,
-              (text) => deps.digest.of(text),
-              { ...inputs.declaredConfig, hypothesis: formatHypothesis(hypothesis) },
-            );
             return {
               ok: true,
               value: {
-                base: { ...base, inputs: { ...base.inputs, engines: sortedEngines({ ...base.inputs.engines, ...deps.engines }) } },
                 links: join.links,
                 serving: join.serving.get(operation) ?? [],
                 unresolvedCalls: join.unresolvedCalls,
                 ambiguousCalls: join.ambiguousCalls.filter((call) => call.reaching.has(operation)).map(({ from, repos }) => ({ from, repos })),
-                cuts: fact.status === "partial" ? fact.cuts : [],
                 callers: ({ repo, ...declaration }) => {
                   const reading = reached.get(repo);
                   return callersOfFunction(reading?.graph, reading?.inbound, declaration);
@@ -162,8 +152,19 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
               },
             };
           };
+          const base: PreparedWorkspace["base"] = (asked) => {
+            const { schema, snapshot, producer, inputs } = fact;
+            const composite = compositeBase(
+              { schema, snapshot, producer, inputs, evidence: [] },
+              Object.entries(fact.value.sections).map(([repo, section]) => ({ kind: `discovery:${repo}`, fact: provenanceOf(section) })),
+              fact.value.workspace,
+              (text) => deps.digest.of(text),
+              { ...inputs.declaredConfig, ...asked },
+            );
+            return { ...composite, inputs: { ...composite.inputs, engines: sortedEngines({ ...composite.inputs.engines, ...deps.engines }) } };
+          };
           try {
-            return { ok: true, value: await use({ session, serving: (declared) => servingOperation(declared, entrypointsOfWorkspace()) }) };
+            return { ok: true, value: await use({ base, repositorySnapshots: fact.value.repositorySnapshots, cuts: fact.status === "partial" ? fact.cuts : [], session, serving: (declared) => servingOperation(declared, entrypointsOfWorkspace()) }) };
           } finally {
             for (const store of stores) store.close();
           }
