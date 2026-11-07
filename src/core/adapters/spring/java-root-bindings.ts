@@ -1,11 +1,10 @@
-import { typeVariableAround } from "./java-symbols.ts";
 import type { Node } from "web-tree-sitter";
 import { isJavaSource } from "../../domain/languages/java.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
-import { createJavaProject, describeFile, qualifiedTypeName, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, describeFile, qualifiedTypeName, typeVariableAround, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: RootBinding = { kind: "unknown" };
 /** Links of a chain whose first name is the root: a member access, a call on a receiver, a qualified name. */
@@ -168,5 +167,3 @@ function staticImport(name: string, file: JavaFile, project: JavaProject): RootB
   if (declared !== undefined && declared !== "ambiguous") return { kind: "located", root: name, file: declared.file.path, path: `${declared.fqn}.${name}` };
   return platformImport(name, className, project);
 }
-
-export { typeVariableAround } from "./java-symbols.ts";

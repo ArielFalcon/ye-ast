@@ -62,6 +62,11 @@ function isFunctionValue(node: Node | null): boolean {
   if (node.type === "parenthesized_expression") return isFunctionValue(node.namedChildren[0] ?? null);
   if (node.type === "cast_expression") return isFunctionValue(node.childForFieldName("value"));
   if (node.type === "ternary_expression") return isFunctionValue(node.childForFieldName("consequence")) || isFunctionValue(node.childForFieldName("alternative"));
+  return isFunctionValueNode(node);
+}
+
+/** A lambda or a method reference: the values a function-value call is read through. */
+export function isFunctionValueNode(node: Node): boolean {
   return FUNCTION_VALUES.includes(node.type);
 }
 

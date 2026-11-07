@@ -128,6 +128,8 @@ export const moduleVia = z.strictObject({
 export const callLocation = z.strictObject({ file: ids.file, line: int, endLine: int.exactOptional() });
 const stated = z.strictObject({ method: httpMethod, path: z.string() });
 const transport = z.enum(["http", "event"]);
+const httpTarget = z.strictObject({ method: httpMethod, path: z.string(), base: z.string().exactOptional(), operationId: z.string().exactOptional() });
+const eventTarget = z.strictObject({ protocol, destination: z.string(), role: z.literal("publish") });
 export const callSiteDiagnostic = z.strictObject({
   cause: z.enum(CALL_SITE_CAUSES),
   source: z.enum(["not-read", "read"]).exactOptional(),
@@ -242,6 +244,10 @@ export const partSchema = z.discriminatedUnion("kind", [
       z.strictObject({ kind: z.enum(["global", "unnamed"]), names: strings }),
     ])).exactOptional(),
     alternatives: z.array(ids.anchor).exactOptional(),
+    effects: z.array(z.discriminatedUnion("kind", [
+      z.strictObject({ kind: z.literal("http"), line: count, target: httpTarget }),
+      z.strictObject({ kind: z.literal("message"), line: count, target: eventTarget }),
+    ])).exactOptional(),
   }),
   part("trace-root", { target: z.string(), steps: z.array(count) }),
   part("reading-range", { file: ids.file, start: count, end: count, steps: z.array(count) }),
@@ -252,10 +258,7 @@ export const partSchema = z.discriminatedUnion("kind", [
       repo: z.string(), symbol: z.string(),
       ancestors: z.array(z.strictObject({ symbol: z.string(), line: int, endLine: int })).exactOptional(),
       transport, diagnostic: callSiteDiagnostic.exactOptional(), stated: stated.exactOptional(), location: callLocation,
-      target: evidenceFinding(z.union([
-        z.strictObject({ method: httpMethod, path: z.string(), base: z.string().exactOptional(), operationId: z.string().exactOptional() }),
-        z.strictObject({ protocol, destination: z.string(), role: z.literal("publish") }),
-      ])),
+      target: evidenceFinding(z.union([httpTarget, eventTarget])),
     }),
     disposition: z.enum(["matched", "unmatched", "external"]),
   }),

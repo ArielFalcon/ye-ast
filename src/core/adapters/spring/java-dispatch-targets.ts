@@ -271,5 +271,3 @@ function simpleName(type: Node): string {
 function spansLine(declaration: Node, line: number): boolean {
   return declaration.startPosition.row + 1 <= line && line <= (declaration.childForFieldName("name") ?? declaration).startPosition.row + 1;
 }
-
-export { sameSignature } from "./java-symbols.ts";

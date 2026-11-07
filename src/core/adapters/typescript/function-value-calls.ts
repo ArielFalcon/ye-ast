@@ -423,7 +423,12 @@ function isFunctionValue(value: ts.Expression): boolean {
     if (LOGICAL_OPERATORS.includes(operator)) return isFunctionValue(value.left) || isFunctionValue(value.right);
     if (operator === ts.SyntaxKind.CommaToken || ASSIGNMENTS.includes(operator)) return isFunctionValue(value.right);
   }
-  return ts.isArrowFunction(value) || ts.isFunctionExpression(value);
+  return isFunctionValueNode(value);
+}
+
+/** An arrow or a function expression: the values a function-value call is read through. */
+export function isFunctionValueNode(node: ts.Node): node is ts.ArrowFunction | ts.FunctionExpression {
+  return ts.isArrowFunction(node) || ts.isFunctionExpression(node);
 }
 
 function isFunctionType(type: ts.TypeNode | undefined): boolean {

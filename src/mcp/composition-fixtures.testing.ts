@@ -201,6 +201,7 @@ export function traceValue(): TraceValue {
         leaves: [{ symbol: "check", file: "src/OrderService.java", start: 40, end: 41 }, { symbol: "check", file: "src/OrderService.java", start: 40, end: 41, deferred: true }, { symbol: "id", file: "src/Order.java", start: 5, end: 5 }],
         external: [{ kind: "import", module: "org.slf4j", names: ["debug", "info"] }, { kind: "unnamed", names: ["repository.findById"] }],
         alternatives: [{ symbol: "find", file: "src/OrderServiceImpl.java", start: 12, end: 20 }],
+        effects: [{ kind: "http", line: 34, target: { method: "GET", path: "/stock/{}" } }, { kind: "message", line: 36, target: { protocol: "kafka", destination: "orders.found", role: "publish" } }],
       },
       { id: 2, parent: 0, depth: 1, file: "src/Audit.java", symbol: "audit", kind: "method", line: 3, at: { line: 8 }, via: "reference", deferred: true },
       { id: 3, parent: 0, depth: 1, file: "src/OrderService.java", symbol: "find", kind: "method", line: 31, endLine: 38, at: { line: 9, column: 4 }, via: "own-member", seen: 1 },

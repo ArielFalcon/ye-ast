@@ -481,3 +481,8 @@ test("composition text retains dependency selection diagnostics next to their cu
   const result = resultOf([sourceFixture("workspace", { value: { ...value, sections: { ...value.sections, web: { ...section, status: "partial", cuts: [cut] } } } })]);
   for (const mode of ["summary", "details"] as const) assert.match(renderComposition(result, mode), /com.acme:clients.*unproven-coordinates.*clients/);
 });
+
+test("details states a trace step's effects with their targets and lines", () => {
+  const text = renderComposition(resultOf([sourceFixture("trace")]), "details");
+  assert.match(text, /trace step #1 .*; effects http GET \/stock\/\{\} at line 34; message kafka orders\.found at line 36/);
+});
