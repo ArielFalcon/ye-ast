@@ -1,7 +1,8 @@
 import { sourceUnreadable } from "../../domain/contracts/consumer-flow.ts";
-import { formatHypothesis } from "../../domain/contracts/hypothesis.ts";
+import { formatHypothesis, type Hypothesis } from "../../domain/contracts/hypothesis.ts";
 import { provenanceOf, sortedEngines } from "../../domain/shared/fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
+import type { Result } from "../../domain/shared/result.ts";
 import { httpTargetOf, type CallSite } from "../../domain/topology/call-site.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { Link } from "../../domain/topology/link.ts";
@@ -13,7 +14,7 @@ import type { ConsumerFlowReader } from "../../ports/consumer-flow.port.ts";
 import type { ConsumerSession, ConsumerSources } from "../../ports/consumer-sources.port.ts";
 import type { ConsumerTemplateReader } from "../../ports/consumer-template.port.ts";
 import type { TemplateFlowReader } from "../../ports/consumer-template-flow.port.ts";
-import type { WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
+import type { WorkspaceFault, WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
@@ -26,7 +27,7 @@ import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import { ABORTED, declaredTrustOf, withScratch } from "../snapshot/read-snapshot.ts";
 import type { WorkspaceReadOperation } from "../topology/workspace-operation.ts";
 import { entrypointsOf } from "../topology/workspace-join.ts";
-import { callersOfFunction } from "./consumer-callers.ts";
+import { callersOfFunction, occurrencesOfMember } from "./consumer-callers.ts";
 import { createConsumerTemplateReader } from "./consumer-templates.ts";
 
 export interface ConsumerSourcesDeps {
@@ -53,31 +54,31 @@ interface Reading {
 }
 
 /**
- * The workspace read of a consequences query: the links the join admitted and, for each repository that calls the
- * operation, its sources and code graph, held until the query has answered. A repository read live, or one the refresh
- * could not provide, has no reader, so a carrier in it is a frontier.
+ * The workspace read of consequences queries: for a set of hypotheses, the repositories' sources and code graphs held
+ * until the holder of the workspace answers, and for each hypothesis the links the join admitted and the fact envelope
+ * that declares it. A repository read live, or one the refresh could not provide, has no reader, so a carrier in it is a frontier.
  */
 export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSources {
   const heads = createHeadReader(deps.heads);
   return {
-    async withSession(request, use) {
-      const { hypothesis, ...planning } = request;
-      const operation = `${hypothesis.method} ${hypothesis.path}`;
-      const answered = await deps.operation.withRead(planning, async (read, context) => {
+    async withWorkspace(request, use) {
+      const answered = await deps.operation.withRead(request, async (read, context) => {
         const { fact } = read;
         if (fact.status === "unknown") return { ok: false as const, fault: { kind: "git-failed" as const, detail: "the workspace read answered nothing" } };
-        const { links, ambiguousCalls, unresolvedCalls } = httpCallsOf(fact.value.repositories, fact.value.workspace.gateways, operation);
-        const serving = fact.value.repositories
-          .flatMap((repository) => entrypointsOf(repository).entrypoints.flatMap((entrypoint) => (entrypoint.kind === "http-route" && entrypoint.name === operation ? [{ repo: repository.repo, handler: entrypoint.handler }] : [])))
-          .sort((a, b) => compareText(a.repo, b.repo) || compareText(a.handler.path, b.handler.path) || a.handler.line - b.handler.line);
-        const callers = new Set(links.filter((link) => isCallOf(link, operation)).map((link) => link.from.repo));
 
         return withScratch(deps.heads.scratch, async (directory) => {
           const readings = new Map<string, Reading>();
           const stores: CodeGraphReader[] = [];
-          try {
+          const session = async (hypothesis: Hypothesis): Promise<Result<ConsumerSession, WorkspaceFault>> => {
+            const operation = `${hypothesis.method} ${hypothesis.path}`;
+            const { links, ambiguousCalls, unresolvedCalls } = httpCallsOf(fact.value.repositories, fact.value.workspace.gateways, operation);
+            const serving = fact.value.repositories
+              .flatMap((repository) => entrypointsOf(repository).entrypoints.flatMap((entrypoint) => (entrypoint.kind === "http-route" && entrypoint.name === operation ? [{ repo: repository.repo, handler: entrypoint.handler }] : [])))
+              .sort((a, b) => compareText(a.repo, b.repo) || compareText(a.handler.path, b.handler.path) || a.handler.line - b.handler.line);
+            const callers = new Set(links.filter((link) => isCallOf(link, operation)).map((link) => link.from.repo));
+
             for (const plan of context.plans) {
-              if (plan.kind !== "read" || !callers.has(plan.at.repoId)) continue;
+              if (plan.kind !== "read" || !callers.has(plan.at.repoId) || readings.has(plan.at.repoId)) continue;
               const trust = (await declaredTrustOf(deps.heads, plan.at.declared)) ?? "untrusted";
               const prepared = await prepareCommit({ ...deps.heads, preparation: context.preparation }, plan.at.source, plan.at.revision, directory, context.selection, { scope: context.scope, trust }, context.signal);
               if (!prepared.ok) return prepared;
@@ -106,21 +107,27 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
               (text) => deps.digest.of(text),
               { ...inputs.declaredConfig, hypothesis: formatHypothesis(hypothesis) },
             );
-            const session: ConsumerSession = {
-              base: { ...base, inputs: { ...base.inputs, engines: sortedEngines({ ...base.inputs.engines, ...deps.engines }) } },
-              links,
-              serving,
-              unresolvedCalls,
-              ambiguousCalls,
-              cuts: fact.status === "partial" ? fact.cuts : [],
-              callers: ({ repo, ...declaration }) => {
-                const reading = readings.get(repo);
-                return callersOfFunction(reading?.graph, reading?.inbound, declaration);
+            return {
+              ok: true,
+              value: {
+                base: { ...base, inputs: { ...base.inputs, engines: sortedEngines({ ...base.inputs.engines, ...deps.engines }) } },
+                links,
+                serving,
+                unresolvedCalls,
+                ambiguousCalls,
+                cuts: fact.status === "partial" ? fact.cuts : [],
+                callers: ({ repo, ...declaration }) => {
+                  const reading = readings.get(repo);
+                  return callersOfFunction(reading?.graph, reading?.inbound, declaration);
+                },
+                memberOccurrences: () => occurrencesOfMember(),
+                flow: { follow: (carrier) => readings.get(carrier.site.repo)?.flow.follow(carrier) ?? sourceUnreadable(carrier.site) },
+                templates: { follow: (carrier) => readings.get(carrier.site.repo)?.templates.follow(carrier) ?? sourceUnreadable(carrier.site) },
               },
-              flow: { follow: (carrier) => readings.get(carrier.site.repo)?.flow.follow(carrier) ?? sourceUnreadable(carrier.site) },
-              templates: { follow: (carrier) => readings.get(carrier.site.repo)?.templates.follow(carrier) ?? sourceUnreadable(carrier.site) },
             };
-            return { ok: true, value: await use(session) };
+          };
+          try {
+            return { ok: true, value: await use({ session }) };
           } finally {
             for (const store of stores) store.close();
           }

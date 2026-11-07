@@ -8,8 +8,6 @@ import type { ConsumerTemplateReader } from "./consumer-template.port.ts";
 import type { WorkspaceRequest } from "./workspace-queries.port.ts";
 import type { WorkspaceFault } from "./workspace-repos.port.ts";
 
-export type ConsumerSessionRequest = WorkspaceRequest & { hypothesis: Hypothesis };
-
 /**
  * One place a function depends on the function asked about: what it does there and how sure the code graph is. A caller
  * that depends on it at several places is several occurrences.
@@ -33,7 +31,22 @@ export interface ConsumerCaller {
 
 export type ConsumerCallers = { kind: "unavailable" } | { kind: "unresolved" } | { kind: "found"; callers: readonly ConsumerCaller[] };
 
-/** The snapshots of a workspace read once, for the duration of one consequences query. */
+/** What a read of a class member goes through: `this` in the class or a subclass, an instance the framework injects, the component in its own template, or anything else. */
+export type MemberReceiver = "this" | "injected" | "template" | "other";
+
+/** One place a class member is read. `line` and `column` (1-based) are in `resource` when the read is written in a template, in `file` otherwise. */
+export interface ConsumerMemberOccurrence {
+  /** The file of the code that holds the read; for a template, the file of its component. */
+  file: string;
+  line: number;
+  column: number;
+  resource?: string;
+  receiver: MemberReceiver;
+}
+
+export type ConsumerMemberOccurrences = { kind: "unavailable" } | { kind: "unresolved" } | { kind: "found"; occurrences: readonly ConsumerMemberOccurrence[] };
+
+/** The answers of a workspace to one hypothesis: what the hypothesis selects, and what the workspace holds whatever the hypothesis. */
 export interface ConsumerSession {
   /** The fact envelope of the answer; its config declares the hypothesis. */
   base: FactBase;
@@ -49,11 +62,19 @@ export interface ConsumerSession {
   cuts: readonly Cut[];
   /** The callers of a function of a repository: the code graph's, with the calls made through injected fields and locals. */
   callers(declaration: { repo: string; file: string; symbol: string; line: number }): ConsumerCallers;
+  /** The places a member of a class of a repository is read, with the receiver each goes through. */
+  memberOccurrences(member: { repo: string; file: string; owner: string; member: string }): ConsumerMemberOccurrences;
   flow: ConsumerFlowReader;
   templates: ConsumerTemplateReader;
 }
 
+/** A workspace read once for a set of hypotheses: everything a hypothesis does not change. */
+export interface PreparedWorkspace {
+  /** The session of one hypothesis on this workspace; it stays valid until the holder of the workspace releases it. */
+  session(hypothesis: Hypothesis): Promise<Result<ConsumerSession, WorkspaceFault>>;
+}
+
 export interface ConsumerSources {
-  /** Opens the session, runs `use` and releases what the session held, whether `use` answers or throws. */
-  withSession<T>(request: ConsumerSessionRequest, use: (session: ConsumerSession) => Promise<T>): Promise<Result<T, WorkspaceFault>>;
+  /** Prepares the workspace, runs `use` and releases what it held, whether `use` answers or throws. */
+  withWorkspace<T>(request: WorkspaceRequest, use: (workspace: PreparedWorkspace) => Promise<T>): Promise<Result<T, WorkspaceFault>>;
 }

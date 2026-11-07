@@ -21,6 +21,9 @@ import { createHttpCallSites } from "../core/adapters/typescript/http-call-sites
 import { createJavaCallSites } from "../core/adapters/spring/java-call-sites.adapter.ts";
 import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-routes.adapter.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
+import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
+import { createJavaNameBindings } from "../core/adapters/spring/java-name-bindings.adapter.ts";
+import { importOriginsByLanguage } from "./import-origins-by-language.ts";
 import { createAngularDeclarationReader } from "../core/adapters/typescript/angular-declarations.adapter.ts";
 import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
 import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loads.adapter.ts";
@@ -81,10 +84,11 @@ export function realWorkspaceFixture(scratchRoot: string, roots: readonly string
     retention: { keepScopes: 3, unusedForMs: 14 * 24 * 60 * 60 * 1000, maxBytes: 512 * 1024 * 1024 }, now: () => 1 };
   const trust: TrustRecordReader = { read: async (root) => ({ ok: true, value: roots.includes(root) ? "trusted" : undefined }) };
   const common = { vcs, scratch, reader, extractor, digest, matcher, graph, live, trust, producer: { name: "ye-ast", version }, engines };
+  const moduleDependencies = createModuleDependenciesReader();
   const impactDeps: ImpactQueriesDeps = { ...common, engines: { ...engines, "@colbymchenry/codegraph": codegraph },
     angular: createAngularDeclarationReader(), contracts, relations: composeAngularRelations(), dynamicLoads: createDynamicLoadReader(),
     angularEngines: { "@angular/compiler": installedVersion("@angular/compiler") },
-    importOrigins: (sources) => createImportOrigins(sources), moduleDependencies: createModuleDependenciesReader(), declarationEvidence: createDeclarationEvidenceReader() };
+    importOrigins: (sources) => importOriginsByLanguage([createImportOrigins(sources), createJavaNameBindings(createJavaParser, sources)]), moduleDependencies, moduleReaders: [moduleDependencies, { extract: async (sources, options) => createJavaImportsReader(await createJavaParser()).extract(sources, options) }], declarationEvidence: createDeclarationEvidenceReader() };
   const workspaceDeps: WorkspaceQueriesDeps = { ...common, callSites, evidence: createWorkspaceEvidence() };
   const operation = createWorkspaceReadOperation(workspaceDeps);
   const discoveries: import("../core/ports/workspace-queries.port.ts").WorkspaceRead[] = [];

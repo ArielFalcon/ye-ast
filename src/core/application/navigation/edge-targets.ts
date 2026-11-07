@@ -5,7 +5,7 @@ import type { ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { ModuleDependencies, ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
-import { importBindings } from "./import-bindings.ts";
+import { declarationAt, importBindings } from "./import-bindings.ts";
 
 /**
  * What the edges the graph resolved really reach, read from the root of the name each spells at its position through
@@ -77,8 +77,8 @@ export function createEdgeTargets({ origins, store, modules }: EdgeTargetsDeps):
       for (const [index, { edge, source, target }] of fresh.entries()) {
         const root = roots[index];
         if (root === undefined) continue;
-        const proven = root.status === "complete" && root.value.kind === "repository" && root.bare === true ? (await bindingsOf(source.file)).get(target.name) : undefined;
-        const verdict = edgeVerdict<GraphNodeId>(root, proven?.id, target.id);
+        const proven = root.status === "complete" && root.value.kind === "repository" && root.bare === true ? (await bindingsOf(source.file)).get(target.name) ?? (root.value.declared === undefined ? undefined : declarationAt(store, root.value.file, root.value.declared)) : undefined;
+        const verdict = edgeVerdict<GraphNodeId>(root, proven?.id, target);
         verdicts.set(edgeKey(edge), verdict.kind === "redirect" ? { kind: "redirect", to: proven! } : verdict.kind === "drop" && root.status === "complete" ? { kind: "drop", root: root.value } : { kind: "keep" });
       }
     }

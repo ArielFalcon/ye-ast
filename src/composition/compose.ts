@@ -63,9 +63,8 @@ import { compareText } from "../core/domain/shared/code-node.ts";
 import type { CallSiteReader } from "../core/domain/topology/call-site.ts";
 import type { EntrypointExtractor, SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
 import { createImportOrigins } from "../core/adapters/typescript/import-origins.adapter.ts";
-import { createJavaRootBindings } from "../core/adapters/spring/java-root-bindings.ts";
-import type { ImportOrigins } from "../core/ports/import-origins.port.ts";
-import { isJavaSource } from "../core/domain/languages/java.ts";
+import { createJavaNameBindings } from "../core/adapters/spring/java-name-bindings.adapter.ts";
+import { importOriginsByLanguage } from "./import-origins-by-language.ts";
 import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
 import type { ModuleDependenciesReader } from "../core/ports/module-dependencies.port.ts";
@@ -212,6 +211,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const entrypoints = measurement === undefined ? bareEntrypoints : measuredEntrypoints(bareEntrypoints, measurement);
   const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph, digest, codegraph, retention: options.indexRetention ?? INDEX_RETENTION, ...(measurement && { onDiscard: measuredIndexDiscard(measurement) }) });
   const moduleDependencies = staged(createModuleDependenciesReader(), { extract: "module-dependencies" });
+  const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => createJavaImportsReader(await createJavaParser()).extract(sources, options) }, { extract: "java-imports" });
+  const importOrigins = (sources: readonly SourceFile[]) => importOriginsByLanguage([createImportOrigins(sources), createJavaNameBindings(createJavaParser, sources)]);
   const unmodelled = staged<UnmodelledConstructsReader>({ extract: async (sources) => createJavaRecordsReader(await createJavaParser()).extract(sources) }, { extract: "java-records" });
   const impactDeps: ImpactQueriesDeps = {
     vcs,
@@ -233,9 +234,10 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     live,
     ...budget,
     ...trust,
-    importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources),
+    importOrigins,
     sourceTrivia,
     moduleDependencies,
+    moduleReaders: [moduleDependencies, javaImports],
     declarationEvidence: createDeclarationEvidenceReader(),
     unmodelled,
     sourceSelection: isWritten,
@@ -269,8 +271,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...trust,
     sourceSelection: isWritten,
   };
-  const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => createJavaImportsReader(await createJavaParser()).extract(sources, options) }, { extract: "java-imports" });
-  const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders: [moduleDependencies, javaImports], unmodelled, importOrigins: (sources: readonly SourceFile[]) => withJavaRootBindings(createImportOrigins(sources), sources) });
+  const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders: [moduleDependencies, javaImports], unmodelled, importOrigins });
   const outline = measurement === undefined ? bareOutline : measuredOutline(bareOutline, measurement);
   const bareTrace = createTraceQueries({
     ...snapshotCache,
@@ -327,7 +328,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     } });
     return measurement === undefined ? operationImpact : measuredImpact(operationImpact, measurement);
   } });
-  const consumers = composeConsumerQueries({ operation, heads: headDeps, digest, engines: { ...headDeps.engines, ...impactDeps.angularEngines }, importOrigins: createImportOrigins });
+  const consumers = composeConsumerQueries({ operation, heads: headDeps, digest, engines: { ...headDeps.engines, ...impactDeps.angularEngines }, importOrigins });
   const bareDecisions = createCapturedDecisionQueries({ operation, defaults, vcs, digest });
   const decisions = measurement === undefined ? bareDecisions : measuredDecisions(bareDecisions, measurement);
   return { version, entrypoints, impact, outline, trace, workspace, workspaceImpact, consumers, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
@@ -351,17 +352,6 @@ export function composeCli(options: CompositionOptions = {}): (argv: readonly st
 const MCP_PACKAGE = "ye-ast-mcp";
 
 /** The TypeScript origins, with the root of a use in a Java source bound by the Java reader. */
-function withJavaRootBindings(origins: ImportOrigins, sources: readonly SourceFile[]): ImportOrigins {
-  const java = createJavaRootBindings(createJavaParser(), sources);
-  return {
-    ...origins,
-    async rootBindings(sites, signal) {
-      const [typescript, fromJava] = [await origins.rootBindings(sites, signal), await java(sites, signal)];
-      return sites.map((site, index) => (isJavaSource(site.file) ? fromJava[index]! : typescript[index]!));
-    },
-  };
-}
-
 /** The entrypoint beside the running module: `main.ts` from a source checkout, `main.js` from the published build. */
 function ownEntrypoint(): string {
   const own = fileURLToPath(import.meta.url);

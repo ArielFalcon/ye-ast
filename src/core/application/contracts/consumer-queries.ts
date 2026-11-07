@@ -1,7 +1,7 @@
 import { formatAccessPath, relatePaths, type AccessPath } from "../../domain/contracts/access-path.ts";
 import { OLD_GUARANTEE, type ConsequencesValue, type UseConsequence } from "../../domain/contracts/consequence-fact.ts";
 import { writtenChange } from "../../domain/contracts/change.ts";
-import { carrierKey, type Carrier, type CarrierSite, type FlowFrontier, type FlowNext, type FlowResult, type Hop } from "../../domain/contracts/consumer-flow.ts";
+import { carrierKey, siteFile, siteLine, type Carrier, type CarrierSite, type FlowFrontier, type FlowNext, type FlowResult, type Hop } from "../../domain/contracts/consumer-flow.ts";
 import { parseHypothesis, type Hypothesis } from "../../domain/contracts/hypothesis.ts";
 import { decideUse } from "../../domain/contracts/verdict.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
@@ -10,7 +10,7 @@ import { withCuts, type Cut, type Evidence, type Fact, type Finding } from "../.
 import type { Link, LinkBasis } from "../../domain/topology/link.ts";
 import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
 import type { ConsequencesFault, ConsumerQueries } from "../../ports/consumer-queries.port.ts";
-import type { ConsumerSession, ConsumerSources } from "../../ports/consumer-sources.port.ts";
+import type { ConsumerSession, ConsumerSources, PreparedWorkspace } from "../../ports/consumer-sources.port.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { isCallOf } from "./consumer-sources.ts";
 
@@ -41,13 +41,19 @@ const located = (evidence: Evidence, repo: string): RepositoryEvidence => ({ ...
 export function createConsumerQueries({ sources }: ConsumerQueriesDeps): ConsumerQueries {
   return {
     async consequences(request) {
-      const parsed = parseHypothesis(request.hypothesis);
+      const { hypothesis: written, ...workspace } = request;
+      const parsed = parseHypothesis(written);
       if (!parsed.ok) return { ok: false, fault: { kind: "invalid-hypothesis", detail: parsed.fault.detail, refusal: parsed.fault } };
-      const hypothesis = parsed.value;
-      const answered = await sources.withSession({ ...request, hypothesis }, async (session) => consequencesOf(session, hypothesis));
+      const answered = await sources.withWorkspace(workspace, (prepared) => consequencesOn(prepared, parsed.value));
       return answered.ok ? answered.value : answered;
     },
   };
+}
+
+/** The consequences of one hypothesis on a workspace already prepared, so a caller with several hypotheses prepares once. */
+export async function consequencesOn(workspace: PreparedWorkspace, hypothesis: Hypothesis): Promise<Result<Fact<ConsequencesValue>, ConsequencesFault>> {
+  const session = await workspace.session(hypothesis);
+  return session.ok ? consequencesOf(session.value, hypothesis) : session;
 }
 
 function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Result<Fact<ConsequencesValue>, ConsequencesFault> {
@@ -143,7 +149,7 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
       ...(hypothesis.change.renamedTo === undefined ? {} : { renamedTo: formatAccessPath(hypothesis.change.renamedTo) }),
       ...(hypothesis.change.elementsAt === undefined ? {} : { elementsAt: formatAccessPath(hypothesis.change.elementsAt) }),
     },
-    assumedOldGuarantee: OLD_GUARANTEE,
+    assumedOldGuarantee: hypothesis.change.oldGuarantee ?? OLD_GUARANTEE,
     ...(hypothesis.change.values === undefined ? {} : { silent }),
     findings: findings.sort(compareFindings),
   };
@@ -210,7 +216,8 @@ function frontierItem(frontier: FlowFrontier, chain: readonly Hop[], repo: strin
 }
 
 function placeOf({ site }: Carrier, chain: readonly Hop[]): Evidence {
-  return site.kind === "input" || site.line === undefined ? chain.at(-1)!.evidence : { path: site.file, line: site.line };
+  const line = siteLine(site);
+  return line === undefined ? chain.at(-1)!.evidence : { path: siteFile(site), line };
 }
 
 function compareEvidence(a: Evidence, b: Evidence): number {

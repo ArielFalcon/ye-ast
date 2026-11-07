@@ -1,0 +1,55 @@
+import type { Evidence, UnknownReason } from "../shared/fact.ts";
+import type { ContractOperation } from "./contract-operation.ts";
+import type { Literal } from "./use-operation.ts";
+
+/** The classes of value that carry literals: a place holds every value of one, or only the listed literals. */
+export const LITERAL_CLASSES = ["boolean", "number", "string"] as const;
+
+export type LiteralClass = (typeof LITERAL_CLASSES)[number];
+
+/** Every value of a literal class, or exactly the listed literals (none when the list is empty). */
+export type ClassValues = "every" | readonly Literal[];
+
+/** What a place of a payload may hold. Absence is apart from the classes: whether a property is required is not whether it is declared. */
+export interface ValueSet {
+  literals: Readonly<Record<LiteralClass, ClassValues>>;
+  array: boolean;
+  object: boolean;
+  null: boolean;
+  absent: boolean;
+}
+
+/** One property of an object place. `required` says whether the place may be absent, which the property's own value set never states. */
+export interface ShapeProperty {
+  name: string;
+  required: boolean;
+  shape: Shape;
+}
+
+/** A place the reader states: what it may hold and, below it, its properties and elements. */
+export interface KnownShape {
+  kind: "known";
+  values: ValueSet;
+  /** Present when the place may hold an object: the declared properties, sorted by name; an undeclared one holds every value when `open`, nothing otherwise. */
+  object?: { properties: readonly ShapeProperty[]; open: boolean };
+  /** Present when the place may hold an array: the shape of its elements. */
+  elements?: Shape;
+}
+
+/** A place the reader cannot state; nothing below it is derived. */
+export interface UnknownShape {
+  kind: "unknown";
+  reason: UnknownReason;
+  evidence: readonly Evidence[];
+}
+
+export type Shape = KnownShape | UnknownShape;
+
+/** A shape and the repository files it was read from, sorted. */
+export interface ReadShape {
+  shape: Shape;
+  files: readonly string[];
+}
+
+/** The shape of the success response of one operation. */
+export type OperationShape = Pick<ContractOperation, "operationId" | "method" | "path" | "basePath"> & ReadShape;

@@ -288,6 +288,14 @@ test("a switch case whose labels are not literals is an opaque guard: it handles
   assert.deepEqual(decideUse(use({ guards: [untested("case")] }), NULLABLE), { kind: "review", reason: "opaque-guard" });
 });
 
+test("a value that may have been reassigned before the use is never shown to throw nor admitted: the use is for review", () => {
+  const reassigned = untested("reassigned");
+  assert.equal(decideUse(use(), NULLABLE)?.kind, "incompatible");
+  assert.deepEqual(decideUse(use({ guards: [reassigned] }), NULLABLE), { kind: "review", reason: "opaque-guard" });
+  assert.deepEqual(decideUse(use({ path: path("address"), operation: SHOWN, guards: [reassigned] }), NULLABLE), { kind: "review", reason: "consumed" });
+  assert.notEqual(decideUse(use({ guards: [reassigned] }), REMOVED)?.kind, "admits");
+});
+
 test("the literals a one-of guard names are named by the use: no fresh value equals one", () => {
   const missing: UseOperation = { steps: [{ kind: "member", name: "missing", optional: false }, { kind: "member", name: "city", optional: false }], end: { kind: "none" } };
   const readable = guard({ kind: "truthy" });

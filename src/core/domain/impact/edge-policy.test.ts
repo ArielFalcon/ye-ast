@@ -76,35 +76,47 @@ test("an injection or template use between two classes or components is followed
 
 test("only a root a package or the language's libraries bind is outside the repository", () => {
   const evidence = [{ path: "src/a.ts", line: 1 }];
-  const root = (value: ImportOrigin) => edgeVerdict({ status: "complete", value, evidence }).kind === "drop";
+  const root = (value: ImportOrigin) => edgeVerdict({ status: "complete", value, evidence }, undefined, { id: "function", file: "src/b.ts" }).kind === "drop";
 
   assert.equal(root({ kind: "external", module: "typescript" }), true);
   assert.equal(root({ kind: "ambient", name: "Promise" }), true);
   assert.equal(root({ kind: "repository", file: "src/b.ts" }), false);
   assert.equal(root({ kind: "local-parameter", name: "x" }), false);
-  assert.equal(edgeVerdict({ status: "unknown", reason: "unresolved", evidence }).kind, "keep");
+  assert.equal(edgeVerdict({ status: "unknown", reason: "unresolved", evidence }, undefined, { id: "function", file: "src/b.ts" }).kind, "keep");
 });
 
 test("a root spelled alone that an import binds to another proven declaration redirects the edge to it", () => {
   const evidence = [{ path: "src/a.ts", line: 1 }];
   const repository: ImportOrigin = { kind: "repository", file: "src/parts.ts" };
 
-  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence, bare: true }, "constant", "function"), { kind: "redirect", to: "constant" });
-  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence, bare: true }, "constant", "constant"), { kind: "keep" });
+  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence, bare: true }, "constant", { id: "function", file: "src/parts.ts" }), { kind: "redirect", to: "constant" });
+  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence, bare: true }, "constant", { id: "constant", file: "src/parts.ts" }), { kind: "keep" });
 });
 
 test("an unproven binding or a root a longer chain reaches keeps the edge on the graph's target", () => {
   const evidence = [{ path: "src/a.ts", line: 1 }];
   const repository: ImportOrigin = { kind: "repository", file: "src/parts.ts" };
 
-  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence, bare: true }, undefined, "function"), { kind: "keep" });
-  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence }, "Logger", "error"), { kind: "keep" });
+  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence, bare: true }, undefined, { id: "function", file: "src/other.ts" }), { kind: "keep" });
+  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence }, "Logger", { id: "error", file: "src/parts.ts" }), { kind: "keep" });
+});
+
+test("a root spelled alone whose declaration the graph places nowhere drops an edge into another file, and keeps one into its declaring file", () => {
+  const evidence = [{ path: "src/web/Resource.java", line: 1 }];
+  const declared: ImportOrigin = { kind: "repository", file: "src/web/Resource.java", declared: "app.web.Resource.Visits" };
+  const elsewhere = { id: "constructor", file: "src/dto/Visits.java" };
+  const inside = { id: "constructor", file: "src/web/Resource.java" };
+
+  assert.deepEqual(edgeVerdict({ status: "complete", value: declared, evidence, bare: true }, undefined, elsewhere), { kind: "drop" });
+  assert.deepEqual(edgeVerdict({ status: "complete", value: declared, evidence, bare: true }, undefined, inside), { kind: "keep" });
+  assert.deepEqual(edgeVerdict({ status: "complete", value: declared, evidence, bare: true }, "type", inside), { kind: "keep" });
+  assert.deepEqual(edgeVerdict({ status: "complete", value: declared, evidence }, undefined, elsewhere), { kind: "keep" });
 });
 
 test("a root spelled alone that a parameter binds drops the edge, whatever the graph matched it to", () => {
   const evidence = [{ path: "src/a.ts", line: 1 }];
   const parameter: ImportOrigin = { kind: "local-parameter", name: "redact" };
 
-  assert.deepEqual(edgeVerdict({ status: "complete", value: parameter, evidence, bare: true }), { kind: "drop" });
-  assert.deepEqual(edgeVerdict({ status: "complete", value: parameter, evidence }), { kind: "keep" });
+  assert.deepEqual(edgeVerdict({ status: "complete", value: parameter, evidence, bare: true }, undefined, { id: "redact", file: "src/redact.ts" }), { kind: "drop" });
+  assert.deepEqual(edgeVerdict({ status: "complete", value: parameter, evidence }, undefined, { id: "redact", file: "src/redact.ts" }), { kind: "keep" });
 });

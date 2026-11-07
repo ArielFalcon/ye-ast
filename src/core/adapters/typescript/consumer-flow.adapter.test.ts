@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { formatAccessPath, parseAccessPath } from "../../domain/contracts/access-path.ts";
-import type { Carrier, CarrierSite, FlowResult } from "../../domain/contracts/consumer-flow.ts";
+import { siteLine, type Carrier, type CarrierSite, type FlowResult } from "../../domain/contracts/consumer-flow.ts";
 import type { Predicate } from "../../domain/contracts/use-operation.ts";
 import type { Guard } from "../../domain/contracts/verdict.ts";
 import { createConsumerFlowReader } from "./consumer-flow.adapter.ts";
@@ -35,8 +35,9 @@ const frontiers = (result: FlowResult) => result.frontiers.map((frontier) => `${
 const next = (result: FlowResult) =>
   result.next.map(({ carrier }) => {
     const { site } = carrier;
-    const where = site.kind === "member" ? `${site.owner}.${site.member}` : site.kind === "parameter" ? `${site.symbol}#${site.index}` : "symbol" in site ? site.symbol : site.kind === "input" ? site.name : site.callee;
-    return `${site.kind} ${where}@${site.kind === "member" ? (site.line === undefined ? "-" : site.line - HEADER_LINES) : site.kind === "input" ? "-" : site.line - HEADER_LINES} ${dotted(carrier.path)}`;
+    const where = site.kind === "member" ? `${site.owner}.${site.member}` : site.kind === "parameter" ? `${site.symbol}#${site.index}` : "symbol" in site ? site.symbol : site.kind === "input" ? site.name : site.kind === "call-result" ? site.callee : site.kind;
+    const line = siteLine(site);
+    return `${site.kind} ${where}@${line === undefined ? "-" : line - HEADER_LINES} ${dotted(carrier.path)}`;
   });
 const steps = (result: FlowResult) => result.next.map(({ hops }) => hops.map((hop) => hop.step).join(">"));
 
@@ -485,6 +486,20 @@ test("a carrier the reader cannot place is a frontier, never an empty result", a
   assert.equal(absent.frontiers.length, 1);
   const unread = await follow([file], { kind: "return", repo: "repo", file: "none.ts", symbol: "f", line: 1 }, "owner");
   assert.equal(unread.frontiers[0]!.reason, "source-unreadable");
+});
+
+test("a site kind this reader does not follow yet is a frontier at its place, never an empty result nor a walk as another kind", async () => {
+  const file = source("a.ts", ["class Page {", "  load() { return 1 }", "}"]);
+  const sites: CarrierSite[] = [
+    { kind: "member-read", repo: "repo", file: "a.ts", line: at(2), column: 3, owner: "Page", member: "load" },
+    { kind: "method-parameter", repo: "repo", file: "a.ts", owner: "Page", method: "load", index: 0 },
+    { kind: "template-call-result", repo: "repo", resource: "a.html", start: 0, end: 4, callee: "load", argument: 0 },
+  ];
+  for (const site of sites) {
+    const result = await follow([file], site, "owner");
+    assert.deepEqual([result.uses, result.next], [[], []], site.kind);
+    assert.deepEqual(result.frontiers.map(({ cause, reason }) => `${cause} ${reason}`), ["unmodelled-flow source-unreadable"], site.kind);
+  }
 });
 
 const ROUTES = (extra: string) => [

@@ -1,6 +1,7 @@
 import { canonicalJson } from "../shared/canonical-json.ts";
 import type { Result } from "../shared/result.ts";
 import { ELEMENT, parseAccessPath, type AccessPath } from "./access-path.ts";
+import type { ValueSet } from "./payload-shape.ts";
 import type { Literal } from "./use-operation.ts";
 
 /** The classes of JSON value a change can introduce, in the order a normalized change lists them. */
@@ -51,6 +52,8 @@ export interface Change {
   values?: ValueLiterals;
   /** What a `meaning` entry says changed; every use the value reaches is to be reviewed. */
   meaning?: string;
+  /** What the old contract guaranteed, when it is read from a contract rather than assumed to be "present and non-null". */
+  oldGuarantee?: ValueSet;
 }
 
 export interface ChangeRefusal {
@@ -67,26 +70,54 @@ export function parseChange(input: ChangeInput, property: AccessPath): Result<Ch
     if (entry === undefined) return refuse("unsupported-change", item);
     if (!entries.some((held) => canonicalJson(held) === canonicalJson(entry))) entries.push(entry);
   }
-  entries.sort((a, b) => CHANGE_KINDS.indexOf(kindOf(a)) - CHANGE_KINDS.indexOf(kindOf(b)));
-  const alwaysAbsent = entries.some((entry) => ALWAYS_ABSENT.has(kindOf(entry)));
-  if (alwaysAbsent && entries.length > 1) return refuse("contradictory-change", input);
+  if (entries.some((entry) => ALWAYS_ABSENT.has(kindOf(entry))) && entries.length > 1) return refuse("contradictory-change", input);
   if (contradicts(entries)) return refuse("contradictory-change", input);
-  const introduced = VALUE_CLASSES.filter((value) => entries.some((entry) => introducedBy(entry) === value));
+  return { ok: true, value: normalized(entries, property) };
+}
+
+/** What a change introduces and retires, as value sets: the classes and literals the new contract permits that the old one did not, and the literals it no longer produces. */
+export interface ValueDelta {
+  introduced: readonly ValueClass[];
+  added: readonly Literal[];
+  retired: readonly Literal[];
+  /** The new contract permits nothing but absence; no other class is introduced. */
+  alwaysAbsent: boolean;
+  /** What the old contract guaranteed, which the answer states. */
+  oldGuarantee: ValueSet;
+}
+
+/**
+ * The change a delta between two contracts makes, normalized as `parseChange` normalizes a written one. It accepts what
+ * a written hypothesis cannot say: several introduced classes, and a retired literal outside a new class.
+ */
+export function derivedChange({ introduced, added, retired, alwaysAbsent, oldGuarantee }: ValueDelta): Result<Change, ChangeRefusal> {
+  const written = { values: { added, removed: retired } };
+  const listed = added.length + retired.length > 0;
+  const values = listed ? valuesOf(written.values) : undefined;
+  if (listed && values === undefined) return refuse("unsupported-change", written);
+  if (values?.values.added.some((literal) => values.values.removed.includes(literal))) return refuse("contradictory-change", written);
+  const entries: ChangeEntry[] = alwaysAbsent ? ["removed"] : VALUE_CLASSES.filter((value) => introduced.includes(value)).map(entryIntroducing);
+  if (!alwaysAbsent && values !== undefined) entries.push(values);
+  if (entries.length === 0) return refuse("unsupported-change", written);
+  return { ok: true, value: { ...normalized(entries, []), oldGuarantee } };
+}
+
+const entryIntroducing = (value: ValueClass): ChangeEntry => (value === "null" ? "nullable" : value === "undefined" ? "optional" : { type: value });
+
+function normalized(entries: ChangeEntry[], property: AccessPath): Change {
+  entries.sort((a, b) => CHANGE_KINDS.indexOf(kindOf(a)) - CHANGE_KINDS.indexOf(kindOf(b)));
   const renamed = entries.find((entry) => typeof entry === "object" && "renamed" in entry);
   const wrapped = entries.find((entry) => typeof entry === "object" && "wrapped" in entry);
   const values = entries.find((entry) => typeof entry === "object" && "values" in entry);
   const meaning = entries.find((entry) => typeof entry === "object" && "meaning" in entry);
   return {
-    ok: true,
-    value: {
-      entries,
-      introduced,
-      alwaysAbsent,
-      ...(renamed === undefined ? {} : { renamedTo: [...property.slice(0, -1), renamed.renamed] }),
-      ...(wrapped === undefined ? {} : { elementsAt: [...property, wrapped.wrapped, ELEMENT] }),
-      ...(values === undefined ? {} : { values: values.values }),
-      ...(meaning === undefined ? {} : { meaning: meaning.meaning }),
-    },
+    entries,
+    introduced: VALUE_CLASSES.filter((value) => entries.some((entry) => introducedBy(entry) === value)),
+    alwaysAbsent: entries.some((entry) => ALWAYS_ABSENT.has(kindOf(entry))),
+    ...(renamed === undefined ? {} : { renamedTo: [...property.slice(0, -1), renamed.renamed] }),
+    ...(wrapped === undefined ? {} : { elementsAt: [...property, wrapped.wrapped, ELEMENT] }),
+    ...(values === undefined ? {} : { values: values.values }),
+    ...(meaning === undefined ? {} : { meaning: meaning.meaning }),
   };
 }
 
@@ -117,7 +148,7 @@ function entryOf(item: ChangeEntryInput): ChangeEntry | undefined {
 
 const LITERAL_ORDER = ["boolean", "number", "string"];
 
-function valuesOf(written: unknown): ChangeEntry | undefined {
+function valuesOf(written: unknown): { values: ValueLiterals } | undefined {
   if (typeof written !== "object" || written === null || Array.isArray(written)) return undefined;
   const lists = written as Readonly<Record<string, unknown>>;
   if (Object.keys(lists).some((key) => key !== "added" && key !== "removed")) return undefined;

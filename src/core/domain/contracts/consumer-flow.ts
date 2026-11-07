@@ -25,7 +25,16 @@ export type CarrierSite =
    * The value a class member holds: a field, an `input()`, a signal, an `@Input()`. `line` is the member's first line,
    * absent when the producer reads only a template; a member is the same carrier whatever line it comes with.
    */
-  | { kind: "member"; repo: string; file: string; owner: string; member: string; line?: number };
+  | { kind: "member"; repo: string; file: string; owner: string; member: string; line?: number }
+  /** The read of a member of `owner` at one occurrence outside its class; `column` is 1-based, so two reads on a line stay apart. */
+  | { kind: "member-read"; repo: string; file: string; line: number; column: number; owner: string; member: string }
+  /** The value a component method receives as its parameter at `index`, 0-based, when a template passes it; the method is named by its class, with no declaration line. */
+  | { kind: "method-parameter"; repo: string; file: string; owner: string; method: string; index: number }
+  /**
+   * The value the call of `callee` in a template expression returns, going back to that expression: `resource` is the
+   * template, `start` and `end` the expression's offsets in it, `argument` the 0-based position the value was passed at.
+   */
+  | { kind: "template-call-result"; repo: string; resource: string; start: number; end: number; callee: string; argument: number };
 
 /** A value being followed, and where the changed property sits inside it. */
 export interface Carrier {
@@ -39,6 +48,12 @@ export function carrierKey(site: CarrierSite): string {
   const { kind, repo, file, owner, member } = site;
   return canonicalJson({ kind, repo, file, owner, member });
 }
+
+/** The file or template a site is in. */
+export const siteFile = (site: CarrierSite): string => ("resource" in site ? site.resource : site.file);
+
+/** The first line of the site's declaration or its occurrence; absent when the site is not placed by a line. */
+export const siteLine = (site: CarrierSite): number | undefined => ("line" in site ? site.line : undefined);
 
 const FLOW_STEPS = [
   "http-call",
@@ -133,8 +148,7 @@ export interface FlowResult {
 export const NO_FLOW: FlowResult = { uses: [], next: [], frontiers: [] };
 
 export function sourceUnreadable(site: CarrierSite): FlowResult {
-  const line = site.kind === "input" ? 1 : site.kind === "member" ? (site.line ?? 1) : site.line;
-  return { uses: [], next: [], frontiers: [{ at: { path: site.file, line }, cause: "unmodelled-flow", reason: "source-unreadable", hops: [] }] };
+  return { uses: [], next: [], frontiers: [{ at: { path: siteFile(site), line: siteLine(site) ?? 1 }, cause: "unmodelled-flow", reason: "source-unreadable", hops: [] }] };
 }
 
 export function templateUnreadable(at: Evidence): FlowResult {

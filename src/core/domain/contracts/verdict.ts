@@ -28,9 +28,9 @@ export interface FallbackGuard extends PlacedGuard {
   replacement: Replacement;
 }
 
-/** A construct whose test the language module does not evaluate. */
+/** A construct whose test the language module does not evaluate; `reassigned` marks a read the carried value and a conditional write may both reach. */
 export interface UntestedGuard extends PlacedGuard {
-  kind: "non-null-assertion" | "type-guard" | "assertion" | "instanceof" | "case";
+  kind: "non-null-assertion" | "type-guard" | "assertion" | "instanceof" | "case" | "reassigned";
 }
 
 /** The guards of one use, in the order the value passes them. */

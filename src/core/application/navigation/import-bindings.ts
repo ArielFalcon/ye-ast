@@ -31,7 +31,11 @@ export function importBindings(store: CodeGraphReader, file: string, dependencie
 }
 
 function namedDeclaration(store: CodeGraphReader, dependency: ModuleDependency, binding: ModuleBinding): GraphSymbol | undefined {
-  if (binding.exportedAs === undefined || dependency.target.kind !== "repository") return undefined;
-  const named = branchesOf(containmentTree(store, store.symbolsInFiles([dependency.target.file]))).filter((branch) => declarationPath(branch) === binding.exportedAs);
+  return binding.exportedAs === undefined || dependency.target.kind !== "repository" ? undefined : declarationAt(store, dependency.target.file, binding.exportedAs);
+}
+
+/** The one declaration of `file` at the dotted containment `path`; none when the graph places none or several there. */
+export function declarationAt(store: CodeGraphReader, file: string, path: string): GraphSymbol | undefined {
+  const named = branchesOf(containmentTree(store, store.symbolsInFiles([file]))).filter((branch) => declarationPath(branch) === path);
   return named.length === 1 ? named[0]!.declaration : undefined;
 }
