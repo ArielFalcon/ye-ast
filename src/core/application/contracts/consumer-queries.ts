@@ -159,8 +159,8 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
 function read(session: ConsumerSession, carrier: Carrier): FlowResult {
   const flow = session.flow.follow(carrier);
   const { site } = carrier;
-  if (site.kind !== "member") return flow;
-  const template = session.templates.follow({ site, path: carrier.path });
+  const template = site.kind === "member" ? session.templates.follow({ site, path: carrier.path }) : site.kind === "template-call-result" ? session.templates.follow({ site, path: carrier.path }) : undefined;
+  if (template === undefined) return flow;
   return { uses: [...flow.uses, ...template.uses], next: [...flow.next, ...template.next], frontiers: [...flow.frontiers, ...template.frontiers] };
 }
 

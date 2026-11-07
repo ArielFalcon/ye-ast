@@ -21,8 +21,9 @@ export async function createConsumerTemplateReader(deps: ConsumerTemplatesDeps, 
   return {
     follow(carrier) {
       const { site } = carrier;
+      if (site.kind !== "member") return NO_FLOW;
       const unit = units.find(({ component }) => component.path === site.file && component.symbol === site.owner);
-      if (unit !== undefined) return deps.flow.follow(unit, carrier);
+      if (unit !== undefined) return deps.flow.follow(unit, { site, path: carrier.path });
       const component = classes.find((candidate) => candidate.kind === "component" && candidate.ref.path === site.file && candidate.ref.symbol === site.owner);
       return component === undefined ? NO_FLOW : templateUnreadable({ path: component.ref.path, line: component.ref.line });
     },
