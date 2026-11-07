@@ -89,7 +89,10 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    repository type names a supertype outside the repository (its own supertypes are not in the sources), or the sources
    hold an anonymous class, a lambda or a method reference (an implementation of an interface they do not state), an
    aspect, or a Java source that does not parse. The implicit supertypes of classes, enums and records
-   (`java.lang.Object`, `Enum` and the interfaces it implements, `Record`) stay unknown. The leaf's evidence is the module or the global it is rooted at, as for every other
+   (`java.lang.Object`, `Enum` and the interfaces it implements, `Record`) stay unknown. Reflection from another class does not
+   weaken the proof: the runtime checks every reflective write against the field's declared type, so the field still
+   holds a platform object or a repository subtype, which the heritage rule above already keeps unknown (a write through
+   `sun.misc.Unsafe` is outside the promise, as an `any` cast is in TypeScript). The leaf's evidence is the module or the global it is rooted at, as for every other
    leaf; the answer gains no field, so the declared type itself is not written.
 
 ## Consequences
