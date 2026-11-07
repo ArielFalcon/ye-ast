@@ -132,7 +132,7 @@ export interface ComposedQueries {
   trace: TraceQueries;
   workspace: WorkspaceQueries;
   workspaceImpact: WorkspaceImpactQueries;
-  /** What changing the contract of an operation, by hypothesis or between two revisions, does to the code that consumes it (RFC-0022, RFC-0023); a library surface only until the MCP, CLI and protocol expose it. */
+  /** What changing the contract of an operation, by hypothesis or between two revisions, does to the code that consumes it (RFC-0022, RFC-0023). */
   contractConsequences: ContractConsequencesQueries;
   decisions: DecisionQueries;
   redaction: Redaction;

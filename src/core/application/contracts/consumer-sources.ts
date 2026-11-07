@@ -63,8 +63,8 @@ interface Reading {
 
 /**
  * The workspace read of consequences queries: for a set of hypotheses, the repositories' sources and code graphs held
- * until the holder of the workspace answers, and for each hypothesis the links the join admitted and the fact envelope
- * that declares it. A repository read live, or one the refresh could not provide, has no reader, so a carrier in it is a frontier.
+ * until the holder of the workspace answers, the fact envelope of what was asked, and for each hypothesis the links the join
+ * admitted. A repository read live, or one the refresh could not provide, has no reader, so a carrier in it is a frontier.
  */
 export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSources {
   const heads = createHeadReader(deps.heads);
