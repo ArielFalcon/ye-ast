@@ -130,3 +130,15 @@ test("an abstract method a more specific interface declares again overrides the 
 
   assert.deepEqual(await targetsOf([base, strict, lambda, SENDER], port, 3), { kind: "bodies", bodies: [body(SENDER, 4)] });
 });
+
+test("overloads of one name and arity whose parameter types hold a type variable of their interface may merge under a type argument, so the interface and every one below it may be functional and a lambda makes the bodies unknown", async () => {
+  const port = java("Port.java", ["package app;", " public interface Port<T> {", " void send(T s);", " void send(String s);", " }"]);
+  const sub = java("Sub.java", ["package app;", " interface Sub extends Port<String> {", "}"]);
+  const lambda = java("Refs.java", ["package app;", " class Refs {", " Sub p = s -> {", "}", ";", " }"]);
+  const sender = java("Sender.java", ["package app;", " public class Sender implements Port<String> {", " public void send(String s) {", "}", " }"]);
+  const mid = java("Mid.java", ["package app;", " interface Mid<T> extends Port {", " void accept(T s);", " void accept(String s);", " default void send(String s) {", "}", " default void close() {", "}", " }"]);
+  const deeper = java("Sub.java", ["package app;", " interface Sub extends Mid<String> {", "}"]);
+
+  assert.deepEqual(await targetsOf([sub, lambda, sender], port, 4), { kind: "unknown" });
+  assert.deepEqual(await targetsOf([SENDER, mid, deeper, lambda]), { kind: "unknown" });
+});

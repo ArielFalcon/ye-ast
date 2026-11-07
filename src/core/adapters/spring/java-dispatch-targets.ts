@@ -112,6 +112,8 @@ function bodyIn(type: TypeDecl, method: MethodDecl, hierarchy: Hierarchy): Metho
 interface Member {
   abstract: boolean;
   from: TypeDecl;
+  /** A parameter type is or holds a type variable of the declaring interface, which a type argument may make any type. */
+  generic: boolean;
 }
 
 /**
@@ -130,8 +132,8 @@ function isFunctional(type: TypeDecl, hierarchy: Hierarchy): boolean {
  * every inherited method of the same signature, and an inherited one overrides those of the interfaces above the one
  * that declares it; abstract methods of one signature from unrelated interfaces merge into one. `undefined` when the
  * sources do not settle it: a supertype outside the repository, a cycle, or two methods of one name and arity that
- * different interfaces spell with different parameter types, which a type argument or a qualified name may make the same
- * signature.
+ * different interfaces spell with different parameter types, or of which one has a parameter type that is or holds a type
+ * variable of its interface, which a type argument or a qualified name may make the same signature.
  */
 function membersOf(type: TypeDecl, hierarchy: Hierarchy, known: Map<TypeDecl, ReadonlyMap<string, Member> | undefined>): ReadonlyMap<string, Member> | undefined {
   if (known.has(type)) return known.get(type);
@@ -139,7 +141,7 @@ function membersOf(type: TypeDecl, hierarchy: Hierarchy, known: Map<TypeDecl, Re
   if (hierarchy.outside.has(type)) return undefined;
   const members = new Map<string, Member>();
   for (const method of type.methods) {
-    if (!method.modifiers.includes("static") && !method.modifiers.includes("private")) members.set(signatureOf(method), { abstract: !method.hasBody, from: type });
+    if (!method.modifiers.includes("static") && !method.modifiers.includes("private")) members.set(signatureOf(method), { abstract: !method.hasBody, from: type, generic: method.parameterTypes.some((parameter) => (parameter.match(/[A-Za-z_$][\w$]*/g) ?? []).some((name) => type.typeVariables.has(name))) });
   }
   const inherited = new Map<string, Member[]>();
   for (const supertype of hierarchy.supertypes.get(type) ?? []) {
@@ -150,10 +152,10 @@ function membersOf(type: TypeDecl, hierarchy: Hierarchy, known: Map<TypeDecl, Re
   for (const [signature, candidates] of inherited) {
     const kept = candidates.filter((candidate) => !candidates.some((other) => other.from !== candidate.from && ancestorsOf(other.from, hierarchy).includes(candidate.from)));
     const abstract = kept.every((candidate) => candidate.abstract);
-    members.set(signature, { abstract, from: kept[0]!.from });
+    members.set(signature, { ...kept[0]!, abstract });
   }
   const entries = [...members];
-  if (entries.some(([signature, member], index) => entries.some(([other, rival], later) => later > index && rival.from !== member.from && arityOf(other) === arityOf(signature)))) return undefined;
+  if (entries.some(([signature, member], index) => entries.some(([other, rival], later) => later > index && (rival.from !== member.from || rival.generic || member.generic) && arityOf(other) === arityOf(signature)))) return undefined;
   known.set(type, members);
   return members;
 }
