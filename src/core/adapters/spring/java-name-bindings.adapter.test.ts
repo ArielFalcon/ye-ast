@@ -123,7 +123,7 @@ test("a static import, which may import a member type of the name, proves nothin
   assert.deepEqual(await rootOf([LIMITS, onDemand], onDemandSite), unknownAt(onDemandSite));
 });
 
-test("a name inside a class whose declaration the reader does not place, anonymous or local, proves nothing", async () => {
+test("a name inside a local class, or an anonymous class of a type the sources do not declare, proves nothing", async () => {
   const anonymous = java("src/main/java/app/api/Meter.java", ["package app.api;", "", "import app.other.Limits;", "", "class Meter {", "  Object a() {", "    return new Object() {", "      Limits limits;", "    };", "  }", "}"]);
   const local = java("src/main/java/app/api/Gauge.java", ["package app.api;", "", "import app.other.Limits;", "", "class Gauge {", "  void a() {", "    class Reading {", "      Limits limits;", "    }", "  }", "}"]);
   const anonymousSite = at(anonymous, "Limits limits", "references", "Limits");
@@ -131,6 +131,37 @@ test("a name inside a class whose declaration the reader does not place, anonymo
 
   assert.deepEqual(await rootOf([LIMITS, anonymous], anonymousSite), unknownAt(anonymousSite));
   assert.deepEqual(await rootOf([LIMITS, local], localSite), unknownAt(localSite));
+});
+
+test("a name inside an anonymous class of a repository type binds a type the body declares, then a member type the type it instantiates offers, then the scope around the instantiation", async () => {
+  const probe = java("src/main/java/app/api/Probe.java", ["package app.api;", "", "public interface Probe {", "  class Reading {}", "}"]);
+  const meter = java("src/main/java/app/api/Meter.java", [
+    "package app.api;",
+    "",
+    "import app.other.Limits;",
+    "",
+    "class Meter {",
+    "  Object a() {",
+    "    return new Probe() {",
+    "      Limits around;",
+    "      Reading offered;",
+    "    };",
+    "  }",
+    "  Object b() {",
+    "    return new Probe() {",
+    "      class Limits {}",
+    "      Limits own;",
+    "    };",
+    "  }",
+    "}",
+  ]);
+  const around = at(meter, "Limits around", "references", "Limits");
+  const offered = at(meter, "Reading offered", "references", "Reading");
+  const own = at(meter, "Limits own", "references", "Limits");
+
+  assert.deepEqual(await rootOf([LIMITS, probe, meter], around), { status: "complete", value: { kind: "repository", file: LIMITS.path, declared: "app.other.Limits" }, bare: true, evidence: [{ path: meter.path, line: around.line }] });
+  assert.deepEqual(await rootOf([LIMITS, probe, meter], offered), { status: "complete", value: { kind: "repository", file: probe.path, declared: "app.api.Probe.Reading" }, bare: true, evidence: [{ path: meter.path, line: offered.line }] });
+  assert.deepEqual(await rootOf([LIMITS, probe, meter], own), unknownAt(own));
 });
 
 test("a class declared in an enclosing block before the use, or in an earlier group of its switch, shadows every other type of the name and proves nothing about it; one declared after does not", async () => {

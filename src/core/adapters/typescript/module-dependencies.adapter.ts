@@ -5,7 +5,7 @@ import type { ModuleDependencies, ModuleDependency, ModuleSource, UntraversedRef
 import type { ModuleTarget } from "../../domain/shared/module-target.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { defaultDeclarationName, moduleStatement } from "./import-bindings.ts";
-import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
+import { moduleResolverOf, packageOf } from "./module-resolver.ts";
 import { sourceTree } from "./source-tree.ts";
 import { declaredNames } from "./syntax-names.ts";
 
@@ -19,8 +19,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
       const selected = options?.files === undefined ? undefined : new Set(options.files);
       const held = new Map(sources.map((source) => [source.path, source]));
       const texts = new Map(sources.map(({ path, content }) => [path, content]));
-      const packages = manifestPackages(sources);
-      const resolver = createModuleResolver(async (file) => texts.get(file), packages, { jsonModules: true });
+      const resolver = moduleResolverOf(sources, { jsonModules: true });
       const parse = (file: string): ts.SourceFile => sourceTree(held.get(file)!, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
       const files: ModuleSource[] = [];
       const pending: PendingDependency[] = [];
