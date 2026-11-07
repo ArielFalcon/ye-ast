@@ -536,6 +536,9 @@ created with: a feature api file 9/11 (example 5b6ec5ca), a page that injects it
 
 The patterns slices are deferred with that section.
 
+Open defects, agent usability findings and the multi-repository analysis from the 2026-11-07 evaluation are in
+[the trace quality findings](../../evaluations/trace-quality/2026-11-07-findings.md).
+
 ## Decisions
 
 Accepted by the owner on 2026-11-01: "Acepto las recomendaciones". Question 5 lapses with the patterns section.
