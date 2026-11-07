@@ -98,9 +98,9 @@ const entrypointNames = (value: ImpactValue): (string | undefined)[] => value.en
 test("a template call through an injected field reaches the component and its route, with the template as evidence", async () => {
   const value = await callersOf("src/app/archive.api.ts", "archive");
   const inline = value.symbols.find((symbol) => symbol.symbol === "ArchivePage");
-  assert.deepEqual(inline?.via, { file: "src/app/archive.api.ts", symbol: "archive", lines: [4], basis: "call" });
+  assert.deepEqual(inline?.via, { file: "src/app/archive.api.ts", symbol: "archive", lines: [4], basis: "call", derivation: "proven" });
   const external = value.symbols.find((symbol) => symbol.symbol === "ReportPage");
-  assert.deepEqual(external?.via, { file: "src/app/archive.api.ts", symbol: "archive", resource: "src/app/report.page.html", lines: [2], basis: "call" });
+  assert.deepEqual(external?.via, { file: "src/app/archive.api.ts", symbol: "archive", resource: "src/app/report.page.html", lines: [2], basis: "call", derivation: "proven" });
   assert.ok(entrypointNames(value).includes("/archive"), JSON.stringify(value.entrypoints));
   assert.ok(entrypointNames(value).includes("/report"), JSON.stringify(value.entrypoints));
   assert.ok(callerNames(value).includes("ThisPage"), JSON.stringify(value.symbols));

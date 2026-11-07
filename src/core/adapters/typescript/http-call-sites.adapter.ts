@@ -6,9 +6,10 @@ import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { moduleResolverOf, type ModuleResolver } from "./module-resolver.ts";
 import { buildDefines, type BuildDefines } from "./url-define.ts";
-import { callUrl, joinedCallUrl, RUN_TIME_HOLE, type CallUrl } from "../../domain/topology/path-template.ts";
+import { callUrl, joinedCallUrl, RUN_TIME_HOLE, urlText } from "../../domain/topology/path-template.ts";
 import { injectedClass } from "./angular-injection.ts";
 import { declarationCounts } from "./syntax-names.ts";
+import { defaultExportOf } from "./import-bindings.ts";
 import { bindingNames, constructorParameters, hasModifier, lineOf, propertyOf, thisClass, typeName } from "./syntax.ts";
 import { ANONYMOUS_DEFAULT, recoveredModuleShape, type ModuleShape } from "./module-shape.ts";
 import { createDeclarationLookup, type DeclarationLookup } from "./declaration-lookup.ts";
@@ -153,17 +154,14 @@ function describe(file: SourceFile): FileShape {
   const module = recoveredModuleShape(source);
   const shape: FileShape = { source, declared: declarationCounts(source), bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), module, imports: module.imports, classes: new Map(), enums: new Map() };
   for (const statement of source.statements) {
-    if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
-      shape.defaultExport = statement.expression;
-      continue;
-    }
+    const held = defaultExportOf(statement);
+    if (held !== undefined) shape.defaultExport = held;
     if (ts.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) {
         if (ts.isIdentifier(declaration.name) && declaration.initializer !== undefined) shape.consts.set(declaration.name.text, declaration.initializer);
       }
       continue;
     }
-    if ((ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) && hasModifier(statement, ts.SyntaxKind.ExportKeyword) && hasModifier(statement, ts.SyntaxKind.DefaultKeyword)) shape.defaultExport = statement;
     if (ts.isClassDeclaration(statement) && statement.name !== undefined) shape.classes.set(statement.name.text, statement);
     if (ts.isEnumDeclaration(statement)) shape.enums.set(statement.name.text, statement);
   }
@@ -407,12 +405,6 @@ function parameterNames(parameters: readonly ts.ParameterDeclaration[]): RunTime
   return new Set(parameters.flatMap((parameter) => bindingNames(parameter.name)));
 }
 
-/** The names a function or method binds, and what the variables it declares are initialized to. */
-function scopeOf(declaration: ts.MethodDeclaration | ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression): Scope {
-  const point = declaration.body ?? declaration;
-  return lexicalScope(point, true);
-}
-
 /**
  * The lexical bindings visible at a call, with inner declarations taking precedence over outer declarations.
  */
@@ -420,8 +412,8 @@ function scopeOfCall(call: ts.CallExpression): Scope {
   return lexicalScope(call);
 }
 
-function lexicalScope(point: ts.Node, includePoint = false): Scope {
-  const node = includePoint ? point : point.parent;
+function lexicalScope(point: ts.Node): Scope {
+  const node = point.parent;
   if (node === undefined || ts.isSourceFile(node)) return NO_SCOPE;
   const cached = LEXICAL_SCOPES.get(node);
   if (cached !== undefined) return cached;
@@ -656,8 +648,8 @@ class Reader {
     const own = callUrl(path);
     const base = own.origin === undefined ? await this.baseUrl(shape, call) : undefined;
     if (base === UNDECIDED) return { ...unknown, stated: { method, path: namedHoles(own.path) } };
-    const url: CallUrl = base === undefined ? own : joinedCallUrl(base, path);
-    return { target: { status: "complete", value: { method, path: namedHoles(url.path), ...(url.origin === undefined ? {} : { base: url.origin }) }, evidence: unknown.target.evidence } };
+    const url = base === undefined ? own : joinedCallUrl(base, path);
+    return { target: { status: "complete", value: { method, path: urlText({ ...url, path: namedHoles(url.path) }) }, evidence: unknown.target.evidence } };
   }
 
   /** The base URL the call's options declare: undefined when they declare none, `UNDECIDED` when the snapshot does not decide it. */
@@ -1085,7 +1077,7 @@ function sourceBindings(source: ts.SourceFile): ReadonlySet<string> {
 }
 
 function isAmbient(node: ts.Node): boolean {
-  return ts.canHaveModifiers(node) && (ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) ?? false);
+  return hasModifier(node, ts.SyntaxKind.DeclareKeyword);
 }
 
 function mayOverrideEncoder(source: ts.SourceFile): boolean {

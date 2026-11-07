@@ -56,6 +56,11 @@ export function joinedCallUrl(...parts: readonly string[]): CallUrl {
   return urlOf(origin, segments);
 }
 
+/** A URL as the one text a call target states: its origin, then its path. */
+export function urlText(url: CallUrl): string {
+  return `${url.origin ?? ""}${url.path}`;
+}
+
 function pathSegments(path: string): string[] {
   return path.split("/").filter((segment) => segment !== "");
 }

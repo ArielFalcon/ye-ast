@@ -136,6 +136,10 @@ export async function usesOf(branch: DeclarationBranch<GraphSymbol>, input: Uses
       continue;
     }
     const verdict = verdicts[index]!;
+    if (verdict.kind === "keep" && verdict.derivation === "name-match") {
+      unproved.push({ root: verdict.receiver ?? target.name, line: edge.line!, spelling: target.name });
+      continue;
+    }
     const place = edge.line === null ? undefined : { line: edge.line, ...(edge.column === null ? {} : { column: edge.column + 1 }) };
     if (verdict.kind !== "drop") declared(verdict.kind === "redirect" ? verdict.to : target, edge.kind, place);
     else if (verdict.root.kind === "external") use({ module: verdict.root.module }, edge.kind, place);

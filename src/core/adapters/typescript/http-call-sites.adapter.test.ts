@@ -253,7 +253,7 @@ test("an injected client's receiver is not the URL supplied to its verb", async 
     "  load() { return this.http.get(this.entityUrl) }",
     "}",
   ].join("\n"));
-  assert.deepEqual(sites(await reader.of([caller], "web")), ["GET /api/owners via http://localhost:9966@src/service.ts:6"]);
+  assert.deepEqual(sites(await reader.of([caller], "web")), ["GET http://localhost:9966/api/owners@src/service.ts:6"]);
 });
 
 test("a path exported by another file resolves through the import, and a template literal composes it", async () => {
@@ -547,13 +547,13 @@ test("a path the snapshot does not decide is an unknown target at the call, neve
   assert.deepEqual(found[0]?.target.status === "unknown" ? found[0].target.evidence : [], [{ path: "src/app/app.component.ts", line: 6 }]);
 });
 
-test("a base URL the call declares is carried beside the path", async () => {
+test("a base URL the call declares leads the path", async () => {
   const component = source(
     "src/app/app.component.ts",
     ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "const DIRECTIONS_URL = 'https://maps.example.com/directions'", "export class AppComponent {", "  private readonly http = inject(HttpClient)", "  route(): void {", "    this.http.get('/route', { baseUrl: DIRECTIONS_URL })", "  }", "}"].join("\n"),
   );
 
-  assert.deepEqual(sites(await reader.of([component], "shop-web")), ["GET /directions/route via https://maps.example.com@src/app/app.component.ts:7"]);
+  assert.deepEqual(sites(await reader.of([component], "shop-web")), ["GET https://maps.example.com/directions/route@src/app/app.component.ts:7"]);
 });
 
 test("a base URL written as a shorthand or under a quoted key is the base the call declares", async () => {
@@ -561,8 +561,8 @@ test("a base URL written as a shorthand or under a quoted key is the base the ca
     source(path, ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "const baseUrl = 'https://maps.example.com'", "export class AppComponent {", "  private readonly http = inject(HttpClient)", "  route(): void {", `    this.http.get('/route', ${options})`, "  }", "}"].join("\n"));
 
   assert.deepEqual(sites(await reader.of([component("shorthand.ts", "{ baseUrl }"), component("quoted.ts", "{ 'baseUrl': baseUrl }")], "shop-web")), [
-    "GET /route via https://maps.example.com@quoted.ts:7",
-    "GET /route via https://maps.example.com@shorthand.ts:7",
+    "GET https://maps.example.com/route@quoted.ts:7",
+    "GET https://maps.example.com/route@shorthand.ts:7",
   ]);
 });
 
@@ -783,8 +783,8 @@ test("a base URL the call declares but the snapshot does not decide is an unknow
   assert.deepEqual(sites(await reader.of([component("    this.http.get('/route', { baseUrl: method })")], "shop-web")), ["unknown unresolved@src/app/app.component.ts:6"]);
 });
 
-test("a URL that names its host overrides the base the call declares, decided or not", async () => {
-  assert.deepEqual(sites(await reader.of([component("    this.http.get('https://maps.example.com/route?q=1', { baseUrl: method })")], "shop-web")), ["GET /route via https://maps.example.com@src/app/app.component.ts:6"]);
+test("a URL that names its host, after `scheme://` or a bare `//`, overrides the base the call declares, decided or not", async () => {
+  assert.deepEqual(sites(await reader.of([component("    this.http.get('//maps.example.com/route?q=1', { baseUrl: method })")], "shop-web")), ["GET //maps.example.com/route@src/app/app.component.ts:6"]);
 });
 
 test("a request whose base the snapshot does not decide still states the method and the path the code writes", async () => {

@@ -16,7 +16,10 @@ export interface ImportersRead {
 const CONTAINMENT = "contains";
 const IMPORT = "imports";
 
-/** With `targets`, an edge they judge to reach another declaration than the file's, or none, makes no user. */
+/**
+ * With `targets`, an edge they judge to reach another declaration than the file's, or none, makes no user, and a file
+ * whose only edges into the file are name matches is one of its `unresolvedNamers`.
+ */
 export async function readImporters(store: CodeGraphReader, requested: readonly string[], references: readonly UnresolvedUse[], modules?: ModuleDependencies, targets?: EdgeTargets, signal?: AbortSignal): Promise<ImportersRead> {
   const files: ImportedFile[] = [];
   const unheld: string[] = [];
@@ -40,7 +43,7 @@ export async function readImporters(store: CodeGraphReader, requested: readonly 
     }
     const read = store.incomingEdges(nodes.map((node) => node.id));
     const sources = new Map(store.symbolsByIds([...new Set(read.map((edge) => edge.source))]).map((symbol) => [symbol.id, symbol]));
-    const edges = targets === undefined ? read : await reaching(targets, file, read, sources, new Map(nodes.map((node) => [node.id, node])), signal);
+    const { edges, matched } = targets === undefined ? { edges: read, matched: new Set<GraphEdge>() } : await reaching(targets, file, read, sources, new Map(nodes.map((node) => [node.id, node])), signal);
     const sourceFiles = new Map([...sources.values()].map((symbol) => [symbol.id, symbol.file]));
     const from = (accept: (edge: GraphEdge) => boolean): string[] =>
       sortedUnique(edges.filter(accept).flatMap((edge) => sourceFiles.get(edge.source) ?? []).filter((other) => other !== file));
@@ -51,23 +54,25 @@ export async function readImporters(store: CodeGraphReader, requested: readonly 
     const reexports = consumers?.reexports ?? new Set<string>();
     const dynamic = consumers?.dynamic ?? new Set<string>();
     const types = consumers?.types ?? new Set<string>();
+    const users = sortedUnique([...from((edge) => edge.kind !== CONTAINMENT && !matched.has(edge)), ...imports, ...reexports, ...dynamic, ...types].filter((source) => source !== file));
+    const matchers = from((edge) => matched.has(edge)).filter((source) => !users.includes(source));
     files.push({
       file,
       importers: sortedUnique([...from((edge) => edge.kind === IMPORT).filter((source) => !(reexports.has(source) || dynamic.has(source) || types.has(source)) || imports.has(source)), ...imports].filter((source) => source !== file)),
       ...(modules === undefined ? {} : { reexporters: sortedUnique([...reexports].filter((source) => source !== file)) }),
       ...(modules === undefined ? {} : { dynamicImporters: sortedUnique([...dynamic].filter((source) => source !== file)), typeImporters: sortedUnique([...types].filter((source) => source !== file)) }),
-      users: sortedUnique([...from((edge) => edge.kind !== CONTAINMENT), ...imports, ...reexports, ...dynamic, ...types].filter((source) => source !== file)),
-      unresolvedNamers: unresolvedNamersOf(file, declared, qualified, references),
+      users,
+      unresolvedNamers: sortedUnique([...unresolvedNamersOf(file, declared, qualified, references), ...matchers]),
     });
   }
   return { files, unheld };
 }
 
 /**
- * The edges into the file's nodes that still reach the file once `targets` judged them. Structure, imports and the file's
- * own edges are not judged: none of them makes a user.
+ * The edges into the file's nodes that still reach the file once `targets` judged them, and those of them the index
+ * matched by name alone (ADR-0036). Structure, imports and the file's own edges are not judged: none of them makes a user.
  */
-async function reaching(targets: EdgeTargets, file: string, edges: readonly GraphEdge[], sources: ReadonlyMap<GraphNodeId, GraphSymbol>, nodes: ReadonlyMap<GraphNodeId, GraphSymbol>, signal?: AbortSignal): Promise<readonly GraphEdge[]> {
+async function reaching(targets: EdgeTargets, file: string, edges: readonly GraphEdge[], sources: ReadonlyMap<GraphNodeId, GraphSymbol>, nodes: ReadonlyMap<GraphNodeId, GraphSymbol>, signal?: AbortSignal): Promise<{ edges: readonly GraphEdge[]; matched: ReadonlySet<GraphEdge> }> {
   const judged = edges.flatMap((edge) => {
     const source = sources.get(edge.source);
     const target = nodes.get(edge.target);
@@ -75,5 +80,6 @@ async function reaching(targets: EdgeTargets, file: string, edges: readonly Grap
   });
   const verdicts = await targets.verdictsOf(judged, signal);
   const away = new Set(judged.filter((_, index) => { const verdict = verdicts[index]!; return verdict.kind === "drop" || (verdict.kind === "redirect" && verdict.to.file !== file); }).map(({ edge }) => edge));
-  return edges.filter((edge) => !away.has(edge));
+  const matched = new Set(judged.filter((_, index) => { const verdict = verdicts[index]!; return verdict.kind === "keep" && verdict.derivation === "name-match"; }).map(({ edge }) => edge));
+  return { edges: edges.filter((edge) => !away.has(edge)), matched };
 }

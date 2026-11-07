@@ -2,8 +2,7 @@ import ts from "typescript";
 import type { Program, Unit } from "./consumer-flow.index.ts";
 import { declaringScope, namedFunction, propertyNameText, type NamedFunction } from "./consumer-flow.syntax.ts";
 import { injectedClass } from "./angular-injection.ts";
-import { isStatic } from "./syntax-names.ts";
-import { constructorParameters, thisClass, typeName, unwrapped } from "./syntax.ts";
+import { constructorParameters, isStatic, thisClass, typeName, unwrapped } from "./syntax.ts";
 
 /** A class of the snapshot with the unit that declares it. */
 export interface ClassRef {

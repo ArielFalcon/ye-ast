@@ -1,3 +1,4 @@
+import type { DependenceDerivation } from "./impact-fact.ts";
 import type { ImportOrigin } from "../relations/resolved-reference.ts";
 import type { Finding } from "../shared/fact.ts";
 
@@ -84,6 +85,9 @@ export function followsRelation({ kind, sourceKind, targetKind }: PolicyEdge): b
  */
 export const CALL_EDGE_KINDS: readonly string[] = ["calls", "instantiates"];
 
+/** The declarations a relation ends at, and the only ones that can own a local an `inject()` call initializes. */
+export const LOCAL_OWNER_KINDS: readonly string[] = [...EDGE_POLICY.relations.from, "function"];
+
 /** The followed edges' kinds, for asking a store only for them. */
 export const FOLLOWED_EDGE_KINDS: readonly string[] = EDGE_POLICY.rules.flatMap((rule) => rule.edges);
 
@@ -101,6 +105,20 @@ export function isIgnoredEdge({ synthesizedBy }: EdgeScore): boolean {
 export function edgeConfidence({ confidence, provenance }: EdgeScore): number {
   if (confidence !== null) return confidence;
   return provenance === "heuristic" ? EDGE_POLICY.unscoredHeuristicConfidence : 1;
+}
+
+/** How a graph edge whose value receiver was settled is known (ADR-0036): bound by a source proof, or by its name alone. */
+export type ReceiverSettlement = "proven" | "name-match";
+
+/**
+ * The score and the derivation of a graph edge the walk follows. An edge whose receiver a source proof binds to the
+ * callee's class counts as certain as ye-ast's own proofs; one the index matched by name on a value receiver no proof
+ * binds counts as a heuristic edge without a score, whatever score the index gave it; a heuristic edge is a name match.
+ */
+export function followedEdge(score: EdgeScore, settled?: ReceiverSettlement): { confidence: number; derivation: DependenceDerivation } {
+  if (settled === "proven") return { confidence: EDGE_POLICY.relations.confidence, derivation: "proven" };
+  if (settled === "name-match") return { confidence: EDGE_POLICY.unscoredHeuristicConfidence, derivation: "name-match" };
+  return { confidence: edgeConfidence(score), derivation: score.provenance === "heuristic" ? "name-match" : "resolved" };
 }
 
 /**

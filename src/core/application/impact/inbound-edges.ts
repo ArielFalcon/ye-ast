@@ -1,13 +1,13 @@
-import type { DependenceBasis } from "../../domain/impact/impact-fact.ts";
+import type { DependenceBasis, DependenceDerivation } from "../../domain/impact/impact-fact.ts";
 import { topLevelOf, isSeedable } from "../../domain/change/seeds.ts";
 import { declarationAnchor, declarationUseKey, referenceKey, uniqueReferenceKeys, type MemberReferenceProofs } from "../../domain/impact/impact-cuts.ts";
-import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followsEdge, followsRelation, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
+import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followedEdge, followsEdge, followsRelation, isIgnoredEdge, LOCAL_OWNER_KINDS, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
 import type { MemberSubstitute, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
+import { createGraphNavigation, isInside, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { edgeKey, type FollowedEdge } from "../navigation/edge-targets.ts";
 
 /**
@@ -26,6 +26,7 @@ export interface InboundEdge {
   resource?: string;
   /** The category of the selected evidence; observed call existence is kept separately for fan-in. */
   basis: DependenceBasis;
+  derivation: DependenceDerivation;
   /** The classes a provider may inject instead of the receiver a proven member call names. */
   substitutes?: readonly MemberSubstitute[];
 }
@@ -38,6 +39,7 @@ export interface InboundOccurrence {
   /** The file `line` is in when it is not `from`'s own: the template of a component. */
   resource?: string;
   basis: DependenceBasis;
+  derivation: DependenceDerivation;
   confidence: number;
   /** What the store recorded for the edge; `null` for a dependence ye-ast derived itself and for an edge the store did not mark. */
   provenance: GraphEdge["provenance"];
@@ -73,23 +75,22 @@ export interface InboundEdges {
   followed(): readonly FollowedEdge[];
 }
 
-/** What `EdgeTargets` judged of the edges read: those that reach no declaration they name, and those it moved to another. */
+/**
+ * What `EdgeTargets` judged of the edges read: those that reach no declaration they name, those it moved to another, and
+ * those whose value receiver it settled.
+ */
 export interface EdgeCorrections {
   /** By `edgeKey`: none of them is a dependence of its graph target. */
   dropped: ReadonlySet<string>;
   /** By the declaration an import proves the edge reaches, the edges the graph matched to another one. */
   into: ReadonlyMap<GraphNodeId, readonly FollowedEdge[]>;
+  /** By `edgeKey`: how each kept edge whose receiver is a value is known (ADR-0029 decision 11). */
+  settled?: ReadonlyMap<string, ReceiverSettlement>;
 }
 
 const NO_CORRECTIONS: EdgeCorrections = { dropped: new Set(), into: new Map() };
 
-function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
-  return inner.file === outer.file && outer.startLine <= inner.startLine && inner.endLine <= outer.endLine;
-}
 const USAGE_EDGES = ["calls", "instantiates", "references"];
-
-/** The declarations a relation ends at, and the only ones that can own a local an `inject()` call initializes. */
-const DECLARATION_KINDS: readonly string[] = [...EDGE_POLICY.relations.from, "function"];
 
 function holdsReference(source: GraphSymbol, use: Pick<GraphUnresolvedReference, "file" | "line">): boolean {
   return source.file === use.file && source.startLine <= use.line && use.line <= source.endLine;
@@ -118,6 +119,8 @@ export function createInboundEdges(
   interface Into {
     edge: GraphEdge;
     source: GraphSymbol;
+    /** Set for an edge moved to the declaration an import proves it reaches. */
+    moved?: true;
   }
   const intoCache = new Map<GraphNodeId, Into[]>();
   const followed: FollowedEdge[] = [];
@@ -131,7 +134,7 @@ export function createInboundEdges(
         return source === undefined || source.id === target.id ? [] : [{ edge, source }];
       });
       for (const { edge, source } of placed) followed.push({ edge, source, target });
-      const moved = (corrections.into.get(target.id) ?? []).filter(({ source }) => source.id !== target.id);
+      const moved = (corrections.into.get(target.id) ?? []).filter(({ source }) => source.id !== target.id).map(({ edge, source }) => ({ edge, source, moved: true as const }));
       into = [...placed.filter(({ edge }) => !corrections.dropped.has(edgeKey(edge))), ...moved];
       intoCache.set(target.id, into);
     }
@@ -145,7 +148,7 @@ export function createInboundEdges(
         typesAround(owner, bridge).flatMap(({ type, confidence }) =>
           methodsOf(type)
             .filter((candidate) => candidate.name === method.name)
-            .map((from) => ({ from, confidence, bridge, basis: "dispatch" as const, lines: [] })),
+            .map((from) => ({ from, confidence, bridge, basis: "dispatch" as const, derivation: "resolved" as const, lines: [] })),
         ),
       ),
     );
@@ -173,7 +176,7 @@ export function createInboundEdges(
         if (source?.kind === "file") importing.push({ file: source.file, confidence: edgeConfidence(edge) });
       }
     }
-    return importing.filter(({ file }) => !isTestFile(file)).flatMap(({ file, confidence }) => topLevelCodeOf(file).map((from) => ({ from, confidence, basis: "import" as const, lines: [] })));
+    return importing.filter(({ file }) => !isTestFile(file)).flatMap(({ file, confidence }) => topLevelCodeOf(file).map((from) => ({ from, confidence, basis: "import" as const, derivation: "resolved" as const, lines: [] })));
   }
 
   /** The classes whose injection or template use of `node` ye-ast read from the sources, only of `kinds` when given. */
@@ -184,7 +187,7 @@ export function createInboundEdges(
         const from = declarationAt(candidate.from);
         return from === undefined || isTestFile(from.file) || !followsRelation({ kind: candidate.kind, sourceKind: from.kind, targetKind: node.kind })
           ? []
-          : [{ from, confidence: EDGE_POLICY.relations.confidence, basis: "relation" as const, lines: [] }];
+          : [{ from, confidence: EDGE_POLICY.relations.confidence, basis: "relation" as const, derivation: "proven" as const, lines: [] }];
       });
   }
 
@@ -205,7 +208,7 @@ export function createInboundEdges(
       const bare = use.name === node.name;
       const occurrence = bare ? uniqueUse(use) : undefined;
       if (occurrence !== undefined && uniqueAnchor(node)) settledUses.push({ key: declarationUseKey(declarationAnchor(node.file, node.name), occurrence), target: node.id, source: from.id });
-      return [{ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" && (bare || use.name === throughThis) ? "call" : "reference", lines: [use.line] }];
+      return [{ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" && (bare || use.name === throughThis) ? "call" : "reference", derivation: "proven", lines: [use.line] }];
     });
   }
 
@@ -264,7 +267,7 @@ export function createInboundEdges(
         const occurrence = uniqueUse(use);
         if (occurrence === undefined) continue;
         if (memberUses === undefined && uniqueAnchor(node)) settledUses.push({ key: declarationUseKey(anchor, occurrence), target: node.id, ...(holdsOwner ? { source: from.id } : {}) });
-        if (holdsOwner) callers.push({ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" ? "call" : "reference", lines: [use.line] });
+        if (holdsOwner) callers.push({ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" ? "call" : "reference", derivation: "proven", lines: [use.line] });
       }
     }
     return callers;
@@ -284,7 +287,7 @@ export function createInboundEdges(
       const held = origin.holds.class;
       if ((sharedLocalNames.get(`${origin.owner.path}\0${origin.local}`) ?? 0) > 1) continue;
       if (!owners.some((owner) => joinsFact(owner, { path: held.path, line: held.line, symbol: held.symbol }))) continue;
-      const holder = declarationAt(origin.owner, DECLARATION_KINDS);
+      const holder = declarationAt(origin.owner, LOCAL_OWNER_KINDS);
       if (holder === undefined || isTestFile(holder.file)) continue;
       const name = `${origin.local}.${node.name}`;
       const uses = referencesThrough(holder.file, name).filter((reference) => reference.name === name);
@@ -296,7 +299,7 @@ export function createInboundEdges(
         if (occurrence === undefined) continue;
         if (memberUses !== undefined && !origin.calls?.some((site) => site.file === use.file && site.line === use.line && site.column === use.column + 1 && site.name === use.name && site.kind === use.kind)) continue;
         if (memberUses === undefined && uniqueAnchor(node)) settledUses.push({ key: declarationUseKey(anchor, occurrence), target: node.id, source: from.id });
-        callers.push({ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" ? "call" : "reference", lines: [use.line] });
+        callers.push({ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" ? "call" : "reference", derivation: "proven", lines: [use.line] });
       }
     }
     return callers;
@@ -373,7 +376,7 @@ export function createInboundEdges(
         if (uniqueAnchor(use.member)) settledUses.push({ key: declarationUseKey(anchor, occurrence), target: use.member.id, source: use.from.id });
       }
       const callers = memberCallers.get(use.member.id) ?? [];
-      callers.push({ from: use.from, confidence: EDGE_POLICY.relations.confidence, basis: "call", lines: [use.line], ...(use.resource === undefined ? {} : { resource: use.resource }), ...(use.substitutes === undefined ? {} : { substitutes: use.substitutes }) });
+      callers.push({ from: use.from, confidence: EDGE_POLICY.relations.confidence, basis: "call", derivation: "proven", lines: [use.line], ...(use.resource === undefined ? {} : { resource: use.resource }), ...(use.substitutes === undefined ? {} : { substitutes: use.substitutes }) });
       memberCallers.set(use.member.id, callers);
     }
   }
@@ -388,9 +391,9 @@ export function createInboundEdges(
   function gather(node: GraphSymbol, contractChanged: boolean, throughMember: boolean): Gathered[] {
     const followed = followedEdgesInto(node).filter(({ edge, source }) => !isTestFile(source.file) && followsEdge({ kind: edge.kind, sourceKind: source.kind, targetKind: node.kind }));
     const into = throughMember ? followed.filter(({ edge }) => (EDGE_POLICY.ownerThroughMember.edges as readonly string[]).includes(edge.kind)) : followed;
-    const direct: Gathered[] = into.map(({ edge, source }) => ({
+    const direct: Gathered[] = into.map(({ edge, source, moved }) => ({
       from: source,
-      confidence: edgeConfidence(edge),
+      ...(moved === true ? { confidence: edgeConfidence(edge), derivation: "proven" as const } : followedEdge(edge, corrections.settled?.get(edgeKey(edge)))),
       basis: CALL_EDGE_KINDS.includes(edge.kind) ? ("call" as const) : ("reference" as const),
       lines: edge.line === null ? [] : [edge.line],
       provenance: edge.provenance,
@@ -422,6 +425,7 @@ export function createInboundEdges(
           ...(line === undefined ? {} : { line }),
           ...(edge.resource === undefined ? {} : { resource: edge.resource }),
           basis: edge.basis,
+          derivation: edge.derivation,
           confidence: edge.confidence,
           provenance: edge.provenance ?? null,
           ...(edge.bridge === undefined ? {} : { bridge: edge.bridge }),
@@ -462,7 +466,7 @@ function strongestPerSymbol(edges: readonly InboundEdge[]): InboundEdge[] {
     const held = gathered.get(edge.from.id);
     let selected = held?.edge;
     if (selected === undefined || edge.confidence > selected.confidence) selected = edge;
-    else if (edge.confidence === selected.confidence && edge.basis === selected.basis && edge.bridge === selected.bridge && edge.resource === selected.resource && edge.substitutes === selected.substitutes) {
+    else if (edge.confidence === selected.confidence && edge.basis === selected.basis && edge.derivation === selected.derivation && edge.bridge === selected.bridge && edge.resource === selected.resource && edge.substitutes === selected.substitutes) {
       selected = { ...selected, lines: [...new Set([...selected.lines, ...edge.lines])].sort((a, b) => a - b) };
     }
     gathered.set(edge.from.id, {

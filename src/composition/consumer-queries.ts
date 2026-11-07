@@ -20,10 +20,12 @@ import type { ContractConsequencesQueries } from "../core/ports/contract-consequ
 import type { ConsumerSources } from "../core/ports/consumer-sources.port.ts";
 import type { ContractRoutes } from "../core/ports/contract-routes.port.ts";
 import type { ImportOriginsReader } from "../core/ports/import-origins.port.ts";
+import type { DeclaredMemberNamesReader } from "../core/ports/declared-member-names.port.ts";
+import type { ModuleDependenciesReader } from "../core/ports/module-dependencies.port.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
 
 /** The workspace read of consequences queries over the workspace read, the TypeScript flow and request origin readers and the Angular template reader. */
-export function composeConsumerSources(deps: { operation: WorkspaceReadOperation; heads: HeadReaderDeps; digest: Digest; importOrigins: ImportOriginsReader; engines: Readonly<Record<string, string>> }): ConsumerSources {
+export function composeConsumerSources(deps: { operation: WorkspaceReadOperation; heads: HeadReaderDeps; digest: Digest; importOrigins: ImportOriginsReader; memberNames: DeclaredMemberNamesReader; modules: ModuleDependenciesReader; engines: Readonly<Record<string, string>> }): ConsumerSources {
   return createConsumerSources({ ...deps, flow: createConsumerFlowReader, origins: createRequestOriginReader, metadata: createAngularMetadataReader(), templateFlow: createTemplateFlowReader(), relations: composeAngularRelations() });
 }
 

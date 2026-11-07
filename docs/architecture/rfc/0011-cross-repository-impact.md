@@ -178,9 +178,11 @@ compared as strings. A segment is text and holes: `{}` is a value the call fills
 writes; `{name}`, `{name:regex}` and `:name` are parameters. A route also states `*` (exactly one segment) and `**` or
 `{*name}` (the rest of the path, none of it included). Every call-site reader states its target through the same
 reading of a URL (`callUrl`): the origin is `scheme://authority` or `//authority`, and the authority ends at the path,
-the query, the fragment or a value the code fills, since that value may hold the start of the path; the target carries
-the origin as its base and the path without query or fragment. A call that states its origin states its whole path,
-whatever base it declares; a base the call declares comes before its path. Segment by segment:
+the query, the fragment or a value the code fills, since that value may hold the start of the path. The target carries
+the URL the call reaches as written, origin included, without query or fragment: a URL that states its origin states
+it whole, whatever base the call declares, and a relative one comes under the base the call declares. A target keeps a
+separate base only for a service its client names without a URL (a Feign `name`). The origin, read back by the same
+grammar, is the host a call names. Segment by segment:
 
 - text against text matches only when equal; a route parameter takes any text of the call;
 - a whole segment the call fills at run time takes a route parameter, never text the route states;

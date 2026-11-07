@@ -9,7 +9,7 @@ import { gatherCandidates, gatherNames, sortEvidence, type NameCandidate, type O
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { JoinedSite } from "../../domain/topology/link-graph.ts";
 import { entrypointsOf, joinWorkspace, linkMapOf } from "./workspace-join.ts";
-import { prefixOf } from "../../domain/topology/link-match.ts";
+import { hostOf, prefixOf } from "../../domain/topology/link-match.ts";
 import type { HeadReaderDeps, HeldLive } from "../snapshot/head-reading.ts";
 import type { WorkspaceReadOperation } from "./workspace-operation.ts";
 import { callSiteEvidence, unresolvedCallSite, unsettledCallSiteCut, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
@@ -267,10 +267,10 @@ function callSiteNames(repo: string, callSites: readonly CallSite[]): OutwardNam
   return callSites.flatMap((site): OutwardName[] => {
     if (site.target.status !== "complete") return [];
     if ("destination" in site.target.value) return [{ name: site.target.value.destination, kind: "destination", evidence: [callSiteEvidence(site)] }];
-    const { base } = site.target.value;
+    const host = hostOf(site.target.value);
     const evidence = [callSiteEvidence(site)];
     const prefix = prefixOf(site.target.value);
-    return [...(base === undefined ? [] : [{ name: base, kind: "http-host" as const, evidence }]), ...(prefix === undefined ? [] : [{ name: prefix, kind: "path-prefix" as const, evidence }])];
+    return [...(host === undefined ? [] : [{ name: host, kind: "http-host" as const, evidence }]), ...(prefix === undefined ? [] : [{ name: prefix, kind: "path-prefix" as const, evidence }])];
   });
 }
 

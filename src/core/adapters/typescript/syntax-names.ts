@@ -55,6 +55,4 @@ export function scriptGlobalNames(tree: ts.SourceFile): ReadonlySet<string> {
   return names;
 }
 
-export function isStatic(member: ts.Node): boolean {
-  return ts.canHaveModifiers(member) && (ts.getModifiers(member) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword);
-}
+

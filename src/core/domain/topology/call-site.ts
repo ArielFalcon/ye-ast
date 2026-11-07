@@ -39,12 +39,14 @@ export interface StatedRequest {
 }
 
 /**
- * A request as the code writes it. `path` is a pattern: a `{}` segment is a parameter the code fills at run time, and
- * the base URL is a finding of its own, `unknown` when the snapshot does not decide it.
+ * A request as the code writes it. `path` is the URL it reaches, its origin included when the code states one, as a
+ * pattern: a `{}` segment is a parameter the code fills at run time. A base the snapshot does not decide makes the
+ * target `unknown`.
  */
 export interface HttpTarget {
   method: HttpMethod;
   path: string;
+  /** A service the client names without a URL. */
   base?: string;
 }
 

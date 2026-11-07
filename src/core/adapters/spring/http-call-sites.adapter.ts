@@ -25,8 +25,8 @@ import { externalNames, scopeOf, type Expr, type JavaFile, type JavaProject, typ
 import { stringLiteralValue } from "./java-literals.ts";
 import { isAnnotation, annotationUses, createSpringAnnotations, pathExpressions, type SpringAnnotations } from "./request-mapping.ts";
 import { JavaValueEvaluator } from "./java-value-evaluator.ts";
-import { callUrl, joinedCallUrl, RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
-import { known, undecided, undecidedTarget, type Evaluated } from "../../domain/topology/evaluated.ts";
+import { callUrl, joinedCallUrl, RUN_TIME_HOLE, urlText } from "../../domain/topology/path-template.ts";
+import { undecided, undecidedTarget, type Evaluated, type Undecided } from "../../domain/topology/evaluated.ts";
 
 /** The base URL a client declares: undefined when it declares none. */
 type Declared = Evaluated<string> | undefined;
@@ -206,13 +206,13 @@ export class JavaHttpReader {
     const at = spanOf(request.invocation.type.file.path, request.invocation.node);
     const read = this.text.evaluated(scope, () => this.requested(request, scope));
     if (read.status === "undecided") return undecidedTarget(read, at);
-    const { method, base, path } = read.value;
-    if (base?.status === "undecided") return { ...undecidedTarget(base, at), stated: { method, path } };
-    return { target: complete({ method, ...(base === undefined ? {} : { base: base.value }), path }) };
+    const { method, path, undecidedBase } = read.value;
+    if (undecidedBase !== undefined) return { ...undecidedTarget(undecidedBase, at), stated: { method, path } };
+    return { target: complete({ method, path }) };
   }
 
-  /** The method and path a request writes, and the base it reaches; undefined when the snapshot does not decide the method or the path. */
-  private requested(request: Request, scope: UrlScope): { method: HttpMethod; base?: Evaluated<string>; path: string } | undefined {
+  /** The method and URL a request writes, and the client base it could not decide; undefined when the snapshot does not decide the method or the path. */
+  private requested(request: Request, scope: UrlScope): { method: HttpMethod; path: string; undecidedBase?: Undecided } | undefined {
     const method = typeof request.method === "string" ? request.method : request.method === undefined ? undefined : this.methodOf(request.method, scope);
     const text = request.url === undefined ? undefined : this.text.of(request.url, scope);
     const resolved = text === undefined || method === undefined ? undefined : targetOf(text, request.base);
@@ -258,12 +258,12 @@ export class JavaHttpReader {
     const head = this.text.attribute((url ?? service)?.node ?? feign.node, scope);
     const prefix = this.attributeText(feign.attributes.get("path")?.[0], scope);
     if (verb === undefined || (url ?? service) === undefined || prefix === undefined) return [at];
-    const origin = head === undefined ? undefined : url === undefined ? { origin: head, path: "/" } : callUrl(head);
     return (pathExpressions(lookup.mapping.attributes) ?? [undefined]).map((expression) => {
       const path = this.attributeText(expression, scope);
       if (path === undefined) return at;
-      if (origin === undefined) return { ...at, stated: { method: verb, path: joinedCallUrl(prefix, path).path } };
-      return origin.origin === undefined ? at : { target: complete({ method: verb, base: origin.origin, path: joinedCallUrl(origin.path, prefix, path).path }) };
+      if (head === undefined) return { ...at, stated: { method: verb, path: joinedCallUrl(prefix, path).path } };
+      if (url === undefined) return { target: complete({ method: verb, base: head, path: joinedCallUrl(prefix, path).path }) };
+      return callUrl(head).origin === undefined ? at : { target: complete({ method: verb, path: urlText(joinedCallUrl(head, prefix, path)) }) };
     });
   }
 
@@ -278,8 +278,7 @@ export class JavaHttpReader {
       return own.map((expression) => {
         const path = this.attributeText(expression, scope);
         if (verb === undefined || path === undefined || prefix === undefined) return unknownAtNode(scope.type.file.path, use.node);
-        const url = joinedCallUrl(prefix, path);
-        return complete({ method: verb, ...(url.origin === undefined ? {} : { base: url.origin }), path: url.path });
+        return complete({ method: verb, path: urlText(joinedCallUrl(prefix, path)) });
       });
     });
   }
@@ -312,16 +311,15 @@ function methodCall(node: Node): string | undefined {
 }
 
 /**
- * The base and path a URL text comes down to; a path that only the code fills at run time is not decided. A relative
- * path under a client base the snapshot does not decide keeps its path, with that base undecided.
+ * The URL a call reaches, as one text: its own when it names an origin, else under the client base it declares; a path
+ * that only the code fills at run time is not decided. A relative path under a client base the snapshot does not decide
+ * keeps its own path, with that base undecided.
  */
-function targetOf(text: string, client: Declared): { base?: Evaluated<string>; path: string } | undefined {
+function targetOf(text: string, client: Declared): { path: string; undecidedBase?: Undecided } | undefined {
   if (text.startsWith(RUN_TIME_HOLE)) return undefined;
-  const absolute = callUrl(text);
-  const declared = client?.status === "known" ? callUrl(client.value) : { path: "/" };
-  const origin = absolute.origin ?? declared.origin;
-  const base = origin === undefined ? client : known(origin);
-  const path = absolute.origin === undefined ? joinedCallUrl(declared.path, text).path : absolute.path;
-  const segments = path.split("/").filter((segment) => segment !== "");
-  return segments.length > 0 && segments.every((segment) => segment === RUN_TIME_HOLE) ? undefined : { ...(base === undefined ? {} : { base }), path };
+  const own = callUrl(text);
+  const url = own.origin === undefined && client?.status === "known" ? joinedCallUrl(client.value, text) : own;
+  const segments = url.path.split("/").filter((segment) => segment !== "");
+  if (segments.length > 0 && segments.every((segment) => segment === RUN_TIME_HOLE)) return undefined;
+  return { path: urlText(url), ...(own.origin === undefined && client?.status === "undecided" ? { undecidedBase: client } : {}) };
 }

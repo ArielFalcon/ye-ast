@@ -689,9 +689,9 @@ test("a changed service method reaches the component that calls it, the route of
   assert.deepEqual(first.fact.value.symbols.map((symbol) => [place(symbol), symbol.depth, symbol.confidence]), [
     ["order.service.ts:OrderService", 0, 1],
     ["order.service.ts:find", 0, 1],
-    ["list.component.ts:ListComponent", 1, 0.9],
-    ["list.component.ts:constructor", 1, 0.9],
-    ["page.component.ts:PageComponent", 2, 0.9],
+    ["list.component.ts:ListComponent", 1, 1],
+    ["list.component.ts:constructor", 1, 1],
+    ["page.component.ts:PageComponent", 2, 1],
     ["app.routes.ts:/page", 3, 0.9],
   ]);
   assert.deepEqual(first.fact.value.entrypoints.map((entry) => [entry.kind, entry.name, entry.depth]), [["ui-route", "/page", 2]]);
