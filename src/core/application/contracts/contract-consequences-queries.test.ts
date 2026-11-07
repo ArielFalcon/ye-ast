@@ -141,6 +141,8 @@ test("an invalid hypothesis refuses the whole call with its index, before the wo
 
   assert.ok(!answer.ok && answer.fault.kind === "invalid-hypothesis");
   assert.equal(answer.fault.index, 2);
+  // Text-only surfaces (the CLI) print only the detail, so it names the hypothesis too.
+  assert.match(answer.fault.detail, /^hypotheses\[2\]: /);
   assert.equal(preparations(), 0);
 });
 

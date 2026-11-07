@@ -54,7 +54,7 @@ export function createContractConsequencesQueries({ sources, ofChange }: Contrac
       const parsed: Hypothesis[] = [];
       for (const [index, input] of hypotheses.entries()) {
         const hypothesis = parseHypothesis(input);
-        if (!hypothesis.ok) return { ok: false, fault: { kind: "invalid-hypothesis", detail: hypothesis.fault.detail, index, refusal: hypothesis.fault } };
+        if (!hypothesis.ok) return { ok: false, fault: { kind: "invalid-hypothesis", detail: `hypotheses[${index}]: ${hypothesis.fault.detail}`, index, refusal: hypothesis.fault } };
         parsed.push(hypothesis.value);
       }
       return sources.withWorkspace(workspace, async (prepared) => {
