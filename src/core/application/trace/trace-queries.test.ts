@@ -7,6 +7,7 @@ import type { DeclaredType, DispatchSite, DispatchTargets, ImportOriginSite, Rec
 import type { TraceBudget, TraceRequest, TraceTarget } from "../../ports/trace-queries.port.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import type { CallSite, PlacedCallSite } from "../../domain/topology/call-site.ts";
+import type { SourceSpan } from "../../domain/trace/owning-body.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
 import type { DeclaredCallable, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
@@ -45,6 +46,8 @@ interface Options {
   trivia?: Readonly<Record<string, readonly number[]>>;
   /** Runs each time the walk asks for a file's trivia lines. */
   onTrivia?: (path: string) => void;
+  /** The function values each source's syntax states (arrows, function expressions, lambdas, method references, anonymous class bodies), by path. */
+  functionValues?: Readonly<Record<string, readonly SourceSpan[]>>;
   /** The member names each source declares in value positions, by path. */
   memberNames?: Readonly<Record<string, readonly string[]>>;
   /** Runs each time the walk reads a source's member names. */
@@ -107,7 +110,7 @@ function setup(options: Options) {
       open: () => ({ ok: true, value: store }),
     },
     sourceTrivia: { triviaLines: async (file: { path: string }) => (options.onTrivia?.(file.path), new Set(options.trivia?.[file.path] ?? [])) },
-    memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: options.callables?.[file.path] ?? [], receiverBindings: options.receiverBindings?.[file.path] ?? [] }) },
+    memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: options.callables?.[file.path] ?? [], receiverBindings: options.receiverBindings?.[file.path] ?? [], functionValues: options.functionValues?.[file.path] ?? [] }) },
     importOrigins: () => ({
       replacedRoots: async () => options.replaced ?? written(),
       rootBindings: async (sites: readonly UseSite[]) => sites.map((site) => options.receiverRoots?.[site.spelled] ?? { kind: "unknown" }),
@@ -1137,7 +1140,11 @@ const site = (line: number, overrides: Partial<CallSite> = {}): CallSite => ({
   ...overrides,
 });
 
+/** The traced file as the snapshot holds it, so its syntax states no function value. */
+const HELD_A = [{ path: A, content: "" }];
+
 const EFFECTS_BODY: Options = {
+  sources: HELD_A,
   nodes: [SVC, RUN, callee("helper"), callee("publish", A, 34)],
   edges: [...CONTAINS, call("run", "helper", 8, 4), call("run", "publish", 9, 4)],
 };
@@ -1181,7 +1188,7 @@ test("an effect is carried once, by the step that expanded its body, never by a 
   const nodes = [SVC, RUN, callee("helper"), callee("wrap", A, 34)];
   const edges = [...CONTAINS, call("run", "wrap", 8, 4), call("run", "wrap", 9, 4), call("wrap", "helper", 35, 4)];
 
-  const fact = await factOf({ nodes, edges, callSites: [site(35, { symbol: "wrap" })] });
+  const fact = await factOf({ nodes, edges, sources: HELD_A, callSites: [site(35, { symbol: "wrap" })] });
 
   assert.deepEqual(valueOf(fact).steps.map((step) => [step.symbol, step.seen ?? null, step.effects?.length ?? 0]), [["run", null, 0], ["wrap", null, 1], ["wrap", 1, 0]]);
 });
@@ -1196,13 +1203,14 @@ test("a body whose only record at a call site is an edge the walk does not follo
   const nodes = [SVC, RUN, callee("helper")];
   const edges = [...CONTAINS, call("run", "helper", 8, 4), { from: "helper", to: "Svc", kind: "references", line: 31, column: 2 }];
 
-  const fact = await factOf({ nodes, edges, callSites: [site(31, { symbol: "helper" })] });
+  const fact = await factOf({ nodes, edges, sources: HELD_A, callSites: [site(31, { symbol: "helper" })] });
 
   assert.deepEqual(valueOf(fact).steps.map((step) => [step.symbol, step.effects?.map((effect) => effect.line)]), [["run", undefined], ["helper", [31]]]);
 });
 
 /** `Api` on lines 3-30 of A: methods placed by line and exact columns, as the index places them. */
 const PLACED_API = fakeNode("Api", "class", A, 3, 30);
+const valueSpan = (line: number, start: number, end: number, endLine = line): SourceSpan => ({ start: { line, column: start }, end: { line: endLine, column: end } });
 const placedNode = (id: string, kind: string, start: number, startColumn: number, end: number, endColumn: number, name = id): FakeNode => ({ ...fakeNode(id, kind, A, start, end, name), startColumn, endColumn });
 const globalCall = (from: string, line: number, column: number): FakeUnresolved => ({ from, name: "Math.max", kind: "calls", file: A, line, column });
 const MATH = { max: { kind: "ambient" as const, name: "Math" } };
@@ -1217,7 +1225,7 @@ test("a call site in a sibling method on the same line is no effect of the metho
   const nodes = [PLACED_API, placedNode("a", "method", 5, 1, 5, 29), placedNode("b", "method", 5, 30, 5, 58)];
   const edges = [{ from: "Api", to: "a", kind: "contains" }, { from: "Api", to: "b", kind: "contains" }];
 
-  const fact = await factOf({ nodes, edges, unresolved: [globalCall("a", 5, 7), globalCall("b", 5, 36)], roots: MATH, placedSites: [at(5, 7, "/a"), at(5, 36, "/b")] }, [{ file: A, symbol: "a" }]);
+  const fact = await factOf({ nodes, edges, unresolved: [globalCall("a", 5, 7), globalCall("b", 5, 36)], roots: MATH, sources: HELD_A, placedSites: [at(5, 7, "/a"), at(5, 36, "/b")] }, [{ file: A, symbol: "a" }]);
 
   assert.deepEqual(effectPaths(fact), [["a", "/a"]]);
 });
@@ -1242,10 +1250,10 @@ test("each shape's call sites are effects of the body that owns their exact plac
       options: { nodes: [PLACED_API, method("a", 5, 1, 5, 29), method("b", 5, 30, 5, 58)], edges: [member("a"), member("b")], unresolved: [globalCall("a", 5, 7), globalCall("b", 5, 36)], placedSites: [at(5, 7, "/a"), at(5, 36, "/b")] } },
     { shape: "an arrow function the body calls", target: "run", effects: [["dead", "/dead"]], cuts: [],
       options: { nodes: [PLACED_API, method("run", 6, 1, 6, 71), method("dead", 6, 22, 6, 50, "function")], edges: [member("run"), call("run", "dead", 6, 52)], unresolved: [globalCall("dead", 6, 34)], placedSites: [at(6, 34, "/dead")] } },
-    { shape: "a lambda or callback passed and invoked, which the index holds as no declaration", target: "run", effects: [["run", "/cb"]], cuts: [],
-      options: { nodes: [PLACED_API, method("run", 6, 1, 6, 71)], edges: [member("run")], unresolved: [globalCall("run", 6, 40)], placedSites: [at(6, 40, "/cb")] } },
-    { shape: "an immediately invoked function", target: "run", effects: [["run", "/iife"]], cuts: [],
-      options: { nodes: [PLACED_API, method("run", 6, 1, 8, 2)], edges: [member("run")], unresolved: [globalCall("run", 7, 10)], placedSites: [at(7, 10, "/iife")] } },
+    { shape: "a lambda or callback passed and invoked, which the index holds as no declaration", target: "run", effects: [], cuts: ["src/a.ts:6 http effect"],
+      options: { nodes: [PLACED_API, method("run", 6, 1, 6, 71)], edges: [member("run")], unresolved: [globalCall("run", 6, 40)], functionValues: { [A]: [valueSpan(6, 30, 60)] }, placedSites: [at(6, 40, "/cb")] } },
+    { shape: "an immediately invoked function, whose run the walk does not prove", target: "run", effects: [], cuts: ["src/a.ts:7 http effect"],
+      options: { nodes: [PLACED_API, method("run", 6, 1, 8, 2)], edges: [member("run")], unresolved: [globalCall("run", 7, 10)], functionValues: { [A]: [valueSpan(6, 12, 1, 8)] }, placedSites: [at(7, 10, "/iife")] } },
     { shape: "a class field initializer", target: "field", effects: [["field", "/field"]], cuts: [],
       options: { nodes: [PLACED_API, method("field", 4, 1, 4, 34, "property"), method("run", 6, 1, 6, 30)], edges: [member("field"), member("run")], unresolved: [globalCall("field", 4, 16), globalCall("run", 6, 10)], placedSites: [at(4, 16, "/field"), at(6, 10, "/run")] } },
     { shape: "a call spread over several lines", target: "run", effects: [["run", "/multi"]], cuts: [],
@@ -1262,7 +1270,41 @@ test("each shape's call sites are effects of the body that owns their exact plac
       options: { nodes: [PLACED_API, method("run", 5, 2, 5, 32)], edges: [member("run")], unresolved: [globalCall("run", 5, 10)], sources: [{ path: A, content: `${"\n".repeat(4)}${nonAsciiAfter}\n` }], placedSites: [at(5, 10, "/r")] } },
   ];
   for (const { shape, options, target, effects, cuts } of rows) {
-    const fact = await factOf({ roots: MATH, ...options }, [{ file: A, symbol: target }]);
+    const fact = await factOf({ roots: MATH, sources: [{ path: A, content: "" }], ...options }, [{ file: A, symbol: target }]);
+    assert.deepEqual(effectPaths(fact), effects, shape);
+    assert.deepEqual(effectCuts(fact).map(([, at]) => (at as readonly string[])[0]), cuts, shape);
+  }
+});
+
+
+test("a call site inside a function value the index declares no body for, and the walk proves no run of, is a cut of the body around it, never its effect", async () => {
+  const nodes = [PLACED_API, placedNode("run", "method", 4, 1, 4, 90)];
+
+  const fact = await factOf({ nodes, edges: [{ from: "Api", to: "run", kind: "contains" }], unresolved: [globalCall("run", 4, 37), globalCall("run", 4, 70)], roots: MATH, sources: [{ path: A, content: "" }], functionValues: { [A]: [valueSpan(4, 30, 67)] }, placedSites: [at(4, 36, "/dead")] }, [{ file: A, symbol: "run" }]);
+
+  assert.deepEqual(effectPaths(fact), []);
+  assert.deepEqual(effectCuts(fact).map(([, at]) => (at as readonly string[])[0]), ["src/a.ts:4 http effect"]);
+});
+
+test("each function-value shape keeps its call sites from the body around it unless the index declares the value and the walk expands it", async () => {
+  const run = placedNode("run", "method", 6, 1, 9, 2);
+  const member = { from: "Api", to: "run", kind: "contains" };
+  const rows: { shape: string; options: Options; effects: (readonly string[])[]; cuts: readonly string[] }[] = [
+    { shape: "an arrow assigned and never called", effects: [], cuts: ["src/a.ts:7 http effect"],
+      options: { nodes: [PLACED_API, run], functionValues: { [A]: [valueSpan(7, 15, 45)] }, placedSites: [at(7, 21, "/arrow")] } },
+    { shape: "a callback passed to a function nothing places", effects: [], cuts: ["src/a.ts:7 http effect"],
+      options: { nodes: [PLACED_API, run], functionValues: { [A]: [valueSpan(7, 14, 40)] }, placedSites: [at(7, 20, "/callback")] } },
+    { shape: "an anonymous class body", effects: [], cuts: ["src/a.ts:8 http effect"],
+      options: { nodes: [PLACED_API, run], functionValues: { [A]: [valueSpan(7, 30, 2, 9)] }, placedSites: [at(8, 6, "/anonymous")] } },
+    { shape: "a method reference", effects: [], cuts: ["src/a.ts:7 http effect"],
+      options: { nodes: [PLACED_API, run], functionValues: { [A]: [valueSpan(7, 20, 33)] }, placedSites: [at(7, 20, "/reference")] } },
+    { shape: "a body whose source the snapshot does not hold, so no function value can be told apart", effects: [], cuts: ["src/a.ts:7 http effect"],
+      options: { nodes: [PLACED_API, run], sources: [], placedSites: [at(7, 21, "/plain")] } },
+    { shape: "a function value the index declares and the walk expands", effects: [["dead", "/dead"]], cuts: [],
+      options: { nodes: [PLACED_API, run, placedNode("dead", "function", 7, 22, 7, 50)], edges: [call("run", "dead", 8, 4)], unresolved: [globalCall("dead", 7, 28)], functionValues: { [A]: [valueSpan(7, 22, 50)] }, placedSites: [at(7, 28, "/dead")] } },
+  ];
+  for (const { shape, options, effects, cuts } of rows) {
+    const fact = await factOf({ roots: MATH, sources: [{ path: A, content: "" }], ...options, edges: [member, ...(options.edges ?? [])], unresolved: [globalCall("run", 7, 21), ...(options.unresolved ?? [])] }, [{ file: A, symbol: "run" }]);
     assert.deepEqual(effectPaths(fact), effects, shape);
     assert.deepEqual(effectCuts(fact).map(([, at]) => (at as readonly string[])[0]), cuts, shape);
   }

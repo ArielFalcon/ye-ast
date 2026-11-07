@@ -158,3 +158,30 @@ class Events {
   assert.equal(run.cuts?.some((cut) => cut.at[0]?.includes(" effect")) ?? false, false);
   assert.deepEqual(effectsOf(published.value), [["a", { kind: "message", line: 8, target: { protocol: "kafka", destination: "topic.a", role: "publish" } }]]);
 });
+
+test("a request or a publish inside a function value nothing proves runs is a cut of the body around it, never its effect", async () => {
+  commit({
+    "src/main/java/shop/Events.java": `package shop;
+
+import org.springframework.kafka.core.KafkaTemplate;
+
+class Events {
+ private KafkaTemplate<String,String> kafka;
+ void run() { Runnable dead = () -> kafka.send("topic.dead", "v"); System.out.println("x"); }
+}
+`,
+    "api.ts": `import { HttpClient } from '@angular/common/http';
+import { inject } from '@angular/core';
+export class Api {
+ private http = inject(HttpClient);
+ load() { return [1].map(() => this.http.get('/each')); }
+}
+`,
+  });
+
+  const run = await trace("src/main/java/shop/Events.java:Events.run");
+  const load = await trace("api.ts:Api.load");
+
+  assert.deepEqual([effectsOf(run.value), run.cuts?.filter((cut) => cut.at[0]?.includes(" effect")).map((cut) => cut.at[0])], [[], ["src/main/java/shop/Events.java:7 message effect"]]);
+  assert.deepEqual([effectsOf(load.value), load.cuts?.filter((cut) => cut.at[0]?.includes(" effect")).map((cut) => cut.at[0])], [[], ["api.ts:5 http effect"]]);
+});

@@ -2,12 +2,13 @@ import type { Node } from "web-tree-sitter";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
 import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, FunctionValueCall } from "../../ports/declared-member-names.port.ts";
-import { javaFunctionValueCalls } from "./java-function-value-calls.ts";
+import { isFunctionValueNode, javaFunctionValueCalls } from "./java-function-value-calls.ts";
+import type { SourceSpan } from "../../domain/trace/owning-body.ts";
 import { javaReceiverBindings } from "./java-receiver-bindings.ts";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { JavaParser } from "./java-parser.adapter.ts";
 
-const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [] };
+const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
 /** Modifiers that keep a subtype from overriding a method. */
 const FIXED: readonly string[] = ["static", "private", "final"];
 
@@ -35,7 +36,9 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
         const name = node.childForFieldName("name");
         if (name !== null) names.add(name.text);
       };
+      const functionValues: SourceSpan[] = [];
       const visit = (node: Node): void => {
+        if (isFunctionValueNode(node) || isAnonymousClassBody(node)) functionValues.push({ start: { line: node.startPosition.row + 1, column: node.startPosition.column }, end: { line: node.endPosition.row + 1, column: node.endPosition.column } });
         if (node.type === "variable_declarator" ? MEMBER_FIELDS.includes(node.parent?.type ?? "") : NAMED.includes(node.type)) nameOf(node);
         if (node.type === "method_declaration") {
           const name = node.childForFieldName("name");
@@ -54,7 +57,12 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
       } finally {
         parsed.value.dispose();
       }
-      return { names: [...names].sort(compareText), functionValueCalls, callables, receiverBindings };
+      return { names: [...names].sort(compareText), functionValueCalls, callables, receiverBindings, functionValues };
     },
   };
+}
+
+/** The body of a class a `new` expression declares in place: its methods run only when something calls them. */
+function isAnonymousClassBody(node: Node): boolean {
+  return node.type === "class_body" && node.parent?.type === "object_creation_expression";
 }

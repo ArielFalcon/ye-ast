@@ -2,7 +2,7 @@ import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
 import type { PlacedCallSite } from "../../domain/topology/call-site.ts";
 import { effectOf, unplacedEffect } from "../../domain/trace/trace-effects.ts";
-import { owningBody, type SourceSpan } from "../../domain/trace/owning-body.ts";
+import { containsPosition, owningBody, type SourcePosition, type SourceSpan } from "../../domain/trace/owning-body.ts";
 import type { WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { CodeGraphReader, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { UnresolvedIn } from "../navigation/declaration-uses.ts";
@@ -20,6 +20,8 @@ export interface TraceEffectsInput {
   sites: () => Promise<readonly PlacedCallSite[]>;
   /** A line of a source as the snapshot holds it; undefined when the snapshot does not hold the file. */
   lineOf: (file: string, line: number) => string | undefined;
+  /** The function values a source's syntax states, each whole; undefined when the snapshot does not hold the source. */
+  functionValuesOf: (file: string) => Promise<readonly SourceSpan[] | undefined>;
 }
 
 type Body = SourceSpan & { symbol: GraphSymbol };
@@ -30,11 +32,12 @@ type Body = SourceSpan & { symbol: GraphSymbol };
  * records a call of that body on the site's line (or the site is the client method the declaration states), and a cut
  * when the extraction does not decide its target. A site in the expanded body that the index records no call at is a cut
  * at the site, never dropped; a site another declaration owns (a nested function the walk did not expand, a sibling on
- * the same line) is not this step's. Where the place cannot be told (no column, or a line on which parsers may count
+ * the same line) is not this step's, and one inside a function value the index declares no body for is a cut, since
+ * the walk proves no run of such a value. Where the place cannot be told (no column, or a line on which parsers may count
  * columns apart), a site that some expanded body may own is a cut, never an effect. Sets `effects` and `unsettled` on the
  * steps and returns the cuts.
  */
-export async function placeEffects(roots: readonly WalkedStep[], { store, unresolvedIn, sites, lineOf }: TraceEffectsInput): Promise<Cut[]> {
+export async function placeEffects(roots: readonly WalkedStep[], { store, unresolvedIn, sites, lineOf, functionValuesOf }: TraceEffectsInput): Promise<Cut[]> {
   const expanded = expandedSteps(roots);
   if (expanded.size === 0) return [];
   const files = new Set([...expanded.values()].map((step) => step.declaration.file));
@@ -42,6 +45,7 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
   const byFile = Map.groupBy((await sites()).filter(({ site }) => files.has(site.file)), ({ site }) => site.file);
   for (const [file, inFile] of byFile) {
     const bodies: Body[] = store.symbolsInFiles([file]).filter((symbol) => !NOT_DECLARED_KINDS.includes(symbol.kind)).map((symbol) => ({ symbol, start: { line: symbol.startLine, column: symbol.startColumn }, end: { line: symbol.endLine, column: symbol.endColumn } }));
+    const values = await functionValuesOf(file);
     const lines = new Map<GraphNodeId, ReadonlySet<number>>();
     const callLinesOf = (symbol: GraphSymbol) => lines.get(symbol.id) ?? lines.set(symbol.id, callLines(store, unresolvedIn, symbol)).get(symbol.id)!;
     for (const placed of inFile) {
@@ -55,7 +59,8 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
       const owner = owningBody(bodies, { line: site.line, column: placed.column! });
       const step = owner === undefined ? undefined : expanded.get(owner.symbol.id);
       if (owner === undefined || step === undefined) continue;
-      if (placed.declaration !== true && !callLinesOf(owner.symbol).has(site.line)) {
+      const at = { line: site.line, column: placed.column! };
+      if (placed.declaration !== true && (!callLinesOf(owner.symbol).has(site.line) || insideUnrunValue(values, owner, at))) {
         markCut(step, unplacedEffect(site), cuts);
         continue;
       }
@@ -65,6 +70,20 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
     }
   }
   return cuts;
+}
+
+/**
+ * Whether the site lies inside a function value the owner's body holds without the index declaring it: the walk proves
+ * no run of such a value (a call through a function value, or of a computed callee, is a cut), so neither may its effects.
+ * A value that holds the owner whole is the owner itself, or a value around it, and proves nothing against it. Without
+ * the source, no value can be told apart, so nothing is proven.
+ */
+function insideUnrunValue(values: readonly SourceSpan[] | undefined, owner: SourceSpan, at: SourcePosition): boolean {
+  return values === undefined || values.some((value) => containsPosition(value, at) && !(containsPosition(value, owner.start) && !before(value.end, owner.end)));
+}
+
+function before(a: SourcePosition, b: SourcePosition): boolean {
+  return a.line < b.line || (a.line === b.line && a.column < b.column);
 }
 
 /**

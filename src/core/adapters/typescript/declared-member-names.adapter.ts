@@ -2,11 +2,12 @@ import ts from "typescript";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
-import { annotated, localReceivers } from "./function-value-calls.ts";
+import { annotated, isFunctionValueNode, localReceivers } from "./function-value-calls.ts";
+import type { SourcePosition, SourceSpan } from "../../domain/trace/owning-body.ts";
 import { isStatic } from "./syntax-names.ts";
 import { sourceTree } from "./source-tree.ts";
 
-const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [] };
+const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
 
 /**
  * The member names a TypeScript source declares where a value can live: object-literal keys, properties assigned through
@@ -35,7 +36,13 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
         if (!ts.isComputedPropertyName(name)) return void names.add(name.text);
         if (ts.isStringLiteralLike(name.expression) || ts.isNumericLiteral(name.expression)) names.add(name.expression.text);
       };
+      const functionValues: SourceSpan[] = [];
+      const positionOf = (at: number): SourcePosition => {
+        const { line, character } = tree.getLineAndCharacterOfPosition(at);
+        return { line: line + 1, column: character };
+      };
       const visit = (node: ts.Node): void => {
+        if (isFunctionValueNode(node)) functionValues.push({ start: positionOf(node.getStart(tree)), end: positionOf(node.getEnd()) });
         if (ts.isFunctionDeclaration(node)) callable(node, false);
         if (isDeclareOnly(node)) return;
         if (ts.isMethodDeclaration(node) && ts.isClassLike(node.parent)) callable(node, isOverridable(node));
@@ -56,7 +63,7 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
         ts.forEachChild(node, visit);
       };
       visit(tree);
-      return { names: [...names].sort(compareText), ...localReceivers(tree), callables };
+      return { names: [...names].sort(compareText), ...localReceivers(tree), callables, functionValues };
     },
   };
 }
