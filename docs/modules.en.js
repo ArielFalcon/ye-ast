@@ -19,7 +19,7 @@ window.MODULE_DETAILS_EN = {
       never: "core/adapters, a write of any kind",
       facts: [
         "McpDeps extends QueryExecutionDeps, which holds only read query families (entrypoints, impact, outline, trace, workspace, workspace impact, decisions) plus redaction and digest, so a write is impossible by type.",
-        "Nine tools: ye_ast_entrypoints, ye_ast_impact, ye_ast_callers, ye_ast_importers, ye_ast_outline, ye_ast_trace, ye_ast_workspace, ye_ast_decisions and ye_ast_compose.",
+        "Ten tools: ye_ast_entrypoints, ye_ast_impact, ye_ast_callers, ye_ast_importers, ye_ast_outline, ye_ast_trace, ye_ast_workspace, ye_ast_decisions, ye_ast_contract_consequences and ye_ast_compose.",
         "The server instructions tell the agent how to read an answer: complete is relative to the declared scope, partial lists its cuts, and unknown never means no impact.",
         "ye_ast_compose combines 1 to 16 queries of the eight families into one set of evidence with a verification identity; it exists only over MCP.",
       ],
