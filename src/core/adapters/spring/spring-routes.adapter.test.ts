@@ -2710,3 +2710,12 @@ test("a library class is never reported as an entrypoint, and the routes the rep
   assert.deepEqual(withLibrary.filter((finding) => finding.evidence.every(({ path }) => path !== INHERITING.path)), bare.filter((finding) => finding.evidence.every(({ path }) => path !== INHERITING.path)));
   assert.ok(withLibrary.every((finding) => finding.evidence.every(({ path }) => !path.startsWith("(library)"))));
 });
+
+test("an unmapped inherited declaration with unread external ancestry does not add a speculative route item", async () => {
+  const findings = await extractor.extract([
+    file("src/main/java/app/Main.java", "package app; import org.springframework.boot.autoconfigure.SpringBootApplication; @SpringBootApplication public class Main {}"),
+    file("src/main/java/app/Port.java", "package app; import ext.Event; public interface Port extends ext.Subscriber { void send(Event event); }"),
+    file("src/main/java/app/Sender.java", "package app; import ext.Event; import org.springframework.stereotype.Component; @Component public class Sender implements Port { public void send(Event event) {} }"),
+  ]);
+  assert.deepEqual(findings, []);
+});
