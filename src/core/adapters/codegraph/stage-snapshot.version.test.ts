@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { STAGING_RULES_VERSION } from "./stage-snapshot.ts";
 
 const SOURCE_DIGEST_BY_VERSION: Readonly<Record<string, string>> = {
+  "10": "add456f6e3137870aad923a72255e992c69ba2d2a3f0270ab365fd8c33290ebe",
   "2": "f29f8d32090e597644690359faa6980a333ad5cd4a8fda42936cf2a9a62d724e",
   "3": "d8d50ff0b543684a228e16e9c3ed080de1196216a17502f2dab54444618e3896",
   "4": "a4dbe978ca40342805ba6b4b1bb275504f95284bdd8f5f773aa227d724c823ee",

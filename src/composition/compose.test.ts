@@ -1945,9 +1945,42 @@ test("missing syntax calls use the same import, ambient, receiver and repository
   const { trace } = composeQueries({ scratchRoot });
   const settled = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/settlement.ts", symbol: "Settled" }] });
   assert.ok(settled.ok && settled.value.status === "complete", JSON.stringify(settled));
-  assert.ok(settled.value.value.steps.flatMap((step) => step.external ?? []).some((leaf) => leaf.kind === "import" && leaf.module === "@angular/core"));
+  assert.deepEqual(settled.value.value.steps.flatMap((step) => step.external ?? []).filter((leaf) => leaf.kind === "import" && leaf.module === "@angular/core").flatMap((leaf) => leaf.names).sort(), ["Injectable", "computed"]);
   assert.ok(settled.value.value.steps.flatMap((step) => step.external ?? []).some((leaf) => leaf.kind === "global" && leaf.names.includes("[1].map")));
   const unknown = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/settlement.ts", symbol: "unknown" }] });
   assert.ok(unknown.ok && unknown.value.status === "partial");
   assert.ok(unknown.value.cuts.some((cut) => cut.at[0] === "src/settlement.ts:7 x.map"));
+});
+
+test("a same-line homonymous method never inherits another body's inventoried calls", async () => {
+  writeFileSync(join(repo, "src/same.ts"), 'export class A { run(){ this.foo`x`; } foo(){ aOnly(); } } export class B { run(){} foo(){ bOnly(); } }');
+  git("add", "-A"); git("commit", "-qm", "same line");
+  const { trace } = composeQueries({ scratchRoot });
+  const answer = await trace.walk({ repo, repoId: "same", revision: "HEAD", targets: [{ file: "src/same.ts", symbol: "B.run" }] });
+  assert.ok(answer.ok && answer.value.status === "complete", JSON.stringify(answer));
+  assert.deepEqual(answer.value.value.steps.map(({ symbol }) => symbol), ["run"]);
+});
+
+test("same-line body ownership preserves class, nested, arrow, tagged and optional call boundaries", async () => {
+  const cases = [
+    ['classes', 'export class A { run(){ this.foo(); } foo(){ aOnly(); } } export class B { run(){} foo(){ bOnly(); } }', 'B.run', 'A.run'],
+    ['nested', 'export function first(){ function run(){ aOnly(); } } export function second(){ function run(){} }', 'second.run', 'first.run'],
+    ['arrows', 'export class A { run = () => { this.foo(); }; foo(){ aOnly(); } } export class B { run = () => {}; foo(){ bOnly(); } }', 'B.run', 'A.run'],
+    ['tags', 'export class A { run(){ this.foo`x`; } foo(){ aOnly(); } } export class B { run(){} foo(){ bOnly(); } }', 'B.run', 'A.run'],
+    ['unicode', 'const marker = "💠💠💠💠💠💠💠💠💠💠"; export class A { run(){ this.foo`x`; } foo(){ aOnly(); } } export class B { run(){} foo(){ bOnly(); } }', 'B.run', 'A.run'],
+    ['optional', 'export class A { run(){ this.foo?.(); } foo(){ aOnly(); } } export class B { run(){} foo(){ bOnly(); } }', 'B.run', 'A.run'],
+  ];
+  for (const [name, source] of cases) writeFileSync(join(repo, `src/${name}.ts`), source!);
+  git('add', '-A'); git('commit', '-qm', 'body boundaries');
+  const { trace } = composeQueries({ scratchRoot });
+  for (const [name, , symbol, active] of cases) {
+    const answer = await trace.walk({ repo, repoId: 'same', revision: 'HEAD', targets: [{ file: `src/${name}.ts`, symbol: symbol! }] });
+    assert.ok(answer.ok && answer.value.status === 'complete', `${name}: ${JSON.stringify(answer)}`);
+    assert.equal(answer.value.value.steps.length, 1, name);
+    assert.equal(answer.value.value.steps[0]?.external, undefined, name);
+    const present = await trace.walk({ repo, repoId: 'same', revision: 'HEAD', targets: [{ file: `src/${name}.ts`, symbol: active! }] });
+    assert.ok(present.ok && present.value.status === 'partial', `${name}: ${JSON.stringify(present)}`);
+    assert.ok(present.value.cuts.some((cut) => cut.at[0]?.includes(' aOnly')), `${name}: ${JSON.stringify(present)}`);
+    assert.ok(!present.value.cuts.some((cut) => cut.at[0]?.includes(' bOnly')), name);
+  }
 });

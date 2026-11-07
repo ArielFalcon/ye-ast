@@ -55,6 +55,9 @@ export interface GraphSymbol {
   language: string;
   startLine: number;
   endLine: number;
+  /** Zero-based UTF-16 columns from the existing index, when present. End is exclusive. */
+  startColumn?: number;
+  endColumn?: number;
 }
 
 export interface GraphEdge {

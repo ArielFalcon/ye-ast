@@ -7,6 +7,8 @@ export interface FakeNode {
   file: string;
   start: number;
   end: number;
+  startColumn?: number;
+  endColumn?: number;
 }
 
 export interface FakeEdge {
@@ -42,7 +44,7 @@ export function fakeNode(id: string, kind: string, file: string, start: number, 
 /** An in-memory code graph; every list comes back in the order the store promises. */
 export function fakeCodeGraph(nodes: readonly FakeNode[], edges: readonly FakeEdge[], unresolved: readonly FakeUnresolved[] = []): CodeGraphReader {
   const symbols = new Map<string, GraphSymbol>(
-    nodes.map((node) => [node.id, { id: handle(node.id), kind: node.kind, name: node.name ?? node.id, qualifiedName: `${node.file}::${node.name ?? node.id}`, file: node.file, language: "java", startLine: node.start, endLine: node.end }]),
+    nodes.map((node) => [node.id, { id: handle(node.id), kind: node.kind, name: node.name ?? node.id, qualifiedName: `${node.file}::${node.name ?? node.id}`, file: node.file, language: "java", startLine: node.start, endLine: node.end, ...(node.startColumn === undefined ? {} : { startColumn: node.startColumn }), ...(node.endColumn === undefined ? {} : { endColumn: node.endColumn }) }]),
   );
   const edge = (e: FakeEdge): GraphEdge => ({
     source: handle(e.from),

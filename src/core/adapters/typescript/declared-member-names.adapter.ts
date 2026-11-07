@@ -52,8 +52,8 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
         const name = (ts.isFunctionDeclaration(node) || ts.isClassLike(node) || ts.isMethodDeclaration(node) || ts.isGetAccessor(node) || ts.isSetAccessor(node) || ts.isPropertyDeclaration(node)) ? node.name
           : (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && (ts.isVariableDeclaration(node.parent) || ts.isPropertyAssignment(node.parent)) ? node.parent.name : undefined;
         const constructor = ts.isConstructorDeclaration(node);
-        const owns = constructor || (name !== undefined && (ts.isIdentifier(name) || ts.isPrivateIdentifier(name) || ts.isStringLiteralLike(name)));
-        if (owns) owners.push({ name: constructor ? "constructor" : name!.getText(tree).replace(/^['"]|['"]$/g, ""), start: lineOf(node), nameLine: name === undefined ? lineOf(node) : lineOf(name) });
+        const owns = ts.isFunctionLike(node) || constructor || (name !== undefined && (ts.isIdentifier(name) || ts.isPrivateIdentifier(name) || ts.isStringLiteralLike(name)));
+        if (owns) owners.push({ name: constructor ? "constructor" : (name?.getText(tree) ?? "").replace(/^['"]|['"]$/g, ""), start: lineOf(node), nameLine: name === undefined ? lineOf(node) : lineOf(name), nameColumn: tree.getLineAndCharacterOfPosition((name ?? node).getStart(tree)).character, startColumn: tree.getLineAndCharacterOfPosition(node.getStart(tree)).character, endLine: tree.getLineAndCharacterOfPosition(node.getEnd()).line + 1, endColumn: tree.getLineAndCharacterOfPosition(node.getEnd()).character });
         if (ts.isFunctionDeclaration(node)) callable(node, false);
         if (isDeclareOnly(node)) { if (owns) owners.pop(); return; }
         if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node)) {
@@ -61,7 +61,16 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
           const written = ts.isTaggedTemplateExpression(node) ? node.tag : node.expression;
           const expression = unwrapped(written);
           const callee = ts.isIdentifier(expression) ? expression.text : ts.isPropertyAccessExpression(expression) ? expression.name.text : undefined;
-          calls.push({ kind: ts.isNewExpression(node) ? "instantiates" : "calls", line: point.line + 1, column: point.character + 1, name: written.getText(tree), ...(callee === undefined ? {} : { callee }), owners: [...owners] });
+          const anchors = [];
+          let at: ts.Node | undefined = node;
+          while (at !== undefined && !ts.isFunctionLike(at) && !ts.isClassLike(at) && !ts.isBlock(at) && !ts.isSourceFile(at)) {
+            const position = tree.getLineAndCharacterOfPosition(at.getStart(tree));
+            anchors.push({ line: position.line + 1, column: position.character + 1 });
+            at = at.parent;
+          }
+          const namePosition = tree.getLineAndCharacterOfPosition((ts.isPropertyAccessExpression(expression) ? expression.name : written).getStart(tree));
+          anchors.push({ line: namePosition.line + 1, column: namePosition.character + 1 });
+          calls.push({ anchors, kind: ts.isNewExpression(node) ? "instantiates" : "calls", line: point.line + 1, column: point.character + 1, name: written.getText(tree), ...(callee === undefined ? {} : { callee }), owners: [...owners] });
         }
         if (ts.isMethodDeclaration(node) && ts.isClassLike(node.parent)) callable(node, isOverridable(node));
         if (ts.isMethodSignature(node) && ts.isInterfaceDeclaration(node.parent)) callable(node, true);
@@ -78,7 +87,13 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
             if (ts.isStringLiteralLike(index) || ts.isNumericLiteral(index)) names.add(index.text);
           }
         }
-        ts.forEachChild(node, visit);
+        ts.forEachChild(node, (child) => {
+          if (owns && child === name) {
+            const held = owners.pop()!;
+            visit(child);
+            owners.push(held);
+          } else visit(child);
+        });
         if (owns) owners.pop();
       };
       visit(tree);

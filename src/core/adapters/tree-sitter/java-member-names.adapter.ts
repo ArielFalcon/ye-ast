@@ -39,12 +39,20 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
       };
       const visit = (node: Node): void => {
         const ownerName = ["class_declaration", "interface_declaration", "enum_declaration", "record_declaration", "method_declaration", "constructor_declaration", "compact_constructor_declaration"].includes(node.type) || (node.type === "variable_declarator" && MEMBER_FIELDS.includes(node.parent?.type ?? "")) ? node.childForFieldName("name") : null;
-        if (ownerName !== null) owners.push({ name: ownerName.text, start: node.startPosition.row + 1, nameLine: ownerName.startPosition.row + 1 });
+        if (ownerName !== null) owners.push({ name: ownerName.text, start: node.startPosition.row + 1, nameLine: ownerName.startPosition.row + 1, nameColumn: ownerName.startPosition.column, startColumn: node.startPosition.column, endLine: node.endPosition.row + 1, endColumn: node.endPosition.column });
         if (node.type === "method_invocation" || node.type === "object_creation_expression" || node.type === "explicit_constructor_invocation") {
           const argumentsNode = node.childForFieldName("arguments");
           const type = node.childForFieldName("type");
           const callee = node.childForFieldName("name")?.text ?? (type?.type === "generic_type" ? type.namedChildren[0]?.text : type?.text)?.split(".").at(-1);
-          calls.push({ kind: node.type === "object_creation_expression" ? "instantiates" : "calls", ...(callee === undefined ? {} : { callee }), line: node.startPosition.row + 1, column: node.startPosition.column + 1, name: node.type === "object_creation_expression" ? node.childForFieldName("type")?.text ?? "new" : file.content.slice(node.startIndex, argumentsNode?.startIndex ?? node.endIndex).trim(), owners: [...owners] });
+          const anchors = [];
+          let at: Node | null = node;
+          while (at !== null && !["method_declaration", "constructor_declaration", "class_body", "block", "lambda_expression"].includes(at.type)) {
+            anchors.push({ line: at.startPosition.row + 1, column: at.startPosition.column + 1 });
+            at = at.parent;
+          }
+          const named = node.childForFieldName("name") ?? type;
+          if (named !== null) anchors.push({ line: named.startPosition.row + 1, column: named.startPosition.column + 1 });
+          calls.push({ anchors, kind: node.type === "object_creation_expression" ? "instantiates" : "calls", ...(callee === undefined ? {} : { callee }), line: node.startPosition.row + 1, column: node.startPosition.column + 1, name: node.type === "object_creation_expression" ? node.childForFieldName("type")?.text ?? "new" : file.content.slice(node.startIndex, argumentsNode?.startIndex ?? node.endIndex).trim(), owners: [...owners] });
         }
         if (node.type === "variable_declarator" ? MEMBER_FIELDS.includes(node.parent?.type ?? "") : NAMED.includes(node.type)) nameOf(node);
         if (node.type === "method_declaration") {

@@ -1,4 +1,5 @@
-import { callsByOwner } from "./syntax-calls.ts";
+import { owningBodyAt } from "../../domain/shared/source-span.ts";
+import { callsByOwner, matchOwnedCall, positionedBodies, type OwnedCall } from "./syntax-calls.ts";
 import { isSeedable } from "../../domain/change/seeds.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { CALL_EDGE_KINDS, FIELD_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
@@ -384,6 +385,11 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   /** The members of a class root that run code, by their declaration: methods, and properties or fields whose initializer makes calls. */
   const syntaxCallsIn = memoizedBy((file: string) => file, async (file) => callsByOwner((await syntaxOf(file)).calls ?? [], store.symbolsInFiles([file])));
 
+  const rawBodiesIn = memoizedBy((file: string) => file, async (file) => {
+    const declarations = store.symbolsInFiles([file]);
+    return positionedBodies(declarations, (await syntaxOf(file)).calls ?? []).map((body) => declarations.find((symbol) => symbol.id === body.id)!).filter((body): body is typeof body & { startColumn: number; endColumn: number } => body.startColumn !== undefined && body.endColumn !== undefined);
+  });
+
   const membersOf = async (node: GraphSymbol): Promise<Child[]> => {
     if (!CLASS_KINDS.includes(node.kind)) return [];
     const syntax = await syntaxCallsIn(node.file);
@@ -428,13 +434,38 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   async function bodyOf(node: GraphSymbol, root: boolean): Promise<Body> {
     const calls = callEdgesOf(store, node);
     const values = store.outgoingEdges([node.id], ["references"]);
-    const called = uses.followed(node, calls);
+    const syntax = await syntaxOf(node.file);
+    const owned = (await syntaxCallsIn(node.file)).get(node.id) ?? [];
+    const accounted = new Set<OwnedCall>();
+    const unplaced: GraphUnresolvedReference[] = [];
+    const rawBodies = await rawBodiesIn(node.file);
+    const matched = (line: number | null, column: number | null, name: string) => {
+      const owner = line === null || column === null || !Number.isFinite(column) ? undefined : owningBodyAt(rawBodies, line, column);
+      return owner !== undefined && owner.id !== node.id ? undefined : matchOwnedCall(owned, line, column, name);
+    };
+    const called = uses.followed(node, calls).flatMap((followed) => {
+      if (syntax.calls === undefined) return [followed];
+      const site = matched(followed.edge.line, followed.edge.column, followed.target.name);
+      if (site === undefined) {
+        unplaced.push({ from: node.id, file: node.file, line: followed.edge.line ?? node.startLine, column: followed.edge.column ?? 0, name: followed.target.name, kind: followed.edge.kind, candidates: [] });
+        return [];
+      }
+      accounted.add(site);
+      return [{ ...followed, edge: { ...followed.edge, line: site.line, column: site.column - 1 } }];
+    });
+    const indexed = callsFrom(node).flatMap((reference) => {
+      if (syntax.calls === undefined) return [reference];
+      const site = matched(reference.line, reference.column, reference.name);
+      if (site === undefined) { unplaced.push(reference); return []; }
+      accounted.add(site);
+      return [{ ...reference, line: site.line, column: site.column - 1 }];
+    });
     const passed = uses.followed(node, values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));
     const verdicts = await targets.verdictsOf([...called, ...passed], signal);
     const valueRoots = await valueReceivers(node, [...called, ...passed], verdicts);
     const external: ExternalCall[] = [];
     const children: Child[] = root ? await membersOf(node) : [];
-    const cuts: Cut[] = [];
+    const cuts: Cut[] = unplaced.map((reference) => unresolvedAt(reference, []));
     /** An external call is a leaf only while the repository writes nothing over what it names; otherwise `replaced` decides. */
     const leafUnlessReplaced = async (call: ExternalCall, root: LeafRoot, replaced: () => unknown): Promise<void> => {
       if (await isReplaced(root)) await replaced();
@@ -511,19 +542,12 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       } else if (bound !== undefined) await settleBound(reference, target.name, named, bound);
       else cuts.push(unresolvedAt(reference, named));
     }
-    const indexed = callsFrom(node);
     const missing: GraphUnresolvedReference[] = [];
-    for (const call of (await syntaxCallsIn(node.file)).get(node.id) ?? []) {
-      const column = call.column - 1;
-      const callee = calleeOf(call.name);
-      const matchesName = (name: string): boolean => {
-        if (name === call.name) return true;
-        const indexedName = calleeOf(name);
-        return indexedName.form !== "computed" && (call.callee ?? (callee.form === "computed" ? undefined : callee.name)) === indexedName.name;
-      };
-      if (indexed.some((reference) => reference.line === call.line && reference.column === column && matchesName(reference.name)) ||
-        called.some(({ edge, target }) => edge.line === call.line && edge.column === column && matchesName(target.name))) continue;
-      missing.push({ from: node.id, file: node.file, line: call.line, column, name: call.name, kind: call.kind, candidates: [] });
+    for (const call of owned) {
+      if (accounted.has(call)) continue;
+      const reference = { from: node.id, file: node.file, line: call.line, column: call.column - 1, name: call.name, kind: call.kind, candidates: [] };
+      if (call.ambiguous) cuts.push(unresolvedAt(reference, []));
+      else missing.push(reference);
     }
     for (const reference of unsettledBy([...indexed, ...missing], called)) {
       const own = ownMemberOf(reference.name);

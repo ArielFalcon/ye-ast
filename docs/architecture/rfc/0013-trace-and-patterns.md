@@ -552,3 +552,30 @@ The 245 new places are 32 bare and 213 member/computed calls. The three S2 publi
 The same 17-command differential remains byte-identical in stdout, stderr and exit code, all exit 0: six maps (ord/pbr/web/pfe/rwb/shop), four callers (ord/pbr/rwb/web), two importers (ord/rwf), two outlines (ord/shop), three impacts (ord HEAD~3, rwb HEAD~5, web HEAD~3). Manifest: `diff.json`. Probe manifest: `probes.json`. Per-site settlement evidence: `measure/head/probes/*.sites`, collected by temporary local instrumentation that was removed before verification. Baseline and rejected outputs remain in `measure/base` and `measure/rejected`; no second baseline export was created. Summary: `correction-summary.json`, in scratch `/private/tmp/ye-ast-unaccounted.9WC4fO`.
 
 C2's render order and the accepted alias boundary are unchanged by this correction. Final foreground `npm run check` exited 0: typecheck and architecture passed; 3,663 tests passed, 0 failed/cancelled/skipped. The public S2 table, render test and new settlement fixture all pass. The missing-site-disconnection mutation was RED and restored before this check. `git diff --check` passed.
+
+
+### Exact source ownership correction (2026-11-07)
+
+Review of `05318a8c` found a false step: on one line, empty `B.run` inherited a tagged call from homonymous `A.run`. The public repro failed before this correction. Inventory ownership now uses the unique innermost source span, with 1-based lines, 0-based columns and an exclusive end. `owningBodyAt` in `domain/shared/source-span.ts` is the small reusable rule for the parallel slice 4 join. Equal or overlapping innermost spans prove no owner. Declaration names never prove ownership.
+
+The adapter transports declaration columns already stored by the index. TypeScript and Java readers supply exact scope spans and call anchors. Indexed edges and unresolved references must reconcile to a unique inventory occurrence in the same body before settlement. An exact invocation start takes precedence over enclosing statement anchors; exact callee spelling takes precedence over its final name. A line-only record is usable only when its owning body and callee select one occurrence. Ambiguity stays an unresolved-link cut. Missing, proven-owned sites still enter the same R1–R6 settlement as indexed pending references. Anonymous callbacks without an indexed body retain their enclosing trace obligation. There is no receiver-shape or builtin-method list.
+
+The same-line public table covers two classes, nested homonymous functions, arrow properties, tags, optional calls and Unicode before the bodies, querying both empty and active bodies. Empty bodies remain complete with just their root; active bodies retain `aOnly` and never `bOnly`. A type-correct mutation restoring name/line assignment failed both the repro and table; choosing the first line-only occurrence failed the ambiguity test. Mutations were restored. Existing settlement coverage now requires both package leaves, `Injectable` and `computed`. No existing expectation was relaxed in this round. Temporary regressions in object-chain matching, initializer/decorator ownership and Java statement anchors were category (b), over-cuts: matching was corrected and their existing assertions pass unchanged. No new category (a) expectation change was needed.
+
+The original baseline `15f44afa` export was reused. All 92 probes and 17 differential commands exclude ThingsBoard, as does the test corpus; no ThingsBoard repository was indexed, traced or mapped. Final measurements:
+
+| Corpus | Traces | Steps baseline → corrected | Cuts baseline → corrected | Expanded baseline → corrected | Complete baseline → corrected |
+|---|---:|---:|---:|---:|---:|
+| pfe | 14 | 301 → 303 | 48 → 48 | 201 → 203 | 0 → 0 |
+| pbr | 15 | 325 → 327 | 250 → 271 | 336 → 336 | 0 → 0 |
+| rwf | 8 | 97 → 97 | 40 → 40 | 70 → 70 | 2 → 2 |
+| rwb | 15 | 347 → 347 | 325 → 341 | 404 → 404 | 0 → 0 |
+| shop | 10 | 345 → 361 | 190 → 195 | 252 → 268 | 1 → 1 |
+| ord | 13 | 210 → 223 | 259 → 314 | 291 → 291 | 0 → 0 |
+| web | 15 | 2445 → 2448 | 1071 → 1145 | 1326 → 1325 | 0 → 0 |
+| self | 2 | 4957 → 4988 | 2559 → 2701 | 2245 → 2245 | 0 → 0 |
+| Total | 92 | 9027 → 9094 | 4742 → 5055 | 5125 → 5142 | 3 → 3 |
+
+All 92 before/after commands exited 0; 60 probe answers changed. Relative to the reviewed `05318a8c` run (9,079 steps, 4,987 cuts, 5,127 expansions), exact ownership yields 9,094 steps, 5,055 cuts and 5,142 expansions. Strict ambiguous joins now retain cuts; corrected initializer ownership also reaches additional bodies. These are measured structural counts, not a claim that every added cut is a new missing-site defect. The previous top-30 and settlement table above describe the historical R1–R6 correction, not this final run.
+
+The 17 non-trace commands remain byte-identical in stdout, stderr and exit code, all exit 0: map 6, callers 4, importers 2, outline 2, impact 3. Evidence: `owner-summary.json`, `measure/head`, `measure/base`, and `measure/pre-owner` under `/private/tmp/ye-ast-unaccounted.9WC4fO`. One baseline export only. Final foreground `npm run check` on Node v24.22.2 exited 0: typecheck, architecture (560 modules) and all 3,666 tests passed; none failed, cancelled or skipped. C2 render ordering and alias policy are unchanged. Adapter source fitness requires staging rules version 10; this is cache invalidation, with no stored/public SCHEMA bump. Parallel adapter edits must coalesce that fitness digest at integration.

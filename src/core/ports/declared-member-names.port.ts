@@ -103,5 +103,7 @@ export interface SyntaxCall {
   column: number;
   name: string;
   callee?: string;
-  owners: readonly { name: string; start: number; nameLine: number }[];
+  /** Exact source anchors used by indexers for the same invocation expression or statement. */
+  anchors?: readonly { line: number; column: number }[];
+  owners: readonly { name: string; start: number; nameLine: number; nameColumn: number; startColumn: number; endLine: number; endColumn: number }[];
 }
