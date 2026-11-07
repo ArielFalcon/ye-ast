@@ -50,6 +50,8 @@ function read(units: readonly TemplateUnit[]): TemplateUsage {
 const byPlace = (a: { line: number; column: number }, b: { line: number; column: number }): number => a.line - b.line || a.column - b.column;
 
 const COMPARISONS: ReadonlySet<string> = new Set(["==", "===", "!=", "!=="]);
+/** Inside an event binding Angular resolves this name to the event, never to a component member. */
+const EVENT_VALUE = "$event";
 
 function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): TemplateEffects {
   const parsed = parseTemplate(template.text, template.path);
@@ -58,7 +60,9 @@ function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): T
   const peel = (ast: AST): AST => (ast instanceof ParenthesizedExpression || ast instanceof NonNullAssert ? peel(ast.expression) : ast);
   const ownField = (ast: AST): PropertyRead | undefined => {
     const read = peel(ast);
-    return read instanceof PropertyRead && (read.receiver instanceof ImplicitReceiver || read.receiver instanceof ThisReceiver) && bound.getExpressionTarget(read) === null ? read : undefined;
+    if (!(read instanceof PropertyRead) || bound.getExpressionTarget(read) !== null) return undefined;
+    if (read.receiver instanceof ThisReceiver) return read;
+    return read.receiver instanceof ImplicitReceiver && !(inEvent && read.name === EVENT_VALUE) ? read : undefined;
   };
   const lineStarts = [0, ...[...template.text.matchAll(/\n/g)].map((match) => match.index + 1)];
   const lineOf = (offset: number): number => lineStarts.findLastIndex((start) => start <= offset);

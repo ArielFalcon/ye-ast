@@ -146,6 +146,7 @@ test("every call an event binding makes, whatever its shape, is an own-method ha
     ["make()()", ["call make()", "handler make"]],
     ["tag`x`", ["handler tag"]],
     ["store.tag`x`", ["call store.tag"]],
+    ["$event()", ["call $event"]],
   ];
   for (const [handler, expected] of shapes) {
     const effects = createTemplateUsageReader().effects({ path: "src/app/host.html", text: `<button (click)="${handler.replaceAll('"', "&quot;")}"></button>`, firstLine: 1 });
