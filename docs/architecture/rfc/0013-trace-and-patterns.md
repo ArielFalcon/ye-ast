@@ -148,6 +148,14 @@ snapshot, file, line). Its existing shared-evidence/shared-support rules relate 
 this states a shared location, not causality. No pair-specific family matcher is introduced. Composed trace summaries
 include an effects count, including a single trace.
 
+Java object creation and TypeScript `new` are execution obligations in the same syntactic inventory as method calls.
+A construction resolved to an indexed constructor walks that body. An indexed class is redirected only to its unique
+source-proven constructor; an unsettled repository constructor is an `unresolved-link` cut. Imported library and
+platform constructors use the existing external-origin settlement and external grouping. Source-only Java library
+summaries also follow constructor edges with argument binding, so a constructor's request is attributed to the root
+wrapper caller. The rule applies with and without workspace sources; constructing a class never proves all of its
+methods execute.
+
 ### The fact
 
 Slice 1 answers this shape; `alternatives` (R7) joined it in slice 3 and `effects` (R12) in slice 4.

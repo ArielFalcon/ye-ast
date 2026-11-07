@@ -67,6 +67,7 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
           owners.push({ name: constructor ? "constructor" : (name?.getText(tree) ?? "").replace(/^['"]|['"]$/g, ""), start: start.line, nameLine: named.line, nameColumn: named.column, startColumn: start.column, endLine: end.line, endColumn: end.column });
         }
         if (ts.isFunctionDeclaration(node)) callable(node, false);
+        if (ts.isConstructorDeclaration(node)) callables.push({ construction: true, name: "constructor", start: lineOf(tree, node), nameLine: lineOf(tree, node), body: node.body !== undefined, overridable: false });
         if (isDeclareOnly(node)) { if (owns) owners.pop(); return; }
         if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node)) {
           const point = positionOf(node.getStart(tree));

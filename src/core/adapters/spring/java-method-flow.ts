@@ -69,6 +69,14 @@ function indexBean(method: MethodDecl, project: JavaProject, register: (name: st
 }
 
 export function methodsOf(call: Invocation, project: JavaProject, text: FieldLookup, concrete = call.type): MethodSelection[] {
+  if (call.node.type === "object_creation_expression" || call.node.type === "explicit_constructor_invocation") {
+    const found = call.node.type === "object_creation_expression"
+      ? project.lookupType(typeNameOf(call.node.childForFieldName("type")), scopeOf(call.type))
+      : call.node.childForFieldName("constructor")?.text === "super" ? project.classChain(call.type)[1] : call.type;
+    if (typeof found !== "object" || found === null) return [];
+    const arity = argumentsOf(call.node).length;
+    return found.constructors.filter(method => method.hasBody && method.parameterTypes.length === arity).map(method => ({ method, receiver: found }));
+  }
   const object = call.node.childForFieldName("object");
   const held = object === null || object.type === "this" ? undefined : receiverOf(object, call, project, text);
   let declared = object === null || object.type === "this" ? concrete : held !== undefined && "decl" in held.resolved ? held.resolved.decl : undefined;

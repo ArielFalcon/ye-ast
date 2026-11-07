@@ -107,6 +107,7 @@ export interface TypeDecl {
   members: Map<string, TypeDecl>;
   constants: Map<string, Expr>;
   methods: MethodDecl[];
+  constructors: MethodDecl[];
 }
 
 export interface JavaProject {
@@ -784,6 +785,7 @@ function declareTypes(file: JavaFile, types: TypeDecl[]): void {
     for (const declaration of declarations) {
       if (declaration.type === "field_declaration" || declaration.type === "constant_declaration") declareConstants(type, declaration);
       else if (declaration.type === "method_declaration") type.methods.push(describeMethod(type, declaration));
+      else if (declaration.type === "constructor_declaration" || declaration.type === "compact_constructor_declaration") type.constructors.push(describeMethod(type, declaration));
       else pending.push({ node: declaration, outer: type });
     }
   }
@@ -807,6 +809,7 @@ function describeType(file: JavaFile, node: Node, outer: TypeDecl | undefined): 
     members: new Map(),
     constants: new Map(),
     methods: [],
+    constructors: [],
   };
 }
 

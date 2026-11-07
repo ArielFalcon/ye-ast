@@ -14,7 +14,7 @@ import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/tr
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import type { DeclaredType, DispatchTargets, ImportOriginSite, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
+import type { DeclaredType, DispatchTargets, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
@@ -632,7 +632,16 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       if (verdict.kind === "keep" || verdict.kind === "redirect") {
         const receiver = value ? undefined : receivers.get(followed);
         const proven = receiver?.kind === "method" ? placedMethod(receiver, CALLABLE_KINDS) : undefined;
-        const reached = proven ?? (verdict.kind === "redirect" ? verdict.to : target);
+        let reached = proven ?? (verdict.kind === "redirect" ? verdict.to : target);
+        if (edge.kind === "instantiates" && CLASS_KINDS.includes(reached.kind)) {
+          const declarations = (await syntaxOf(reached.file)).callables.filter(callable => callable.construction && callable.body);
+          const constructors = navigation.membersOf(reached).filter(member => declarations.some(declared => declared.name === member.name && declared.start <= member.startLine && member.startLine <= declared.nameLine));
+          if (constructors.length !== 1) {
+            cuts.push(unresolvedAt({ from: node.id, file: node.file, line: edge.line ?? node.startLine, column: edge.column ?? 0, name: reached.name, kind: "instantiates", candidates: [] }, constructors.length ? constructors : [reached]));
+            continue;
+          }
+          reached = constructors[0]!;
+        }
         if (receiver !== undefined && receiver.kind !== "unknown" && proven === undefined) cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique([candidateOf(target), ...declarationsNamed(target.name).map(candidateOf)])] });
         else children.push(value ? childAt(reached, edge.line, edge.column, target.name, "reference", true) : childAt(reached, edge.line, edge.column, target.name, "call"));
       } else if (verdict.root.kind === "local-parameter") {
@@ -650,11 +659,16 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       else await settleByName(reference, name, named);
     }
     if (bare.length > 0) {
-      const sites = bare.map(({ reference, name }): ImportOriginSite => ({ file: reference.file, line: reference.line, column: reference.column + 1, name, fullName: reference.name, kind: reference.kind }));
+      const sites = bare.map(({ reference, name }) => ({ file: reference.file, line: reference.line, column: reference.column + 1, name, fullName: reference.name, kind: reference.kind }));
       const findings = await origins.origins(sites, signal);
+      const constructed = await origins.rootOrigins(sites.filter(site => site.kind === "instantiates"), signal);
+      let construction = 0;
       for (const [index, { reference, name }] of bare.entries()) {
         const finding = findings[index];
-        const origin = finding?.status === "complete" && finding.occurrence === true ? finding.value : undefined;
+        const root = reference.kind === "instantiates" ? constructed[construction++] : undefined;
+        const origin = reference.kind === "instantiates"
+          ? root?.status === "complete" && root.pastRoot !== true ? root.value : undefined
+          : finding?.status === "complete" && finding.occurrence === true ? finding.value : undefined;
         const cut = () => cuts.push(unresolvedAt(reference, declarationsNamed(name)));
         if (origin?.kind === "external") await leafUnlessReplaced({ kind: "import", module: origin.module, name: reference.name }, { module: origin.module }, cut);
         else if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, { path: [origin.name], member: name, open: true }, cut);

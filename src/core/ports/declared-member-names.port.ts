@@ -76,6 +76,7 @@ export interface FunctionValueCall {
 
 /** A method or function declaration as its syntax states it: whether it has a body, and whether a subtype can override it. */
 export interface DeclaredCallable {
+  construction?: true;
   name: string;
   /** The line of its first token, an annotation or a decorator included. */
   start: number;

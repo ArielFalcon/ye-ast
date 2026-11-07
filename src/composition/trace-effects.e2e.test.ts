@@ -186,7 +186,6 @@ export class Api {
   assert.deepEqual([effectsOf(load.value), load.cuts?.filter((cut) => cut.at[0]?.includes(" effect")).map((cut) => cut.at[0])], [[], ["api.ts:5 http effect"]]);
 });
 
-
 test("trace reads only the artifact-proven library closure of an explicit workspace", async () => {
   commit({
     "pom.xml": '<project><groupId>sample</groupId><artifactId>app</artifactId><dependencies><dependency><groupId>transport</groupId><artifactId>gateway</artifactId></dependency></dependencies></project>',
@@ -211,11 +210,14 @@ import org.springframework.kafka.core.KafkaTemplate;
 public class Gateway {
   private KafkaTemplate<String, String> kafka;
   private RestTemplate http;
-  public String get(String path) { return http.getForObject(path, String.class); }
+  public String get(String path) { new Worker(http, path); return "ok"; }
   public void defer(String path) { Runnable dead = () -> later(path); }
   private void later(String path) { http.getForObject(path, String.class); }
   public void mixed(String path) { later(path); Runnable dead = () -> later(path); }
   public void emit(String topic) { Runnable dead = () -> kafka.send(topic, "value"); }
+}
+class Worker {
+  Worker(RestTemplate http, String path) { http.getForObject(path, String.class); }
 }
 `);
   execFileSync("git", ["add", "."], { cwd: library, env: GIT_ENV });
@@ -249,4 +251,48 @@ public class Gateway {
   assert.equal(JSON.parse(stdout.join("\n")).value.steps.flatMap((s: { effects?: unknown[] }) => s.effects ?? []).length, 1);
   const repeated = await queries.trace.walk(request);
   assert.deepEqual(repeated, local);
+});
+
+test("Java and TypeScript constructions walk a settled constructor and cut an unsettled repository constructor", async () => {
+  commit({
+    "src/main/java/shop/Build.java": `package shop;
+import org.springframework.web.client.RestTemplate;
+import java.util.ArrayList;
+class Build {
+ RestTemplate http;
+ void load() { new Worker(http); }
+ void absent() { new Empty(); }
+ void external() { new ArrayList<>(); new ArrayList<>(); }
+}
+class Worker {
+ Worker(RestTemplate http) { http.getForObject("/java-built", String.class); }
+}
+class Empty {}
+`,
+    "build.ts": `import { HttpClient } from '@angular/common/http';
+class Worker {
+ constructor(http: HttpClient) { http.get('/ts-built'); }
+}
+class Empty {}
+export class Build {
+ http: HttpClient;
+ load() { new Worker(this.http); }
+ absent() { new Empty(); }
+ external() { new Date(); new Date(); }
+}
+`,
+  });
+  for (const [file, path] of [["src/main/java/shop/Build.java", "/java-built"], ["build.ts", "/ts-built"]] as const) {
+    const loaded = await trace(`${file}:Build.load`);
+    assert.ok(loaded.value.steps.some(step => ["method", "function"].includes(step.kind) && (step.symbol === "constructor" || step.symbol === "Worker")));
+    assert.ok(loaded.value.steps.some(step => step.effects?.some(effect => effect.kind === "http" && effect.target.path === path)));
+    const absent = await trace(`${file}:Build.absent`);
+    assert.equal(absent.status, "partial");
+    assert.ok(absent.cuts?.some(cut => cut.kind === "unresolved-link"));
+    const external = await trace(`${file}:Build.external`);
+    assert.equal(external.status, "complete");
+    const groups = external.value.steps.flatMap(step => step.external ?? []);
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0]!.names.length, 1);
+  }
 });
