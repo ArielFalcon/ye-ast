@@ -70,7 +70,7 @@ export async function readImporters(store: CodeGraphReader, requested: readonly 
 
 /**
  * The edges into the file's nodes that still reach the file once `targets` judged them, and those of them the index
- * matched by name alone (ADR-0035). Structure, imports and the file's own edges are not judged: none of them makes a user.
+ * matched by name alone (ADR-0036). Structure, imports and the file's own edges are not judged: none of them makes a user.
  */
 async function reaching(targets: EdgeTargets, file: string, edges: readonly GraphEdge[], sources: ReadonlyMap<GraphNodeId, GraphSymbol>, nodes: ReadonlyMap<GraphNodeId, GraphSymbol>, signal?: AbortSignal): Promise<{ edges: readonly GraphEdge[]; matched: ReadonlySet<GraphEdge> }> {
   const judged = edges.flatMap((edge) => {

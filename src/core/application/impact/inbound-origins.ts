@@ -30,7 +30,7 @@ export function inboundEdgesOf(store: CodeGraphReader, origins: RelationOrigins,
 
 /**
  * How each graph edge out of the TypeScript sources among `files` whose receiver is a value is known, settled at once for
- * a reading whose callers are asked without waiting (ADR-0035).
+ * a reading whose callers are asked without waiting (ADR-0036).
  */
 export async function receiverSettlementsOf(store: CodeGraphReader, targets: EdgeTargets, files: readonly string[], signal?: AbortSignal): Promise<ReadonlyMap<string, ReceiverSettlement>> {
   const sources = new Map(store.symbolsInFiles(files.filter((file) => isTypeScriptFile(file) && kindOfChangedFile(file) !== "test")).map((symbol) => [symbol.id, symbol]));

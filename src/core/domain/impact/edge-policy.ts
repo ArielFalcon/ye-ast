@@ -104,7 +104,7 @@ export function edgeConfidence({ confidence, provenance }: EdgeScore): number {
   return provenance === "heuristic" ? EDGE_POLICY.unscoredHeuristicConfidence : 1;
 }
 
-/** How a graph edge whose value receiver was settled is known (ADR-0035): bound by a source proof, or by its name alone. */
+/** How a graph edge whose value receiver was settled is known (ADR-0036): bound by a source proof, or by its name alone. */
 export type ReceiverSettlement = "proven" | "name-match";
 
 /**

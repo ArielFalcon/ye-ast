@@ -131,7 +131,7 @@ function focused(file: string, selector: string, branch: DeclarationBranch<Graph
 
 /**
  * Each focused declaration with what its own body uses, and one `unresolved-link` cut per name it uses that no binding
- * proves, a call the index matched by name alone included (ADR-0035). A declaration two selectors match is read once.
+ * proves, a call the index matched by name alone included (ADR-0036). A declaration two selectors match is read once.
  */
 export async function focusWithUses(store: CodeGraphReader, read: FocusRead, origins: ImportOrigins, modules: ModuleDependencies, syntaxOf: EdgeTargetsDeps["syntaxOf"], signal: AbortSignal | undefined): Promise<{ focus: OutlineFocus[]; cuts: Cut[] } | "aborted"> {
   const navigation = createGraphNavigation(store, () => false);

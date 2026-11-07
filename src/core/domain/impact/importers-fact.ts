@@ -13,7 +13,7 @@ export interface ImportedFile {
   users: readonly string[];
   /**
    * Files holding a reference the index could not resolve that names the file or a symbol it declares, or whose only
-   * dependence on it is an edge the index matched by name alone (ADR-0035).
+   * dependence on it is an edge the index matched by name alone (ADR-0036).
    */
   unresolvedNamers: readonly string[];
 }

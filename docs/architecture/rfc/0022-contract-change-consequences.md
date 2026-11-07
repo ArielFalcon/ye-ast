@@ -81,7 +81,7 @@ which replaces `undefined` only; a `switch` clause on the covered path (see "Cha
 derived by evaluating the test, never listed. A guard on one element (`items[0]`) protects only reads of that same index. A read after
 a write to the guarded path or a prefix of it reads the written value, and one that only a guard outside its closure
 would protect is not decided where the closure runs: both are frontiers. A caller edge the code graph only guesses, or matched by name alone on a value receiver no source proof binds
-(ADR-0035), is never proof: an `ambiguous-caller` frontier, and a reference to a function is not a call. User type guards, assertion functions and `instanceof` are not recognized: a use behind them is
+(ADR-0036), is never proof: an `ambiguous-caller` frontier, and a reference to a function is not a call. User type guards, assertion functions and `instanceof` are not recognized: a use behind them is
 `review`. A dereference is any operation that fails on null or undefined: a member read, a call, a keyed read, an array
 spread, iteration, destructuring (an empty pattern included).
 

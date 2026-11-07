@@ -1,4 +1,4 @@
-# ADR-0035: An index edge on a value receiver is a name match until a source proof binds it
+# ADR-0036: An index edge on a value receiver is a name match until a source proof binds it
 
 - Status: Accepted, 2026-11-07, the owner through the tech lead
 - Decision source: the owner, 2026-11-07 (translated): "launch one agent per improvement … and when it is approved each

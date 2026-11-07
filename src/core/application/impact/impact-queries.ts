@@ -80,7 +80,7 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
   importOrigins?: ImportOriginsReader;
   /**
    * Reads what a source's syntax states, so a graph edge the index matched on a value receiver is settled by what the
-   * sources bind the receiver to (ADR-0035); without it every kept edge counts as the index resolved it.
+   * sources bind the receiver to (ADR-0036); without it every kept edge counts as the index resolved it.
    */
   memberNames?: DeclaredMemberNamesReader;
   /** Tells the trivia lines of a requested range apart; without it every line of a range is code. */
