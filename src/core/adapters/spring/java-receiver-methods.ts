@@ -8,8 +8,7 @@ import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adap
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import { enclosingType } from "./java-root-bindings.ts";
-import { ancestorsOf, hierarchyOf, type Hierarchy, type Superclass } from "./java-dispatch-targets.ts";
-import { createJavaProject, describeFile, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, describeFile, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
@@ -69,8 +68,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
       }
       const project = createJavaProject(files);
       const falsified = !parsedAll || unreadJvm || project.unreadable.length > 0 || files.some((file) => namesAnyDynamicImplementation(file, project));
-      const hierarchy = falsified ? undefined : hierarchyOf(files, project);
-      const proves = hierarchy !== undefined && !files.some(({ root }) => rewritesCalls(root));
+      const proves = !falsified && !files.some(({ root }) => rewritesCalls(root));
       const byPath = new Map(files.map((file) => [file.path, file]));
       const readFiles = new Map<string, ReadFile>();
       const readFile = (path: string): ReadFile | undefined => {
@@ -83,7 +81,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         }
         return known;
       };
-      const resolver = createResolver(project, hierarchy);
+      const resolver = createResolver(project);
       for (const [index, site] of sites.entries()) {
         if (signal?.aborted) break;
         const source = readFile(site.file);
@@ -101,7 +99,24 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
   };
 }
 
-function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) {
+function createResolver(project: JavaProject) {
+  const hierarchies = new Map<TypeDecl, ReturnType<JavaProject["hierarchy"]>>();
+  const declaredHierarchy = (type: TypeDecl) => {
+    let known = hierarchies.get(type);
+    if (known === undefined) {
+      known = project.hierarchy(type, (node, owner) => {
+        const found = resolve(node, owner.file, project, enclosingType(owner.node.parent ?? owner.node, owner.file, project), node);
+        return found?.kind === "repository" ? found.type : undefined;
+      });
+      hierarchies.set(type, known);
+    }
+    return known;
+  };
+  const signatures = new Map<MethodDecl, ReturnType<typeof readSignature>>();
+  const signatureOf = (method: MethodDecl) => {
+    if (!signatures.has(method)) signatures.set(method, readSignature(method, project));
+    return signatures.get(method);
+  };
   const placed = new Map(project.types.map((type) => [type.node.id, type]));
 
   /** The repository type the receiver of an invocation is declared to hold; none when nothing proves one. */
@@ -151,16 +166,16 @@ function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) 
    * nearest up its class chain, else the only one.
    */
   const memberOf = (type: TypeDecl, name: string, arity: number): MethodDecl | undefined => {
-    if (hierarchy === undefined || OBJECT_METHODS.has(name)) return undefined;
-    const above = ancestorsOf(type, hierarchy);
-    if (above.some((ancestor) => hierarchy.outside.has(ancestor))) return undefined;
-    const named = above.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
+    if (OBJECT_METHODS.has(name)) return undefined;
+    const above = declaredHierarchy(type);
+    if (above.gaps.length > 0) return undefined;
+    const named = above.types.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
     if (named.some(hasVarargs)) return undefined;
     const candidates = named.filter((method) => method.parameterTypes.length === arity);
     const [first] = candidates;
     if (first === undefined) return undefined;
-    if (candidates.some((method) => (method.modifiers.includes("private") && method.owner !== type) || hasVarargs(method) || (method !== first && !sameStatedSignature(method, first)))) return undefined;
-    for (let current: Superclass = type; typeof current === "object"; current = hierarchy.superclasses.get(current) ?? "outside") {
+    if (candidates.some((method) => (method.modifiers.includes("private") && method.owner !== type) || (method !== first && !sameStatedSignature(method, first)))) return undefined;
+    for (const current of project.classChain(type)) {
       const own = candidates.find((method) => method.owner === current);
       if (own !== undefined) return own;
     }
@@ -169,8 +184,8 @@ function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) 
 
   /** Whether two members certainly state the same parameter types, each as the strict reading settles them. */
   const sameStatedSignature = (method: MethodDecl, other: MethodDecl): boolean => {
-    const own = hierarchy?.signatureOf(method);
-    const others = hierarchy?.signatureOf(other);
+    const own = signatureOf(method);
+    const others = signatureOf(other);
     return own !== undefined && others !== undefined && sameSignature(own, others);
   };
 

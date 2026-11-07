@@ -774,3 +774,10 @@ The TypeScript placed reader reuses its existing request-body/wrapper reader to 
 provenance is explicit and stays a cut. Forwarding sites remain suppressed in the public call-site read and are
 retained only for trace's body ownership join. A structural receiver does not acquire its wrapper's HTTP effect
 when trace leaves that call unexpanded.
+
+
+Static Java member selection reuses `JavaProject.hierarchy` with the existing strict parent-name resolver and
+`readSignature`. It does not consume the dispatch hierarchy's repository-wide runtime veto. An aspect therefore
+does not erase a proven private helper or the declaration a receiver names; R7 still cuts the unproven runtime
+implementation. Unread parents remain explicit hierarchy gaps. The default hierarchy reading used outside trace
+is unchanged.

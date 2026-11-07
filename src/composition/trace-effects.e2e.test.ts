@@ -369,3 +369,22 @@ export function proven(client: NominalClient) { client.post('/proven'); }
   const client = await trace("src/client.ts:Client.post");
   assert.ok(client.cuts?.some((cut) => cut.at[0]?.includes("http effect")));
 });
+
+test("Java declaration selection preserves private helper traversal while aspect dispatch remains cut", async () => {
+  commit({
+    "src/Flow.java": `@org.aspectj.lang.annotation.Aspect class Advice {}
+interface Port { void save(); }
+class Worker implements Port { public void save() {} }
+class Flow {
+  private Port service;
+  void run() { helper(); }
+  private void helper() { service.save(); }
+}
+`,
+  });
+  const result = await trace("src/Flow.java:Flow.run");
+  assert.deepEqual(result.value.steps.map((step) => step.symbol), ["run", "helper", "save"]);
+  assert.equal(result.status, "partial");
+  assert.equal(result.value.steps.find((step) => step.symbol === "save")?.line, 2);
+  assert.ok(result.cuts?.some((cut) => cut.at[0]?.includes("src/Flow.java:2 save")));
+});
