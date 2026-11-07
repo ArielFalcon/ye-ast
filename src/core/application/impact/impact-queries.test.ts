@@ -918,6 +918,16 @@ test("importers tells importing files from using files from files that only name
   ]);
 });
 
+test("importers reads a call the index resolved into an edge of another kind as an unresolved reference that can name the file", async () => {
+  const nodes = [fakeNode("router", "file", "src/router.ts", 1, 9, "router"), fakeNode("open", "method", "src/A.ts", 5, 9, "open"), fakeNode("route", "route", "src/routes.ts", 1, 1, "route")];
+  const edges: FakeEdge[] = [{ from: "open", to: "route", kind: "navigates", line: 7, column: 4, resolvedFrom: { name: "this.router.navigate", kind: "calls" } }];
+  const exports: Options["exports"] = { [HEAD]: { files: ["src/A.ts", "src/router.ts", "src/routes.ts"].map((path) => ({ path, blob: path, written: true })), skipped: [] } };
+
+  const answer = importersFact(await setup({ nodes, edges, exports }).importers({ files: ["src/router.ts"] }));
+
+  assert.deepEqual(answer.status !== "unknown" && answer.value.files.map((entry) => entry.unresolvedNamers), [["src/A.ts"]]);
+});
+
 test("importers answers the files in path order whatever order they were asked in", async () => {
   const { importers } = setup({ nodes: SHOP_NODES, exports: { [HEAD]: SHOP_EXPORT } });
   const answer = importersFact(await importers({ files: ["src/Order.java", "src/Cart.java"] }));
