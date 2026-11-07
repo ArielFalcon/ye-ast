@@ -39,20 +39,11 @@ export function isTraceRoot(store: CodeGraphReader, unresolvedIn: UnresolvedIn):
   return (symbol) =>
     isSeedable(symbol) ||
     ((FIELD_KINDS as readonly string[]).includes(symbol.kind) &&
-      (callEdgesOf(store, symbol).length > 0 || retypedCallsOf(store, symbol).length > 0 || unresolvedIn(symbol.file).some((reference) => reference.from === symbol.id && CALL_EDGE_KINDS.includes(reference.kind))));
+      (callEdgesOf(store, symbol).length > 0 || unresolvedIn(symbol.file).some((reference) => reference.from === symbol.id && CALL_EDGE_KINDS.includes(reference.kind))));
 }
 
 function callEdgesOf(store: CodeGraphReader, symbol: GraphSymbol) {
   return store.outgoingEdges([symbol.id], CALL_EDGE_KINDS).filter((edge) => !isIgnoredEdge(edge));
-}
-
-/** The calls a resolver turned into edges of another kind, a navigation for example, read back as the references they were. */
-function retypedCallsOf(store: CodeGraphReader, symbol: GraphSymbol): GraphUnresolvedReference[] {
-  return store.outgoingEdges([symbol.id]).flatMap((edge) => {
-    const { resolvedFrom, line, column } = edge;
-    const retyped = resolvedFrom !== null && CALL_EDGE_KINDS.includes(resolvedFrom.kind) && !CALL_EDGE_KINDS.includes(edge.kind);
-    return retyped && line !== null && column !== null ? [{ from: symbol.id, name: resolvedFrom.name, kind: resolvedFrom.kind, file: symbol.file, line, column, candidates: [] }] : [];
-  });
 }
 
 export interface TraceWalkInput {
@@ -157,7 +148,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   const { store, unresolvedIn, origins, targets, inScope, memberDeclarations, syntaxOf, memberProofs, budget, signal } = input;
   const navigation = createGraphNavigation(store, () => false);
   const uses = createDeclarationUses(store, navigation, unresolvedIn);
-  const callsFrom = (node: GraphSymbol): readonly GraphUnresolvedReference[] => [...uses.referencesFrom(node, CALL_EDGE_KINDS), ...retypedCallsOf(store, node)];
+  const callsFrom = (node: GraphSymbol): readonly GraphUnresolvedReference[] => uses.referencesFrom(node, CALL_EDGE_KINDS);
 
   const namedCache = new Map<string, readonly GraphSymbol[]>();
   const declarationsNamed = (name: string): readonly GraphSymbol[] => {
