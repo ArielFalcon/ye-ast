@@ -414,3 +414,18 @@ test("a destructured, untyped, any, union, function-typed, getter or static rece
     "}",
   ])).receiverBindings, []);
 });
+
+test("a field of a class whose own `this` escapes it, is computed into, assigned into or destructured is held by no annotation", async () => {
+  const escapes = [
+    "const self = this; self.r.navigate = keep;",
+    "this['r'].navigate = keep;",
+    "Object.assign(this, { r: { navigate: keep } });",
+    "keep(this);",
+    "const copy = { ...this }; keep(copy);",
+    "const { r } = this; r.navigate = keep;",
+    "const self = (): Page => this; self().r.navigate = keep;",
+  ];
+  const classes = escapes.map((escape, index) => `export class Page${index} { r: Router; run(): void { ${escape} this.r.navigate([]); } }`);
+  assert.deepEqual((await read(["import { Router } from '@angular/router';", "import { keep } from './keep';", ...classes])).receiverBindings, []);
+  assert.deepEqual((await read(["import { Router } from '@angular/router';", "export class Page { r: Router; run(): Page { this.r.navigate([]); return this; } }"])).receiverBindings, []);
+});

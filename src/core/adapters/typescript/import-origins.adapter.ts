@@ -60,6 +60,15 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     const resolved = await modules.resolve(from, specifier);
     return "file" in resolved ? resolved.file : undefined;
   });
+  /** What a file exports with its top-level types beside its values: what a heritage name may name. */
+  const typeShapes = new Map<string, ModuleShape | undefined>();
+  const exportedType = createExportLookup(async (file) => {
+    if (!typeShapes.has(file)) typeShapes.set(file, withTypes(moduleShapeOf(file), indexOf(file)?.index.source));
+    return typeShapes.get(file);
+  }, async (from, specifier) => {
+    const resolved = await modules.resolve(from, specifier);
+    return "file" in resolved ? resolved.file : undefined;
+  });
   const shapes = new Map<string, FileShape>();
   const parameterStarts = new Map<string, ReadonlySet<number>>();
   /** A file is bound once for the life of the reader, and only the places of its parameter uses are kept (ADR-0029). */
@@ -124,7 +133,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     return names;
   };
   let replaced: ReplacedRoots | undefined;
-  let subtyped: ReadonlySet<string> | undefined;
+  let subtyped: ReadonlySet<string> | typeof UNPROVEN | undefined;
   /** The globals the snapshot declares, the member paths it writes and the packages it writes through; read when first asked. */
   const replacedRoots = (): ReplacedRoots => {
     if (replaced !== undefined) return replaced;
@@ -213,7 +222,8 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
       if (parsed === undefined) continue;
       for (const { site, index } of group) {
         const type = await annotatedTypeAt(file, parsed.index, parsed.text, site);
-        results[index] = type.kind === "unknown" || (await subtypedTypes()).has(typeKey(type)) ? UNKNOWN_TYPE : type;
+        const subtypes = type.kind === "unknown" ? undefined : await subtypedTypes();
+        results[index] = type.kind === "unknown" || subtypes === undefined || subtypes.has(typeKey(type)) ? UNKNOWN_TYPE : type;
       }
     }
     return results;
@@ -240,32 +250,93 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     return name === undefined ? UNKNOWN_TYPE : { kind: "package", module: binding.origin.module, name };
   }
 
-  /** The library and package types an in-scope repository class or interface extends or implements; read when first asked. */
-  async function subtypedTypes(): Promise<ReadonlySet<string>> {
-    if (subtyped !== undefined) return subtyped;
+  /**
+   * The library and package types an in-scope repository class or interface extends or implements, read when first asked;
+   * `undefined` when some heritage names neither a repository class or interface nor a library or package type, so a
+   * value of any type may run repository code.
+   */
+  async function subtypedTypes(): Promise<ReadonlySet<string> | undefined> {
+    if (subtyped !== undefined) return subtyped === UNPROVEN ? undefined : subtyped;
     const keys = new Set<string>();
+    const bound = new Map<string, BoundFile>();
+    const boundOf = (path: string): BoundFile => {
+      if (!bound.has(path)) bound.set(path, bindFile(path, texts.get(path)!));
+      return bound.get(path)!;
+    };
     for (const [path, text] of texts) {
       if (!isTypeScriptSource(path) || !HERITAGE.test(text)) continue;
       const parsed = indexOf(path);
-      if (parsed === undefined) continue;
-      const heads: { root: ts.Identifier; member?: string }[] = [];
+      if (parsed === undefined) {
+        subtyped = UNPROVEN;
+        return undefined;
+      }
+      const heritage: ts.ExpressionWithTypeArguments[] = [];
       const visit = (node: ts.Node): void => {
-        if (ts.isHeritageClause(node)) for (const type of node.types) {
-          const root = headOf(type.expression);
-          const member = chainNames(type.expression)[1];
-          if (ts.isIdentifier(root)) heads.push({ root, ...(member === undefined ? {} : { member }) });
-        }
+        if (ts.isHeritageClause(node)) heritage.push(...node.types);
         node.forEachChild(visit);
       };
       visit(parsed.index.source);
-      const bound = heads.some(({ root }) => !isTypeName(root)) ? bindFile(path, text) : undefined;
-      for (const head of heads) {
-        const type = typeOf(path, await bindingOf(path, parsed.index, head, bound, NO_OWNER));
-        if (type.kind !== "unknown") keys.add(typeKey(type));
+      for (const type of heritage) {
+        const proven = await heritageOf(path, type.expression, boundOf, 0);
+        if (proven === undefined) {
+          subtyped = UNPROVEN;
+          return undefined;
+        }
+        if (proven !== REPOSITORY_TYPE) keys.add(proven);
       }
     }
     subtyped = keys;
     return keys;
+  }
+
+  /**
+   * What a heritage name stands for, following constants, type aliases and imports of the repository: the key of a library
+   * or package type, a repository class or interface (whose own heritage is read where it is declared), or `undefined`
+   * when nothing proves either.
+   */
+  async function heritageOf(file: string, node: ts.Node, boundOf: (path: string) => BoundFile, depth: number): Promise<string | undefined> {
+    const parsed = indexOf(file);
+    const written = ts.isTypeReferenceNode(node) ? node.typeName : node;
+    if (ts.isClassExpression(written)) return REPOSITORY_TYPE;
+    const [root, member, ...rest] = chainNames(written);
+    const head = headOf(written);
+    if (parsed === undefined || depth >= ALIAS_DEPTH || root === undefined || rest.length > 0 || !ts.isIdentifier(head) || !isPlainChain(written)) return undefined;
+    let declarations: readonly ts.Node[] | undefined;
+    if (isTypeName(head)) declarations = typeScopeOf(head);
+    else {
+      const binding = boundOf(file).bindingOf(boundOf(file).identifierAt(head.getStart(), root)!);
+      if (binding.kind === "dynamic") return undefined;
+      if (binding.kind === "declared" && !binding.declarations.every(isImportDeclaration)) declarations = binding.declarations;
+    }
+    if (declarations !== undefined) return member === undefined ? declarationsOf(file, declarations, boundOf, depth) : undefined;
+    const type = typeOf(file, await bindingOf(file, parsed.index, { root: head, ...(member === undefined ? {} : { member }) }, boundOf(file), NO_OWNER));
+    if (type.kind !== "unknown") return type.kind === "global" && member !== undefined ? undefined : typeKey(type);
+    const imported = moduleShapeOf(file)?.imports.get(root);
+    const resolved = imported === undefined ? undefined : await modules.resolve(file, imported.module);
+    if (imported === undefined || resolved === undefined || !("file" in resolved)) return undefined;
+    const name = imported.imported === "*" ? member : member === undefined ? imported.imported : undefined;
+    const declaration = name === undefined ? undefined : await exportedType(resolved.file, name);
+    return declaration === undefined || declaration === "ambiguous" ? undefined : exportedOf(declaration.file, declaration.name, boundOf, depth);
+  }
+
+  /** What a top-level declaration of a repository file stands for as heritage. */
+  function exportedOf(file: string, name: string, boundOf: (path: string) => BoundFile, depth: number): Promise<string | undefined> | undefined {
+    const parsed = indexOf(file);
+    if (parsed === undefined) return undefined;
+    const declarations = parsed.index.source.statements.flatMap((statement): ts.Node[] =>
+      ts.isVariableStatement(statement) ? statement.declarationList.declarations.filter((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === name) : declaredName(statement) === name ? [statement] : []);
+    return declarationsOf(file, declarations, boundOf, depth);
+  }
+
+  /** Classes, interfaces and type literals are the repository's own; a constant or a type alias stands for the name it holds. */
+  async function declarationsOf(file: string, declarations: readonly ts.Node[], boundOf: (path: string) => BoundFile, depth: number): Promise<string | undefined> {
+    if (declarations.length > 0 && declarations.every((declaration) => ts.isClassLike(declaration) || ts.isInterfaceDeclaration(declaration))) return REPOSITORY_TYPE;
+    const [only, ...others] = declarations;
+    if (only === undefined || others.length > 0) return undefined;
+    if (ts.isVariableDeclaration(only) && only.initializer !== undefined && (ts.getCombinedNodeFlags(only) & ts.NodeFlags.Const) !== 0) return heritageOf(file, unwrappedValue(only.initializer), boundOf, depth + 1);
+    if (ts.isTypeAliasDeclaration(only) && ts.isTypeLiteralNode(only.type)) return REPOSITORY_TYPE;
+    if (ts.isTypeAliasDeclaration(only) && ts.isTypeReferenceNode(only.type)) return heritageOf(file, only.type, boundOf, depth + 1);
+    return undefined;
   }
 
   async function importBinding(file: string, specifier: string, root: string, member: string | undefined): Promise<RootBinding> {
@@ -312,6 +383,45 @@ const UNKNOWN_TYPE: DeclaredType = { kind: "unknown" };
 const NO_OWNER: UseSite["owner"] = { name: "", line: 0, endLine: 0 };
 
 const HERITAGE = /\b(extends|implements)\b/;
+
+/** Heritage that names a repository class or interface. */
+const REPOSITORY_TYPE = "";
+
+/** Some heritage names nothing the sources prove. */
+const UNPROVEN = Symbol("unproven");
+
+/** How many constants and type aliases a heritage name is followed through. */
+const ALIAS_DEPTH = 8;
+
+/** A name or a chain of plain names: no call, element access or other expression. */
+function isPlainChain(node: ts.Node): boolean {
+  if (ts.isIdentifier(node)) return true;
+  if (ts.isPropertyAccessExpression(node)) return isPlainChain(node.expression);
+  if (ts.isQualifiedName(node)) return isPlainChain(node.left);
+  return false;
+}
+
+/** A module shape whose declarations and exports also hold the file's top-level interfaces, type aliases and enums. */
+function withTypes(shape: ModuleShape | undefined, source: ts.SourceFile | undefined): ModuleShape | undefined {
+  if (shape === undefined || source === undefined) return undefined;
+  const declared = new Map(shape.declared);
+  const exports = new Map(shape.exports);
+  for (const statement of source.statements) {
+    if (!ts.isInterfaceDeclaration(statement) && !ts.isTypeAliasDeclaration(statement) && !ts.isEnumDeclaration(statement)) continue;
+    declared.set(statement.name.text, NO_SPAN);
+    const modifiers = ts.getModifiers(statement) ?? [];
+    if (modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) exports.set(modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) ? "default" : statement.name.text, { local: statement.name.text });
+  }
+  return { ...shape, declared, exports };
+}
+
+const NO_SPAN = { line: 0, endLine: 0 };
+
+function unwrappedValue(expression: ts.Expression): ts.Expression {
+  let inner = expression;
+  while (ts.isParenthesizedExpression(inner) || ts.isAsExpression(inner) || ts.isSatisfiesExpression(inner) || ts.isNonNullExpression(inner)) inner = inner.expression;
+  return inner;
+}
 
 /** The library type a primitive keyword annotation names. */
 const KEYWORD_TYPES: ReadonlyMap<ts.SyntaxKind, string> = new Map([

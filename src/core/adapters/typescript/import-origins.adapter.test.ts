@@ -744,3 +744,54 @@ test("an annotation the repository declares, imports from its own files or packa
     ["ReadonlyArray<string>", "ReadonlyArray", [], [subtypes]],
   ] as const) assert.deepEqual(await declaredTypeOf(annotation, spelled, lines, extra), { kind: "unknown" }, `${annotation} ${extra.length}`);
 });
+
+test("a repository type whose heritage follows constants, type aliases and imports of the repository to a library type makes that type unknown", async () => {
+  const aliases: SourceFile = {
+    path: "src/aliases.ts",
+    content: [
+      "import { Router } from '@angular/router';",
+      "import { Base } from './bases';",
+      "const Fault = Error;",
+      "type Items = Array<string>;",
+      "const Navigator = Router;",
+      "export class RepoError extends Fault {}",
+      "export class RepoItems implements Items {}",
+      "export class Repo extends Navigator {}",
+      "export class Cache extends Base {}",
+    ].join("\n"),
+  };
+  const bases: SourceFile = { path: "src/bases.ts", content: "export const Base = Map;" };
+  for (const [annotation, spelled, lines] of [
+    ["Error", "Error", []],
+    ["string[]", "Array", []],
+    ["Router", "Router", ["import { Router } from '@angular/router';"]],
+    ["Map<string, number>", "Map", []],
+  ] as const) assert.deepEqual(await declaredTypeOf(annotation, spelled, lines, [aliases, bases]), { kind: "unknown" }, annotation);
+});
+
+test("heritage that names no repository class or interface and no library type makes every annotation unknown", async () => {
+  const holder: SourceFile = { path: "src/holder.ts", content: "export class Holder { static Inner = Map; }" };
+  for (const heritage of [
+    ["function Mixin(Base: ErrorConstructor) { return class extends Base {}; }", "export class RepoError extends Mixin(Error) {}"],
+    ["import { mixinWith } from '@angular/router';", "export class Mixed extends mixinWith(Map) {}"],
+    ["export class Dynamic extends (globalThis as any).Base {}"],
+    ["export class Collating extends Intl.Collator {}"],
+    ["import * as holders from './holder';", "export class Deep extends holders.Holder.Inner {}"],
+    ["import { Holder } from './holder';", "export function scoped(scope: object) { with (scope) { return class extends Holder {}; } }"],
+    ["let Kind = Map;", "Kind = Set;", "export class Changing extends Kind {}"],
+    ["export class Chosen extends (Math.random() > 0.5 ? Error : Map) {}"],
+    ["export class Broken extends Set {", "  run(: void {}"],
+  ]) {
+    const extra: SourceFile = { path: "src/heritage.ts", content: heritage.join("\n") };
+    assert.deepEqual(await declaredTypeOf("Set<string>", "Set", [], [extra, holder]), { kind: "unknown" }, heritage.at(-1));
+  }
+});
+
+test("heritage between repository classes and interfaces, imported or local, proves the library types they do not reach", async () => {
+  const shapes: SourceFile = {
+    path: "src/shapes.ts",
+    content: ["import { Shape } from './shape';", "import * as kinds from './shape';", "interface Named {}", "export class Square extends Shape implements Named {}", "export class Round extends kinds.Shape {}", "const Alias = Square;", "export class Box extends Alias {}", "type Outline = Named;", "export class Frame implements Outline {}", "import type { Outlined } from './shape';", "export interface Drawn extends Outlined, kinds.Outlined {}", "type Sized = { size: number };", "export interface Measured extends Sized {}"].join("\n"),
+  };
+  const shape: SourceFile = { path: "src/shape.ts", content: "export class Shape {}\nexport interface Outlined {}" };
+  assert.deepEqual(await declaredTypeOf("Map<string, number>", "Map", [], [shapes, shape]), { kind: "global", name: "Map" });
+});

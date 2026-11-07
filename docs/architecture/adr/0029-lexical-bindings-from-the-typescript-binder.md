@@ -70,8 +70,11 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    and the `typeCount` test still holds: no type is created.
 9. A receiver annotated with a library, primitive or package type is an external leaf (trace slice 2, S5) only when no
    in-scope repository class or interface extends or implements that type and the type is not imported from one of the
-   repository's own packages (the module resolver never resolves those to a package). A type declared nowhere
-   (generated code) stays unknown. The leaf's evidence is the module or the global it is rooted at, as for every other
+   repository's own packages (the module resolver never resolves those to a package). A heritage name is followed
+   through `const` aliases, type aliases and imports of the repository's own files to a repository class, interface or
+   type literal, or to a library or package type. Heritage that reaches neither (a mixin call, a parameter, a `let`, a
+   dynamic scope, a deeper chain, a source that does not parse) proves nothing about any type, so every annotation stays
+   unknown in that snapshot. A type declared nowhere (generated code) stays unknown. The leaf's evidence is the module or the global it is rooted at, as for every other
    leaf; the answer gains no field, so the declared type itself is not written.
 
 ## Consequences

@@ -70,7 +70,8 @@ export interface ImportOrigins {
    * language's libraries, and an import of a package the repository depends on is that package's export by its exported
    * name. `unknown` when the repository declares the type, the name binds nothing (generated code), the package is one
    * the repository declares itself, or an in-scope repository type extends or implements the same type, so a value of
-   * it may run repository code (ADR-0029 decision 9).
+   * it may run repository code; every site is `unknown` when some heritage reaches no repository class, interface or type
+   * literal and no library or package type (ADR-0029 decision 9).
    */
   declaredTypes(sites: readonly UseSite[], signal?: AbortSignal): Promise<readonly DeclaredType[]>;
   /**

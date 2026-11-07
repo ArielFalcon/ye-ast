@@ -198,14 +198,16 @@ function isInside(node: ts.Node, scope: ts.Node): boolean {
 }
 
 /**
- * Whether every `this.<name>` the class writes for its own instance only reads one of the field's members or stores a
- * value into the field: a field passed, returned, copied, indexed or written through could have its members replaced.
+ * Whether every `this` the class writes for its own instance names one member, and every `this.<name>` only reads one of
+ * the field's members or stores a value into the field: an instance or a field passed, returned, copied, indexed or
+ * written through could have its members replaced.
  */
 function fieldStaysLocal(owner: ts.ClassLikeDeclaration, name: string): boolean {
   let stays = true;
   const visit = (node: ts.Node): void => {
     if (!stays) return;
-    if (isThisMember(node) && node.name.text === name && thisClassOf(node) === owner) {
+    if (node.kind === ts.SyntaxKind.ThisKeyword && thisClassOf(node) === owner && !isThisMember(node.parent)) stays = false;
+    else if (isThisMember(node) && node.name.text === name && thisClassOf(node) === owner) {
       const parent = node.parent;
       const read = ts.isPropertyAccessExpression(parent) && parent.expression === node && !isWritten(parent);
       const stored = ts.isBinaryExpression(parent) && parent.left === node && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken;
