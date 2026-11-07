@@ -9,6 +9,10 @@ export interface ConsequencesRequest extends WorkspaceRequest {
   hypothesis: HypothesisInput;
 }
 
+export interface EachConsequencesRequest extends WorkspaceRequest {
+  hypotheses: readonly HypothesisInput[];
+}
+
 export type ConsequencesFault =
   | WorkspaceFault
   | { kind: "invalid-hypothesis"; detail: string; refusal: HypothesisRefusal }
@@ -22,4 +26,9 @@ export interface ConsumerQueries {
    * followed is an `unknown` item with its location and cause; an answer without items is never "safe" on its own.
    */
   consequences(request: ConsequencesRequest): Promise<Result<Fact<ConsequencesValue>, ConsequencesFault>>;
+  /**
+   * The consequences of several hypotheses on one workspace, prepared once and released when the last one is answered;
+   * answers come in the order asked. A workspace that cannot be read fails them all; an invalid hypothesis is its own fault.
+   */
+  consequencesOfEach(request: EachConsequencesRequest): Promise<Result<readonly Result<Fact<ConsequencesValue>, ConsequencesFault>[], WorkspaceFault>>;
 }

@@ -302,7 +302,8 @@ call sites and readers. Selecting the operation's links and serving handlers, an
 hypothesis, belong to each hypothesis, never to the preparation. A second hypothesis on the same workspace, and every
 hypothesis P4 derives from one diff, pays only its selection and its walk. Measured before P3 (P3.0): the walk is
 0.1-2 s; repeated preparation is 1.5-70 s per query. The preparation is released when its holder releases it, so memory
-is held for the hypotheses that use it and no longer.
+is held for the hypotheses that use it and no longer. A caller with several hypotheses asks them in one call (`consequencesOfEach`), answered in the order asked; nothing is
+held between calls, so a repository the size of the largest measured one (3.5 GB prepared) is never kept by a cache.
 
 **Seams landed before the writers.** The prepared workspace and the per-hypothesis session as two port types; the
 member-occurrence query of the session (found, unresolved, unavailable) with the receiver's provenance; the template

@@ -66,6 +66,7 @@ function setup(options: Setup = {}) {
   const templated: Carrier[] = [];
   const opened: string[] = [];
   const asked: string[] = [];
+  let preparations = 0;
   const session: ConsumerSession = {
     base: BASE,
     links: options.links ?? [link()],
@@ -81,7 +82,7 @@ function setup(options: Setup = {}) {
   const queries: ConsumerQueries = createConsumerQueries({
     sources: {
       withWorkspace: async (_, run) => ({
-        ok: true,
+        ok: (preparations++, true),
         value: await run({
           session: async (hypothesis) => {
             opened.push(hypothesis.property.join("."));
@@ -98,10 +99,31 @@ function setup(options: Setup = {}) {
     assert.notEqual(answer.value.status, "unknown");
     return answer.value as Exclude<typeof answer.value, { status: "unknown" }>;
   };
-  return { ask, followed, templated, opened, asked, queries, request, session };
+  return { ask, followed, templated, opened, asked, queries, request, session, preparations: () => preparations };
 }
 
 const verdictsOf = (fact: Awaited<ReturnType<ReturnType<typeof setup>["ask"]>>) => fact.value.findings.map((finding) => (finding.status === "complete" ? finding.value.verdict.kind : finding.evidence.at(-1)?.via));
+
+test("hypotheses asked together share one prepared workspace and are answered in the order asked, an invalid one with its own fault", async () => {
+  const { queries, request, opened, preparations } = setup();
+  const { hypothesis, ...workspace } = request;
+  const answers = await queries.consequencesOfEach({ ...workspace, hypotheses: [{ ...hypothesis, property: "phone" }, { ...hypothesis, change: "bogus" as HypothesisInput["change"] }, hypothesis] });
+
+  assert.ok(answers.ok);
+  assert.deepEqual(answers.value.map((answer) => (!answer.ok ? answer.fault.kind : answer.value.status === "unknown" ? "unknown" : answer.value.value.hypothesis.property)), ["phone", "invalid-hypothesis", "address"]);
+  assert.deepEqual(opened, ["phone", "address"]);
+  assert.equal(preparations(), 1);
+});
+
+test("hypotheses that are all invalid are answered without preparing the workspace", async () => {
+  const { queries, request, preparations } = setup();
+  const { hypothesis, ...workspace } = request;
+  const answers = await queries.consequencesOfEach({ ...workspace, hypotheses: [{ ...hypothesis, change: "bogus" as HypothesisInput["change"] }] });
+
+  assert.ok(answers.ok);
+  assert.deepEqual(answers.value.map((answer) => !answer.ok && answer.fault.kind), ["invalid-hypothesis"]);
+  assert.equal(preparations(), 0);
+});
 
 test("each use gets its verdict, with the chain from the call site that proves it", async () => {
   const flow = { [carrierKey(siteOf())]: { uses: [use(30, { operation: READ }), use(40, { operation: READ, guards: [guard()] }), use(50, { operation: UNMODELLED, path: path("address") })], next: [], frontiers: [] } };

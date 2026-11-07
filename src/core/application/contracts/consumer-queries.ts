@@ -2,7 +2,7 @@ import { formatAccessPath, relatePaths, type AccessPath } from "../../domain/con
 import { OLD_GUARANTEE, type ConsequencesValue, type UseConsequence } from "../../domain/contracts/consequence-fact.ts";
 import { writtenChange } from "../../domain/contracts/change.ts";
 import { carrierKey, siteFile, siteLine, type Carrier, type CarrierSite, type FlowFrontier, type FlowNext, type FlowResult, type Hop } from "../../domain/contracts/consumer-flow.ts";
-import { parseHypothesis, type Hypothesis } from "../../domain/contracts/hypothesis.ts";
+import { parseHypothesis, type Hypothesis, type HypothesisRefusal } from "../../domain/contracts/hypothesis.ts";
 import { decideUse } from "../../domain/contracts/verdict.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -43,16 +43,26 @@ interface Pending {
 const located = (evidence: Evidence, repo: string): RepositoryEvidence => ({ ...evidence, repo });
 
 export function createConsumerQueries({ sources }: ConsumerQueriesDeps): ConsumerQueries {
+  const consequencesOfEach: ConsumerQueries["consequencesOfEach"] = async ({ hypotheses, ...workspace }) => {
+    const parsed = hypotheses.map(parseHypothesis);
+    const invalid = (refusal: HypothesisRefusal): Answer => ({ ok: false, fault: { kind: "invalid-hypothesis", detail: refusal.detail, refusal } });
+    if (!parsed.some((hypothesis) => hypothesis.ok)) return { ok: true, value: parsed.flatMap((hypothesis) => (hypothesis.ok ? [] : [invalid(hypothesis.fault)])) };
+    return sources.withWorkspace(workspace, async (prepared) => {
+      const answers: Answer[] = [];
+      for (const hypothesis of parsed) answers.push(hypothesis.ok ? await consequencesOn(prepared, hypothesis.value) : invalid(hypothesis.fault));
+      return answers;
+    });
+  };
   return {
-    async consequences(request) {
-      const { hypothesis: written, ...workspace } = request;
-      const parsed = parseHypothesis(written);
-      if (!parsed.ok) return { ok: false, fault: { kind: "invalid-hypothesis", detail: parsed.fault.detail, refusal: parsed.fault } };
-      const answered = await sources.withWorkspace(workspace, (prepared) => consequencesOn(prepared, parsed.value));
-      return answered.ok ? answered.value : answered;
+    async consequences({ hypothesis, ...workspace }) {
+      const answers = await consequencesOfEach({ ...workspace, hypotheses: [hypothesis] });
+      return answers.ok ? answers.value[0]! : answers;
     },
+    consequencesOfEach,
   };
 }
+
+type Answer = Result<Fact<ConsequencesValue>, ConsequencesFault>;
 
 /** The consequences of one hypothesis on a workspace already prepared, so a caller with several hypotheses prepares once. */
 export async function consequencesOn(workspace: PreparedWorkspace, hypothesis: Hypothesis): Promise<Result<Fact<ConsequencesValue>, ConsequencesFault>> {
