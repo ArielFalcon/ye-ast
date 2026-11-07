@@ -293,6 +293,37 @@ Reading for the next slice: findings 1 and 2 are unsound answers, so they come f
 import binding settle 28 of the 45 cuts and R3 opens the stopped frontend flows; on the backends, R7 (slice 3) opens
 more flow than R4-R5.
 
+### Slice 2 measured (2026-11-07)
+
+The research probe set, `untrusted`, through `ye-ast trace` at a pinned revision of each repository: 86 traces over six
+repositories, the slice 1 four (frontend A 20, frontend B 13, backend A 12, backend B 14), an Angular admin application
+(frontend C, 25) and ye-ast's own sources at a fixed commit (two roots, `composeQueries` and `walkTrace`). *Cuts* counts
+the `unresolved-link` cuts of every trace of a repository; *before* is main before slice 2, *after* the head of slice 2
+with its review corrections. Three runs of the after set (one per follow-up commit) answered the same bytes.
+
+| Probe | Traces | Cuts before | Cuts after | Removed | Expected after S5 |
+|---|---|---|---|---|---|
+| ye-ast `composeQueries` | 1 | 2863 | 1992 | 30% | 54% |
+| ye-ast `walkTrace` | 1 | 119 | 65 | 45% | — |
+| frontend A | 20 | 103 | 57 | 45% | 65% |
+| frontend B | 13 | 68 | 60 | 12% | — |
+| frontend C | 25 | 339 | 230 | 32% | 76% |
+| backend A | 12 | 195 | 195 | 0% | — |
+| backend B | 14 | 161 | 161 | 0% | 22% |
+
+Where the yield fell short of the research estimate, a soundness guard took it back, by design:
+
+- S2-S4 removed 26% on `composeQueries` and 12% on frontend C (expected 31% and 51%): a field proof counts only when
+  nothing may replace the field's value (`risks.reaches(owner, field)`), which holds for most constructor-injected
+  fields of frontend C.
+- S5 first reached 107 cuts on frontend C; the review guards (a field binds only when it is `#` or `private` and named
+  through `this` alone, and every field of a class that indexes another receiver by an unstated key binds nothing)
+  brought it back to 230. Every cut they restore is a place a repository write could reach.
+- On both backends the global Java guard fires (a repository type extends a supertype outside the repository), so every
+  Java annotation stays unknown and no cut is removed; 46 unnamed external leaves of backend B gained their package
+  name instead. A per-member guard was measured to save 4 cuts on backend B and was not taken.
+- The one past-root rule (`readsPastRoot`) cost no cut on any probe.
+
 ## Patterns (deferred)
 
 Deferred by the owner on 2026-11-01 (translated): "the architecture part does not convince me yet; I do not see what
