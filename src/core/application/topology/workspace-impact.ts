@@ -6,7 +6,7 @@ import { incompleteSectionCuts, provenanceOf, withCuts } from "../../domain/shar
 import type { Result } from "../../domain/shared/result.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
-import type { CallSite } from "../../domain/topology/call-site.ts";
+import { unsettledCallSiteCut, type CallSite } from "../../domain/topology/call-site.ts";
 import {
   admitDownstream,
   admitUpstream,
@@ -435,7 +435,7 @@ function sectionOf(section: Fact<{ unresolved: readonly unknown[] }>, value: Rep
   if (section.status === "unknown") return section;
   const cuts: Cut[] = [
     ...value.reads.flatMap(({ kind, fact }, index): readonly Cut[] => fact.status === "partial" ? fact.cuts : fact.status === "unknown" ? [{ kind: "section", at: [kind, String(index)] }] : []),
-    ...undecided.map((site): Cut => ({ kind: "unresolved-link", at: [site.file, `${site.file}:${site.line}`] })),
+    ...undecided.map(unsettledCallSiteCut),
     ...unserved,
   ];
   const triggerWalk = value.reads.find(({ kind }) => kind === "trigger")?.fact;

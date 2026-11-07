@@ -3,7 +3,7 @@ import type { HttpRoute } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
 import type { CallSite, EventTarget, HttpTarget } from "./call-site.ts";
 import { linkIdentity, type Link, type LinkBasis } from "./link.ts";
-import { callTemplate, CANNOT_MATCH, literalText, looseness, namesHost, routeSegments, RUN_TIME_HOLE, statedLength, unify, type CallTemplate, type TemplateSegment, type Unification } from "./path-template.ts";
+import { callTemplate, CANNOT_MATCH, literalText, looseness, namesHost, prefixText, routeSegments, RUN_TIME_HOLE, statedLength, unify, type CallTemplate, type TemplateSegment, type Unification } from "./path-template.ts";
 
 /** A repository's entrypoints, as the join reads them. */
 export interface RepositoryEntrypoints {
@@ -110,21 +110,29 @@ function matchOf({ route, unified, profiles }: Taken, basis: LinkBasis): Match {
 /** What a rung finds in one repository: a landing, `could` when only routes the call could match depending on its run-time values take it, or nothing. */
 type Rung = (call: CallTemplate, method: HttpTarget["method"], routes: readonly HttpRoute[]) => Landing | "could" | undefined;
 
-/** The routes a rung took, or `could` when it took none and the call could match one of them. */
-function landingOf(taken: readonly Taken[], could: boolean, basis: LinkBasis): Landing | "could" | undefined {
+/** The routes a rung's rule takes, and whether the call could match one more depending on its run-time values. */
+interface Found {
+  taken: readonly Taken[];
+  could: boolean;
+}
+
+/** The landing of what a rung found, or `could` when it took no route and the call could match one. */
+function landingOf({ taken, could }: Found, basis: LinkBasis): Landing | "could" | undefined {
   return mostSpecific(taken, basis) ?? (could ? "could" : undefined);
 }
 
-const exactRung: Rung = (call, method, routes) => {
-  const unified = routes.filter((route) => accepts(route, method)).map((route) => ({ route, unified: unify(call.segments, routeSegments(route.path)) }));
-  return landingOf(takenOf(unified), unified.some(({ unified: found }) => found.outcome === "could-match"), "exact");
-};
-
-function takenOf(unified: readonly { route: HttpRoute; unified: Unification }[]): Taken[] {
-  return unified.flatMap(({ route, unified: found }) => (found.outcome === "matches" ? [{ route, unified: found }] : []));
+function foundOf(unified: readonly { route: HttpRoute; unified: Unification }[]): Found {
+  return {
+    taken: unified.flatMap(({ route, unified: found }) => (found.outcome === "matches" ? [{ route, unified: found }] : [])),
+    could: unified.some(({ unified: found }) => found.outcome === "could-match"),
+  };
 }
 
-const basePathRung: Rung = (call, method, routes) => {
+function equalPaths(call: CallTemplate, method: HttpTarget["method"], routes: readonly HttpRoute[]): Found {
+  return foundOf(routes.filter((route) => accepts(route, method)).map((route) => ({ route, unified: unify(call.segments, routeSegments(route.path)) })));
+}
+
+function underBasePaths(call: CallTemplate, method: HttpTarget["method"], routes: readonly HttpRoute[]): Found {
   let could = false;
   const taken = routes.flatMap((route): Taken[] => {
     if (!accepts(route, method)) return [];
@@ -140,8 +148,12 @@ const basePathRung: Rung = (call, method, routes) => {
     const profiles = via.flatMap(({ profile }) => (profile === undefined ? [] : [profile])).toSorted(compareText);
     return [{ route, unified: first.unified, ...(underDefault ? {} : { profiles }) }];
   });
-  return landingOf(taken, could, "base-path");
-};
+  return { taken, could };
+}
+
+const exactRung: Rung = (call, method, routes) => landingOf(equalPaths(call, method, routes), "exact");
+
+const basePathRung: Rung = (call, method, routes) => landingOf(underBasePaths(call, method, routes), "base-path");
 
 /**
  * One path ends with the other: the extra leading segments of the longer state only text, and one segment both paths
@@ -157,22 +169,15 @@ function suffixUnify(call: CallTemplate, route: readonly TemplateSegment[]): Uni
   return unified.outcome === "matches" && unified.literals === 0 ? CANNOT_MATCH : unified;
 }
 
-const suffixRung: Rung = (call, method, routes) => {
-  const unified = routes.filter((route) => accepts(route, method)).map((route) => ({ route, unified: suffixUnify(call, routeSegments(route.path)) }));
-  return landingOf(takenOf(unified), unified.some(({ unified: found }) => found.outcome === "could-match"), "suffix");
-};
+const suffixRung: Rung = (call, method, routes) => landingOf(foundOf(routes.filter((route) => accepts(route, method)).map((route) => ({ route, unified: suffixUnify(call, routeSegments(route.path)) }))), "suffix");
 
-/** What the call takes once its gateway prefix is removed: equal paths and configured base paths, never a suffix, and only with a segment both state as text. */
+/** What the call takes once its gateway prefix is removed: equal paths, then configured base paths, never a suffix, and only with a segment both state as text. */
 const behindGatewayRung: Rung = (call, method, routes) => {
   const stripped = { ...call, segments: call.segments.slice(1) };
-  const evidenced = routes.filter((route) => {
-    if (!accepts(route, method)) return false;
-    const unified = matched(unify(stripped.segments, routeSegments(route.path))) ?? basePathKeys(route).flatMap(({ keys }) => keys).map((key) => matched(unify(stripped.segments, [...routeSegments(key), ...routeSegments(route.path)]))).find((found) => found !== undefined);
-    return unified !== undefined && unified.literals > 0;
-  });
-  const landing = [exactRung(stripped, method, evidenced), basePathRung(stripped, method, evidenced)].find((found) => found !== undefined && found !== "could");
-  if (landing !== undefined) return landing;
-  return [exactRung(stripped, method, routes), basePathRung(stripped, method, routes)].includes("could") ? "could" : undefined;
+  const [exact, basePath] = [equalPaths(stripped, method, routes), underBasePaths(stripped, method, routes)];
+  const evidenced = (found: Found): Found => ({ ...found, taken: found.taken.filter(({ unified }) => unified.literals > 0) });
+  const landing = [landingOf(evidenced(exact), "exact"), landingOf(evidenced(basePath), "base-path")].find((found) => found !== undefined && found !== "could");
+  return landing ?? (exact.could || basePath.could ? "could" : undefined);
 };
 
 function httpRoutes(repository: RepositoryEntrypoints): HttpRoute[] {
@@ -181,9 +186,7 @@ function httpRoutes(repository: RepositoryEntrypoints): HttpRoute[] {
 
 /** The first path segment of a call, which is the prefix a gateway routes. */
 export function prefixOf(target: HttpTarget): string | undefined {
-  if (/^[a-z][a-z0-9+.-]*:/i.test(target.path) && !/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i.test(target.path)) return undefined;
-  const [first] = callTemplate({ path: target.path }).segments;
-  return first === undefined ? undefined : literalText(first);
+  return prefixText(target.path);
 }
 
 /** The routes a call takes once its gateway prefix is removed, by equal paths and configured base paths: one, or several equally. */

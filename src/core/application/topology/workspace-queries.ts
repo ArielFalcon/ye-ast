@@ -12,7 +12,7 @@ import { entrypointsOf, joinWorkspace, linkMapOf } from "./workspace-join.ts";
 import { prefixOf } from "../../domain/topology/link-match.ts";
 import type { HeadReaderDeps, HeldLive } from "../snapshot/head-reading.ts";
 import type { WorkspaceReadOperation } from "./workspace-operation.ts";
-import { callSiteEvidence, unresolvedCallSite, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
+import { callSiteEvidence, unresolvedCallSite, unsettledCallSiteCut, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
 import { nameCandidates, dependencyClosures, repositoryNameOf, type RepositoryIdentity } from "../../domain/topology/repository-identity.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
@@ -200,7 +200,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
           const cuts = [
             ...entry.cuts,
             ...unresolved.map((place) => ({ kind: "unresolved-link" as const, reason: place.reason, at: [place.path, `${place.path}:${place.line}`, ...(place.via === undefined ? [] : [`library ${place.via}`])] })),
-            ...unsettled.map((site) => ({ kind: "unresolved-link" as const, at: [site.file, `${site.file}:${site.line}`] })),
+            ...unsettled.map(unsettledCallSiteCut),
           ];
           sections[entry.repository.repo] = withCuts(section, { names, unresolved }, cuts);
           for (const name of names) {

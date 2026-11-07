@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { unresolvedCallSite, type CallSite } from "./call-site.ts";
+import { unresolvedCallSite, unsettledCallSiteCut, type CallSite } from "./call-site.ts";
 
 function site(overrides: Partial<CallSite> = {}): CallSite {
   return { repo: "shop", file: "src/app/order.api.ts", line: 4, symbol: "OrderApi.create", transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [{ path: "src/app/order.api.ts", line: 4 }] }, ...overrides };
@@ -33,4 +33,8 @@ test("unresolved discovery retains the typed reason, diagnostic and every causal
   assert.equal(result.reason, "source-unreadable");
   assert.deepEqual(result.evidence, evidence);
   assert.deepEqual(result.diagnostic, diagnostic);
+});
+
+test("a call site the join could not settle is an unresolved-link cut at its file, then at its line", () => {
+  assert.deepEqual(unsettledCallSiteCut(site({ file: "src/app/catalog.api.ts", line: 12 })), { kind: "unresolved-link", at: ["src/app/catalog.api.ts", "src/app/catalog.api.ts:12"] });
 });

@@ -20,12 +20,13 @@ export type Unification = { outcome: "matches"; literals: number; parity: boolea
 
 export const CANNOT_MATCH: Unification = { outcome: "cannot-match" };
 const COULD: Unification = { outcome: "could-match" };
-const ORIGIN = /^((?:[a-z][a-z0-9+.-]*:)?\/\/[^/]*)/i;
-const NAMED_PARAMETER = /^:[A-Za-z_][A-Za-z0-9_]*$/;
+const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+/** A scheme and authority, the authority captured. */
+const ORIGIN = /^(?:[a-z][a-z0-9+.-]*:)?\/\/([^/]*)/i;
 /** A `{...}` hole, with one level of braces inside for a regular expression such as `{id:\d{3}}`. */
 const HOLE = /\{[^/{}]*(?:\{[^/{}]*\}[^/{}]*)*\}/g;
 
-/** The path a call states, its query and fragment dropped; a base it declares comes first, and an absolute path overrides it. */
+/** The path a call states: a base it declares comes first, and an absolute path overrides it. */
 export function callTemplate(target: { path: string; base?: string }): CallTemplate {
   const own = splitOrigin(target.path);
   if (own.origin !== undefined || target.base === undefined) return withOrigin(own.origin, segmentsOf(own.rest, "call"));
@@ -35,7 +36,15 @@ export function callTemplate(target: { path: string; base?: string }): CallTempl
 
 /** Whether a call names the host it reaches; a host the code fills at run time names none. */
 export function namesHost(call: CallTemplate): boolean {
-  return call.origin !== undefined && !/^(?:[a-z][a-z0-9+.-]*:)?\/\/(?:$|\{)/i.test(call.origin);
+  const authority = call.origin === undefined ? undefined : ORIGIN.exec(call.origin)?.[1];
+  return authority !== undefined && authority !== "" && !authority.startsWith("{");
+}
+
+/** The text of the first segment a call path states, which is the prefix a gateway routes; a URI with a scheme and no host states none. */
+export function prefixText(path: string): string | undefined {
+  if (SCHEME.test(path) && !ORIGIN.exec(path)?.[1]) return undefined;
+  const [first] = callTemplate({ path }).segments;
+  return first === undefined ? undefined : literalText(first);
 }
 
 /** The segments of a route path or of a base path a route's configuration adds. */
@@ -122,7 +131,7 @@ function edgesAgree(call: readonly TemplatePart[], route: readonly TemplatePart[
 
 function splitOrigin(text: string): { origin?: string; rest: string } {
   const match = ORIGIN.exec(text);
-  return match === null ? { rest: text } : { origin: match[1]!, rest: text.slice(match[1]!.length) };
+  return match === null ? { rest: text } : { origin: match[0], rest: text.slice(match[0].length) };
 }
 
 function withOrigin(origin: string | undefined, segments: TemplateSegment[]): CallTemplate {
@@ -130,8 +139,7 @@ function withOrigin(origin: string | undefined, segments: TemplateSegment[]): Ca
 }
 
 function segmentsOf(path: string, side: "call" | "route"): TemplateSegment[] {
-  const pathname = path.split(/[?#]/)[0] ?? "";
-  return pathname
+  return path
     .split("/")
     .filter((segment) => segment !== "")
     .map((segment) => segmentOf(segment, side));
@@ -140,7 +148,6 @@ function segmentsOf(path: string, side: "call" | "route"): TemplateSegment[] {
 function segmentOf(segment: string, side: "call" | "route"): TemplateSegment {
   if (side === "route" && segment === "*") return { kind: "any-segment" };
   if (side === "route" && (segment === "**" || /^\{\*[^/{}]*\}$/.test(segment))) return { kind: "any-tail" };
-  if (NAMED_PARAMETER.test(segment)) return { kind: "parts", parts: [{ kind: "hole" }] };
   const parts: TemplatePart[] = [];
   let at = 0;
   for (const hole of segment.matchAll(HOLE)) {
