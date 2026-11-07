@@ -1,11 +1,11 @@
 import ts from "typescript";
+import { lineOf } from "./syntax.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { Evidence } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { readAngularRouteFile } from "./angular-router.extractor.ts";
 import type { RawImport } from "./module-shape.ts";
 import { createDeclarationLookup, type Declaration, type DeclarationLookup } from "./declaration-lookup.ts";
-import { lineOf } from "./http-call-sites.adapter.ts";
 import { moduleResolverOf } from "./module-resolver.ts";
 import { namedFunction, type NamedFunction } from "./consumer-flow.syntax.ts";
 import { sourceTree } from "./source-tree.ts";

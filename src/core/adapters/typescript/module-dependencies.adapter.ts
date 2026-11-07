@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { bindingNames } from "./syntax.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { ModuleDependencies, ModuleDependency, ModuleSource, UntraversedReference } from "../../domain/impact/module-dependency.ts";
@@ -144,7 +145,3 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
   };
 }
 
-function bindingNames(name: ts.BindingName): string[] {
-  if (ts.isIdentifier(name)) return [name.text];
-  return name.elements.flatMap((element) => ts.isOmittedExpression(element) ? [] : bindingNames(element.name));
-}

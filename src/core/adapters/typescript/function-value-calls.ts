@@ -1,8 +1,7 @@
 import ts from "typescript";
 import type { FunctionValueCall, ReceiverBinding, ReceiverValue } from "../../ports/declared-member-names.port.ts";
-import { lineOf } from "./http-call-sites.adapter.ts";
 import { bindFile, type BoundFile, isDirectEval, type LexicalBinding } from "./lexical-bindings.ts";
-import { thisClass, unwrapped } from "./syntax.ts";
+import { lineOf, thisClass, unwrapped } from "./syntax.ts";
 import { isStatic } from "./syntax-names.ts";
 
 const LOGICAL_OPERATORS: readonly ts.SyntaxKind[] = [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken];

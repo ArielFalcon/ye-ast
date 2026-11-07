@@ -37,11 +37,12 @@ import {
   type FunctionNode,
   type NamedFunction,
 } from "./consumer-flow.syntax.ts";
-import { lineOf, propertyOf, symbolOf, typeName, VERBS } from "./http-call-sites.adapter.ts";
+import { symbolOf, VERBS } from "./http-call-sites.adapter.ts";
 import { FUNCTIONS, isModule, METHODS, type MethodResult, type MethodRow } from "./consumer-flow.callees.ts";
 import { resolveFunction, type Resolved } from "./consumer-flow.resolution.ts";
-import { baseOf, injectedClass, injectedInstance, lineage, memberDeclaration, type ClassRef } from "./consumer-flow.classes.ts";
-import { thisClass, unwrapped } from "./syntax.ts";
+import { injectedClass } from "./angular-injection.ts";
+import { baseOf, injectedInstance, lineage, memberDeclaration, type ClassRef } from "./consumer-flow.classes.ts";
+import { lineOf, propertyOf, thisClass, typeName, unwrapped } from "./syntax.ts";
 
 /** A value being followed: where the changed property sits in it, the steps taken, and the guards that hold on it. */
 interface Trail {

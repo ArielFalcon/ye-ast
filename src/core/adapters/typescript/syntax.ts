@@ -30,3 +30,33 @@ export function thisClass(node: ts.Node): ts.ClassLikeDeclaration | undefined {
   }
   return undefined;
 }
+
+export function lineOf(source: ts.SourceFile, node: ts.Node): number {
+  return source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+}
+
+export function typeName(node: ts.TypeNode): string | undefined {
+  return ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) ? node.typeName.text : undefined;
+}
+
+/** The parameters of a class's constructors, the parameter properties among them. */
+export function constructorParameters(classDeclaration: ts.ClassDeclaration): readonly ts.ParameterDeclaration[] {
+  return classDeclaration.members.flatMap((member) => (ts.isConstructorDeclaration(member) ? member.parameters : []));
+}
+
+/** Every name a binding pattern binds, through nested destructuring. */
+export function bindingNames(name: ts.BindingName): string[] {
+  if (ts.isIdentifier(name)) return [name.text];
+  return name.elements.flatMap((element) => (ts.isOmittedExpression(element) ? [] : bindingNames(element.name)));
+}
+
+/** The expression an object literal states for a key written as a name or a string, a shorthand's name included. */
+export function propertyOf(object: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
+  for (const property of object.properties) {
+    const key = property.name !== undefined && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) ? property.name.text : undefined;
+    if (key !== name) continue;
+    if (ts.isPropertyAssignment(property)) return property.initializer;
+    if (ts.isShorthandPropertyAssignment(property)) return property.name;
+  }
+  return undefined;
+}

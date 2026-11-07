@@ -34,3 +34,9 @@ export function injectedToken(expression: ts.Expression, names: FileNames): ts.E
 function importOf(name: ts.Identifier, names: FileNames): RawImport | undefined {
   return names.declared.has(name.text) ? undefined : names.imports.get(name.text);
 }
+
+/** The class an Angular `inject(X)` call asks for, by the name `X` is written with. */
+export function injectedClass(expression: ts.Expression, names: FileNames): string | undefined {
+  const token = injectedToken(expression, names);
+  return token !== undefined && ts.isIdentifier(token) ? token.text : undefined;
+}

@@ -5,7 +5,7 @@ import type { BranchCondition, Origin, OriginFrontierReason, OriginTrail, Origin
 import { keepsLeft, wireOf, type WrittenValue } from "../../domain/languages/javascript.ts";
 import type { ArgumentOrigins } from "../../ports/request-origins.port.ts";
 import { memberDeclaration } from "./consumer-flow.classes.ts";
-import { thisClass, unwrapped } from "./syntax.ts";
+import { lineOf, thisClass, unwrapped } from "./syntax.ts";
 import type { Program } from "./consumer-flow.index.ts";
 import {
   assignedBinding,
@@ -23,7 +23,7 @@ import {
   searchRoot,
   type FunctionNode,
 } from "./consumer-flow.syntax.ts";
-import { lineOf, type RequestBody } from "./http-call-sites.adapter.ts";
+import type { RequestBody } from "./http-call-sites.adapter.ts";
 import { createEscapes, isRewritten } from "./request-escapes.ts";
 
 /** A call to a wrapper method: inside the wrapper's body its parameters hold the arguments of that call, which are written in the caller. */

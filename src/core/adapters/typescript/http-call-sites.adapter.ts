@@ -9,6 +9,9 @@ import { moduleResolverOf, type ModuleResolver } from "./module-resolver.ts";
 import { buildDefines, type BuildDefines } from "./url-define.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
+import { injectedClass } from "./angular-injection.ts";
+import { declarationCounts } from "./syntax-names.ts";
+import { bindingNames, constructorParameters, lineOf, propertyOf, thisClass, typeName } from "./syntax.ts";
 
 export const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
 const HTTP_CLIENT_PACKAGE = "@angular/common/http";
@@ -24,6 +27,8 @@ const FORWARDING_CALLS = new WeakMap<ts.Node, ts.CallExpression>();
 /** What one file declares at its top level, and the classes and enums it holds, as the reader needs them. */
 interface FileShape {
   source: ts.SourceFile;
+  /** How often each name is declared anywhere in the file. */
+  declared: ReadonlyMap<string, number>;
   bindings: ReadonlySet<string>;
   unsafeEncoder: boolean;
   consts: Map<string, ts.Expression>;
@@ -150,7 +155,7 @@ async function readPlaced(files: readonly SourceFile[], repo: string): Promise<r
 }
 function describe(file: SourceFile): FileShape {
   const source = sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
-  const shape: FileShape = { source, bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], localExports: new Map(), classes: new Map(), enums: new Map() };
+  const shape: FileShape = { source, declared: declarationCounts(source), bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], localExports: new Map(), classes: new Map(), enums: new Map() };
   for (const statement of source.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
       const module = statement.moduleSpecifier.text;
@@ -242,10 +247,8 @@ function injectedClasses(shapes: ReadonlyMap<string, FileShape>): ReadonlySet<st
   const held = new Set<string>();
   for (const shape of shapes.values()) {
     const walk = (node: ts.Node): void => {
-      if (ts.isCallExpression(node) && node.expression.getText(shape.source) === "inject") {
-        const [first] = node.arguments;
-        if (first !== undefined && ts.isIdentifier(first)) held.add(first.text);
-      }
+      const injected = ts.isCallExpression(node) ? injectedClass(node, shape) : undefined;
+      if (injected !== undefined) held.add(injected);
       if (ts.isParameter(node) && node.type !== undefined) {
         const name = typeName(node.type);
         if (name !== undefined) held.add(name);
@@ -313,10 +316,7 @@ function httpClientFields(shape: FileShape, classDeclaration: ts.ClassDeclaratio
 }
 
 function injectsAngularHttpClient(shape: FileShape, expression: ts.Expression): boolean {
-  if (!ts.isCallExpression(expression) || expression.arguments.length === 0) return false;
-  const first = expression.arguments[0];
-  if (first === undefined || !ts.isIdentifier(first)) return false;
-  return expression.expression.getText(shape.source) === "inject" && isAngularHttpClientName(shape, first.text);
+  return isAngularHttpClientName(shape, injectedClass(expression, shape));
 }
 
 /** Whether an expression names `httpResource` or one of its variants (`httpResource.text`), imported from Angular. */
@@ -331,26 +331,11 @@ function isHttpPackageName(shape: FileShape, expression: ts.Expression, name: st
   return imported?.module === HTTP_CLIENT_PACKAGE && imported.imported === name;
 }
 
-export function propertyOf(object: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
-  const property = object.properties.find((candidate): candidate is ts.PropertyAssignment => ts.isPropertyAssignment(candidate) && candidate.name.getText() === name);
-  return property?.initializer;
-}
-
 /** Whether a name is Angular's `HttpClient`: the name alone is not enough, its import decides. */
 function isAngularHttpClientName(shape: FileShape, name: string | undefined): boolean {
   if (name === undefined) return false;
   const imported = shape.imports.get(name);
   return name === "HttpClient" && imported?.module === HTTP_CLIENT_PACKAGE;
-}
-
-/** The parameter properties of a class's constructor: the fields a class declares by writing them in its signature. */
-export function constructorParameters(classDeclaration: ts.ClassDeclaration): readonly ts.ParameterDeclaration[] {
-  return classDeclaration.members.flatMap((member) => (ts.isConstructorDeclaration(member) ? member.parameters : []));
-}
-
-export function typeName(node: ts.TypeNode): string | undefined {
-  if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) return node.typeName.text;
-  return undefined;
 }
 
 /**
@@ -464,10 +449,6 @@ function parametersOf(member: ts.Node): RunTime {
 
 function parameterNames(parameters: readonly ts.ParameterDeclaration[]): RunTime {
   return new Set(parameters.flatMap((parameter) => bindingNames(parameter.name)));
-}
-
-function bindingNames(name: ts.BindingName): string[] {
-  return ts.isIdentifier(name) ? [name.text] : name.elements.flatMap((element) => ts.isBindingElement(element) ? bindingNames(element.name) : []);
 }
 
 /** The names a function or method binds, and what the variables it declares are initialized to. */
@@ -731,18 +712,18 @@ class Reader {
    */
   private async ownerClass(shape: FileShape, receiver: ts.Expression): Promise<TypeNamed | undefined> {
     if (ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword) {
-      const enclosing = enclosingClassOf(receiver);
+      const enclosing = ownClassDeclaration(receiver);
       return enclosing === undefined ? undefined : this.memberType(shape, enclosing, receiver.name.text, new Set());
     }
     if (!ts.isIdentifier(receiver)) return undefined;
     const scope = lexicalScope(receiver);
     if (scope.names.has(receiver.text)) {
       const local = scope.locals.get(receiver.text);
-      const named = local === undefined ? parameterType(receiver) : appendsTo(local)?.length === 0 ? this.injectedType(shape, local) : undefined;
+      const named = local === undefined ? parameterType(receiver) : appendsTo(local)?.length === 0 ? injectedClass(local, shape) : undefined;
       return named === undefined ? undefined : { name: named, shape };
     }
     const constant = shape.consts.get(receiver.text);
-    const named = constant === undefined ? undefined : this.injectedType(shape, constant);
+    const named = constant === undefined ? undefined : injectedClass(constant, shape);
     return named === undefined ? undefined : { name: named, shape };
   }
 
@@ -753,18 +734,12 @@ class Reader {
     const parameter = constructorParameters(declaration).find((candidate) => ts.isIdentifier(candidate.name) && candidate.name.text === name && ts.isParameterPropertyDeclaration(candidate, candidate.parent));
     const declared = field ?? parameter;
     if (declared !== undefined) {
-      const named = (field?.initializer === undefined ? undefined : this.injectedType(shape, field.initializer)) ?? (declared.type === undefined ? undefined : typeName(declared.type));
+      const named = (field?.initializer === undefined ? undefined : injectedClass(field.initializer, shape)) ?? (declared.type === undefined ? undefined : typeName(declared.type));
       return named === undefined ? undefined : { name: named, shape };
     }
     const base = baseClassName(declaration);
     const found = base === undefined ? undefined : await this.classOf(shape, base);
     return found === undefined ? undefined : this.memberType(found.shape, found.declaration, name, new Set(visited).add(declaration));
-  }
-
-  private injectedType(shape: FileShape, expression: ts.Expression): string | undefined {
-    if (!ts.isCallExpression(expression) || expression.expression.getText(shape.source) !== "inject") return undefined;
-    const [first] = expression.arguments;
-    return first !== undefined && ts.isIdentifier(first) ? first.text : undefined;
   }
 
   /**
@@ -920,7 +895,7 @@ class Reader {
     const owner = expression.expression;
     const name = expression.name.text;
     if (owner.kind === ts.SyntaxKind.ThisKeyword) {
-      const enclosing = enclosingClassOf(owner);
+      const enclosing = ownClassDeclaration(owner);
       return enclosing === undefined ? undefined : await this.fieldOf(shape, enclosing, name, trail, { shape, declaration: enclosing });
     }
     if (!ts.isIdentifier(owner)) return undefined;
@@ -1072,7 +1047,7 @@ class Reader {
 
   /** The class a method call's receiver is an instance of; `virtual` unless the call is a `super` call. */
   private async receiverClass(shape: FileShape, receiver: ts.Expression): Promise<{ shape: FileShape; declaration: ts.ClassDeclaration; virtual: boolean } | undefined> {
-    const enclosing = enclosingClassOf(receiver);
+    const enclosing = ownClassDeclaration(receiver);
     if (receiver.kind === ts.SyntaxKind.ThisKeyword) return enclosing === undefined ? undefined : { shape, declaration: enclosing, virtual: true };
     if (receiver.kind === ts.SyntaxKind.SuperKeyword) {
       const base = enclosing === undefined ? undefined : baseClassName(enclosing);
@@ -1429,13 +1404,10 @@ function enclosingMethodDeclaration(node: ts.Node): ts.MethodDeclaration | undef
   return undefined;
 }
 
-/** The class whose body a node sits in, if any. */
-function enclosingClassOf(node: ts.Node): ts.ClassDeclaration | undefined {
-  for (let current: ts.Node | undefined = node.parent; current !== undefined; current = current.parent) {
-    if (ts.isClassDeclaration(current)) return current;
-    if (ts.isSourceFile(current)) return undefined;
-  }
-  return undefined;
+/** The class declaration whose instance `this` or `super` denotes at a node. */
+function ownClassDeclaration(node: ts.Node): ts.ClassDeclaration | undefined {
+  const owner = thisClass(node);
+  return owner !== undefined && ts.isClassDeclaration(owner) ? owner : undefined;
 }
 
 /** The text a path part states. */
@@ -1484,8 +1456,4 @@ export function symbolOf(node: ts.Node): string | undefined {
   }
   if (className === undefined) return member;
   return member === undefined ? className : `${className}.${member}`;
-}
-
-export function lineOf(source: ts.SourceFile, node: ts.Node): number {
-  return source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
 }

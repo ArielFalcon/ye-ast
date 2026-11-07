@@ -1,10 +1,9 @@
 import ts from "typescript";
-import { constructorParameters, typeName } from "./http-call-sites.adapter.ts";
 import type { Program, Unit } from "./consumer-flow.index.ts";
 import { declaringScope, namedFunction, propertyNameText, type NamedFunction } from "./consumer-flow.syntax.ts";
-import { injectedToken, type FileNames } from "./angular-injection.ts";
+import { injectedClass } from "./angular-injection.ts";
 import { isStatic } from "./syntax-names.ts";
-import { thisClass, unwrapped } from "./syntax.ts";
+import { constructorParameters, thisClass, typeName, unwrapped } from "./syntax.ts";
 
 /** A class of the snapshot with the unit that declares it. */
 export interface ClassRef {
@@ -65,12 +64,6 @@ export function methodDeclared(cls: ts.ClassLikeDeclaration, name: string): Name
   if (member === undefined || ts.isParameter(member) || member.name === undefined || propertyNameText(member.name) !== name) return undefined;
   const fn = ts.isMethodDeclaration(member) ? member : ts.isPropertyDeclaration(member) && member.initializer !== undefined && (ts.isArrowFunction(member.initializer) || ts.isFunctionExpression(member.initializer)) ? member.initializer : undefined;
   return fn === undefined ? undefined : namedFunction(fn);
-}
-
-/** The class an Angular `inject(X)` call asks for, by the name `X` is written with. */
-export function injectedClass(expression: ts.Expression, names: FileNames): string | undefined {
-  const token = injectedToken(expression, names);
-  return token !== undefined && ts.isIdentifier(token) ? token.text : undefined;
 }
 
 /**
