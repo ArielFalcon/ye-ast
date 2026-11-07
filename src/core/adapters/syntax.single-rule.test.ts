@@ -55,6 +55,13 @@ const RULES: readonly Rule[] = [
     owners: ["typescript/import-bindings.ts"],
     pending: ["typescript/http-call-sites.adapter.ts"],
   },
+  {
+    concept: "parsing Java sources into files of a project",
+    pattern: /(?<!JSON)\.parse\(\s*(?:source|file)\.content\s*\)/,
+    /* The tree-sitter readers parse one file at a time for a per-file answer and build no project. */
+    owners: ["spring/java-project.ts", "tree-sitter/java-member-names.adapter.ts", "tree-sitter/java-records.adapter.ts", "tree-sitter/java-trivia.adapter.ts"],
+    pending: ["spring/java-imports.adapter.ts", "spring/spring-payload-shapes.adapter.ts"],
+  },
 ];
 
 function sourceFiles(directory: string): string[] {

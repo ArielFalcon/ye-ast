@@ -3,8 +3,9 @@ import { isJavaSource } from "../../domain/languages/java.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
-import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
-import { createJavaProject, describeFile, qualifiedTypeName, typeVariableAround, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
+import { withJavaSources } from "./java-project.ts";
+import { createJavaProject, qualifiedTypeName, typeVariableAround, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: RootBinding = { kind: "unknown" };
 /** Links of a chain whose first name is the root: a member access, a call on a receiver, a qualified name. */
@@ -24,15 +25,8 @@ export function createJavaRootBindings(parser: Promise<JavaParser>, sources: rea
     const results: RootBinding[] = sites.map(() => UNKNOWN);
     if (!sites.some(({ file }) => isJavaSource(file))) return results;
     const read = await parser;
-    const trees: JavaSyntaxTree[] = [];
-    try {
-      const files = new Map<string, JavaFile>();
-      for (const source of java) {
-        const parsed = read.parse(source.content);
-        if (!parsed.ok) continue;
-        trees.push(parsed.value);
-        files.set(source.path, describeFile(source.path, parsed.value.root));
-      }
+    return withJavaSources(read, (parse) => {
+      const files = new Map(parse(java).files.map((file) => [file.path, file]));
       const project = createJavaProject([...files.values()]);
       for (const [index, site] of sites.entries()) {
         if (signal?.aborted) break;
@@ -40,9 +34,7 @@ export function createJavaRootBindings(parser: Promise<JavaParser>, sources: rea
         if (file !== undefined && !project.unreadable.includes(file)) results[index] = bindingAt(site, file, project);
       }
       return results;
-    } finally {
-      for (const tree of trees) tree.dispose();
-    }
+    });
   };
 }
 

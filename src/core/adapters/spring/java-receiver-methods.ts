@@ -4,12 +4,13 @@ import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts"
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins, ReceiverMethod } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
-import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
+import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
+import { withJavaSources } from "./java-project.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import { enclosingType } from "./java-root-bindings.ts";
 import { ancestorsOf, hierarchyOf, targetsOf, type Hierarchy, type Superclass } from "./java-dispatch-targets.ts";
-import { createJavaProject, describeFile, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
@@ -55,21 +56,10 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
     const results: ReceiverMethod[] = sites.map(() => UNKNOWN);
     if (!sites.some(({ file }) => isJavaSource(file))) return results;
     const read = await parser();
-    const trees: JavaSyntaxTree[] = [];
-    try {
-      const files: JavaFile[] = [];
-      let parsedAll = true;
-      for (const source of java) {
-        const parsed = read.parse(source.content);
-        if (!parsed.ok) {
-          parsedAll = false;
-          continue;
-        }
-        trees.push(parsed.value);
-        files.push(describeFile(source.path, parsed.value.root));
-      }
+    return withJavaSources(read, (parse) => {
+      const { files, unparsed } = parse(java);
       const project = createJavaProject(files);
-      const falsified = !parsedAll || unreadJvm || project.unreadable.length > 0 || files.some((file) => namesAnyDynamicImplementation(file, project));
+      const falsified = unparsed.length > 0 || unreadJvm || project.unreadable.length > 0 || files.some((file) => namesAnyDynamicImplementation(file, project));
       const hierarchy = falsified ? undefined : hierarchyOf(files, project);
       const proves = hierarchy !== undefined && !files.some(({ root }) => rewritesCalls(root));
       const byPath = new Map(files.map((file) => [file.path, file]));
@@ -96,9 +86,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         } else if (falsified && resolver.holdsValue(invocations[0]!, source.file)) results[index] = UNPROVEN;
       }
       return results;
-    } finally {
-      for (const tree of trees) tree.dispose();
-    }
+    });
   };
 }
 
