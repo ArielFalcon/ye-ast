@@ -63,7 +63,7 @@ import { createConsumerQueries } from "../core/application/contracts/consumer-qu
 import type { ContractChangeQueries } from "../core/ports/contract-change-queries.port.ts";
 import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
-import type { CallSiteReader } from "../core/domain/topology/call-site.ts";
+import type { CallSiteReader, PlacedCallSiteReader } from "../core/domain/topology/call-site.ts";
 import type { EntrypointExtractor, SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
 import { createImportOrigins } from "../core/adapters/typescript/import-origins.adapter.ts";
 import { createJavaNameBindings } from "../core/adapters/spring/java-name-bindings.adapter.ts";
@@ -190,6 +190,12 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
       return [...(await typescriptCallSites.of(files, repo)), ...java].sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
     },
   }, { of: "call-sites" });
+  const placedCallSites = staged<PlacedCallSiteReader>({
+    placed: async (files, repo) => {
+      const java = await createJavaCallSites(await createJavaParser()).placed(files, repo);
+      return [...(await typescriptCallSites.placed(files, repo)), ...java].sort(({ site: a }, { site: b }) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
+    },
+  }, { placed: "call-sites" });
   const vcs = staged(createGitVcs(), { exportCommit: "export", listCommit: "export", materializeCommit: "materialize" });
   const scratch = createTempScratchDirectory(options.scratchRoot);
   const reader = createFsSourceReader();
@@ -298,7 +304,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     sourceTrivia,
     memberNames,
     relations: impactDeps.relations,
-    callSites,
+    callSites: placedCallSites,
     sourceSelection: isWritten,
   });
   const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);

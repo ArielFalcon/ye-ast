@@ -29,7 +29,7 @@ import { createHeadReader, type FactSpec, type HeadReaderDeps, type HeadReading 
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
 import { isTraceRoot, walkTrace } from "./trace-walk.ts";
 import { placeEffects } from "./trace-effects.ts";
-import type { CallSiteReader } from "../../domain/topology/call-site.ts";
+import type { PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
 import { pagePlans } from "./page-plans.ts";
 import { unresolvedOncePerFile } from "../navigation/declaration-uses.ts";
 
@@ -43,7 +43,7 @@ export interface TraceQueriesDeps extends HeadReaderDeps {
   /** Reads the relations impact reads, under the same retained key, for the member calls they prove (RFC-0013 R3). */
   relations: RelationExtractor;
   /** Reads the snapshot's call sites (RFC-0011), the declared rows a trace's effects come from (RFC-0013 R12). */
-  callSites: CallSiteReader;
+  callSites: PlacedCallSiteReader;
   /** Tells the trivia lines of a requested range apart, so they select nothing. */
   sourceTrivia: SourceTrivia;
   /** Version of each engine every operation runs on, by package name. */
@@ -113,7 +113,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const pages = pageRoots.size === 0 ? {} : { pages: { roots: pageRoots, of: pagePlans(store, memberProofs) } };
           const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, memberProofs, budget, ...pages, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
-          const effectCuts = await placeEffects(walk.roots, { store, unresolvedIn, sites: async () => (await deps.callSites.of(head.tree.sources, request.repoId)).filter((site) => head.selected(site.file)) });
+          const effectCuts = await placeEffects(walk.roots, { store, unresolvedIn, sites: async () => (await deps.callSites.placed(head.tree.sources, request.repoId)).filter(({ site }) => head.selected(site.file)), lineOf: linesOncePerFile(sources) });
 
           const { steps, ids } = traceSteps(walk.roots);
           const rootIds = new Map(roots.map((root, index) => [root.id, ids.get(walk.roots[index]!)!]));
@@ -234,4 +234,17 @@ async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file:
 async function rangeRoots(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], trivia: SourceTrivia, isRoot: (symbol: GraphSymbol) => boolean): Promise<RootSelection> {
   const ranges = await requestedRanges(store, changes, sources, trivia);
   return selectRoots(store, ranges.changes, [], NO_COMPONENTS, ranges.uncovered, isRoot);
+}
+
+/** A line of a source, splitting each source once for the life of one query. */
+function linesOncePerFile(sources: ReadonlyMap<string, SourceFile>): (file: string, line: number) => string | undefined {
+  const split = new Map<string, readonly string[]>();
+  return (file, line) => {
+    let lines = split.get(file);
+    if (lines === undefined) {
+      lines = sources.get(file)?.content.split("\n") ?? [];
+      split.set(file, lines);
+    }
+    return lines[line - 1];
+  };
 }

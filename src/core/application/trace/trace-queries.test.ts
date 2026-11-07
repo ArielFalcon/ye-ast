@@ -6,7 +6,7 @@ import type { TraceStep, TraceValue } from "../../domain/trace/trace-fact.ts";
 import type { DeclaredType, DispatchSite, DispatchTargets, ImportOriginSite, ReceiverCallSite, ReceiverMethod, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget, TraceRequest, TraceTarget } from "../../ports/trace-queries.port.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
-import type { CallSite } from "../../domain/topology/call-site.ts";
+import type { CallSite, PlacedCallSite } from "../../domain/topology/call-site.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
 import type { DeclaredCallable, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
@@ -75,6 +75,8 @@ interface Options {
   onReceivers?: (members: readonly string[]) => void;
   /** The call sites the RFC-0011 extraction reads in the snapshot; none by default. */
   callSites?: readonly CallSite[];
+  /** The same, each with where its call starts; by default every call site starts at column 0. */
+  placedSites?: readonly PlacedCallSite[];
   /** Runs each time the call sites are read. */
   onCallSites?: () => void;
 }
@@ -121,7 +123,7 @@ function setup(options: Options) {
       }),
     }),
     relations: { extract: async () => ({ relations: [], fields: [], locals: [], ...options.proofs, ...options.relations }) },
-    callSites: { of: async () => (options.onCallSites?.(), options.callSites ?? []) },
+    callSites: { placed: async () => (options.onCallSites?.(), options.placedSites ?? (options.callSites ?? []).map((site) => ({ site, column: 0 }))) },
     engines: {},
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
   } as unknown as TraceQueriesDeps;
@@ -1197,4 +1199,71 @@ test("a body whose only record at a call site is an edge the walk does not follo
   const fact = await factOf({ nodes, edges, callSites: [site(31, { symbol: "helper" })] });
 
   assert.deepEqual(valueOf(fact).steps.map((step) => [step.symbol, step.effects?.map((effect) => effect.line)]), [["run", undefined], ["helper", [31]]]);
+});
+
+/** `Api` on lines 3-30 of A: methods placed by line and exact columns, as the index places them. */
+const PLACED_API = fakeNode("Api", "class", A, 3, 30);
+const placedNode = (id: string, kind: string, start: number, startColumn: number, end: number, endColumn: number, name = id): FakeNode => ({ ...fakeNode(id, kind, A, start, end, name), startColumn, endColumn });
+const globalCall = (from: string, line: number, column: number): FakeUnresolved => ({ from, name: "Math.max", kind: "calls", file: A, line, column });
+const MATH = { max: { kind: "ambient" as const, name: "Math" } };
+const at = (line: number, column: number, path = "/x", overrides: Partial<CallSite> = {}): PlacedCallSite => ({
+  site: site(line, { target: { status: "complete", value: { method: "GET", path }, evidence: [{ path: A, line }] }, ...overrides }),
+  column,
+});
+const effectPaths = (fact: Fact<TraceValue>) => valueOf(fact).steps.flatMap((step) => (step.effects ?? []).map((effect) => [step.symbol, effect.kind === "http" ? effect.target.path : effect.target.destination]));
+const effectCuts = (fact: Fact<TraceValue>) => cutsOf(fact).filter(([, at]) => (at as readonly string[])[0]!.includes(" effect"));
+
+test("a call site in a sibling method on the same line is no effect of the method traced", async () => {
+  const nodes = [PLACED_API, placedNode("a", "method", 5, 1, 5, 29), placedNode("b", "method", 5, 30, 5, 58)];
+  const edges = [{ from: "Api", to: "a", kind: "contains" }, { from: "Api", to: "b", kind: "contains" }];
+
+  const fact = await factOf({ nodes, edges, unresolved: [globalCall("a", 5, 7), globalCall("b", 5, 36)], roots: MATH, placedSites: [at(5, 7, "/a"), at(5, 36, "/b")] }, [{ file: A, symbol: "a" }]);
+
+  assert.deepEqual(effectPaths(fact), [["a", "/a"]]);
+});
+
+test("a call site in a function the walk did not expand is neither an effect nor a cut of the body around it, even on a line that body calls on", async () => {
+  const nodes = [PLACED_API, placedNode("run", "method", 6, 1, 6, 71), placedNode("dead", "function", 6, 22, 6, 50)];
+  const edges = [{ from: "Api", to: "run", kind: "contains" }];
+
+  const fact = await factOf({ nodes, edges, unresolved: [globalCall("run", 6, 52)], roots: MATH, placedSites: [at(6, 34, "/dead")] }, [{ file: A, symbol: "run" }]);
+
+  assert.equal(fact.status, "complete");
+  assert.deepEqual(effectPaths(fact), []);
+});
+
+test("each shape's call sites are effects of the body that owns their exact place, and only of it", async () => {
+  const method = (id: string, start: number, startColumn: number, end: number, endColumn: number, kind = "method") => placedNode(id, kind, start, startColumn, end, endColumn);
+  const member = (id: string) => ({ from: "Api", to: id, kind: "contains" });
+  const nonAscii = "  run() { log('é'); const f = () => get('/f') }";
+  const nonAsciiAfter = "  run() { get('/r'); log('é') }";
+  const rows: { shape: string; options: Options; target: string; effects: (readonly string[])[]; cuts: readonly string[] }[] = [
+    { shape: "same-line methods", target: "b", effects: [["b", "/b"]], cuts: [],
+      options: { nodes: [PLACED_API, method("a", 5, 1, 5, 29), method("b", 5, 30, 5, 58)], edges: [member("a"), member("b")], unresolved: [globalCall("a", 5, 7), globalCall("b", 5, 36)], placedSites: [at(5, 7, "/a"), at(5, 36, "/b")] } },
+    { shape: "an arrow function the body calls", target: "run", effects: [["dead", "/dead"]], cuts: [],
+      options: { nodes: [PLACED_API, method("run", 6, 1, 6, 71), method("dead", 6, 22, 6, 50, "function")], edges: [member("run"), call("run", "dead", 6, 52)], unresolved: [globalCall("dead", 6, 34)], placedSites: [at(6, 34, "/dead")] } },
+    { shape: "a lambda or callback passed and invoked, which the index holds as no declaration", target: "run", effects: [["run", "/cb"]], cuts: [],
+      options: { nodes: [PLACED_API, method("run", 6, 1, 6, 71)], edges: [member("run")], unresolved: [globalCall("run", 6, 40)], placedSites: [at(6, 40, "/cb")] } },
+    { shape: "an immediately invoked function", target: "run", effects: [["run", "/iife"]], cuts: [],
+      options: { nodes: [PLACED_API, method("run", 6, 1, 8, 2)], edges: [member("run")], unresolved: [globalCall("run", 7, 10)], placedSites: [at(7, 10, "/iife")] } },
+    { shape: "a class field initializer", target: "field", effects: [["field", "/field"]], cuts: [],
+      options: { nodes: [PLACED_API, method("field", 4, 1, 4, 34, "property"), method("run", 6, 1, 6, 30)], edges: [member("field"), member("run")], unresolved: [globalCall("field", 4, 16), globalCall("run", 6, 10)], placedSites: [at(4, 16, "/field"), at(6, 10, "/run")] } },
+    { shape: "a call spread over several lines", target: "run", effects: [["run", "/multi"]], cuts: [],
+      options: { nodes: [PLACED_API, method("run", 8, 1, 11, 2)], edges: [member("run")], unresolved: [globalCall("run", 9, 4)], placedSites: [{ ...at(9, 4, "/multi"), site: { ...at(9, 4, "/multi").site, endLine: 10 } }] } },
+    { shape: "a request through a wrapper, at the caller that names the path", target: "checkout", effects: [["checkout", "/orders/checkout"]], cuts: [],
+      options: { nodes: [PLACED_API, method("checkout", 9, 1, 9, 60), method("post", 12, 1, 14, 2)], edges: [member("checkout"), member("post"), call("checkout", "post", 9, 20), call("post", "Api", 13, 4, { kind: "references" })], placedSites: [at(9, 13, "/orders/checkout")] } },
+    { shape: "a client method a declaration states", target: "fetch", effects: [["fetch", "/stock"]], cuts: [],
+      options: { nodes: [PLACED_API, method("fetch", 5, 1, 6, 30)], edges: [member("fetch"), call("fetch", "Api", 6, 2, { kind: "references" })], placedSites: [{ ...at(5, 1, "/stock"), declaration: true }] } },
+    { shape: "a site with no column, inside the expanded body", target: "run", effects: [], cuts: ["src/a.ts:6 http effect"],
+      options: { nodes: [PLACED_API, method("run", 6, 1, 6, 71)], edges: [member("run")], unresolved: [globalCall("run", 6, 10)], placedSites: [{ site: at(6, 40, "/x").site }] } },
+    { shape: "a site past its line's first character outside ASCII, where parsers may count columns apart", target: "run", effects: [], cuts: ["src/a.ts:5 http effect"],
+      options: { nodes: [PLACED_API, method("run", 5, 2, 5, 48), method("f", 5, 33, 5, 47, "function")], edges: [member("run")], unresolved: [globalCall("run", 5, 11)], sources: [{ path: A, content: `${"\n".repeat(4)}${nonAscii}\n` }], placedSites: [at(5, 37, "/f")] } },
+    { shape: "a line whose first character outside ASCII lies after the site", target: "run", effects: [["run", "/r"]], cuts: [],
+      options: { nodes: [PLACED_API, method("run", 5, 2, 5, 32)], edges: [member("run")], unresolved: [globalCall("run", 5, 10)], sources: [{ path: A, content: `${"\n".repeat(4)}${nonAsciiAfter}\n` }], placedSites: [at(5, 10, "/r")] } },
+  ];
+  for (const { shape, options, target, effects, cuts } of rows) {
+    const fact = await factOf({ roots: MATH, ...options }, [{ file: A, symbol: target }]);
+    assert.deepEqual(effectPaths(fact), effects, shape);
+    assert.deepEqual(effectCuts(fact).map(([, at]) => (at as readonly string[])[0]), cuts, shape);
+  }
 });

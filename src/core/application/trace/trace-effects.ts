@@ -1,7 +1,8 @@
 import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
-import type { CallSite } from "../../domain/topology/call-site.ts";
+import type { PlacedCallSite } from "../../domain/topology/call-site.ts";
 import { effectOf, unplacedEffect } from "../../domain/trace/trace-effects.ts";
+import { owningBody, type SourceSpan } from "../../domain/trace/owning-body.ts";
 import type { WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { CodeGraphReader, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { UnresolvedIn } from "../navigation/declaration-uses.ts";
@@ -9,42 +10,71 @@ import type { UnresolvedIn } from "../navigation/declaration-uses.ts";
 /** Edges that state where a declaration sits or what it extends, never a call its body makes. */
 const STRUCTURAL_KINDS: readonly string[] = ["contains", "extends", "implements"];
 
+/** The first character no parser counts alike: before it, every parser counts columns alike. */
+const NOT_ASCII = /[^\x00-\x7F]/;
+
 export interface TraceEffectsInput {
   store: CodeGraphReader;
   unresolvedIn: UnresolvedIn;
-  /** The snapshot's call sites, read once by the caller. */
-  sites: () => Promise<readonly CallSite[]>;
+  /** The snapshot's call sites with their places, read once by the caller. */
+  sites: () => Promise<readonly PlacedCallSite[]>;
+  /** A line of a source as the snapshot holds it; undefined when the snapshot does not hold the file. */
+  lineOf: (file: string, line: number) => string | undefined;
 }
 
+type Body = SourceSpan & { symbol: GraphSymbol };
+
 /**
- * Joins the call sites to the walked steps by place (R12): a site at a call the index records in an expanded body is an
- * effect of that step (the innermost such body), or a cut when the extraction does not resolve its target. A site the
- * innermost declaration around it, an expanded body, records no call at is a cut at the site, never dropped; a site in
- * a body the walk did not expand is no effect of this trace. Sets `effects` and `unsettled` on the steps and returns the cuts.
+ * Joins the call sites to the walked steps (R12). A site belongs to the declaration of the index that owns its exact
+ * place (`owningBody`); it is an effect of a step only when that declaration is the body the step expanded and the index
+ * records a call of that body on the site's line (or the site is the client method the declaration states), and a cut
+ * when the extraction does not decide its target. A site in the expanded body that the index records no call at is a cut
+ * at the site, never dropped; a site another declaration owns (a nested function the walk did not expand, a sibling on
+ * the same line) is not this step's. Where the place cannot be told (no column, or a line on which parsers may count
+ * columns apart), a site that some expanded body may own is a cut, never an effect. Sets `effects` and `unsettled` on the
+ * steps and returns the cuts.
  */
-export async function placeEffects(roots: readonly WalkedStep[], { store, unresolvedIn, sites }: TraceEffectsInput): Promise<Cut[]> {
+export async function placeEffects(roots: readonly WalkedStep[], { store, unresolvedIn, sites, lineOf }: TraceEffectsInput): Promise<Cut[]> {
   const expanded = expandedSteps(roots);
   if (expanded.size === 0) return [];
   const files = new Set([...expanded.values()].map((step) => step.declaration.file));
   const cuts: Cut[] = [];
-  const byFile = Map.groupBy((await sites()).filter((site) => files.has(site.file)), (site) => site.file);
+  const byFile = Map.groupBy((await sites()).filter(({ site }) => files.has(site.file)), ({ site }) => site.file);
   for (const [file, inFile] of byFile) {
-    const declarations = store.symbolsInFiles([file]).filter((symbol) => !NOT_DECLARED_KINDS.includes(symbol.kind));
-    const bodies = declarations.filter((symbol) => expanded.has(symbol.id)).map((symbol) => ({ symbol, step: expanded.get(symbol.id)!, lines: callLines(store, unresolvedIn, symbol) }));
-    for (const site of inFile) {
-      const placed = innermost(bodies.filter(({ symbol, lines }) => contains(symbol, site.line) && lines.has(site.line)), ({ symbol }) => symbol);
-      if (placed !== undefined) {
-        const read = effectOf(site);
-        if ("effect" in read) (placed.step.effects ??= []).push(read.effect);
-        else markCut(placed.step, read.cut, cuts);
+    const bodies: Body[] = store.symbolsInFiles([file]).filter((symbol) => !NOT_DECLARED_KINDS.includes(symbol.kind)).map((symbol) => ({ symbol, start: { line: symbol.startLine, column: symbol.startColumn }, end: { line: symbol.endLine, column: symbol.endColumn } }));
+    const lines = new Map<GraphNodeId, ReadonlySet<number>>();
+    const callLinesOf = (symbol: GraphSymbol) => lines.get(symbol.id) ?? lines.set(symbol.id, callLines(store, unresolvedIn, symbol)).get(symbol.id)!;
+    for (const placed of inFile) {
+      const { site } = placed;
+      const told = placed.column !== undefined && countedAlike(placed.column, lineOf(file, site.line) ?? "");
+      if (!told) {
+        const around = owningBody(bodies.filter(({ symbol }) => expanded.has(symbol.id)).map((body) => ({ ...body, start: { line: body.start.line, column: 0 }, end: { line: body.end.line + 1, column: 0 } })), { line: site.line, column: 0 });
+        if (around !== undefined) markCut(expanded.get(around.symbol.id)!, unplacedEffect(site), cuts);
         continue;
       }
-      const around = innermost(declarations.filter((symbol) => contains(symbol, site.line)), (symbol) => symbol);
-      const owner = around === undefined ? undefined : expanded.get(around.id);
-      if (owner !== undefined) markCut(owner, unplacedEffect(site), cuts);
+      const owner = owningBody(bodies, { line: site.line, column: placed.column! });
+      const step = owner === undefined ? undefined : expanded.get(owner.symbol.id);
+      if (owner === undefined || step === undefined) continue;
+      if (placed.declaration !== true && !callLinesOf(owner.symbol).has(site.line)) {
+        markCut(step, unplacedEffect(site), cuts);
+        continue;
+      }
+      const read = effectOf(site);
+      if ("effect" in read) (step.effects ??= []).push(read.effect);
+      else markCut(step, read.cut, cuts);
     }
   }
   return cuts;
+}
+
+/**
+ * Whether the site lies before its line's first character outside ASCII. Up to there the parser that placed the site and
+ * the one that placed the declarations count alike, and past it both only count further, so comparing the site with any
+ * declaration boundary on the line gives the same answer in either count.
+ */
+function countedAlike(column: number, text: string): boolean {
+  const first = NOT_ASCII.exec(text)?.index;
+  return first === undefined || column <= first;
 }
 
 function markCut(step: WalkedStep, cut: Cut, cuts: Cut[]): void {
@@ -69,18 +99,4 @@ function callLines(store: CodeGraphReader, unresolvedIn: UnresolvedIn, symbol: G
   for (const edge of store.outgoingEdges([symbol.id])) if (edge.line !== null && !STRUCTURAL_KINDS.includes(edge.kind)) lines.add(edge.line);
   for (const reference of unresolvedIn(symbol.file)) if (reference.from === symbol.id) lines.add(reference.line);
   return lines;
-}
-
-function contains(symbol: GraphSymbol, line: number): boolean {
-  return symbol.startLine <= line && line <= symbol.endLine;
-}
-
-/** The narrowest span; of two equal spans, the one that starts later, so a nested declaration wins over its owner. */
-function innermost<T>(items: readonly T[], symbolOf: (item: T) => GraphSymbol): T | undefined {
-  return items.reduce<T | undefined>((best, item) => {
-    if (best === undefined) return item;
-    const [a, b] = [symbolOf(item), symbolOf(best)];
-    const size = a.endLine - a.startLine - (b.endLine - b.startLine);
-    return size < 0 || (size === 0 && a.startLine > b.startLine) ? item : best;
-  }, undefined);
 }

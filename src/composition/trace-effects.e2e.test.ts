@@ -126,3 +126,35 @@ class OrderEvents {
   assert.deepEqual(effectsOf(quote.value), []);
   assert.deepEqual(quote.cuts?.filter((cut) => cut.at[0]?.includes("effect")), [{ kind: "unresolved-link", at: ["src/main/java/shop/OrderEvents.java:20 http effect through com.acme.rest.AcmeRestClient"] }]);
 });
+
+test("a call site belongs to the declaration that owns its exact place: a same-line sibling's or an uninvoked inner function's request is no effect of the body traced", async () => {
+  commit({
+    "api.ts": `import { HttpClient } from '@angular/common/http';
+import { inject } from '@angular/core';
+export class Api {
+ private http = inject(HttpClient);
+ a() { this.http.get('/a'); } b() { this.http.get('/b'); }
+ run() { const dead = () => this.http.get('/dead'); console.log('x'); }
+}
+`,
+    "src/main/java/shop/Events.java": `package shop;
+
+import org.springframework.kafka.core.KafkaTemplate;
+
+class Events {
+  private final KafkaTemplate<String, String> kafka;
+  Events(KafkaTemplate<String, String> kafka) { this.kafka = kafka; }
+  void a() { kafka.send("topic.a", "v"); } void b() { kafka.send("topic.b", "v"); }
+}
+`,
+  });
+
+  const a = await trace("api.ts:Api.a");
+  const run = await trace("api.ts:Api.run");
+  const published = await trace("src/main/java/shop/Events.java:Events.a");
+
+  assert.deepEqual(effectsOf(a.value), [["a", { kind: "http", line: 5, target: { method: "GET", path: "/a" } }]]);
+  assert.deepEqual(effectsOf(run.value), []);
+  assert.equal(run.cuts?.some((cut) => cut.at[0]?.includes(" effect")) ?? false, false);
+  assert.deepEqual(effectsOf(published.value), [["a", { kind: "message", line: 8, target: { protocol: "kafka", destination: "topic.a", role: "publish" } }]]);
+});
