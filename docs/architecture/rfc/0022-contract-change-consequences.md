@@ -406,6 +406,93 @@ paths, an open object losing a declared property, and a recursive schema. (2) Sh
 corpus DTO styles (plain getters, records, Lombok), with negative controls: a field renamed with its wire name pinned by
 `@JsonProperty` derives nothing, and a `NON_EMPTY` or `NON_DEFAULT` member is `unknown`.
 
+## Requests (P5, proposed)
+
+A request body is written by the frontend and read by the server, so the polarity flips: a change breaks a producer
+when the server stops accepting a value that producer may write. Values the server newly accepts break nothing.
+
+**Measured baseline** (P5.0 and the design challenge). 351 syntactic `post`/`put`/`patch` candidates in the five corpus
+frontends: 255 pass an identifier, 32 an object literal, 39 `null`. Bodies are models passed through service methods,
+object literals beside form values (`getRawValue()`, `form.value`), spreads of loaded entities, mapper functions, and a
+wrapper that serializes its own parameter (`JSON.stringify(data)`). Estimated, not measured: presence and `null`
+hypotheses on properties a producer builds deliberately reach a decisive verdict on 15-35% of producer paths; scalar,
+type and enumeration hypotheses on 0-15%. So P5 starts with a measured slice, and the owner decides from its numbers
+whether it grows.
+
+**Rejection.** What a change makes a producer unable to write is a rejection: a value set (P4) of the values the base
+accepted and the head does not, absence and `null` included. A written request hypothesis (`target: "request"`) states
+it with its own kinds, normalized into that value set: `required` (absence), `non-nullable` (`null`),
+`{ "values": { "removed": [...] } }` (literals no longer accepted, each in a class the server keeps), and
+`{ "type": class }` (the other present JSON classes; absence and `null` are stated apart). The response kinds are
+refused for a request with `unsupported-change`, since each states what a reader may now receive; contradictory
+combinations are refused as for a response.
+
+**Origins** (the new mechanism). The question is whether some path the producer writes can put a rejected value at the
+property, so the body is followed backward to what builds it, syntax only. A declared type is never an origin. An
+origin is exact (a value the source writes), approximate (a class whose values are not all known, such as a template
+literal with a substitution) or a frontier with its reason. Only an exact origin can be a witness.
+
+| Expression at the followed path | Origin |
+|---|---|
+| a literal; a template literal whose substitutions are literals | that value |
+| a template literal with any other substitution | approximate: some string |
+| an array or object literal at the end of the path | its class (the path ends there) |
+| an object literal | its own writes in source order: a later definite write replaces earlier ones (a written `undefined` included); a spread proven to lack the property keeps the earlier writes; a spread whose presence is unknown, a non-literal computed key, a getter or `__proto__` makes the property uncertain; no write and no uncertain member is absence |
+| `a.b` | `a` at `b` followed by the rest of the path |
+| `c ? a : b` | each branch, under its condition |
+| `a ?? b`, `a \|\| b` | the left values that pass the operator's test, and the right only when the left can fail it; a left side whose test is undecidable keeps the uncertainty and proves nothing about the right |
+| a parenthesis, `as`, `!`, `satisfies` | the operand |
+| a local binding | its initializer, only when it reaches the read unchanged: no reassignment between them and, for an object, no write to it, no alias, and no call or closure it escapes to; otherwise a frontier |
+| a parameter | the argument of each proven call, in that call's context; its default when the argument is omitted or `undefined` (never `null`); missing or unresolved callers are a frontier, and no caller is never "no origin"; destructuring, spread arguments, rest parameters and `arguments` are a frontier |
+| a call through a wrapper method (the P1.5 fixpoint) | the wrapped call's body inside the wrapper, its parameters bound to this call's arguments, each call kept apart |
+| `JSON.stringify(x)` without replacer or indent arguments | `x`, serialized |
+
+Anything else ends the origin with a frontier naming its reason: `form-value`, `call-result`, `member`, `construction`,
+`mutated`, `unresolved-callers`, `untracked`.
+
+**Transport.** The body's serialization is a step, not an assumption: Angular's `HttpClient` serializes a plain object
+or array as JSON, passes a string through, and sends `FormData`, `Blob`, `ArrayBuffer` and `HttpParams` in another
+format. A string body is followed only when it is a `JSON.stringify` of a followed value; any other format, or an
+interceptor that replaces the body, is a frontier. Under JSON serialization an `undefined`, a function or a symbol drops
+an object property and becomes `null` in an array slot, and a non-finite number becomes `null`; a `toJSON` on the value
+or an ancestor is a frontier.
+
+**Verdict per producer** (domain, pure). `incompatible` when an exact origin on a modelled branch writes a rejected wire
+value, with the value, its place, the chain from the call site and the branch conditions it holds under. `admits` when
+every origin of that producer is covered and every wire value it can write lies outside the rejection; it says nothing
+about the rest of the request. `review` otherwise, each frontier an `unknown` finding at its place. An empty origin set
+never admits. The denominator is producer x followed path: a body can be decided at `id` and unknown at `name`.
+
+**First slice (P5.1).** Declared request hypotheses (`required`, `non-nullable`, removed literals) over qualified HTTP
+links; the origin rows above; the transport step for plain objects and `JSON.stringify`; frontiers elsewhere. Gate:
+petclinic's literal fields (`vet-add.component.ts` writes `id: null` beside form values) and jhipster's small account
+payloads, with negative controls, zero false `incompatible`/`admits`, frontiers counted by reason, latency and peak RSS
+per query against the response family.
+
+**Server shapes (later slice, after the gate).** The shape port gains request bodies so a diff derives rejections:
+
+- OpenAPI: the request schema through the existing resolver, read in the request direction: a `readOnly` property is
+  never a request obligation, `writeOnly` is readable, whole-body `required` is apart from property `required`;
+  unsupported media, conflicting alternatives and constraints outside the value set vocabulary are frontiers.
+- Spring `@RequestBody`: acceptance is read only under an evidenced Spring and Jackson version and mapper
+  configuration. Jackson 2 reads `null` into a primitive as its default; Jackson 3 (Spring Boot 4) rejects it. Unknown
+  properties are ignored under the documented Boot 2-4 defaults. A validation rejection is inferred only when the
+  validation entry (`@Valid`/`@Validated` and groups), the cascade path and the deserialized value are established; a
+  field default, a constructor, a setter, a `BindingResult` parameter or a null-handling annotation is a frontier.
+  `@JsonProperty(required = true)` requires presence on the active creator property only. An enumeration rejects
+  unknown text; numeric input (ordinals) and custom creators, aliases or formats are a frontier. Jackson coerces
+  between scalars, so a scalar place whose present classes depend on coercion is `unknown`, and only presence and
+  `null` are derived where they are exact.
+- Derivation: the shape comparison is extended to properties the head newly declares and to exact narrowed literal
+  sets; a request rejection is base acceptance minus head acceptance, and a difference it cannot state is a frontier.
+
+**Out of P5.** The server as a reader of what the producer sends (no Java flow reader); form models and validators (a
+`form-value` frontier, counted first); websocket and brokers (no typed instance in the corpus). Spring application
+events are open question 4.
+
+**Cost.** Origins are memoized per expression, followed path and call-binding context within one prepared workspace;
+recursion and unresolved continuations end in frontiers; caller lookups reuse the session's. No cross-call cache.
+
 ## Output
 
 The RFC-0002 envelope. Uses are complete findings with their verdict (the witness, failing step or end and capability
@@ -451,3 +538,9 @@ and consumers, validators, stores (NgRx, signal stores: frontier only), attribut
 2. Attribution when the old contract is not declared. Recommended for F0: the assumed old guarantee, stated.
 3. A flow step that converts the value (`new Date(x)`, `Number(x)`) ends the chain, so the JSON classes always describe
    the value at the use. P3 keeps it so: no conversion reached response data in the P3.0 baseline.
+4. Spring application events (P5.2). Both ends are Java in the same repository: the publisher builds the event,
+   the listener reads it, and the corpus has two repositories with them (shopizer, ThingsBoard). Following what a
+   listener does with a field needs a Java flow reader, which does not exist. Recommended: defer until a Java flow reader
+   exists for another reason; the cheap alternative (each listener of a changed event class as one `review`, linking
+   same-repository events) identifies candidate listeners under declared dispatch evidence, with unresolved
+   dispatch and conditions explicit; it does not establish field consumption or compatibility.
