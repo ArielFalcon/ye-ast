@@ -42,8 +42,8 @@ export interface QueryExecutionDeps {
   digest: Digest;
 }
 
-export type QueryExecutionContext<D extends QueryExecutionDeps = QueryExecutionDeps> = {
-  deps: D;
+export type QueryExecutionContext = {
+  deps: QueryExecutionDeps;
   catalog: ReturnType<typeof repositoryCatalog>;
   signal?: AbortSignal;
 };
@@ -84,19 +84,18 @@ type WithQuery<P> = P extends { family: infer F extends ToolFamily } ? P & { que
  * may hold values redaction would change (see `identityGuard.changedArguments`). `live` is the local stale notice the
  * port reported; `workspaceLive`, roots and refresh stay in `read`.
  */
-type Executed<P> = WithQuery<P> & {
+export type ExecutedSource = WithQuery<SourcePayload> & {
   recovery?: Recovery;
   identityGuard: RedactionIdentityGuard;
   live?: LiveStaleNotice;
 };
-export type ExecutedSource = Executed<SourcePayload>;
 
 /** A workspace replay that no longer matches is reported as a changed result of the original query. */
 export type ReplayChangedFault = { kind: "result-changed"; detail: string; stage: "workspace-replay" };
 export type InternalFault = { kind: "internal-fault"; detail: string };
 export type QueryFault = VcsFault | LiveFault | ImpactFault | OutlineFault | WorkspaceFault | TraceFault | ConsequencesFault | RepositoryTargetFault | ReplayChangedFault | InternalFault;
 
-type Run<S = ExecutedSource> = Promise<Result<S, QueryFault>>;
+type Run = Promise<Result<ExecutedSource, QueryFault>>;
 
 /** The single semantic dispatch, shared by the original tools and composition. */
 export async function executeQuery(query: SemanticQuery, ctx: QueryExecutionContext): Run {
@@ -237,7 +236,7 @@ type Rest = { recovery?: Recovery; identityGuard: RedactionIdentityGuard; live?:
  * redacted; recovery compares the public fact with the original; sidecars are redacted. Local families report the
  * selected binding as their repository root.
  */
-function finish<V, S extends ExecutedSource>(
+function finish<V>(
   read: FactRead<V>,
   query: SemanticQuery,
   repository: RepositoryBinding,
@@ -245,8 +244,8 @@ function finish<V, S extends ExecutedSource>(
   moved: LiveStaleNotice | undefined,
   ctx: QueryExecutionContext,
   recoveryFor: ((fact: Fact<V>, original: Fact<V>) => Recovery) | undefined,
-  build: (read: PublicRead<V>, rest: Rest) => S,
-): Result<S, QueryFault> {
+  build: (read: PublicRead<V>, rest: Rest) => ExecutedSource,
+): Result<ExecutedSource, QueryFault> {
   const { redaction } = ctx.deps;
   if (read.fact.snapshot.repo !== repository.repoId) return { ok: false, fault: { kind: "internal-fault", detail: "Primary snapshot repository does not match selected repository" } };
   const fact = redaction.redactValue(read.fact) as Fact<V>;

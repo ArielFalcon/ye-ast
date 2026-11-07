@@ -183,7 +183,7 @@
       </details>
 
       <div class="mcp-note">
-        <p><strong>Read-only by type.</strong> The MCP server receives only read query families: <code>EntrypointQueries</code>, <code>ImpactQueries</code>, <code>OutlineQueries</code>, <code>WorkspaceQueries</code>, <code>WorkspaceImpactQueries</code> and <code>DecisionQueries</code>. No write method exists, and all eight tools are annotated read-only.</p>
+        <p><strong>Read-only by type.</strong> The MCP server receives only read query families: <code>EntrypointQueries</code>, <code>ImpactQueries</code>, <code>OutlineQueries</code>, <code>WorkspaceQueries</code>, <code>WorkspaceImpactQueries</code>, <code>DecisionQueries</code> and <code>ContractConsequencesQueries</code>. No write method exists, and all ten tools are annotated read-only.</p>
         <p>The server also includes instructions: when to call each tool and how to read an answer. Complete is relative to the declared scope, partial keeps its known findings and lists its cuts, unknown never means no impact, and a bound is raised only when a cut names it.</p>
         <p>One server serves several declared repositories: <code>ye-ast mcp [&lt;launch-root&gt;] [--repo &lt;id&gt; &lt;root&gt;]...</code> declares them, and each call chooses one with <code>repo</code> (the launch repository by default). Registering a repository grants it no trust.</p>
         <p class="ref"><code>src/mcp/query-runner.ts:27-37</code> · <code>src/mcp/server.ts:50-69</code> · <code>src/composition/mcp.ts:9-23</code></p>
@@ -196,6 +196,7 @@
           <li><code>ye_ast_trace</code> returns what a declaration executes, in source order, each declaration expanded once, with a reading plan of the line spans to open. Branches are not evaluated, and a call no rule settles is an <code>unresolved-link</code> cut with its candidates, never a guess.</li>
           <li><code>ye_ast_workspace</code> returns the outward names a repository uses (HTTP, messaging, dependencies), the candidate repositories for each and the names no repository serves. Local clones you supply are used as given, never downloaded.</li>
           <li><code>ye_ast_decisions</code> returns the gaps the code cannot fill (membership, repository, library, gateway, revision, remote, trust), each with evidence-backed options. It writes nothing.</li>
+          <li><code>ye_ast_contract_consequences</code> returns what a request or response contract change breaks, from written hypotheses or from a diff of the contract: each consumer use or request producer with its verdict and the chain that proves it, and every place the flow is lost as <code>unknown</code>. An answer without findings never means the change is safe.</li>
           <li><code>mode</code> changes presentation only, never coverage: <code>summary</code> gives findings, <code>details</code> evidence and locations, <code>full</code> the complete result JSON with navigation text.</li>
           <li>Entrypoints, callers and impact page the evidence the text omits: <code>select</code> and <code>page</code> go together, and <code>page.limit</code> is required. <code>expect</code> asserts a result identity; <code>replay</code> reruns the query and fails if the result changed, because ye-AST keeps no earlier capture.</li>
         </ul>
