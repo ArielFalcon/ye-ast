@@ -24,6 +24,8 @@ interface Declaration {
   key: string;
   value: string | undefined;
   line: number;
+  /** The key holds an alias, a merge or a key that is not a scalar: the keys below it cannot be read exactly. */
+  opaque?: true;
 }
 
 type ConfigRead = { ok: true; documents: Declaration[][] } | { ok: false; line: number };
@@ -121,7 +123,8 @@ export interface Configuration {
   valueOf(key: string): ConfiguredValue;
   /**
    * Every key declared at or under a prefix, whatever its value, in whichever profile. `undecided` holds the places the files
-   * could not be read at (a syntax error, an XML file, an import): they may declare any key.
+   * could not be read at (a syntax error, an XML file, an import, an alias or merge key on the way to the prefix or below it): they may
+   * declare any key.
    */
   keysUnder(prefix: string): { keys: readonly ConfiguredKey[]; undecided: readonly Evidence[] };
 }
@@ -134,6 +137,7 @@ export function configurationOf(files: readonly SourceFile[]): Configuration {
   const declared = new Map<string, (string | undefined)[]>();
   const keys: ConfiguredKey[] = [];
   const gaps: Evidence[] = [];
+  const opaque: ConfiguredKey[] = [];
   let unplaced = false;
   for (const file of files) {
     const read = file.path.endsWith(".xml") ? ({ ok: false, line: 1 } as const) : readConfig(file, EVERY_KEY);
@@ -143,8 +147,9 @@ export function configurationOf(files: readonly SourceFile[]): Configuration {
     }
     for (const document of read.documents) {
       if (documentProfile(document, profileOfConfigFile(file.path)) === null) unplaced = true;
-      for (const { key, value, line } of document) {
+      for (const { key, value, line, opaque: unread } of document) {
         if (key === IMPORT || key.startsWith(`${IMPORT}[`)) gaps.push({ path: file.path, line });
+        else if (unread) opaque.push({ key: key.replace(/\.?<<$/, ""), evidence: { path: file.path, line } });
         else if (!key.startsWith(`${ACTIVATE}.`)) {
           declared.set(key, [...(declared.get(key) ?? []), value]);
           keys.push({ key, evidence: { path: file.path, line } });
@@ -153,15 +158,17 @@ export function configurationOf(files: readonly SourceFile[]): Configuration {
     }
   }
   const undecided = unplaced || gaps.length > 0;
+  const unreadAround = (root: string): Evidence[] => opaque.filter(({ key }) => isWithin(key, root) || isWithin(root, key)).map(({ evidence }) => evidence);
   return {
     keysUnder(prefix) {
       const root = canonicalKey(prefix);
-      return { keys: keys.filter(({ key }) => key === root || key.startsWith(`${root}.`) || key.startsWith(`${root}[`)), undecided: sortSpans(gaps) };
+      return { keys: keys.filter(({ key }) => isWithin(key, root)), undecided: sortSpans([...gaps, ...unreadAround(root)]) };
     },
     valueOf(key) {
-      const values = new Set(declared.get(canonicalKey(key)));
+      const root = canonicalKey(key);
+      const values = new Set(declared.get(root));
       const [only] = values;
-      if (undecided || values.size > 1 || (values.size === 1 && only === undefined)) return { status: "undecided" };
+      if (undecided || unreadAround(root).length > 0 || values.size > 1 || (values.size === 1 && only === undefined)) return { status: "undecided" };
       return only === undefined ? { status: "absent" } : { status: "found", value: only };
     },
   };
@@ -183,6 +190,11 @@ export function configurationsOf(files: readonly SourceFile[]): (source: JavaFil
     known.set(key, configuration);
     return configuration;
   };
+}
+
+/** Whether `key` is `root` or a key below it. */
+function isWithin(key: string, root: string): boolean {
+  return root === "" || key === root || key.startsWith(`${root}.`) || key.startsWith(`${root}[`);
 }
 
 /** The profile a document applies to (`""` for none), or null when its condition is one the snapshot cannot place under a single profile. */
@@ -214,7 +226,7 @@ function readYaml(content: string, keys: ReadKeys): ConfigRead {
 function walkYaml(node: unknown, path: readonly string[], line: number, out: Declaration[], lines: LineCounter, keys: ReadKeys): void {
   const key = canonicalKey(path.join("."));
   if (isAlias(node) || path.at(-1) === "<<") {
-    if (keys.leads(key.replace(/\.?<<$/, ""))) out.push({ key, value: undefined, line });
+    if (keys.leads(key.replace(/\.?<<$/, ""))) out.push({ key, value: undefined, line, opaque: true });
     return;
   }
   if (isMap(node)) {
@@ -222,7 +234,7 @@ function walkYaml(node: unknown, path: readonly string[], line: number, out: Dec
       const name = isScalar(pair.key) ? String(pair.key.value) : undefined;
       const at = lines.linePos((isScalar(pair.key) && pair.key.range?.[0]) || 0).line;
       if (name === undefined) {
-        if (keys.leads(key)) out.push({ key, value: undefined, line: at });
+        if (keys.leads(key)) out.push({ key, value: undefined, line: at, opaque: true });
         continue;
       }
       walkYaml(pair.value, [...path, name], at, out, lines, keys);

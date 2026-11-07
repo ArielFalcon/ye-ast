@@ -1,7 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
-import { isSpringConfigFile } from "../../domain/languages/spring-config.ts";
+import { isSpringConfigFile, resourcesOfSource } from "../../domain/languages/spring-config.ts";
 import type { LiteralClass, ReadShape, Shape, ValueSet } from "../../domain/contracts/payload-shape.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
@@ -34,21 +34,28 @@ const ENTITIES: ReadonlySet<string> = new Set(["org.springframework.http.Respons
 const TEXT_BODY = "java.lang.String";
 const BODY_ANNOTATIONS: ReadonlySet<string> = new Set(["org.springframework.web.bind.annotation.RestController", "org.springframework.web.bind.annotation.ResponseBody"]);
 const BEAN = "org.springframework.context.annotation.Bean";
-const JSON_COMPONENT = "org.springframework.boot.jackson.JsonComponent";
+const MAPPER_ANNOTATIONS: ReadonlySet<string> = new Set(["org.springframework.boot.jackson.JsonComponent", "org.springframework.boot.jackson.JsonMixin"]);
 /** The types whose bean, in a repository's code, configures the mapper the HTTP message converters write with. */
 const MAPPER_BEANS: ReadonlySet<string> = new Set([
-  "ObjectMapper",
-  "JsonMapper",
-  "Jackson2ObjectMapperBuilder",
-  "Jackson2ObjectMapperBuilderCustomizer",
-  "Module",
-  "SimpleModule",
-  "MappingJackson2HttpMessageConverter",
-  "HttpMessageConverters",
-  "HttpMessageConverter",
+  "com.fasterxml.jackson.databind.ObjectMapper",
+  "com.fasterxml.jackson.databind.json.JsonMapper",
+  "com.fasterxml.jackson.databind.Module",
+  "com.fasterxml.jackson.databind.module.SimpleModule",
+  "org.springframework.http.converter.json.Jackson2ObjectMapperBuilder",
+  "org.springframework.boot.autoconfigure.jackson.Jackson2ObjectMapperBuilderCustomizer",
+  "org.springframework.http.converter.json.AbstractJackson2HttpMessageConverter",
+  "org.springframework.http.converter.json.MappingJackson2HttpMessageConverter",
+  "org.springframework.boot.autoconfigure.http.HttpMessageConverters",
+  "org.springframework.http.converter.HttpMessageConverter",
 ]);
-const CONVERTER_HOOKS: ReadonlySet<string> = new Set(["configureMessageConverters", "extendMessageConverters"]);
-const DEFAULT_CONVERTER = "MappingJackson2HttpMessageConverter";
+/** The classes whose hooks choose the converters Spring MVC writes bodies with. */
+const MVC_CONFIGURERS: ReadonlySet<string> = new Set([
+  "org.springframework.web.servlet.config.annotation.WebMvcConfigurer",
+  "org.springframework.web.servlet.config.annotation.WebMvcConfigurationSupport",
+  "org.springframework.web.servlet.config.annotation.DelegatingWebMvcConfiguration",
+]);
+const CONVERTER_HOOKS: ReadonlySet<string> = new Set(["configureMessageConverters", "extendMessageConverters", "addDefaultHttpMessageConverters", "addReturnValueHandlers"]);
+const DEFAULT_CONVERTER = "org.springframework.http.converter.json.MappingJackson2HttpMessageConverter";
 /** The configuration prefixes that choose or configure the mapper writing HTTP bodies. */
 const MAPPER_PREFIXES = ["spring.jackson", "spring.mvc.converters", "spring.http.converters"];
 /** Under `spring.jackson`: the settings that change how a body is laid out or how its dates are written, never which properties it holds (dates have no modelled shape). */
@@ -348,32 +355,68 @@ function mapperSettings(configuration: Configuration): MapperSettings {
   return { changing, files: [...files] };
 }
 
-/** Whether a converter hook only registers the mapper Spring would build by default, so it changes nothing about what bodies hold. */
+const SUPERTYPE_CLAUSES: ReadonlySet<string> = new Set(["superclass", "super_interfaces", "extends_interfaces"]);
+
+function supertypeNames(declaration: Node): string[] {
+  return declaration.namedChildren
+    .filter((clause) => SUPERTYPE_CLAUSES.has(clause.type))
+    .flatMap((clause) => clause.namedChildren.flatMap((child) => (child.type === "type_list" ? child.namedChildren : [child])))
+    .map(nameOf);
+}
+
+/** Whether a type extends or implements one of the platform types, through the supertypes the sources declare; a supertype the sources leave ambiguous may. */
+function extendsPlatform(type: TypeDecl, project: JavaProject, wanted: ReadonlySet<string>): boolean {
+  const { types, gaps } = project.hierarchy(type);
+  if (gaps.some((gap) => gap.kind === "ambiguous")) return true;
+  return types.some((member) => supertypeNames(member.node).some((name) => project.lookupType(name, scopeOf(member)) === undefined && externalNames(name, member.file, false).some((fqn) => wanted.has(fqn))));
+}
+
+/** Whether a type written in a scope is one of the platform types, or a project type that extends one. */
+function denotesPlatform(name: string, scope: Scope, project: JavaProject, wanted: ReadonlySet<string>): boolean {
+  const found = project.lookupType(name, scope);
+  if (found === "ambiguous") return true;
+  return found === undefined ? externalNames(name, scope.file, false).some((fqn) => wanted.has(fqn)) : extendsPlatform(found, project, wanted);
+}
+
+/** Whether a converter hook only registers, on the list it receives, the mapper Spring would build by default, so it changes nothing about what bodies hold. */
 function keepsDefaultMapper(method: MethodDecl, project: JavaProject): boolean {
   const statements = method.node.childForFieldName("body")?.namedChildren.filter((child) => !child.type.endsWith("comment")) ?? [];
+  const list = method.node.childForFieldName("parameters")?.namedChildren[0]?.childForFieldName("name")?.text;
   const scope = scopeOf(method.owner);
   return statements.every((statement) => {
     const call = statement.type === "expression_statement" ? statement.namedChildren[0] : undefined;
-    if (call?.type !== "method_invocation" || call.childForFieldName("name")?.text !== "add") return false;
+    if (call?.type !== "method_invocation" || call.childForFieldName("name")?.text !== "add" || list === undefined || call.childForFieldName("object")?.text !== list) return false;
     const [added, ...others] = call.childForFieldName("arguments")?.namedChildren ?? [];
     const type = added?.type === "object_creation_expression" ? added.childForFieldName("type") : null;
-    if (others.length > 0 || type === null || type === undefined || added?.childForFieldName("arguments")?.namedChildren.length !== 0) return false;
-    const simple = nameOf(type).split(".").pop() ?? "";
-    return simple === DEFAULT_CONVERTER && project.lookupType(simple, scope) === undefined;
+    if (others.length > 0 || type === null || type === undefined || added === undefined || added.namedChildren.some((child) => child.type === "class_body" || (child.type === "argument_list" && child.namedChildren.length > 0))) return false;
+    const name = nameOf(type);
+    return project.lookupType(name, scope) === undefined && externalNames(name, scope.file, false).includes(DEFAULT_CONVERTER);
   });
 }
 
+/** A place in the repository's code that configures the mapper that writes HTTP bodies, and the module whose application it belongs to. */
+interface CodeConfiguration {
+  module: string;
+  evidence: Evidence;
+}
+
+function moduleOf(path: string): string {
+  return resourcesOfSource(path) ?? "";
+}
+
 /** Where the repository's code configures the mapper that writes HTTP bodies; the bodies of an application that does are not the default's. */
-function codeMapperConfiguration(project: JavaProject): Evidence[] {
-  const found: Evidence[] = [];
+function codeMapperConfiguration(project: JavaProject): CodeConfiguration[] {
+  const found: CodeConfiguration[] = [];
   for (const type of project.types) {
     const scope = scopeOf(type);
-    if (annotationUses(type.node, scope).some((use) => isAnnotation(use, JSON_COMPONENT))) found.push(spanOf(type.file.path, type.node));
+    const module = moduleOf(type.file.path);
+    const place = (node: Node): void => void found.push({ module, evidence: spanOf(type.file.path, node) });
+    if (annotationUses(type.node, scope).some((use) => isAnnotation(use, MAPPER_ANNOTATIONS))) place(type.node);
+    const configurer = type.methods.some((method) => CONVERTER_HOOKS.has(method.name)) && extendsPlatform(type, project, MVC_CONFIGURERS);
     for (const method of type.methods) {
-      if (CONVERTER_HOOKS.has(method.name) && !keepsDefaultMapper(method, project)) found.push(spanOf(type.file.path, method.node));
+      if (configurer && CONVERTER_HOOKS.has(method.name) && !keepsDefaultMapper(method, project)) place(method.node);
       const returns = method.node.childForFieldName("type");
-      const simple = returns === null ? "" : (nameOf(returns).split(".").pop() ?? "");
-      if (MAPPER_BEANS.has(simple) && annotationUses(method.node, scope).some((use) => isAnnotation(use, BEAN))) found.push(spanOf(type.file.path, method.node));
+      if (returns !== null && annotationUses(method.node, scope).some((use) => isAnnotation(use, BEAN)) && denotesPlatform(nameOf(returns), scope, project, MAPPER_BEANS)) place(method.node);
     }
   }
   return found;
@@ -456,11 +499,13 @@ export function createSpringPayloadShapes(parser: JavaParser, readRoutes: RouteR
               const configuration = configurationOf(method.owner.file);
               const settings = settingsOf.get(configuration) ?? mapperSettings(configuration);
               settingsOf.set(configuration, settings);
-              const configured = [...code, ...settings.changing].toSorted(bySpan);
-              read =
-                configured.length > 0
-                  ? withFiles({ shape: unknownShape("no-extractor", ...configured), files: [handler.path] }, configured.map(({ path }) => path), settings.files)
-                  : withFiles(responseOf(method, reader, project), settings.files);
+              const module = moduleOf(method.owner.file.path);
+              const configured = [...code.filter((place) => place.module === module).map((place) => place.evidence), ...settings.changing].toSorted(bySpan);
+              const elsewhere = code.filter((place) => place.module !== module).map((place) => place.evidence).toSorted(bySpan);
+              const undecided = [...configured, ...elsewhere];
+              const response = responseOf(method, reader, project);
+              const shape = undecided.length === 0 ? response.shape : unknownShape(configured.length > 0 ? "no-extractor" : "unresolved", ...undecided);
+              read = withFiles({ shape, files: response.files }, undecided.map(({ path }) => path), settings.files);
             }
             shapes.set(key, read);
           }

@@ -273,9 +273,18 @@ test("a body is written only when the class or method says so or the value is an
   assert.equal((await shapeOf(controller("void"))).kind, "unknown");
 });
 
+const OBJECT_MAPPER = "import com.fasterxml.jackson.databind.ObjectMapper;";
+const CONFIGURATION = "@org.springframework.context.annotation.Configuration";
+const BEAN = "@org.springframework.context.annotation.Bean";
+const WEB_IMPORTS = [
+  "import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;",
+  "import org.springframework.http.converter.HttpMessageConverter;",
+  "import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;",
+].join(" ");
+
 test("code that configures the mapper makes every Java shape unknown, with the places that configure it", async () => {
   const dto = source("Item", "class Item { public String name; }");
-  const config = source("MapperConfig", "@org.springframework.context.annotation.Configuration class MapperConfig { @org.springframework.context.annotation.Bean ObjectMapper mapper() { return null; } }");
+  const config = source("MapperConfig", `${OBJECT_MAPPER} @org.springframework.context.annotation.Configuration class MapperConfig { @org.springframework.context.annotation.Bean ObjectMapper mapper() { return null; } }`);
   const shape = await shapeOf(controller("Item"), dto, config);
   assert.ok(shape.kind === "unknown");
   assert.deepEqual(
@@ -309,13 +318,14 @@ test("a mapper setting of another module, or text that only mentions jackson, do
 
 test("a converter hook that only registers the default Jackson converter changes nothing; any other statement in it may", async () => {
   const dto = source("Item", "class Item { public String name; }");
-  const hook = (body: string) => source("WebConfig", `class WebConfig { public void configureMessageConverters(List<HttpMessageConverter<?>> converters) { ${body} } }`);
+  const hook = (body: string) => source("WebConfig", `${WEB_IMPORTS} class WebConfig implements WebMvcConfigurer { public void configureMessageConverters(List<HttpMessageConverter<?>> converters) { ${body} } }`);
   assert.equal((await shapeOf(controller("Item"), dto, hook("converters.add(new MappingJackson2HttpMessageConverter());"))).kind, "known");
   assert.equal((await shapeOf(controller("Item"), dto, hook("converters.add(new MappingJackson2HttpMessageConverter(custom));"))).kind, "unknown");
   assert.equal((await shapeOf(controller("Item"), dto, hook("converters.add(build());"))).kind, "unknown");
   assert.equal((await shapeOf(controller("Item"), dto, hook("converters.clear();"))).kind, "unknown");
   const own = source("MappingJackson2HttpMessageConverter", "class MappingJackson2HttpMessageConverter { }");
-  assert.equal((await shapeOf(controller("Item"), dto, own, hook("converters.add(new MappingJackson2HttpMessageConverter());"))).kind, "unknown");
+  const withoutImport = (body: string) => source("WebConfig", `import org.springframework.web.servlet.config.annotation.WebMvcConfigurer; class WebConfig implements WebMvcConfigurer { public void configureMessageConverters(List<Object> converters) { ${body} } }`);
+  assert.equal((await shapeOf(controller("Item"), dto, own, withoutImport("converters.add(new MappingJackson2HttpMessageConverter());"))).kind, "unknown");
 });
 
 test("the files a shape depends on include every file that declares a mapper setting, harmless or not, and the places of code that configure it", async () => {
@@ -330,9 +340,89 @@ test("the files a shape depends on include every file that declares a mapper set
   const settings = "src/main/resources/application.yml";
   assert.deepEqual(await filesOf(), [item, handler]);
   assert.deepEqual(await filesOf(yamlAt("spring:\n  jackson:\n    time-zone: UTC\n")), [item, handler, settings]);
-  assert.deepEqual(await filesOf(yamlAt("spring:\n  jackson:\n    default-property-inclusion: non_null\n")), [handler, settings]);
-  const mapper = "@org.springframework.context.annotation.Configuration class Mapper { @org.springframework.context.annotation.Bean ObjectMapper mapper() { return null; } }";
-  assert.deepEqual(await filesOf(source("Mapper", mapper)), [handler, "src/main/java/app/Mapper.java"]);
+  const mapper = `${OBJECT_MAPPER} ${CONFIGURATION} class Mapper { ${BEAN} ObjectMapper mapper() { return null; } }`;
+  assert.deepEqual(await filesOf(source("Mapper", mapper)), [item, handler, "src/main/java/app/Mapper.java"]);
+});
+
+test("the files of a shape the reader cannot answer under the configured mapper still include the types it would have read, and an unrelated file stays out", async () => {
+  const handler = "src/main/java/app/ItemController.java";
+  const item = "src/main/java/app/Item.java";
+  const unrelated = source("Unrelated", "class Unrelated { public int z; }");
+  const mapper = source("Mapper", `${OBJECT_MAPPER} ${CONFIGURATION} class Mapper { ${BEAN} ObjectMapper mapper() { return null; } }`);
+  const inclusion = yamlAt("spring:\n  jackson:\n    default-property-inclusion: non_null\n");
+  for (const configured of [inclusion, mapper]) {
+    const [only] = await responses(controller("Item"), source("Item", "class Item { public String x; }"), unrelated, configured);
+    assert.ok(only?.status === "complete" && only.value.shape.kind === "unknown");
+    assert.deepEqual(only.value.files, [item, handler, configured.path].toSorted());
+  }
+});
+
+test("a method named like a converter hook is code configuration only in a class that is a Spring MVC configurer", async () => {
+  const dto = source("Item", "class Item { public String name; }");
+  const hook = "public void configureMessageConverters(List<HttpMessageConverter<?>> converters) { converters.clear(); }";
+  const support = "import org.springframework.web.servlet.config.annotation.WebMvcConfigurationSupport; import org.springframework.http.converter.HttpMessageConverter;";
+  const configure = (name: string, head: string, supertype: string, imports = WEB_IMPORTS) => source(name, `${imports} ${head} class ${name} ${supertype} { ${hook} }`);
+  assert.equal((await shapeOf(controller("Item"), dto, configure("Helper", "", ""))).kind, "known");
+  assert.equal((await shapeOf(controller("Item"), dto, configure("Helper", "", "implements Runnable"))).kind, "known");
+  assert.equal((await shapeOf(controller("Item"), dto, configure("WebConfig", "", "implements WebMvcConfigurer"))).kind, "unknown");
+  assert.equal((await shapeOf(controller("Item"), dto, configure("WebConfig", "", "extends WebMvcConfigurationSupport", support))).kind, "unknown");
+  const intermediate = source("Base", `${WEB_IMPORTS} interface Base extends WebMvcConfigurer { }`);
+  assert.equal((await shapeOf(controller("Item"), dto, intermediate, configure("WebConfig", "", "implements Base"))).kind, "unknown");
+  const homonym = configure("WebConfig", "", "implements WebMvcConfigurer", "import example.WebMvcConfigurer; import org.springframework.http.converter.HttpMessageConverter;");
+  assert.equal((await shapeOf(controller("Item"), dto, homonym)).kind, "known");
+});
+
+test("a bean configures the mapper by the identity of its declared type, whatever its simple name", async () => {
+  const dto = source("Item", "class Item { public String name; }");
+  const bean = (name: string, imports: string, type: string) => source(name, `${imports} ${CONFIGURATION} class ${name} { ${BEAN} ${type} bean() { return null; } }`);
+  assert.equal((await shapeOf(controller("Item"), dto, bean("Config", OBJECT_MAPPER, "ObjectMapper"))).kind, "unknown");
+  assert.equal((await shapeOf(controller("Item"), dto, bean("Config", "import com.fasterxml.jackson.databind.*;", "ObjectMapper"))).kind, "unknown");
+  assert.equal((await shapeOf(controller("Item"), dto, bean("Config", "", "com.fasterxml.jackson.databind.ObjectMapper"))).kind, "unknown");
+  const own = source("OwnMapper", `${OBJECT_MAPPER} class OwnMapper extends ObjectMapper { }`);
+  assert.equal((await shapeOf(controller("Item"), dto, own, bean("Config", "", "OwnMapper"))).kind, "unknown");
+  assert.equal((await shapeOf(controller("Item"), dto, bean("Config", "import example.ObjectMapper;", "ObjectMapper"))).kind, "known");
+  assert.equal((await shapeOf(controller("Item"), dto, bean("Config", "import java.lang.Module;", "Module"))).kind, "known");
+  assert.equal((await shapeOf(controller("Item"), dto, bean("Config", "", "String"))).kind, "known");
+});
+
+test("code configuration decides the shapes of its own module, and another module's makes them unresolved at its places", async () => {
+  const dto = source("Item", "class Item { public String name; }");
+  const mapper = `${OBJECT_MAPPER} ${CONFIGURATION} class Mapper { ${BEAN} ObjectMapper mapper() { return null; } }`;
+  const own = source("Mapper", mapper);
+  const other: SourceFile = { path: "other/src/main/java/app/Mapper.java", content: `${HEADER}\n${mapper}` };
+  const sameModule = await shapeOf(controller("Item"), dto, own);
+  assert.ok(sameModule.kind === "unknown");
+  assert.equal(sameModule.reason, "no-extractor");
+  const elsewhere = await shapeOf(controller("Item"), dto, other);
+  assert.ok(elsewhere.kind === "unknown");
+  assert.equal(elsewhere.reason, "unresolved");
+  assert.deepEqual(elsewhere.evidence.map(({ path, line }) => `${path}:${line}`), [`${other.path}:8`]);
+  const [only] = await responses(controller("Item"), dto, other);
+  assert.ok(only?.status === "complete");
+  assert.ok(only.value.files.includes(other.path) && only.value.files.includes("src/main/java/app/Item.java"));
+});
+
+test("a mapper setting an alias or a merge key may hold leaves the shapes unknown at that place", async () => {
+  const files = [controller("Item"), source("Item", "class Item { public String name; }")];
+  const alias = "defaults: &settings\n  jackson:\n    default-property-inclusion: non_null\nspring: *settings\n";
+  const merge = "defaults: &defaults\n  jackson:\n    default-property-inclusion: non_null\nspring:\n  <<: *defaults\n";
+  for (const content of [alias, merge]) {
+    const shape = await shapeOf(...files, yamlAt(content));
+    assert.ok(shape.kind === "unknown", content);
+    assert.equal(shape.evidence[0]?.path, "src/main/resources/application.yml");
+  }
+  assert.equal((await shapeOf(...files, yamlAt("shared: &shared\n  a: 1\nother: *shared\nspring:\n  jackson:\n    locale: en\n"))).kind, "known");
+});
+
+test("only a plain registration of the framework's own converter on the hook's list keeps the default mapper", async () => {
+  const dto = source("Item", "class Item { public String name; }");
+  const hook = (body: string, imports = WEB_IMPORTS) => source("WebConfig", `${imports} class WebConfig implements WebMvcConfigurer { public void configureMessageConverters(List<HttpMessageConverter<?>> converters, List<Object> others) { ${body} } }`);
+  const subclass = "converters.add(new MappingJackson2HttpMessageConverter() { @Override protected void writeInternal(Object object, java.lang.reflect.Type type, org.springframework.http.HttpOutputMessage out) { } });";
+  assert.equal((await shapeOf(controller("Item"), dto, hook(subclass))).kind, "unknown");
+  assert.equal((await shapeOf(controller("Item"), dto, hook("converters.add(new example.MappingJackson2HttpMessageConverter());"))).kind, "unknown");
+  assert.equal((await shapeOf(controller("Item"), dto, hook("converters.add(new MappingJackson2HttpMessageConverter());", WEB_IMPORTS.replace("org.springframework.http.converter.json", "example")))).kind, "unknown");
+  assert.equal((await shapeOf(controller("Item"), dto, hook("others.add(new MappingJackson2HttpMessageConverter());"))).kind, "unknown");
+  assert.equal((await shapeOf(controller("Item"), dto, hook("converters.add(new org.springframework.http.converter.json.MappingJackson2HttpMessageConverter());", ""))).kind, "known");
 });
 
 test("one handler mapped to several routes gives each the same shape, and a source with no route gives none", async () => {
