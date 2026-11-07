@@ -2,11 +2,12 @@ import { createPayloadShapes } from "../core/adapters/openapi/payload-shapes.ada
 import { extractRoutes } from "../core/adapters/spring/spring-routes.adapter.ts";
 import { createSpringPayloadShapes } from "../core/adapters/spring/spring-payload-shapes.adapter.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
-import { createContractChangeQueries, type ContractChangeQueries } from "../core/application/contracts/contract-change-queries.ts";
+import { createContractChangeQueries } from "../core/application/contracts/contract-change-queries.ts";
 import { createRevisionSources } from "../core/application/snapshot/revision-sources.ts";
 import type { HeadReaderDeps } from "../core/application/snapshot/head-reading.ts";
 import { isExtractorConfiguration } from "../core/domain/languages/configuration.ts";
 import { isJavaSource, isJvmTestFile } from "../core/domain/languages/java.ts";
+import type { ContractChangeQueries } from "../core/ports/contract-change-queries.port.ts";
 import type { ConsumerSources } from "../core/ports/consumer-sources.port.ts";
 import type { ContractRoutes } from "../core/ports/contract-routes.port.ts";
 

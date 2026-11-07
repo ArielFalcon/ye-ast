@@ -12,6 +12,7 @@ import { canonicalKey, configurationsOf, type Configuration } from "./applicatio
 import { spanOf } from "./findings.ts";
 import { enumerationNames, serializedProperties, type WireProperty } from "./jackson-properties.ts";
 import { createJavaProject, describeFile, externalNames, scopeOf, type JavaFile, type JavaProject, type MethodDecl, type Scope, type TypeDecl } from "./java-symbols.ts";
+import { BEAN } from "./java-value-vocabulary.ts";
 import { annotationUses, isAnnotation } from "./request-mapping.ts";
 
 type PlatformKind = LiteralClass | "collection" | "optional" | "wrapper" | "unmodelled";
@@ -33,7 +34,6 @@ const PLATFORM: ReadonlyMap<string, PlatformKind> = new Map<string, PlatformKind
 const ENTITIES: ReadonlySet<string> = new Set(["org.springframework.http.ResponseEntity", "org.springframework.http.HttpEntity"]);
 const TEXT_BODY = "java.lang.String";
 const BODY_ANNOTATIONS: ReadonlySet<string> = new Set(["org.springframework.web.bind.annotation.RestController", "org.springframework.web.bind.annotation.ResponseBody"]);
-const BEAN = "org.springframework.context.annotation.Bean";
 const MAPPER_ANNOTATIONS: ReadonlySet<string> = new Set(["org.springframework.boot.jackson.JsonComponent", "org.springframework.boot.jackson.JsonMixin"]);
 /** The types whose bean, in a repository's code, configures the mapper the HTTP message converters write with. */
 const MAPPER_BEANS: ReadonlySet<string> = new Set([

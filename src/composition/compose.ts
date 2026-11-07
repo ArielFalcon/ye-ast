@@ -60,7 +60,7 @@ import { composeAngularRelations } from "./angular-relations.ts";
 import { composeConsumerSources } from "./consumer-queries.ts";
 import { composeContractChangeQueries } from "./contract-change-queries.ts";
 import { createConsumerQueries } from "../core/application/contracts/consumer-queries.ts";
-import type { ContractChangeQueries } from "../core/application/contracts/contract-change-queries.ts";
+import type { ContractChangeQueries } from "../core/ports/contract-change-queries.port.ts";
 import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { CallSiteReader } from "../core/domain/topology/call-site.ts";
