@@ -979,7 +979,7 @@ function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "comp
     ...(trigger?.status !== "unknown" && trigger?.value.impact !== undefined ? [`  The originating repository's walk is at ${originPath}.`, ...impactLookups(trigger.value.impact, originPath, context)] : []),
     ...(otherImpacts.length === 0 ? [] : ["  Other repository walks are at value.sections[repo].value.impact only when that field exists. In each walk, entrypoints[].seeds indexes that same walk's seeds array; never join origins across repositories."]),
     ...(value.links.length === 0 ? [] : ["  To follow a cross-repository consequence, filter value.links by link.from (repo/file/symbol/line) or link.to (repo/name/handler). Each reach contains link IDs in recorded order: resolve them against value.links[].link.id, not the text's display numbers. Retain direction, basis and confidence; reach does not establish an unrecorded path inside a repository."]),
-    ...(value.workspace.unserved.length === 0 ? [] : ["  For missing service coverage, inspect value.workspace.unserved and section.value.external when present. Use ye_ast_workspace to investigate outward-name evidence and candidate local repositories; adding workspace.repos changes the query's coverage rather than filtering this fact."]),
+    ...(value.workspace.unserved.length === 0 ? [] : ["  For missing service coverage, inspect value.workspace.unserved, section.value.unmatched and section.value.external when present. Use ye_ast_workspace to investigate outward-name evidence and candidate local repositories; adding workspace.repos changes the query's coverage rather than filtering this fact."]),
     ...impactCutLookup(cutsOf(fact), "cuts", context, fact.inputs.declaredConfig.walk),
     ...(Object.values(value.sections).some((section) => section.status === "partial") ? ["  Repository-local limits remain in value.sections[repo].cuts; inspect contributing section.value.reads[].fact too. Do not treat a complete independent read as resolving an unknown contributing read."] : []),
     ...(crossRepository(value) ? [workspaceOwnerGuide("full")] : []),
@@ -1300,7 +1300,7 @@ function linkMapLines(links: readonly Link[], unlinked: readonly UnlinkedCallSit
   const listed = detail === "details" || links.length === 0 || size(literal) < size(counted) ? literal : counted;
   return [
     `links between the repositories read (${links.length}):`, ...listed,
-    ...(unlinked.length === 0 ? [] : [`call sites the join reached without a link (${unlinked.length}):`, ...unlinked.map(({ from, transport, outcome, name, repos }) => `  - ${from.repo}:${placeText(from.file, from.line)} ${from.symbol} ${transport} ${name}: ${outcome}${repos === undefined ? "" : ` (${repos.join(", ")})`}`)]),
+    ...(unlinked.length === 0 ? [] : [`call sites the join reached without a link (${unlinked.length}):`, ...unlinked.map(({ from, transport, outcome, name, repos, routes }) => `  - ${from.repo}:${placeText(from.file, from.line)} ${from.symbol} ${transport} ${name}: ${outcome}${repos === undefined ? "" : ` (${repos.join(", ")})`}${routes === undefined ? "" : ` routes ${routes.join(", ")}`}`)]),
   ];
 }
 

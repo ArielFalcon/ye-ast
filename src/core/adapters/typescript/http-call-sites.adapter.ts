@@ -8,10 +8,10 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { moduleResolverOf, type ModuleResolver } from "./module-resolver.ts";
 import { buildDefines, type BuildDefines } from "./url-define.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
+import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 
 export const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
 const HTTP_CLIENT_PACKAGE = "@angular/common/http";
-const PLACEHOLDER = "{}";
 const UNDECIDED = Symbol("undecided");
 const RUN_TIME_VALUE: Evaluation = { kind: "value" };
 /** A class field the code assigns at run time, so no initializer states its value. */
@@ -1033,7 +1033,7 @@ class Reader {
   private async encoded(shape: FileShape, argument: ts.Expression, scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
     const value = await this.evaluate(shape, argument, scope, trail);
     if (value === undefined) return readsRunTime(argument, scope) ? RUN_TIME_VALUE : undefined;
-    if (value.kind === "value" || value.cut || value.text.includes(PLACEHOLDER)) return RUN_TIME_VALUE;
+    if (value.kind === "value" || value.cut || value.text.includes(RUN_TIME_HOLE)) return RUN_TIME_VALUE;
     if (this.unsafeEncoder) return undefined;
     try {
       return stated(encodeURIComponent(value.text));
@@ -1405,7 +1405,7 @@ function endsPath(text: string): boolean {
  * may hold an origin, a base path or several segments, so it stands for no segment.
  */
 function startsSegments(path: string): boolean {
-  for (let at = path.indexOf(PLACEHOLDER); at !== -1; at = path.indexOf(PLACEHOLDER, at + PLACEHOLDER.length)) {
+  for (let at = path.indexOf(RUN_TIME_HOLE); at !== -1; at = path.indexOf(RUN_TIME_HOLE, at + RUN_TIME_HOLE.length)) {
     if (path[at - 1] !== "/") return false;
   }
   return true;
@@ -1417,7 +1417,7 @@ function normalizePath(path: string): string {
   const withoutQuery = end === -1 ? path : path.slice(0, end);
   return withoutQuery
     .split("/")
-    .map((segment) => (/^:[A-Za-z_][A-Za-z0-9_]*$/.test(segment) ? PLACEHOLDER : segment))
+    .map((segment) => (/^:[A-Za-z_][A-Za-z0-9_]*$/.test(segment) ? RUN_TIME_HOLE : segment))
     .join("/");
 }
 
@@ -1449,7 +1449,7 @@ function cutAt(text: string): Evaluation {
 
 /** What an evaluation writes inside a path: the text it states, or the placeholder a run-time value leaves. */
 function written(evaluation: Evaluation): string {
-  return evaluation.kind === "text" ? evaluation.text : PLACEHOLDER;
+  return evaluation.kind === "text" ? evaluation.text : RUN_TIME_HOLE;
 }
 
 /** The text an evaluation states; undefined for a run-time value and for a part the snapshot does not decide. */

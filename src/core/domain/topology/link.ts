@@ -4,7 +4,7 @@ import type { ChangedContract } from "../impact/changed-contracts.ts";
 import { compareText } from "../shared/code-node.ts";
 
 /** How a call site was matched to the entrypoint it reaches. */
-export type LinkBasis = "exact" | "base-path" | "suffix" | "operation-id" | "event-destination" | "gateway-prefix" | "route-overlap";
+export type LinkBasis = "exact" | "base-path" | "suffix" | "event-destination" | "gateway-prefix" | "route-overlap";
 
 /** A call site of one repository joined to an entrypoint of another, or of its own when the transport stays inside it. */
 export interface Link {
@@ -19,15 +19,20 @@ export interface Link {
   confidence: number;
 }
 
-/** A call site the join reached and did not link: no route of the service it names takes it, or several entrypoints take it equally. */
+/**
+ * A call site the join reached and did not link: no route takes it and it names no host, several entrypoints take it
+ * equally, or a route could take it depending on the value the code fills at run time.
+ */
 export interface UnlinkedCallSite {
   from: Link["from"];
   transport: Link["transport"];
-  outcome: "unmatched" | "ambiguous";
-  /** The path no route took when `unmatched`; the prefix or destination that matched when `ambiguous`. */
+  outcome: "unmatched" | "ambiguous" | "could-match";
+  /** The path no route took when `unmatched`, or some could when `could-match`; the prefix or destination that matched when `ambiguous`. */
   name: string;
   /** The repositories that matched equally, sorted; only when `ambiguous`. */
   repos?: readonly string[];
+  /** The routes that took the call equally, sorted; only when an HTTP call is `ambiguous`. */
+  routes?: readonly string[];
 }
 
 /** The ids of the links crossed from the change, nearest first. */

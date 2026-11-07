@@ -1,6 +1,6 @@
 import type { LibrarySource } from "./library-source.ts";
 import type { HttpMethod } from "../entrypoints/http-route.ts";
-import { declarationSpan, type Evidence, type Finding, type UnknownReason } from "../shared/fact.ts";
+import { declarationSpan, type Cut, type Evidence, type Finding, type UnknownReason } from "../shared/fact.ts";
 
 /** A call one repository makes out of itself: an HTTP request or a published message, with where it is written. */
 export interface CallSite {
@@ -45,8 +45,6 @@ export interface HttpTarget {
   method: HttpMethod;
   path: string;
   base?: string;
-  /** The contract operation a generated client names, when the call is made through one. */
-  operationId?: string;
 }
 
 export function httpTargetOf(site: CallSite): HttpTarget | undefined {
@@ -108,6 +106,11 @@ export interface UnresolvedCallSite {
 /** The place a call site is written, as the evidence of the finding that reports it. */
 export function callSiteEvidence(site: CallSite): Evidence {
   return site.endLine === undefined ? { path: site.file, line: site.line } : { path: site.file, line: site.line, endLine: site.endLine };
+}
+
+/** A call site the join reached and could not settle, as the cut of its repository's section: its file, then its place. */
+export function unsettledCallSiteCut(site: CallSite): Cut {
+  return { kind: "unresolved-link", at: [site.file, `${site.file}:${site.line}`] };
 }
 
 /** A call site the snapshot cannot decide, as the workspace reports it: what is known, never only its place. */
