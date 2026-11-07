@@ -51,7 +51,7 @@ async function trace(target: string, ...also: string[]): Promise<{ status: strin
 
 const effectsOf = (value: TraceValue) => value.steps.flatMap((step) => (step.effects ?? []).map((effect) => [step.symbol, effect]));
 
-test("an Angular HttpClient request is an http effect of the body that makes it, with its path; through a wrapper, of the caller that names the path", async () => {
+test("a direct Angular HttpClient request has its effect and an unexpanded wrapper remains an effect cut", async () => {
   commit({
     "src/api.client.ts": `import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
@@ -88,7 +88,8 @@ export class OrdersApi {
   const checkout = await trace("src/orders.api.ts:OrdersApi.checkout");
   const cancel = await trace("src/orders.api.ts:OrdersApi.cancel");
 
-  assert.deepEqual(effectsOf(checkout.value), [["checkout", { kind: "http", line: 11, target: { method: "POST", path: "/orders/checkout" } }]]);
+  assert.deepEqual(effectsOf(checkout.value), []);
+  assert.ok(checkout.cuts?.some((cut) => cut.at[0]?.includes("http effect")));
   assert.deepEqual(effectsOf(cancel.value), [["cancel", { kind: "http", line: 15, target: { method: "DELETE", path: "/api/orders/{}" } }]]);
 });
 
@@ -341,4 +342,30 @@ class Flow {
   assert.ok(undecided.cuts?.some((cut) => cut.at[0]?.includes("http effect")));
   const emit = await trace("src/Flow.java:Client.emit");
   assert.ok(effectsOf(emit.value).some(([, effect]) => typeof effect === "object" && effect.kind === "message"));
+});
+
+test("TypeScript wrapper effects require a traversed wrapper body and remain visible at that body as a root", async () => {
+  commit({
+    "src/client.ts": `import { HttpClient } from '@angular/common/http';
+import { inject } from '@angular/core';
+export class Client {
+  http = inject(HttpClient);
+  post(path: string) { return this.http.post(path, {}); }
+}
+export function run(client: Client) { client.post('/unproven'); }
+export class NominalClient {
+  private readonly http = inject(HttpClient);
+  post(path: string) { return this.http.post('/api' + path, {}); }
+}
+export function proven(client: NominalClient) { client.post('/proven'); }
+`,
+  });
+  const run = await trace("src/client.ts:run");
+  assert.deepEqual(effectsOf(run.value), []);
+  assert.ok(run.cuts?.some((cut) => cut.at[0]?.includes("http effect")));
+  const proven = await trace("src/client.ts:proven");
+  assert.equal(effectsOf(proven.value).length, 1);
+  assert.ok(!proven.cuts?.some((cut) => cut.at[0]?.includes("http effect")));
+  const client = await trace("src/client.ts:Client.post");
+  assert.ok(client.cuts?.some((cut) => cut.at[0]?.includes("http effect")));
 });

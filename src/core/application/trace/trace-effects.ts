@@ -1,3 +1,4 @@
+import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
 import type { PlacedCallSite } from "../../domain/topology/call-site.ts";
@@ -41,6 +42,7 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
   if (expanded.size === 0) return [];
   const files = new Set([...expanded.values()].map((step) => step.declaration.file));
   const cuts: Cut[] = [];
+  const pending: { step: WalkedStep; owner: GraphNodeId; at: string; origins: PlacedCallSite["origins"]; bodies: ReadonlySet<GraphNodeId>; read: ReturnType<typeof effectOf> }[] = [];
   const knownBodies = new Map<string, Body[]>();
   const bodiesOf = (file: string): Body[] => {
     let bodies = knownBodies.get(file);
@@ -73,7 +75,8 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
         continue;
       }
       const reached = placed.origins === undefined ? undefined : expandedSteps(step.children.filter((child) => child.at?.line === site.line && child.at.column === placed.column! + 1));
-      let proven = true;
+      const producingBodies = new Set<GraphNodeId>();
+      let proven = placed.origins === undefined || placed.origins.length > 0;
       for (const origin of placed.origins ?? []) {
         const sourceBodies = bodiesOf(origin.file);
         const body = owningBody(sourceBodies, origin);
@@ -82,20 +85,40 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
           proven = false;
           break;
         }
+        producingBodies.add(body.symbol.id);
       }
       if (!proven) {
         markCut(step, unplacedEffect(site), cuts);
         continue;
       }
-      const read = effectOf(site);
-      if ("effect" in read) {
-        const effects = (step.effects ??= []);
-        if (!effects.some((effect) => JSON.stringify(effect) === JSON.stringify(read.effect))) effects.push(read.effect);
-      }
-      else markCut(step, read.cut, cuts);
+      pending.push({ step, owner: owner.symbol.id, at: originKey({ file, ...at }), origins: placed.origins, bodies: producingBodies, read: effectOf(site) });
     }
   }
+  const coveredBodies = new Set<GraphNodeId>();
+  const coveredOrigins = new Set<string>();
+  const retained = new Set<(typeof pending)[number]>();
+  for (const item of pending.toSorted((a, b) => (b.origins?.length ?? 0) - (a.origins?.length ?? 0))) {
+    const covered = item.origins === undefined ? coveredOrigins.has(item.at) : item.origins.every((origin) => coveredOrigins.has(originKey(origin)));
+    if (coveredBodies.has(item.owner) && covered) continue;
+    retained.add(item);
+    if ("effect" in item.read) {
+      for (const origin of item.origins ?? []) coveredOrigins.add(originKey(origin));
+      for (const body of item.bodies) coveredBodies.add(body);
+    }
+  }
+  for (const item of pending) {
+    if (!retained.has(item)) continue;
+    if ("effect" in item.read) {
+      const effects = (item.step.effects ??= []);
+      const effect = item.read.effect;
+      if (!effects.some((existing) => canonicalJson(existing) === canonicalJson(effect))) effects.push(effect);
+    } else markCut(item.step, item.read.cut, cuts);
+  }
   return cuts;
+}
+
+function originKey(at: { file: string; line: number; column: number }): string {
+  return JSON.stringify([at.file, at.line, at.column]);
 }
 
 /**

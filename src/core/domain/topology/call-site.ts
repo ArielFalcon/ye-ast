@@ -78,7 +78,7 @@ export interface PlacedCallSite {
   site: CallSite;
   column?: number;
   declaration?: true;
-  /** Source bodies and effect occurrences traversed by interprocedural extraction; trace must prove each runs. */
+  /** Source bodies and occurrences used by extraction; empty means no propagated proof, absent means a direct site. */
   origins?: readonly { file: string; line: number; column: number }[];
 }
 
