@@ -168,6 +168,19 @@ function atRung(rung: (target: HttpTarget, routes: readonly HttpRoute[]) => Matc
   return rest.length === 0 ? first : { ambiguous: landed.map((candidate) => candidate.repo).sort(compareText) };
 }
 
+/** The one route of one repository a declared operation lands on, or the repositories that serve it equally. */
+export type DeclaredOperationMatch = { repo: string; route: HttpRoute } | { ambiguous: readonly string[] };
+
+/**
+ * The route that serves an operation a contract declares, by the rungs of the ladder that name a path exactly: an equal
+ * path, then the base path a route's configuration adds. Two repositories serving it equally are ambiguous, never a pick.
+ */
+export function matchDeclaredOperation(target: HttpTarget, repositories: readonly RepositoryEntrypoints[]): DeclaredOperationMatch | undefined {
+  const landed = atRung(exactMatch, target, repositories) ?? atRung(basePathMatch, target, repositories);
+  if (landed === undefined || "ambiguous" in landed) return landed;
+  return { repo: landed.repo, route: landed.match.route };
+}
+
 /**
  * The link a call site makes against the routes of the repositories given, by the ladder of RFC-0011: an equal path; a
  * gateway prefix, declared or inferred, removed from the call; the base path a route's configuration adds; a path that

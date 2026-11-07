@@ -17,7 +17,7 @@ const CHANGE_KINDS = [...NAMED_KINDS, "renamed", "type", "values", "wrapped", "m
 type ChangeKind = (typeof CHANGE_KINDS)[number];
 
 /** The kinds a `type` change can state: every class but the absences. */
-const TYPE_KINDS: readonly ValueClass[] = ["boolean", "number", "string", "array", "object"];
+export const TYPE_KINDS: readonly ValueClass[] = ["boolean", "number", "string", "array", "object"];
 
 /** The literals a `values` change lets in and the ones it no longer produces, each list sorted and without repeats. */
 export interface ValueLiterals {
@@ -158,7 +158,7 @@ function valuesOf(written: unknown): { values: ValueLiterals } | undefined {
 }
 
 /** A missing list is empty; anything but a list of strings, finite numbers and booleans is not a list of literals. */
-function literalsOf(written: unknown): Literal[] | undefined {
+export function literalsOf(written: unknown): Literal[] | undefined {
   if (written === undefined) return [];
   if (!Array.isArray(written) || !written.every(isLiteral)) return undefined;
   const literals = [...new Set<Literal>(written)];

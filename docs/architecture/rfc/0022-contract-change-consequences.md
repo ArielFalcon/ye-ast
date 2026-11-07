@@ -383,6 +383,11 @@ every path that reaches it (`billing.city` and `shipping.city` both). A path tha
 - A declared contract document wins over the code that implements it; a declared document the reader cannot read is
   `unknown`, never replaced by the code's shape. The application decides this precedence.
 
+**Operation identity.** A document operation is named as the route of the handler that serves it names it (equal path,
+then the configured base path, through the join's matching), since a route's name excludes its base path; an operation
+no route or several repositories serve is a frontier. A contract file's references are read at the same revision, and a
+reference the reader cannot resolve keeps its file among the shape's sources, so the operation is never dropped.
+
 **Answer.** One fact over the change: for each property path with a delta, the derived change (normalized, with the base
 value set as the old guarantee), the base and head places in the contract as evidence, and its consequences as P2
 answers them, on the head snapshot, from one prepared workspace (P3). Gained guarantees are listed, not followed. An
@@ -442,7 +447,7 @@ literal with a substitution) or a frontier with its reason. Only an exact origin
 | `c ? a : b` | each branch, under its condition |
 | `a ?? b`, `a \|\| b` | the left values that pass the operator's test, and the right only when the left can fail it; a left side whose test is undecidable keeps the uncertainty and proves nothing about the right |
 | a parenthesis, `as`, `!`, `satisfies` | the operand |
-| a local binding | its initializer, only when it reaches the read unchanged: no reassignment between them and, for an object, no write to it, no alias, and no call or closure it escapes to; otherwise a frontier |
+| a local binding, or a name destructured from an object (`const { a } = x`, no default, rest or nested pattern, read as `x.a`) | its initializer, only when it reaches the read unchanged: no reassignment between them and, for an object, no write to it, no alias, and no call or closure it escapes to; otherwise a frontier |
 | a parameter | the argument of each proven call, in that call's context; its default when the argument is omitted or `undefined` (never `null`); missing or unresolved callers are a frontier, and no caller is never "no origin"; destructuring, spread arguments, rest parameters and `arguments` are a frontier |
 | a call through a wrapper method (the P1.5 fixpoint) | the wrapped call's body inside the wrapper, its parameters bound to this call's arguments, each call kept apart |
 | `JSON.stringify(x)` without replacer or indent arguments | `x`, serialized |
@@ -455,7 +460,9 @@ or array as JSON, passes a string through, and sends `FormData`, `Blob`, `ArrayB
 format. A string body is followed only when it is a `JSON.stringify` of a followed value; any other format, or an
 interceptor that replaces the body, is a frontier. Under JSON serialization an `undefined`, a function or a symbol drops
 an object property and becomes `null` in an array slot, and a non-finite number becomes `null`; a `toJSON` on the value
-or an ancestor is a frontier.
+or an ancestor is a frontier. `JSON.stringify(x)` is the body's own serialization only along the chain that is the body
+itself (bindings, parameters, conditionals, `??`); inside an object property it is a string, so a deeper path is a
+frontier.
 
 **Verdict per producer** (domain, pure). `incompatible` when an exact origin on a modelled branch writes a rejected wire
 value, with the value, its place, the chain from the call site and the branch conditions it holds under. `admits` when
@@ -463,11 +470,13 @@ every origin of that producer is covered and every wire value it can write lies 
 about the rest of the request. `review` otherwise, each frontier an `unknown` finding at its place. An empty origin set
 never admits. The denominator is producer x followed path: a body can be decided at `id` and unknown at `name`.
 
-**First slice (P5.1).** Declared request hypotheses (`required`, `non-nullable`, removed literals) over qualified HTTP
-links; the origin rows above; the transport step for plain objects and `JSON.stringify`; frontiers elsewhere. Gate:
+**First slice (P5.1).** Declared request hypotheses (`required`, `non-nullable`, removed literals, `{ "type": class }`)
+over qualified HTTP links; a body located at a `post`, `put` or `patch` of `HttpClient` or of a wrapper (the bodies of
+`request`, `fetch` and `httpResource` are `untracked`); the origin rows above; the transport step for plain objects and `JSON.stringify`; frontiers elsewhere. Gate:
 petclinic's literal fields (`vet-add.component.ts` writes `id: null` beside form values) and jhipster's small account
 payloads, with negative controls, zero false `incompatible`/`admits`, frontiers counted by reason, latency and peak RSS
-per query against the response family.
+per query against the response family. A request answer lists each producer as a complete finding with its verdict,
+witness and chain, and states that the old contract accepted the rejected values.
 
 **Server shapes (later slice, after the gate).** The shape port gains request bodies so a diff derives rejections:
 

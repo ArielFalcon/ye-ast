@@ -45,7 +45,7 @@ export interface UnknownShape {
 
 export type Shape = KnownShape | UnknownShape;
 
-/** A shape and the repository files it was read from, sorted. */
+/** A shape and the repository files it depends on, sorted: the ones it was read from, and the ones a reference names that could not be read, so a revision that holds one it did not hold before changes the shape. */
 export interface ReadShape {
   shape: Shape;
   files: readonly string[];

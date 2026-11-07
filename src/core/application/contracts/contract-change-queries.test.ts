@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { KnownShape, OperationShape, Shape, ShapeProperty, ValueSet } from "../../domain/contracts/payload-shape.ts";
 import type { Cut, Finding } from "../../domain/shared/fact.ts";
-import type { ConsumerSession, ConsumerSources } from "../../ports/consumer-sources.port.ts";
+import type { ConsumerSession, ConsumerSources, ServingWorkspace, ServingOperation } from "../../ports/consumer-sources.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PayloadShapes } from "../../ports/payload-shapes.port.ts";
 import type { WorkspaceRequest } from "../../ports/workspace-queries.port.ts";
@@ -45,25 +45,62 @@ function reader(name: string, calls: string[] = []): PayloadShapes {
   };
 }
 
+/** Every declared operation is served as it is written. */
+const asWritten: ServingWorkspace["serving"] = ({ method, path }) => ({ kind: "served", method, path });
+const changeOf = (base: readonly SourceFile[], head: readonly SourceFile[], shapes: readonly PayloadShapes[], serving: ServingWorkspace["serving"] = asWritten) => planChange(base, head, shapes, serving);
+
 const PET_BASE = object(property("city", TEXT), property("zip", TEXT));
 const PET_HEAD = object(property("city", NULLABLE_TEXT), property("zip", NULLABLE_TEXT));
 
 test("every operation whose sources changed derives its hypotheses, sorted by operation then property, each with its places in the contract at both revisions", () => {
   const base = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_BASE }, { path: "/owners", shape: PET_BASE }])];
   const head = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_HEAD }, { path: "/owners", shape: PET_HEAD, method: "POST" }, { path: "/owners", shape: PET_HEAD }])];
-  const plan = planChange(base, head, [reader("declared")]);
+  const plan = changeOf(base, head, [reader("declared")]);
   assert.deepEqual(plan.hypotheses.map(({ operation, property: at }) => `${operation} ${at}`), ["GET /owners city", "GET /owners zip", "GET /pets city", "GET /pets zip"]);
   assert.deepEqual(plan.hypotheses[2]!.places, { base: { path: "api/openapi.json", line: 1, via: "declared" }, head: { path: "api/openapi.json", line: 1, via: "declared" } });
   assert.deepEqual(plan.hypotheses[0]!.hypothesis, { method: "GET", path: "/owners", target: "response", property: ["city"], change: plan.hypotheses[0]!.hypothesis.change });
   assert.deepEqual(plan.operations, { added: ["POST /owners"], removed: [] });
 });
 
-test("an operation a document serves under a base path is the one the handler's route names: the base path joined to the path, in the hypothesis and in the lists of added and removed operations", () => {
+/** The workspace serves each path of the table, naming it as its route does; anything else is served by `others`. */
+const servedAs = (table: Record<string, string>, others: ServingOperation = { kind: "unserved" }): ServingWorkspace["serving"] => ({ method, path }) => (table[path] === undefined ? others : { kind: "served", method, path: table[path] });
+
+test("an operation a document declares is named as the route that serves it names it, in the hypothesis and an operation no route serves keeps the path the document writes in the lists of added and removed operations", () => {
   const base = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_BASE, basePath: "/api" }, { path: "/gone", shape: PET_BASE, basePath: "/api" }])];
   const head = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_HEAD, basePath: "/api" }, { path: "/new", shape: PET_HEAD, basePath: "/api" }])];
-  const plan = planChange(base, head, [reader("declared")]);
-  assert.deepEqual(plan.hypotheses.map(({ hypothesis, operation }) => [hypothesis.path, operation]), [["/api/pets", "GET /api/pets"], ["/api/pets", "GET /api/pets"]]);
+  const plan = changeOf(base, head, [reader("declared")], servedAs({ "/api/pets": "/pets" }));
+  assert.deepEqual(plan.hypotheses.map(({ hypothesis, operation }) => [hypothesis.method, hypothesis.path, operation]), [["GET", "/pets", "GET /pets"], ["GET", "/pets", "GET /pets"]]);
   assert.deepEqual(plan.operations, { added: ["GET /api/new"], removed: ["GET /api/gone"] });
+});
+
+test("an operation no route serves, or several repositories serve, is a frontier with its places and derives nothing; one whose sources did not change is not reported", () => {
+  const base = [fileOf("api/openapi.json", [{ path: "/lost", shape: PET_BASE }, { path: "/twin", shape: PET_BASE }, { path: "/still", shape: PET_BASE }])];
+  const head = [fileOf("api/openapi.json", [{ path: "/lost", shape: PET_HEAD }, { path: "/twin", shape: PET_HEAD }, { path: "/still", shape: PET_BASE }])];
+  const serving: ServingWorkspace["serving"] = ({ method, path }) => (path === "/twin" ? { kind: "ambiguous", repos: ["a", "b"] } : path === "/still" ? { kind: "served", method, path } : { kind: "unserved" });
+  const plan = changeOf(base, head, [reader("declared")], serving);
+  assert.deepEqual(plan.hypotheses, []);
+  assert.deepEqual(plan.frontiers.map(({ kind, operation, detail, evidence }) => [kind, operation, detail, evidence.length]), [
+    ["unserved-operation", "GET /lost", "no route of the workspace serves it", 2],
+    ["ambiguous-operation", "GET /twin", "served by several repositories: a, b", 2],
+  ]);
+});
+
+test("two readers that write one operation with different paths agree on it once the workspace names it, and the first reader's shape wins", () => {
+  const declared = reader("declared");
+  const code = reader("code");
+  const base = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_BASE, basePath: "/api" }]), fileOf("api/code.json", [{ path: "/pets", shape: PET_BASE }])];
+  const head = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_HEAD, basePath: "/api" }]), fileOf("api/code.json", [{ path: "/pets", shape: PET_HEAD }])];
+  const onlyOpenApi: PayloadShapes = { responses: (files) => declared.responses(files.filter((file) => file.path.endsWith("openapi.json"))) };
+  const onlyCode: PayloadShapes = { responses: (files) => code.responses(files.filter((file) => file.path.endsWith("code.json"))) };
+  const plan = changeOf(base, head, [onlyOpenApi, onlyCode], servedAs({ "/api/pets": "/pets", "/pets": "/pets" }));
+  assert.deepEqual(new Set(plan.hypotheses.map(({ operation, places }) => `${operation} ${places.head.via}`)), new Set(["GET /pets declared"]));
+});
+
+test("sources that are the same at both revisions are not read by any reader", () => {
+  const calls: string[] = [];
+  const same = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_BASE }])];
+  assert.deepEqual(changeOf(same, same, [reader("declared", calls)]), { hypotheses: [], gained: [], frontiers: [], operations: { added: [], removed: [] } });
+  assert.deepEqual(calls, []);
 });
 
 test("an operation whose sources are the same at both revisions derives nothing and reports nothing, even when its place is unknown", () => {
@@ -71,7 +108,7 @@ test("an operation whose sources are the same at both revisions derives nothing 
   const untouched = fileOf("api/untouched.json", [{ path: "/stable", shape: unknown }]);
   const base = [untouched, fileOf("api/openapi.json", [{ path: "/pets", shape: PET_BASE }])];
   const head = [untouched, fileOf("api/openapi.json", [{ path: "/pets", shape: PET_HEAD }])];
-  const plan = planChange(base, head, [reader("declared")]);
+  const plan = changeOf(base, head, [reader("declared")]);
   assert.deepEqual(new Set(plan.hypotheses.map(({ operation }) => operation)), new Set(["GET /pets"]));
   assert.deepEqual(plan.frontiers, []);
 });
@@ -82,8 +119,8 @@ test("a file a shape was read through that changed makes the operation changed, 
     responses: (files) => [{ status: "complete", value: { operationId: undefined, method: "GET", path: "/pets", basePath: "", shape: files.some((file) => file.path === "api/types.json" && file.content === "[ ]") ? PET_HEAD : PET_BASE, files: ["api/openapi.json", "api/types.json"] }, evidence: [{ path: "api/openapi.json", line: 1 }] }],
   };
   const types = (content: string): SourceFile => ({ path: "api/types.json", content });
-  assert.equal(planChange([document, types("[]")], [document, types("[ ]")], [throughTypes]).hypotheses.length, 2);
-  assert.equal(planChange([document, types("[]")], [document, types("[]")], [throughTypes]).hypotheses.length, 0);
+  assert.equal(changeOf([document, types("[]")], [document, types("[ ]")], [throughTypes]).hypotheses.length, 2);
+  assert.equal(changeOf([document, types("[]")], [document, types("[]")], [throughTypes]).hypotheses.length, 0);
 });
 
 test("the shape a reader states wins over a later reader's for the same operation, which still serves the operations the first does not state", () => {
@@ -92,11 +129,11 @@ test("the shape a reader states wins over a later reader's for the same operatio
   const base = [fileOf("api/openapi.json", [{ path: "/a", shape: PET_BASE }, { path: "/b", shape: PET_BASE }])];
   const head = [fileOf("api/openapi.json", [{ path: "/a", shape: PET_HEAD }, { path: "/b", shape: PET_BASE }])];
   const onlyDeclaredA: PayloadShapes = { responses: (files) => declared.responses(files).filter((finding) => finding.status === "complete" && finding.value.path === "/a") };
-  const plan = planChange(base, head, [onlyDeclaredA, code]);
+  const plan = changeOf(base, head, [onlyDeclaredA, code]);
   assert.deepEqual([...new Set(plan.hypotheses.flatMap(({ places }) => [places.base.via, places.head.via]))], ["declared"]);
-  const unchanged = planChange(base, base, [onlyDeclaredA, code]);
+  const unchanged = changeOf(base, base, [onlyDeclaredA, code]);
   assert.deepEqual(unchanged.hypotheses, []);
-  const codeB = planChange(base, [fileOf("api/openapi.json", [{ path: "/a", shape: PET_BASE }, { path: "/b", shape: PET_HEAD }])], [onlyDeclaredA, code]);
+  const codeB = changeOf(base, [fileOf("api/openapi.json", [{ path: "/a", shape: PET_BASE }, { path: "/b", shape: PET_HEAD }])], [onlyDeclaredA, code]);
   assert.deepEqual(new Set(codeB.hypotheses.map(({ operation, places }) => `${operation} ${places.head.via}`)), new Set(["GET /b code"]));
 });
 
@@ -105,19 +142,19 @@ test("a declared source a reader cannot read is a frontier and stops the readers
   const base = [fileOf("api/openapi.json", [{ path: "/a", shape: PET_BASE }]), fileOf("api/swagger.json", "unreadable")];
   const head = [fileOf("api/openapi.json", [{ path: "/a", shape: PET_BASE }]), { path: "api/swagger.json", content: `${JSON.stringify("unreadable")} ` }];
   const later = reader("code", calls);
-  const plan = planChange(base, head, [reader("declared", calls), later]);
+  const plan = changeOf(base, head, [reader("declared", calls), later]);
   assert.deepEqual(calls.filter((call) => call === "code"), []);
   assert.deepEqual(plan.frontiers.map(({ kind, evidence }) => [kind, evidence[0]!.path]), [["unreadable-contract", "api/swagger.json"]]);
-  const unchanged = planChange(base, base, [reader("declared"), later]);
+  const unchanged = changeOf(base, base, [reader("declared"), later]);
   assert.deepEqual(unchanged.frontiers, []);
 });
 
 test("an operation declared twice by one reader, or whose servers disagree, is ambiguous: a frontier at every place, no hypothesis", () => {
   const twice = [fileOf("api/openapi.json", [{ path: "/a", shape: PET_BASE }, { path: "/a", shape: PET_BASE }])];
   const head = [fileOf("api/openapi.json", [{ path: "/a", shape: PET_HEAD }, { path: "/a", shape: PET_HEAD }])];
-  const plan = planChange(twice, head, [reader("declared")]);
+  const plan = changeOf(twice, head, [reader("declared")]);
   assert.deepEqual([plan.hypotheses, plan.frontiers.map(({ kind, operation, detail, evidence }) => [kind, operation, detail, evidence.length])], [[], [["ambiguous-operation", "GET /a", "declared more than once", 4]]]);
-  const disagree = planChange([fileOf("api/openapi.json", [{ path: "/a", shape: PET_BASE, basePath: null }])], [fileOf("api/openapi.json", [{ path: "/a", shape: PET_HEAD, basePath: null }])], [reader("declared")]);
+  const disagree = changeOf([fileOf("api/openapi.json", [{ path: "/a", shape: PET_BASE, basePath: null }])], [fileOf("api/openapi.json", [{ path: "/a", shape: PET_HEAD, basePath: null }])], [reader("declared")]);
   assert.deepEqual([disagree.hypotheses, disagree.frontiers.map(({ detail }) => detail)], [[], ["servers disagree"]]);
 });
 
@@ -125,7 +162,7 @@ test("a gained guarantee is listed with its operation, property and places; a pl
   const unknown: Shape = { kind: "unknown", reason: "unresolved", evidence: [{ path: "api/openapi.json", line: 1, via: "oneOf" }] };
   const base = [fileOf("api/openapi.json", [{ path: "/pets", shape: object(property("city", NULLABLE_TEXT), property("owner", TEXT)) }])];
   const head = [fileOf("api/openapi.json", [{ path: "/pets", shape: object(property("city", TEXT), property("owner", unknown)) }])];
-  const plan = planChange(base, head, [reader("declared")]);
+  const plan = changeOf(base, head, [reader("declared")]);
   assert.deepEqual(plan.gained.map(({ operation, property: at, retired }) => [operation, at, retired]), [["GET /pets", "city", "null"]]);
   assert.deepEqual(plan.frontiers.map(({ kind, operation, property: at, side, reason }) => [kind, operation, at, side, reason]), [["unknown-shape", "GET /pets", "owner", "head", "unresolved"]]);
   assert.deepEqual(plan.frontiers[0]!.evidence, unknown.evidence);
@@ -147,7 +184,7 @@ function setup(files: Record<string, readonly SourceFile[]>, refs: Record<string
     withWorkspace: async (request, run) => {
       events.push("open");
       opened.push(request);
-      const value = await run({ session: async (hypothesis) => (events.push(`session ${hypothesis.method} ${hypothesis.path} ${hypothesis.property.join(".")}`), { ok: true, value: session }) });
+      const value = await run({ serving: asWritten, session: async (hypothesis) => (events.push(`session ${hypothesis.method} ${hypothesis.path} ${hypothesis.property.join(".")}`), { ok: true, value: session }) });
       events.push("close");
       return { ok: true, value };
     },

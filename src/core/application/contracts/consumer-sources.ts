@@ -6,12 +6,13 @@ import type { Result } from "../../domain/shared/result.ts";
 import { httpTargetOf, type CallSite } from "../../domain/topology/call-site.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { Link } from "../../domain/topology/link.ts";
-import { matchCallSite, type Gateway } from "../../domain/topology/link-match.ts";
+import { matchCallSite, matchDeclaredOperation, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import type { AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
 import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
 import type { InboundOccurrences } from "../impact/inbound-edges.ts";
 import type { ConsumerFlowReader } from "../../ports/consumer-flow.port.ts";
-import type { ConsumerSession, ConsumerSources } from "../../ports/consumer-sources.port.ts";
+import type { RequestOriginReader } from "../../ports/request-origins.port.ts";
+import type { ConsumerSession, ConsumerSources, ServingOperation } from "../../ports/consumer-sources.port.ts";
 import type { ConsumerTemplateReader } from "../../ports/consumer-template.port.ts";
 import type { TemplateFlowReader } from "../../ports/consumer-template-flow.port.ts";
 import type { WorkspaceFault, WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
@@ -27,7 +28,7 @@ import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import { ABORTED, declaredTrustOf, withScratch } from "../snapshot/read-snapshot.ts";
 import type { WorkspaceReadOperation } from "../topology/workspace-operation.ts";
 import type { WorkspaceSnapshotContext } from "../topology/workspace-snapshots.ts";
-import type { Handler } from "../../domain/entrypoints/http-route.ts";
+import type { Handler, HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { entrypointsOf } from "../topology/workspace-join.ts";
 import { callersOfFunction, occurrencesOfMember } from "./consumer-callers.ts";
 import { createConsumerTemplateReader } from "./consumer-templates.ts";
@@ -38,6 +39,8 @@ export interface ConsumerSourcesDeps {
   digest: Digest;
   /** Reads the TypeScript sources of one repository and follows a value through them. */
   flow(files: readonly SourceFile[], repo: string): Promise<ConsumerFlowReader>;
+  /** Reads the TypeScript sources of one repository and follows a request body back to what builds it. */
+  origins(files: readonly SourceFile[]): RequestOriginReader;
   metadata: AngularMetadataReader;
   templateFlow: TemplateFlowReader;
   /** The injection and template relations, fields and locals that let the callers of a function see calls made through `inject()`. */
@@ -52,6 +55,7 @@ type ReadPlan = Extract<WorkspaceSnapshotContext["plans"][number], { kind: "read
 
 interface Reading {
   flow: ConsumerFlowReader;
+  origins: RequestOriginReader;
   templates: ConsumerTemplateReader;
   graph: CodeGraphReader | undefined;
   inbound: InboundOccurrences | undefined;
@@ -74,6 +78,8 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
           const readings = new Map<string, Promise<Result<Reading, WorkspaceFault>>>();
           const stores: CodeGraphReader[] = [];
           let workspaceJoin: WorkspaceHttpJoin | undefined;
+          let routes: RepositoryEntrypoints[] | undefined;
+          const entrypointsOfWorkspace = (): RepositoryEntrypoints[] => (routes ??= fact.value.repositories.map(entrypointsOf));
 
           const readRepository = async (plan: ReadPlan): Promise<Result<Reading, WorkspaceFault>> => {
             const trust = (await declaredTrustOf(deps.heads, plan.at.declared)) ?? "untrusted";
@@ -92,6 +98,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
               ok: true,
               value: {
                 flow: await deps.flow(sources, plan.at.repoId),
+                origins: deps.origins(sources),
                 templates: await createConsumerTemplateReader({ metadata: deps.metadata, flow: deps.templateFlow }, sources),
                 graph: indexed === "unavailable" ? undefined : indexed.store,
                 inbound: indexed === "unavailable" || origins === undefined ? undefined : inboundEdgesOf(indexed.store, origins, proofs),
@@ -113,7 +120,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
 
           const session = async (hypothesis: Hypothesis): Promise<Result<ConsumerSession, WorkspaceFault>> => {
             const operation = `${hypothesis.method} ${hypothesis.path}`;
-            const join = (workspaceJoin ??= joinHttpCalls(fact.value.repositories, fact.value.workspace.gateways));
+            const join = (workspaceJoin ??= joinHttpCalls(fact.value.repositories, entrypointsOfWorkspace(), fact.value.workspace.gateways));
             const callers = new Set(join.links.filter((link) => isCallOf(link, operation)).map((link) => link.from.repo));
 
             const reached = new Map<string, Reading>();
@@ -151,11 +158,12 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
                 },
                 flow: { follow: (carrier) => reached.get(carrier.site.repo)?.flow.follow(carrier) ?? sourceUnreadable(carrier.site) },
                 templates: { follow: (carrier) => reached.get(carrier.site.repo)?.templates.follow(carrier) ?? sourceUnreadable(carrier.site) },
+                requestOrigins: (repo) => reached.get(repo)?.origins,
               },
             };
           };
           try {
-            return { ok: true, value: await use({ session }) };
+            return { ok: true, value: await use({ session, serving: (declared) => servingOperation(declared, entrypointsOfWorkspace()) }) };
           } finally {
             for (const store of stores) store.close();
           }
@@ -182,8 +190,7 @@ interface WorkspaceHttpJoin {
  * The HTTP call sites of the workspace decided once each, against the routes of every repository including their own. A
  * call site two repositories serve equally is ambiguous, never linked to its own.
  */
-function joinHttpCalls(repositories: readonly WorkspaceRepository[], gateways: readonly Gateway[]): WorkspaceHttpJoin {
-  const entrypoints = repositories.map(entrypointsOf);
+function joinHttpCalls(repositories: readonly WorkspaceRepository[], entrypoints: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): WorkspaceHttpJoin {
   const links = new Map<string, Link>();
   const ambiguousCalls: WorkspaceHttpJoin["ambiguousCalls"][number][] = [];
   const unresolvedCalls: ConsumerSession["unresolvedCalls"][number][] = [];
@@ -216,6 +223,13 @@ function joinHttpCalls(repositories: readonly WorkspaceRepository[], gateways: r
     ambiguousCalls: ambiguousCalls.sort((a, b) => byPlace(a.from, b.from)),
     serving,
   };
+}
+
+function servingOperation(declared: { method: HttpMethod; path: string }, entrypoints: readonly RepositoryEntrypoints[]): ServingOperation {
+  const matched = matchDeclaredOperation(declared, entrypoints);
+  if (matched === undefined) return { kind: "unserved" };
+  if ("ambiguous" in matched) return { kind: "ambiguous", repos: matched.ambiguous };
+  return { kind: "served", method: matched.route.method, path: matched.route.path };
 }
 
 function httpRouteName(link: Link): string | undefined {

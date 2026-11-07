@@ -1,10 +1,11 @@
-import type { Handler } from "../domain/entrypoints/http-route.ts";
+import type { Handler, HttpMethod } from "../domain/entrypoints/http-route.ts";
 import type { Hypothesis } from "../domain/contracts/hypothesis.ts";
 import type { Cut, FactBase } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { Link } from "../domain/topology/link.ts";
 import type { ConsumerFlowReader } from "./consumer-flow.port.ts";
 import type { ConsumerTemplateReader } from "./consumer-template.port.ts";
+import type { RequestOriginReader } from "./request-origins.port.ts";
 import type { WorkspaceRequest } from "./workspace-queries.port.ts";
 import type { WorkspaceFault } from "./workspace-repos.port.ts";
 
@@ -66,7 +67,12 @@ export interface ConsumerSession {
   memberOccurrences(member: { repo: string; file: string; owner: string; member: string }): ConsumerMemberOccurrences;
   flow: ConsumerFlowReader;
   templates: ConsumerTemplateReader;
+  /** The reader of request bodies of a repository the session reads; a repository it does not read has none. */
+  requestOrigins(repo: string): RequestOriginReader | undefined;
 }
+
+/** The operation of the workspace that serves a path a contract declares, as the route of its handler names it. */
+export type ServingOperation = { kind: "served"; method: HttpMethod; path: string } | { kind: "ambiguous"; repos: readonly string[] } | { kind: "unserved" };
 
 /** A workspace read once for a set of hypotheses: everything a hypothesis does not change. */
 export interface PreparedWorkspace {
@@ -74,7 +80,13 @@ export interface PreparedWorkspace {
   session(hypothesis: Hypothesis): Promise<Result<ConsumerSession, WorkspaceFault>>;
 }
 
+/** A prepared workspace that also names the operations a contract declares as the routes of its handlers do. */
+export interface ServingWorkspace extends PreparedWorkspace {
+  /** Which route serves the operation a contract declares, by the same matching that links a call to a route; no route and several repositories are answers of their own. */
+  serving(declared: { method: HttpMethod; path: string }): ServingOperation;
+}
+
 export interface ConsumerSources {
   /** Prepares the workspace, runs `use` and releases what it held, whether `use` answers or throws. */
-  withWorkspace<T>(request: WorkspaceRequest, use: (workspace: PreparedWorkspace) => Promise<T>): Promise<Result<T, WorkspaceFault>>;
+  withWorkspace<T>(request: WorkspaceRequest, use: (workspace: ServingWorkspace) => Promise<T>): Promise<Result<T, WorkspaceFault>>;
 }

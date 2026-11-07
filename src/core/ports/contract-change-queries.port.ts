@@ -36,7 +36,7 @@ export interface GainedGuaranteeItem {
 
 /** A place the change could not be derived at, so nothing at or below it is decided. */
 export interface ChangeFrontier {
-  kind: DerivationFrontier["kind"] | "ambiguous-operation" | "unreadable-contract";
+  kind: DerivationFrontier["kind"] | "ambiguous-operation" | "unserved-operation" | "unreadable-contract";
   operation?: string;
   property?: string;
   side?: "base" | "head";

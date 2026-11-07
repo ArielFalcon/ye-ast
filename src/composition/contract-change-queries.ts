@@ -1,3 +1,4 @@
+import { missingReferences } from "../core/adapters/openapi/contract-document.adapter.ts";
 import { createPayloadShapes } from "../core/adapters/openapi/payload-shapes.adapter.ts";
 import { extractRoutes } from "../core/adapters/spring/spring-routes.adapter.ts";
 import { createSpringPayloadShapes } from "../core/adapters/spring/spring-payload-shapes.adapter.ts";
@@ -11,7 +12,7 @@ import type { ContractChangeQueries } from "../core/ports/contract-change-querie
 import type { ConsumerSources } from "../core/ports/consumer-sources.port.ts";
 import type { ContractRoutes } from "../core/ports/contract-routes.port.ts";
 
-/** What the shape readers read of a commit: Java sources, contract documents and the configuration the mapper reads. */
+/** What the shape readers read of a commit before the files its contract documents reference: Java sources, contract documents and the configuration the mapper reads. */
 const isShapeSource = (path: string): boolean => (isJavaSource(path) && !isJvmTestFile(path)) || isExtractorConfiguration(path);
 
 /**
@@ -20,7 +21,7 @@ const isShapeSource = (path: string): boolean => (isJavaSource(path) && !isJvmTe
  * trust declaration, and `contracts` is the one the entrypoint wiring reads routes with.
  */
 export function composeContractChangeQueries(deps: { sources: ConsumerSources; heads: HeadReaderDeps; contracts: ContractRoutes }): ContractChangeQueries {
-  const revisions = createRevisionSources({ ...deps.heads, sourceSelection: isShapeSource });
+  const revisions = createRevisionSources({ ...deps.heads, sourceSelection: isShapeSource, dependencies: missingReferences });
   let ready: Promise<ContractChangeQueries> | undefined;
   const queries = (): Promise<ContractChangeQueries> => (ready ??= createJavaParser().then((parser) => createContractChangeQueries({
     sources: deps.sources,

@@ -207,3 +207,42 @@ test("an untrusted repository is read from its commits: an uncommitted edit of t
 
   assert.deepEqual(change.derived.map(({ property, change: kind }) => [property, kind]), [["customer", "nullable"]]);
 });
+
+test("a schema a document references from outside the contract directory is part of the revision, so changing only that schema derives the hypothesis", async () => {
+  const document = JSON.parse(DOCUMENT(CUSTOMER));
+  document.paths["/orders/{id}"].get.responses[200].content["application/json"].schema = { $ref: "../../schemas/order.json" };
+  const schema = (customer: Record<string, unknown>) => JSON.stringify({ type: "object", required: ["customer"], properties: { customer } });
+  const base = commit("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER("String"), [DOCUMENT_FILE]: JSON.stringify(document), "src/main/schemas/order.json": schema(CUSTOMER) });
+  const head = commit("api", { "src/main/schemas/order.json": schema({ ...CUSTOMER, nullable: true }) });
+  commit("web", WEB);
+
+  const change = await changeOfOrders(base, head);
+
+  assert.deepEqual(change.derived.map(({ operation, property, change: kind }) => [operation, property, kind]), [["GET /api/orders/{id}", "customer", "nullable"]]);
+});
+
+test("a referenced schema the base revision does not hold is a frontier of the operation, never an unchanged one", async () => {
+  const document = JSON.parse(DOCUMENT(CUSTOMER));
+  document.paths["/orders/{id}"].get.responses[200].content["application/json"].schema = { $ref: "../../schemas/order.json" };
+  const base = commit("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER("String"), [DOCUMENT_FILE]: JSON.stringify(document) });
+  const head = commit("api", { "src/main/schemas/order.json": JSON.stringify({ type: "object", properties: { customer: CUSTOMER } }) });
+  commit("web", WEB);
+
+  const change = await changeOfOrders(base, head);
+
+  assert.deepEqual(change.derived, []);
+  assert.deepEqual(change.frontiers.map(({ kind, operation, side, reason }) => [kind, operation, side, reason]), [["unknown-shape", "GET /api/orders/{id}", "base", "unresolved"]]);
+  assert.deepEqual(change.frontiers[0]!.evidence[0]!.via, "unresolved reference ../../schemas/order.json");
+});
+
+test("a document operation is named as the handler that serves it names it: a configured context path is not part of the hypothesis", async () => {
+  const handler = CONTROLLER("String").replace("/api/orders", "/orders");
+  const base = commit("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": handler, "src/main/resources/application.properties": "server.servlet.context-path=/api\n", [DOCUMENT_FILE]: DOCUMENT(CUSTOMER) });
+  const head = commit("api", { [DOCUMENT_FILE]: DOCUMENT({ ...CUSTOMER, nullable: true }) });
+  commit("web", WEB);
+
+  const change = await changeOfOrders(base, head);
+
+  assert.deepEqual(change.derived.map(({ operation, property }) => [operation, property]), [["GET /orders/{id}", "customer"]]);
+  assert.ok(change.derived[0]!.consequences.ok, JSON.stringify(change.derived[0]!.consequences));
+});

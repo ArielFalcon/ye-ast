@@ -87,7 +87,10 @@ function createReader(referenced: ReferencedDocuments, place: Evidence, document
       const ref = current.node.$ref;
       if (Object.keys(current.node).some((key) => key !== "$ref" && !DOCUMENTATION.has(key))) return unknown(`reference with siblings ${ref}`);
       const target = targetOf(current.file, ref, referenced);
-      if ("unresolved" in target) return unknown(`unresolved reference ${ref}`);
+      if ("unresolved" in target) {
+        if (target.unresolved.file !== undefined) files.add(target.unresolved.file);
+        return unknown(`unresolved reference ${ref}`);
+      }
       const key = `${target.file}#${target.pointer}`;
       if (followed.has(key)) return unknown(`reference cycle ${key}`);
       followed.add(key);

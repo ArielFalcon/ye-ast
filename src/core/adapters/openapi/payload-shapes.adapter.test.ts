@@ -69,6 +69,13 @@ test("a reference into another file is followed and that file is listed among th
   assert.deepEqual(result.files, ["api/openapi.yml", "api/types.yml"]);
 });
 
+test("a reference the sources cannot answer keeps the file it names among the files of the shape, so a revision that holds the file changes the shape", () => {
+  const main = document({}, { "200": response({ $ref: "types.yml#/Pet" }) });
+  const [absent, held] = [rootOf([main]), rootOf([main, { path: "api/types.yml", content: JSON.stringify({ Pet: STRING }) }])];
+  assert.deepEqual([absent.shape.kind, absent.files], ["unknown", ["api/openapi.yml", "api/types.yml"]]);
+  assert.deepEqual([held.shape.kind, held.files], ["known", ["api/openapi.yml", "api/types.yml"]]);
+});
+
 test("oneOf, anyOf, not, a schema in additionalProperties, a reference that cannot be followed and one with sibling keywords are unknown at their place, with it in the evidence, and the rest is still read", () => {
   const root = rootOf([
     document({ Root: { type: "object", properties: { a: { oneOf: [STRING] }, b: { anyOf: [STRING] }, c: { not: STRING }, d: { type: "object", additionalProperties: STRING }, e: { $ref: "#/components/schemas/Missing" }, g: { $ref: "#/components/schemas/Other", nullable: true }, f: STRING } }, Other: STRING }),

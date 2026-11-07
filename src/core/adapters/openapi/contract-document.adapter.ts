@@ -207,19 +207,52 @@ function withoutDocumentation(node: unknown, parentKey: string | undefined, onRe
 
 export type Target = { file: string; pointer: string; node: unknown } | { unresolved: UnresolvedReference };
 
-/** The place a reference names: a JSON pointer into its own document or into another source of the repository. */
-export function targetOf(from: string, ref: string, referenced: ReferencedDocuments): Target {
+/** The repository file a reference names, `undefined` for one that names none a repository can hold: a remote location, an absolute path, or a path above the root. */
+function fileOfReference(from: string, ref: string): string | undefined {
   const hash = ref.indexOf("#");
   const location = hash === -1 ? ref : ref.slice(0, hash);
-  const pointer = hash === -1 ? "" : ref.slice(hash + 1);
-  if (/^[a-z][a-z0-9+.-]*:/i.test(location)) return { unresolved: { ref } };
+  if (/^[a-z][a-z0-9+.-]*:/i.test(location)) return undefined;
+  if (location === "") return from;
   const decoded = percentDecoded(location);
-  const file = location === "" ? from : decoded === undefined || posix.isAbsolute(decoded) ? undefined : posix.join(posix.dirname(from), decoded);
-  if (file === undefined || file.startsWith("../")) return { unresolved: { ref } };
+  const file = decoded === undefined || posix.isAbsolute(decoded) ? undefined : posix.join(posix.dirname(from), decoded);
+  return file === undefined || file.startsWith("../") ? undefined : file;
+}
+
+/** The place a reference names: a JSON pointer into its own document or into another source of the repository. */
+export function targetOf(from: string, ref: string, referenced: ReferencedDocuments): Target {
+  const file = fileOfReference(from, ref);
+  if (file === undefined) return { unresolved: { ref } };
+  const hash = ref.indexOf("#");
+  const pointer = hash === -1 ? "" : ref.slice(hash + 1);
   const parsed = referenced.get(file);
   if (parsed === undefined) return { unresolved: { ref, file } };
   const node = pointer === "" ? parsed.content : nodeAt(parsed.content, pointer);
   return node === undefined ? { unresolved: { ref, file } } : { file, pointer, node };
+}
+
+/**
+ * The repository files the contract documents among `files` reference, directly or through the files they reference, that
+ * `files` does not hold: what a read of the sources must still take for the references to resolve.
+ */
+export function missingReferences(files: readonly SourceFile[]): string[] {
+  const held = new Set(files.map((file) => file.path));
+  const referenced = referencedDocuments(files);
+  const missing = new Set<string>();
+  const visited = new Set<string>();
+  const pending = files.filter((file) => isContractDocument(file.path)).map((file) => file.path);
+  for (let path = pending.pop(); path !== undefined; path = pending.pop()) {
+    if (visited.has(path)) continue;
+    visited.add(path);
+    const parsed = referenced.get(path);
+    if (parsed === undefined) continue;
+    withoutDocumentation(parsed.content, undefined, (ref) => {
+      const file = fileOfReference(path, ref);
+      if (file === undefined) return;
+      if (held.has(file)) pending.push(file);
+      else missing.add(file);
+    });
+  }
+  return [...missing].sort(compareText);
 }
 
 function nodeAt(root: unknown, pointer: string): unknown {

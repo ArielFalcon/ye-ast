@@ -18,6 +18,8 @@ const RUN_TIME_VALUE: Evaluation = { kind: "value" };
 const ASSIGNED_AT_RUN_TIME = Symbol("assigned at run time");
 const WRITTEN_FIELDS = new WeakMap<ts.ClassDeclaration, ReadonlySet<string>>();
 const VARIABLE_WRITES = new WeakMap<ts.Node, ReadonlyMap<string, readonly ts.Expression[] | null>>();
+/** The request call through which a wrapper method forwards its parameters, by the method; set where the wrapper fixpoint settles it. */
+const FORWARDING_CALLS = new WeakMap<ts.Node, ts.CallExpression>();
 
 /** What one file declares at its top level, and the classes and enums it holds, as the reader needs them. */
 interface FileShape {
@@ -107,13 +109,32 @@ export function createHttpCallSites(): CallSiteReader {
   return { of: async (files, repo) => read(files, repo) };
 }
 
-async function read(files: readonly SourceFile[], repo: string): Promise<readonly CallSite[]> {
+function readerOf(files: readonly SourceFile[]): { shapes: ReadonlyMap<string, FileShape>; reader: Reader } {
   /* The module resolver reads the config files of the snapshot too, so the map holds every source it was given. */
   const texts = new Map(files.map((file) => [file.path, file.content]));
   const shapes = new Map(files.filter((file) => isTypeScriptSource(file.path)).map((file) => [file.path, describe(file)]));
   const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(files));
   const wrappers = wrapperMethods(shapes);
-  const read = new Reader(shapes, modules, wrappers, buildDefines(files));
+  return { shapes, reader: new Reader(shapes, modules, wrappers, buildDefines(files)) };
+}
+
+/** The expression a request carries as its body and, when the call is to a wrapper method, the function it forwards through. */
+export interface RequestBody {
+  expression: ts.Expression | undefined;
+  wrapper?: ts.MethodDeclaration | ts.ArrowFunction | ts.FunctionExpression;
+}
+
+/** Where the body of the HTTP request a call makes is written, read through the same owner and wrapper resolution as the call sites; undefined for a call that is no request of the project. */
+export function createRequestBodies(files: readonly SourceFile[]): (call: ts.CallExpression) => Promise<RequestBody | undefined> {
+  const { shapes, reader } = readerOf(files);
+  return async (call) => {
+    const shape = shapes.get(call.getSourceFile().fileName);
+    return shape === undefined ? undefined : reader.requestBody(shape, call);
+  };
+}
+
+async function read(files: readonly SourceFile[], repo: string): Promise<readonly CallSite[]> {
+  const { shapes, reader: read } = readerOf(files);
   const found: CallSite[] = [];
   for (const shape of shapes.values()) {
     for (const call of calls(shape.source)) found.push(...(await read.callSite(shape, call, repo)));
@@ -343,11 +364,13 @@ function forwardedVerb(member: ts.Node, httpFields: ReadonlySet<string>, reachin
       const receiver = node.expression.expression;
       if (VERBS.has(name) && ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword && httpFields.has(receiver.name.text) && forwards(node, name)) {
         found = name;
+        FORWARDING_CALLS.set(member, node);
         return;
       }
       const chained = reaching.get(name);
       if (receiver.kind === ts.SyntaxKind.ThisKeyword && chained !== undefined && forwards(node, name)) {
         found = chained;
+        FORWARDING_CALLS.set(member, node);
         return;
       }
     }
@@ -385,6 +408,11 @@ function forwardsAsTail(node: ts.Node, member: ts.Node, parameters: ReadonlySet<
     const own = new Set([parameter.name.text]);
     return returnsOf(declared).every((returned) => returned !== undefined && forwardsAsTail(returned, helper, own, methods, new Set(trail).add(name)));
   });
+}
+
+/** The argument that carries the body of a request through the verb of its `HttpClient` call; the others carry none, or (`request`) an options object. */
+function bodyArgument(verb: string, call: ts.CallExpression): ts.Expression | undefined {
+  return verb === "post" || verb === "put" || verb === "patch" ? call.arguments[1] : undefined;
 }
 
 function memberNamed(declaration: ts.ClassDeclaration, name: string): ts.ClassElement | undefined {
@@ -563,6 +591,20 @@ class Reader {
     const start = shape.source.getLineAndCharacterOfPosition(call.getStart(shape.source)).line + 1;
     const end = shape.source.getLineAndCharacterOfPosition(call.getEnd()).line + 1;
     return [{ repo, file: shape.source.fileName, line: start, endLine: end, symbol: symbolOf(call) ?? "(top level)", ancestors: ancestorsOf(call, shape.source), transport: "http", target: read.target, ...(read.stated === undefined ? {} : { stated: read.stated }) }];
+  }
+
+  async requestBody(shape: FileShape, call: ts.CallExpression): Promise<RequestBody | undefined> {
+    const callee = call.expression;
+    if (!ts.isPropertyAccessExpression(callee) || !VERBS.has(callee.name.text)) return undefined;
+    const owner = await this.ownerClass(shape, callee.expression);
+    if (owner === undefined) return undefined;
+    if (isAngularHttpClientName(owner.shape, owner.name)) return { expression: bodyArgument(callee.name.text, call) };
+    const held = await this.classOf(owner.shape, owner.name);
+    const member = held === undefined ? undefined : memberNamed(held.declaration, callee.name.text);
+    const forwarded = member === undefined ? undefined : FORWARDING_CALLS.get(member);
+    const wrapper = member === undefined ? undefined : functionOf(member);
+    if (forwarded === undefined || wrapper === undefined || !ts.isPropertyAccessExpression(forwarded.expression)) return undefined;
+    return { expression: bodyArgument(forwarded.expression.name.text, forwarded), wrapper };
   }
 
   /**

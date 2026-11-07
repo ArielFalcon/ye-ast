@@ -303,3 +303,19 @@ function needsIterable(subject: Subject, at: number): Evaluation {
   if (subject.kind === "json" || subject.kind === "unknown") return UNKNOWN_VALUE;
   return subject.kind === "value" && (typeof subject.value === "string" || isArray(subject.value)) ? RUNS : { kind: "throws", at, capability: "iterable" };
 }
+
+/** A primitive value the source writes. */
+export type WrittenValue = undefined | null | boolean | number | string;
+
+/**
+ * What `JSON.stringify` writes for a primitive at an object property: a non-finite number becomes `null`, `undefined`
+ * drops the property, which a reader sees as absence (`undefined` here).
+ */
+export function wireOf(value: WrittenValue): Literal | null | undefined {
+  return typeof value === "number" && !Number.isFinite(value) ? null : value;
+}
+
+/** Whether `a OP b` keeps its left side `value` rather than taking the right: `??` keeps all but the nullish values, `||` the truthy ones. */
+export function keepsLeft(operator: "??" | "||", value: WrittenValue): boolean {
+  return operator === "??" ? value !== null && value !== undefined : Boolean(value);
+}

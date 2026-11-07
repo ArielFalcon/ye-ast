@@ -20,7 +20,7 @@ test("input the slice does not support or that contradicts itself is refused wit
   };
   assert.equal(refusal({ method: "FETCH" }), "invalid-method");
   assert.equal(refusal({ path: "api/owners" }), "invalid-path");
-  assert.equal(refusal({ target: "request" }), "unsupported-target");
+  assert.equal(refusal({ target: "headers" }), "unsupported-target");
   assert.equal(refusal({ change: "renamed" }), "unsupported-change");
   assert.equal(refusal({ change: { type: "date" } }), "unsupported-change");
   assert.equal(refusal({ change: { renamed: "owner.name" } }), "unsupported-change");
@@ -29,6 +29,20 @@ test("input the slice does not support or that contradicts itself is refused wit
   assert.equal(refusal({ property: "a..b" }), "invalid-property");
   assert.equal(refusal({ property: "" }), "invalid-property");
   assert.equal(refusal({ property: "owners[]" }), "element-is-not-a-property");
+});
+
+test("a request hypothesis states a rejection, and the response kinds are refused for it", () => {
+  const parsed = parseHypothesis(input({ method: "post", target: "request", property: "id", change: "non-nullable" }));
+  assert.ok(parsed.ok && parsed.value.target === "request");
+  assert.deepEqual(parsed.value.change.entries, ["non-nullable"]);
+  assert.equal(parsed.value.change.rejected.null, true);
+  assert.equal(formatHypothesis(parsed.value), "POST /api/owners/{id} request id non-nullable");
+  const refused = parseHypothesis(input({ target: "request", change: "nullable" }));
+  assert.ok(!refused.ok);
+  assert.equal(refused.fault.kind, "unsupported-change");
+  const contradictory = parseHypothesis(input({ target: "request", change: [{ type: "string" }, { type: "number" }] }));
+  assert.ok(!contradictory.ok);
+  assert.equal(contradictory.fault.kind, "contradictory-change");
 });
 
 test("a combined change is normalized once: each entry once, in a fixed order, with the values they introduce united", () => {

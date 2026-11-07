@@ -2,9 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { type Hypothesis, parseHypothesis } from "../../domain/contracts/hypothesis.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
+import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { CallSite } from "../../domain/topology/call-site.ts";
 import type { Carrier } from "../../domain/contracts/consumer-flow.ts";
-import type { ConsumerSession, PreparedWorkspace } from "../../ports/consumer-sources.port.ts";
+import type { ConsumerSession, ServingWorkspace } from "../../ports/consumer-sources.port.ts";
 import type { WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 import { createConsumerSources, isCallOf } from "./consumer-sources.ts";
 
@@ -35,7 +36,7 @@ function hypothesis(path: string): Hypothesis {
 }
 
 interface Workbench {
-  withWorkspace<T>(use: (workspace: PreparedWorkspace) => Promise<T>): Promise<T>;
+  withWorkspace<T>(use: (workspace: ServingWorkspace) => Promise<T>): Promise<T>;
   exported: string[];
   flowReads: string[];
   callSiteReads: () => number;
@@ -93,6 +94,7 @@ function workbench(layout: { routes: Record<string, Entrypoint[]>; calls: Record
     },
     metadata: { read: async () => ({ classes: [] }) } as never,
     templateFlow: { follow: () => ({ uses: [], next: [], frontiers: [] }) },
+    origins: () => ({ ofBody: async () => [], ofArgument: async () => ({ kind: "omitted" }) }),
     relations: { extract: async () => assert.fail("the code graph is unavailable here") } as never,
     engines: {},
   });
@@ -156,4 +158,16 @@ test("a call site two repositories serve equally is ambiguous only for the opera
     return { orders: orders.ambiguousCalls.map(({ from }) => from.line), items: items.ambiguousCalls.map(({ from }) => from.line), itemLinks: items.links.filter((link) => isCallOf(link, "GET /items")).length };
   });
   assert.deepEqual(answers, { orders: [3], items: [], itemLinks: 1 });
+});
+
+test("an operation a contract declares is served by the route the join links calls to: by path or by the context path, and no route or two repositories are answers of their own", async () => {
+  const configured = (path: string): HttpRoute => ({ ...(route(`GET ${path}`, path) as HttpRoute), basePath: { status: "complete", value: { default: { contextPath: "/api" }, profiles: {} }, evidence: [] } });
+  const bench = workbench({ routes: { api: [configured("/orders/{id}")], legacy: [configured("/legacy")], mirror: [configured("/legacy")] }, calls: {} });
+  const served = await bench.withWorkspace(async (workspace) => ["/api/orders/{orderId}", "/orders/{id}", "/missing", "/api/legacy"].map((path) => workspace.serving({ method: "GET", path })));
+  assert.deepEqual(served, [
+    { kind: "served", method: "GET", path: "/orders/{id}" },
+    { kind: "served", method: "GET", path: "/orders/{id}" },
+    { kind: "unserved" },
+    { kind: "ambiguous", repos: ["legacy", "mirror"] },
+  ]);
 });

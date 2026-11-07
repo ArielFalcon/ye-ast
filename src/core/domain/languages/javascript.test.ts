@@ -3,7 +3,7 @@ import test from "node:test";
 import { ELEMENT } from "../contracts/access-path.ts";
 import { VALUE_CLASSES } from "../contracts/change.ts";
 import type { AccessStep, JsonValue, Literal, Predicate, UseEnd, UseOperation } from "../contracts/use-operation.ts";
-import { evaluate, representatives, subjectOf, testSubject, type Subject } from "./javascript.ts";
+import { evaluate, keepsLeft, representatives, subjectOf, testSubject, wireOf, type Subject } from "./javascript.ts";
 import { ARRAY_PROTOTYPE, BOOLEAN_PROTOTYPE, NUMBER_PROTOTYPE, OBJECT_PROTOTYPE, STRING_PROTOTYPE, type MemberKind } from "./javascript-prototypes.ts";
 
 const ALL = representatives(VALUE_CLASSES, []);
@@ -317,4 +317,16 @@ test("the prototype table holds exactly the string-keyed members the engine's in
       assert.equal(kind, engineKind, name);
     }
   }
+});
+
+test("the wire drops undefined, writes a non-finite number as null and keeps every other primitive", () => {
+  assert.equal(wireOf(undefined), undefined);
+  assert.equal(wireOf(Number.NaN), null);
+  assert.equal(wireOf(-Infinity), null);
+  assert.deepEqual([wireOf(0), wireOf(""), wireOf(false), wireOf(null)], [0, "", false, null]);
+});
+
+test("?? keeps a left side that is not nullish, even 0 or an empty string, and || keeps only a truthy one", () => {
+  assert.deepEqual([0, "", false, null, undefined, "a"].map((value) => keepsLeft("??", value)), [true, true, true, false, false, true]);
+  assert.deepEqual([0, "", false, null, undefined, "a", Number.NaN].map((value) => keepsLeft("||", value)), [false, false, false, false, false, true, false]);
 });

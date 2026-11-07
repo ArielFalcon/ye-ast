@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ContractOperation } from "../../ports/contract-routes.port.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
-import { createContractRoutes } from "./contract-document.adapter.ts";
+import { createContractRoutes, missingReferences } from "./contract-document.adapter.ts";
 
 const routes = createContractRoutes();
 
@@ -197,4 +197,14 @@ test("a reference by absolute path names no source of the repository: it is unre
   const read = dataByOperation(shop({ type: "object", properties: { total: { $ref: "/schemas/money.yaml#/Money" } } }), { "openapi/schemas/money.yaml": { Money: { type: "number" } } });
 
   assert.deepEqual([read.getOrders?.files, read.getOrders?.unresolved], [[], [{ ref: "/schemas/money.yaml#/Money" }]]);
+});
+
+test("the files the contract documents reference, directly or through the files they reference, that the sources do not hold are the ones still to read", () => {
+  const source = (path: string, content: unknown) => ({ path, content: JSON.stringify(content) });
+  const document = source("openapi/api.json", { openapi: "3.0.3", paths: {}, components: { schemas: { A: { $ref: "../schemas/a.json" }, B: { $ref: "#/components/schemas/A" }, C: { $ref: "https://example.com/c.json" }, D: { $ref: "/abs/d.json" }, E: { $ref: "../../../escape.json" } } } });
+  const outside = source("schemas/a.json", { properties: { next: { $ref: "b.json#/Next" }, self: { $ref: "#/properties/next" }, back: { $ref: "../openapi/api.json" } } });
+  const unrelated = source("schemas/unrelated.json", { $ref: "never.json" });
+  assert.deepEqual(missingReferences([document]), ["schemas/a.json"]);
+  assert.deepEqual(missingReferences([document, outside, unrelated]), ["schemas/b.json"]);
+  assert.deepEqual(missingReferences([document, outside, source("schemas/b.json", {})]), []);
 });

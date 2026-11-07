@@ -10,7 +10,9 @@ import type { TestedGuard, UseOperation } from "../../domain/contracts/verdict.t
 import type { FactBase } from "../../domain/shared/fact.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import type { ConsequencesRequest, ConsumerQueries } from "../../ports/consumer-queries.port.ts";
-import type { ConsumerCaller, ConsumerCallers, ConsumerMemberOccurrences, ConsumerSession, PreparedWorkspace } from "../../ports/consumer-sources.port.ts";
+import type { ConsumerCaller, ConsumerCallers, ConsumerMemberOccurrences, ConsumerSession, PreparedWorkspace, ServingWorkspace } from "../../ports/consumer-sources.port.ts";
+import type { Origin } from "../../domain/contracts/request-origin.ts";
+import type { ArgumentOrigins, RequestOriginReader } from "../../ports/request-origins.port.ts";
 import { consequencesOn, createConsumerQueries } from "./consumer-queries.ts";
 
 const path = (text: string) => parseAccessPath(text)!;
@@ -59,6 +61,10 @@ interface Setup {
   ambiguousCalls?: ConsumerSession["ambiguousCalls"];
   property?: string;
   change?: HypothesisInput["change"];
+  target?: HypothesisInput["target"];
+  method?: string;
+  path?: string;
+  origins?: Record<string, RequestOriginReader>;
 }
 
 function setup(options: Setup = {}) {
@@ -78,21 +84,24 @@ function setup(options: Setup = {}) {
     memberOccurrences: ({ member }) => options.members?.[member] ?? { kind: "found", occurrences: [] },
     flow: { follow: (carrier) => (followed.push(carrier), options.flow?.[carrierKey(carrier.site)] ?? NO_FLOW) },
     templates: { follow: (carrier) => (templated.push(carrier), options.templates?.[carrierKey(carrier.site)] ?? NO_FLOW) },
+    requestOrigins: (repo) => options.origins?.[repo],
+  };
+  const workspace: ServingWorkspace = {
+    session: async (hypothesis) => {
+      opened.push(hypothesis.property.join("."));
+      return { ok: true, value: session };
+    },
+    serving: () => ({ kind: "unserved" }),
   };
   const queries: ConsumerQueries = createConsumerQueries({
     sources: {
       withWorkspace: async (_, run) => ({
         ok: (preparations++, true),
-        value: await run({
-          session: async (hypothesis) => {
-            opened.push(hypothesis.property.join("."));
-            return { ok: true, value: session };
-          },
-        }),
+        value: await run(workspace),
       }),
     },
   });
-  const request: ConsequencesRequest = { repo: { repo: "web", path: "/work/web" } as ConsequencesRequest["repo"], hypothesis: { method: "get", path: "/owners/{id}", target: "response", property: options.property ?? "address", change: options.change ?? "nullable" } };
+  const request: ConsequencesRequest = { repo: { repo: "web", path: "/work/web" } as ConsequencesRequest["repo"], hypothesis: { method: options.method ?? "get", path: options.path ?? "/owners/{id}", target: options.target ?? "response", property: options.property ?? "address", change: options.change ?? "nullable" } };
   const ask = async () => {
     const answer = await queries.consequences(request);
     assert.ok(answer.ok);
@@ -676,4 +685,150 @@ test("a method entered from a template that returns something else than its own 
 
   assert.deepEqual(verdictsOf(fact), ["unmodelled-flow:return-context"]);
   assert.deepEqual(templated, []);
+});
+
+const POST = "POST /vets";
+const SERVICE = "src/vet.service.ts";
+
+const literalOrigin = (value: string | number | boolean | null, line: number, overrides: Partial<Origin> = {}): Origin => ({ kind: "exact", value: { kind: "literal", value }, at: { path: SERVICE, line }, hops: [], conditions: [], ...overrides }) as Origin;
+const absentOrigin = (line: number): Origin => ({ kind: "exact", value: { kind: "absent" }, at: { path: SERVICE, line }, hops: [], conditions: [] });
+const frontierOrigin = (reason: Extract<Origin, { kind: "frontier" }>["reason"], line: number): Origin => ({ kind: "frontier", reason, at: { path: SERVICE, line }, hops: [], conditions: [] });
+const parameterOrigin = (symbol: string, line: number, omitted: readonly Origin[] = []): Origin => ({ kind: "parameter", at: { path: SERVICE, line }, hops: [], conditions: [], parameter: { file: SERVICE, symbol, line, index: 0, path: [], body: true, omitted } });
+
+/** A reader that answers the body of each call site by its line, and the argument of each caller by its line. */
+function readerFor(bodies: Record<number, readonly Origin[]>, argumentsAt: Record<number, ArgumentOrigins> = {}) {
+  const asked: string[] = [];
+  const reader: RequestOriginReader = {
+    ofBody: async (site) => (asked.push(`body ${site.line}`), bodies[site.line] ?? []),
+    ofArgument: async (call) => (asked.push(`argument ${call.line}`), argumentsAt[call.line] ?? { kind: "passed", origins: [] }),
+  };
+  return { reader, asked };
+}
+
+const postLink = (line: number) => link({ line, name: POST, file: SERVICE });
+const requestSetup = (options: Setup & { reader?: RequestOriginReader } = {}) => {
+  const { reader, ...rest } = options;
+  return setup({ method: "post", path: "/vets", target: "request", property: "id", change: "non-nullable", links: [postLink(10)], ...(reader === undefined ? {} : { origins: { web: reader } }), ...rest });
+};
+const producers = (fact: Awaited<ReturnType<ReturnType<typeof setup>["ask"]>>) =>
+  fact.value.findings.map((finding) => (finding.status === "complete" ? `${finding.value.verdict.kind}@${finding.evidence[0]?.line}` : `unknown ${finding.evidence.at(-1)?.via}@${finding.evidence.at(-1)?.line}`));
+
+test("each producer call site of a request is judged on its own, with the witness an incompatible one writes", async () => {
+  const { reader } = readerFor({ 10: [literalOrigin("ok", 11), literalOrigin(null, 12)], 20: [literalOrigin("ok", 21)] });
+
+  const fact = await requestSetup({ links: [postLink(20), postLink(10)], reader }).ask();
+
+  assert.deepEqual(producers(fact), ["incompatible@10", "admits@20"]);
+  const [first] = fact.value.findings;
+  assert.ok(first?.status === "complete");
+  const { verdict } = first.value;
+  assert.ok(verdict.kind === "incompatible" && typeof verdict.witness !== "string");
+  assert.deepEqual(verdict.witness.at, { path: SERVICE, line: 12 });
+  assert.equal(verdict.witness.value, "null");
+  assert.deepEqual(first.evidence.map((place) => place.line), [10, 12]);
+  assert.deepEqual(first.value.chain.map((hop) => hop.step), ["http-call"]);
+});
+
+test("the answer echoes the normalized request hypothesis and the old acceptance it assumes", async () => {
+  const { reader } = readerFor({});
+
+  const fact = await requestSetup({ reader, change: ["non-nullable", "required"] }).ask();
+
+  assert.deepEqual(fact.value.hypothesis, { method: "POST", path: "/vets", target: "request", property: "id", change: ["required", "non-nullable"] });
+  assert.equal(fact.value.assumedOldGuarantee, "accepts-the-rejected");
+});
+
+test("a producer with no origin is never admitted, and neither is one that has an origin it cannot follow", async () => {
+  const { reader } = readerFor({ 10: [], 20: [literalOrigin("ok", 21), frontierOrigin("call-result", 22)] });
+
+  const fact = await requestSetup({ links: [postLink(10), postLink(20)], reader }).ask();
+
+  assert.deepEqual(producers(fact), ["review@10", "review@20", "unknown call-result@22"]);
+  const reasons = fact.value.findings.flatMap((finding) => (finding.status === "complete" && finding.value.verdict.kind === "review" ? [finding.value.verdict.reason] : []));
+  assert.deepEqual(reasons, ["no-origin", "frontier"]);
+});
+
+test("a repository with no origin reader leaves its producers to review with a frontier", async () => {
+  const fact = await requestSetup().ask();
+
+  assert.deepEqual(producers(fact), ["review@10", "unknown untracked:no-origin-reader@10"]);
+});
+
+test("a parameter is resolved at each proven caller of its function, each call apart, with the chain to the witness", async () => {
+  const callers: ConsumerCallers = {
+    kind: "found",
+    callers: [
+      { file: "src/page.ts", line: 5, at: 7, kind: "call", provenance: "resolved", confidence: 1, proven: true },
+      { file: "src/other.ts", line: 3, at: 4, kind: "call", provenance: "resolved", confidence: 1, proven: true },
+    ],
+  };
+  const { reader, asked } = readerFor({ 10: [parameterOrigin("add", 9)] }, { 7: { kind: "passed", origins: [literalOrigin("ok", 7, { at: { path: "src/page.ts", line: 7 } })] }, 4: { kind: "passed", origins: [literalOrigin(null, 4, { at: { path: "src/other.ts", line: 4 } })] } });
+  const { ask, session } = requestSetup({ reader, callers: { add: callers } });
+
+  const fact = await ask();
+
+  assert.deepEqual(asked, ["body 10", "argument 7", "argument 4"]);
+  assert.deepEqual(producers(fact), ["incompatible@10"]);
+  const [producer] = fact.value.findings;
+  assert.ok(producer?.status === "complete");
+  assert.deepEqual(producer.value.chain.map((hop) => [hop.step, hop.evidence.path, hop.evidence.line]), [["http-call", SERVICE, 10], ["caller", "src/other.ts", 4]]);
+  assert.ok(session);
+});
+
+test("an argument a caller omits takes the parameter's default", async () => {
+  const callers: ConsumerCallers = { kind: "found", callers: [{ file: "src/page.ts", line: 5, at: 7, kind: "call", provenance: "resolved", confidence: 1, proven: true }] };
+  const { reader } = readerFor({ 10: [parameterOrigin("add", 9, [literalOrigin(null, 9)])] }, { 7: { kind: "omitted" } });
+
+  const fact = await requestSetup({ reader, callers: { add: callers } }).ask();
+
+  assert.deepEqual(producers(fact), ["incompatible@10"]);
+});
+
+test("a function with no callers, unresolved callers or an unproven caller is a frontier, never an absent origin", async () => {
+  const caller = { file: "src/page.ts", line: 5, at: 7, kind: "call" as const, provenance: "heuristic" as const, confidence: 0.5 };
+  const none = await requestSetup({ reader: readerFor({ 10: [parameterOrigin("add", 9)] }).reader }).ask();
+  const unresolved = await requestSetup({ reader: readerFor({ 10: [parameterOrigin("add", 9)] }).reader, callers: { add: { kind: "unresolved" } } }).ask();
+  const unproven = await requestSetup({ reader: readerFor({ 10: [parameterOrigin("add", 9)] }).reader, callers: { add: { kind: "found", callers: [{ ...caller, proven: false }] } } }).ask();
+
+  assert.deepEqual(producers(none), ["unknown unresolved-callers:no-caller@9", "review@10"]);
+  assert.deepEqual(producers(unresolved), ["unknown unresolved-callers:unresolved@9", "review@10"]);
+  assert.deepEqual(producers(unproven), ["unknown unresolved-callers:ambiguous-caller@7", "review@10"]);
+});
+
+test("functions that call each other through their parameters end instead of looping", async () => {
+  const callers: ConsumerCallers = { kind: "found", callers: [{ file: "src/page.ts", line: 5, at: 7, kind: "call", provenance: "resolved", confidence: 1, proven: true }] };
+  const { reader, asked } = readerFor({ 10: [parameterOrigin("add", 9)] }, { 7: { kind: "passed", origins: [parameterOrigin("add", 9)] } });
+
+  const fact = await requestSetup({ reader, callers: { add: callers } }).ask();
+
+  assert.deepEqual(asked, ["body 10", "argument 7"]);
+  assert.deepEqual(producers(fact), ["review@10"]);
+});
+
+test("a call site whose link is not qualified is reported with its basis and never followed, and the answer names every call site searched", async () => {
+  const { reader, asked } = readerFor({ 10: [literalOrigin(null, 11)] });
+
+  const fact = await requestSetup({ reader, links: [postLink(10), link({ line: 30, name: POST, file: SERVICE, basis: "suffix" })] }).ask();
+
+  assert.deepEqual(producers(fact), ["incompatible@10", "unknown link-basis:suffix@30"]);
+  assert.deepEqual(asked, ["body 10"]);
+  assert.deepEqual(fact.evidence.map((place) => place.line), [10, 30]);
+});
+
+test("a request hypothesis on an operation nobody serves is the same typed fault as a response one", async () => {
+  const { queries, request } = requestSetup({ serving: [] });
+
+  const answer = await queries.consequences(request);
+
+  assert.ok(!answer.ok && answer.fault.kind === "unknown-operation");
+});
+
+test("a response hypothesis follows the flow and never asks for a request origin", async () => {
+  const { reader, asked } = readerFor({});
+  const flow = { [carrierKey(siteOf())]: { uses: [use(30, { operation: READ })], next: [], frontiers: [] } };
+
+  const fact = await setup({ flow, origins: { web: reader } }).ask();
+
+  assert.deepEqual(verdictsOf(fact), ["incompatible"]);
+  assert.deepEqual(asked, []);
 });

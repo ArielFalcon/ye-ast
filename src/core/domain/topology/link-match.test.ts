@@ -4,7 +4,7 @@ import type { Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { CallSite, EventTarget, HttpTarget } from "../../domain/topology/call-site.ts";
 import type { RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
-import { inferGateways, matchCallSite, matchEventCallSite, prefixOf } from "../../domain/topology/link-match.ts";
+import { inferGateways, matchCallSite, matchDeclaredOperation, matchEventCallSite, prefixOf } from "../../domain/topology/link-match.ts";
 
 function route(method: HttpRoute["method"], path: string, handler = { path: "src/main/java/app/Orders.java", symbol: "Orders.orders", line: 10 }, basePath = {}): HttpRoute {
   return { kind: "http-route", name: `${method} ${path}`, method, path, handler, basePath: { status: "complete", value: { default: basePath, profiles: {} }, evidence: [] } };
@@ -247,4 +247,15 @@ test("a destination one repository consumes with two listeners is one link per l
     consumedBy(call, [listener("kafka", "orders.created"), listener("kafka", "orders.created", { ...CONSUMER, symbol: "OrdersListener.audit", line: 20 })]),
     "event-destination 1 event -> orders listener kafka orders.created at OrdersListener.on | event-destination 1 event -> orders listener kafka orders.created at OrdersListener.audit",
   );
+});
+
+test("an operation a contract declares lands on the route that serves it by an equal path or by the base path its configuration adds, and on two repositories it is ambiguous", () => {
+  const target = (path: string): HttpTarget => ({ method: "GET", path });
+  const prefixed = route("GET", "/orders/{id}", undefined, { contextPath: "/api" });
+  const name = (match: ReturnType<typeof matchDeclaredOperation>) => (match !== undefined && "route" in match ? `${match.repo} ${match.route.name}` : match);
+  assert.equal(name(matchDeclaredOperation(target("/orders/{orderId}"), repositories([prefixed]))), "orders GET /orders/{id}");
+  assert.equal(name(matchDeclaredOperation(target("/api/orders/{orderId}"), repositories([prefixed]))), "orders GET /orders/{id}");
+  assert.equal(name(matchDeclaredOperation(target("/api/orders/{id}"), repositories([route("GET", "/api/orders/{id}")]))), "orders GET /api/orders/{id}");
+  assert.equal(matchDeclaredOperation(target("/other/{id}"), repositories([prefixed])), undefined);
+  assert.deepEqual(matchDeclaredOperation(target("/api/orders/{id}"), [...repositories([prefixed]), ...repositories([prefixed], "billing")]), { ambiguous: ["billing", "orders"] });
 });
