@@ -96,6 +96,7 @@ export interface FactInputs {
 }
 
 export interface Evidence {
+  column?: number;
   path: string;
   line: number;
   endLine?: number;

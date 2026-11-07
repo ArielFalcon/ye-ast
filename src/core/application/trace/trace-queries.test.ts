@@ -1159,8 +1159,8 @@ test("a call site the extraction resolves at a call of an expanded body is an ef
 
   assert.equal(fact.status, "complete");
   assert.deepEqual(valueOf(fact).steps[0]!.effects, [
-    { kind: "http", line: 8, target: { method: "POST", path: "/orders/{}/checkout" } },
-    { kind: "message", line: 9, target: { protocol: "nats", destination: "orders.created", role: "publish" } },
+    { kind: "http", line: 8, column: 1, target: { method: "POST", path: "/orders/{}/checkout" } },
+    { kind: "message", line: 9, column: 1, target: { protocol: "nats", destination: "orders.created", role: "publish" } },
   ]);
 });
 

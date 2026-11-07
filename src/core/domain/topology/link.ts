@@ -10,7 +10,7 @@ export type LinkBasis = "exact" | "base-path" | "suffix" | "operation-id" | "eve
 export interface Link {
   /** Digest of every field but `confidence`: two links with one id are one link. */
   id: string;
-  from: { repo: string; file: string; line: number; symbol: string };
+  from: { repo: string; file: string; line: number; column?: number; symbol: string };
   to: { repo: string; kind: Entrypoint["kind"]; name: string; handler: Handler };
   transport: "http" | "event";
   basis: LinkBasis;

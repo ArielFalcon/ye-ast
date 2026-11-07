@@ -19,9 +19,9 @@ export interface TraceLeaf {
 
 /**
  * A call the RFC-0011 call-site extraction proves leaves the process through a declared client (an HTTP request, a
- * published message), with the target it resolves, at its line in the step's file.
+ * published message), with the target it resolves, at its 1-based line and optional start column in the step's file.
  */
-export type TraceEffect = { kind: "http"; line: number; target: HttpTarget } | { kind: "message"; line: number; target: EventTarget };
+export type TraceEffect = { kind: "http"; line: number; column?: number; target: HttpTarget } | { kind: "message"; line: number; column?: number; target: EventTarget };
 
 /**
  * Calls that leave the repository, once per name. `import` names the package a file imports the callee from, `global` a

@@ -34,7 +34,7 @@ export const snapshotRef = z.discriminatedUnion("kind", [
   z.strictObject({ repo: z.string(), kind: z.literal("live"), head: z.string(), stateId: z.string() }),
 ]);
 export const evidenceValue = z.strictObject({
-  path: z.string(), line: int, endLine: int.exactOptional(), via: z.string().exactOptional(), confidence: z.number().exactOptional(),
+  path: z.string(), line: int, column: int.exactOptional(), endLine: int.exactOptional(), via: z.string().exactOptional(), confidence: z.number().exactOptional(),
 });
 export const producer = z.strictObject({ name: z.string(), version: z.string() });
 export const schemaVersion = z.templateLiteral([z.int().min(0), ".", z.int().min(0), ".", z.int().min(0)]);
@@ -127,7 +127,7 @@ export const moduleVia = z.strictObject({
   file: z.string(), line: int, specifier: z.string(), kind: z.enum(["import", "reexport"]), typeOnly: z.boolean(),
   form: z.enum(["dynamic-import", "type-query"]).exactOptional(),
 });
-export const callLocation = z.strictObject({ file: ids.file, line: int, endLine: int.exactOptional() });
+export const callLocation = z.strictObject({ file: ids.file, line: int, column: int.exactOptional(), endLine: int.exactOptional() });
 const stated = z.strictObject({ method: httpMethod, path: z.string() });
 const transport = z.enum(["http", "event"]);
 const httpTarget = z.strictObject({ method: httpMethod, path: z.string(), base: z.string().exactOptional(), operationId: z.string().exactOptional() });
@@ -308,8 +308,8 @@ export const partSchema = z.discriminatedUnion("kind", [
     ])).exactOptional(),
     alternatives: z.array(ids.anchor).exactOptional(),
     effects: z.array(z.discriminatedUnion("kind", [
-      z.strictObject({ kind: z.literal("http"), line: count, target: httpTarget, place: ids.evidence.exactOptional() }),
-      z.strictObject({ kind: z.literal("message"), line: count, target: eventTarget, place: ids.evidence.exactOptional() }),
+      z.strictObject({ kind: z.literal("http"), line: count, column: count.exactOptional(), target: httpTarget, place: ids.evidence.exactOptional() }),
+      z.strictObject({ kind: z.literal("message"), line: count, column: count.exactOptional(), target: eventTarget, place: ids.evidence.exactOptional() }),
     ])).exactOptional(),
   }),
   part("trace-root", { target: z.string(), steps: z.array(count) }),

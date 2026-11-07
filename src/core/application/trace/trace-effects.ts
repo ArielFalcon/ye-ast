@@ -64,7 +64,7 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
         continue;
       }
       const read = effectOf(site);
-      if ("effect" in read) (step.effects ??= []).push(read.effect);
+      if ("effect" in read) (step.effects ??= []).push({ ...read.effect, column: placed.column! + 1 });
       else markCut(step, read.cut, cuts);
     }
   }

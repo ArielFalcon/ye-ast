@@ -157,8 +157,8 @@ export type FileCategory = keyof Omit<ImportedFile, "file">;
 export type FileDependencyCategory = "importer" | "reexporter" | "dynamic-importer" | "type-importer" | "user" | "unresolved-namer" | "outline-import";
 
 /** A call-site location: never a declaration start. */
-export type CallLocation = { file: FileId; line: number; endLine?: number };
-export type CallSiteData = Omit<CallSite, "file" | "line" | "endLine" | "target"> & {
+export type CallLocation = { file: FileId; line: number; column?: number; endLine?: number };
+export type CallSiteData = Omit<CallSite, "file" | "line" | "column" | "endLine" | "target"> & {
   location: CallLocation & { place?: EvidenceId };
   target: EvidenceFinding<HttpTarget | EventTarget>;
 };

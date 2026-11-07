@@ -501,16 +501,25 @@ test("consequences: an unknown finding is named a consequence finding, and a use
 test("trace effects share call-place evidence with links across compatible sources", () => {
   const workspace = workspaceValue();
   const from = workspace.links[0]!.from;
+  from.column = 9;
   const snapshot = workspace.repositorySnapshots.find(s => s.repo === from.repo)!.snapshot;
   const trace = sourceFixture("trace", {
-    value: { roots: [{ target: `${from.file}:run`, steps: [0] }], steps: [{ id: 0, depth: 0, file: from.file, symbol: "run", kind: "method", line: 1, endLine: 40, effects: [{ kind: "http", line: from.line, target: { method: "GET", path: "/orders" } }] }], readingPlan: { ranges: [], lines: 0 }, cost: { expanded: 1 } },
+    value: { roots: [{ target: `${from.file}:run`, steps: [0] }], steps: [{ id: 0, depth: 0, file: from.file, symbol: "run", kind: "method", line: 1, endLine: 40, effects: [{ kind: "http", line: from.line, column: 9, target: { method: "GET", path: "/orders" } }] }], readingPlan: { ranges: [], lines: 0 }, cost: { expanded: 1 } },
   });
   trace.read.fact.snapshot = snapshot;
   const result = resultOf([trace, sourceFixture("workspace", { value: workspace })]);
   const shared = result.graph.connections.filter(c => c.rule === "shared-support" && new Set(c.supports.map(s => s.source)).size === 2);
   assert.ok(shared.some(c => c.parts.some(id => result.graph.parts.find(p => p.id === id)?.kind === "trace-step") && c.parts.some(id => result.graph.parts.find(p => p.id === id)?.kind === "workspace-link")));
   assert.match(renderComposition(resultOf([trace]), "summary"), /effects \(1\)/);
-  if (trace.read.fact.status !== "unknown") trace.read.fact.value.steps[0]!.effects![0]!.line += 1;
+  if (trace.read.fact.status !== "unknown") trace.read.fact.value.steps[0]!.effects![0]!.column = 27;
   const shifted = resultOf([trace, sourceFixture("workspace", { value: workspace })]);
   assert.equal(shifted.graph.connections.some(c => c.rule === "shared-support" && c.parts.some(id => shifted.graph.parts.find(p => p.id === id)?.kind === "trace-step") && c.parts.some(id => shifted.graph.parts.find(p => p.id === id)?.kind === "workspace-link")), false);
+});
+
+test("line-only call places never relate a trace effect to a workspace link", () => {
+  const w = workspaceValue();
+  const value = { roots: [], steps: [{ id: 0, depth: 0, file: "src/OrderService.java", symbol: "find", kind: "method", line: 31, effects: [{ kind: "http" as const, line: 34, target: { method: "GET" as const, path: "/a" } }] }], readingPlan: { ranges: [], lines: 0 }, cost: { expanded: 1 } };
+  w.links = [{ ...w.links[0]!, from: { repo: "shop", file: "src/OrderService.java", line: 34, symbol: "other" } }];
+  const result = resultOf([sourceFixture("trace", { value }), sourceFixture("workspace", { value: w })]);
+  assert.equal(result.graph.connections.some(c => c.rule === "shared-support" && c.parts.some(id => result.graph.parts.find(p => p.id === id)?.kind === "trace-step") && c.parts.some(id => result.graph.parts.find(p => p.id === id)?.kind === "workspace-link")), false);
 });

@@ -132,8 +132,8 @@ fallback of a field origin.
 ### Declared library sources for effects
 
 Trace accepts optional `workspace` (`repos`, `gateways`) and `offline` inputs on the library port, protocol, MCP
-`ye_ast_trace` and composed trace queries. CLI uses `trace --workspace <manifest.json> [--offline]`. Omission preserves
-local-only output; `{}` uses eligible persisted workspace defaults. The existing workspace operation selects snapshots,
+`ye_ast_trace` and composed trace queries. CLI uses `trace --workspace <manifest.json> [--offline]`. Omission selects only
+root-repository sources; `{}` uses eligible persisted workspace defaults. The existing workspace operation selects snapshots,
 computes artifact-proven dependency closures and supplies `LibrarySource` to placed call-site extraction. The Java reader uses its existing library summaries; other readers retain their existing coverage. Root indexing
 and the walk stay within the root repository. A live root retains its existing `onStale` callback after the shared capture closes. Dependency-library live sidecars are not exposed by the Fact-returning trace port; the acceptance measurements use committed snapshots. Library snapshots participate in the composite input identity; library
 paths keep the existing `(library)/<repository>/...` provenance. Unrelated declared repositories are not library sources.
@@ -144,7 +144,8 @@ ownership and wrapper attribution at the root caller remain unchanged. Runtime-o
 owner-declared URL contracts and dependency-cache or jar discovery are outside this work.
 
 Compose normalizes effects, call sites and link origins with the same call-place evidence identity (repository,
-snapshot, file, line). Its existing shared-evidence/shared-support rules relate compatible observations automatically;
+snapshot, file, line and 1-based start column). A side without a column supplies no call-place identity. Its existing
+shared-evidence/shared-support rules relate compatible observations automatically;
 this states a shared location, not causality. No pair-specific family matcher is introduced. Composed trace summaries
 include an effects count, including a single trace.
 

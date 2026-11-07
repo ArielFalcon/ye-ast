@@ -53,7 +53,7 @@ export function linkMapOf(joined: readonly JoinedSite[]): { links: Link[]; unlin
   const links = new Map<string, Link>();
   const unlinked: UnlinkedCallSite[] = [];
   for (const { site, joined: answer } of joined) {
-    const from = { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol };
+    const from = { repo: site.repo, file: site.file, line: site.line, ...(site.column === undefined ? {} : { column: site.column }), symbol: site.symbol };
     for (const link of answer.links ?? []) links.set(link.id, link);
     if (answer.links !== undefined) continue;
     if (answer.ambiguous !== undefined) unlinked.push({ from, transport: site.transport, outcome: "ambiguous", name: answer.ambiguous.key, repos: answer.ambiguous.repos });

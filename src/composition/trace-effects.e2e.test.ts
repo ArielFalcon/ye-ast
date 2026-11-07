@@ -49,7 +49,7 @@ async function trace(target: string): Promise<{ status: string; value: TraceValu
   return JSON.parse(stdout.join("\n"));
 }
 
-const effectsOf = (value: TraceValue) => value.steps.flatMap((step) => (step.effects ?? []).map((effect) => [step.symbol, effect]));
+const effectsOf = (value: TraceValue) => value.steps.flatMap((step) => (step.effects ?? []).map(({ column: _column, ...effect }) => [step.symbol, effect]));
 
 test("an Angular HttpClient request is an http effect of the body that makes it, with its path; through a wrapper, of the caller that names the path", async () => {
   commit({
@@ -282,10 +282,15 @@ export class Build {
 }
 `,
   });
+  const outward = await composeQueries({ scratchRoot: workspace, indexCache: join(workspace, "cache") }).workspace.outwardNames({ repo: { path: repo } });
+  assert.ok(outward.ok && outward.value.fact.status !== "unknown");
+  const callSites = outward.value.fact.value.repositories.flatMap(repository => repository.callSites);
   for (const [file, path] of [["src/main/java/shop/Build.java", "/java-built"], ["build.ts", "/ts-built"]] as const) {
     const loaded = await trace(`${file}:Build.load`);
     assert.ok(loaded.value.steps.some(step => ["method", "function"].includes(step.kind) && (step.symbol === "constructor" || step.symbol === "Worker")));
     assert.ok(loaded.value.steps.some(step => step.effects?.some(effect => effect.kind === "http" && effect.target.path === path)));
+    assert.equal(loaded.value.steps.flatMap(step => step.effects ?? [])[0]?.column, file.endsWith(".java") ? 16 : 34);
+    assert.equal(callSites.find(candidate => candidate.file === file)?.column, file.endsWith(".java") ? 16 : 34);
     const absent = await trace(`${file}:Build.absent`);
     assert.equal(absent.status, "partial");
     assert.ok(absent.cuts?.some(cut => cut.kind === "unresolved-link"));

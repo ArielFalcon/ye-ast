@@ -106,7 +106,7 @@ interface Located<E extends ts.Expression = ts.Expression> {
 }
 
 export function createHttpCallSites(): CallSiteReader & PlacedCallSiteReader {
-  return { of: async (files, repo) => (await readPlaced(files, repo)).map(({ site }) => site), placed: readPlaced };
+  return { of: async (files, repo) => (await readPlaced(files, repo)).map(({ site, column }) => ({ ...site, ...(column === undefined ? {} : { column: column + 1 }) })), placed: readPlaced };
 }
 
 function readerOf(files: readonly SourceFile[]): { shapes: ReadonlyMap<string, FileShape>; reader: Reader } {

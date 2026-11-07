@@ -59,6 +59,10 @@ function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[], libra
     for (const site of sites) if (site.diagnostic?.source === "not-read" && unreadableLibraries.length > 0) {
       site.diagnostic = { ...site.diagnostic, unreadableSources: unreadableLibraries };
     }
+    for (const site of sites) {
+      const column = CALL_PLACES.get(site)?.column;
+      if (column !== undefined) site.column = column + 1;
+    }
     return [...sites, ...unread].sort(compareSite);
   } finally {
     for (const tree of trees) tree.dispose();

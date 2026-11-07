@@ -4,6 +4,7 @@ import { declarationSpan, type Evidence, type Finding, type UnknownReason } from
 
 /** A call one repository makes out of itself: an HTTP request or a published message, with where it is written. */
 export interface CallSite {
+  column?: number;
   /** The repository the call site is in. */
   repo: string;
   file: string;

@@ -145,7 +145,7 @@ function rebuildImpact(t: Tables, prefix: string): ImpactValue {
 
 function rebuildSite(t: Tables, part: PartOf<"call-site">): CallSite {
   const { location, target, ...rest } = part.site;
-  return { ...rest, file: t.path(location.file), line: location.line, ...(location.endLine === undefined ? {} : { endLine: location.endLine }), target: t.finding(target) };
+  return { ...rest, file: t.path(location.file), line: location.line, ...(location.column === undefined ? {} : { column: location.column }), ...(location.endLine === undefined ? {} : { endLine: location.endLine }), target: t.finding(target) };
 }
 
 function rebuildWorkspaceImpact(t: Tables): WorkspaceImpactValue {
@@ -178,7 +178,7 @@ function rebuildWorkspaceImpact(t: Tables): WorkspaceImpactValue {
 }
 
 function rebuildLink(t: Tables, { from, to, ...link }: PartOf<"workspace-link">["link"]) {
-  return { ...link, from: { repo: from.repo, file: t.path(from.file), line: from.line, symbol: from.symbol }, to: { repo: to.repo, kind: to.kind, name: to.name, handler: t.handler(to.handler) } };
+  return { ...link, from: { repo: from.repo, file: t.path(from.file), line: from.line, ...(from.column === undefined ? {} : { column: from.column }), symbol: from.symbol }, to: { repo: to.repo, kind: to.kind, name: to.name, handler: t.handler(to.handler) } };
 }
 
 const CATEGORIES: readonly FileCategory[] = ["importers", "reexporters", "dynamicImporters", "typeImporters", "users", "unresolvedNamers"];
@@ -286,7 +286,7 @@ function reconstruct(source: ExecutedSource, t: Tables): Fact<unknown> {
           candidates: t.list("/value/candidates", "name-candidate").map((c) => ({ name: c.name, repo: c.repo, basis: c.basis, evidence: t.repoEvidence(c.evidence) })),
           unserved: t.list("/value/unserved", "outward-name").map((n) => ({ name: n.name, kind: n.kindName, evidence: t.repoEvidence(n.evidence) })),
           links: t.list("/value/links", "workspace-link").map((p) => rebuildLink(t, p.link)),
-          unlinked: t.list("/value/unlinked", "unlinked-call-site").map(({ site: { from, ...site } }) => ({ from: { repo: from.repo, file: t.path(from.file), line: from.line, symbol: from.symbol }, ...site })),
+          unlinked: t.list("/value/unlinked", "unlinked-call-site").map(({ site: { from, ...site } }) => ({ from: { repo: from.repo, file: t.path(from.file), line: from.line, ...(from.column === undefined ? {} : { column: from.column }), symbol: from.symbol }, ...site })),
         };
       }
       case "decisions": {
@@ -511,7 +511,12 @@ test("an outline focus keeps each matched declaration with its subtree, and no o
 });
 
 test("workspace impact keeps reads with their kinds, call-site ancestors and stated requests, and link reach", () => {
-  const set = normalizeSource(sourceFixture("impact-workspace"), digest);
+  const source = sourceFixture("impact-workspace");
+  if (source.read.fact.status !== "unknown") {
+    const section = source.read.fact.value.sections.web!;
+    if (section.status !== "unknown") (section.value.callSites[0]! as { column?: number }).column = 12;
+  }
+  const set = normalizeSource(source, digest);
   const t = new Tables(set);
   const web = found(t.read({ kind: "section", repo: "web" }), "web");
   const nested = set.reads.filter((r) => r.owner.kind === "read" && r.owner.repo === "web");
@@ -521,7 +526,7 @@ test("workspace impact keeps reads with their kinds, call-site ancestors and sta
   const [site] = t.list(`${prefix}/callSites`, "call-site");
   assert.equal(site?.disposition, "matched");
   const place = set.evidence.find(evidence => evidence.id === site?.site.location.place);
-  assert.deepEqual(place === undefined ? undefined : { repo: place.repo, value: place.value }, { repo: "web", value: { path: "src/orders.service.ts", line: 14 } });
+  assert.deepEqual(place === undefined ? undefined : { repo: place.repo, value: place.value }, { repo: "web", value: { path: "src/orders.service.ts", line: 14, column: 12 } });
   assert.deepEqual(site?.site.ancestors, [{ symbol: "OrdersService", line: 3, endLine: 40 }]);
   assert.deepEqual(site?.site.stated, { method: "GET", path: "/orders" });
   const [bare] = t.list(`${prefix}/unmatched`, "call-site");
