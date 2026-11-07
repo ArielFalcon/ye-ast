@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { sourceUnreadable, type Carrier, type CarrierSite, type FlowFrontier, type FlowNext, type FlowResult, type FlowUse } from "../../domain/contracts/consumer-flow.ts";
+import { siteFile, sourceUnreadable, type Carrier, type CarrierSite, type FlowFrontier, type FlowNext, type FlowResult, type FlowUse } from "../../domain/contracts/consumer-flow.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { ConsumerFlowReader } from "../../ports/consumer-flow.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -17,7 +17,7 @@ export async function createConsumerFlowReader(files: readonly SourceFile[], rep
 }
 
 function follow(program: Program, repo: string, { site, path }: Carrier): FlowResult {
-  const unit = program.index.units.get(site.file);
+  const unit = program.index.units.get(siteFile(site));
   if (unit === undefined) return sourceUnreadable(site);
   const walker = new Walker(repo, program, unit);
   const walkers = [walker];
@@ -26,7 +26,8 @@ function follow(program: Program, repo: string, { site, path }: Carrier): FlowRe
   else if (site.kind === "parameter") walker.startParameter(site, path);
   else if (site.kind === "member") walker.startMember(site, path);
   else if (site.kind === "input") return followInput(repo, unit, site, path);
-  else walkers.push(...resolverContinuation(program, repo, walker, site, path));
+  else if (site.kind === "return") walkers.push(...resolverContinuation(program, repo, walker, site, path));
+  else return sourceUnreadable(site);
   return {
     uses: ordered(walkers.flatMap((held) => held.uses)),
     next: ordered(walkers.flatMap((held) => held.next)),

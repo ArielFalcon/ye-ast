@@ -1,4 +1,4 @@
-import type { ConsumerCaller, ConsumerCallers } from "../../ports/consumer-sources.port.ts";
+import type { ConsumerCaller, ConsumerCallers, ConsumerMemberOccurrences } from "../../ports/consumer-sources.port.ts";
 import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
 import type { InboundOccurrence, InboundOccurrences } from "../impact/inbound-edges.ts";
 
@@ -15,6 +15,10 @@ export function callersOfFunction(store: CodeGraphReader | undefined, inbound: I
     .sort((a, b) => a.endLine - a.startLine - (b.endLine - b.startLine))[0];
   if (symbol === undefined) return { kind: "unresolved" };
   return { kind: "found", callers: inbound.occurrencesOf(symbol).map(callerOf) };
+}
+
+export function occurrencesOfMember(): ConsumerMemberOccurrences {
+  return { kind: "unavailable" };
 }
 
 function callerOf(occurrence: InboundOccurrence): ConsumerCaller {

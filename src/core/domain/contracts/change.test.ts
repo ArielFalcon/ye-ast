@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ELEMENT, parseAccessPath } from "./access-path.ts";
-import { parseChange, VALUE_CLASSES, type ChangeInput } from "./change.ts";
+import { derivedChange, parseChange, VALUE_CLASSES, type ChangeInput, type ValueDelta } from "./change.ts";
+import type { ValueSet } from "./payload-shape.ts";
 
 const property = parseAccessPath("owner.items")!;
 
@@ -87,4 +88,58 @@ test("a meaning change carries its note as written and introduces nothing", () =
   assert.equal(refusal({ meaning: "  " }), "unsupported-change");
   assert.equal(refusal({ meaning: 3 }), "unsupported-change");
   assert.equal(refusal(["removed", { meaning: "x" }]), "contradictory-change");
+});
+
+const OLD_GUARANTEE: ValueSet = { literals: { boolean: [], number: [], string: ["A", "B"] }, array: false, object: false, null: false, absent: false };
+
+const delta = (overrides: Partial<ValueDelta> = {}): ValueDelta => ({ introduced: [], added: [], retired: [], alwaysAbsent: false, oldGuarantee: OLD_GUARANTEE, ...overrides });
+
+function derived(input: ValueDelta) {
+  const result = derivedChange(input);
+  assert.ok(result.ok);
+  return result.value;
+}
+
+const WRITTEN: readonly (readonly [string, ChangeInput, ValueDelta])[] = [
+  ["nullable", "nullable", delta({ introduced: ["null"] })],
+  ["optional", "optional", delta({ introduced: ["undefined"] })],
+  ["removed", "removed", delta({ introduced: ["undefined"], alwaysAbsent: true })],
+  ["every type", { type: "string" }, delta({ introduced: ["string"] })],
+  ["an array type", { type: "array" }, delta({ introduced: ["array"] })],
+  ["added literals", { values: { added: ["B", 2, "A", true] } }, delta({ added: ["B", 2, "A", true] })],
+  ["retired literals", { values: { removed: ["Z", 1] } }, delta({ retired: ["Z", 1] })],
+  ["both lists", { values: { added: ["A"], removed: ["B"] } }, delta({ added: ["A"], retired: ["B"] })],
+  ["nullable and optional", ["optional", "nullable"], delta({ introduced: ["undefined", "null"] })],
+  ["a type and an absence", [{ type: "number" }, "optional"], delta({ introduced: ["number", "undefined"] })],
+  ["an absence and literals", ["nullable", { values: { added: ["A"], removed: ["B"] } }], delta({ introduced: ["null"], added: ["A"], retired: ["B"] })],
+  ["a type and literals of its kind", [{ type: "string" }, { values: { added: ["A"], removed: ["B"] } }], delta({ introduced: ["string"], added: ["A"], retired: ["B"] })],
+];
+
+test("a change derived from a delta is exactly the change the parser builds for the delta a written hypothesis expresses, and states the old guarantee", () => {
+  for (const [name, input, expected] of WRITTEN) {
+    const { oldGuarantee, ...rest } = derived(expected);
+    assert.deepEqual(rest, parsed(input), name);
+    assert.deepEqual(oldGuarantee, OLD_GUARANTEE, name);
+  }
+});
+
+test("a derived change accepts what a written one cannot say: several introduced classes, and a retired literal outside a new class", () => {
+  const classes = derived(delta({ introduced: ["string", "number", "null"] }));
+  assert.deepEqual(classes.entries, ["nullable", { type: "number" }, { type: "string" }]);
+  assert.deepEqual(classes.introduced, ["null", "number", "string"]);
+  assert.equal(refusal([{ type: "number" }, { type: "string" }]), "contradictory-change");
+
+  const outside = derived(delta({ introduced: ["number"], retired: ["x"] }));
+  assert.deepEqual(outside.entries, [{ type: "number" }, { values: { added: [], removed: ["x"] } }]);
+  assert.equal(refusal([{ type: "number" }, { values: { removed: ["x"] } }]), "contradictory-change");
+});
+
+test("a delta that introduces and retires nothing, or that contradicts itself, derives no change", () => {
+  const faults = (input: ValueDelta) => {
+    const result = derivedChange(input);
+    return result.ok ? undefined : result.fault.kind;
+  };
+  assert.equal(faults(delta()), "unsupported-change");
+  assert.equal(faults(delta({ added: ["A"], retired: ["A"] })), "contradictory-change");
+  assert.equal(faults(delta({ added: [Number.NaN] })), "unsupported-change");
 });

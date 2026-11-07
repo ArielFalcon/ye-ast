@@ -2,14 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseAccessPath } from "../../domain/contracts/access-path.ts";
 import { carrierKey, NO_FLOW, type Carrier, type FlowResult, type FlowUse } from "../../domain/contracts/consumer-flow.ts";
-import type { HypothesisInput } from "../../domain/contracts/hypothesis.ts";
+import { derivedChange } from "../../domain/contracts/change.ts";
+import { formatHypothesis, parseHypothesis, type HypothesisInput } from "../../domain/contracts/hypothesis.ts";
+import type { ValueSet } from "../../domain/contracts/payload-shape.ts";
 import type { Predicate } from "../../domain/contracts/use-operation.ts";
 import type { TestedGuard, UseOperation } from "../../domain/contracts/verdict.ts";
 import type { FactBase } from "../../domain/shared/fact.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import type { ConsequencesRequest, ConsumerQueries } from "../../ports/consumer-queries.port.ts";
-import type { ConsumerCaller, ConsumerCallers, ConsumerSession } from "../../ports/consumer-sources.port.ts";
-import { createConsumerQueries } from "./consumer-queries.ts";
+import type { ConsumerCaller, ConsumerCallers, ConsumerSession, PreparedWorkspace } from "../../ports/consumer-sources.port.ts";
+import { consequencesOn, createConsumerQueries } from "./consumer-queries.ts";
 
 const path = (text: string) => parseAccessPath(text)!;
 const OPERATION = "GET /owners/{id}";
@@ -71,15 +73,21 @@ function setup(options: Setup = {}) {
     ambiguousCalls: options.ambiguousCalls ?? [],
     cuts: [],
     callers: (declaration) => (asked.push(declaration.symbol), options.callers?.[declaration.symbol] ?? { kind: "found", callers: [] }),
+    memberOccurrences: () => ({ kind: "unavailable" }),
     flow: { follow: (carrier) => (followed.push(carrier), options.flow?.[carrierKey(carrier.site)] ?? NO_FLOW) },
     templates: { follow: (carrier) => (templated.push(carrier), options.templates?.[carrierKey(carrier.site)] ?? NO_FLOW) },
   };
   const queries: ConsumerQueries = createConsumerQueries({
     sources: {
-      withSession: async (request, run) => {
-        opened.push(request.hypothesis.property.join("."));
-        return { ok: true, value: await run(session) };
-      },
+      withWorkspace: async (_, run) => ({
+        ok: true,
+        value: await run({
+          session: async (hypothesis) => {
+            opened.push(hypothesis.property.join("."));
+            return { ok: true, value: session };
+          },
+        }),
+      }),
     },
   });
   const request: ConsequencesRequest = { repo: { repo: "web", path: "/work/web" } as ConsequencesRequest["repo"], hypothesis: { method: "get", path: "/owners/{id}", target: "response", property: options.property ?? "address", change: options.change ?? "nullable" } };
@@ -89,7 +97,7 @@ function setup(options: Setup = {}) {
     assert.notEqual(answer.value.status, "unknown");
     return answer.value as Exclude<typeof answer.value, { status: "unknown" }>;
   };
-  return { ask, followed, templated, opened, asked, queries, request };
+  return { ask, followed, templated, opened, asked, queries, request, session };
 }
 
 const verdictsOf = (fact: Awaited<ReturnType<ReturnType<typeof setup>["ask"]>>) => fact.value.findings.map((finding) => (finding.status === "complete" ? finding.value.verdict.kind : finding.evidence.at(-1)?.via));
@@ -112,6 +120,35 @@ test("the answer echoes the normalized hypothesis and the old guarantee it assum
   assert.deepEqual(fact.value.hypothesis, { method: "GET", path: "/owners/{id}", target: "response", property: "[].address", change: "nullable" });
   assert.equal(fact.value.assumedOldGuarantee, "present-and-non-null");
   assert.deepEqual(fact.value.findings, []);
+});
+
+test("several hypotheses are answered on one prepared workspace, each from the session it asks for", async () => {
+  const { session } = setup();
+  const asked: string[] = [];
+  const workspace: PreparedWorkspace = { session: async (hypothesis) => (asked.push(formatHypothesis(hypothesis)), { ok: true, value: session }) };
+  const hypotheses = [{ property: "address", change: "nullable" }, { property: "name", change: "optional" }].map((written) => {
+    const parsed = parseHypothesis({ method: "GET", path: "/owners/{id}", target: "response", ...written });
+    assert.ok(parsed.ok);
+    return parsed.value;
+  });
+
+  const answers = [];
+  for (const hypothesis of hypotheses) answers.push(await consequencesOn(workspace, hypothesis));
+
+  assert.deepEqual(asked, ["GET /owners/{id} response address nullable", "GET /owners/{id} response name optional"]);
+  assert.deepEqual(answers.map((answer) => answer.ok && answer.value.status !== "unknown" && [answer.value.value.hypothesis.property, answer.value.value.hypothesis.change]), [["address", "nullable"], ["name", "optional"]]);
+});
+
+test("a hypothesis derived from a diff states the old guarantee it was derived from instead of the assumed one", async () => {
+  const oldGuarantee: ValueSet = { literals: { boolean: [], number: [], string: "every" }, array: false, object: false, null: false, absent: false };
+  const change = derivedChange({ introduced: ["null"], added: [], retired: [], alwaysAbsent: false, oldGuarantee });
+  assert.ok(change.ok);
+  const { session } = setup();
+
+  const answer = await consequencesOn({ session: async () => ({ ok: true, value: session }) }, { method: "GET", path: "/owners/{id}", target: "response", property: path("address"), change: change.value });
+
+  assert.ok(answer.ok && answer.value.status !== "unknown");
+  assert.deepEqual(answer.value.value.assumedOldGuarantee, oldGuarantee);
 });
 
 test("an optional property is admitted behind a test that excludes undefined, not behind one that excludes only null, with undefined as the witness", async () => {
