@@ -8,7 +8,9 @@
   it must be done well). Standing owner rules that bound it: no repository code runs in either mode; `untrusted` must
   work in pipelines and outside a developer's machine without precautionary restrictions that block features, while
   every restriction that blocks a real attack stays; no limit without a measurement; duplicated logic is unified, not
-  patched.
+  patched. On 2026-11-08 the owner approved this design (translated): "we go on with B6 as you recommend", with a
+  measurement gate before any surface is exposed (below), and decided the snapshot without a lockfile (decision 5): "yes,
+  as you recommend".
 - Supersedes in part: [ADR-0010](0010-trust-modes.md) decisions 2 and 6, [ADR-0013](0013-coverage-grows-only-with-evidence.md)
   decision 2, [ADR-0014](0014-angular-and-spring-from-own-extractors.md) the definition-of-done item on fixtures,
   [ADR-0036](0036-dependence-is-the-compile-time-binding.md) decision 3. Reopens the host contract that
@@ -112,10 +114,10 @@ same checker binds 86.7% of its calls, not 100%.
 5. **Staleness is checked, and stated.** For each package the program read, the installed version in its
    `package.json` is compared with the snapshot's lockfile entry at the same install path (npm lockfile versions 2 and
    3). Any mismatch, or a package the lockfile does not list, makes the declaration unused for that snapshot: every
-   answer falls back to decision 9 and carries a `build-output` cut naming each mismatched package. What a snapshot
-   without a readable lockfile gets is one switch of that same domain rule, decided by the owner: either the declaration
-   is used and recorded as unverified in the fact's inputs, or it is unused with a `build-output` cut naming the missing
-   lockfile. Another lockfile format enters with evidence.
+   answer falls back to decision 9 and carries a `build-output` cut naming each mismatched package. A snapshot without a
+   readable lockfile uses the declaration, and every fact that used it states it as unverified, in its inputs and
+   visibly in the answer, never as a verified fact (the owner, 2026-11-08, translated: "yes, as you recommend"). No
+   check against the manifest's version ranges is made. Another lockfile format enters with evidence.
 6. **The fact records its basis.** `inputs` gains, per declaration, its kind, its `at`, whether it was verified, and the
    digest of the files the derivation read (path under the directory and content). The derivation of a dependence gains
    `typed` beside ADR-0036's `proven`, `resolved` and `name-match`.
@@ -173,6 +175,6 @@ numbers whether the derivation also runs on live trees or on `sha` snapshots onl
 
 - Java class paths, generated OpenAPI sources and SCIP indexes: each needs a measured application where it changes an
   answer.
-- yarn and pnpm lockfiles, and a manifest-range check for snapshots without a lockfile.
+- yarn and pnpm lockfiles. A check of installed versions against the manifest's ranges is out (decision 5).
 - Reusing a previous program for an edited live tree.
 - Whether trace may use a typed binding of a nominal class (ADR-0029 decision 11).

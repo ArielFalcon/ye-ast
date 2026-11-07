@@ -82,7 +82,7 @@ export function createTypeBindings({ trees, digest, facts }: { trees: DeclaredTr
         return { path, version: manifest.kind === "file" ? versionOf(manifest.content) : undefined };
       });
       const verdict = installVerdict(lockedVersions(lockfileOf(sources, output)), installed);
-      if (!verdict.usable) unused.push({ kind: output.kind, at: output.at, ...(verdict.reason === "stale" ? { reason: "stale", stale: verdict.stale } : { reason: "no-lockfile" }) });
+      if (!verdict.usable) unused.push({ kind: output.kind, at: output.at, stale: verdict.stale });
       else {
         const lines = [...asked.values()].filter((each) => each.output === index).map(({ path, found }) => `${path}\0${found}`).toSorted(compareText);
         used.push({ kind: output.kind, at: output.at, verified: verdict.verified, digest: digest.of(lines.join("\n")) });

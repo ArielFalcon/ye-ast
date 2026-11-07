@@ -162,7 +162,7 @@ const lock = (version: string) => JSON.stringify({ lockfileVersion: 3, packages:
 
 test("a declaration whose package the lockfile states at another version is unused, naming the package and both versions", async () => {
   const answer = await createTypeBindings({ digest: DIGEST, trees: declared(KIT) }).of(sources({ ...USE_KIT, "package-lock.json": lock("1.0.0") }), [OUTPUT]);
-  assert.deepEqual(answer, { status: "unused", outputs: [{ kind: "node-modules", at: "", reason: "stale", stale: [{ path: "kit", installed: "2.0.0", locked: "1.0.0" }] }] });
+  assert.deepEqual(answer, { status: "unused", outputs: [{ kind: "node-modules", at: "", stale: [{ path: "kit", installed: "2.0.0", locked: "1.0.0" }] }] });
 });
 
 test("a kept answer is used only while every declared path it read answers the same", async () => {

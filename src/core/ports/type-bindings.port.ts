@@ -22,7 +22,7 @@ export interface UnownedSource {
   configurations: readonly string[];
 }
 
-/** A declaration the derivation used: whether the snapshot's lockfile verified it, and the digest of what it read from it. */
+/** A declaration the derivation used: whether the snapshot's lockfile verified it (a snapshot without one leaves it unverified), and the digest of what it read from it. */
 export interface UsedOutput {
   kind: DeclaredBuildOutput["kind"];
   at: string;
@@ -30,8 +30,12 @@ export interface UsedOutput {
   digest: string;
 }
 
-/** A declaration the snapshot does not match (ADR-0037 decision 5). */
-export type UnusedOutput = { kind: DeclaredBuildOutput["kind"]; at: string } & ({ reason: "stale"; stale: readonly StaleInstall[] } | { reason: "no-lockfile" });
+/** A declaration the snapshot's lockfile contradicts (ADR-0037 decision 5), with each package it states otherwise. */
+export interface UnusedOutput {
+  kind: DeclaredBuildOutput["kind"];
+  at: string;
+  stale: readonly StaleInstall[];
+}
 
 /**
  * `bound`: a call the checker leaves unbound is absent from `bindings`, and its syntactic settlement answers (ADR-0037

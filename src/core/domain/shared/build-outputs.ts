@@ -21,13 +21,6 @@ export function isRepositoryDirectory(at: string): boolean {
   return !at.startsWith("/") && !at.endsWith("/") && at.split("/").every((segment) => segment !== "" && segment !== "." && segment !== ".." && !segment.includes("\\"));
 }
 
-/**
- * What a snapshot without a readable lockfile gets from a declaration (ADR-0037 decision 5): `use-unverified` uses it and
- * records it unverified, `unused` leaves it unused and names the missing lockfile. The owner's decision; one switch.
- */
-export type WithoutLockfile = "use-unverified" | "unused";
-export const WITHOUT_LOCKFILE: WithoutLockfile = "use-unverified";
-
 /** A package the derivation read, at its install path under the declared directory (`@scope/name`, `a/node_modules/b`). */
 export interface InstalledPackage {
   path: string;
@@ -41,20 +34,18 @@ export interface StaleInstall {
   locked?: string;
 }
 
-export type InstallVerdict =
-  | { usable: true; verified: boolean }
-  | { usable: false; reason: "stale"; stale: readonly StaleInstall[] }
-  | { usable: false; reason: "no-lockfile" };
+export type InstallVerdict = { usable: true; verified: boolean } | { usable: false; stale: readonly StaleInstall[] };
 
 /**
  * Whether a declared directory matches the snapshot: every package read has, at its install path, the version the
- * lockfile states there. `locked` is absent when the snapshot has no readable lockfile for the directory.
+ * lockfile states there. Without a readable lockfile (`locked` absent) the directory is usable and unverified (ADR-0037
+ * decision 5).
  */
-export function installVerdict(locked: ReadonlyMap<string, string> | undefined, installed: readonly InstalledPackage[], withoutLockfile: WithoutLockfile = WITHOUT_LOCKFILE): InstallVerdict {
-  if (locked === undefined) return withoutLockfile === "use-unverified" ? { usable: true, verified: false } : { usable: false, reason: "no-lockfile" };
+export function installVerdict(locked: ReadonlyMap<string, string> | undefined, installed: readonly InstalledPackage[]): InstallVerdict {
+  if (locked === undefined) return { usable: true, verified: false };
   const stale = installed
     .filter(({ path, version }) => version === undefined || locked.get(path) !== version)
     .map(({ path, version }) => ({ path, ...(version === undefined ? {} : { installed: version }), ...(locked.has(path) ? { locked: locked.get(path)! } : {}) }))
     .toSorted((a, b) => compareText(a.path, b.path));
-  return stale.length === 0 ? { usable: true, verified: true } : { usable: false, reason: "stale", stale };
+  return stale.length === 0 ? { usable: true, verified: true } : { usable: false, stale };
 }
