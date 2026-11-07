@@ -715,7 +715,7 @@ test("a reached symbol names locations of the selected evidence category", async
   ];
   const answer = callersFact(await setup({ nodes, edges }).callers({ targets: [{ file: "src/A.java", symbol: "f" }] }));
   const reached = answer.status === "complete" ? answer.value.symbols.find((symbol) => symbol.symbol === "g") : undefined;
-  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [14, 21], basis: "call" });
+  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [14, 21], basis: "call", derivation: "resolved" });
   assert.equal(reached?.endLine, 40);
 });
 
@@ -724,7 +724,7 @@ test("selected constructor evidence excludes type-reference locations", async ()
   const edges = [{ from: "g", to: "f", kind: "references", confidence: 0.8, line: 11 }, { from: "g", to: "f", kind: "instantiates", confidence: 0.9, line: 13 }];
   const answer = fact(await setup({ nodes, edges, changes: { ok: true, value: [change("src/A.java")] } }).ask());
   const reached = answer.status !== "unknown" ? answer.value.symbols.find((symbol) => symbol.symbol === "g") : undefined;
-  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [13], basis: "call" });
+  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [13], basis: "call", derivation: "resolved" });
 });
 
 test("a dependence that is a use and not a call says so, so a reference is never read as a signature to change", async () => {
@@ -732,7 +732,7 @@ test("a dependence that is a use and not a call says so, so a reference is never
   const edges = [{ from: "g", to: "f", kind: "references", confidence: 0.9, line: 7 }];
   const answer = callersFact(await setup({ nodes, edges }).callers({ targets: [{ file: "src/A.java", symbol: "f" }] }));
   const reached = answer.status === "complete" ? answer.value.symbols.find((symbol) => symbol.symbol === "g") : undefined;
-  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [7], basis: "reference" });
+  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [7], basis: "reference", derivation: "resolved" });
 });
 
 test("a dependence the walk never places names its reason instead of leaving the line silent", async () => {
@@ -740,7 +740,7 @@ test("a dependence the walk never places names its reason instead of leaving the
   const edges = [{ from: "C", to: "C.m", kind: "contains" }];
   const answer = callersFact(await setup({ nodes, edges }).callers({ targets: [{ file: "src/A.java", symbol: "m" }] }));
   const owner = answer.status === "complete" ? answer.value.symbols.find((symbol) => symbol.symbol === "C") : undefined;
-  assert.deepEqual(owner?.via, { file: "src/A.java", symbol: "m", basis: "contains" });
+  assert.deepEqual(owner?.via, { file: "src/A.java", symbol: "m", basis: "contains", derivation: "resolved" });
 });
 
 const TWO_CLASSES = {
@@ -1380,7 +1380,7 @@ test("a bare call the import reader places on this, inside the class that declar
   const ask = async (reader: ImportOriginsReader) => callersFact(await setup({ ...common, importOrigins: reader }).callers({ targets: [{ file, symbol: "fetch" }] }));
   const proven = await ask(origins((site) => (site.column === 23 ? { kind: "this-member", name: "fetch" } : undefined)));
   assert.equal(proven.status, "complete");
-  assert.deepEqual(proven.status === "complete" && proven.value.symbols.find((symbol) => symbol.symbol === "load")?.via, { file, symbol: "fetch", lines: [3], basis: "call" });
+  assert.deepEqual(proven.status === "complete" && proven.value.symbols.find((symbol) => symbol.symbol === "load")?.via, { file, symbol: "fetch", lines: [3], basis: "call", derivation: "proven" });
   const unproven = await ask(origins(() => undefined));
   assert.equal(unproven.status, "partial");
   assert.equal(unproven.status === "partial" && unproven.value.symbols.some((symbol) => symbol.symbol === "load"), false);
@@ -1533,7 +1533,7 @@ test("public via follows the confidence witness while shortest depth remains ind
   const reached = answer.value.symbols.find((symbol) => symbol.symbol === "target");
   assert.equal(reached?.depth, 1);
   assert.equal(reached?.confidence, 0.8);
-  assert.deepEqual(reached?.via, { file: "src/B.java", symbol: "mid", lines: [3], basis: "reference" });
+  assert.deepEqual(reached?.via, { file: "src/B.java", symbol: "mid", lines: [3], basis: "reference", derivation: "resolved" });
 });
 
 test("public strongest reference keeps its locations and the observed call still counts", async () => {
@@ -1548,7 +1548,7 @@ test("public strongest reference keeps its locations and the observed call still
   assert.equal(answer.value.symbols.find((symbol) => symbol.symbol === "seed")?.fanIn, 1);
   const reached = answer.value.symbols.find((symbol) => symbol.symbol === "caller");
   assert.equal(reached?.confidence, 0.9);
-  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "seed", lines: [5], basis: "reference" });
+  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "seed", lines: [5], basis: "reference", derivation: "resolved" });
 });
 
 const RECORDS = {
