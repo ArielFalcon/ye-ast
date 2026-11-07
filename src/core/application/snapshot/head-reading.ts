@@ -40,6 +40,7 @@ export interface HeldLive {
   sources(signal?: AbortSignal): Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>>;
   extract(signal?: AbortSignal): Promise<Result<CommitExtraction, VcsFault>>;
   retained?: PreparedCommit["retained"];
+  facts?: PreparedCommit["facts"];
 }
 
 /** Consumers of a capture share one operation signal; independent operations create their own capture. */
@@ -51,9 +52,9 @@ export function createHeldLive(input: { repo: string; repoId: string; scope: Dec
 }
 
 /** The held capture as the readers of a snapshot take it: nothing to write, since the mirror already holds the files. */
-export function preparedLive(held: Pick<HeldLive, "tree" | "sources" | "extract" | "retained">): PreparedCommit {
-  const { tree, sources, extract, retained } = held;
-  return { root: tree.root, materialize: async () => ({ ok: true, value: undefined }), tree: { export: tree.export }, sources, extract, ...(retained === undefined ? {} : { retained }) };
+export function preparedLive(held: Pick<HeldLive, "tree" | "sources" | "extract" | "retained" | "facts">): PreparedCommit {
+  const { tree, sources, extract, retained, facts } = held;
+  return { root: tree.root, materialize: async () => ({ ok: true, value: undefined }), tree: { export: tree.export }, sources, extract, ...(retained === undefined ? {} : { retained }), ...(facts === undefined ? {} : { facts }) };
 }
 
 export interface LiveCaptureSelection {

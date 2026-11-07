@@ -318,7 +318,7 @@ const NO_DERIVED = {
   value: {
     repositorySnapshots: [{ repo: "shop", snapshot: BASE.snapshot }],
     answers: [],
-    change: { base: "main", head: "HEAD", snapshots: { base: "b".repeat(40), head: "c".repeat(40) }, derivation: { ...BASE, status: "complete", value: { gained: [], operations: { added: [], removed: [] }, frontiers: [] } } },
+    change: { base: "main", head: "HEAD", snapshots: { base: "b".repeat(40), head: "c".repeat(40) }, derivation: { ...BASE, status: "complete", value: { differences: [], frontiers: [] } } },
   },
 } as unknown as Fact<ConsequencesValue>;
 

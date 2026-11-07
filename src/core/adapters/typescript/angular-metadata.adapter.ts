@@ -1,7 +1,9 @@
 import { posix } from "node:path";
 import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
-import { bindFile, unwrapped } from "./lexical-bindings.ts";
+import { bindFile } from "./lexical-bindings.ts";
+import { unwrapped } from "./syntax.ts";
+import { ANGULAR_CORE } from "./angular-injection.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 import { isAngularWorkspace, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { AngularClass, Operand, TemplateSource } from "../../domain/relations/angular-class.ts";
@@ -20,7 +22,6 @@ import { manifestsOf, pathsByProject, projectOf } from "./angular-projects.ts";
 import { createModuleResolver, type ManifestPackages } from "./module-resolver.ts";
 import { providerIdentityEvidence, type ProviderIdentityEvidence } from "./provider-identity.ts";
 
-const ANGULAR_CORE = "@angular/core";
 const NO_PROVIDER_IDENTITY: ProviderIdentityEvidence = {
   tokens: new Set(), exportedTokens: new Set(), imports: new Map(), writes: new Set(),
 };
@@ -134,7 +135,7 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
         const usesCore = [...shape.imports.values()].some((binding) => binding.module === ANGULAR_CORE);
         const coreExternal = usesCore && "external" in await resolver.resolve(file, ANGULAR_CORE);
         const angular = readAngularMetadataFile(sf, shape, collectSites, coreExternal);
-        return { shape, angular, identity: proveMembers ? providerIdentityEvidence(sf, coreExternal, angular.memberEvidence.declarations) : NO_PROVIDER_IDENTITY };
+        return { shape, angular, identity: proveMembers ? providerIdentityEvidence(sf, shape, coreExternal, angular.memberEvidence.declarations) : NO_PROVIDER_IDENTITY };
       })();
       parsed.set(file, held);
     }

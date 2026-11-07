@@ -67,6 +67,7 @@ import { createJavaNameBindings } from "../core/adapters/spring/java-name-bindin
 import { importOriginsByLanguage } from "./import-origins-by-language.ts";
 import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
+import type { DerivedFacts } from "../core/ports/derived-facts.port.ts";
 import type { ModuleDependenciesReader } from "../core/ports/module-dependencies.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
@@ -81,7 +82,7 @@ import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
-import { measuredContractConsequences, measuredDecisions, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredTrace, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
+import { measuredContractConsequences, measuredDecisions, measuredDerivedFacts, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredTrace, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
 
 const PRODUCER_NAME = "ye-ast";
 export const LIVE_STAGING_VERSION = `${STAGING_RULES_VERSION}:${WRITTEN_UNIVERSE_VERSION}`;
@@ -132,7 +133,7 @@ export interface ComposedQueries {
   trace: TraceQueries;
   workspace: WorkspaceQueries;
   workspaceImpact: WorkspaceImpactQueries;
-  /** What changing the contract of an operation, by hypothesis or between two revisions, does to the code that consumes it (RFC-0022, RFC-0023); a library surface only until the MCP, CLI and protocol expose it. */
+  /** What changing the contract of an operation, by hypothesis or between two revisions, does to the code that consumes it (RFC-0022, RFC-0023). */
   contractConsequences: ContractConsequencesQueries;
   decisions: DecisionQueries;
   redaction: Redaction;
@@ -219,8 +220,12 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const entrypoints = measurement === undefined ? bareEntrypoints : measuredEntrypoints(bareEntrypoints, measurement);
   const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph, digest, codegraph, retention: options.indexRetention ?? INDEX_RETENTION, ...(measurement && { onDiscard: measuredIndexDiscard(measurement) }) });
   const moduleDependencies = staged(createModuleDependenciesReader(), { extract: "module-dependencies" });
-  const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => createJavaImportsReader(await createJavaParser()).extract(sources, options) }, { extract: "java-imports" });
-  const importOrigins = (sources: readonly SourceFile[], paths?: readonly string[]) => importOriginsByLanguage([createImportOrigins(sources), createJavaNameBindings(createJavaParser, sources, paths)]);
+  let javaImportsReader: Promise<ModuleDependenciesReader> | undefined;
+  const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => (await (javaImportsReader ??= createJavaParser().then(createJavaImportsReader))).extract(sources, options) }, { extract: "java-imports" });
+  const importOrigins = (sources: readonly SourceFile[], paths?: readonly string[], facts?: DerivedFacts) => {
+    const reader = importOriginsByLanguage([createImportOrigins(sources, facts === undefined ? {} : { facts }), createJavaNameBindings(createJavaParser, sources, paths)]);
+    return staged(measurement === undefined || facts === undefined ? reader : measuredDerivedFacts(reader, facts, "import-origins", measurement), { origins: "import-origins", rootOrigins: "root-origins" });
+  };
   const unmodelled = staged<UnmodelledConstructsReader>({ extract: async (sources) => createJavaRecordsReader(await createJavaParser()).extract(sources) }, { extract: "java-records" });
   const impactDeps: ImpactQueriesDeps = {
     vcs,

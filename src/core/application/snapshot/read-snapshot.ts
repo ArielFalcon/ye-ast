@@ -4,6 +4,7 @@ import { sortedEngines, SCHEMA, type DeclaredConfig, type DeclaredScope, type Fa
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { PathSelection } from "../../domain/shared/scope.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { LiveFault } from "../../ports/live-queries.port.ts";
@@ -62,10 +63,22 @@ export interface SnapshotData {
   output?: unknown;
 }
 
+/** What the cache decided for one derived fact: whether it holds it, its charge, and how many entries it evicted. */
+export interface FactAdmission {
+  admitted: boolean;
+  entryBytes: number;
+  evicted: number;
+}
+
 /** Serialized immutable data only: no scratch paths, compiler trees, readers or in-flight work. */
 export interface SnapshotDataCache {
   get(key: string): SnapshotData | undefined;
   put(key: string, data: SnapshotData): void;
+  /** A derived fact (ADR-0035), parsed afresh; facts share the budget and the eviction order and write no `cache` line. */
+  getFact(key: string): unknown;
+  putFact(key: string, json: string): FactAdmission;
+  /** The bytes the cache holds now, and how many of them are derived facts. */
+  usage(): { factBytes: number; retainedBytes: number };
 }
 
 export interface PreparedCommit {
@@ -84,6 +97,8 @@ export interface PreparedCommit {
    * besides the sources the output depends on. Absent where nothing is retained.
    */
   retained?<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal): Promise<T>;
+  /** The derived facts of this snapshot's files, kept between requests by content (ADR-0035). Absent where nothing is retained. */
+  facts?: DerivedFacts;
 }
 
 export interface SnapshotPreparation {

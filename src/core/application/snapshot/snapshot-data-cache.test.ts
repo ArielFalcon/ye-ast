@@ -108,3 +108,18 @@ test("an entry whose source bytes alone exceed the budget is skipped without bei
   assert.equal(borderline.get("huge"), undefined);
   assert.deepEqual(events[1], { outcome: "oversize-skipped", entryBytes: bytes("huge", huge), retainedBytes: 0 });
 });
+
+test("a derived fact is charged on the shared budget, evicts the least recently used snapshot entry, and writes no line", () => {
+  const events: SnapshotCacheEvent[] = [];
+  const cache = createSnapshotDataCache(2 * bytes("a", empty) + 3, (event) => events.push(event));
+  cache.put("a", empty);
+  cache.put("b", empty);
+  events.length = 0;
+
+  assert.deepEqual(cache.putFact("f", "[1]"), { admitted: true, entryBytes: 4, evicted: 1 });
+  assert.deepEqual(cache.getFact("f"), [1]);
+  assert.equal(cache.getFact("g"), undefined);
+  assert.deepEqual(cache.usage(), { factBytes: 4, retainedBytes: 4 + bytes("b", empty) });
+  assert.deepEqual(events.map(({ outcome }) => outcome), ["evicted"]);
+  assert.equal(cache.get("a"), undefined);
+});

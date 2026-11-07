@@ -89,3 +89,15 @@ test("a class a method declares before the use shadows a member type its class i
 
   assert.deepEqual(await createJavaRootBindings(createJavaParser(), [base, derived])([site]), [{ kind: "local", root: "User" }]);
 });
+
+test("super binds to the superclass of the class around it, and to nothing inside an anonymous class's body", async () => {
+  const base = { path: "src/main/java/app/Base.java", content: "package app;\npublic class Base {\n  public void run() {}\n}\n" };
+  const lines = ["package app;", "class Child extends Base {", "  void m() {", "    super.run();", "    Runnable task = new Runnable() {", "      public void run() { super.toString(); }", "    };", "  }", "}"];
+  const child = { path: "src/main/java/app/Child.java", content: lines.join("\n") };
+  const site = (line: number) => ({ file: child.path, line, column: lines[line - 1]!.indexOf("super") + 1, spelled: "super", owner: { name: "m", line: 3, endLine: 8 } });
+
+  const [own, anonymous] = await createJavaRootBindings(createJavaParser(), [base, child])([site(4), site(6)]);
+
+  assert.deepEqual(own, { kind: "located", root: "Base", file: base.path, path: "app.Base" });
+  assert.deepEqual(anonymous, { kind: "unknown" });
+});

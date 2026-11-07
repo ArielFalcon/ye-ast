@@ -235,9 +235,9 @@ npx --yes ye-ast-mcp map /path/to/repo
 - [ ] stdout is one JSON object with `schema`, `snapshot`, `producer`, `inputs`, `evidence`, `status` and `value`.
 - [ ] `status` is `complete` or `partial`. Both are valid answers.
 - [ ] `value.entrypoints` is an object, not `null`.
-- [ ] If the client lists MCP tools, the nine read-only tools appear: `ye_ast_entrypoints`, `ye_ast_callers`,
-      `ye_ast_importers`, `ye_ast_impact`, `ye_ast_outline`, `ye_ast_trace`, `ye_ast_workspace`, `ye_ast_decisions` and
-      `ye_ast_compose`. The client may need a restart to pick up a new server. The server also sends the client short
+- [ ] If the client lists MCP tools, the ten read-only tools appear: `ye_ast_entrypoints`, `ye_ast_callers`,
+      `ye_ast_importers`, `ye_ast_impact`, `ye_ast_outline`, `ye_ast_trace`, `ye_ast_workspace`, `ye_ast_decisions`,
+      `ye_ast_contract_consequences` and `ye_ast_compose`. The client may need a restart to pick up a new server. The server also sends the client short
       instructions: when to call each tool and how to read an answer.
 
 A non-zero exit code is a query problem, not a registration problem: read [step 7](#7-failures-and-what-they-mean).
@@ -252,6 +252,7 @@ flowchart TD
     Q -->|"Move, rename or delete a file,<br/>or change its exports"| I["ye_ast_importers"]
     Q -->|"Follow what a declaration executes<br/>before reading the flow file by file"| T["ye_ast_trace"]
     Q -->|"Report work done<br/>or open a pull request"| P["ye_ast_impact"]
+    Q -->|"Change a response or request contract,<br/>or see what a contract diff breaks"| K["ye_ast_contract_consequences"]
     Q -->|"The work crosses repositories:<br/>who calls this from another clone"| W["ye_ast_workspace, then<br/>callers or impact with workspace"]
 ```
 
@@ -265,9 +266,10 @@ flowchart TD
 | `ye_ast_trace` | Follow what declarations execute, in source order, with their HTTP and message effects and a reading plan of the spans to open; branches are not evaluated | `targets`, `revision`, `live`, `scope`, `budget` (`depth`, `expansions`), `mode` |
 | `ye_ast_workspace` | Discover outward names and candidate local repositories | `repos`, `gateways`, `revision`, `live`, `offline`, `scope`, `mode` |
 | `ye_ast_decisions` | Find workspace configuration gaps and evidence-backed options | `repos`, `gateways`, `revision`, `live`, `offline`, `scope`, `mode` |
+| `ye_ast_contract_consequences` | Before changing an HTTP response or request contract, or to see what a contract diff breaks: each consumer use or request producer with its verdict and code evidence, and every place the flow is lost as `unknown` | `hypotheses` (`{ method, path, target, property, change }`, `path` as the workspace links the route) or `base`/`head`, `revision`, `live` (hypotheses only), `scope`, `workspace`, `mode` |
 | `ye_ast_compose` | Combine related queries into shared entities, relations and evidence with source provenance | `queries`, `mode`, `expect`, `deadlineMs` |
 
-Eight query families answer one question each; `ye_ast_compose` runs several of them in one call and merges what they
+Nine query families answer one question each; `ye_ast_compose` runs several of them in one call and merges what they
 share (see [Compose related queries](#compose-related-queries)).
 
 How the arguments behave:
@@ -385,7 +387,7 @@ Working rules:
 
 ### Compose related queries
 
-`ye_ast_compose` takes `queries` (1 to 16, each `{ name, arguments }` of one of the eight families above), `mode`,
+`ye_ast_compose` takes `queries` (1 to 16, each `{ name, arguments }` of one of the nine families above), `mode`,
 and optionally `expect` and `deadlineMs`:
 
 ```json
@@ -540,6 +542,7 @@ names the kind and whose `_meta["ye-ast/fault"]` holds `{ kind, detail, entries?
 | `unsupported-object-format`, `live-mirror-failed` | The live mirror could not be built or read | Answer from a revision; report the detail |
 | `unknown-symbol` | Nothing declares that symbol at that revision, or a line range covers no declaration and no code (past the end of the file, or only blank and comment lines) | The error lists the symbols each file declares; use one, or a line range inside a declaration (`ye_ast_outline` lists their spans) |
 | `unknown-change-path` | A `changed` glob selected no changed path | Correct the globs (`globs` lists the ones that matched nothing) |
+| `invalid-hypothesis`, `contradictory-revisions` | A `ye_ast_contract_consequences` hypothesis is malformed or unsupported (`index` names it), or the bound revision contradicts `head` | Fix that hypothesis, or bind the repository to `head`. An operation no repository serves is not a fault: it is an `unknown` answer |
 | `unknown-repository`, `ambiguous-repository` | `repo` is not a declared ID (or is declared twice); `available` lists the IDs | Use a declared ID, or update the host registration |
 | `duplicate-repository`, `duplicate-workspace-source`, `workspace-capture-unavailable`, `workspace-replay-mismatch`, `result-changed` | A workspace request names a repository twice, a capture failed, or a replay or `expect` no longer matches the source | Fix the request, or run the query again without `expect` and report the new identity |
 | `composition-*`, `replay-unavailable` | A `ye_ast_compose` request failed validation, its size limit, an assertion or one of its sources | See [Compose related queries](#compose-related-queries) |
@@ -580,6 +583,7 @@ ye-ast outline . src/checkout.ts                # declarations with spans, and i
 ye-ast trace . src/checkout.ts:placeOrder       # what a declaration executes, with a reading plan
 ye-ast trace --entrypoint "http-route:POST /orders" .   # what an entrypoint of the map executes
 ye-ast map --live .                             # the working tree (trusted only)
+ye-ast contract-consequences --base main .      # what the branch's contract changes break
 ```
 
 | Command | Answers |
@@ -593,6 +597,8 @@ ye-ast map --live .                             # the working tree (trusted only
 | `ye-ast trace [--revision <rev> \| --live] [scope] [--depth <n>] [--expansions <n>] [--entrypoint <kind>:<name>]… <repo> [<file>:<symbol> \| <file>:<start>-<end>] …` | What the selected declarations execute, in the order their bodies call it: each declaration expanded once, proven terminal callees folded into leaves, calls leaving the repository grouped by module, the HTTP requests and published messages a declared client makes as `effects` with their target (a target the snapshot does not decide is an `unresolved-link` cut naming the library it goes through), unsettled calls as `unresolved-link` cuts with their candidates, and the reading plan of the spans to open. `--entrypoint`, instead of declarations, starts at the handler of every entrypoint of the map with that kind and name (`http-route:POST /orders`, `ui-route:/orders/:id`, split at the first colon), a UI route at its component; a name the map does not hold is the `unknown-entrypoint` fault listing the names of that kind |
 | `ye-ast workspace [--revision <rev>] [--offline] [scope] <repo>` | The outward names the bound repository and the workspace it persists state, the local repository that serves each, and the names nothing serves |
 | `ye-ast decisions [--revision <rev>] [--offline] [scope] <repo>` | The gaps the same workspace leaves to the user, each with every option the workspace can verify |
+| `ye-ast contract-consequences --hypothesis <json> [--hypothesis <json>]… [--revision <rev>] [scope] <repo>` | Per hypothesis (`{ "method", "path", "target": "response"\|"request", "property", "change" }`), in the order given: the consumer uses or request producers the change reaches, each with its verdict and chain, and every lost flow as an `unknown` finding, over the workspace the repository persists |
+| `ye-ast contract-consequences --base <rev> [--head <rev>] [scope] <repo>` | The hypotheses a contract diff implies, derived from the contract both revisions state, each answered as above and naming the rules of the differences it follows, plus the derivation: every difference classified by its rule (`response-property-became-nullable`, `operation-removed`, …) and level (`breaking`, `review`, `compatible`), and the places it could not be derived or classify |
 | `ye-ast init --trust trusted\|untrusted [--workspace <file>] [<repo>]` | Declares the trust mode (the repository defaults to `.`), writes the fixed layer (and the workspace manifest given, once every repository it names is a readable repository root), prints the MCP registration |
 | `ye-ast init --trust trusted\|untrusted [--workspace <file>] --repo <id> <path> [--repo <id> <path>]… <launch-repo>` | The batch form of step 2: one trust choice for several roots; prints a JSON report, then the MCP registration |
 | `ye-ast mcp [<launch-root>] [--repo <id> <root>]…` | Read-only stdio MCP server with a declared repository catalog |
@@ -603,7 +609,7 @@ ye-ast map --live .                             # the working tree (trusted only
 | `scope` | `[--include <glob>]… [--exclude <glob>]…` over repository-relative paths, on every query command; without `--include` every path is included; `--exclude` wins |
 | `changed` | `[--changed <glob>]…` on `impact` only: globs over the changed paths that seed the walk; a glob that selects no changed path is an error (`unknown-change-path`) |
 | `budget` | `[--depth <n>] [--hub-fan-in <n>] [--expansions <n>]` on `impact` and `callers`, `[--depth <n>] [--expansions <n>]` on `trace`; positive integers, no defaults |
-| `--live` | Reads the working tree of a repository declared `trusted` from ye-AST's own mirror, instead of a revision. Replaces `--revision` (`map`, `callers`, `importers`, `outline`, `trace`) or `--head` (`impact`; `--base` stays). Using both is a usage error (exit `2`); `workspace` and `decisions` take no `--live`. A stale answer adds one stderr line |
+| `--live` | Reads the working tree of a repository declared `trusted` from ye-AST's own mirror, instead of a revision. Replaces `--revision` (`map`, `callers`, `importers`, `outline`, `trace`) or `--head` (`impact`; `--base` stays). Using both is a usage error (exit `2`); `workspace`, `decisions` and `contract-consequences` take no `--live`. A stale answer adds one stderr line |
 | `--offline` | `workspace` and `decisions` only: read every repository from its own clone and refresh no declared remote, as under `untrusted` |
 | `--repo-id` | Names the repository in every snapshot; without it the name is the directory of the repository's main worktree, so every linked worktree of one repository answers the same name |
 | `--measure` | Writes one JSON measurement line per query and per index build to stderr, never stdout |
@@ -654,12 +660,10 @@ const result = await impact.callers({
 });
 ```
 
-`composeQueries` returns the read query families (`entrypoints`, `impact`, `outline`, `workspace`, `workspaceImpact`, `decisions`) and `warmLive`, plus the redaction and repository-naming helpers; nothing it exposes can write.
+`composeQueries` returns the read query families (`entrypoints`, `impact`, `outline`, `workspace`, `workspaceImpact`, `decisions`, `contractConsequences`) and `warmLive`, plus the redaction and repository-naming helpers; nothing it exposes can write.
 
-Contract analysis is currently library-only: `contractConsequences` evaluates written request/response hypotheses,
-and `contractChanges` evaluates a diff. The planned unified MCP and compose name is `ye_ast_contract_consequences`,
-with CLI command `contract-consequences` and protocol namespace `contractConsequences`; see
-[the surface design](docs/architecture/rfc/0023-consequences-surfaces.md).
+`contractConsequences.ofHypotheses` answers written request/response hypotheses and `contractConsequences.ofChange` a
+diff; both return one composite fact ([the surface design](docs/architecture/rfc/0023-consequences-surfaces.md)).
 
 </details>
 

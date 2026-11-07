@@ -9,9 +9,10 @@ import { gatherCandidates, gatherNames, sortEvidence, type NameCandidate, type O
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { JoinedSite } from "../../domain/topology/link-graph.ts";
 import { entrypointsOf, joinWorkspace, linkMapOf } from "./workspace-join.ts";
+import { prefixOf } from "../../domain/topology/link-match.ts";
 import type { HeadReaderDeps, HeldLive } from "../snapshot/head-reading.ts";
 import type { WorkspaceReadOperation } from "./workspace-operation.ts";
-import { callSiteEvidence, unresolvedCallSite, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
+import { callSiteEvidence, unresolvedCallSite, unsettledCallSiteCut, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
 import { nameCandidates, dependencyClosures, repositoryNameOf, type RepositoryIdentity } from "../../domain/topology/repository-identity.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
@@ -194,12 +195,12 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
         for (const entry of resolved) {
           const names = gatherNames(entry.names);
           const unresolved = entry.callSites.flatMap((site) => (site.target.status === "unknown" ? [unresolvedCallSite(site)] : []));
-          const ambiguous = join.joined.filter(({ site, joined }) => site.repo === entry.repository.repo && joined.ambiguous !== undefined).map(({ site }) => site);
+          const unsettled = join.joined.filter(({ site, joined }) => site.repo === entry.repository.repo && (joined.ambiguous !== undefined || joined.undecided !== undefined)).map(({ site }) => site);
           const section: FactBase & { evidence: readonly { path: string; line: number }[] } = { ...(entry.base as FactBase), evidence: sortEvidence(names.flatMap((name) => name.evidence)) };
           const cuts = [
             ...entry.cuts,
             ...unresolved.map((place) => ({ kind: "unresolved-link" as const, reason: place.reason, at: [place.path, `${place.path}:${place.line}`, ...(place.via === undefined ? [] : [`library ${place.via}`])] })),
-            ...ambiguous.map((site) => ({ kind: "unresolved-link" as const, at: [site.file, `${site.file}:${site.line}`] })),
+            ...unsettled.map(unsettledCallSiteCut),
           ];
           sections[entry.repository.repo] = withCuts(section, { names, unresolved }, cuts);
           for (const name of names) {
@@ -266,10 +267,10 @@ function callSiteNames(repo: string, callSites: readonly CallSite[]): OutwardNam
   return callSites.flatMap((site): OutwardName[] => {
     if (site.target.status !== "complete") return [];
     if ("destination" in site.target.value) return [{ name: site.target.value.destination, kind: "destination", evidence: [callSiteEvidence(site)] }];
-    const { base, path } = site.target.value;
+    const { base } = site.target.value;
     const evidence = [callSiteEvidence(site)];
-    const prefix = path.split("/").find((segment) => segment !== "");
-    return [...(base === undefined ? [] : [{ name: base, kind: "http-host" as const, evidence }]), ...(prefix === undefined || prefix === "{}" ? [] : [{ name: prefix, kind: "path-prefix" as const, evidence }])];
+    const prefix = prefixOf(site.target.value);
+    return [...(base === undefined ? [] : [{ name: base, kind: "http-host" as const, evidence }]), ...(prefix === undefined ? [] : [{ name: prefix, kind: "path-prefix" as const, evidence }])];
   });
 }
 

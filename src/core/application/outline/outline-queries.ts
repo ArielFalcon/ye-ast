@@ -69,7 +69,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
           const modules = await combinedModuleReader(deps.moduleReaders).extract(sources, { files: covered });
           if (request.signal?.aborted) return ABORTED;
           const listed = focused === undefined ? readOutline(store, covered, modules) : undefined;
-          const used = focused === undefined ? undefined : await focusWithUses(store, focused, deps.importOrigins(sources), modules, syntaxOfSources(deps.memberNames, sources), request.signal);
+          const used = focused === undefined ? undefined : await focusWithUses(store, focused, deps.importOrigins(sources, undefined, head.prepared?.facts), modules, syntaxOfSources(deps.memberNames, sources), request.signal);
           if (used === "aborted" || request.signal?.aborted) return ABORTED;
           const read = focused === undefined ? listed!.value : { ...focused.value, focus: used!.focus };
           const cuts = [

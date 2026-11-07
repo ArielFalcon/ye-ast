@@ -1,6 +1,7 @@
 # RFC-0023: The `contractConsequences` query family on every surface
 
-- Status: Draft, 2026-11-07
+- Status: Accepted and implemented, 2026-11-07 (see "Implementation notes"; "Where it stands" records the state
+  before it)
 - Related: [ADR-0034](../adr/0034-name-contract-consequences-explicitly.md) (the public names),
   [ADR-0033](../adr/0033-contract-consequences-as-one-query-family.md) (the decision),
   [ADR-0032](../adr/0032-a-query-family-is-done-when-every-surface-exposes-it.md) (the rule),
@@ -61,11 +62,11 @@ only the port and the answer's assembly change.
 | `answers` | one per hypothesis, in the order asked (`ofHypotheses`) or sorted by operation and property (`ofChange`) |
 | `answers[].hypothesis` | the normalized hypothesis, as RFC-0022 "Output" echoes it today |
 | `answers[].oldContract` | the assumed or derived old guarantee (response) or old acceptance (request) |
-| `answers[].derivedFrom` | `ofChange` only: the operation, the property and its contract places at base and head |
+| `answers[].derivedFrom` | `ofChange` only: the operation, the property, the rules of the differences it answers (RFC-0022 P6) and its contract places at base and head |
 | `answers[].status` | `complete`, `partial` with its cuts, or `unknown` with its reason (an operation no repository serves, a workspace read that failed for it) |
 | `answers[].findings` | uses or producers with their verdicts, and frontiers as `unknown` findings, as today |
 | `change` | `ofChange` only: `base`, `head`, the resolved `snapshots`, and the `derivation` section; retained even when `answers` is empty |
-| `change.derivation` | a fact whose value holds gained guarantees, operations added and removed, and the frontiers of the derivation (unreadable contract, unsupported delta, unserved or ambiguous operation) as `unknown` findings; `partial` preserves the source-read cuts from both base and head, and `unknown` carries its reason and evidence without a value |
+| `change.derivation` | a fact whose value holds every classified difference (rule, level, side, operation, property, delta, places; RFC-0022 P6) and the frontiers of the derivation (unreadable contract, unsupported delta, unclassified difference, unread request, unserved or ambiguous operation) as `unknown` findings, a derivation frontier on the request naming its side; `partial` preserves the source-read cuts from both base and head, and `unknown` carries its reason and evidence without a value |
 
 **Status.** The fact is a composite of its hypothesis sections and, for `ofChange`, the `change.derivation` section
 (RFC-0002 rule 2). It is `complete` only when every section is complete; otherwise it is `partial`, retaining its value
@@ -167,6 +168,22 @@ Each unit carries its tests and docs and runs alone (no concurrent full suites o
    `ye_ast_trace`, missing today), RFC-0022 "Output" pointing here, the architecture index and the docs site.
 
 The review of each unit checks uniformity explicitly (ADR-0032 decision 3) besides correctness.
+
+## Implementation notes
+
+Units 1 to 3 landed as designed, with these choices the design left open:
+
+- The MCP family identifier is `contract_consequences`: tool names derive as `ye_ast_<family>`, so compose registers
+  `fresh("contract_consequences")`.
+- An empty `hypotheses` list is refused on every surface (MCP schema, CLI usage, protocol parameters).
+- A workspace read's cuts also limit `change.derivation`, which looks operations up through the same workspace; a change
+  with no derived hypotheses over a cut workspace is therefore `partial`, never `complete`.
+- `derived-contract-change` carries `handlers`, the handlers its answer's findings reach, since a derived change may
+  reach several.
+- The SCHEMA version was not bumped (owner, 2026-11-06: no schema bumps while the MCP has no consumers), which answers
+  open question 1.
+- A hypothesis `path` is the route as the workspace links it (with any context prefix the handler's route carries); a
+  bare contract path no repository serves answers `unknown`.
 
 ## Open questions
 

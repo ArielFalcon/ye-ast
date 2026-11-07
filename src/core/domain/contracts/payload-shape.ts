@@ -34,6 +34,8 @@ export interface KnownShape {
   object?: { properties: readonly ShapeProperty[]; open: boolean };
   /** Present when the place may hold an array: the shape of its elements. */
   elements?: Shape;
+  /** The JSON Schema keywords the place carries that its value set does not state (bounds, patterns, annotations), by keyword; absent when it carries none. */
+  keywords?: Readonly<Record<string, unknown>>;
 }
 
 /** A place the reader cannot state; nothing below it is derived. */
@@ -57,5 +59,28 @@ export const ANYTHING: KnownShape = Object.freeze({
   values: Object.freeze({ literals: Object.freeze({ boolean: "every", number: "every", string: "every" } as const), array: true, object: true, null: true, absent: false }),
 });
 
-/** The shape of the success response of one operation. */
-export type OperationShape = Pick<ContractOperation, "operationId" | "method" | "path" | "basePath"> & ReadShape;
+/** A place that holds no value: a body nothing declares, or an undeclared property of a closed object. */
+export const NOTHING: KnownShape = Object.freeze({
+  kind: "known",
+  values: Object.freeze({ literals: Object.freeze({ boolean: [], number: [], string: [] }), array: false, object: false, null: false, absent: false }),
+});
+
+/**
+ * Digests of what an operation exchanges beside its success body, each differing exactly when that part differs: its
+ * request, its non-success responses, and its success responses without their schemas (status, media types, headers).
+ */
+export interface ExchangeDigests {
+  request: string;
+  errors: string;
+  envelope: string;
+}
+
+/** What one operation accepts, read in the request direction: its body, when it declares one, and its parameters as a closed object with one closed object per location (`cookie`, `header`, `path`, `query`). */
+export type OperationRequest = Pick<ContractOperation, "operationId" | "method" | "path" | "basePath"> & {
+  body: { shape: Shape; required: boolean } | undefined;
+  parameters: Shape;
+  files: readonly string[];
+};
+
+/** The shape of the success response of one operation; `digests` is absent when its reader cannot state them. */
+export type OperationShape = Pick<ContractOperation, "operationId" | "method" | "path" | "basePath"> & ReadShape & { digests?: ExchangeDigests };

@@ -4,7 +4,8 @@ import type { Hop } from "../../domain/contracts/consumer-flow.ts";
 import type { BranchCondition, Origin, OriginFrontierReason, OriginTrail, OriginValue } from "../../domain/contracts/request-origin.ts";
 import { keepsLeft, wireOf, type WrittenValue } from "../../domain/languages/javascript.ts";
 import type { ArgumentOrigins } from "../../ports/request-origins.port.ts";
-import { memberDeclaration, thisClass } from "./consumer-flow.classes.ts";
+import { memberDeclaration } from "./consumer-flow.classes.ts";
+import { thisClass, unwrapped } from "./syntax.ts";
 import type { Program } from "./consumer-flow.index.ts";
 import {
   assignedBinding,
@@ -20,7 +21,6 @@ import {
   receiptOf,
   referencesOf,
   searchRoot,
-  unwrap,
   type FunctionNode,
 } from "./consumer-flow.syntax.ts";
 import { lineOf, type RequestBody } from "./http-call-sites.adapter.ts";
@@ -77,7 +77,7 @@ function writtenValue(node: ts.Expression): { value: WrittenValue } | "approxima
   if (!ts.isTemplateExpression(node)) return undefined;
   let text = node.head.text;
   for (const span of node.templateSpans) {
-    const part = writtenValue(unwrap(span.expression));
+    const part = writtenValue(unwrapped(span.expression));
     if (part === undefined || part === "approximate") return "approximate";
     text += String(part.value) + span.literal.text;
   }
@@ -123,7 +123,7 @@ export class OriginWalker {
   }
 
   private walk(expression: ts.Expression, path: AccessPath, frame: Frame | undefined, body: boolean): readonly Found[] {
-    const node = unwrap(expression);
+    const node = unwrapped(expression);
     const key = JSON.stringify([path, frame?.id ?? "", body]);
     const held = this.memo.get(node)?.get(key);
     if (held !== undefined) return held;
@@ -189,7 +189,7 @@ export class OriginWalker {
   }
 
   private property(node: ts.PropertyAccessExpression | ts.ElementAccessExpression, path: AccessPath, frame: Frame | undefined): readonly Found[] {
-    const object = unwrap(node.expression);
+    const object = unwrapped(node.expression);
     const key = ts.isPropertyAccessExpression(node) ? node.name.text : keyOf(node.argumentExpression);
     if (key === undefined) return [frontier(node, "untracked", "computed key")];
     if (object.kind === ts.SyntaxKind.ThisKeyword) return [frontier(node, "member", key)];
@@ -198,10 +198,10 @@ export class OriginWalker {
   }
 
   private call(node: ts.CallExpression, path: AccessPath, frame: Frame | undefined, body: boolean): readonly Found[] {
-    const callee = unwrap(node.expression);
+    const callee = unwrapped(node.expression);
     if (ts.isIdentifier(callee) && callee.text === "Symbol" && isUndeclaredName(callee)) return this.heldFunction(node, path);
     if (ts.isPropertyAccessExpression(callee)) {
-      const receiver = unwrap(callee.expression);
+      const receiver = unwrapped(callee.expression);
       if (callee.name.text === "stringify" && ts.isIdentifier(receiver) && receiver.text === "JSON" && isUndeclaredName(receiver)) {
         if (node.arguments.length !== 1) return [frontier(node, "untracked", "stringify arguments")];
         if (body) return this.walk(node.arguments[0]!, path, frame, true);
@@ -291,7 +291,7 @@ export class OriginWalker {
     const binding = declaredBinding(name, declaredScope(declaration));
     const root = searchRoot(binding);
     const { reads, dynamic } = referencesOf(binding);
-    const primitive = initializer !== undefined && ts.isIdentifier(declaration.name) && writtenValue(unwrap(initializer)) !== undefined;
+    const primitive = initializer !== undefined && ts.isIdentifier(declaration.name) && writtenValue(unwrapped(initializer)) !== undefined;
     if (isRewritten(root, binding)) return [frontier(read, "mutated", "written")];
     if (dynamic.length > 0 || (!primitive && reads.some((other) => other !== read && this.escapes(other)))) return [frontier(read, "mutated", "escapes")];
     if (initializer === undefined) return [frontier(read, "untracked", "no initializer")];
@@ -342,7 +342,7 @@ function outcomeOf(operator: "??" | "||", left: Found): "keeps" | "fails" | "unk
 }
 
 const isUndefined = (expression: ts.Expression): boolean => {
-  const bare = unwrap(expression);
+  const bare = unwrapped(expression);
   return ts.isVoidExpression(bare) || (ts.isIdentifier(bare) && bare.text === "undefined" && isUndeclaredName(bare));
 };
 
@@ -356,7 +356,7 @@ function destructuring(element: ts.BindingElement): { variable: ts.VariableDecla
 
 /** A key an element access names literally; a number or any other expression is not one. */
 function keyOf(expression: ts.Expression): string | undefined {
-  const key = unwrap(expression);
+  const key = unwrapped(expression);
   return ts.isStringLiteralLike(key) ? key.text : undefined;
 }
 
@@ -376,7 +376,7 @@ function declarationOf(identifier: ts.Identifier): ts.Node | undefined {
 
 /** A form model: a field or variable declared as one of Angular's form classes or built by a form builder. */
 function isFormModel(expression: ts.Expression): boolean {
-  const bare = unwrap(expression);
+  const bare = unwrapped(expression);
   let declaration: ts.Node | undefined;
   if (ts.isPropertyAccessExpression(bare) && bare.expression.kind === ts.SyntaxKind.ThisKeyword) {
     const owner = thisClass(bare);
@@ -387,7 +387,7 @@ function isFormModel(expression: ts.Expression): boolean {
   if (declaration === undefined || !(ts.isPropertyDeclaration(declaration) || ts.isVariableDeclaration(declaration) || ts.isParameter(declaration))) return false;
   const type = declaration.type;
   if (type !== undefined && ts.isTypeReferenceNode(type) && ts.isIdentifier(type.typeName) && FORM_MODELS.has(type.typeName.text)) return true;
-  const initializer = declaration.initializer === undefined ? undefined : unwrap(declaration.initializer);
+  const initializer = declaration.initializer === undefined ? undefined : unwrapped(declaration.initializer);
   if (initializer !== undefined && ts.isNewExpression(initializer)) return ts.isIdentifier(initializer.expression) && FORM_MODELS.has(initializer.expression.text);
   return initializer !== undefined && ts.isCallExpression(initializer) && ts.isPropertyAccessExpression(initializer.expression) && FORM_BUILDERS.has(initializer.expression.name.text);
 }

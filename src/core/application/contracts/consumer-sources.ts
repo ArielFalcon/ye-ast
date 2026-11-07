@@ -70,8 +70,8 @@ interface Reading {
 
 /**
  * The workspace read of consequences queries: for a set of hypotheses, the repositories' sources and code graphs held
- * until the holder of the workspace answers, and for each hypothesis the links the join admitted and the fact envelope
- * that declares it. A repository read live, or one the refresh could not provide, has no reader, so a carrier in it is a frontier.
+ * until the holder of the workspace answers, the fact envelope of what was asked, and for each hypothesis the links the join
+ * admitted. A repository read live, or one the refresh could not provide, has no reader, so a carrier in it is a frontier.
  */
 export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSources {
   const heads = createHeadReader(deps.heads);
@@ -100,7 +100,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             if (indexed !== "unavailable" && "fault" in indexed) return { ok: false, fault: indexed.fault };
             if (indexed !== "unavailable") stores.push(indexed.store);
             const origins = indexed === "unavailable" ? undefined : await deps.relations.extract(sources, { memberProofs: memberProofContextOf(loaded.value, context.scope) });
-            const importOrigins = deps.importOrigins?.(sources);
+            const importOrigins = deps.importOrigins?.(sources, undefined, prepared.value.facts);
             const proofs = indexed === "unavailable" ? undefined : await referenceProofsOf(importOrigins, indexed.store, loaded.value, context.signal);
             const settled = indexed === "unavailable" || origins === undefined || importOrigins === undefined
               ? undefined
@@ -217,10 +217,8 @@ function joinHttpCalls(repositories: readonly WorkspaceRepository[], entrypoints
     }
     const joined = matchCallSite(site, target, entrypoints, gateways);
     for (const link of joined.links ?? []) links.set(link.id, link);
-    const repos = joined.ambiguous?.repos.toSorted(compareText);
-    if (repos === undefined) continue;
-    const reaching = new Set(repos.flatMap((repo) => (matchCallSite(site, target, entrypoints.filter((candidate) => candidate.repo === repo), gateways).links ?? []).flatMap((link) => httpRouteName(link) ?? [])));
-    ambiguousCalls.push({ from, repos, reaching });
+    if (joined.ambiguous === undefined) continue;
+    ambiguousCalls.push({ from, repos: joined.ambiguous.repos.toSorted(compareText), reaching: new Set(joined.ambiguous.routes) });
   }
   const byPlace = (a: { repo: string; file: string; line: number }, b: { repo: string; file: string; line: number }) => compareText(a.repo, b.repo) || compareText(a.file, b.file) || a.line - b.line;
   const serving = new Map<string, { repo: string; handler: Handler }[]>();

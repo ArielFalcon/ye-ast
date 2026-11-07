@@ -719,6 +719,43 @@ test("callers and a trace at one snapshot read the relations once, under the one
   assert.equal(relationReads(), 1);
 });
 
+test("a measured callers names the origin reads of its reference proofs as stages", async () => {
+  writeFileSync(join(repo, "src", "origin.ts"), ["export function origin(): number {", "  return 1;", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "user.ts"), ["import { origin } from './origin';", "export function user(): number {", "  return origin();", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "origin");
+  const lines: string[] = [];
+  const { impact } = composeQueries({ scratchRoot, measure: (line) => lines.push(line) });
+
+  assert.ok((await impact.callers({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/origin.ts", symbol: "origin" }] })).ok);
+
+  const stages = lines.map((line) => JSON.parse(line).ye_ast as { event: string; stage?: string }).flatMap((record) => (record.event === "stage" ? [record.stage] : []));
+  assert.ok(stages.includes("import-origins"));
+  assert.ok(stages.includes("root-origins"));
+});
+
+test("a repeated callers finds every derived fact it kept, and answers what a composition that keeps none answers", async () => {
+  writeFileSync(join(repo, "src", "kept.ts"), ["export function kept(redact: () => void): void {", "  redact();", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "keeper.ts"), ["import { kept } from './kept';", "export function keeper(): void {", "  kept(() => undefined);", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "kept");
+  const lines: string[] = [];
+  const { impact } = composeQueries({ scratchRoot, measure: (line) => lines.push(line) });
+  const request = { repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/kept.ts", symbol: "kept" }] };
+  const factLines = () => lines.splice(0).map((line) => JSON.parse(line).ye_ast as { event: string; reader?: string; hits: number; misses: number }).filter((record) => record.event === "derived-facts");
+
+  const first = await impact.callers(request);
+  const firstFacts = factLines();
+  const second = await impact.callers(request);
+  const secondFacts = factLines();
+
+  assert.ok(firstFacts.length > 0 && firstFacts.every((record) => record.reader === "import-origins"));
+  assert.ok(firstFacts.some((record) => record.misses > 0));
+  assert.ok(secondFacts.length > 0 && secondFacts.every((record) => record.misses === 0 && record.hits > 0), JSON.stringify(secondFacts));
+  assert.deepEqual(second, first);
+  assert.deepEqual(await composeQueries({ scratchRoot, snapshotCacheBytes: 0 }).impact.callers(request), first);
+});
+
 test("a trace over a real index leaves a library global's member call as a global leaf, and keeps it a cut where a local shadows the global", async () => {
   writeFileSync(join(repo, "src", "clamp.ts"), ["export function clamp(value: number): number {", "  return Math.max(value, 0);", "}", "export function max(value: number): number {", "  return value;", "}", ""].join("\n"));
   writeFileSync(join(repo, "src", "shadow.ts"), ["import { max } from './clamp';", "export function shadowed(value: number): number {", "  const Math = { max };", "  return Math.max(value);", "}", ""].join("\n"));
