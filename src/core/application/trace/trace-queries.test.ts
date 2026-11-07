@@ -3,12 +3,12 @@ import test from "node:test";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Fact, Finding } from "../../domain/shared/fact.ts";
 import type { TraceStep, TraceValue } from "../../domain/trace/trace-fact.ts";
-import type { DeclaredType, ImportOriginSite, ReplacedRoots, ResolvedNameSite, UseSite } from "../../ports/import-origins.port.ts";
+import type { DeclaredType, DispatchSite, DispatchTargets, ImportOriginSite, ReplacedRoots, ResolvedNameSite, UseSite } from "../../ports/import-origins.port.ts";
 import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { TraceBudget, TraceRequest } from "../../ports/trace-queries.port.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
-import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredCallable, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { RelationExtraction } from "../relations/relation-extractor.ts";
 import { createTraceQueries, type TraceQueriesDeps } from "./trace-queries.ts";
 
@@ -56,6 +56,10 @@ interface Options {
   declared?: Readonly<Record<string, DeclaredType>>;
   /** The member calls the relations prove. */
   proofs?: Pick<RelationExtraction, "memberUses" | "externalUses">;
+  /** The callables each source's syntax states, by path. */
+  callables?: Readonly<Record<string, readonly DeclaredCallable[]>>;
+  /** The bodies the declared hierarchy proves a body-less method runs, by its name; unknown by default. */
+  dispatch?: Readonly<Record<string, DispatchTargets>>;
 }
 
 function setup(options: Options) {
@@ -84,10 +88,11 @@ function setup(options: Options) {
       open: () => ({ ok: true, value: store }),
     },
     sourceTrivia: { triviaLines: async (file: { path: string }) => (options.onTrivia?.(file.path), new Set(options.trivia?.[file.path] ?? [])) },
-    memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: [], receiverBindings: options.receiverBindings?.[file.path] ?? [] }) },
+    memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: options.callables?.[file.path] ?? [], receiverBindings: options.receiverBindings?.[file.path] ?? [] }) },
     importOrigins: () => ({
       replacedRoots: async () => options.replaced ?? written(),
       declaredTypes: async (sites: readonly UseSite[]) => sites.map((site) => options.declared?.[site.spelled] ?? { kind: "unknown" }),
+      dispatchTargets: async (sites: readonly DispatchSite[]) => sites.map((site) => options.dispatch?.[site.name] ?? { kind: "unknown" }),
       origins: async (sites: readonly ImportOriginSite[]) => { options.onOrigins?.(); return sites.map(answer); },
       rootOrigins: async (sites: readonly ResolvedNameSite[]) => sites.map((site): Finding<ImportOrigin> => {
         const root = options.roots?.[site.name];
@@ -148,6 +153,46 @@ test("a method no source's syntax states is a dispatch cut when an interface own
 
   const fact = await factOf({ nodes, edges });
 
+  assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/b.ts:2 send", "src/b.ts::Impl.send"]]]);
+});
+
+test("a body-less method whose declared hierarchy proves one body expands that body below it, via dispatch, with it as the one alternative", async () => {
+  const nodes = [SVC, RUN, fakeNode("Port", "interface", B, 1, 3), fakeNode("Port.send", "method", B, 2, 2, "send"), fakeNode("Impl", "class", B, 5, 9), fakeNode("Impl.send", "method", B, 6, 8, "send")];
+  const edges: FakeEdge[] = [...CONTAINS, { from: "Port", to: "Port.send", kind: "contains" }, { from: "Impl", to: "Impl.send", kind: "contains" }, { from: "Impl", to: "Port", kind: "implements" }, call("run", "Port.send", 8, 4)];
+  const callables = { [B]: [{ name: "send", start: 2, nameLine: 2, body: false, overridable: true }] };
+
+  const fact = await factOf({ nodes, edges, callables, sources: [{ path: B, content: "" }], unresolved: [OUTWARD_CALL("Impl.send", B, 7)], roots: { max: { kind: "ambient", name: "Math" } }, dispatch: { send: { kind: "bodies", bodies: [{ file: B, start: 6, nameLine: 6 }] } } });
+
+  assert.equal(fact.status, "complete");
+  assert.deepEqual(valueOf(fact).steps.map(({ symbol, file, line, parent, via, at, alternatives }) => ({ symbol, file, line, parent, via, at, alternatives })), [
+    { symbol: "run", file: A, line: 5, parent: undefined, via: undefined, at: undefined, alternatives: undefined },
+    { symbol: "send", file: B, line: 2, parent: 0, via: "call", at: { line: 8, column: 5 }, alternatives: [{ symbol: "send", file: B, start: 6, end: 8 }] },
+    { symbol: "send", file: B, line: 6, parent: 1, via: "dispatch", at: undefined, alternatives: undefined },
+  ]);
+});
+
+test("a body-less method whose declared hierarchy proves several bodies is a cut listing them, with every one as an alternative, and expands none", async () => {
+  const nodes = [SVC, RUN, fakeNode("Port", "interface", B, 1, 3), fakeNode("Port.send", "method", B, 2, 2, "send"), fakeNode("One", "class", B, 5, 7), fakeNode("One.send", "method", B, 6, 6, "send"), fakeNode("Two", "class", B, 8, 10), fakeNode("Two.send", "method", B, 9, 9, "send")];
+  const edges: FakeEdge[] = [...CONTAINS, { from: "Port", to: "Port.send", kind: "contains" }, { from: "One", to: "One.send", kind: "contains" }, { from: "Two", to: "Two.send", kind: "contains" }, call("run", "Port.send", 8, 4)];
+  const callables = { [B]: [{ name: "send", start: 2, nameLine: 2, body: false, overridable: true }] };
+
+  const fact = await factOf({ nodes, edges, callables, sources: [{ path: B, content: "" }], dispatch: { send: { kind: "bodies", bodies: [{ file: B, start: 6, nameLine: 6 }, { file: B, start: 9, nameLine: 9 }] } } });
+
+  assert.deepEqual(valueOf(fact).steps.map(({ symbol, line, alternatives }) => ({ symbol, line, alternatives: alternatives?.map((body) => body.start) })), [
+    { symbol: "run", line: 5, alternatives: undefined },
+    { symbol: "send", line: 2, alternatives: [6, 9] },
+  ]);
+  assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/b.ts:2 send", "src/b.ts::One.send", "src/b.ts::Two.send"]]]);
+});
+
+test("a proven body the index does not place as one method proves nothing: the body-less method stays a cut listing the implementations below its owner", async () => {
+  const nodes = [SVC, RUN, fakeNode("Port", "interface", B, 1, 3), fakeNode("Port.send", "method", B, 2, 2, "send"), fakeNode("Impl", "class", B, 5, 7), fakeNode("Impl.send", "method", B, 6, 6, "send")];
+  const edges: FakeEdge[] = [...CONTAINS, { from: "Port", to: "Port.send", kind: "contains" }, { from: "Impl", to: "Impl.send", kind: "contains" }, { from: "Impl", to: "Port", kind: "implements" }, call("run", "Port.send", 8, 4)];
+  const callables = { [B]: [{ name: "send", start: 2, nameLine: 2, body: false, overridable: true }] };
+
+  const fact = await factOf({ nodes, edges, callables, sources: [{ path: B, content: "" }], dispatch: { send: { kind: "bodies", bodies: [{ file: B, start: 12, nameLine: 12 }] } } });
+
+  assert.deepEqual(valueOf(fact).steps.map(({ symbol, alternatives }) => [symbol, alternatives]), [["run", undefined], ["send", undefined]]);
   assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/b.ts:2 send", "src/b.ts::Impl.send"]]]);
 });
 

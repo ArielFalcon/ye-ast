@@ -11,7 +11,7 @@ import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/tr
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import type { ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { DispatchTargets, ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
@@ -285,24 +285,38 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     at: [placeAt(symbol.file, symbol.startLine, symbol.name), ...sortedUnique(implementations.map(candidateOf))],
   });
   /**
-   * What dispatch may run instead of the body the walk reads, from the declaration's own syntax: a body-less callable
-   * runs whatever implements it, so it is a cut listing every declaration of its name below its owners, or none; a
-   * static, private or final one with a body runs it; an overridable one with a body is a cut only when a type below its
-   * owner declares its name, listing those declarations. A declaration its syntax does not state is a cut when an
-   * interface owns it.
+   * The method bodies the proof names, each the one method the index places there; none when one is not placed so.
    */
-  const unboundDispatch = async (symbol: GraphSymbol): Promise<Cut | undefined> => {
+  const placedBodies = (targets: DispatchTargets): GraphSymbol[] | undefined => {
+    if (targets.kind === "unknown") return undefined;
+    const placed = targets.bodies.map(({ file, start, nameLine }) => store.symbolsInFiles([file]).filter((symbol) => symbol.kind === "method" && start <= symbol.startLine && symbol.startLine <= nameLine));
+    return placed.every((symbols) => symbols.length === 1) ? placed.map((symbols) => symbols[0]!) : undefined;
+  };
+  /**
+   * What dispatch may run instead of the body the walk reads, from the declaration's own syntax: a body-less callable
+   * runs whatever implements it, so the sources' declared hierarchy names every body it may run (R7): one is expanded in
+   * place, several are a cut listing them, and without that proof, or with no body, it is a cut listing every declaration
+   * of its name below its owners, or none; a static, private or final one with a body runs it; an overridable one with a body is a cut
+   * only when a type below its owner declares its name, listing those declarations. A declaration its syntax does not
+   * state is a cut when an interface owns it.
+   */
+  const unboundDispatch = async (symbol: GraphSymbol): Promise<Dispatch | undefined> => {
     if (!CALLABLE_KINDS.includes(symbol.kind)) return undefined;
     const declared = (await syntaxIndexOf(symbol.file)).callables.get(symbol.name)?.find(({ start, nameLine }) => start <= symbol.startLine && symbol.startLine <= nameLine);
     const owners = navigation.ownersOf(symbol);
     if (declared === undefined) {
       const interfaces = owners.filter((owner) => owner.kind === "interface");
-      return interfaces.length === 0 ? undefined : dispatchCut(symbol, implementationsBelow(symbol, interfaces));
+      return interfaces.length === 0 ? undefined : { cut: dispatchCut(symbol, implementationsBelow(symbol, interfaces)) };
     }
-    if (!declared.body) return dispatchCut(symbol, implementationsBelow(symbol, owners));
+    if (!declared.body) {
+      const [targets] = await origins.dispatchTargets([{ file: symbol.file, line: symbol.startLine, name: symbol.name }], signal);
+      const bodies = targets === undefined ? undefined : placedBodies(targets);
+      if (bodies === undefined || bodies.length === 0) return { cut: dispatchCut(symbol, implementationsBelow(symbol, owners)) };
+      return bodies.length === 1 ? { to: bodies[0]!, alternatives: bodies } : { cut: dispatchCut(symbol, bodies), alternatives: bodies };
+    }
     if (!declared.overridable) return undefined;
     const overriders = implementationsBelow(symbol, owners);
-    return overriders.length === 0 ? undefined : dispatchCut(symbol, overriders);
+    return overriders.length === 0 ? undefined : { cut: dispatchCut(symbol, overriders) };
   };
   /** Whether the call's own source binds its receiver to a function value, which a library member such as `call` runs. */
   const holdsFunctionValue = async (reference: GraphUnresolvedReference, receiver: string, member: string): Promise<boolean> =>
@@ -480,14 +494,16 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     step.expanded = true;
     const body = await bodyOf(symbol, depth === 0);
     const dispatch = await unboundDispatch(symbol);
-    if (dispatch !== undefined) body.cuts.push(dispatch);
+    if (dispatch?.cut !== undefined) body.cuts.push(dispatch.cut);
+    if (dispatch?.alternatives !== undefined) step.alternatives = dispatch.alternatives.map(declarationOf);
+    if (dispatch?.to !== undefined) body.children.push(childAt(dispatch.to, null, null, dispatch.to.name, "dispatch"));
     step.external = body.external;
     step.unsettled = body.cuts.length > 0;
     cuts.push(...body.cuts);
     for (const child of body.children) {
       const { line, column } = child.place;
       const walked = stepOf(child.symbol, {
-        ...(line === null || child.via === "member" ? {} : { at: { line, ...(column === null ? {} : { column: column + 1 }) } }),
+        ...(line === null || child.via === "member" || child.via === "dispatch" ? {} : { at: { line, ...(column === null ? {} : { column: column + 1 }) } }),
         via: child.via,
         ...(child.deferred === undefined ? {} : { deferred: child.deferred }),
       });
@@ -511,7 +527,12 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   };
 }
 
-/** `Port` for `Port<T>` and for `pkg.Port<T>`. */
+/**
+ * What dispatch decides for a body-less or overridable callable: the one body it runs, or a cut; `alternatives` when the
+ * declared hierarchy names every body it may run.
+ */
+type Dispatch = { to: GraphSymbol; alternatives: readonly GraphSymbol[]; cut?: undefined } | { to?: undefined; cut: Cut; alternatives?: readonly GraphSymbol[] };
+
 interface SyntaxIndex {
   callables: ReadonlyMap<string, readonly DeclaredCallable[]>;
   functionValueCalls: ReadonlySet<string>;

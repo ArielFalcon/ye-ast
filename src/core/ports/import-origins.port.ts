@@ -76,6 +76,14 @@ export interface ImportOrigins {
    */
   declaredTypes(sites: readonly UseSite[], signal?: AbortSignal): Promise<readonly DeclaredType[]>;
   /**
+   * One entry per site, in the order received: every method body a call to the body-less method declared at the site
+   * runs, read from the sources' declared hierarchy (RFC-0013 R7). `unknown` when a value the sources do not place may
+   * run another body: the language types structurally (TypeScript), a supertype or a class chain the strict reading
+   * does not settle, an anonymous or local class, a lambda where the owner is functional, a generator or a proxy that may
+   * implement the owner, or a class that inherits the method from outside the repository.
+   */
+  dispatchTargets(sites: readonly DispatchSite[], signal?: AbortSignal): Promise<readonly DispatchTargets[]>;
+  /**
    * Where the repository may run its own code where a library's is expected: the path of every global the snapshot
    * declares, every member path a source writes from a global (`Math.max = f`, `Array.prototype[k] = f`,
    * `globalThis.fetch = f`, `Object.assign(process.env, vars)`), and every package a source writes through an import of
@@ -100,6 +108,16 @@ export interface ReplacedRoots {
 
 /** A type from outside the repository: a global of the language's libraries, or a package's export. */
 export type DeclaredType = { kind: "global"; name: string } | { kind: "package"; module: string; name: string } | { kind: "unknown" };
+
+/** A body-less method by its file, a 1-based line from its declaration's first token to its name, and its name. */
+export interface DispatchSite {
+  file: string;
+  line: number;
+  name: string;
+}
+
+/** The method bodies a call to a body-less method may run, each by its file and the 1-based lines from its first token to its name, sorted. */
+export type DispatchTargets = { kind: "bodies"; bodies: readonly { file: string; start: number; nameLine: number }[] } | { kind: "unknown" };
 
 /** A place a declaration uses a name, where the index places the use: repository-relative and 1-based. */
 export interface UseSite {

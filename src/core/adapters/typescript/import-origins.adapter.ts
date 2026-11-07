@@ -214,7 +214,10 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
       for (const { chain, index, owner } of chains) results[index] = await bindingOf(file, tree, chain, bound, owner);
     }
     return results;
-  }, declaredTypes: async (sites, signal) => {
+  },
+  /** TypeScript types structurally: any object with the members of a type may stand where it is declared, so no hierarchy names every body a call runs. */
+  dispatchTargets: async (sites) => sites.map(() => ({ kind: "unknown" })),
+  declaredTypes: async (sites, signal) => {
     const results: DeclaredType[] = sites.map(() => UNKNOWN_TYPE);
     for (const [file, group] of Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file)) {
       if (signal?.aborted) break;

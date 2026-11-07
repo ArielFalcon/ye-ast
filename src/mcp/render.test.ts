@@ -170,7 +170,7 @@ function traceFact(cuts: readonly unknown[] = []): Fact<TraceValue> {
     steps: [
       { id: 0, depth: 0, file: "src/order.ts", symbol: "Order", kind: "class", line: 1, endLine: 30 },
       { id: 1, parent: 0, depth: 1, file: "src/order.ts", symbol: "total", kind: "method", line: 12, endLine: 20, at: { line: 5 }, via: "own-member", leaves: [{ symbol: "round", file: "src/math.ts", start: 1, end: 3 }, { symbol: "log", file: "src/log.ts", start: 2, end: 4, deferred: true }], external: [{ kind: "import", module: "lodash", names: ["sum", "map"] }] },
-      { id: 2, parent: 1, depth: 2, file: "src/tax.ts", symbol: "tax", kind: "function", line: 4, endLine: 9, at: { line: 14 }, deferred: true },
+      { id: 2, parent: 1, depth: 2, file: "src/tax.ts", symbol: "tax", kind: "function", line: 4, endLine: 9, at: { line: 14 }, deferred: true, alternatives: [{ symbol: "tax", file: "src/flat-tax.ts", start: 3, end: 6 }] },
       { id: 3, parent: 0, depth: 1, file: "src/order.ts", symbol: "total", kind: "method", line: 12, endLine: 20, at: { line: 7 }, seen: 1 },
     ],
     readingPlan: { ranges: [{ file: "src/order.ts", start: 1, end: 30, steps: [0, 1, 3] }, { file: "src/tax.ts", start: 4, end: 9, steps: [2] }, { file: "src/order.ts", start: 40, end: 40, steps: [1] }], lines: 37 },
@@ -193,8 +193,9 @@ test("a trace in details keeps one reading range per line in plan order and one 
   assert.ok(!text.includes("places omitted"), text);
 });
 
-test("a trace tree line carries the call line, a foreign span, the seen and deferred notes, leaves and external calls", () => {
+test("a trace tree line carries the call line, a foreign span, the seen and deferred notes, leaves, external calls and dispatch alternatives", () => {
   const text = renderTrace(traceFact(), "details");
+  assert.ok(text.includes("      #2 14 tax (src/tax.ts:4-9) deferred\n        dispatch alternatives (1): src/flat-tax.ts:3-6"), text);
   assert.ok(text.includes("    #1 5 total own-member\n      leaves: round, log (deferred)\n      external: lodash: sum, map"), text);
   assert.ok(text.includes("      #2 14 tax (src/tax.ts:4-9) deferred"), text);
   assert.ok(text.includes("    #3 7 total seen #1"), text);
