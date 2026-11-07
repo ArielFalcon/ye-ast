@@ -40,6 +40,8 @@ export interface MirrorState {
   indexed: readonly string[];
   /** The `stateId` at the last full build of the store; empty while no full build has completed. */
   fullBuildStateId: string;
+  /** Paths a sync since the last full build took that the engine does not parse, sorted: what it synthesizes from them is stale. */
+  unparsedSinceBuild: readonly string[];
   stateId: string;
   /** Mirror paths the store may not reflect yet: a refresh began to change them and did not finish, or only the files were refreshed. The next store refresh changes them again. */
   pending: readonly string[];

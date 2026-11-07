@@ -73,14 +73,16 @@ record that origin in their inputs; `sha` facts keep reading full builds until t
   resolver) from a component class to a route node of `app.routes.ts`. Each of the four steps changed only an HTML
   template (and an i18n JSON file) of the component or of a neighbouring page, never the component's `.ts` file or the
   routes file. Symbols, unresolved references and the files left out were equal in every step. So `sync` does not equal a
-  fresh build when a template changes: it drops a cross-file synthesized `navigates` edge. No fact reads that edge
-  kind: the impact walk follows `calls`, `instantiates`, `references`, `extends` and `implements` only
-  (`src/core/domain/impact/edge-policy.ts`), and the test "navigation, imports, containment and type edges are no
-  calls" pins that it never follows `navigates`. On what facts read, every step of both repositories was equal, so
-  `sync` serves live facts (RFC-0010 "The `sync` parity test", equality on what facts read); `sha` facts keep full
-  builds, and whether they may read `sync`-derived indexes stays the owner's decision. An edge policy that starts
-  following `navigates` reopens this result. Durations are evidence, not a limit. This is evidence, not a test in the
-  repository.
+  fresh build when a template changes: it drops a cross-file synthesized `navigates` edge. The impact walk never
+  follows that kind (`src/core/domain/impact/edge-policy.ts`), but `importers` counts every edge into a file as a user,
+  synthesized edges included, so the measurement's "equal on what facts read" did not hold for it. The engine
+  synthesizes a template's renders (`calls`, `angular-template`) and router links (`navigates`, `angular-router-link`)
+  only when the file that declares the component is indexed; a `sync` that takes only a `templateUrl` file leaves them
+  as the last full build left them, added or removed. The adapter now reports the paths a `sync` took that the engine
+  does not parse, the live mirror records them until the next full build, and a query that reads synthesized edges
+  (`importers`) builds the store in full first (RFC-0010 "The `sync` parity test"). `sha` facts keep full builds, and
+  whether they may read `sync`-derived indexes stays the owner's decision. Durations are evidence, not a limit. This is
+  evidence, not a test in the repository.
 - The key of a kept index is the digest of the content fingerprint of the head export
   (`contentFingerprint`, RFC-0002 rule 5), the installed codegraph version, the supported schema and extraction
   versions, and `STAGING_RULES_VERSION`, which changes with any change to what the staging places; a test pins the

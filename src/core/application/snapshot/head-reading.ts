@@ -62,6 +62,7 @@ export interface LiveCaptureSelection {
   head: string;
   scope: DeclaredScope;
   trust: "trusted";
+  synthesized?: OpenLive["synthesized"];
   onStale?: OpenLive["onStale"];
   onStalenessUnavailable?: OpenLive["onStalenessUnavailable"];
 }
@@ -85,7 +86,7 @@ export async function withLiveCaptures<T>(deps: HeadReaderDeps, selections: read
     if (index === ordered.length) return { ok: true, value: await use(captures) };
     const selection = ordered[index]!;
     const selected = exportSelection(selection.scope, deps.matcher.matches, isExtractorConfiguration);
-    const opened = await openLive(live, { repo: selection.repo, scope: selection.scope, selected, store: true, signal,
+    const opened = await openLive(live, { repo: selection.repo, scope: selection.scope, selected, store: true, synthesized: selection.synthesized, signal,
       ...(selection.onStale === undefined ? {} : { onStale: (notice) => { postludes.push({ repoId: selection.repoId, run: () => selection.onStale!(notice) }); } }),
       ...(selection.onStalenessUnavailable === undefined ? {} : { onStalenessUnavailable: (notice) => { postludes.push({ repoId: selection.repoId, run: () => selection.onStalenessUnavailable!(notice) }); } }),
     }, async (tree): Promise<Result<T, { repoId: string; cause: LiveFailure }>> => {
@@ -124,6 +125,9 @@ export async function withLiveCapture<T, E>(deps: HeadReaderDeps, request: Extra
     if (held === undefined || held.kind !== "live" || held.trust !== "trusted" || held.repo !== repo || held.repoId !== repoId || held.tree.location.repo !== repo || canonicalJson(held.scope) !== canonicalJson(scope) || held.deps.vcs !== deps.vcs || held.deps.reader !== deps.reader || held.deps.extractor !== deps.extractor || held.deps.graph !== deps.graph || held.deps.matcher !== deps.matcher || held.deps.live === undefined || held.deps.live !== deps.live || held.tree.location.scope !== held.deps.live.digest.of(JSON.stringify(scope))) {
       return { ok: false, fault: { kind: "live-mirror-failed", detail: "held live capture does not match the request" } };
     }
+    if (request.synthesized === true && held.tree.unparsedSinceBuild.length > 0) {
+      return { ok: false, fault: { kind: "live-mirror-failed", detail: "held live capture holds stale synthesized edges" } };
+    }
     const base = await options.beforeHead?.();
     if (signal?.aborted) return ABORTED;
     if (base !== undefined && !base.ok) return base;
@@ -143,7 +147,7 @@ export async function withLiveCapture<T, E>(deps: HeadReaderDeps, request: Extra
   const prepared = await options.beforeOpen?.(head.value);
   if (signal?.aborted) return ABORTED;
   if (prepared !== undefined && !prepared.ok) return prepared;
-  const opened = await withLiveCaptures(deps, [{ repo, repoId, scope, head: head.value, trust: "trusted", onStale: request.onStale }], signal, (captures) => options.use(captures.get(repoId)!));
+  const opened = await withLiveCaptures(deps, [{ repo, repoId, scope, head: head.value, trust: "trusted", synthesized: request.synthesized, onStale: request.onStale }], signal, (captures) => options.use(captures.get(repoId)!));
   if (opened.ok) return opened.value;
   if (opened.fault.cause.kind === "unavailable") {
     const answer = await options.unavailable({ head: head.value, scope });
@@ -182,7 +186,7 @@ export interface HeadReading<Tree extends Pick<CommitExtraction, "export"> = Com
 }
 
 /** A revisioned request: the repository, what it selects, and the revision or the live tree it reads. */
-export type Revisioned = { repo: string; source?: string; repoId: string; scope?: ScopeRequest; signal?: AbortSignal } & ({ revision: string; live?: undefined } | ({ revision?: undefined } & LiveSelector));
+export type Revisioned = { repo: string; source?: string; repoId: string; scope?: ScopeRequest; signal?: AbortSignal; synthesized?: OpenLive["synthesized"] } & ({ revision: string; live?: undefined } | ({ revision?: undefined } & LiveSelector));
 
 /** A live query reads the working tree against the commit HEAD names. */
 const LIVE_HEAD = "HEAD";

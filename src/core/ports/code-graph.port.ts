@@ -135,4 +135,9 @@ export interface CodeGraph {
 
 export interface MirrorSyncSummary extends IndexSummary {
   filesFailed: readonly string[];
+  /**
+   * The given paths the engine does not parse as sources, such as an Angular `templateUrl` file: the edges it synthesizes
+   * from them (a template's renders and router links) stay as the last full build left them.
+   */
+  filesUnparsed: readonly string[];
 }

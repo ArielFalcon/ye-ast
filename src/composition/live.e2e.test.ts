@@ -349,3 +349,25 @@ test("one composition answers a repeated live query from its retained data, an e
     assert.equal(canonicalJson(edited), canonicalJson(await ask(composeQueries({ scratchRoot, trustDirectory }))), name);
   }
 });
+
+const ANGULAR_PACKAGE = JSON.stringify({ dependencies: { "@angular/core": "20.0.0", "@angular/router": "20.0.0" } });
+const ROUTES = 'import { Routes } from "@angular/router";\nexport const routes: Routes = [\n  { path: "list", loadComponent: () => import("./list.component") },\n];\n';
+const LIST = 'import { Component } from "@angular/core";\n@Component({ selector: "app-list", template: "" })\nexport default class ListComponent {}\n';
+const HOME = 'import { Component } from "@angular/core";\n@Component({ selector: "app-home", templateUrl: "./home.component.html" })\nexport default class HomeComponent {}\n';
+
+test("a live importers answer after an edit that only touched a template agrees with committing the same bytes", async () => {
+  commit({ "package.json": ANGULAR_PACKAGE, "web/app.routes.ts": ROUTES, "web/list.component.ts": LIST, "web/home.component.ts": HOME, "web/home.component.html": '<a routerLink="/list">List</a>\n' });
+  await trust("trusted");
+  const users = (answer: Answer): unknown => (answer.fact.value as unknown as { files: { users: string[] }[] }).files[0]?.users;
+  const linked = await ye("importers", ["--live"], ["web/app.routes.ts"]);
+  assert.deepEqual(users(linked), ["web/home.component.ts"]);
+
+  write({ "web/home.component.html": "<p>Home</p>\n" });
+  const live = await ye("importers", ["--live"], ["web/app.routes.ts"]);
+  commit({ "web/home.component.html": "<p>Home</p>\n" });
+  const sha = await ye("importers", [], ["web/app.routes.ts"]);
+
+  assert.equal(live.code, EXIT_CODE.ok, live.stderr);
+  assert.deepEqual(users(sha), []);
+  assert.deepEqual(users(live), users(sha));
+});

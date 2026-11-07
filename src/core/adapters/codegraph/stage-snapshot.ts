@@ -6,7 +6,7 @@ import { isEngineConfiguration, isEngineEntry } from "../../ports/staging-rules.
 import type { CodeGraphFault } from "../../ports/code-graph.port.ts";
 
 /** Part of the key of a kept index: any change to how a snapshot is staged or indexed changes this value. */
-export const STAGING_RULES_VERSION = "8";
+export const STAGING_RULES_VERSION = "9";
 
 class UnstageableEntry extends Error {
   constructor(readonly path: string) {

@@ -157,7 +157,7 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps): Cod
     if (signal?.aborted) return ABORTED;
     const report = readReport(run);
     if (!report.ok) return report;
-    const summarized = summarize(root, listed.value);
+    const summarized = summarize(root, listed.value, []);
     if (!summarized.ok) return summarized;
     const { filesIndexed, filesSkipped, filesErrored } = report.value;
     const { filesNotIndexed, versions } = summarized.value;
@@ -177,20 +177,21 @@ export function createCodeGraph(deps: CodeGraphDeps = defaultCodeGraphDeps): Cod
     if (signal?.aborted) return ABORTED;
     const report = readSyncReport(run);
     if (!report.ok) return report;
-    const summarized = summarize(root, listed.value);
+    const summarized = summarize(root, listed.value, paths);
     if (!summarized.ok) return summarized;
     const filesFailed = [...report.value.filesFailed].sort(compareText);
-    const { filesNotIndexed, filesStored, versions } = summarized.value;
-    return { ok: true, value: { filesIndexed: filesStored, filesSkipped: 0, filesErrored: filesFailed.length, filesNotIndexed, versions, filesFailed } };
+    const { filesNotIndexed, filesUnparsed, filesStored, versions } = summarized.value;
+    return { ok: true, value: { filesIndexed: filesStored, filesSkipped: 0, filesErrored: filesFailed.length, filesNotIndexed, versions, filesFailed, filesUnparsed } };
   }
 
-  function summarize(root: string, files: readonly string[]): Result<{ filesNotIndexed: readonly string[]; filesStored: number; versions: StoreVersions }, CodeGraphFault> {
+  function summarize(root: string, files: readonly string[], synced: readonly string[]): Result<{ filesNotIndexed: readonly string[]; filesUnparsed: readonly string[]; filesStored: number; versions: StoreVersions }, CodeGraphFault> {
     const opened = openGraph(root);
     if (!opened.ok) return opened;
     const { sdk, graph, versions } = opened.value;
     try {
       const indexed = graph.getFiles();
-      return { ok: true, value: { filesNotIndexed: unindexedFiles(sdk, files, indexed), filesStored: indexed.length, versions } };
+      const filesUnparsed = synced.filter((path) => !sdk.isLanguageSupported(sdk.detectLanguage(path))).sort(compareText);
+      return { ok: true, value: { filesNotIndexed: unindexedFiles(sdk, files, indexed), filesUnparsed, filesStored: indexed.length, versions } };
     } catch (error) {
       return fault("store-unreadable", errorDetail(error));
     } finally {

@@ -12,6 +12,7 @@ const SOURCE_DIGEST_BY_VERSION: Readonly<Record<string, string>> = {
   "6": "a8c09d6b64608d7e3027d71b94019507b866260fdd92c2c2c1d92506796a87e9",
   "7": "4a194e5800822fc8991a069836108131d20c047a1902b314e8e9e8bdcc3df078",
   "8": "5fdf3273371fcca7ef4f3ce8fed93e7935ca1cd909495991a736b8eecb776654",
+  "9": "768a265f7b56105d86c2515f4b29aee7ab7b6ed7d094773bc5e00b225636613e",
 };
 
 const INDEX_BUILDING_SOURCES = ["./stage-snapshot.ts", "./index-snapshot.child.ts", "./sync-mirror.child.ts", "./codegraph.adapter.ts", "../../ports/staging-rules.ts"];

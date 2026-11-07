@@ -19,7 +19,7 @@ const LOCK_SUFFIX = ".lock";
 const TEMPORARY_SUFFIX = ".tmp";
 const STATE_TEMPORARY = /^(.*)\.state\.json\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/;
 /** A state of another format version is discarded, which rebuilds its scope once. */
-const STATE_FORMAT_VERSION = 4;
+const STATE_FORMAT_VERSION = 5;
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 const LOCK_POLL_MS = 50;
@@ -632,13 +632,13 @@ function unsafe(path: string): boolean {
 
 function parseState(value: unknown): MirrorState | null {
   if (!isRecord(value) || value.version !== STATE_FORMAT_VERSION) return null;
-  const { versions, manifest, skipped, notHeld, indexed, fullBuildStateId, stateId, pending } = value;
+  const { versions, manifest, skipped, notHeld, indexed, fullBuildStateId, unparsedSinceBuild, stateId, pending } = value;
   if (!isRecord(versions) || typeof versions.codegraph !== "string" || typeof versions.store !== "string" || typeof versions.staging !== "string") return null;
   if (!Array.isArray(manifest) || !manifest.every(isEntry) || !Array.isArray(skipped) || !skipped.every(isSkipped)) return null;
-  if (!isStrings(notHeld) || !isStrings(indexed) || !isStrings(pending) || typeof fullBuildStateId !== "string" || typeof stateId !== "string") return null;
+  if (!isStrings(notHeld) || !isStrings(indexed) || !isStrings(pending) || !isStrings(unparsedSinceBuild) || typeof fullBuildStateId !== "string" || typeof stateId !== "string") return null;
   return {
     versions: { codegraph: versions.codegraph, store: versions.store, staging: versions.staging },
-    manifest, skipped, notHeld, indexed, fullBuildStateId, stateId, pending,
+    manifest, skipped, notHeld, indexed, fullBuildStateId, unparsedSinceBuild, stateId, pending,
   };
 }
 

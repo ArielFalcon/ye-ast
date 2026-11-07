@@ -188,7 +188,7 @@ test("a mirror build emits the index line a live session would otherwise hide", 
     index: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
     open: () => ({ ok: false, fault: { kind: "unsupported-store", detail: "" } }),
     buildMirror: async () => ({ ok: true, value: summary }),
-    syncMirror: async () => ({ ok: true, value: { ...summary, filesFailed: [] } }),
+    syncMirror: async () => ({ ok: true, value: { ...summary, filesFailed: [], filesUnparsed: [] } }),
   };
 
   await measuredGraph(graph, { sink, redaction }).buildMirror("/mirror");
@@ -213,7 +213,7 @@ test("a mirror sync reports synced, so a host never mistakes an incremental sync
     index: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
     open: () => ({ ok: false, fault: { kind: "unsupported-store", detail: "" } }),
     buildMirror: async () => ({ ok: true, value: summary }),
-    syncMirror: async () => ({ ok: true, value: { ...summary, filesFailed: [] } }),
+    syncMirror: async () => ({ ok: true, value: { ...summary, filesFailed: [], filesUnparsed: [] } }),
   };
 
   await measuredGraph(graph, { sink, redaction }).syncMirror("/mirror", ["src/a.ts"]);

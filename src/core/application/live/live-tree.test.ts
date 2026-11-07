@@ -9,12 +9,12 @@ import { openLive, type LiveTree } from "./live-tree.ts";
 const SCOPE = liveScope();
 const selected = pathSelection(SCOPE, () => false);
 
-function query(fake: FakeLive, options: { store?: boolean; onStale?: (notice: LiveStaleNotice) => void; signal?: AbortSignal } = {}, use: (tree: LiveTree) => Promise<unknown> = async (tree) => tree) {
-  return openLive(fake.deps, { repo: "/repo", scope: SCOPE, selected, store: options.store ?? true, onStale: options.onStale, signal: options.signal }, use);
+function query(fake: FakeLive, options: { store?: boolean; synthesized?: boolean; onStale?: (notice: LiveStaleNotice) => void; signal?: AbortSignal } = {}, use: (tree: LiveTree) => Promise<unknown> = async (tree) => tree) {
+  return openLive(fake.deps, { repo: "/repo", scope: SCOPE, selected, store: options.store ?? true, synthesized: options.synthesized, onStale: options.onStale, signal: options.signal }, use);
 }
 
-async function tree(fake: FakeLive, store = true): Promise<LiveTree> {
-  const answered = await query(fake, { store });
+async function tree(fake: FakeLive, store = true, synthesized = false): Promise<LiveTree> {
+  const answered = await query(fake, { store, synthesized });
   assert.ok(answered.ok, JSON.stringify(answered));
   return answered.value as LiveTree;
 }
@@ -73,6 +73,52 @@ test("an edit, an added file and a deleted file run sync with exactly those path
   assert.deepEqual(next.origin, { kind: "sync", base: first.stateId });
   assert.notEqual(next.stateId, first.stateId);
   assert.deepEqual(fake.state.current?.pending, []);
+});
+
+test("a query that reads synthesized edges builds in full once a sync took a file the engine does not parse", async () => {
+  const fake = fakeLive({ "src/a.component.ts": "1", "src/a.component.html": "1" });
+  await tree(fake);
+  fake.tree.set("src/a.component.html", "2");
+  fake.engine.sync = { ok: true, value: { ...(fake.engine.sync.ok ? fake.engine.sync.value : (undefined as never)), filesUnparsed: ["src/a.component.html"] } };
+  await tree(fake);
+  fake.tree.set("src/a.component.ts", "2");
+  fake.engine.sync = { ok: true, value: { ...(fake.engine.sync.ok ? fake.engine.sync.value : (undefined as never)), filesUnparsed: [] } };
+  await tree(fake);
+  assert.deepEqual(fake.state.current?.unparsedSinceBuild, ["src/a.component.html"], "a later sync of sources only keeps the record");
+
+  const rebuilt = await tree(fake, true, true);
+
+  assert.equal(fake.builds, 2);
+  assert.deepEqual(rebuilt.origin, { kind: "full" });
+  assert.deepEqual(fake.state.current?.unparsedSinceBuild, []);
+});
+
+test("a query that reads synthesized edges builds in full when the sync it runs takes a file the engine does not parse", async () => {
+  const fake = fakeLive({ "src/a.component.ts": "1", "src/a.component.html": "1" });
+  await tree(fake);
+  fake.tree.set("src/a.component.html", "2");
+  fake.engine.sync = { ok: true, value: { ...(fake.engine.sync.ok ? fake.engine.sync.value : (undefined as never)), filesUnparsed: ["src/a.component.html"] } };
+
+  const rebuilt = await tree(fake, true, true);
+
+  assert.deepEqual(fake.syncs, [["src/a.component.html"]]);
+  assert.equal(fake.builds, 2);
+  assert.deepEqual(rebuilt.origin, { kind: "full" });
+  assert.deepEqual(fake.state.current?.unparsedSinceBuild, []);
+});
+
+test("a query that reads no synthesized edge keeps the synced store over a file the engine does not parse", async () => {
+  const fake = fakeLive({ "src/a.component.ts": "1", "src/a.component.html": "1" });
+  const first = await tree(fake);
+  fake.tree.set("src/a.component.html", "2");
+  fake.engine.sync = { ok: true, value: { ...(fake.engine.sync.ok ? fake.engine.sync.value : (undefined as never)), filesUnparsed: ["src/a.component.html"] } };
+  await tree(fake);
+
+  const again = await tree(fake);
+
+  assert.equal(fake.builds, 1);
+  assert.deepEqual(again.origin, { kind: "sync", base: first.stateId });
+  assert.deepEqual(again.unparsedSinceBuild, ["src/a.component.html"]);
 });
 
 test("a state built by other engines is discarded and the mirror is rebuilt in full", async () => {

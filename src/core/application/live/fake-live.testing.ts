@@ -76,7 +76,7 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
     openable: { value: true },
     engine: {
       build: { ok: true, value: SUMMARY },
-      sync: { ok: true, value: { ...SUMMARY, filesFailed: [] } },
+      sync: { ok: true, value: { ...SUMMARY, filesFailed: [], filesUnparsed: [] } },
       lock: { ok: true, value: undefined },
       usage: { ok: true, value: { scopes: [], debris: [] } },
       touch: { ok: true, value: undefined },
