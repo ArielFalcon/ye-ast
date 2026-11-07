@@ -105,12 +105,15 @@ population did not.
   nowhere, which is the measured case: codegraph gives a record no node and matches its name to the constructor of a
   homonym record elsewhere. The record's own answers already say so (an `unknown-symbol` fault naming the record, a
   `no-extractor` cut on its changed file), so the dropped edge hides no dependence the graph represented.
+- The walk back from a reached declaration reads the edges the graph matched to another declaration that a file's
+  imports bind to it, and the edges into its homonyms: one the same verdict redirects to it is a use of it. A Java name
+  read before a method's own `class User {}`, or outside the block that declares one, binds the member type its class
+  inherits, though the graph matched it to the local class.
 
 ## Not decided here
 
-- A Java cut retired by an import-binding proof, a call on a type name (`T.m()`) whose type declares no such member, a
-  use moved to a declaration from a file that does not import it (only the edges of the files that import a reached
-  symbol are read for it), and a call on a typed receiver: each needs a proof the verdict does not take yet.
+- A Java cut retired by an import-binding proof, a call on a type name (`T.m()`) whose type declares no such member,
+  and a call on a typed receiver: each needs a proof the verdict does not take yet.
 
 ## Amendment: a root proves only the member below it
 

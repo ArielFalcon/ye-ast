@@ -18,7 +18,30 @@ const VISITS = "src/main/java/app/dto/Visits.java";
 const STATE = "src/main/java/app/inherit/State.java";
 const REMOTE_USER = "src/main/java/app/remote/User.java";
 const SHADOWED = "src/main/java/app/shadow/Derived.java";
+const INHERITED_USER = "src/main/java/app/hidden/Base.java";
+const HIDDEN = "src/main/java/app/hidden/Derived.java";
 const FILES: Record<string, string> = {
+  [INHERITED_USER]: "package app.hidden;\n\npublic class Base {\n  static class User {}\n}\n",
+  [HIDDEN]: [
+    "package app.hidden;",
+    "",
+    "public class Derived extends Base {",
+    "  Object later() {",
+    "    Object user = new User();",
+    "    class User {}",
+    "    return user;",
+    "  }",
+    "",
+    "  Object outside(boolean fresh) {",
+    "    if (fresh) {",
+    "      class User {}",
+    "      return new User();",
+    "    }",
+    "    return new User();",
+    "  }",
+    "}",
+    "",
+  ].join("\n"),
   "src/main/java/app/shadow/Base.java": "package app.shadow;\n\npublic class Base {\n  static class User {}\n}\n",
   [SHADOWED]: ["package app.shadow;", "", "public class Derived extends Base {", "  Object load() {", "    class User {}", "    return new User();", "  }", "}", ""].join("\n"),
   "src/main/java/app/inherit/Base.java": "package app.inherit;\n\npublic class Base {\n  private record State(int n) {}\n}\n",
@@ -77,6 +100,8 @@ before(async () => {
   }
   execFileSync("git", ["add", "."], { cwd: repo, env });
   execFileSync("git", ["commit", "-qm", "fixture"], { cwd: repo, env });
+  await writeFile(join(repo, INHERITED_USER), "package app.hidden;\n\npublic class Base {\n  static class User {\n    int id;\n  }\n}\n");
+  execFileSync("git", ["commit", "-qam", "change the inherited User"], { cwd: repo, env });
 });
 
 after(async () => {
@@ -126,4 +151,20 @@ test("a Java class declared in a method shadows a member type its class inherits
 
   assert.deepEqual(used?.filter((file) => file === "src/main/java/app/shadow/Base.java"), []);
   assert.ok(callers.value.value.symbols.some(({ file, symbol, depth }) => file === SHADOWED && symbol === "load" && depth === 1));
+});
+
+test("a Java type name read where no local class of the name is in scope yet is a use of the type the class inherits, for its callers and the impact of its change alike", async () => {
+  const queries = composeQueries({ scratchRoot });
+  const callers = await queries.impact.callers({ repo, repoId: "java-name-bindings", revision: "HEAD", targets: [{ file: INHERITED_USER, symbol: "Base.User" }] });
+  const impact = await queries.impact.ofChange({ repo, repoId: "java-name-bindings", base: "HEAD~1", head: "HEAD" });
+  const reached = (result: typeof callers): string[] => {
+    assert.ok(result.ok, JSON.stringify(result));
+    assert.ok(result.value.status !== "unknown", JSON.stringify(result.value));
+    return result.value.value.symbols.filter(({ file, depth }) => file === HIDDEN && depth === 1).map(({ symbol }) => symbol);
+  };
+
+  for (const answer of [callers, impact]) {
+    assert.ok(reached(answer).includes("later"), JSON.stringify(answer));
+    assert.ok(reached(answer).includes("outside"), JSON.stringify(answer));
+  }
 });

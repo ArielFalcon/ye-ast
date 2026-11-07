@@ -17,7 +17,10 @@ import { declarationAt, importBindings } from "./import-bindings.ts";
 export interface EdgeTargets {
   /** One verdict per edge, in the order received; an edge the graph placed nowhere is kept. */
   verdictsOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<readonly EdgeTarget[]>;
-  /** The edges the graph matched elsewhere that an import proves reach `node`, each with `node` as its target. */
+  /**
+   * The edges the graph matched elsewhere that the source's bindings prove reach `node`, each with `node` as its target:
+   * a name an import binds to it, or a name of it the graph matched to a homonym declaration where it is in scope.
+   */
   redirectedInto(node: GraphSymbol, signal?: AbortSignal): Promise<readonly FollowedEdge[]>;
   /** Per local name `file`'s imports bind, the declaration the join proves it reaches, when it proves exactly one. */
   importedDeclarations(file: string): Promise<ReadonlyMap<string, GraphSymbol>>;
@@ -90,23 +93,26 @@ export function createEdgeTargets({ origins, store, modules }: EdgeTargetsDeps):
     verdictsOf,
     importedDeclarations: bindingsOf,
     async redirectedInto(node, signal) {
+      const candidates = new Map<string, FollowedEdge>();
+      const collect = (edges: readonly GraphEdge[], named: (target: GraphSymbol) => boolean): void => {
+        const placed = edges.filter((edge) => edge.target !== node.id && edge.line !== null && edge.column !== null);
+        const symbols = new Map(store.symbolsByIds([...new Set(placed.flatMap((edge) => [edge.source, edge.target]))]).map((symbol) => [symbol.id, symbol]));
+        for (const edge of placed) {
+          const source = symbols.get(edge.source);
+          const target = symbols.get(edge.target);
+          if (source !== undefined && target !== undefined && named(target)) candidates.set(edgeKey(edge), { edge, source, target });
+        }
+      };
       const importing = store.symbolsByIds([...new Set(store.incomingEdges([node.id], [IMPORT]).map((edge) => edge.source))]);
-      const candidates: FollowedEdge[] = [];
       for (const file of new Set(importing.map((symbol) => symbol.file))) {
         const locals = new Set([...(await bindingsOf(file))].filter(([, declaration]) => declaration.id === node.id).map(([local]) => local));
-        if (locals.size === 0) continue;
-        const sources = store.symbolsInFiles([file]);
-        const edges = store.outgoingEdges(sources.map((symbol) => symbol.id), FOLLOWED_EDGE_KINDS).filter((edge) => edge.target !== node.id && edge.line !== null && edge.column !== null);
-        const targets = new Map(store.symbolsByIds([...new Set(edges.map((edge) => edge.target))]).map((symbol) => [symbol.id, symbol]));
-        const bySource = new Map(sources.map((symbol) => [symbol.id, symbol]));
-        for (const edge of edges) {
-          const target = targets.get(edge.target);
-          const source = bySource.get(edge.source);
-          if (target !== undefined && source !== undefined && locals.has(target.name)) candidates.push({ edge, source, target });
-        }
+        if (locals.size > 0) collect(store.outgoingEdges(store.symbolsInFiles([file]).map((symbol) => symbol.id), FOLLOWED_EDGE_KINDS), (target) => locals.has(target.name));
       }
-      const judged = await verdictsOf(candidates, signal);
-      return candidates.flatMap(({ edge, source }, index) => {
+      const homonyms = store.declarationsNamed([node.name]).filter((symbol) => symbol.id !== node.id);
+      collect(store.incomingEdges(homonyms.map((symbol) => symbol.id), FOLLOWED_EDGE_KINDS), () => true);
+      const found = [...candidates.values()];
+      const judged = await verdictsOf(found, signal);
+      return found.flatMap(({ edge, source }, index) => {
         const verdict = judged[index]!;
         return verdict.kind === "redirect" && verdict.to.id === node.id ? [{ edge, source, target: node }] : [];
       });
