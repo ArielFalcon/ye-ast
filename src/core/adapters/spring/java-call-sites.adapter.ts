@@ -2,8 +2,7 @@ import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import { basename } from "node:path";
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
 import { isSpringConfigFile } from "../../domain/languages/spring-config.ts";
-import { compareText } from "../../domain/shared/code-node.ts";
-import type { CallSite, CallSiteReader, PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
+import { compareCallSites, type CallSite, type CallSiteReader, type PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
 import { CALL_PLACES } from "./findings.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
@@ -42,7 +41,7 @@ function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[], libra
     for (const site of sites) if (site.diagnostic?.source === "not-read" && unreadableLibraries.length > 0) {
       site.diagnostic = { ...site.diagnostic, unreadableSources: unreadableLibraries };
     }
-    return [...sites, ...unread].sort(compareSite);
+    return [...sites, ...unread].sort(compareCallSites);
   });
 }
 
@@ -60,8 +59,4 @@ export function createJavaCallSites(parser: JavaParser): CallSiteReader & Placed
     of: async (files, repo, libraries = []) => javaCallSitesOf(parser, files, libraries, repo, [httpSites, eventSites]),
     placed: async (files, repo) => javaCallSitesOf(parser, files, [], repo, [httpSites, eventSites]).map((site) => ({ site, ...CALL_PLACES.get(site) })),
   };
-}
-
-function compareSite(a: CallSite, b: CallSite): number {
-  return compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol) || compareText(a.target.status, b.target.status);
 }

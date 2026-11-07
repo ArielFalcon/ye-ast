@@ -3,7 +3,7 @@ import type { Hypothesis } from "../../domain/contracts/hypothesis.ts";
 import { provenanceOf, sortedEngines } from "../../domain/shared/fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Result } from "../../domain/shared/result.ts";
-import { httpTargetOf, type CallSite } from "../../domain/topology/call-site.ts";
+import { callPlaceOf, compareCallPlaces, httpTargetOf } from "../../domain/topology/call-site.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import { matchCallSite, matchDeclaredOperation, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
@@ -198,7 +198,7 @@ function joinHttpCalls(repositories: readonly WorkspaceRepository[], entrypoints
   for (const site of repositories.flatMap((repository) => repository.callSites)) {
     if (site.transport !== "http") continue;
     const target = httpTargetOf(site);
-    const from = { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol };
+    const from = callPlaceOf(site);
     if (target === undefined) {
       if (site.target.status === "unknown") unresolvedCalls.push(from);
       continue;
@@ -208,7 +208,6 @@ function joinHttpCalls(repositories: readonly WorkspaceRepository[], entrypoints
     if (joined.ambiguous === undefined) continue;
     ambiguousCalls.push({ from, repos: joined.ambiguous.repos.toSorted(compareText), reaching: new Set(joined.ambiguous.routes) });
   }
-  const byPlace = (a: { repo: string; file: string; line: number }, b: { repo: string; file: string; line: number }) => compareText(a.repo, b.repo) || compareText(a.file, b.file) || a.line - b.line;
   const serving = new Map<string, { repo: string; handler: Handler }[]>();
   for (const { repo, entrypoints: routes } of entrypoints) {
     for (const entrypoint of routes) {
@@ -218,8 +217,8 @@ function joinHttpCalls(repositories: readonly WorkspaceRepository[], entrypoints
   for (const handlers of serving.values()) handlers.sort((a, b) => compareText(a.repo, b.repo) || compareText(a.handler.path, b.handler.path) || a.handler.line - b.handler.line);
   return {
     links: [...links.values()].sort((a, b) => compareText(a.id, b.id)),
-    unresolvedCalls: unresolvedCalls.sort(byPlace),
-    ambiguousCalls: ambiguousCalls.sort((a, b) => byPlace(a.from, b.from)),
+    unresolvedCalls: unresolvedCalls.sort(compareCallPlaces),
+    ambiguousCalls: ambiguousCalls.sort((a, b) => compareCallPlaces(a.from, b.from)),
     serving,
   };
 }

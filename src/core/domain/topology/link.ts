@@ -2,6 +2,7 @@ import type { Entrypoint } from "../entrypoints/entrypoint.ts";
 import type { Handler } from "../entrypoints/http-route.ts";
 import type { ChangedContract } from "../impact/changed-contracts.ts";
 import { compareText } from "../shared/code-node.ts";
+import type { CallPlace } from "./call-site.ts";
 
 /** How a call site was matched to the entrypoint it reaches. */
 export type LinkBasis = "exact" | "base-path" | "suffix" | "event-destination" | "gateway-prefix" | "route-overlap";
@@ -10,7 +11,7 @@ export type LinkBasis = "exact" | "base-path" | "suffix" | "event-destination" |
 export interface Link {
   /** Digest of every field but `confidence`: two links with one id are one link. */
   id: string;
-  from: { repo: string; file: string; line: number; symbol: string };
+  from: CallPlace;
   to: { repo: string; kind: Entrypoint["kind"]; name: string; handler: Handler };
   transport: "http" | "event";
   basis: LinkBasis;

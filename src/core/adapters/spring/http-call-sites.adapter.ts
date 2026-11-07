@@ -3,8 +3,7 @@ import { agreed, JavaMethodFlow, reachedDiagnostic } from "./java-method-flow.ts
 import type { Node } from "web-tree-sitter";
 import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
-import { compareText } from "../../domain/shared/code-node.ts";
-import type { CallSite, CallSiteDiagnostic, HttpTarget, StatedRequest } from "../../domain/topology/call-site.ts";
+import { compareCallSites, type CallSite, type CallSiteDiagnostic, type HttpTarget, type StatedRequest } from "../../domain/topology/call-site.ts";
 import type { Configuration } from "./application-config.ts";
 import { complete, placed, spanOf, unknown, unknownAtNode, withEvidence } from "./findings.ts";
 import {
@@ -99,7 +98,7 @@ export class JavaHttpReader {
       }
     }
     for (const type of this.project.types.filter((candidate) => this.owned.has(candidate.file))) found.push(...this.declarations(repo, type));
-    return found.sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol) || compareText(a.target.status, b.target.status));
+    return found.sort(compareCallSites);
   }
 
   private scopeOf(invocation: Invocation, env: UrlScope["env"]): UrlScope {

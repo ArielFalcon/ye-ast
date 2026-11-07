@@ -1,7 +1,7 @@
 import type { Entrypoint, Listener } from "../entrypoints/entrypoint.ts";
 import type { HttpRoute } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
-import type { CallSite, EventTarget, HttpTarget } from "./call-site.ts";
+import { callPlaceOf, type CallSite, type EventTarget, type HttpTarget } from "./call-site.ts";
 import { linkIdentity, type Link, type LinkBasis } from "./link.ts";
 import { callTemplate, CANNOT_MATCH, literalText, looseness, namesHost, prefixText, routeSegments, RUN_TIME_HOLE, statedLength, unify, type CallTemplate, type TemplateSegment, type Unification } from "./path-template.ts";
 
@@ -197,7 +197,7 @@ export function servedBehindGateway(target: HttpTarget, routes: readonly HttpRou
 
 function linkTo(site: CallSite, repo: string, match: Match): Link {
   const link: Omit<Link, "id"> = {
-    from: { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol },
+    from: callPlaceOf(site),
     to: { repo, kind: match.route.kind, name: match.route.name, handler: match.route.handler },
     transport: "http",
     basis: match.basis,
@@ -327,7 +327,7 @@ function consumes(target: EventTarget, listener: Listener): boolean {
 
 function eventLinkTo(site: CallSite, repo: string, listener: Listener): Link {
   const link: Omit<Link, "id"> = {
-    from: { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol },
+    from: callPlaceOf(site),
     to: { repo, kind: listener.kind, name: listener.name, handler: listener.handler },
     transport: "event",
     basis: "event-destination",

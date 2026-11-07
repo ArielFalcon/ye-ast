@@ -1,15 +1,14 @@
 import type { UrlScope } from "./java-values.ts";
 import { agreed, JavaMethodFlow, reachedDiagnostic } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
-import { compareText } from "../../domain/shared/code-node.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
-import type { CallSite, CallSiteDiagnostic, EventTarget } from "../../domain/topology/call-site.ts";
+import { compareCallSites, type CallSite, type CallSiteDiagnostic, type EventTarget } from "../../domain/topology/call-site.ts";
 import type { Configuration } from "./application-config.ts";
 import { EVENT_CLIENT_NAME, PUBLISH_CLIENTS, PUBLISH_METHOD_NAME, type PublishClient } from "./event-vocabulary.ts";
 import { complete, placed, spanOf, unknown, withEvidence } from "./findings.ts";
 import { argumentsOf, typeNameOf } from "./java-members.ts";
 import { ancestorsOf, receiverOf, symbolOf, type Invocation } from "./java-invocations.ts";
-import { qualifiedTypeName, scopeOf, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { qualifiedTypeName, scopeOf, type JavaFile, type JavaProject } from "./java-symbols.ts";
 import { JavaValueEvaluator } from "./java-value-evaluator.ts";
 import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 
@@ -67,7 +66,7 @@ export class JavaEventReader {
         if (library !== undefined) found.push(this.siteOf(repo, invocation, unknown("unresolved", [{ ...spanOf(invocation.type.file.path, invocation.node), via: library.via }, ...library.evidence]), { cause: library.source === "read" ? "request-not-found" : "source-not-read", source: library.source }));
       }
     }
-    return found.sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol) || compareText(a.target.status, b.target.status));
+    return found.sort(compareCallSites);
   }
 
   private scopeOf(invocation: Invocation, env: UrlScope["env"]): UrlScope {

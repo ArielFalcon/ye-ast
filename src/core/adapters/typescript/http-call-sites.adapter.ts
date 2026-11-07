@@ -1,13 +1,11 @@
 import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
-import type { CallSite, HttpTarget, StatedRequest } from "../../domain/topology/call-site.ts";
-import type { CallSiteReader, PlacedCallSite, PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
+import { compareCallSites, type CallSite, type CallSiteReader, type HttpTarget, type PlacedCallSite, type PlacedCallSiteReader, type StatedRequest } from "../../domain/topology/call-site.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { moduleResolverOf, type ModuleResolver } from "./module-resolver.ts";
 import { buildDefines, type BuildDefines } from "./url-define.ts";
-import { compareText } from "../../domain/shared/code-node.ts";
 import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 import { injectedClass } from "./angular-injection.ts";
 import { declarationCounts } from "./syntax-names.ts";
@@ -148,7 +146,7 @@ async function readPlaced(files: readonly SourceFile[], repo: string): Promise<r
       for (const site of await read.callSite(shape, call, repo)) found.push({ site, column });
     }
   }
-  return found.sort(({ site: a }, { site: b }) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
+  return found.sort(({ site: a }, { site: b }) => compareCallSites(a, b));
 }
 function describe(file: SourceFile): FileShape {
   const source = sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);

@@ -1,4 +1,4 @@
-import { httpTargetOf, type CallSite, type EventTarget } from "../../domain/topology/call-site.ts";
+import { callPlaceOf, compareCallPlaces, httpTargetOf, type CallSite, type EventTarget } from "../../domain/topology/call-site.ts";
 import type { JoinedSite } from "../../domain/topology/link-graph.ts";
 import type { Link, UnlinkedCallSite } from "../../domain/topology/link.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -58,7 +58,7 @@ export function linkMapOf(joined: readonly JoinedSite[]): { links: Link[]; unlin
   const links = new Map<string, Link>();
   const unlinked: UnlinkedCallSite[] = [];
   for (const { site, joined: answer } of joined) {
-    const from = { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol };
+    const from = callPlaceOf(site);
     for (const link of answer.links ?? []) links.set(link.id, link);
     if (answer.links !== undefined) continue;
     if (answer.ambiguous !== undefined) unlinked.push({ from, transport: site.transport, outcome: "ambiguous", name: answer.ambiguous.key, repos: answer.ambiguous.repos, ...(answer.ambiguous.routes === undefined ? {} : { routes: answer.ambiguous.routes }) });
@@ -67,6 +67,6 @@ export function linkMapOf(joined: readonly JoinedSite[]): { links: Link[]; unlin
   }
   return {
     links: [...links.values()].sort((a, b) => compareText(a.id, b.id)),
-    unlinked: unlinked.sort((a, b) => compareText(a.from.repo, b.from.repo) || compareText(a.from.file, b.from.file) || a.from.line - b.from.line || compareText(a.from.symbol, b.from.symbol) || compareText(a.name, b.name)),
+    unlinked: unlinked.sort((a, b) => compareCallPlaces(a.from, b.from) || compareText(a.name, b.name)),
   };
 }

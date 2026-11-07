@@ -663,7 +663,7 @@ test("a method the class or a subclass assigns through this is not read from its
     "export function load(field: Field, method: Method, base: Base, kept: Kept) { fetch(field.path()); fetch(method.path()); fetch(base.path()); fetch(kept.path()) }",
   ].join("\n"));
 
-  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@paths.ts:6", "unknown unresolved@paths.ts:6", "unknown unresolved@paths.ts:6", "GET /kept@paths.ts:6"]);
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /kept@paths.ts:6", "unknown unresolved@paths.ts:6", "unknown unresolved@paths.ts:6", "unknown unresolved@paths.ts:6"]);
 });
 
 test("a class or a function an import names is found through re-exports, local export aliases and default exports", async () => {
