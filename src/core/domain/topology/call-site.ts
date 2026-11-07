@@ -82,7 +82,7 @@ export interface PlacedCallSite {
 
 /** The call sites of a snapshot with their exact places, read as `CallSiteReader.of` reads them. */
 export interface PlacedCallSiteReader {
-  placed(files: readonly { path: string; content: string }[], repo: string): Promise<readonly PlacedCallSite[]>;
+  placed(files: readonly { path: string; content: string }[], repo: string, libraries?: readonly LibrarySource[]): Promise<readonly PlacedCallSite[]>;
 }
 
 /**

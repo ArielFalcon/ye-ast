@@ -1,4 +1,4 @@
-import { libraryPath } from "../../domain/topology/library-source.ts";
+import { type LibrarySource, libraryPath } from "../../domain/topology/library-source.ts";
 import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
 import { incompleteSectionCuts, provenanceOf, withCuts, type Cut, type DeclaredScope, type Fact, type Finding, type FactBase, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
@@ -51,6 +51,7 @@ interface ReadRepository {
 }
 
 interface Resolved extends ReadRepository {
+  librarySources: readonly LibrarySource[];
   names: readonly OutwardName[];
   callSites: readonly CallSite[];
 }
@@ -145,7 +146,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
       const librarySources = libraries.flatMap((library) => library.sources.toSorted((a, b) => compareText(a.path, b.path)).map((source) => ({ ...source, repo: library.identity.id })));
       const callSites = (await deps.callSites.of(entry.sources, entry.repository.repo, librarySources)).filter((site) => selected(site.file));
       const entrypoints = librarySources.length === 0 ? entry.repository.entrypoints : selectedFindings(await deps.extractor.extract(entry.sources, librarySources), selected);
-      resolved.push({ ...entry, cuts, repository: { ...entry.repository, entrypoints }, callSites, names: [...entry.stated, ...callSiteNames(entry.repository.repo, callSites)] });
+      resolved.push({ ...entry, librarySources, cuts, repository: { ...entry.repository, entrypoints }, callSites, names: [...entry.stated, ...callSiteNames(entry.repository.repo, callSites)] });
     }
     return resolved;
   }
@@ -233,7 +234,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
           ...unavailable.map(({ repoId, sha }) => ({ repo: repoId, kind: "sha" as const, sha })),
         ].toSorted((a, b) => compareText(a.repo, b.repo));
         const workspaceReplay = declaration === undefined ? undefined : { version: 1 as const, declaration, snapshots };
-        return use({ fact, ...(workspaceReplay === undefined ? {} : { workspaceReplay }), repositoryRoots, repositorySources, ...(refresh === undefined ? {} : { refresh: refresh }) }, context);
+        return use({ fact, ...(workspaceReplay === undefined ? {} : { workspaceReplay }), repositoryRoots, repositorySources, ...(refresh === undefined ? {} : { refresh: refresh }) }, { ...context, librarySources: new Map(resolved.map((entry) => [entry.repository.repo, entry.librarySources])) });
       });
     },
   };

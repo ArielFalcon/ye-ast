@@ -105,6 +105,7 @@ export class JavaEventReader {
   }
 
   private target(publish: Publish, scope: UrlScope): { target: Finding<EventTarget>; diagnostic?: CallSiteDiagnostic } {
+    if (scope.deferred === true) return { target: unknown("no-extractor", [spanOf(publish.invocation.type.file.path, publish.invocation.node)]) };
     const evaluated = this.text.trace(() => scope.undecided === true ? undefined : this.destination(publish, scope));
     return evaluated.value === undefined
       ? {

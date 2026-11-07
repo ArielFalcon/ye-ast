@@ -189,7 +189,7 @@ async function dispatch(query: SemanticQuery, repository: RepositoryBinding, ctx
     }
     case "ye_ast_trace": {
       const a = query.arguments;
-      const result = await deps.trace.walk({ ...local, ...atRevision(a.revision, a.live, onStale), targets: a.targets as TraceTarget[], ...scopeOf(a.scope), ...budgetOf(a.budget, TRACE_BOUND_FIELDS), ...signal });
+      const result = await deps.trace.walk({ ...local, ...atRevision(a.revision, a.live, onStale), targets: a.targets as TraceTarget[], ...(a.workspace === undefined ? {} : { workspace: workspaceOf(a.workspace)! }), ...(a.offline === undefined ? {} : { offline: a.offline }), ...scopeOf(a.scope), ...budgetOf(a.budget, TRACE_BOUND_FIELDS), ...signal });
       if (!result.ok) return result;
       return finish({ fact: result.value }, query, repository, true, moved, ctx, undefined, (read, rest) => ({ family: "trace", read, query, ...rest }));
     }

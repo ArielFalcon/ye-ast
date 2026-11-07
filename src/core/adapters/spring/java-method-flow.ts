@@ -1,3 +1,5 @@
+import { LIBRARY_ROOT } from "../../domain/topology/library-source.ts";
+import { isFunctionValueNode } from "../tree-sitter/java-function-value-calls.ts";
 import { BEAN, NAMED_COMPONENTS, PRIMARY, QUALIFIER } from "./java-value-vocabulary.ts";
 import type { Node } from "web-tree-sitter";
 import { argumentsOf, descendants, localBindings, typeNameOf } from "./java-members.ts";
@@ -115,6 +117,7 @@ export function reachedDiagnostic(diagnostics: readonly (CallSiteDiagnostic | un
 export function bindMethod(selection: MethodSelection, call: Node, scope: UrlScope): UrlScope {
   const args = argumentsOf(call);
   return {
+    deferred: scope.deferred === true || deferredLibraryCall(call, scope.type.file.path),
     type: selection.method.owner,
     receiver: selection.receiver,
     configurationFile: scope.configurationFile ?? scope.type.file,
@@ -213,10 +216,10 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
           done([...(this.reachable.get(method) ?? [])].map((leaf) => [{ leaf, scope: { ...bound, undecided: true, undecidedCause: "recursive" } }]));
           return;
         }
-        const key = `${method}:${selection.receiver.node.id}:${bound.configurationFile?.path}:${[...bound.env].map(([name, value]) => `${name}=${closureKey(value.node, value.scope)}`).join(";")}`;
+        const key = `${method}:${bound.deferred === true}:${selection.receiver.node.id}:${bound.configurationFile?.path}:${[...bound.env].map(([name, value]) => `${name}=${closureKey(value.node, value.scope)}`).join(";")}`;
         const cached = cache.get(key);
         if (cached !== undefined) { done(cached); return; }
-        const frame: Frame = { groups: (this.leaves.get(method) ?? []).map((leaf) => [{ leaf, scope: { ...bound, locals: leaf.invocation.locals } }]), edges: [] };
+        const frame: Frame = { groups: (this.leaves.get(method) ?? []).map((leaf) => [{ leaf, scope: { ...bound, deferred: bound.deferred === true || deferredLibraryCall(leaf.invocation.node, leaf.invocation.type.file.path), locals: leaf.invocation.locals } }]), edges: [] };
         pending.push(() => {
           const groups = [...frame.groups, ...frame.edges.flatMap(merge)];
           cache.set(key, groups); done(groups);
@@ -235,4 +238,12 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
     for (let task = pending.pop(); task !== undefined; task = pending.pop()) task();
     return merge(roots);
   }
+}
+
+function deferredLibraryCall(call: Node, file: string): boolean {
+  if (!file.startsWith(`${LIBRARY_ROOT}/`)) return false;
+  for (let node = call.parent; node !== null; node = node.parent) {
+    if (isFunctionValueNode(node) || (node.type === "class_body" && node.parent?.type === "object_creation_expression")) return true;
+  }
+  return false;
 }

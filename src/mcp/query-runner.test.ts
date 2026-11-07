@@ -271,3 +271,14 @@ test("runner recovery equals the recovery the original tools publish", async () 
     await session.close();
   }
 });
+
+
+test("the shared MCP dispatcher passes trace workspace sources and offline policy to the trace family", async () => {
+  const { deps } = spies();
+  const requests: unknown[] = [];
+  deps.trace = { walk: async request => { requests.push(request); return { ok: true, value: { ...base(request.repoId), status: "complete", value: { roots: [], steps: [], readingPlan: { ranges: [], lines: 0 }, cost: { expanded: 0 } } } }; } };
+  const args = { targets: [{ file: "src/Load.java", symbol: "load" }], workspace: { repos: [{ path: "/work/lib", revision: "v2" }] }, offline: true };
+  const result = await executeQuery({ name: "ye_ast_trace", arguments: args }, { deps, catalog: repositoryCatalog(SHOP) });
+  assert.ok(result.ok);
+  assert.deepEqual(requests, [{ repo: "/work/shop", repoId: "shop", revision: DEFAULT_REVISION, ...args }]);
+});

@@ -19,7 +19,7 @@ export const COMPOSE_LIMITS = {
 } as const;
 
 /** Same accepted set and published pattern as the original tools' `expect` (`RESULT_IDENTITY_PATTERN`). */
-const sourceExpect = compositionIdSchema("mcp-r1").describe("Assert this source's complete public resultIdentity, as the original tool's expect does.");
+const sourceExpect = compositionIdSchema("mcp-r1").describe("Assert full source resultIdentity (original tool expect).");
 const compositionExpect = compositionIdSchema("mcp-c1").describe("Assert the identity of the whole composition (verification.identity).");
 
 function recoverable<F extends RecoverableFamily>(family: F) {

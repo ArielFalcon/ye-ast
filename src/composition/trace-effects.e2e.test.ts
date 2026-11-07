@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { EXIT_CODE } from "../cli/main.ts";
 import type { Cut } from "../core/domain/shared/fact.ts";
 import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
-import { composeCli } from "./compose.ts";
+import { composeQueries, composeCli } from "./compose.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -184,4 +184,69 @@ export class Api {
 
   assert.deepEqual([effectsOf(run.value), run.cuts?.filter((cut) => cut.at[0]?.includes(" effect")).map((cut) => cut.at[0])], [[], ["src/main/java/shop/Events.java:7 message effect"]]);
   assert.deepEqual([effectsOf(load.value), load.cuts?.filter((cut) => cut.at[0]?.includes(" effect")).map((cut) => cut.at[0])], [[], ["api.ts:5 http effect"]]);
+});
+
+
+test("trace reads only the artifact-proven library closure of an explicit workspace", async () => {
+  commit({
+    "pom.xml": '<project><groupId>sample</groupId><artifactId>app</artifactId><dependencies><dependency><groupId>transport</groupId><artifactId>gateway</artifactId></dependency></dependencies></project>',
+    "src/main/java/shop/Caller.java": `package shop;
+import transport.Gateway;
+class Caller {
+  private Gateway gateway;
+  void load() { gateway.get("/inventory"); }
+  void defer() { gateway.defer("/deferred"); }
+  void emit() { gateway.emit("topic.deferred"); }
+  void mixed() { gateway.mixed("/mixed"); }
+}
+`,
+  });
+  const library = join(workspace, "gateway");
+  mkdirSync(library);
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: library, env: GIT_ENV });
+  writeFileSync(join(library, "pom.xml"), '<project><groupId>transport</groupId><artifactId>gateway</artifactId></project>');
+  writeFileSync(join(library, "Gateway.java"), `package transport;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.kafka.core.KafkaTemplate;
+public class Gateway {
+  private KafkaTemplate<String, String> kafka;
+  private RestTemplate http;
+  public String get(String path) { return http.getForObject(path, String.class); }
+  public void defer(String path) { Runnable dead = () -> later(path); }
+  private void later(String path) { http.getForObject(path, String.class); }
+  public void mixed(String path) { later(path); Runnable dead = () -> later(path); }
+  public void emit(String topic) { Runnable dead = () -> kafka.send(topic, "value"); }
+}
+`);
+  execFileSync("git", ["add", "."], { cwd: library, env: GIT_ENV });
+  execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: library, env: GIT_ENV });
+  const queries = composeQueries({ scratchRoot: join(workspace, "scratch"), indexCache: join(workspace, "cache") });
+  const request = { repo, repoId: "shop", revision: "HEAD", targets: [{ file: "src/main/java/shop/Caller.java", symbol: "Caller.load" }] };
+  const local = await queries.trace.walk(request);
+  const linked = await queries.trace.walk({ ...request, workspace: { repos: [{ path: library }] } });
+  assert.ok(local.ok && linked.ok);
+  assert.ok(local.value.status !== "unknown" && linked.value.status !== "unknown");
+  assert.deepEqual(local.value.value.steps.flatMap(s => s.effects ?? []), []);
+  assert.deepEqual(linked.value.value.steps.flatMap(s => s.effects ?? []).map(e => e.target), [{ method: "GET", path: "/inventory" }]);
+  const deferred = await queries.trace.walk({ ...request, targets: [{ file: "src/main/java/shop/Caller.java", symbol: "Caller.defer" }], workspace: { repos: [{ path: library }] } });
+  assert.ok(deferred.ok && deferred.value.status === "partial");
+  assert.deepEqual(deferred.value.value.steps.flatMap(s => s.effects ?? []), []);
+  assert.ok(deferred.value.cuts?.some(c => c.at.some(a => a.includes("effect through"))));
+  const emitted = await queries.trace.walk({ ...request, targets: [{ file: "src/main/java/shop/Caller.java", symbol: "Caller.emit" }], workspace: { repos: [{ path: library }] } });
+  assert.ok(emitted.ok && emitted.value.status === "partial");
+  assert.deepEqual(emitted.value.value.steps.flatMap(s => s.effects ?? []), []);
+  assert.ok(emitted.value.cuts?.some(c => c.at.some(a => a.includes("message effect through"))));
+  const mixed = await queries.trace.walk({ ...request, targets: [{ file: "src/main/java/shop/Caller.java", symbol: "Caller.mixed" }], workspace: { repos: [{ path: library }] } });
+  assert.ok(mixed.ok && mixed.value.status === "partial");
+  assert.equal(mixed.value.value.steps.flatMap(s => s.effects ?? []).length, 1);
+  assert.equal(mixed.value.cuts?.filter(c => c.at.some(a => a.includes("http effect through"))).length, 1);
+  const manifest = join(workspace, "workspace.json");
+  writeFileSync(manifest, JSON.stringify({ repos: [{ path: library }] }));
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const cli = await composeCli({ scratchRoot: join(workspace, "scratch"), indexCache: join(workspace, "cache") })(["trace", "--workspace", manifest, "--offline", repo, "src/main/java/shop/Caller.java:Caller.load"], { out: s => stdout.push(s), err: s => stderr.push(s) });
+  assert.equal(cli, EXIT_CODE.ok, stderr.join("\n"));
+  assert.equal(JSON.parse(stdout.join("\n")).value.steps.flatMap((s: { effects?: unknown[] }) => s.effects ?? []).length, 1);
+  const repeated = await queries.trace.walk(request);
+  assert.deepEqual(repeated, local);
 });

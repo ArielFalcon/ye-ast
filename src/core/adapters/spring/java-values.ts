@@ -19,6 +19,7 @@ export interface UrlScope {
   env: ReadonlyMap<string, Closure>;
   receiver?: TypeDecl;
   instance?: ObjectValue;
+  deferred?: boolean;
   undecided?: boolean;
   undecidedCause?: FlowCause;
   configurationFile?: JavaFile;

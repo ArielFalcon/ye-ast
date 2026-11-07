@@ -188,8 +188,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     },
   }, { of: "call-sites" });
   const placedCallSites = staged<PlacedCallSiteReader>({
-    placed: async (files, repo) => {
-      const java = await createJavaCallSites(await createJavaParser()).placed(files, repo);
+    placed: async (files, repo, libraries) => {
+      const java = await createJavaCallSites(await createJavaParser()).placed(files, repo, libraries);
       return [...(await typescriptCallSites.placed(files, repo)), ...java].sort(({ site: a }, { site: b }) => compareSites(a, b));
     },
   }, { placed: "call-sites" });
@@ -281,7 +281,30 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   };
   const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders: [moduleDependencies, javaImports], unmodelled, importOrigins });
   const outline = measurement === undefined ? bareOutline : measuredOutline(bareOutline, measurement);
+  const defaults = createWorkspaceDefaults(createFixedLayerStore());
+  const refresh = options.refresh ?? (options.cacheDirectory === undefined ? undefined : createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory: options.cacheDirectory, digest }));
+  const workspaceDeps: WorkspaceQueriesDeps = {
+    ...snapshotCache,
+    vcs,
+    scratch,
+    reader,
+    extractor,
+    digest,
+    matcher,
+    callSites,
+    graph,
+    live,
+    evidence: createWorkspaceEvidence(),
+    producer: { name: PRODUCER_NAME, version },
+    engines: entrypointEngines,
+    defaults,
+    ...(refresh === undefined ? {} : { refresh }),
+    ...budget,
+    ...trust,
+  };
+  const operation = createWorkspaceReadOperation(workspaceDeps);
   const bareTrace = createTraceQueries({
+    workspace: operation,
     ...snapshotCache,
     vcs,
     scratch,
@@ -305,28 +328,6 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     sourceSelection: isWritten,
   });
   const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);
-  const defaults = createWorkspaceDefaults(createFixedLayerStore());
-  const refresh = options.refresh ?? (options.cacheDirectory === undefined ? undefined : createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory: options.cacheDirectory, digest }));
-  const workspaceDeps: WorkspaceQueriesDeps = {
-    ...snapshotCache,
-    vcs,
-    scratch,
-    reader,
-    extractor,
-    digest,
-    matcher,
-    callSites,
-    graph,
-    live,
-    evidence: createWorkspaceEvidence(),
-    producer: { name: PRODUCER_NAME, version },
-    engines: entrypointEngines,
-    defaults,
-    ...(refresh === undefined ? {} : { refresh }),
-    ...budget,
-    ...trust,
-  };
-  const operation = createWorkspaceReadOperation(workspaceDeps);
   const bareWorkspace = createWorkspaceQueries(workspaceDeps, operation);
   const workspace = measurement === undefined ? bareWorkspace : measuredWorkspace(bareWorkspace, measurement);
   // One measurement line per read: the workspace impact reports through the impact family it walks with.

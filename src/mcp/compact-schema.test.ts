@@ -56,7 +56,7 @@ test("catalogue advertises useful guides within budget", async () => {
     ]) assert.match(session.instructions!, rule);
 
     const originals = tools.filter(tool => tool.name !== "ye_ast_compose");
-    assert.ok(Buffer.byteLength(JSON.stringify({ tools: originals })) <= 41_000);
+    assert.ok(bytes <= 36_100);
     assert.equal(outputs, 0);
     const compose = tools.find(tool => tool.name === "ye_ast_compose");
     assert.ok(compose);
@@ -166,7 +166,7 @@ const INPUT_CONSTRAINTS: Record<string, string> = {
   ye_ast_callers: "7ee67eedc7880c1bf1e5b7beb1d3f65de5d1ef7440de26963cc554ac217f8259",
   ye_ast_importers: "5c8a30a8565d803f111f7c0878aab0c64f902e7b58f1bb9731a7ae2c75781022",
   ye_ast_outline: "2f1a5187e37a9f464453fcc2adb15c02b469b798a37de7c5c32f6cf81a612109",
-  ye_ast_trace: "2de47807688347b35b5176925c11d8c6edc791e9c2d4be4bc5e817fa9c14024a",
+  ye_ast_trace: "cec9068dd718abdb2063d804a53907ac8a34e98eedcf50f123dc35a0968b4567",
   ye_ast_workspace: "a3eb1c0ee1dbf6c86080e0215b48283bcd1d26de492fbd78d558ba49b2ee7cda",
   ye_ast_decisions: "a3eb1c0ee1dbf6c86080e0215b48283bcd1d26de492fbd78d558ba49b2ee7cda",
   ye_ast_contract_consequences: "6e05e8d94599268d755e79a4df04adfc3340e1140c84f0b32b31d968a93baf4d",

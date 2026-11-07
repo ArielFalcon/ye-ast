@@ -723,3 +723,8 @@ Apache-2.0 · See [LICENSE](LICENSE)
 <img src="https://capsule-render.vercel.app/api?type=waving&height=90&color=0:3a3a3a,100:111111&section=footer" alt="" width="100%" />
 
 </div>
+
+Trace can read explicitly declared client-library sources with `trace --workspace <manifest.json> [--offline]`, or
+`workspace`/`offline` on `ye_ast_trace` and composed trace queries. The existing workspace manifest supplies local
+repositories; artifact-proven dependency closures determine which library sources extraction reads. Omit workspace
+for the unchanged local-only answer. Undecidable runtime URL policies remain cuts.

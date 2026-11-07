@@ -179,10 +179,15 @@ export function readImporters(params: unknown): Omit<AtRevision<ImpactImportersR
 type Unsignaled<T> = T extends unknown ? Omit<T, "signal"> : never;
 
 export function readTrace(params: unknown): Unsignaled<Extract<TraceRequest, { live?: undefined }>> {
-  const p = only(params, ["repo", "repoId", "revision", "targets", "scope", "budget"]);
+  const p = only(params, ["repo", "repoId", "revision", "targets", "scope", "budget", "workspace", "offline"]);
+  const declared = p.workspace === undefined ? undefined : only(p.workspace, ["repos", "gateways"]);
+  const workspace = declared === undefined ? undefined : {
+    ...(declared.repos === undefined ? {} : { repos: list(declared, "repos", repositoryOf) }),
+    ...(declared.gateways === undefined ? {} : { gateways: list(declared, "gateways", gatewayOf) }),
+  };
   const targets = list(p, "targets", traceTargetOf);
   if (mixesTargetKinds(targets)) throw new InvalidParamsError("targets are declarations or entrypoints, not both");
-  return { repo: text(p, "repo"), repoId: text(p, "repoId"), revision: text(p, "revision"), targets, ...scopeOf(p), ...budgetOf(p, TRACE_BOUND_FIELDS) };
+  return { repo: text(p, "repo"), repoId: text(p, "repoId"), revision: text(p, "revision"), targets, ...(workspace === undefined ? {} : { workspace }), ...(p.offline === undefined ? {} : { offline: flag(p, "offline") }), ...scopeOf(p), ...budgetOf(p, TRACE_BOUND_FIELDS) };
 }
 
 /** A declaration target, or an entrypoint of the map by its kind and name. */

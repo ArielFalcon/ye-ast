@@ -77,7 +77,7 @@ export function createJavaEventCallSites(parser: JavaParser): CallSiteReader {
 export function createJavaCallSites(parser: JavaParser): CallSiteReader & PlacedCallSiteReader {
   return {
     of: async (files, repo, libraries = []) => javaCallSitesOf(parser, files, libraries, repo, [httpSites, eventSites]),
-    placed: async (files, repo) => javaCallSitesOf(parser, files, [], repo, [httpSites, eventSites]).map((site) => ({ site, ...CALL_PLACES.get(site) })),
+    placed: async (files, repo, libraries = []) => javaCallSitesOf(parser, files, libraries, repo, [httpSites, eventSites]).map((site) => ({ site, ...CALL_PLACES.get(site) })),
   };
 }
 

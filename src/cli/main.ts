@@ -1,3 +1,4 @@
+import { parseWorkspaceManifest } from "../core/domain/topology/workspace-manifest.ts";
 import { unknownTargetKey } from "../core/ports/impact-queries.port.ts";
 import { basename, resolve } from "node:path";
 import { readFile } from "node:fs/promises";
@@ -504,7 +505,7 @@ async function parseTraceRequest(args: readonly string[], deps: RepositoryNaming
   try {
     const { values, positionals } = parseArgs({
       args: [...args],
-      options: { revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, entrypoint: { type: "string", multiple: true }, ...SCOPE_OPTIONS, ...TRACE_BUDGET_OPTIONS },
+      options: { workspace: { type: "string" }, offline: { type: "boolean" }, revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, entrypoint: { type: "string", multiple: true }, ...SCOPE_OPTIONS, ...TRACE_BUDGET_OPTIONS },
       allowPositionals: true,
     });
     const [path, ...specs] = positionals;
@@ -513,8 +514,13 @@ async function parseTraceRequest(args: readonly string[], deps: RepositoryNaming
     if (specs.length > 0 && values.entrypoint !== undefined) return undefined;
     const scope = parseScope(values);
     const at = atRevision(values);
+    const file = values.workspace === undefined ? undefined : await readWorkspaceFile(resolve(values.workspace));
+    if (file !== undefined && !file.ok) return undefined;
+    const declared = file?.ok ? parseWorkspaceManifest(file.value.text) : undefined;
+    if (declared !== undefined && !declared.ok) return undefined;
+    if (values.live && values.offline !== undefined && declared === undefined) return undefined;
     if (path === undefined || targets.length === 0 || budget === undefined || scope === undefined || at === undefined || targets.some((target) => target === undefined)) return undefined;
-    return { ...(await repositoryOf(deps, path, values["repo-id"])), ...at, targets: targets as TraceRequest["targets"], ...scope, ...withBudget(budget) };
+    return { ...(await repositoryOf(deps, path, values["repo-id"])), ...at, targets: targets as TraceRequest["targets"], ...scope, ...withBudget(budget), ...(declared?.ok ? { workspace: declared.value } : {}), ...(values.offline === undefined ? {} : { offline: values.offline }) };
   } catch {
     return undefined;
   }

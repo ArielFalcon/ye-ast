@@ -218,6 +218,7 @@ export class JavaHttpReader {
   }
 
   private target(request: Request, scope: UrlScope): ReadTarget {
+    if (scope.deferred === true) return { target: unknown("no-extractor", [spanOf(request.invocation.type.file.path, request.invocation.node)]) };
     const evaluated = this.text.trace(() => this.readTarget(request, scope));
     const { value, alternatives } = evaluated;
     if (value.target.status !== "unknown" || (evaluated.cause === undefined && alternatives.length === 0)) return value;

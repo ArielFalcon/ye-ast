@@ -1,11 +1,12 @@
+import type { WorkspaceRequest } from "./workspace-queries.port.ts";
+import type { WorkspaceFault } from "./workspace-repos.port.ts";
 import type { Entrypoint } from "../domain/entrypoints/entrypoint.ts";
 import type { Fact, WalkBounds } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { ScopeRequest } from "../domain/shared/scope.ts";
 import type { TraceValue } from "../domain/trace/trace-fact.ts";
 import type { CallersTarget, UnknownSymbolFault } from "./impact-queries.port.ts";
-import type { LiveFault, LiveSelector } from "./live-queries.port.ts";
-import type { VcsFault } from "./vcs.port.ts";
+import type { LiveSelector } from "./live-queries.port.ts";
 
 /** The walk bounds a trace takes: the hub bound counts callers and has no outbound meaning. */
 export const TRACE_BOUND_FIELDS = ["depth", "expansions"] as const;
@@ -38,6 +39,11 @@ export interface UnknownEntrypointFault {
 }
 
 interface TraceBase {
+  /** Omitted reads only this repository; {} uses eligible workspace defaults. */
+  workspace?: Pick<WorkspaceRequest, "repos" | "gateways">;
+  offline?: boolean;
+  /** Internal committed source selected by workspace snapshot preparation. */
+  source?: string;
   /** Path of the root of a git repository to read. */
   repo: string;
   /** Stable name of the repository in the snapshot of every fact; never a path. */
@@ -51,7 +57,7 @@ interface TraceBase {
 
 export type TraceRequest = TraceBase & ({ revision: string; live?: undefined } | ({ revision?: undefined } & LiveSelector));
 
-export type TraceFault = VcsFault | LiveFault | UnknownSymbolFault | UnknownEntrypointFault;
+export type TraceFault = WorkspaceFault | UnknownSymbolFault | UnknownEntrypointFault;
 
 export interface TraceQueries {
   /**
