@@ -83,6 +83,21 @@ record that origin in their inputs; `sha` facts keep reading full builds until t
   (`importers`) builds the store in full first (RFC-0010 "The `sync` parity test"). `sha` facts keep full builds, and
   whether they may read `sync`-derived indexes stays the owner's decision. Durations are evidence, not a limit. This is
   evidence, not a test in the repository.
+- `sync` parity re-measurement, 2026-11-07, codegraph 1.6.2, after the parity gate compared every field of the code
+  graph port: the last first-parent commits of the same two repositories were replayed through a mirror (the files in
+  map scope; each step `sync` over the paths the commit changed, deletions included) and each step was compared with a
+  fresh full build of the same files, on every symbol, edge (`resolvedFrom` included) and unresolved reference field
+  and on the files left out.
+
+  | Repository | Steps | Steps with a change in scope | Steps whose `sync` named unparsed files | Steps with a difference | Differences outside the edges synthesized from those files |
+  |---|---|---|---|---|---|
+  | The Java/Angular repository of 1,117 files | 13 | 12 | 9 | 4 | 0 |
+  | The Java multi-service repository of 208 files | 30 | 14 | 2 | 0 | 0 |
+
+  Every difference was a `navigates` edge (`angular-router-link`) present in the fresh build and absent after `sync`,
+  in a step whose `sync` named the changed template unparsed; a stale edge stayed through later steps until a build,
+  as `unparsedSinceBuild` assumes. The files left out were equal in every step and no `sync` failed a file. This is
+  evidence, not a test in the repository.
 - The key of a kept index is the digest of the content fingerprint of the head export
   (`contentFingerprint`, RFC-0002 rule 5), the installed codegraph version, the supported schema and extraction
   versions, and `STAGING_RULES_VERSION`, which changes with any change to what the staging places; a test pins the
