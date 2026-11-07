@@ -82,7 +82,7 @@ export function createEdgeTargets({ origins, store, modules }: EdgeTargetsDeps):
       for (const [index, { edge, source, target }] of fresh.entries()) {
         const root = roots[index];
         if (root === undefined || root.pastRoot === true) continue;
-        const proven = root.status === "complete" && root.value.kind === "repository" && root.bare === true ? (await bindingsOf(source.file)).get(target.name) ?? (root.value.declared === undefined ? undefined : declarationAt(store, root.value.file, root.value.declared)) : undefined;
+        const proven = root.status !== "complete" || root.value.kind !== "repository" || root.bare !== true ? undefined : root.value.declared !== undefined ? declarationAt(store, root.value.file, root.value.declared) : (await bindingsOf(source.file)).get(target.name);
         const verdict = edgeVerdict<GraphNodeId>(root, proven?.id, target);
         verdicts.set(edgeKey(edge), verdict.kind === "redirect" ? { kind: "redirect", to: proven! } : verdict.kind === "drop" && root.status === "complete" ? { kind: "drop", root: root.value } : { kind: "keep" });
       }

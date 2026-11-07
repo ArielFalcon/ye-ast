@@ -21,7 +21,18 @@ const SHADOWED = "src/main/java/app/shadow/Derived.java";
 const INHERITED_USER = "src/main/java/app/hidden/Base.java";
 const HIDDEN = "src/main/java/app/hidden/Derived.java";
 const ANONYMOUS = "src/main/java/app/hidden/Deferred.java";
+const QUALIFIED_LOCAL = "src/main/java/app/qualified/Derived.java";
+const INHERITED_OVER_IMPORT = "src/main/java/app/imported/Task.java";
+const IMPORTING = "src/main/java/app/imported/Derived.java";
+const localHolder = (user: string): string =>
+  ["package app.qualified;", "", "public class Derived {", "  Object load() {", "    class Holder {", "      static class Task {", `        ${user}`, "      }", "    }", "    return new Holder.Task() {", "      Object run() {", "        return new User();", "      }", "    };", "  }", "}", ""].join("\n");
+const inheritedUser = (user: string): string => ["package app.imported;", "", "public interface Task {", `  ${user}`, "  Object run();", "}", ""].join("\n");
 const FILES: Record<string, string> = {
+  "src/main/java/app/qualified/Holder.java": "package app.qualified;\n\npublic class Holder {\n  public static class Task {\n    public static class User {}\n  }\n}\n",
+  [QUALIFIED_LOCAL]: localHolder("static class User {}"),
+  "src/main/java/app/elsewhere/User.java": "package app.elsewhere;\n\npublic class User {}\n",
+  [INHERITED_OVER_IMPORT]: inheritedUser("class User {}"),
+  [IMPORTING]: ["package app.imported;", "", "import app.elsewhere.User;", "", "public class Derived {", "  Object load() {", "    return new Task() {", "      public Object run() {", "        return new User();", "      }", "    };", "  }", "}", ""].join("\n"),
   "src/main/java/app/hidden/Task.java": "package app.hidden;\n\npublic interface Task {\n  Object run();\n}\n",
   [ANONYMOUS]: [
     "package app.hidden;",
@@ -119,6 +130,8 @@ before(async () => {
   execFileSync("git", ["add", "."], { cwd: repo, env });
   execFileSync("git", ["commit", "-qm", "fixture"], { cwd: repo, env });
   await writeFile(join(repo, INHERITED_USER), "package app.hidden;\n\npublic class Base {\n  static class User {\n    int id;\n  }\n}\n");
+  await writeFile(join(repo, QUALIFIED_LOCAL), localHolder("static class User { int id; }"));
+  await writeFile(join(repo, INHERITED_OVER_IMPORT), inheritedUser("class User { int id = 0; }"));
   execFileSync("git", ["commit", "-qam", "change the inherited User"], { cwd: repo, env });
 });
 
@@ -196,5 +209,29 @@ test("a Java type name read in an anonymous class body binds through the body's 
     assert.ok(answer.ok, JSON.stringify(answer));
     assert.ok(answer.value.status !== "unknown", JSON.stringify(answer.value));
     assert.ok(answer.value.value.symbols.some(({ file, depth }) => file === ANONYMOUS && depth > 0), JSON.stringify(answer.value));
+  }
+});
+
+test("a Java type an anonymous class instantiates by a qualified name binds its first name where the instantiation reads it, a local class included", async () => {
+  const queries = composeQueries({ scratchRoot });
+  const callers = await queries.impact.callers({ repo, repoId: "java-name-bindings", revision: "HEAD", targets: [{ file: QUALIFIED_LOCAL, symbol: "Derived.load.Holder.Task.User" }] });
+  const impact = await queries.impact.ofChange({ repo, repoId: "java-name-bindings", base: "HEAD~1", head: "HEAD" });
+
+  for (const answer of [callers, impact]) {
+    assert.ok(answer.ok, JSON.stringify(answer));
+    assert.ok(answer.value.status !== "unknown", JSON.stringify(answer.value));
+    assert.ok(answer.value.value.symbols.some(({ file, symbol, depth }) => file === QUALIFIED_LOCAL && symbol === "run" && depth > 0), JSON.stringify(answer.value));
+  }
+});
+
+test("a member type an anonymous class inherits from the type it instantiates shadows a single-type import of its name", async () => {
+  const queries = composeQueries({ scratchRoot });
+  const callers = await queries.impact.callers({ repo, repoId: "java-name-bindings", revision: "HEAD", targets: [{ file: INHERITED_OVER_IMPORT, symbol: "Task.User" }] });
+  const impact = await queries.impact.ofChange({ repo, repoId: "java-name-bindings", base: "HEAD~1", head: "HEAD" });
+
+  for (const answer of [callers, impact]) {
+    assert.ok(answer.ok, JSON.stringify(answer));
+    assert.ok(answer.value.status !== "unknown", JSON.stringify(answer.value));
+    assert.ok(answer.value.value.symbols.some(({ file, symbol, depth }) => file === IMPORTING && symbol === "run" && depth > 0), JSON.stringify(answer.value));
   }
 });

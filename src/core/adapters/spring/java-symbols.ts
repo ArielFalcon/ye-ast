@@ -302,7 +302,7 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
       const member = namedChildren(around).find((declaration) => LOCAL_TYPE_DECLARATIONS.has(declaration.type) && declaration.childForFieldName("name")?.text === head);
       if (member !== undefined) return { local: member };
       const written = typeNodeName(creation.childForFieldName("type") ?? creation);
-      const instantiated = written.includes(".") ? lookupType(written, scope) : resolveSimple(written, { ...scope, at: creation }, strict);
+      const instantiated = resolveName(written, { ...scope, at: creation }, strict);
       const inherited = inheritedThrough([instantiated], head, strict, new Set([scope.file.packageName]), new Set());
       if (inherited !== undefined) return inherited;
     }
@@ -362,13 +362,24 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     return resolveSimple(name, scope, reading === "strict");
   }
 
-  function lookupType(name: string, scope: Scope): TypeLookup {
+  /**
+   * The type a dotted name denotes in a scope: its first name bound as a simple name is (`resolveSimple`, at the scope's
+   * place when it has one), then each member type after it; a dotted name that binds no type is read as fully qualified.
+   * A first name bound to a local type leads through types no project type stands for, so a longer name is unsettled.
+   */
+  function resolveName(name: string, scope: Scope, strict: boolean): TypeLookup | "unsettled" | LocalType {
     const [head = "", ...rest] = name.split(".");
-    const resolved = resolveSimple(head, { file: scope.file, type: scope.type }, false);
-    let type = resolved === "unsettled" || (typeof resolved === "object" && "local" in resolved) ? undefined : resolved;
-    if (type === "ambiguous") return type;
+    const resolved = resolveSimple(head, scope, strict);
+    if (rest.length === 0 || resolved === "ambiguous" || resolved === "unsettled") return resolved;
+    if (typeof resolved === "object" && "local" in resolved) return "unsettled";
+    let type = resolved;
     for (const part of rest) type = type?.members.get(part);
     return type ?? byFqn(name);
+  }
+
+  function lookupType(name: string, scope: Scope): TypeLookup {
+    const resolved = resolveName(name, { file: scope.file, type: scope.type }, false);
+    return resolved === undefined || resolved === "unsettled" || (typeof resolved === "object" && "local" in resolved) ? byFqn(name) : resolved;
   }
 
   function typeNodeName(node: Node): string {
