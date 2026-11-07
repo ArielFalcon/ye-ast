@@ -3,13 +3,9 @@ import type { Evidence, UnknownReason } from "../shared/fact.ts";
 import { compareText } from "../shared/code-node.ts";
 import { ELEMENT, formatAccessPath, type AccessPath } from "./access-path.ts";
 import type { Result } from "../shared/result.ts";
-import { derivedChange, type Change, type ChangeRefusal, type ValueClass, type ValueDelta } from "./change.ts";
-import { ANYTHING, LITERAL_CLASSES, NOTHING, type KnownShape, type LiteralClass, type Shape, type ShapeProperty, type ValueSet } from "./payload-shape.ts";
+import { compareValues, derivedChange, type Change, type ChangeRefusal, type RetiredValue, type ValueDelta } from "./change.ts";
+import { ANYTHING, NOTHING, type KnownShape, type Shape, type ShapeProperty, type ValueSet } from "./payload-shape.ts";
 import { derivedRequestChange, type RequestChange } from "./request-change.ts";
-import type { Literal } from "./use-operation.ts";
-
-/** A value the head no longer permits and the derivation lists without following: a literal class narrowed or gone counts as the class. */
-type RetiredValue = "null" | "absence" | "array" | "object" | LiteralClass;
 
 /** What a change did at one place, in the order a derivation lists them for a place. */
 export const SHAPE_DELTAS = [
@@ -115,13 +111,6 @@ interface Absence {
 
 const OPEN_OBJECT = Object.freeze({ properties: [] as readonly ShapeProperty[], open: true });
 const NOT_ABSENT: Absence = { base: false, head: false };
-
-const FLAGS: readonly { value: ValueClass; retired: RetiredValue; allows(values: ValueSet): boolean }[] = [
-  { value: "null", retired: "null", allows: (values) => values.null },
-  { value: "undefined", retired: "absence", allows: (values) => values.absent },
-  { value: "array", retired: "array", allows: (values) => values.array },
-  { value: "object", retired: "object", allows: (values) => values.object },
-];
 
 /**
  * What a change from the base to the head shape of one payload did to each property path: introduced values are the
@@ -297,32 +286,4 @@ function keywordDelta(keyword: string, was: unknown, now: unknown): ShapeDelta |
 
 function unknownPlaces(base: Shape, head: Shape): Entry[] {
   return ([["base", base], ["head", head]] as const).flatMap(([side, shape]): Entry[] => (shape.kind === "unknown" ? [{ kind: "frontier", path: [], frontier: { kind: "unknown-shape", side, reason: shape.reason, evidence: shape.evidence } }] : []));
-}
-
-const presentIn = (values: ValueSet): boolean => values.null || values.array || values.object || LITERAL_CLASSES.some((valueClass) => values.literals[valueClass] === "every" || values.literals[valueClass].length > 0);
-
-/** What the head introduces and retires at one place, as the delta a change is built from, and the guarantees it gains and leaves unfollowed. */
-function compareValues(base: ValueSet, head: ValueSet): { delta: ValueDelta | undefined; gained: RetiredValue[] } {
-  const introduced: ValueClass[] = [];
-  const gained: RetiredValue[] = [];
-  const added: Literal[] = [];
-  const retired: Literal[] = [];
-  for (const { value, retired: name, allows } of FLAGS) {
-    if (allows(head) && !allows(base)) introduced.push(value);
-    else if (allows(base) && !allows(head)) gained.push(name);
-  }
-  for (const valueClass of LITERAL_CLASSES) {
-    const was = base.literals[valueClass];
-    const now = head.literals[valueClass];
-    if (now === "every") {
-      if (was !== "every") introduced.push(valueClass);
-    } else if (was === "every") gained.push(valueClass);
-    else {
-      added.push(...now.filter((literal) => !was.includes(literal)));
-      retired.push(...was.filter((literal) => !now.includes(literal)));
-    }
-  }
-  if (head.absent && !presentIn(head) && presentIn(base)) return { delta: { introduced: [], added: [], retired: [], alwaysAbsent: true, oldGuarantee: base }, gained: [] };
-  const changes = introduced.length + added.length + retired.length > 0;
-  return { delta: changes ? { introduced, added, retired, alwaysAbsent: false, oldGuarantee: base } : undefined, gained };
 }

@@ -1,7 +1,7 @@
 import { canonicalJson } from "../shared/canonical-json.ts";
 import type { Result } from "../shared/result.ts";
 import { ELEMENT, parseAccessPath, type AccessPath } from "./access-path.ts";
-import type { ValueSet } from "./payload-shape.ts";
+import { LITERAL_CLASSES, type LiteralClass, type ValueSet } from "./payload-shape.ts";
 import type { Literal } from "./use-operation.ts";
 
 /** The classes of JSON value a change can introduce, in the order a normalized change lists them. */
@@ -100,6 +100,48 @@ export function derivedChange({ introduced, added, retired, alwaysAbsent, oldGua
   if (!alwaysAbsent && values !== undefined) entries.push(values);
   if (entries.length === 0) return refuse("unsupported-change", written);
   return { ok: true, value: { ...normalized(entries, []), oldGuarantee } };
+}
+
+/** A value the head no longer permits and the derivation lists without following: a literal class narrowed or gone counts as the class. */
+export type RetiredValue = "null" | "absence" | "array" | "object" | LiteralClass;
+
+const FLAGS: readonly (readonly [ValueClass, RetiredValue])[] = [["null", "null"], ["undefined", "absence"], ["array", "array"], ["object", "object"]];
+
+/** Whether a value set holds some value of the class. */
+export function holdsClass(values: ValueSet, valueClass: ValueClass): boolean {
+  if (valueClass === "null") return values.null;
+  if (valueClass === "undefined") return values.absent;
+  if (valueClass === "array" || valueClass === "object") return values[valueClass];
+  const literals = values.literals[valueClass];
+  return literals === "every" || literals.length > 0;
+}
+
+const presentIn = (values: ValueSet): boolean => TYPE_KINDS.some((valueClass) => holdsClass(values, valueClass)) || values.null;
+
+/** What the head introduces and retires at one place, as the delta a change is built from, and the guarantees it gains and leaves unfollowed. */
+export function compareValues(base: ValueSet, head: ValueSet): { delta: ValueDelta | undefined; gained: RetiredValue[] } {
+  const introduced: ValueClass[] = [];
+  const gained: RetiredValue[] = [];
+  const added: Literal[] = [];
+  const retired: Literal[] = [];
+  for (const [value, name] of FLAGS) {
+    if (holdsClass(head, value) && !holdsClass(base, value)) introduced.push(value);
+    else if (holdsClass(base, value) && !holdsClass(head, value)) gained.push(name);
+  }
+  for (const valueClass of LITERAL_CLASSES) {
+    const was = base.literals[valueClass];
+    const now = head.literals[valueClass];
+    if (now === "every") {
+      if (was !== "every") introduced.push(valueClass);
+    } else if (was === "every") gained.push(valueClass);
+    else {
+      added.push(...now.filter((literal) => !was.includes(literal)));
+      retired.push(...was.filter((literal) => !now.includes(literal)));
+    }
+  }
+  if (head.absent && !presentIn(head) && presentIn(base)) return { delta: { introduced: [], added: [], retired: [], alwaysAbsent: true, oldGuarantee: base }, gained: [] };
+  const changes = introduced.length + added.length + retired.length > 0;
+  return { delta: changes ? { introduced, added, retired, alwaysAbsent: false, oldGuarantee: base } : undefined, gained };
 }
 
 const entryIntroducing = (value: ValueClass): ChangeEntry => (value === "null" ? "nullable" : value === "undefined" ? "optional" : { type: value });

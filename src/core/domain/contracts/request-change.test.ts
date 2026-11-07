@@ -71,6 +71,12 @@ test("what a server stops accepting between two revisions is written as the entr
   assert.deepEqual(derived.value.rejected, parsed(["required", "non-nullable", { type: "string" }, { values: { removed: ["b"] } }]).rejected);
 });
 
+test("listed literals a server stops accepting are removed values even when their whole class goes, as the comparison names them", () => {
+  const derived = derivedRequestChange(accepts({ literals: { boolean: [], number: "every", string: ["a", "b"] } }), accepts({ literals: { boolean: [], number: "every", string: [] } }));
+  assert.ok(derived?.ok);
+  assert.deepEqual(derived.value.entries, [{ values: { removed: ["a", "b"] } }]);
+});
+
 test("a server that accepts as much as before or more derives no request change", () => {
   assert.equal(derivedRequestChange(accepts({ literals: STRINGS }), accepts({ literals: { ...STRINGS, number: "every" }, null: true, absent: true })), undefined);
   assert.equal(derivedRequestChange(accepts({ literals: { ...STRINGS, string: ["a"] } }), accepts({ literals: STRINGS })), undefined);

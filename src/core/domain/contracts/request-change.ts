@@ -1,6 +1,6 @@
 import { canonicalJson } from "../shared/canonical-json.ts";
 import type { Result } from "../shared/result.ts";
-import { literalsOf, TYPE_KINDS, type ChangeEntryInput, type ChangeInput, type ChangeRefusal, type ValueClass } from "./change.ts";
+import { compareValues, holdsClass, literalsOf, TYPE_KINDS, type ChangeEntryInput, type ChangeInput, type ChangeRefusal, type ValueClass } from "./change.ts";
 import { LITERAL_CLASSES, type ClassValues, type LiteralClass, type ValueSet } from "./payload-shape.ts";
 import type { Literal } from "./use-operation.ts";
 
@@ -35,34 +35,26 @@ export function parseRequestChange(input: ChangeInput): Result<RequestChange, Ch
   return { ok: true, value: { entries, rejected: rejectionOf(entries) } };
 }
 
-const accepts = (values: ValueSet, valueClass: ValueClass): boolean => {
-  if (valueClass === "array" || valueClass === "object") return values[valueClass];
-  const literals = values.literals[valueClass as LiteralClass];
-  return literals === "every" || literals.length > 0;
-};
-
 /**
- * What a server that accepted `base` and accepts `head` at one place stops accepting, written as the entries a declared
- * request change uses and normalized as one; `undefined` when it accepts as much as before. A rejection those entries
- * cannot write (classes retired with several or no present class left, a class narrowed to its listed literals) is refused.
+ * What a server that accepted `base` and accepts `head` at one place stops accepting, as the comparison of the two value
+ * sets names it, written as the entries a declared request change uses and normalized as one; `undefined` when it
+ * accepts as much as before. A rejection those entries cannot write (nothing but absence accepted, classes retired with
+ * several or no present class left, a class narrowed to its listed literals) is refused.
  */
 export function derivedRequestChange(base: ValueSet, head: ValueSet): Result<RequestChange, ChangeRefusal> | undefined {
+  const { delta, gained } = compareValues(base, head);
+  if (delta?.alwaysAbsent === true) return refuse("unsupported-change", "accepts nothing but absence");
   const entries: ChangeEntryInput[] = [];
-  if (base.absent && !head.absent) entries.push("required");
-  if (base.null && !head.null) entries.push("non-nullable");
-  const kept = TYPE_KINDS.filter((valueClass) => accepts(head, valueClass));
-  if (TYPE_KINDS.some((valueClass) => accepts(base, valueClass) && !accepts(head, valueClass))) {
+  if (gained.includes("absence")) entries.push("required");
+  if (gained.includes("null")) entries.push("non-nullable");
+  const narrowed = LITERAL_CLASSES.find((valueClass) => gained.includes(valueClass) && holdsClass(head, valueClass));
+  if (narrowed !== undefined) return refuse("unsupported-change", `narrows ${narrowed} to listed literals`);
+  if (gained.some((value) => value !== "absence" && value !== "null")) {
+    const kept = TYPE_KINDS.filter((valueClass) => holdsClass(head, valueClass));
     if (kept.length !== 1) return refuse("unsupported-change", `retires a class and leaves ${kept.length === 0 ? "none" : kept.join(", ")}`);
     entries.push({ type: kept[0]! });
   }
-  const removed: Literal[] = [];
-  for (const valueClass of LITERAL_CLASSES.filter((candidate) => accepts(base, candidate) && accepts(head, candidate))) {
-    const was = base.literals[valueClass];
-    const now = head.literals[valueClass];
-    if (was === "every" && now !== "every") return refuse("unsupported-change", `narrows ${valueClass} to listed literals`);
-    if (was !== "every" && now !== "every") removed.push(...was.filter((literal) => !now.includes(literal)));
-  }
-  if (removed.length > 0) entries.push({ values: { removed } });
+  if (delta !== undefined && delta.retired.length > 0) entries.push({ values: { removed: delta.retired } });
   if (entries.length === 0) return undefined;
   const change = parseRequestChange(entries);
   return change.ok ? { ok: true, value: { ...change.value, oldAcceptance: base } } : change;
