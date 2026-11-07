@@ -74,7 +74,11 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    through `const` aliases, type aliases and imports of the repository's own files to a repository class, interface or
    type literal, or to a library or package type. Heritage that reaches neither (a mixin call, a parameter, a `let`, a
    dynamic scope, a deeper chain, a source that does not parse) proves nothing about any type, so every annotation stays
-   unknown in that snapshot. A type declared nowhere (generated code) stays unknown. The leaf's evidence is the module or the global it is rooted at, as for every other
+   unknown in that snapshot. A type declared nowhere (generated code) stays unknown. A field annotation (`this.r`) holds
+   only for a field the language keeps inside its class, a `#name` or a TypeScript `private` field or constructor
+   parameter property, while the class's `this` never escapes and the class names the field through no other receiver;
+   a `protected`, `public` or unmodified field stays unknown, since a subclass, a superclass method or another module
+   could write it, and no class hierarchy is read across files. The leaf's evidence is the module or the global it is rooted at, as for every other
    leaf; the answer gains no field, so the declared type itself is not written.
 
 ## Consequences
@@ -89,8 +93,9 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
 - Decision 9 trusts a declaration, not a value. TypeScript types are structural: a repository object that has the
   members of a library type can be passed where that type is declared without extending or implementing it, and an
   `any` or a cast can put any value there. A receiver declared as such a type is reported external although it may run
-  repository code; the guards of decision 9 only catch the nominal cases. The owner accepted this limitation with the
-  decision.
+  repository code; the guards of decision 9 only catch the nominal cases. The same holds for a TypeScript `private` field
+  written from outside its class through an `any` or a cast (`(page as any).cache.get = f`). The owner accepted this
+  limitation with the decision.
 
 ## Not decided here
 

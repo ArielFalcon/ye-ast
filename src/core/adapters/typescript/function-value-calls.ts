@@ -158,7 +158,7 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
       return member.name !== undefined && !ts.isComputedPropertyName(member.name) && member.name.text === name ? [member] : [];
     });
     const [field, ...others] = declared;
-    if (field === undefined || others.length > 0 || !fieldStaysLocal(owner, name)) return undefined;
+    if (field === undefined || others.length > 0 || !isClassPrivate(field) || !fieldStaysLocal(owner, name)) return undefined;
     if (ts.isParameter(field)) return annotated(field.type, tree);
     const isStatic = ts.isPropertyDeclaration(field) && field.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword);
     return ts.isPropertyDeclaration(field) && !isStatic ? annotated(field.type, tree) : undefined;
@@ -198,15 +198,16 @@ function isInside(node: ts.Node, scope: ts.Node): boolean {
 }
 
 /**
- * Whether every `this` the class writes for its own instance names one member, and every `this.<name>` only reads one of
- * the field's members or stores a value into the field: an instance or a field passed, returned, copied, indexed or
- * written through could have its members replaced.
+ * Whether every `this` the class writes for its own instance names one member, the class names the field through no
+ * other receiver, and every `this.<name>` only reads one of the field's members or stores a value into the field: an
+ * instance or a field passed, returned, copied, indexed or written through could have its members replaced.
  */
 function fieldStaysLocal(owner: ts.ClassLikeDeclaration, name: string): boolean {
   let stays = true;
   const visit = (node: ts.Node): void => {
     if (!stays) return;
     if (node.kind === ts.SyntaxKind.ThisKeyword && thisClassOf(node) === owner && !isThisMember(node.parent)) stays = false;
+    else if (namesMember(node, name) && !(isThisMember(node) && thisClassOf(node) === owner)) stays = false;
     else if (isThisMember(node) && node.name.text === name && thisClassOf(node) === owner) {
       const parent = node.parent;
       const read = ts.isPropertyAccessExpression(parent) && parent.expression === node && !isWritten(parent);
@@ -228,6 +229,24 @@ function isWritten(access: ts.Expression): boolean {
   if ((ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) && (parent.operator === ts.SyntaxKind.PlusPlusToken || parent.operator === ts.SyntaxKind.MinusMinusToken)) return true;
   if ((ts.isForInStatement(parent) || ts.isForOfStatement(parent)) && parent.initializer === node) return true;
   return ts.isDeleteExpression(parent);
+}
+
+/** A member access, a literal element access or a destructured key that names `name` on any receiver. */
+function namesMember(node: ts.Node, name: string): boolean {
+  if (ts.isPropertyAccessExpression(node)) return node.name.text === name;
+  if (ts.isElementAccessExpression(node)) return ts.isStringLiteralLike(node.argumentExpression) && node.argumentExpression.text === name;
+  if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) {
+    const key = node.propertyName ?? node.name;
+    return (ts.isIdentifier(key) || ts.isStringLiteralLike(key)) && key.text === name;
+  }
+  return false;
+}
+
+/** A field only its own class can reach: a `#name`, or one TypeScript declares `private`. */
+function isClassPrivate(field: ts.Node): boolean {
+  const name = ts.getNameOfDeclaration(field as ts.Declaration);
+  if (name !== undefined && ts.isPrivateIdentifier(name)) return true;
+  return ts.canHaveModifiers(field) && (ts.getModifiers(field) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword);
 }
 
 function isAssignment(kind: ts.SyntaxKind): boolean {
