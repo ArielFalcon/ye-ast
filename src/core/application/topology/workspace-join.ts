@@ -19,7 +19,7 @@ export function entrypointsOf(repository: WorkspaceRepository): RepositoryEntryp
 }
 
 /**
- * The one join of a workspace: a published message against the listeners of the other repositories, an HTTP call by the
+ * The one join of a workspace: a published message against the listeners its protocol delivers to, an HTTP call by the
  * ladder of RFC-0011 under the gateways in force, against every repository's routes: one its own repository serves is
  * internal, never a link across repositories nor drift. A call site whose target its snapshot does not decide joins nothing.
  */
@@ -27,11 +27,10 @@ export function joinWorkspace(repositories: readonly WorkspaceRepository[], entr
   const gateways = inferGateways(repositories.flatMap((repository) => repository.callSites), entrypoints, declared);
   const joined: JoinedSite[] = [];
   for (const repository of repositories) {
-    const others = entrypoints.filter((candidate) => candidate.repo !== repository.repo);
     for (const site of repository.callSites) {
       const event = eventTargetOf(site);
       if (event !== undefined) {
-        joined.push({ site, joined: matchEventCallSite(site, event, others) });
+        joined.push({ site, joined: matchEventCallSite(site, event, entrypoints) });
         continue;
       }
       const target = httpTargetOf(site);
@@ -53,14 +52,13 @@ export function declaredGateways(gateways: readonly Gateway[]): GatewayDeclarati
   return gateways.flatMap(({ prefix, repo, basis }) => (basis === "gateway-prefix" ? [{ prefix, repo }] : []));
 }
 
-/** What a join admitted, once per `Link.id` and sorted by id, and the call sites it reached without a link, sorted by place. */
+/** What a join admitted, once per `Link.id` and sorted by id, and the call sites it reached and could not settle, sorted by place. */
 export function linkMapOf(joined: readonly JoinedSite[]): { links: Link[]; unlinked: UnlinkedCallSite[] } {
   const links = new Map<string, Link>();
   const unlinked: UnlinkedCallSite[] = [];
   for (const { site, joined: answer } of joined) {
     const from = callPlaceOf(site);
     for (const link of answer.links ?? []) links.set(link.id, link);
-    if (answer.links !== undefined) continue;
     if (answer.ambiguous !== undefined) unlinked.push({ from, transport: site.transport, outcome: "ambiguous", name: answer.ambiguous.key, repos: answer.ambiguous.repos, ...(answer.ambiguous.routes === undefined ? {} : { routes: answer.ambiguous.routes }) });
     else if (answer.undecided !== undefined) unlinked.push({ from, transport: site.transport, outcome: "could-match", name: answer.undecided });
     else if (answer.unmatched !== undefined) unlinked.push({ from, transport: site.transport, outcome: "unmatched", name: answer.unmatched });

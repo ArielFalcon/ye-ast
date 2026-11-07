@@ -1,5 +1,5 @@
 import type { UrlScope } from "./java-values.ts";
-import { agreed, JavaMethodFlow, reachedDiagnostic } from "./java-method-flow.ts";
+import { JavaMethodFlow, reachedTarget, type Reading } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import { compareCallSites, type CallSite, type CallSiteDiagnostic, type EventTarget } from "../../domain/topology/call-site.ts";
@@ -11,16 +11,19 @@ import { ancestorsOf, receiverOf, symbolOf, type Invocation } from "./java-invoc
 import { qualifiedTypeName, scopeOf, type JavaFile, type JavaProject } from "./java-symbols.ts";
 import { JavaValueEvaluator } from "./java-value-evaluator.ts";
 import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
+import { undecidedTarget } from "../../domain/topology/evaluated.ts";
+import { statesDestination } from "../../domain/topology/event-destination.ts";
 
-/** One publish call: where it is written, the client that publishes and the argument that names the destination. */
+/** One publish call: where it is written, the client that publishes, the argument that names the destination and the one that names the exchange. */
 interface Publish {
   invocation: Invocation;
   client: PublishClient;
   argument: Node;
+  exchange?: Node;
 }
 
-
-const TOKEN_SEPARATOR = ".";
+/** The exchange the broker routes through when the code names none, or names it empty. */
+const DEFAULT_EXCHANGE = "";
 
 /** The messages a Java snapshot publishes: one call site per publish of a client the vocabulary knows. */
 export class JavaEventReader {
@@ -49,17 +52,8 @@ export class JavaEventReader {
       const expanded = flow.expand(invocation, scope);
       if (expanded !== undefined) {
         for (const group of expanded) {
-          const alternatives = group.map(({ leaf, scope }) => this.target(leaf, scope));
-          const agreedTarget = agreed(alternatives, ({ target }) => target.status === "unknown" ? target.status : target.value);
-          const target = agreedTarget?.target;
-          if (target !== undefined && target.status !== "unknown") {
-            found.push(this.siteOf(repo, invocation, target));
-            continue;
-          }
-          const library = group.find(({ leaf }) => !this.owned.has(leaf.invocation.type.file))?.leaf.invocation.type.fqn;
-          const span = spanOf(invocation.type.file.path, invocation.node);
-          const causal = unknown(target?.status === "unknown" ? target.reason : "unresolved", [library === undefined ? span : { ...span, via: library }, ...alternatives.flatMap(({ target }) => target.evidence), ...group.map(({ leaf }) => spanOf(leaf.invocation.type.file.path, leaf.invocation.node))]);
-          found.push(this.siteOf(repo, invocation, causal, reachedDiagnostic(alternatives.map(({ diagnostic }) => diagnostic), agreedTarget !== undefined, library !== undefined)));
+          const reached = reachedTarget(invocation, group, group.map(({ leaf, scope }) => this.target(leaf, scope)), this.owned);
+          found.push(this.siteOf(repo, invocation, reached.target, reached.diagnostic));
         }
       } else {
         const library = this.libraryOf(invocation);
@@ -90,7 +84,9 @@ export class JavaEventReader {
     if (client === undefined || destination === undefined) return undefined;
     const args = argumentsOf(node);
     const argument = args[destination(args.length)];
-    return argument === undefined ? undefined : { invocation, client, argument };
+    const exchangeAt = client.exchange?.(args.length);
+    const exchange = exchangeAt === undefined ? undefined : args[exchangeAt];
+    return argument === undefined ? undefined : { invocation, client, argument, ...(exchange === undefined ? {} : { exchange }) };
   }
 
   /** The library a publish goes through when the sources of its client type are not read to the destination. */
@@ -104,21 +100,25 @@ export class JavaEventReader {
     return !this.project.isPlatformName(resolved.fqn) && EVENT_CLIENT_NAME.test(simpleNameOf(resolved.fqn)) ? { via: resolved.fqn, source: "not-read", evidence: [] } : undefined;
   }
 
-  private target(publish: Publish, scope: UrlScope): { target: Finding<EventTarget>; diagnostic?: CallSiteDiagnostic } {
-    const evaluated = this.text.trace(() => scope.undecided === true ? undefined : this.destination(publish, scope));
-    return evaluated.value === undefined
-      ? {
-          target: unknown("unresolved", [spanOf(publish.invocation.type.file.path, publish.invocation.node), ...evaluated.evidence]),
-          diagnostic: { cause: scope.undecidedCause ?? evaluated.cause ?? "destination-undecidable", ...(evaluated.alternatives.length === 0 ? {} : { alternatives: evaluated.alternatives }) },
-        }
-      : { target: complete({ protocol: publish.client.protocol, destination: evaluated.value, role: "publish" }) };
+  private target(publish: Publish, scope: UrlScope): Reading<EventTarget> {
+    const destination = this.text.evaluated(scope, () => this.destination(publish, scope));
+    return destination.status === "undecided"
+      ? undecidedTarget(destination, spanOf(publish.invocation.type.file.path, publish.invocation.node))
+      : { target: complete({ protocol: publish.client.protocol, destination: destination.value, role: "publish", ...this.exchangeOf(publish, scope) }) };
+  }
+
+  /** The exchange a publish names, unless it is the default one; `{}` when the snapshot does not decide it. */
+  private exchangeOf(publish: Publish, scope: UrlScope): { exchange?: string } {
+    if (publish.exchange === undefined) return {};
+    const exchange = this.text.of(publish.exchange, scope) ?? RUN_TIME_HOLE;
+    return exchange === DEFAULT_EXCHANGE ? {} : { exchange };
   }
 
   /** The destination a publish names, `{}` for a part the code fills at run time; undefined when it names none. */
   private destination(publish: Publish, scope: UrlScope): string | undefined {
     if (publish.client.byType === true) return this.eventType(publish.argument, scope);
     const text = this.text.of(publish.argument, scope);
-    return text === undefined || text.split(TOKEN_SEPARATOR).every((token) => token === RUN_TIME_HOLE) ? undefined : text;
+    return text === undefined || !statesDestination(text, publish.client.protocol) ? undefined : text;
   }
 
   /** The qualified type of an event expression: an instantiation, or a name whose declared type the sources state. */
