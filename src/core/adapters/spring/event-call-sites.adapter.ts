@@ -34,11 +34,11 @@ export class JavaEventReader {
     this.text = new JavaValueEvaluator(project, configuration);
   }
 
-  sites(repo: string): CallSite[] {
+  sites(repo: string, includeNested = false): CallSite[] {
     const found: CallSite[] = [];
     const flow = new JavaMethodFlow<Publish>(this.project, this.text, (call) => this.publishOf(call));
     for (const invocation of flow.invocations.filter((call) => this.owned.has(call.type.file))) {
-      if (flow.nested(invocation)) continue;
+      if (!includeNested && flow.nested(invocation)) continue;
       const scope = this.scopeOf(invocation, new Map());
       const direct = this.publishOf(invocation);
       if (direct !== undefined) {

@@ -760,3 +760,11 @@ assignments preserve that nominal type. The stricter private-field rule for exte
 The shared strict Java name resolver and hierarchy locate inherited members; an unproved receiver or signature
 retains a cut and never a step at a name-only indexed target. A `var` with no declared-type proof remains a cut.
 No type inference, second resolver or change to the aspect-dispatch rule is introduced.
+
+
+### Root client methods retain their sites (2026-11-07)
+
+The trace-only placed-site read retains sites in every Java body, even when interprocedural extraction finds a caller
+elsewhere in the snapshot. The public RFC-0011 call-site read still suppresses those nested sites. Trace's existing
+exact owning-body join selects only expanded bodies; starting at a client method therefore reports its own HTTP or
+message effect, or its effect cut when the target is unresolved.

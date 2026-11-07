@@ -302,3 +302,30 @@ class Flow extends base.Base {
   assert.equal(unknown.status, "partial");
   assert.deepEqual(unknown.value.steps.map((step) => step.symbol), ["unknown"]);
 });
+
+test("a Java client method root retains its own effect or effect cut even when another method calls it", async () => {
+  commit({
+    "src/Flow.java": `import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.context.ApplicationEventPublisher;
+class ImageEvent {}
+class Client {
+  private WebClient web = WebClient.create("http://customers");
+  private ApplicationEventPublisher publisher;
+  Object fetch(String id) { return web.get().uri("/customers/" + id); }
+  Object undecided(String path) { return web.get().uri(path); }
+  void emit() { publisher.publishEvent(new ImageEvent()); }
+}
+class Flow {
+  private Client client;
+  void run() { client.fetch("one"); client.undecided("/known"); client.emit(); }
+}
+`,
+  });
+  const fetch = await trace("src/Flow.java:Client.fetch");
+  assert.ok(effectsOf(fetch.value).some(([, effect]) => typeof effect === "object" && effect.kind === "http"));
+  const undecided = await trace("src/Flow.java:Client.undecided");
+  assert.equal(undecided.status, "partial");
+  assert.ok(undecided.cuts?.some((cut) => cut.at[0]?.includes("http effect")));
+  const emit = await trace("src/Flow.java:Client.emit");
+  assert.ok(effectsOf(emit.value).some(([, effect]) => typeof effect === "object" && effect.kind === "message"));
+});
