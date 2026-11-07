@@ -1,5 +1,6 @@
 import ts from "typescript";
-import { bindFile, type LexicalBinding, unwrapped } from "./lexical-bindings.ts";
+import { bindFile, type LexicalBinding } from "./lexical-bindings.ts";
+import { unwrapped } from "./syntax.ts";
 import { packageOf } from "./module-resolver.ts";
 
 /**

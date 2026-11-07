@@ -3,7 +3,8 @@ import type { Origin } from "../../domain/contracts/request-origin.ts";
 import { classNamed, methodDeclared } from "./consumer-flow.classes.ts";
 import type { Program, Unit } from "./consumer-flow.index.ts";
 import { resolveFunction } from "./consumer-flow.resolution.ts";
-import { calleeName, isFunctionNode, propertyNameText, unwrap } from ".\/consumer-flow.syntax.ts";
+import { calleeName, isFunctionNode, propertyNameText } from "./consumer-flow.syntax.ts";
+import { unwrapped } from "./syntax.ts";
 import { frontier } from "./request-origins.walker.ts";
 
 const frontierAt = (node: ts.Node, detail: string): Origin => frontier(node, "untracked", detail);
@@ -27,17 +28,17 @@ export function bodyReplacements(program: Program): Origin[] {
 }
 
 function registered(program: Program, unit: Unit, call: ts.CallExpression): Origin[] {
-  const list = call.arguments[0] === undefined ? undefined : unwrap(call.arguments[0]);
+  const list = call.arguments[0] === undefined ? undefined : unwrapped(call.arguments[0]);
   if (list === undefined || !ts.isArrayLiteralExpression(list)) return [frontierAt(call, "interceptors")];
   return list.elements.flatMap((element) => {
-    const interceptor = ts.isExpression(element) ? functionOf(program, unit, unwrap(element)) : undefined;
+    const interceptor = ts.isExpression(element) ? functionOf(program, unit, unwrapped(element)) : undefined;
     return interceptor === undefined ? [frontierAt(element, "interceptor")] : replacementIn(program, interceptor, 0);
   });
 }
 
 function registeredClass(program: Program, unit: Unit, registration: ts.ObjectLiteralExpression): Origin[] {
   const used = registration.properties.find((member): member is ts.PropertyAssignment => ts.isPropertyAssignment(member) && ts.isIdentifier(member.name) && member.name.text === "useClass");
-  const initializer = used === undefined ? undefined : unwrap(used.initializer);
+  const initializer = used === undefined ? undefined : unwrapped(used.initializer);
   const owner = initializer !== undefined && ts.isIdentifier(initializer) ? classNamed(program, unit, initializer.text) : undefined;
   const method = owner === undefined ? undefined : methodDeclared(owner.cls, "intercept");
   return method === undefined ? [frontierAt(registration, "interceptor")] : replacementIn(program, method.node, 0);
@@ -80,8 +81,8 @@ function replacementIn(program: Program, interceptor: ts.Node, request: number, 
  */
 function helperReplacement(program: Program, call: ts.CallExpression, request: string | undefined, forwarder: string | undefined, followed: Set<ts.Node>): Origin[] {
   if (forwards(call, forwarder) || calleeName(call) === "clone") return [];
-  const at = request === undefined ? -1 : call.arguments.findIndex((argument) => unwrap(argument).kind === ts.SyntaxKind.Identifier && (unwrap(argument) as ts.Identifier).text === request);
-  const passedOn = ts.isCallExpression(call.parent) && forwards(call.parent, forwarder) && call.parent.arguments.some((argument) => unwrap(argument) === call);
+  const at = request === undefined ? -1 : call.arguments.findIndex((argument) => unwrapped(argument).kind === ts.SyntaxKind.Identifier && (unwrapped(argument) as ts.Identifier).text === request);
+  const passedOn = ts.isCallExpression(call.parent) && forwards(call.parent, forwarder) && call.parent.arguments.some((argument) => unwrapped(argument) === call);
   if (at < 0 && !passedOn) return [];
   const unit = program.index.units.get(call.getSourceFile().fileName);
   const target = unit === undefined ? undefined : resolveFunction(program, unit, call.expression);
@@ -91,14 +92,14 @@ function helperReplacement(program: Program, call: ts.CallExpression, request: s
 /** The call hands the request to the next handler: the forwarding parameter itself, or a method of it. */
 function forwards(call: ts.CallExpression, forwarder: string | undefined): boolean {
   if (forwarder === undefined) return false;
-  let callee = unwrap(call.expression);
-  while (ts.isPropertyAccessExpression(callee)) callee = unwrap(callee.expression);
+  let callee = unwrapped(call.expression);
+  while (ts.isPropertyAccessExpression(callee)) callee = unwrapped(callee.expression);
   return ts.isIdentifier(callee) && callee.text === forwarder;
 }
 
 /** A clone whose argument is an object that names neither a `body` nor a spread or computed key leaves the body as it was. */
 function keepsBody(argument: ts.Expression): boolean {
-  const bare = unwrap(argument);
+  const bare = unwrapped(argument);
   return ts.isObjectLiteralExpression(bare) && bare.properties.every((member) => !ts.isSpreadAssignment(member) && member.name !== undefined && propertyNameText(member.name) !== undefined && propertyNameText(member.name) !== "body");
 }
 

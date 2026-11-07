@@ -1,4 +1,4 @@
-import type { RawRouteFile } from "./angular-router.extractor.ts";
+import type { ModuleShape as FileModule } from "./module-shape.ts";
 
 /** The declaration an exported name comes down to. */
 export interface Declaration {
@@ -7,7 +7,7 @@ export interface Declaration {
 }
 
 /** What a file declares, imports and exports at its top level. */
-export type ModuleShape = Pick<RawRouteFile, "exports" | "declared" | "imports" | "stars">;
+export type ModuleShape = Pick<FileModule, "exports" | "declared" | "imports" | "stars">;
 
 export type DeclarationLookup = (file: string, name: string, trail?: ReadonlySet<string>) => Promise<Declaration | undefined>;
 

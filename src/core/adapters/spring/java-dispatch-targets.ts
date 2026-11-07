@@ -2,10 +2,10 @@ import type { Node } from "web-tree-sitter";
 import { isJavaSource } from "../../domain/languages/java.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchTargets, ImportOrigins } from "../../ports/import-origins.port.ts";
-import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
-import { enclosingType } from "./java-root-bindings.ts";
+import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
+import { enclosingType, withJavaSources } from "./java-project.ts";
 import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf, TYPE_DECLARATIONS, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
-import { createJavaProject, describeFile, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: DispatchTargets = { kind: "unknown" };
 const PARAMETERS: ReadonlySet<string> = new Set(["formal_parameter", "spread_parameter"]);
@@ -52,15 +52,9 @@ export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sou
     const results: DispatchTargets[] = sites.map(() => UNKNOWN);
     if (unreadJvm || !sites.some(({ file }) => isJavaSource(file))) return results;
     const read = await parser();
-    const trees: JavaSyntaxTree[] = [];
-    try {
-      const files: JavaFile[] = [];
-      for (const source of java) {
-        const parsed = read.parse(source.content);
-        if (!parsed.ok) return results;
-        trees.push(parsed.value);
-        files.push(describeFile(source.path, parsed.value.root));
-      }
+    return withJavaSources(read, (parse) => {
+      const { files, unparsed } = parse(java);
+      if (unparsed.length > 0) return results;
       const project = createJavaProject(files);
       if (project.unreadable.length > 0) return results;
       const hierarchy = hierarchyOf(files, project);
@@ -71,9 +65,7 @@ export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sou
         if (method !== undefined) results[index] = targetsOf(method, hierarchy);
       }
       return results;
-    } finally {
-      for (const tree of trees) tree.dispose();
-    }
+    });
   };
 }
 
