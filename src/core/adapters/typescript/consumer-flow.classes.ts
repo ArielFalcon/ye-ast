@@ -1,7 +1,9 @@
 import ts from "typescript";
 import { constructorParameters, typeName } from "./http-call-sites.adapter.ts";
 import type { Program, Unit } from "./consumer-flow.index.ts";
-import { declaringScope, namedFunction, propertyNameText, unwrap, type NamedFunction } from "./consumer-flow.syntax.ts";
+import { declaringScope, namedFunction, propertyNameText, type NamedFunction } from "./consumer-flow.syntax.ts";
+import { isStatic } from "./syntax-names.ts";
+import { thisClass, unwrapped } from "./syntax.ts";
 
 /** A class of the snapshot with the unit that declares it. */
 export interface ClassRef {
@@ -38,11 +40,9 @@ export function lineage(program: Program, ref: ClassRef): ClassRef[] {
 /** A key read from `Symbol` (`[Symbol.iterator]`) is a symbol, which no string name ever equals. */
 function keyedBySymbol(name: ts.PropertyName): boolean {
   if (!ts.isComputedPropertyName(name)) return false;
-  const key = unwrap(name.expression);
+  const key = unwrapped(name.expression);
   return ts.isPropertyAccessExpression(key) && ts.isIdentifier(key.expression) && key.expression.text === "Symbol";
 }
-
-const isStatic = (member: ts.ClassElement): boolean => ts.canHaveModifiers(member) && (ts.getModifiers(member)?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword) ?? false);
 
 /**
  * The declaration that may be the member `name` denotes. Names are the language's: `render`, `'render'` and `['render']`
@@ -73,23 +73,11 @@ export function injectedClass(expression: ts.Expression): string | undefined {
 }
 
 /**
- * The class `this` is an instance of at `node`: the class around it, unless a `function` rebinds `this` on the way.
- * Arrow functions, methods, accessors and property initializers keep it.
- */
-export function thisClass(node: ts.Node): ts.ClassLikeDeclaration | undefined {
-  for (let current = node.parent; current !== undefined; current = current.parent) {
-    if (ts.isFunctionExpression(current) || ts.isFunctionDeclaration(current)) return undefined;
-    if (ts.isClassLike(current)) return current;
-  }
-  return undefined;
-}
-
-/**
  * The class of the instance `receiver` denotes when the framework injects it: a field initialized by `inject(X)`, a
  * parameter property of a decorated class, or a local `const x = inject(X)`. A declared type alone is no provenance.
  */
 export function injectedInstance(program: Program, unit: Unit, receiver: ts.Expression): ClassRef | undefined {
-  const bare = unwrap(receiver);
+  const bare = unwrapped(receiver);
   let name: string | undefined;
   if (ts.isPropertyAccessExpression(bare) && bare.expression.kind === ts.SyntaxKind.ThisKeyword) name = injectedField(thisClass(bare), bare.name.text);
   else if (ts.isIdentifier(bare)) name = injectedLocal(bare);

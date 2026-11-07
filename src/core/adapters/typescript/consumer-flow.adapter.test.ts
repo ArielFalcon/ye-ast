@@ -693,6 +693,25 @@ test("assignment and set on a field hand back the member carrier", async () => {
   assert.deepEqual(next(result), ["member Page.order@2 owner", "member Page.state@3 owner"]);
 });
 
+test("this inside a function expression or an object literal method is not the class instance: no member or method of the class is reached through it", async () => {
+  const file = source("a.ts", [
+    "class Page {",
+    "  order: Order",
+    "  constructor(private http: HttpClient) {}",
+    "  load() {",
+    "    this.http.get<Order>('/orders/1').subscribe(function (o) { this.order = o })",
+    "    this.http.get<Order>('/orders/2').subscribe({ next(o) { this.render(o) } })",
+    "  }",
+    "  render(order: Order) {}",
+    "}",
+  ]);
+  const written = await follow([file], callSite("a.ts", 5, "Page.load"), "owner");
+  assert.deepEqual(next(written), []);
+  assert.deepEqual(frontiers(written), ["5 unmodelled-flow:member of an anonymous class"]);
+  const called = await follow([file], callSite("a.ts", 6, "Page.load"), "owner");
+  assert.deepEqual(next(called), []);
+});
+
 function plain(lines: readonly string[]) {
   return source("p.ts", ["function use(o: Order) {", ...lines.map((line) => `  ${line}`), "}"]);
 }

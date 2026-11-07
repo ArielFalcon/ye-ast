@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { bare } from "./angular-router.extractor.ts";
+import { unwrapped } from "./syntax.ts";
 
 export interface ProviderIdentityEvidence {
   tokens: ReadonlySet<string>;
@@ -48,8 +48,7 @@ export function providerIdentityEvidence(sf: ts.SourceFile, coreExternal: boolea
   }
   const writes = new Set<string>();
   const target = (node: ts.Node): void => {
-    if (ts.isNonNullExpression(node)) { target(node.expression); return; }
-    if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isTypeAssertionExpression(node)) { target(bare(node)); return; }
+    if (ts.isExpression(node) && unwrapped(node) !== node) { target(unwrapped(node)); return; }
     if (ts.isIdentifier(node)) { writes.add(node.text); return; }
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) return;
     if (ts.isPropertyAssignment(node)) { target(node.initializer); return; }

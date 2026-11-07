@@ -1,7 +1,8 @@
 import ts from "typescript";
 import type { FunctionValueCall, ReceiverBinding, ReceiverValue } from "../../ports/declared-member-names.port.ts";
 import { lineOf } from "./http-call-sites.adapter.ts";
-import { bindFile, type BoundFile, isDirectEval, type LexicalBinding, unwrapped } from "./lexical-bindings.ts";
+import { bindFile, type BoundFile, isDirectEval, type LexicalBinding } from "./lexical-bindings.ts";
+import { thisClass, unwrapped } from "./syntax.ts";
 import { isStatic } from "./syntax-names.ts";
 
 const LOGICAL_OPERATORS: readonly ts.SyntaxKind[] = [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken];
@@ -43,7 +44,7 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
       else if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken) for (const name of targetNames(node.left)) stores.push({ name });
       if (ASSIGNMENTS.includes(node.operatorToken.kind) && isFunctionValue(node.right)) {
         if (ts.isIdentifier(node.left)) holders.add(node.left.text);
-        const owner = isThisMember(node.left) ? thisClassOf(node.left) : undefined;
+        const owner = isThisMember(node.left) ? thisClass(node.left) : undefined;
         if (owner !== undefined && isThisMember(node.left)) assignedFields.set(owner, new Set([...(assignedFields.get(owner) ?? []), node.left.name.text]));
       }
     }
@@ -121,7 +122,7 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
     const reads = values.map((value) => unwrapped(value!));
     const [read] = reads;
     if (read !== undefined && isThisMember(read)) {
-      const same = reads.every((other) => isThisMember(other) && other.name.text === read.name.text && thisClassOf(other) === thisClassOf(read));
+      const same = reads.every((other) => isThisMember(other) && other.name.text === read.name.text && thisClass(other) === thisClass(read));
       return same ? fieldAnnotationOf(read, new Set(reads)) : undefined;
     }
     const kinds = values.map((value) => storedValue(value!, bindingOf, tree));
@@ -133,7 +134,7 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
     const receiver = unwrapped(access.expression);
     const line = lineOf(tree, access);
     if (isThisMember(receiver)) {
-      const owner = thisClassOf(receiver);
+      const owner = thisClass(receiver);
       const name = receiver.name.text;
       const holds = owner !== undefined && (fieldHoldsFunction(owner, name) || (assignedFields.get(owner)?.has(name) ?? false));
       return holds ? [{ line, receiver: name, member: access.name.text }] : [];
@@ -162,7 +163,7 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
    * itself stays in the file's sight, so the field's value reaches nothing else through them.
    */
   const fieldAnnotationOf = (access: ts.PropertyAccessExpression, copies: ReadonlySet<ts.Node> = new Set()): ReceiverValue | undefined => {
-    const owner = thisClassOf(access);
+    const owner = thisClass(access);
     if (owner === undefined || evals.some((call) => isInside(call, owner))) return undefined;
     const name = access.name.text;
     const declared = owner.members.flatMap((member): ts.Node[] => {
@@ -221,9 +222,9 @@ function fieldStaysLocal(owner: ts.ClassLikeDeclaration, name: string, copies: R
   let stays = true;
   const visit = (node: ts.Node): void => {
     if (!stays) return;
-    if (node.kind === ts.SyntaxKind.ThisKeyword && thisClassOf(node) === owner && !isThisMember(node.parent)) stays = false;
-    else if (namesMember(node, name) && !(isThisMember(node) && thisClassOf(node) === owner)) stays = false;
-    else if (isThisMember(node) && node.name.text === name && thisClassOf(node) === owner) {
+    if (node.kind === ts.SyntaxKind.ThisKeyword && thisClass(node) === owner && !isThisMember(node.parent)) stays = false;
+    else if (namesMember(node, name) && !(isThisMember(node) && thisClass(node) === owner)) stays = false;
+    else if (isThisMember(node) && node.name.text === name && thisClass(node) === owner) {
       const parent = node.parent;
       const read = readsMember(node);
       const stored = ts.isBinaryExpression(parent) && parent.left === node && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken;
@@ -439,16 +440,6 @@ function isFunctionType(type: ts.TypeNode | undefined): boolean {
 
 function isThisMember(node: ts.Node): node is ts.PropertyAccessExpression {
   return ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword;
-}
-
-/** The class whose instance `this` is at `node`: an arrow keeps it; a function or an object-literal method rebinds it. */
-function thisClassOf(node: ts.Node): ts.ClassLikeDeclaration | undefined {
-  for (let scope = node.parent; scope !== undefined; scope = scope.parent) {
-    if (ts.isClassLike(scope)) return scope;
-    if (ts.isFunctionDeclaration(scope) || ts.isFunctionExpression(scope)) return undefined;
-    if ((ts.isMethodDeclaration(scope) || ts.isAccessor(scope)) && !ts.isClassLike(scope.parent)) return undefined;
-  }
-  return undefined;
 }
 
 function fieldHoldsFunction(owner: ts.ClassLikeDeclaration, name: string): boolean {

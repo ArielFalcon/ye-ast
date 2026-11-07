@@ -1,7 +1,8 @@
 import { posix } from "node:path";
 import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
-import { bindFile, unwrapped } from "./lexical-bindings.ts";
+import { bindFile } from "./lexical-bindings.ts";
+import { unwrapped } from "./syntax.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 import { isAngularWorkspace, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { AngularClass, Operand, TemplateSource } from "../../domain/relations/angular-class.ts";
