@@ -109,7 +109,7 @@ export function createSpringRoutesExtractor(parser: JavaParser, contracts: Contr
 
 type Parsed = { file: JavaFile } | { fault: Finding<never> };
 
-function extractRoutes(parser: JavaParser, files: readonly SourceFile[], libraries: readonly LibrarySource[], contracts: ContractRoutes): readonly Finding<Entrypoint>[] {
+export function extractRoutes(parser: JavaParser, files: readonly SourceFile[], libraries: readonly LibrarySource[], contracts: ContractRoutes): readonly Finding<Entrypoint>[] {
   const findings: Finding<MappedEntrypoint>[] = [];
   const trees: JavaSyntaxTree[] = [];
   const parsed: JavaFile[] = [];

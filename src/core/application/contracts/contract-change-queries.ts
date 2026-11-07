@@ -5,20 +5,18 @@ import type { Hypothesis } from "../../domain/contracts/hypothesis.ts";
 import type { OperationShape } from "../../domain/contracts/payload-shape.ts";
 import { deriveChanges, type DerivationFrontier, type RetiredValue } from "../../domain/contracts/shape-derivation.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { Evidence, Fact, UnknownReason } from "../../domain/shared/fact.ts";
+import type { Cut, Evidence, Fact, UnknownReason } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { ConsequencesFault } from "../../ports/consumer-queries.port.ts";
 import type { ConsumerSources } from "../../ports/consumer-sources.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PayloadShapes } from "../../ports/payload-shapes.port.ts";
+import type { RevisionSources } from "../../ports/revision-sources.port.ts";
 import type { WorkspaceRequest } from "../../ports/workspace-queries.port.ts";
 import type { WorkspaceFault } from "../../ports/workspace-repos.port.ts";
 import { consequencesOn } from "./consumer-queries.ts";
 
-/** The sources of the repository a request is bound to at a revision: what the shape readers read. */
-export interface RevisionSources {
-  filesAt(request: WorkspaceRequest, revision: string): Promise<Result<readonly SourceFile[], WorkspaceFault>>;
-}
+export type ContractChangeFault = WorkspaceFault | { kind: "contradictory-revisions"; detail: string };
 
 export interface ContractChangeDeps {
   sources: ConsumerSources;
@@ -28,7 +26,7 @@ export interface ContractChangeDeps {
 }
 
 export interface ContractChangeRequest {
-  /** The workspace the consequences are answered on: the head of the change. */
+  /** The workspace the consequences are answered on, bound to the head of the change: its bound repository names no other revision than `head`, and is not read live. */
   workspace: WorkspaceRequest;
   base: string;
   head: string;
@@ -66,11 +64,15 @@ export interface ChangeFrontier {
 export interface ContractChangeValue {
   base: string;
   head: string;
+  /** The commits `base` and `head` named when the change was read; the consequences are answered on the head one. */
+  snapshots: { base: string; head: string };
   derived: readonly DerivedConsequences[];
   gained: readonly GainedGuaranteeItem[];
   frontiers: readonly ChangeFrontier[];
   /** Operations only one revision declares, by name: they derive no hypothesis. */
   operations: { added: readonly string[]; removed: readonly string[] };
+  /** What reading the sources of either revision left out: nothing at or below a cut is decided. */
+  cuts: readonly Cut[];
 }
 
 export interface ContractChangeQueries {
@@ -78,27 +80,46 @@ export interface ContractChangeQueries {
    * What a change between two revisions did to the response of each operation, from the contract both revisions state,
    * and what depends on it at the head. An operation or place whose shape cannot be stated is a frontier, never silence.
    */
-  consequencesOfChange(request: ContractChangeRequest): Promise<Result<ContractChangeValue, WorkspaceFault>>;
+  consequencesOfChange(request: ContractChangeRequest): Promise<Result<ContractChangeValue, ContractChangeFault>>;
 }
 
 export function createContractChangeQueries({ sources, revisions, shapes }: ContractChangeDeps): ContractChangeQueries {
   return {
     async consequencesOfChange({ workspace, base, head }) {
-      const before = await revisions.filesAt(workspace, base);
+      if (workspace.repo.live === true) return contradiction("the consequences of a change between revisions are answered on its head commit, never on the working tree");
+      const baseSha = await revisions.resolve(workspace, base);
+      if (!baseSha.ok) return baseSha;
+      const headSha = await revisions.resolve(workspace, head);
+      if (!headSha.ok) return headSha;
+      if (workspace.repo.revision !== undefined) {
+        const bound = await revisions.resolve(workspace, workspace.repo.revision);
+        if (!bound.ok) return bound;
+        if (bound.value !== headSha.value) return contradiction(`the workspace is bound to ${workspace.repo.revision} (${bound.value}) but the head of the change is ${head} (${headSha.value})`);
+      }
+      const pinned: WorkspaceRequest = { ...workspace, repo: { ...workspace.repo, revision: headSha.value } };
+      const before = await revisions.filesAt(pinned, baseSha.value);
       if (!before.ok) return before;
-      const after = await revisions.filesAt(workspace, head);
+      const after = await revisions.filesAt(pinned, headSha.value);
       if (!after.ok) return after;
-      const plan = planChange(before.value, after.value, shapes);
-      const answered = plan.hypotheses.length === 0 ? { ok: true as const, value: [] } : await sources.withWorkspace(workspace, async (prepared) => {
+      const plan = planChange(before.value.files, after.value.files, shapes);
+      const answered = plan.hypotheses.length === 0 ? { ok: true as const, value: [] } : await sources.withWorkspace(pinned, async (prepared) => {
         const results: Result<Fact<ConsequencesValue>, ConsequencesFault>[] = [];
         for (const { hypothesis } of plan.hypotheses) results.push(await consequencesOn(prepared, hypothesis));
         return results;
       });
       if (!answered.ok) return answered;
       const derived = plan.hypotheses.map(({ hypothesis, operation, property, places }, index): DerivedConsequences => ({ operation, property, change: writtenChange(hypothesis.change), places, consequences: answered.value[index]! }));
-      return { ok: true, value: { base, head, derived, gained: plan.gained, frontiers: plan.frontiers, operations: plan.operations } };
+      const snapshots = { base: baseSha.value, head: headSha.value };
+      return { ok: true, value: { base, head, snapshots, derived, gained: plan.gained, frontiers: plan.frontiers, operations: plan.operations, cuts: mergedCuts([...before.value.cuts, ...after.value.cuts]) } };
     },
   };
+}
+
+const contradiction = (detail: string): Result<never, ContractChangeFault> => ({ ok: false, fault: { kind: "contradictory-revisions", detail } });
+
+function mergedCuts(cuts: readonly Cut[]): Cut[] {
+  const unique = new Map(cuts.map((cut) => [JSON.stringify([cut.kind, cut.at, cut.limit]), cut]));
+  return [...unique.values()].sort((a, b) => compareText(a.kind, b.kind) || compareText(a.at.join("\0"), b.at.join("\0")));
 }
 
 export interface PlannedHypothesis {
@@ -154,7 +175,7 @@ export function planChange(baseFiles: readonly SourceFile[], headFiles: readonly
     } else {
       const places = { base: base.place, head: head.place };
       const derivation = deriveChanges(base.shape.shape, head.shape.shape);
-      const [method, path] = [head.shape.method, head.shape.path];
+      const [method, path] = [head.shape.method, servedPath(head.shape)];
       for (const { property, change } of derivation.hypotheses) hypotheses.push({ hypothesis: { method, path, target: "response", property, change }, operation, property: formatAccessPath(property), places });
       for (const { path: at, retired } of derivation.gained) gained.push({ operation, property: formatAccessPath(at), retired, places });
       for (const { path: at, evidence, ...frontier } of derivation.frontiers) frontiers.push({ ...frontier, operation, property: formatAccessPath(at), evidence: evidence ?? [base.place, head.place] });
@@ -162,6 +183,9 @@ export function planChange(baseFiles: readonly SourceFile[], headFiles: readonly
   }
   return { hypotheses, gained, frontiers, operations };
 }
+
+/** The path the operation is served at, which is how a handler's route names it: the contract's base path, when it states one, before its path. */
+const servedPath = ({ basePath, path }: OperationShape): string => `${basePath ?? ""}${path}`;
 
 function read(files: readonly SourceFile[], providers: readonly PayloadShapes[]): Reading {
   const held = new Map<string, Held[]>();
@@ -175,7 +199,7 @@ function read(files: readonly SourceFile[], providers: readonly PayloadShapes[])
         stopped = true;
         continue;
       }
-      const key = `${finding.value.method} ${finding.value.path}`;
+      const key = `${finding.value.method} ${servedPath(finding.value)}`;
       claimed.set(key, [...(claimed.get(key) ?? []), { shape: finding.value, place: finding.evidence[0]! }]);
     }
     for (const [key, entries] of claimed) if (!held.has(key)) held.set(key, entries);
