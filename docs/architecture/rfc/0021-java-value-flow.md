@@ -19,7 +19,7 @@
 
 ## Ownership and evidence
 
-All implementation belongs to `core/adapters/spring`: it interprets Java syntax and framework configuration. The existing call-site and finding contracts remain the public seam. HTTP and event readers share summary propagation rather than maintaining two wrapper engines. A selected leaf retains source evidence and its caller evidence. Existing typed `unresolved` findings express undecidable targets; a new public cause would require a separate schema change.
+All implementation belongs to `core/adapters/spring`: it interprets Java syntax and framework configuration. The existing call-site and finding contracts remain the public seam. HTTP and event readers share summary propagation rather than maintaining two wrapper engines. An evaluation comes to the topology domain's `Evaluated<T>` (`core/domain/topology/evaluated.ts`): a value, or an undecided one with its cause, places and alternatives. One mapping there turns an undecided value into a call site's unknown target and diagnostic, and one rule picks the prevailing cause of several readings, for every reader. An undecided client base keeps the request the code writes, with the base's own cause. A selected leaf retains source evidence and its caller evidence. Existing typed `unresolved` findings express undecidable targets; a new public cause would require a separate schema change.
 
 The present evaluator only interprets strings (`url-text.ts`); readers independently register direct-client methods as wrappers (`http-call-sites.adapter.ts`, `event-call-sites.adapter.ts`). `classChain` excludes interfaces although `hierarchy` includes them. Configuration already returns found/absent/undecided and loads only consuming-repository resources.
 

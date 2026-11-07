@@ -103,6 +103,16 @@ export interface Evidence {
   confidence?: number;
 }
 
+/** Whether one place holds another: same file, same first line, and it ends no earlier. */
+export function spanCovers(outer: Evidence, inner: Evidence): boolean {
+  return outer.path === inner.path && outer.line === inner.line && (outer.endLine ?? outer.line) >= (inner.endLine ?? inner.line);
+}
+
+/** Evidence that never repeats a line: a place an earlier one holds adds nothing. */
+export function distinctEvidence(evidence: readonly Evidence[]): Evidence[] {
+  return evidence.filter((span, index) => !evidence.slice(0, index).some((earlier) => spanCovers(earlier, span)));
+}
+
 /** The last line of a place, and nothing when it spans one line: one line is the common case and takes no field. */
 export function declarationSpan(line: number, endLine: number | undefined): { endLine?: number } {
   return endLine === undefined || endLine === line ? {} : { endLine };

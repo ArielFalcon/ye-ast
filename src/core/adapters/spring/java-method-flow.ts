@@ -2,11 +2,13 @@ import { BEAN, NAMED_COMPONENTS, PRIMARY, QUALIFIER } from "./java-value-vocabul
 import type { Node } from "web-tree-sitter";
 import { argumentsOf, descendants, localBindings, typeNameOf } from "./java-members.ts";
 import { invocationsOf, parametersOf, receiverOf, type Invocation, type FieldLookup } from "./java-invocations.ts";
-import { scopeOf, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { scopeOf, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 import { annotationUses, isAnnotation } from "./request-mapping.ts";
 import type { UrlScope } from "./java-values.ts";
-import type { CallSiteDiagnostic } from "../../domain/topology/call-site.ts";
-import { compareText } from "../../domain/shared/code-node.ts";
+import type { CallSiteDiagnostic, StatedRequest } from "../../domain/topology/call-site.ts";
+import type { Finding } from "../../domain/shared/fact.ts";
+import { reachedDiagnostic } from "../../domain/topology/evaluated.ts";
+import { spanOf, unknown } from "./findings.ts";
 
 export interface MethodSelection {
   method: MethodDecl;
@@ -97,19 +99,32 @@ export function methodsOf(call: Invocation, project: JavaProject, text: FieldLoo
 }
 
 /** The one value every alternative agrees on; undefined when alternatives disagree. */
-export function agreed<V>(alternatives: readonly V[], identity: (value: V) => unknown): V | undefined {
+function agreed<V>(alternatives: readonly V[], identity: (value: V) => unknown): V | undefined {
   return new Set(alternatives.map((value) => JSON.stringify(identity(value)))).size === 1 ? alternatives[0] : undefined;
 }
 
+/** A call site's target as one reading of the code states it, with why it is unknown and what the code writes. */
+export interface Reading<T> {
+  target: Finding<T>;
+  diagnostic?: CallSiteDiagnostic;
+  stated?: StatedRequest;
+}
+
 /**
- * Why a call that reaches requests through other methods stays unresolved: recursion first, then implementations that
- * disagree, then the requests' own cause.
+ * What a call that reaches requests or publishes through other methods comes to for one group of them: the decided target
+ * every reading agrees on, or an unknown at the call naming the library it goes through, with each reading's evidence,
+ * the reached calls and the prevailing cause.
  */
-export function reachedDiagnostic(diagnostics: readonly (CallSiteDiagnostic | undefined)[], agreement: boolean, throughLibrary: boolean): CallSiteDiagnostic {
-  const causes = diagnostics.map((diagnostic) => diagnostic?.cause);
-  const cause = causes.includes("recursive") ? "recursive" : !agreement || causes.includes("dispatch-disagreement") ? "dispatch-disagreement" : causes[0] ?? "destination-undecidable";
-  const alternatives = [...new Set(diagnostics.flatMap((diagnostic) => diagnostic?.alternatives ?? []))].sort(compareText);
-  return { cause, ...(throughLibrary ? { source: "read" } : {}), ...(alternatives.length === 0 ? {} : { alternatives }) };
+export function reachedTarget<T>(call: Invocation, group: readonly { leaf: { invocation: Invocation } }[], readings: readonly Reading<T>[], owned: ReadonlySet<JavaFile>): Reading<T> {
+  const agreedReading = agreed(readings, ({ target }) => (target.status === "unknown" ? target.status : target.value));
+  if (agreedReading !== undefined && agreedReading.target.status !== "unknown") return agreedReading;
+  const library = group.find(({ leaf }) => !owned.has(leaf.invocation.type.file))?.leaf.invocation.type.fqn;
+  const span = spanOf(call.type.file.path, call.node);
+  return {
+    ...agreedReading,
+    target: unknown(agreedReading?.target.status === "unknown" ? agreedReading.target.reason : "unresolved", [library === undefined ? span : { ...span, via: library }, ...readings.flatMap(({ target }) => target.evidence), ...group.map(({ leaf }) => spanOf(leaf.invocation.type.file.path, leaf.invocation.node))]),
+    diagnostic: reachedDiagnostic(readings.map(({ diagnostic }) => diagnostic), agreedReading !== undefined, library !== undefined),
+  };
 }
 
 export function bindMethod(selection: MethodSelection, call: Node, scope: UrlScope): UrlScope {
@@ -199,7 +214,7 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
       return Array.from({ length }, (_, index) => {
         const present = [...new Set(branches.flatMap((branch) => branch[index] ?? []))];
         return branches.some((branch) => branch[index] === undefined)
-          ? present.map(({ leaf, scope }) => ({ leaf, scope: { ...scope, undecided: true, undecidedCause: scope.undecidedCause ?? "dispatch-disagreement" } })) : present;
+          ? present.map(({ leaf, scope }) => ({ leaf, scope: { ...scope, undecided: scope.undecided ?? "dispatch-disagreement" } })) : present;
       });
     };
     const selections = methodsOf(call, this.project, this.text, scope.receiver ?? scope.type);
@@ -210,7 +225,7 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
       pending.push(() => {
         const method = selection.method.node.id;
         if (active.has(method)) {
-          done([...(this.reachable.get(method) ?? [])].map((leaf) => [{ leaf, scope: { ...bound, undecided: true, undecidedCause: "recursive" } }]));
+          done([...(this.reachable.get(method) ?? [])].map((leaf) => [{ leaf, scope: { ...bound, undecided: "recursive" } }]));
           return;
         }
         const key = `${method}:${selection.receiver.node.id}:${bound.configurationFile?.path}:${[...bound.env].map(([name, value]) => `${name}=${closureKey(value.node, value.scope)}`).join(";")}`;

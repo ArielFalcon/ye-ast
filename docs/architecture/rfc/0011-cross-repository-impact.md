@@ -123,6 +123,10 @@ body; the functions it declares return their own. A bare `return`, and an end th
 undecided. An `httpResource` function that returns `undefined` requests nothing then, so its request is the one its other
 returns state. Variables the function declares are values it fills at run time.
 
+An undecided call carries its cause, through the same `Evaluated<T>` and mapping as the Java readers (RFC-0021):
+`recursive` for a function or method that calls itself, `dispatch-disagreement` for overrides that write different
+paths, and `destination-undecidable` otherwise, a base the snapshot does not decide and returns that disagree included.
+
 A class member the class does not declare (`this.resourceUrl`) is read from the class it extends, in the same file or
 through an import; a member the class declares itself wins. A field's initializer is its value only while nothing else
 assigns it: a field declared without an initializer or as a constructor parameter, one the reading class or any class it
@@ -143,13 +147,33 @@ project root above it. A build plugin that rewrites defines is not read.
 | Transport | Call-site side | Entrypoint side | Matched by | Confidence |
 |---|---|---|---|---|
 | http | `CallSite` with `HttpTarget` | `HttpRoute` (`http-route.ts:33-43`) | verb equal or route `ANY`; the two paths unify as typed templates (below), then the base-path ladder below | 1.0; 0.6 when a value the call fills at run time took a parameter of the route (parity, `openapi-http-resolver.adapter.ts:334-336`) |
-| event | publish `CallSite` with `EventTarget` | `Listener` (`entrypoint.ts:5-12`) | same `protocol` and `destination` | 1.0 |
+| event | publish `CallSite` with `EventTarget` | `Listener` (`entrypoint.ts:5-12`) of a repository the protocol delivers to | same `protocol`; the two destinations unify as typed templates under the protocol's grammar (below) | 1.0 |
 | Spring in-process event | `publishEvent(new X())`, protocol `event`, destination the qualified type | `@EventListener` listener, destination the qualified type (RFC-0007 row S7) | as event; `from.repo` equals `to.repo` | 1.0 |
 
 An in-process event is the same link with one repository, so one code path serves both. qayaba's event resolver also
 matches by stem (`Event`, `Model` suffix removed, 0.7) and keeps only the first publisher
 (`event-resolver.adapter.ts:23-27,94-98`); ye-ast links every pair on an exact destination and defers the stem
 (deferred list).
+
+### Event destinations
+
+A destination is read through the same template grammar as a path (`path-template.ts`), under a grammar each protocol
+states as data (`core/domain/topology/event-destination.ts`):
+
+| Protocol | Tokens | Listener wildcards | A whole token the publisher fills at run time | Delivered to |
+|---|---|---|---|---|
+| `nats` | separated by `.` | `*` one token, `>` one or more trailing tokens | takes any one token (decision 9) | other repositories |
+| `kafka`, `jms` | the whole name | none (`topicPattern` is not read) | could match | other repositories |
+| `rabbit` | the whole name | none (`bindings` is not read) | could match | other repositories |
+| `event` | the qualified type | none | not written | the publishing repository |
+
+Token by token: two texts match when equal; a part either side fills at run time (`orders-{}`, or a listener subject
+built from a value) could be the other's text when what it states around that part agrees, and the message is then
+`could-match`, an `unresolved-link` cut, never a link and never a silent miss. A message some listeners consume and
+another could is their links plus one `could-match` item. A RabbitMQ message published to a named exchange reaches a
+queue only through bindings the snapshot does not read, so against a RabbitMQ listener it could match, never links; the
+routing key equals a queue only on the default exchange. A destination made only of values filled at run time names
+none and is unknown.
 
 ### Path templates
 
@@ -591,10 +615,10 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   same name heuristic the HTTP reader uses. A listener is read from the existing annotations and, for NATS, from
   `Connection.subscribe`, `JetStream.subscribe` and `Dispatcher.subscribe` (a dispatcher held in a field or created in
   place with `connection.createDispatcher()`), as `nats <subject>`, in a method or in a constructor, whose listener names
-  the class. The join matches a publish to a listener of
-  another repository with the same protocol and a destination that takes it, basis `event-destination` at confidence 1;
-  for NATS a listener's `*` stands for one token and its `>` for one or more trailing tokens, and a token the publisher
-  fills at run time for one (decision 9). A destination several listeners consume is one link per listener, whether they are
+  the class. The join matches a publish to a listener of a repository its protocol delivers to (another one, or its own
+  for an in-process event) with the same protocol and a destination that takes it under the protocol's grammar ("Event
+  destinations"), basis `event-destination` at confidence 1; for NATS a listener's `*` stands for one token and its `>`
+  for one or more trailing tokens, and a token the publisher fills at run time for one (decision 9). A destination several listeners consume is one link per listener, whether they are
   in one repository or in several, since pub/sub delivers a message to every subscriber; queue groups are not modelled. On the probe workspace the five
   publishers are cuts naming the messenger library, whose source the workspace does not hold, and the five listeners
   extend a base class of that library, so no listener is read and no pair links: the slice accepts the cut on the
