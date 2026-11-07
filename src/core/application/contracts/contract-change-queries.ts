@@ -9,13 +9,13 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import type { Cut, Evidence, Fact } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { ChangeFrontier, ContractChangeFault, ContractChangeQueries, DerivedConsequences, GainedGuaranteeItem } from "../../ports/contract-change-queries.port.ts";
-import type { ConsequencesFault } from "../../ports/consumer-queries.port.ts";
+import type { ConsequencesFault } from "../../ports/contract-consequences-queries.port.ts";
 import type { ConsumerSources, ServingWorkspace, ServingOperation } from "../../ports/consumer-sources.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PayloadShapes } from "../../ports/payload-shapes.port.ts";
 import type { RevisionSources } from "../../ports/revision-sources.port.ts";
 import type { WorkspaceRequest } from "../../ports/workspace-queries.port.ts";
-import { consequencesOn } from "./consumer-queries.ts";
+import { consequencesOn } from "./contract-consequences-queries.ts";
 
 export interface ContractChangeDeps {
   sources: ConsumerSources;

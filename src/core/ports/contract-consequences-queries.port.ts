@@ -19,7 +19,7 @@ export type ConsequencesFault =
   /** No repository of the workspace serves the operation, so there is no contract to change. */
   | { kind: "unknown-operation"; detail: string; operation: string };
 
-export interface ConsumerQueries {
+export interface ContractConsequencesQueries {
   /**
    * Follows the response of one operation from each call site that a qualified link joins to it, to the code that uses the
    * changed property, and gives each use a verdict with the chain that proves it. A place where the flow cannot be

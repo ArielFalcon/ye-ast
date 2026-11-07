@@ -126,7 +126,7 @@ function workspace(): void {
 }
 
 function ask(change: string, repos: readonly string[] = ["web"], path = "/api/orders/{id}", bound = "api") {
-  return composeQueries({ scratchRoot }).consumers.consequences({
+  return composeQueries({ scratchRoot }).contractConsequences.consequences({
     repo: { path: join(root, bound), id: bound },
     repos: repos.map((id) => ({ path: join(root, id), id })),
     hypothesis: { method: "GET", path, target: "response", property: "customer", change },

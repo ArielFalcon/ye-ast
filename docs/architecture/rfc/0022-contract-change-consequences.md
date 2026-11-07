@@ -525,7 +525,8 @@ operation; when no call site links, that item also names the handler. Output is
 sorted and reproducible; the hypothesis is echoed as normalized (a single change as written, a combined one as its
 list), with its assumed old guarantee and, for a rename, the property's new path, for a wrapped array, the path of its
 elements, once. F0 had no MCP, CLI or protocol surface; the family is exposed on every surface by
-[RFC-0023](0023-consequences-surfaces.md) under [ADR-0033](../adr/0033-contract-consequences-as-one-query-family.md).
+[RFC-0023](0023-consequences-surfaces.md) under [ADR-0033](../adr/0033-contract-consequences-as-one-query-family.md),
+as `ye_ast_contract_consequences` ([ADR-0034](../adr/0034-name-contract-consequences-explicitly.md)).
 
 ## Ownership
 

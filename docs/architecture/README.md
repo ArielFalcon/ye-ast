@@ -38,7 +38,8 @@ marked **Proposed** awaits the owner's acceptance.
 | [0030](adr/0030-live-captures-use-the-snapshot-data-cache.md) | A live capture uses the snapshot data cache, keyed by the content hashes of its reconciled listing and never by HEAD; amends ADR-0020 decision 6 | Accepted |
 | [0031](adr/0031-snapshot-data-is-keyed-by-the-written-files.md) | SHA snapshot data is keyed by the scope, trust, export budget and the path and blob of every written file, never by the commit or the repository; amends ADR-0020 decision 4 | Accepted |
 | [0032](adr/0032-a-query-family-is-done-when-every-surface-exposes-it.md) | A query family is delivered only when it answers the fact contract and every surface (library, MCP, compose, CLI, protocol) reaches it; a deferred surface names its phase | Accepted |
-| [0033](adr/0033-contract-consequences-as-one-query-family.md) | Contract consequences become one family, `consequences` (written hypotheses or a diff), answering one composite fact on every surface as `ye_ast_consequences`; a fresh family | Accepted |
+| [0033](adr/0033-contract-consequences-as-one-query-family.md) | Contract consequences become one family, `contractConsequences` (written hypotheses or a diff), answering one composite fact on every surface as `ye_ast_contract_consequences`; a fresh family | Accepted |
+| [0034](adr/0034-name-contract-consequences-explicitly.md) | Name the family `contractConsequences`, MCP and compose `ye_ast_contract_consequences`, and CLI `contract-consequences`; supersedes the naming in 0033 | Accepted |
 
 ## Designs (RFC)
 
@@ -63,7 +64,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0017](rfc/0017-answer-size-and-outline.md) | A counted elision is never longer than listing what it hides, and a file outline with declaration spans an agent reads around | Draft |
 | [0018](rfc/0018-change-selection.md) | `changed` on `impact.ofChange`: globs over the changed paths select what seeds the walk while the repository stays indexed whole, so callers outside the selection are still known | Draft |
 | [0022](rfc/0022-contract-change-consequences.md) | Contract change consequences: which consumers of a response, and which producers of a request, a contract change breaks, with evidence, from a written hypothesis or a diff | Draft |
-| [0023](rfc/0023-consequences-surfaces.md) | The `consequences` family on every surface: one composite fact, the MCP tool `ye_ast_consequences`, the CLI command, protocol methods and compose parts | Draft |
+| [0023](rfc/0023-consequences-surfaces.md) | The `contractConsequences` family on every surface: one composite fact, the MCP tool `ye_ast_contract_consequences`, the CLI command, protocol methods and compose parts | Draft |
 
 ## Pending decisions
 

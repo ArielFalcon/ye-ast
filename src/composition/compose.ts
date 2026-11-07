@@ -59,7 +59,7 @@ import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loa
 import { composeAngularRelations } from "./angular-relations.ts";
 import { composeConsumerSources } from "./consumer-queries.ts";
 import { composeContractChangeQueries } from "./contract-change-queries.ts";
-import { createConsumerQueries } from "../core/application/contracts/consumer-queries.ts";
+import { createContractConsequencesQueries } from "../core/application/contracts/contract-consequences-queries.ts";
 import type { ContractChangeQueries } from "../core/ports/contract-change-queries.port.ts";
 import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
@@ -77,7 +77,7 @@ import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
 import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
-import type { ConsumerQueries } from "../core/ports/consumer-queries.port.ts";
+import type { ContractConsequencesQueries } from "../core/ports/contract-consequences-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { RemoteRefresh } from "../core/ports/remote-refresh.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
@@ -136,7 +136,7 @@ export interface ComposedQueries {
   workspace: WorkspaceQueries;
   workspaceImpact: WorkspaceImpactQueries;
   /** What changing one property of an operation's response does to the code that consumes it (RFC-0022); a library surface only. */
-  consumers: ConsumerQueries;
+  contractConsequences: ContractConsequencesQueries;
   /** What a change between two revisions did to the responses of the operations and what consumes them at the head (RFC-0022 P4); a library surface only. */
   contractChanges: ContractChangeQueries;
   decisions: DecisionQueries;
@@ -334,11 +334,11 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     return measurement === undefined ? operationImpact : measuredImpact(operationImpact, measurement);
   } });
   const consumerSources = composeConsumerSources({ operation, heads: headDeps, digest, engines: { ...headDeps.engines, ...impactDeps.angularEngines }, importOrigins });
-  const consumers = createConsumerQueries({ sources: consumerSources });
+  const contractConsequences = createContractConsequencesQueries({ sources: consumerSources });
   const contractChanges = composeContractChangeQueries({ sources: consumerSources, heads: headDeps, contracts });
   const bareDecisions = createCapturedDecisionQueries({ operation, defaults, vcs, digest });
   const decisions = measurement === undefined ? bareDecisions : measuredDecisions(bareDecisions, measurement);
-  return { version, entrypoints, impact, outline, trace, workspace, workspaceImpact, consumers, contractChanges, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
+  return { version, entrypoints, impact, outline, trace, workspace, workspaceImpact, contractConsequences, contractChanges, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
 }
 
 export function composeCli(options: CompositionOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {
