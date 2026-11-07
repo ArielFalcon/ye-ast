@@ -40,6 +40,8 @@ export interface LiveTree {
   notHeld: readonly string[];
   /** Where the store came from; set when the query asked for a store. */
   origin: IndexOrigin | undefined;
+  /** The paths whose synthesized edges the store holds stale (`MirrorState.unparsedSinceBuild`); empty when the query asked for no store. */
+  unparsedSinceBuild: readonly string[];
   location: MirrorLocation;
 }
 
@@ -50,6 +52,11 @@ export interface OpenLive {
   selected: PathSelection;
   /** True when the answer reads the store: the refresh then brings it up to date or builds it. */
   store: boolean;
+  /**
+   * True when the answer reads the edges the engine synthesizes from files it does not parse (an Angular template's
+   * renders and router links): a store a sync left stale for them is built in full.
+   */
+  synthesized?: boolean | undefined;
   signal?: AbortSignal | undefined;
   onStale?: ((notice: LiveStaleNotice) => void) | undefined;
   onStalenessUnavailable?: ((notice: { stateId: string } & ({ stage: "listing"; cause: VcsFault } | { stage: "comparison"; cause: MirrorFault })) => void | Promise<void>) | undefined;
@@ -204,6 +211,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
     notHeld: state?.notHeld ?? [],
     indexed: held,
     fullBuildStateId: state?.fullBuildStateId ?? "",
+    unparsedSinceBuild: state?.unparsedSinceBuild ?? [],
     stateId,
     pending: behind,
   };
@@ -227,9 +235,11 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
     stateId,
     notHeld: request.store ? heldState.notHeld : [],
     origin: request.store ? (heldState.fullBuildStateId === stateId ? { kind: "full" } : { kind: "sync", base: heldState.fullBuildStateId }) : undefined,
+    unparsedSinceBuild: request.store ? heldState.unparsedSinceBuild : [],
     location,
   });
 
+  if (request.store && request.synthesized === true && current.unparsedSinceBuild.length > 0) current.fullBuildStateId = "";
   const needsBuild = current.fullBuildStateId === "";
   if (!request.store || (!needsBuild && behind.length === 0)) {
     if (moved) {
@@ -252,16 +262,17 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   }
   let full = needsBuild;
   let notHeld: readonly string[];
+  let unparsed: readonly string[] = [];
   if (needsBuild) {
     const built = await graph.buildMirror(indexRoot, signal);
     if (!built.ok) return unavailable(built.fault.detail);
     notHeld = built.value.filesNotIndexed;
   } else {
     const synced = await graph.syncMirror(indexRoot, behind, signal);
-    if (synced.ok) {
+    if (!synced.ok && synced.fault.kind === "aborted") return unavailable(synced.fault.detail);
+    unparsed = synced.ok ? sorted([...new Set([...current.unparsedSinceBuild, ...synced.value.filesUnparsed])]) : [];
+    if (synced.ok && !(request.synthesized === true && unparsed.length > 0)) {
       notHeld = sorted([...synced.value.filesNotIndexed, ...synced.value.filesFailed]);
-    } else if (synced.fault.kind === "aborted") {
-      return unavailable(synced.fault.detail);
     } else {
       const rebuilt = await graph.buildMirror(indexRoot, signal);
       if (!rebuilt.ok) return unavailable(rebuilt.fault.detail);
@@ -269,7 +280,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
       full = true;
     }
   }
-  const committed: MirrorState = { ...current, notHeld: sorted(notHeld), indexed: sorted(written), fullBuildStateId: full ? stateId : current.fullBuildStateId, pending: [] };
+  const committed: MirrorState = { ...current, notHeld: sorted(notHeld), indexed: sorted(written), fullBuildStateId: full ? stateId : current.fullBuildStateId, unparsedSinceBuild: full ? [] : unparsed, pending: [] };
   const writtenState = await mirror.writeState(location, committed);
   if (!writtenState.ok) return mirrorFailure(writtenState.fault);
   return { ok: true, value: { tree: tree(committed), state: committed } };

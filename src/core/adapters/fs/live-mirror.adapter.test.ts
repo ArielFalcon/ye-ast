@@ -47,6 +47,7 @@ const state = (manifest: readonly MirrorEntry[] = []): MirrorState => ({
   notHeld: ["a.bin"],
   indexed: ["a.ts"],
   fullBuildStateId: "full",
+  unparsedSinceBuild: ["a.html"],
   stateId: "state",
   pending: ["b.ts"],
 });

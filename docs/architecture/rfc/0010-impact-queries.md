@@ -543,10 +543,10 @@ with a change query at any commit whose written files are equal and survives an 
 **The `sync` parity test** (ADR-0015 decision 4).
 
 - **The gate test.** A fixture repository: a full build, then the change shapes below, then `sync` through the
-  mirror, compared with a fresh full build of the same content. The comparison works on what facts read and ignores
-  ids and row order:
-  - symbols `(path, kind, name, qualifiedName, span)`;
-  - edges `(source, target, kind, line, column, confidence, provenance, synthesizedBy)`, keyed by path and symbol;
+  mirror, compared with a fresh full build of the same content. The comparison takes every field the code graph port
+  exposes, so a field a reader starts to use is compared without editing the test, and ignores ids and row order:
+  - symbols, keyed by path and qualified name;
+  - edges, keyed by path and symbol at both ends, `resolvedFrom` included;
   - unresolved references with their candidates;
   - the files the store does not hold.
 
@@ -555,7 +555,13 @@ with a change query at any commit whose written files are equal and survives an 
   - rename a symbol used elsewhere;
   - add a definition that a previously unresolved reference in an unchanged file now names;
   - remove a definition from a surviving file whose callers stay;
+  - change only an Angular `templateUrl` file, adding a router link or a child component;
+  - change the class whose call a router resolver retypes into `navigates`, and the routes a navigation reaches;
   - move HEAD.
+
+  A `sync` that took a file the engine does not parse names it in `filesUnparsed`; for that shape the comparison
+  leaves out synthesized edges, which the engine derives from that file only through the component that declares it,
+  and requires the path to be named.
 
   The two definition shapes are the risky class. No index difference turns a fact `partial`, so a difference is
   either a missing caller (a falsely `complete` fact) or an extra one.
@@ -564,9 +570,10 @@ with a change query at any commit whose written files are equal and survives an 
   like its determinism check.
 - **What the result decides.**
   - **Equality** on every shape and every step, on what facts read (the edge kinds the walk follows), lets live facts
-    use `sync`, and lets the owner decide whether `sha` facts may read `sync`-derived indexes. The measurement found
-    one difference outside that projection, a synthesized `navigates` edge after a template-only change, which no
-    fact reads (ADR-0015); a policy that starts following that kind reopens the result.
+    use `sync`, and lets the owner decide whether `sha` facts may read `sync`-derived indexes. The one difference
+    found, the edges synthesized from a template a `sync` took alone, is named by the adapter: the live mirror records
+    those paths until its next full build, and a query that reads synthesized edges (`importers`, whose users count
+    them) builds the store in full first, while every other query keeps the synced store (ADR-0015).
   - **Any difference** refuses `sync` for live facts as well: each new `stateId` rebuilds the mirror's store in
     full until the engine is fixed, and the difference is recorded. This is stricter than ADR-0015 decision 3, which
     allowed `sync`-derived live facts before the test existed.

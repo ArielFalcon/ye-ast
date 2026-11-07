@@ -183,7 +183,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       const files = sortedUnique(request.files);
       const spec: FactSpec = { declaredConfig: { files }, engines: importersEngines };
 
-      return importerReader.atSources(request, spec, async (head): Promise<Result<Fact<ImportersValue>, VcsFault>> => {
+      return importerReader.atSources({ ...request, synthesized: true }, spec, async (head): Promise<Result<Fact<ImportersValue>, VcsFault>> => {
         const headTree = head.tree;
         const content = contentFingerprint(headTree.export, importerSource);
         const outside = files.filter((file) => !head.selected(file));

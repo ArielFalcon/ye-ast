@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { cpSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
+import type { CodeGraphReader, GraphNodeId } from "../../ports/code-graph.port.ts";
 import { createCodeGraph } from "./codegraph.adapter.ts";
 
 const BASE: Readonly<Record<string, string>> = {
@@ -14,6 +14,12 @@ const BASE: Readonly<Record<string, string>> = {
   "java/Repo.java": "package app;\npublic interface Repo {\n    void save(String v);\n}\n",
   "java/RepoImpl.java": "package app;\npublic class RepoImpl implements Repo {\n    public void save(String v) {\n    }\n}\n",
   "java/Svc.java": "package app;\npublic class Svc {\n    private final Repo repo;\n    public Svc(Repo repo) { this.repo = repo; }\n    public void run() {\n        repo.save(\"a\");\n    }\n}\n",
+  "package.json": JSON.stringify({ dependencies: { "@angular/core": "20.0.0", "@angular/router": "20.0.0" } }),
+  "web/app.routes.ts": "import { Routes } from \"@angular/router\";\nexport const routes: Routes = [\n  { path: \"article/:slug\", loadComponent: () => import(\"./article.component\") },\n  { path: \"list\", loadComponent: () => import(\"./list.component\") },\n];\n",
+  "web/article.component.ts": "import { Component } from \"@angular/core\";\n@Component({ selector: \"app-article\", template: \"\" })\nexport default class ArticleComponent {}\n",
+  "web/list.component.ts": "import { Component, inject } from \"@angular/core\";\nimport { Router } from \"@angular/router\";\n@Component({ selector: \"app-list\", templateUrl: \"./list.component.html\" })\nexport default class ListComponent {\n  private readonly router = inject(Router);\n  open(slug: string) {\n    this.router.navigate([\"/article\", slug]);\n  }\n}\n",
+  "web/inline.component.ts": "import { Component } from \"@angular/core\";\n@Component({ selector: \"app-inline\", template: \"<p>Inline</p>\" })\nexport default class InlineComponent {}\n",
+  "web/list.component.html": "<a routerLink=\"/article\">Read</a>\n",
 };
 
 type Files = Readonly<Record<string, string | null>>;
@@ -21,6 +27,8 @@ type Files = Readonly<Record<string, string | null>>;
 interface Shape {
   name: string;
   change: Files;
+  /** The changed paths the engine does not parse; the edges it synthesizes from them may differ from a fresh build. */
+  unparsed?: readonly string[];
 }
 
 const SHAPES: readonly Shape[] = [
@@ -34,6 +42,11 @@ const SHAPES: readonly Shape[] = [
   { name: "a definition appears for a reference left unresolved in an unchanged file", change: { "src/future.ts": "export function futureThing(): void {\n}\n" } },
   { name: "a definition is removed from a surviving file whose callers stay", change: { "src/gone.ts": "export function other(): number {\n  return 1;\n}\n" } },
   { name: "a Java implementation is added for an interface", change: { "java/Repo2.java": "package app;\npublic class Repo2 implements Repo {\n    public void save(String v) {\n    }\n}\n" } },
+  { name: "only a component's template changes", change: { "web/list.component.html": "<a routerLink=\"/article\">Read</a>\n<a routerLink=\"/list\">Back</a>\n" }, unparsed: ["web/list.component.html"] },
+  { name: "only a template starts using a child component", change: { "web/list.component.html": "<a routerLink=\"/article\">Read</a>\n<app-article></app-article>\n" }, unparsed: ["web/list.component.html"] },
+  { name: "an inline template starts using a child component and a link", change: { "web/inline.component.ts": BASE["web/inline.component.ts"]!.replace("<p>Inline</p>", "<app-article></app-article><a routerLink=\\\"/list\\\">List</a>") } },
+  { name: "the class whose call a router resolver retypes changes", change: { "web/list.component.ts": BASE["web/list.component.ts"]!.replace("navigate([\"/article\", slug]);", "navigate([\"/article\", slug]);\n    this.router.navigate([\"/list\"]);") } },
+  { name: "the routes a navigation reaches change", change: { "web/app.routes.ts": BASE["web/app.routes.ts"]!.replace("article/:slug", "post/:slug") } },
 ];
 
 const scratches: string[] = [];
@@ -62,20 +75,23 @@ function apply(root: string, files: Files): void {
 
 const graph = createCodeGraph();
 
-function projection(reader: CodeGraphReader, files: readonly string[]) {
+function projection(reader: CodeGraphReader, files: readonly string[], synthesized: boolean) {
   const symbols = reader.symbolsInFiles(files);
   const name = new Map(symbols.map((symbol) => [symbol.id, `${symbol.file}#${symbol.qualifiedName}`]));
-  const label = (id: string) => name.get(id as never) ?? reader.symbolsByIds([id as never])[0]?.qualifiedName ?? "?";
-  const edges = reader
-    .outgoingEdges(symbols.map((symbol) => symbol.id))
-    .map((edge) => [name.get(edge.source), label(edge.target), reader.symbolsByIds([edge.target])[0]?.file ?? "?", edge.kind, edge.line, edge.column, edge.confidence, edge.provenance, edge.synthesizedBy].join("|"))
-    .sort();
+  const label = (id: GraphNodeId) => {
+    const target = reader.symbolsByIds([id])[0];
+    return name.get(id) ?? (target === undefined ? "?" : `${target.file}#${target.qualifiedName}`);
+  };
   return {
-    symbols: symbols.map((symbol) => [symbol.file, symbol.kind, symbol.name, symbol.qualifiedName, symbol.startLine, symbol.endLine].join("|")).sort(),
-    edges,
+    symbols: symbols.map(({ id: _id, ...fields }) => JSON.stringify(fields)).sort(),
+    edges: reader
+      .outgoingEdges(symbols.map((symbol) => symbol.id))
+      .filter((edge) => synthesized || edge.synthesizedBy === null)
+      .map(({ source, target, ...fields }) => JSON.stringify({ source: label(source), target: label(target), ...fields }))
+      .sort(),
     unresolved: reader
       .unresolvedReferences(files)
-      .map((reference) => [reference.file, name.get(reference.from) ?? "?", reference.name, reference.kind, reference.line, reference.column, [...reference.candidates].sort().join(",")].join("|"))
+      .map(({ from, candidates, ...fields }) => JSON.stringify({ from: label(from), candidates: [...candidates].sort(), ...fields }))
       .sort(),
   };
 }
@@ -85,7 +101,7 @@ function allFiles(extra: Files): string[] {
 }
 
 for (const shape of SHAPES) {
-  test(`sync matches a fresh build when ${shape.name}`, async () => {
+  test(`sync matches a fresh build when ${shape.name}${shape.unparsed === undefined ? "" : ", but for what it synthesizes from the files it names unparsed"}`, async () => {
     const live = mirrorOf(BASE);
     const built = await graph.buildMirror(live);
     assert.ok(built.ok);
@@ -103,7 +119,9 @@ for (const shape of SHAPES) {
     const freshReader = graph.open(fresh);
     assert.ok(liveReader.ok && freshReader.ok);
     try {
-      assert.deepEqual(projection(liveReader.value, files), projection(freshReader.value, files));
+      const synthesized = shape.unparsed === undefined;
+      assert.deepEqual(projection(liveReader.value, files, synthesized), projection(freshReader.value, files, synthesized));
+      assert.deepEqual(synced.value.filesUnparsed, shape.unparsed ?? []);
       assert.deepEqual(synced.value.filesNotIndexed, rebuilt.value.filesNotIndexed);
       assert.deepEqual(synced.value.filesFailed, []);
     } finally {
