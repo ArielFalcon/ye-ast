@@ -15,9 +15,9 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import type { DeclaredType, ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { moduleResolverOf, packageOf, rememberedModuleResolver } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
-import { moduleShape } from "./module-shape.ts";
+import { moduleShape, type ModuleShape } from "./module-shape.ts";
 import { hasModifier, isStatic, unwrapped } from "./syntax.ts";
-import { createExportLookup, type ModuleShape } from "./declaration-lookup.ts";
+import { createExportLookup } from "./declaration-lookup.ts";
 
 /** The names the pinned `typescript` declares, held once for the process rather than rebuilt per query. */
 const LIB_GLOBALS = new Set(TYPESCRIPT_LIB_GLOBALS);
