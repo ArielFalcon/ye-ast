@@ -11,7 +11,7 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import { withCuts, type Cut, type Evidence, type Fact, type Finding } from "../../domain/shared/fact.ts";
 import type { Link, LinkBasis } from "../../domain/topology/link.ts";
 import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
-import type { ConsequencesFault, ConsumerQueries } from "../../ports/consumer-queries.port.ts";
+import type { ConsequencesFault, ContractConsequencesQueries } from "../../ports/contract-consequences-queries.port.ts";
 import type { ConsumerSession, ConsumerSources, PreparedWorkspace } from "../../ports/consumer-sources.port.ts";
 import type { RequestOriginReader } from "../../ports/request-origins.port.ts";
 import type { Result } from "../../domain/shared/result.ts";
@@ -20,7 +20,7 @@ import { isCallOf } from "./consumer-sources.ts";
 /** The bases that say the call reaches this operation; the others say it may, and are reported where they stop. */
 const QUALIFIED_BASES: ReadonlySet<LinkBasis> = new Set(["exact", "base-path", "operation-id"]);
 
-export interface ConsumerQueriesDeps {
+export interface ContractConsequencesQueriesDeps {
   sources: ConsumerSources;
 }
 
@@ -45,8 +45,8 @@ interface Pending {
 
 const located = (evidence: Evidence, repo: string): RepositoryEvidence => ({ ...evidence, repo });
 
-export function createConsumerQueries({ sources }: ConsumerQueriesDeps): ConsumerQueries {
-  const consequencesOfEach: ConsumerQueries["consequencesOfEach"] = async ({ hypotheses, ...workspace }) => {
+export function createContractConsequencesQueries({ sources }: ContractConsequencesQueriesDeps): ContractConsequencesQueries {
+  const consequencesOfEach: ContractConsequencesQueries["consequencesOfEach"] = async ({ hypotheses, ...workspace }) => {
     const parsed = hypotheses.map(parseHypothesis);
     const invalid = (refusal: HypothesisRefusal): Answer => ({ ok: false, fault: { kind: "invalid-hypothesis", detail: refusal.detail, refusal } });
     if (!parsed.some((hypothesis) => hypothesis.ok)) return { ok: true, value: parsed.flatMap((hypothesis) => (hypothesis.ok ? [] : [invalid(hypothesis.fault)])) };

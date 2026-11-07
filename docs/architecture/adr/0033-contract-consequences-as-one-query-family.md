@@ -5,15 +5,17 @@
   formas de entrada (hipótesis escritas a mano o `base`/`head`), en MCP, CLI, `serve` y `compose`, con el mismo contrato
   de respuesta que las demás": "Me parece bien, deja formalizado el documento para aplicar esta unificación. Su RFC y adrs
   correspondientes".
+- Naming: [ADR-0034](0034-name-contract-consequences-explicitly.md) supersedes the original identifiers; the
+  decision source above is preserved verbatim.
 - Related: [ADR-0032](0032-a-query-family-is-done-when-every-surface-exposes-it.md),
   [ADR-0011](0011-query-protocol-in-the-mvp.md), [ADR-0022](0022-typed-query-replay-and-selective-evidence.md),
   [ADR-0024](0024-one-producer-version-for-every-family.md), [RFC-0022](../rfc/0022-contract-change-consequences.md)
   (its "Output" sentence "F0 has no MCP, CLI or protocol surface" is superseded),
   [RFC-0023](../rfc/0023-consequences-surfaces.md) (the design)
 
-**In short:** the two library families of RFC-0022 (`ConsumerQueries` for written hypotheses, `ContractChangeQueries`
-for a diff) become one family, `consequences`, with two operations that answer the same fact value. It is exposed as
-the MCP tool `ye_ast_consequences`, a CLI command, protocol methods and a compose query, under the conventions of
+**In short:** the two library families of RFC-0022 (`ContractConsequencesQueries` for written hypotheses, `ContractChangeQueries`
+for a diff) become one family, `contractConsequences`, with two operations that answer the same fact value. It is exposed as
+the MCP tool `ye_ast_contract_consequences`, a CLI command, protocol methods and a compose query, under the conventions of
 `impact`. It is a fresh family: no replay, select or page in this step.
 
 ## Context
@@ -23,7 +25,7 @@ the MCP tool `ye_ast_consequences`, a CLI command, protocol methods and a compos
   (ADR-0032).
 - The two families overlap: a diff derives hypotheses and answers each with the hypothesis evaluator. Two tools would
   repeat the workspace arguments, the faults and the rendering.
-- `ConsumerQueries` answers `Fact<ConsequencesValue>` with no replay context (`FactRead`), so it can only be a fresh
+- `ContractConsequencesQueries` answers `Fact<ConsequencesValue>` with no replay context (`FactRead`), so it can only be a fresh
   family (`src/mcp/recovery.ts`, ADR-0022 decision 1).
 
 | Option | Effect |
@@ -33,15 +35,19 @@ the MCP tool `ye_ast_consequences`, a CLI command, protocol methods and a compos
 
 ## Decision
 
-1. One driving port family `consequences` with two operations: `ofHypotheses` (one or more written hypotheses) and
+1. One driving port family `contractConsequences` with two operations: `ofHypotheses` (one or more written hypotheses) and
    `ofChange` (a base and a head). Both answer `Result<Fact<ConsequencesValue>, ConsequencesFault>` with one value type;
-   the library ports `ConsumerQueries` and `ContractChangeQueries` are replaced, not kept beside it.
+   the existing `ContractConsequencesQueries` port evolves to this contract and absorbs `ContractChangeQueries`,
+   which is removed rather than kept beside it.
 2. One fact per call. Each hypothesis is a section of the composite (RFC-0002 rule 2): a hypothesis no repository
-   serves, or one the workspace cannot follow, is an `unknown` section, never a call fault. A call fault is reserved for
+   serves, or one the workspace cannot follow, is an `unknown` section, never a call fault. Unknown sections are
+   retained in a `partial` composite even when all hypotheses are unknown. A change also has a derivation section:
+   its source-read cuts from either revision affect composite completeness independently of the hypothesis answers,
+   and its recorded frontiers remain visible even when it derives no hypotheses (RFC-0023). A call fault is reserved for
    input the family refuses (an invalid hypothesis, contradictory revisions) and for workspace faults, each a kind in the
    closed fault set of every surface.
-3. Exposed as the MCP tool `ye_ast_consequences`, the CLI command `consequences`, the protocol methods
-   `consequences.ofHypotheses` and `consequences.ofChange`, and the compose query `ye_ast_consequences`, following the
+3. Exposed as the MCP tool `ye_ast_contract_consequences`, the CLI command `contract-consequences`, the protocol methods
+   `contractConsequences.ofHypotheses` and `contractConsequences.ofChange`, and the compose query `ye_ast_contract_consequences`, following the
    argument conventions of `impact` (`repo`, nested `workspace`, `base`/`head`).
 4. Fresh family in this step: response modes `summary`, `details`, `full` with counted elision (RFC-0017 §1); no
    `select`, `page`, `expect` or replay.

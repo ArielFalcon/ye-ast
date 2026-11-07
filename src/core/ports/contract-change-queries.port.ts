@@ -3,7 +3,7 @@ import type { ConsequencesValue } from "../domain/contracts/consequence-fact.ts"
 import type { DerivationFrontier, RetiredValue } from "../domain/contracts/shape-derivation.ts";
 import type { Cut, Evidence, Fact, UnknownReason } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
-import type { ConsequencesFault } from "./consumer-queries.port.ts";
+import type { ConsequencesFault } from "./contract-consequences-queries.port.ts";
 import type { WorkspaceRequest } from "./workspace-queries.port.ts";
 import type { WorkspaceFault } from "./workspace-repos.port.ts";
 

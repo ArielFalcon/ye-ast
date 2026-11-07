@@ -9,11 +9,11 @@ import type { Predicate } from "../../domain/contracts/use-operation.ts";
 import type { TestedGuard, UseOperation } from "../../domain/contracts/verdict.ts";
 import type { FactBase } from "../../domain/shared/fact.ts";
 import type { Link } from "../../domain/topology/link.ts";
-import type { ConsequencesRequest, ConsumerQueries } from "../../ports/consumer-queries.port.ts";
+import type { ConsequencesRequest, ContractConsequencesQueries } from "../../ports/contract-consequences-queries.port.ts";
 import type { ConsumerCaller, ConsumerCallers, ConsumerMemberOccurrences, ConsumerSession, PreparedWorkspace, ServingWorkspace } from "../../ports/consumer-sources.port.ts";
 import type { Origin } from "../../domain/contracts/request-origin.ts";
 import type { ArgumentOrigins, RequestOriginReader } from "../../ports/request-origins.port.ts";
-import { consequencesOn, createConsumerQueries } from "./consumer-queries.ts";
+import { consequencesOn, createContractConsequencesQueries } from "./contract-consequences-queries.ts";
 
 const path = (text: string) => parseAccessPath(text)!;
 const OPERATION = "GET /owners/{id}";
@@ -93,7 +93,7 @@ function setup(options: Setup = {}) {
     },
     serving: () => ({ kind: "unserved" }),
   };
-  const queries: ConsumerQueries = createConsumerQueries({
+  const queries: ContractConsequencesQueries = createContractConsequencesQueries({
     sources: {
       withWorkspace: async (_, run) => ({
         ok: (preparations++, true),

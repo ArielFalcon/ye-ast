@@ -656,6 +656,11 @@ const result = await impact.callers({
 
 `composeQueries` returns the read query families (`entrypoints`, `impact`, `outline`, `workspace`, `workspaceImpact`, `decisions`) and `warmLive`, plus the redaction and repository-naming helpers; nothing it exposes can write.
 
+Contract analysis is currently library-only: `contractConsequences` evaluates written request/response hypotheses,
+and `contractChanges` evaluates a diff. The planned unified MCP and compose name is `ye_ast_contract_consequences`,
+with CLI command `contract-consequences` and protocol namespace `contractConsequences`; see
+[the surface design](docs/architecture/rfc/0023-consequences-surfaces.md).
+
 </details>
 
 <details>
