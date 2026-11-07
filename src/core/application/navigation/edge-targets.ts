@@ -1,18 +1,23 @@
 import { edgeVerdict, FOLLOWED_EDGE_KINDS, type EdgeVerdict } from "../../domain/impact/edge-policy.ts";
+import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
+import type { DeclaredMemberNames, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { ImportOrigins } from "../../ports/import-origins.port.ts";
+import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { ModuleDependencies, ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
+import { createGraphNavigation } from "./graph-navigation.ts";
 import { declarationAt, importBindings } from "./import-bindings.ts";
 
 /**
  * What the edges the graph resolved really reach, read from the root of the name each spells at its position through
  * the source file's own bindings (`ImportOrigins.rootOrigins`) and, for a root an import binds, the declaration the
  * module statements and the graph's `imports` edges join it to (`importBindings`). An edge whose root proof reads past
- * its root (`RootOrigin.pastRoot`) is kept: the root says where the chain starts, not what the call runs. The one owner
- * of that decision for every family that reads graph edges as dependences.
+ * its root (`RootOrigin.pastRoot`) is kept: the root says where the chain starts, not what the call runs. A kept edge of a
+ * TypeScript source into a member of a class whose receiver is a value names that receiver (`EdgeTarget.receiver`): the
+ * index matched such a call by name, and the language types structurally, so another object may stand there (ADR-0029
+ * decision 11). The one owner of that decision for every family that reads graph edges as dependences.
  */
 export interface EdgeTargets {
   /** One verdict per edge, in the order received; an edge the graph placed nowhere is kept. */
@@ -35,6 +40,8 @@ export interface EdgeTargetsDeps {
    * edge is redirected.
    */
   modules?: ModuleDependencies | { reader: ModuleDependenciesReader; sources: readonly SourceFile[] } | undefined;
+  /** What a source's syntax states, read once per file; without it no kept edge names a receiver. */
+  syntaxOf?: ((file: string) => Promise<DeclaredMemberNames>) | undefined;
 }
 
 /** A graph edge with both of its ends. */
@@ -49,14 +56,41 @@ export function edgeKey({ source, target, kind, line, column }: GraphEdge): stri
   return JSON.stringify([source, target, kind, line, column]);
 }
 
-/** What an edge reaches (`EdgeVerdict`); a dropped one carries the root that binds its name outside the repository's declarations. */
-export type EdgeTarget = Exclude<EdgeVerdict<GraphSymbol>, { kind: "drop" }> | { kind: "drop"; root: ImportOrigin };
+/**
+ * What an edge reaches (`EdgeVerdict`); a dropped one carries the root that binds its name outside the repository's
+ * declarations. `receiver` is the value a kept member call is made on: the field's name for `this.f.m`, the parameter's or
+ * variable's root for `v.m`, and empty for a call result or another expression.
+ */
+export type EdgeTarget = Exclude<EdgeVerdict<GraphSymbol>, { kind: "keep" | "drop" }> | { kind: "keep"; receiver?: string } | { kind: "drop"; root: ImportOrigin };
 
 const KEEP: EdgeTarget = { kind: "keep" };
 const IMPORT = "imports";
+/** Declarations that hold a value, which a call may find any object in. */
+const VALUE_KINDS: readonly string[] = ["constant", "variable"];
+/** The types whose members a value receiver may stand for. */
+const CLASS_KINDS: readonly string[] = ["class", "component"];
 
-export function createEdgeTargets({ origins, store, modules }: EdgeTargetsDeps): EdgeTargets {
+const bindingKey = (line: number, column: number, member: string): string => `${line}:${column}:${member}`;
+
+export function createEdgeTargets({ origins, store, modules, syntaxOf }: EdgeTargetsDeps): EdgeTargets {
   const verdicts = new Map<string, EdgeTarget>();
+  const navigation = createGraphNavigation(store, () => false);
+  const receiverBindings = new Map<string, Promise<ReadonlyMap<string, ReceiverBinding | "ambiguous">>>();
+  const bindingsIn = (read: (file: string) => Promise<DeclaredMemberNames>, file: string): Promise<ReadonlyMap<string, ReceiverBinding | "ambiguous">> => {
+    let held = receiverBindings.get(file);
+    if (held === undefined) {
+      held = read(file).then(({ receiverBindings: found }) => {
+        const byPlace = new Map<string, ReceiverBinding | "ambiguous">();
+        for (const binding of found) {
+          const key = bindingKey(binding.line, binding.column, binding.member);
+          byPlace.set(key, byPlace.has(key) ? "ambiguous" : binding);
+        }
+        return byPlace;
+      });
+      receiverBindings.set(file, held);
+    }
+    return held;
+  };
   /** Per file, the declaration each local name its imports bind reaches, when the join proves exactly one. */
   const bound = new Map<string, ReadonlyMap<string, GraphSymbol>>();
   let extracted: ReadonlyMap<string, readonly ModuleDependency[]> | undefined;
@@ -79,15 +113,50 @@ export function createEdgeTargets({ origins, store, modules }: EdgeTargetsDeps):
     const fresh = [...new Map(edges.filter(({ edge }) => edge.line !== null && edge.column !== null && !verdicts.has(edgeKey(edge))).map((followed) => [edgeKey(followed.edge), followed])).values()];
     if (fresh.length > 0) {
       const roots = await origins.rootOrigins(fresh.map(({ edge, source, target }) => ({ file: source.file, line: edge.line!, column: edge.column! + 1, kind: edge.kind, name: target.name })), signal);
-      for (const [index, { edge, source, target }] of fresh.entries()) {
+      const kept: FollowedEdge[] = [];
+      for (const [index, followed] of fresh.entries()) {
+        const { edge, source, target } = followed;
         const root = roots[index];
-        if (root === undefined || root.pastRoot === true) continue;
-        const proven = root.status !== "complete" || root.value.kind !== "repository" || root.bare !== true ? undefined : root.value.declared !== undefined ? declarationAt(store, root.value.file, root.value.declared) : (await bindingsOf(source.file)).get(target.name);
-        const verdict = edgeVerdict<GraphNodeId>(root, proven?.id, target);
-        verdicts.set(edgeKey(edge), verdict.kind === "redirect" ? { kind: "redirect", to: proven! } : verdict.kind === "drop" && root.status === "complete" ? { kind: "drop", root: root.value } : { kind: "keep" });
+        const proven = root === undefined || root.pastRoot === true || root.status !== "complete" || root.value.kind !== "repository" || root.bare !== true ? undefined : root.value.declared !== undefined ? declarationAt(store, root.value.file, root.value.declared) : (await bindingsOf(source.file)).get(target.name);
+        const verdict = root === undefined || root.pastRoot === true ? undefined : edgeVerdict<GraphNodeId>(root, proven?.id, target);
+        if (verdict?.kind === "redirect") verdicts.set(edgeKey(edge), { kind: "redirect", to: proven! });
+        else if (verdict?.kind === "drop" && root!.status === "complete") verdicts.set(edgeKey(edge), { kind: "drop", root: root!.value });
+        else kept.push(followed);
+      }
+      const receivers = await receiversOf(kept, signal);
+      for (const [index, { edge }] of kept.entries()) {
+        const receiver = receivers[index];
+        verdicts.set(edgeKey(edge), receiver === undefined ? KEEP : { kind: "keep", receiver });
       }
     }
     return edges.map(({ edge }) => verdicts.get(edgeKey(edge)) ?? KEEP);
+  }
+
+  /**
+   * Per kept edge, the receiver it is called on when that receiver is a value (a parameter or a variable, by the binder's
+   * scoping), a field read through `this` (`this.f.m`) or no name at all (a call result, `f().m`, empty), rather than a
+   * class, a function, an import or `this` itself. The receiver the source's syntax binds at the call decides first,
+   * whatever it holds; the root's binding decides otherwise.
+   */
+  async function receiversOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<readonly (string | undefined)[]> {
+    const read = syntaxOf;
+    if (read === undefined) return [];
+    const asked = edges.flatMap((followed, index) => (isTypeScriptFile(followed.source.file) && navigation.ownersOf(followed.target).some((owner) => CLASS_KINDS.includes(owner.kind)) ? [{ ...followed, index }] : []));
+    if (asked.length === 0) return [];
+    const bindings = await origins.rootBindings(asked.map(({ edge, source, target }): UseSite => ({ file: source.file, line: edge.line!, column: edge.column! + 1, spelled: target.name, owner: { name: source.name, line: source.startLine, endLine: source.endLine } })), signal);
+    /** The body's own binding, or a declaration of the file the index holds as no class, function or other non-value node. */
+    const isValue = (file: string, binding: RootBinding | undefined): binding is Extract<RootBinding, { kind: "local" | "declared" }> =>
+      binding?.kind === "local" ||
+      (binding?.kind === "declared" && !navigation.symbolsInFile(file).some((symbol) => symbol.name === binding.root && !VALUE_KINDS.includes(symbol.kind) && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
+    const receivers: (string | undefined)[] = [];
+    for (const [k, { edge, source, target, index }] of asked.entries()) {
+      const bound = (await bindingsIn(read, source.file)).get(bindingKey(edge.line!, edge.column! + 1, target.name));
+      const binding = bindings[k];
+      if (bound !== undefined) receivers[index] = bound === "ambiguous" ? "" : bound.receiver;
+      else if (binding?.kind === "this") receivers[index] = binding.member === undefined || binding.member === target.name ? undefined : binding.member;
+      else if (isValue(source.file, binding)) receivers[index] = binding.root;
+    }
+    return receivers;
   }
 
   return {

@@ -1,7 +1,6 @@
 import { declarationSpan, executesInBody, owningBody } from "../../domain/trace/owning-body.ts";
 import { callsByOwner, matchOwnedCall, positionedBodies, type OwnedCall } from "./syntax-calls.ts";
 import { isSeedable } from "../../domain/change/seeds.ts";
-import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { CALL_EDGE_KINDS, FIELD_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor, placeAt } from "../../domain/impact/impact-cuts.ts";
 import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-fact.ts";
@@ -14,12 +13,12 @@ import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/tr
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import type { DeclaredType, DispatchTargets, ImportOriginSite, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
+import type { DeclaredType, DispatchTargets, ImportOriginSite, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
 import type { RelationExtraction } from "../relations/relation-extractor.ts";
-import type { EdgeTarget, EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
+import type { EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
 import { createDeclarationUses, unsettledBy, type UnresolvedIn } from "../navigation/declaration-uses.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
@@ -33,9 +32,6 @@ const TYPE_KINDS: readonly string[] = ["class", "interface", "component"];
 
 /** Declarations whose syntax says whether they have a body and whether a subtype can override them. */
 const CALLABLE_KINDS: readonly string[] = ["method", "function"];
-
-/** Declarations that hold a value, which a call may find any object in. */
-const VALUE_KINDS: readonly string[] = ["constant", "variable"];
 
 /** Types whose methods have bodies, so a root of one of them runs what its members run. */
 const CLASS_KINDS: readonly string[] = ["class", "component"];
@@ -400,38 +396,6 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       .map((member) => childAt(member, member.startLine, null, member.name, "member"));
   };
 
-  /**
-   * By the index of each kept edge of a TypeScript source into a member of a class, the receiver it is called on when
-   * that receiver is a value (a parameter or a variable, by the binder's scoping, ADR-0029), a field read through
-   * `this` (`this.f.m`) or no name at all (a call result, `f().m`, empty), rather than a class, a function, an import or
-   * `this` itself: the index matched such a call by
-   * name, and TypeScript types structurally, so another object may stand there (ADR-0029 decision 11).
-   */
-  async function valueReceivers(node: GraphSymbol, edges: readonly FollowedEdge[], verdicts: readonly EdgeTarget[]): Promise<ReadonlyMap<number, string>> {
-    if (!isTypeScriptFile(node.file)) return new Map();
-    const kept = edges.flatMap(({ edge, target }, index) => (verdicts[index]!.kind === "keep" && edge.line !== null && edge.column !== null && navigation.ownersOf(target).some((owner) => CLASS_KINDS.includes(owner.kind)) ? [{ index, edge, target }] : []));
-    if (kept.length === 0) return new Map();
-    const syntax = (await syntaxIndexOf(node.file)).receiverBindings;
-    /** The receiver the source's syntax binds at the call, whatever it holds: its rules decide, never the root alone. */
-    const boundReceiver = (edge: GraphEdge, target: GraphSymbol): string | undefined => {
-      const binding = syntax.get(bindingKey(edge.line!, edge.column! + 1, target.name));
-      return binding === "ambiguous" ? "" : binding?.receiver;
-    };
-    const owner = { name: node.name, line: node.startLine, endLine: node.endLine };
-    const bindings = await origins.rootBindings(kept.map(({ edge, target }): UseSite => ({ file: node.file, line: edge.line!, column: edge.column! + 1, spelled: target.name, owner })), signal);
-    /** The body's own binding, or a declaration of the file the index holds as no class, function or other non-value node. */
-    const isValue = (binding: RootBinding | undefined): binding is Extract<RootBinding, { kind: "local" | "declared" }> =>
-      binding?.kind === "local" ||
-      (binding?.kind === "declared" && !navigation.symbolsInFile(node.file).some((symbol) => symbol.name === binding.root && !VALUE_KINDS.includes(symbol.kind) && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
-    return new Map(kept.flatMap(({ index }, k) => {
-      const binding = bindings[k];
-      const receiver = boundReceiver(kept[k]!.edge, kept[k]!.target);
-      if (receiver !== undefined) return [[index, receiver] as const];
-      if (binding?.kind === "this") return binding.member === undefined || binding.member === kept[k]!.target.name ? [] : [[index, binding.member] as const];
-      return isValue(binding) ? [[index, binding.root] as const] : [];
-    }));
-  }
-
   async function bodyOf(node: GraphSymbol, root: boolean): Promise<Body> {
     const calls = callEdgesOf(store, node);
     const values = store.outgoingEdges([node.id], ["references"]);
@@ -468,7 +432,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     });
     const passed = uses.followed(node, values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));
     const verdicts = await targets.verdictsOf([...called, ...passed], signal);
-    const valueRoots = await valueReceivers(node, [...called, ...passed], verdicts);
+    /** The kept edges the index matched by name on a value receiver (ADR-0029 decision 11), by their index. */
+    const valueRoots = new Map(verdicts.flatMap((verdict, index) => (verdict.kind === "keep" && verdict.receiver !== undefined ? [[index, verdict.receiver] as const] : [])));
     const external: ExternalCall[] = [];
     const children: Child[] = root ? await membersOf(node) : [];
     const cuts: Cut[] = unplaced.map((reference) => unresolvedAt(reference, []));
