@@ -75,6 +75,31 @@ test("the digests of an operation change exactly with its request, its non-succe
   assert.deepEqual(differing(read((schema) => ({ responses: ok(schema) }), { schemas: { Root: { type: "integer" } } })), []);
 });
 
+test("the request digest leaves out the schemas the request shapes compare, and changes with what a writer sends beside them", () => {
+  const PET = { type: "object", properties: { name: STRING } };
+  const page = (schema: unknown, extra: Record<string, unknown> = {}) => ({ in: "query", name: "page", schema, ...extra });
+  const TRACE = { in: "header", name: "X-Trace", schema: STRING };
+  const body = (schema: unknown, media = "application/json") => ({ content: { [media]: { schema } } });
+  const digestOf = (get: Record<string, unknown>, schemas: Record<string, unknown> = { Pet: PET, Page: { type: "integer" } }, version: Record<string, unknown> = { openapi: "3.0.3" }) =>
+    rootOf([{ path: "api/openapi.yml", content: JSON.stringify({ ...version, paths: { "/pets": { post: { ...get, responses: { "200": { description: "ok" } } } } }, components: { schemas } }) }]).digests!.request;
+  const base = digestOf({ parameters: [page({ $ref: "#/components/schemas/Page" }), TRACE], requestBody: body({ $ref: "#/components/schemas/Pet" }) });
+  const unchanged = {
+    renamed: digestOf({ parameters: [page({ $ref: "#/components/schemas/PageNumber" }), TRACE], requestBody: body({ $ref: "#/components/schemas/Animal" }) }, { Animal: PET, PageNumber: { type: "integer" } }),
+    inline: digestOf({ parameters: [page({ type: "integer" }), TRACE], requestBody: body(PET) }),
+    split: digestOf({ parameters: [page({ $ref: "#/components/schemas/Page" }), TRACE], requestBody: body({ allOf: [{ $ref: "#/components/schemas/Pet" }, { type: "object" }] }) }),
+    reordered: digestOf({ parameters: [TRACE, page({ $ref: "#/components/schemas/Page" })], requestBody: body({ $ref: "#/components/schemas/Pet" }) }),
+  };
+  assert.deepEqual(Object.entries(unchanged).filter(([, digest]) => digest !== base).map(([variant]) => variant), []);
+  const changed = {
+    media: digestOf({ parameters: [page({ $ref: "#/components/schemas/Page" }), TRACE], requestBody: body({ $ref: "#/components/schemas/Pet" }, "application/xml") }),
+    serialization: digestOf({ parameters: [page({ $ref: "#/components/schemas/Page" }, { style: "deepObject" }), TRACE], requestBody: body({ $ref: "#/components/schemas/Pet" }) }),
+  };
+  assert.deepEqual(Object.entries(changed).filter(([, digest]) => digest === base).map(([variant]) => variant), []);
+  const swagger = (parameter: Record<string, unknown>) => digestOf({ parameters: [{ in: "query", name: "page", ...parameter }] }, {}, { swagger: "2.0" });
+  assert.equal(swagger({ type: "integer" }), swagger({ type: "string" }));
+  assert.notEqual(swagger({ type: "integer" }), swagger({ type: "integer", allowEmptyValue: true }));
+});
+
 function requestOf(content: unknown, path = "api/openapi.yml"): OperationRequest {
   const [finding] = shapes.requests!([{ path, content: JSON.stringify(content) }]);
   assert.equal(finding?.status, "complete");
@@ -134,6 +159,12 @@ test("a reference into another file is followed and that file is listed among th
   const result = rootOf([main, types]);
   assert.equal(property(result.shape, "id").name, "id");
   assert.deepEqual(result.files, ["api/openapi.yml", "api/types.yml"]);
+});
+
+test("the files of an operation list those its request schemas reach, followed or not, so a change to a schema only the request uses is a change to the operation", () => {
+  const get = { operationId: "create", parameters: [{ in: "query", name: "page", schema: { $ref: "params.yml#/Page" } }], requestBody: { content: { "application/json": { schema: { $ref: "body.yml#/Pet" } } } }, responses: { "204": { description: "none" } } };
+  const main: SourceFile = { path: "api/openapi.yml", content: JSON.stringify({ openapi: "3.0.3", paths: { "/pets": { post: get } } }) };
+  assert.deepEqual(rootOf([main, { path: "api/body.yml", content: JSON.stringify({ Pet: STRING }) }]).files, ["api/body.yml", "api/openapi.yml", "api/params.yml"]);
 });
 
 test("a reference the sources cannot answer keeps the file it names among the files of the shape, so a revision that holds the file changes the shape", () => {

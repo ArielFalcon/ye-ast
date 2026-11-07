@@ -618,17 +618,19 @@ An operation only the head declares is `operation-added` (compatible); one only 
 ids are part of the answer and change with the producer version (ADR-0024); no fact that holds them is stored.
 
 **Fail closed.** The body shape is not all an operation exchanges. The OpenAPI reader states three digests per
-operation, with the digest the `impact` family already computes (one owner, documentation left out, references
-followed): the request (parameters, body, consumed media), the non-success responses, and the success responses without
-their schemas (status codes, media types, headers). A changed operation whose non-success responses differ is
-`errors-changed`; one whose success responses differ beyond their schemas is `envelope-changed`; neither is followed,
-since no consumer reader follows error handling or headers. The request is compared through the reader's request (body
-and parameters, above); a request whose digest differs while that comparison finds nothing (a consumed media type, a
-schema renamed behind a reference) is an `unclassified-difference` frontier at the operation. A reader that states no
+operation, with the digester the `impact` family already uses (one owner, documentation left out, references
+followed): the request without the schemas its body and parameter shapes read (media types, parameter serialization,
+consumed media, parameters in the order of their location and name), the non-success responses, and the success
+responses without their schemas (status codes, media types, headers). A changed operation whose non-success responses
+differ is `errors-changed`; one whose success responses differ beyond their schemas is `envelope-changed`; neither is
+followed, since no consumer reader follows error handling or headers. The request is compared through the reader's
+request (body and parameters, above); a request whose digest differs while that comparison finds nothing (a consumed
+media type, a parameter's `style`) is an `unclassified-difference` frontier at the operation. A reader that states no
 request (Spring handlers) leaves the request of its changed operations unread: one `request-unread` frontier
 (`no-extractor`) for the whole change, with the place of each, rather than one marker per operation. The request of an
 operation is taken from the reader whose response shape is held for it, never combined from two readers. A refactor that
-keeps every value set, keyword and digest (an `allOf` split, a schema moved behind a reference) reports nothing.
+keeps every value set and keyword (an `allOf` split, a schema moved or renamed behind a reference) reports nothing, in
+the request as in the response.
 
 **Answer.** The derivation section lists every difference once, in the order of the operations (each operation's own
 first, then its properties'), with its rule id, level, side of the exchange (`operation`, `response`, `request` or
