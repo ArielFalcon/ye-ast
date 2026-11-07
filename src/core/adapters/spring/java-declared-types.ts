@@ -11,8 +11,19 @@ const TYPE_DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration", "in
 /** Values whose class is one no declaration names: an implementation of an interface the sources do not state. */
 const FUNCTION_VALUES: ReadonlySet<string> = new Set(["lambda_expression", "method_reference"]);
 const QUALIFIED = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
+/** Nodes a qualified name is written as, whose last named child is its last segment. */
+const QUALIFIED_LINKS: ReadonlySet<string> = new Set(["scoped_identifier", "scoped_type_identifier", "field_access"]);
 /** A package starts lowercase, so a qualified name whose first segment does is one. */
 const PACKAGE_SEGMENT = /^[a-z]/;
+/** The JDK APIs that make a value implementing an interface at run time, by their simple names. */
+const DYNAMIC_IMPLEMENTATIONS: ReadonlyMap<string, string> = new Map([
+  ["Proxy", "java.lang.reflect.Proxy"],
+  ["EventHandler", "java.beans.EventHandler"],
+  ["MethodHandleProxies", "java.lang.invoke.MethodHandleProxies"],
+  ["LambdaMetafactory", "java.lang.invoke.LambdaMetafactory"],
+]);
+/** Sources of JVM languages no extractor reads: their classes may implement any platform type. */
+const UNREAD_JVM_SOURCE = /\.(kt|kts|groovy|scala)$/;
 /** The supertypes every repository class, enum and record has without writing them (JLS 8.1.4, 8.9, 8.10). */
 const IMPLICIT_SUPERTYPES: readonly string[] = ["java.lang.Object", "java.lang.Enum", "java.lang.Comparable", "java.io.Serializable", "java.lang.constant.Constable", "java.lang.Record"];
 
@@ -25,13 +36,15 @@ type Resolved = { kind: "repository" } | { kind: "platform"; fqn: string } | und
  * a type variable or a type no import names (generated code or a dependency outside the platform packages), when the
  * strict reading leaves it unsettled, or when the repository may run its own code behind any platform type: a supertype
  * outside the repository (whose own supertypes the sources do not state), an anonymous class, a lambda or a method
- * reference (whose interface they do not state), an aspect, or a Java source that does not parse (ADR-0029 decision 9).
+ * reference (whose interface they do not state), a JDK API that implements an interface at run time (a dynamic proxy), an
+ * aspect, a Java source that does not parse, or a source of a JVM language no extractor reads (ADR-0029 decision 9).
  */
-export function createJavaDeclaredTypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[]): ImportOrigins["declaredTypes"] {
+export function createJavaDeclaredTypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[]): ImportOrigins["declaredTypes"] {
   const java = sources.filter(({ path }) => isJavaSource(path));
+  const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
   return async (sites, signal) => {
     const results: DeclaredType[] = sites.map(() => UNKNOWN);
-    if (!sites.some(({ file }) => isJavaSource(file))) return results;
+    if (unreadJvm || !sites.some(({ file }) => isJavaSource(file))) return results;
     const read = await parser();
     const trees: JavaSyntaxTree[] = [];
     try {
@@ -72,7 +85,7 @@ function subtypedTypes(files: readonly JavaFile[], project: JavaProject): Readon
   for (const file of files) {
     const pending: Node[] = [file.root];
     for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-      if (FUNCTION_VALUES.has(node.type) || isAspect(node)) return undefined;
+      if (FUNCTION_VALUES.has(node.type) || isAspect(node) || namesDynamicImplementation(node, file, project)) return undefined;
       const scope = TYPE_DECLARATIONS.has(node.type) || isAnonymous(node) ? enclosingType(node.parent ?? node, file, project) : undefined;
       for (const supertype of supertypesOf(node)) if (resolve(supertype, file, project, scope, supertype)?.kind !== "repository") return undefined;
       for (const child of node.namedChildren) if (child !== null) pending.push(child);
@@ -89,6 +102,21 @@ function supertypesOf(node: Node): Node[] {
   const clause = node.childForFieldName("interfaces") ?? node.namedChildren.find((child) => child?.type === "extends_interfaces");
   const listed = clause?.namedChildren.find((child) => child?.type === "type_list")?.namedChildren ?? [];
   return [...(superclass === null || superclass === undefined ? [] : [superclass]), ...listed.filter((type): type is Node => type !== null)];
+}
+
+/**
+ * Whether a name may be a JDK API that implements an interface at run time: its simple name is one of them, and the strict
+ * resolver does not prove it a repository type or another platform type; an import, a qualified name and a name no
+ * import settles all count.
+ */
+function namesDynamicImplementation(node: Node, file: JavaFile, project: JavaProject): boolean {
+  if (node.type !== "identifier" && node.type !== "type_identifier") return false;
+  const fqn = DYNAMIC_IMPLEMENTATIONS.get(node.text);
+  if (fqn === undefined) return false;
+  const parent = node.parent;
+  const last = parent !== null && QUALIFIED_LINKS.has(parent.type) && parent.lastNamedChild?.id === node.id;
+  const resolved = resolveName((last ? parent : node).text.replace(/\s+/g, ""), file, project, enclosingType(node, file, project), node);
+  return resolved === undefined || (resolved.kind === "platform" && resolved.fqn === fqn);
 }
 
 function isAnonymous(node: Node): boolean {
@@ -110,7 +138,10 @@ function annotationAt(root: Node, line: number, column: number, spelled: string)
 
 /** Where a type name leads, read through the project's one resolver in its strict reading. */
 function resolve(type: Node, file: JavaFile, project: JavaProject, scope: ReturnType<typeof enclosingType>, at: Node): Resolved {
-  const name = (type.type === "generic_type" ? type.namedChildren[0] : type)?.text.replace(/\s+/g, "") ?? "";
+  return resolveName((type.type === "generic_type" ? type.namedChildren[0] : type)?.text.replace(/\s+/g, "") ?? "", file, project, scope, at);
+}
+
+function resolveName(name: string, file: JavaFile, project: JavaProject, scope: ReturnType<typeof enclosingType>, at: Node): Resolved {
   if (!QUALIFIED.test(name)) return undefined;
   const [head = "", ...rest] = name.split(".");
   const where = { file, type: scope };

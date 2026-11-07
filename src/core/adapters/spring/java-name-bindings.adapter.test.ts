@@ -213,9 +213,10 @@ test("an annotation the repository declares, a type variable, a type outside the
   assert.deepEqual(type, { kind: "unknown" });
 });
 
-test("heritage between repository types, and the implicit supertypes of an enum, leave a platform annotation its type", async () => {
-  const local = java("src/main/java/app/domain/Admin.java", ["package app.domain;", "", "public class Admin extends User implements Named {", "  public String name() { return \"\"; }", "}", "interface Named { String name(); }", "enum Level { LOW }"]);
-  assert.deepEqual(await declaredIn([local], "List<String> items", "List"), { kind: "package", module: "java.util", name: "List" });
+test("heritage between repository types, the implicit supertypes of an enum, and a repository class named like a dynamic proxy API leave a platform annotation its type", async () => {
+  const local = java("src/main/java/app/domain/Admin.java", ["package app.domain;", "", "public class Admin extends User implements Named {", "  public String name() { return Proxy.make().toString(); }", "}", "interface Named { String name(); }", "enum Level { LOW }", "class Proxy { static Proxy make() { return new Proxy(); } }"]);
+  const caller = java("src/main/java/app/other/Caller.java", ["package app.other;", "", "class Caller { Object call() { return app.domain.Proxy.make(); } }"]);
+  assert.deepEqual(await declaredIn([local, caller], "List<String> items", "List"), { kind: "package", module: "java.util", name: "List" });
 });
 
 test("an annotation is unknown when the repository may run its code behind a platform type: a platform or unresolved supertype, an anonymous class, a lambda, a method reference, an aspect, or a source that does not parse", async () => {
@@ -228,7 +229,33 @@ test("an annotation is unknown when the repository may run its code behind a pla
     ["package app.domain;", "class Run { java.util.function.Supplier<String> task = String::new; }"],
     ["package app.domain;", "@org.aspectj.lang.annotation.Aspect", "class Watch {}"],
     ["package app.domain;", "class Broken {"],
+    ["package app.domain;", "import java.beans.EventHandler;", "class Run { Object make(Object owner) { return EventHandler.create(Runnable.class, owner, \"run\"); } }"],
+    ["package app.domain;", "class Run { Object make(Object owner) { return java.beans.EventHandler.create(Runnable.class, owner, \"run\"); } }"],
+    ["package app.domain;", "import java.lang.reflect.*;", "class Run { Object make() { return Proxy.newProxyInstance(null, new Class<?>[0], null); } }"],
+    ["package app.domain;", "import java.lang.invoke.MethodHandleProxies;", "class Run { Object make() { return MethodHandleProxies.asInterfaceInstance(Runnable.class, null); } }"],
+    ["package app.domain;", "class Run { Object make() throws Throwable { return java.lang.invoke.LambdaMetafactory.metafactory(null, null, null, null, null, null); } }"],
+    ["package app.domain;", "class Run { Object make(Object owner) { return EventHandler.create(Runnable.class, owner, \"run\"); } }"],
   ]) {
     assert.deepEqual(await declaredIn([java("src/main/java/app/domain/Extra.java", lines)], "List<String> items", "List"), { kind: "unknown" }, lines.slice(1).join(" "));
   }
+});
+
+test("a source of a JVM language no extractor reads makes every Java annotation unknown", async () => {
+  for (const path of ["src/main/kotlin/Repo.kt", "build.gradle.kts", "src/main/groovy/Repo.groovy", "src/main/scala/Repo.scala"]) {
+    assert.deepEqual(await declaredIn([{ path, content: "class Repo\n" }], "List<String> items", "List"), { kind: "unknown" }, path);
+  }
+});
+
+test("a call that reads a member past its platform root is marked past the root, and a call on the root itself is not", async () => {
+  const use = java("src/main/java/app/service/Out.java", ["package app.service;", "", "import java.util.Collections;", "", "class Out {", "  void run() { System.out.println(\"x\"); Collections.emptyList(); Collections.EMPTY_LIST.size(); java.util.Collections.emptyList(); java.lang.System.out.println(\"y\"); }", "}"]);
+  const system = { ...use, content: use.content.replace("import java.util.Collections;", "import java.util.Collections;\nimport java.lang.System;") };
+  const sites = [at(system, "System.out.println", "calls", "println"), at(system, "Collections.emptyList", "calls", "emptyList"), at(system, "Collections.EMPTY_LIST", "calls", "size"), at(system, "java.util.Collections", "calls", "emptyList", 2), at(system, "java.lang.System", "calls", "println", 2)];
+  const roots = await createJavaNameBindings(createJavaParser, [system]).rootOrigins(sites);
+  assert.deepEqual(roots.map((root) => (root.status === "complete" ? [root.value, root.pastRoot ?? false] : root.status)), [
+    [{ kind: "external", module: "java.lang" }, true],
+    [{ kind: "external", module: "java.util" }, false],
+    [{ kind: "external", module: "java.util" }, true],
+    [{ kind: "external", module: "java.util" }, false],
+    [{ kind: "external", module: "java.lang" }, true],
+  ]);
 });

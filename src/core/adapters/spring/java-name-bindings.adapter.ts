@@ -32,12 +32,12 @@ interface Spelled {
  * outside the snapshot may declare, two on-demand imports that may both offer the name, a variable that obscures a
  * type, a class the reader does not place) is `unknown`. Nothing comes from the graph.
  */
-export function createJavaNameBindings(parser: () => Promise<JavaParser>, sources: readonly SourceFile[]): ImportOrigins {
+export function createJavaNameBindings(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[] = sources.map(({ path }) => path)): ImportOrigins {
   const javaSources = sources.filter(({ path }) => isJavaSource(path));
   return {
     origins: async (sites) => sites.map((site) => unresolved(site)),
     rootBindings: (sites, signal) => createJavaRootBindings(parser(), sources)(sites, signal),
-    declaredTypes: createJavaDeclaredTypes(parser, sources),
+    declaredTypes: createJavaDeclaredTypes(parser, sources, paths),
     replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),
     rootOrigins: async (sites, signal) => {
       const results: RootOrigin[] = sites.map((site) => unresolved(site));
@@ -59,7 +59,7 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
           const file = files.get(site.file);
           if (file === undefined || unreadable.has(file)) continue;
           const root = rootOf(site, file, project);
-          if (root !== undefined) results[index] = { status: "complete", value: root.origin, ...(root.bare ? { bare: true as const } : {}), evidence: [{ path: site.file, line: site.line }] };
+          if (root !== undefined) results[index] = { status: "complete", value: root.origin, ...(root.bare ? { bare: true as const } : {}), ...(root.pastRoot ? { pastRoot: true as const } : {}), evidence: [{ path: site.file, line: site.line }] };
         }
       } finally {
         for (const tree of trees) tree.dispose();
@@ -73,9 +73,22 @@ function unresolved(site: { file: string; line: number }): Finding<ImportOrigin>
   return { status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] };
 }
 
-function rootOf(site: ResolvedNameSite, file: JavaFile, project: JavaProject): { origin: ImportOrigin; bare: boolean } | undefined {
+/**
+ * Where a site's spelled chain is rooted; `pastRoot` for a call whose receiver is not its root type itself but a member read
+ * below it (`System.out.println`, `Map.Entry.comparingByKey`), since Java records nothing the repository stores in a
+ * platform class's fields.
+ */
+function rootOf(site: ResolvedNameSite, file: JavaFile, project: JavaProject): { origin: ImportOrigin; bare: boolean; pastRoot: boolean } | undefined {
   const spelled = spelledAt(site, file.root);
   if (spelled === undefined) return undefined;
+  const found = chainRootOf(spelled, file, project);
+  if (found === undefined) return undefined;
+  const segments = spelled.chain.split(".");
+  const root = segments.findIndex((segment) => !PACKAGE_SEGMENT.test(segment));
+  return { ...found, pastRoot: site.kind === "calls" && segments.length - root > 2 };
+}
+
+function chainRootOf(spelled: Spelled, file: JavaFile, project: JavaProject): { origin: ImportOrigin; bare: boolean } | undefined {
   const enclosing = enclosingTypes(spelled.node, file, project);
   if (enclosing === undefined) return undefined;
   const segments = spelled.chain.split(".");

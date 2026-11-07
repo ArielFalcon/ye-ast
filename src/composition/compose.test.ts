@@ -783,6 +783,33 @@ test("a Java trace over a real index leaves a call on a platform-typed parameter
   assert.deepEqual(lambda.value.status === "partial" && lambda.value.cuts.map((cut) => cut.at[0]), ["src/Orders.java:11 items.add", "src/Orders.java:12 rest.getForObject"]);
 });
 
+/** The cuts a Java trace of `Use.entry` gives over a fresh repository holding `files`. */
+async function javaTraceCuts(name: string, files: Readonly<Record<string, string>>): Promise<readonly (readonly string[])[]> {
+  const root = join(workspace, name);
+  mkdirSync(root);
+  const run = (...args: string[]): string => execFileSync("git", args, { cwd: root, env: GIT_ENV, encoding: "utf8" }).trim();
+  run("init", "-q");
+  for (const [file, content] of Object.entries(files)) writeFileSync(join(root, file), content);
+  run("add", "-A");
+  run("commit", "-q", "-m", name);
+  const answer = await composeQueries({ scratchRoot }).trace.walk({ repo: root, repoId: name, revision: "HEAD", targets: [{ file: "Use.java", symbol: "Use.entry" }] });
+  assert.ok(answer.ok);
+  return answer.value.status === "partial" ? answer.value.cuts.map((cut) => [cut.kind, ...cut.at]) : [];
+}
+
+test("a Java trace keeps a call a cut when a dynamic proxy may implement its platform type, when a JVM source no extractor reads may, or when the call reads a platform class's field", async () => {
+  const proxy = ["import java.lang.Runnable;", "import java.beans.EventHandler;", "public class Use {", "  public void run() { System.out.println(\"REPOSITORY_RUN\"); }", "  public void entry(Runnable task) { task.run(); }", "  public static void main(String[] args) { Use owner = new Use(); owner.entry(EventHandler.create(Runnable.class, owner, \"run\")); }", "}", ""].join("\n");
+  const field = ["import java.lang.Runnable;", "public class Use {", "  private Runnable task;", "  public void run() { System.out.println(\"REPOSITORY_RUN\"); }", "  public void entry() { this.task.run(); }", "}", ""].join("\n");
+  const wiring = ["import java.lang.Runnable;", "import java.beans.EventHandler;", "import java.lang.reflect.Field;", "public class Wiring {", "  public static void main(String[] args) throws Exception {", "    Use owner = new Use();", "    Field field = Use.class.getDeclaredField(\"task\");", "    field.setAccessible(true);", "    field.set(owner, EventHandler.create(Runnable.class, owner, \"run\"));", "  }", "}", ""].join("\n");
+  const system = ["import java.lang.System;", "public class Use {", "  public void entry() { System.out.println(\"x\"); }", "  public static void main(String[] args) { System.setOut(new RepoStream()); new Use().entry(); }", "}", "class RepoStream extends java.io.PrintStream {", "  RepoStream() { super(new java.io.ByteArrayOutputStream()); }", "  public void println(String text) { System.err.println(\"REPOSITORY_PRINTLN\"); }", "}", ""].join("\n");
+  const kotlin = ["import java.lang.Runnable;", "class Use { void entry(Runnable task) { task.run(); } }", "class Other { void run() {} }", ""].join("\n");
+
+  assert.deepEqual(await javaTraceCuts("eventhandler", { "Use.java": proxy }), [["unresolved-link", "Use.java:5 task.run", "Use.java::Use.run"]]);
+  assert.deepEqual(await javaTraceCuts("reflectproxy", { "Use.java": field, "Wiring.java": wiring }), [["unresolved-link", "Use.java:5 task.run", "Use.java::Use.run"]]);
+  assert.deepEqual(await javaTraceCuts("systemout", { "Use.java": system }), [["unresolved-link", "Use.java:3 System.out.println", "Use.java::RepoStream.println"]]);
+  assert.deepEqual(await javaTraceCuts("kotlin", { "Use.java": kotlin, "Repo.kt": "class Repo: Runnable { override fun run() { println(\"repo\") } }\n" }), [["unresolved-link", "Use.java:2 task.run", "Use.java::Other.run"], ["no-extractor", "Repo.kt"]]);
+});
+
 /** Repository functions named like library members, so a member call settled by its name alone is a cut. */
 const HOMONYMS = ["export function push(): void {}", "export function test(): void {}", "export function set(): void {}", "export function save(): void {}", "export class Other {", "  save(): void {}", "}", ""].join("\n");
 

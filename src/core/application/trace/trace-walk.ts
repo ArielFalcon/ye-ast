@@ -425,7 +425,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       const roots = await origins.rootOrigins(sites, signal);
       for (const [index, { reference, name, named }] of rooted.entries()) {
         const root = roots[index];
-        const origin = root?.status === "complete" ? root.value : undefined;
+        const origin = root?.status === "complete" && root.pastRoot !== true ? root.value : undefined;
         if (origin?.kind === "external") await leafUnlessReplaced({ kind: "import", module: origin.module, name: reference.name }, { module: origin.module }, () => settleByName(reference, name, named, true));
         else if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, { path: reference.name.split("."), member: name }, () => settleByName(reference, name, named, true));
         else await settleByName(reference, name, named);

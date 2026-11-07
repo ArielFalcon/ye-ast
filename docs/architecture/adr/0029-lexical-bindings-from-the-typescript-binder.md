@@ -84,15 +84,21 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    lambda parameter, a local or loop variable, or a `private` field the file names only through `this` and never by
    reflection) states a type a single import names under a platform package is a leaf under that package. A repository
    type, a type variable, a type outside the platform packages (a dependency or generated code) and a name the strict
-   reading leaves unsettled stay unknown. Java needs no record of replaced roots, since source cannot rebind a class's
-   methods; repository code reaches a platform type only by subtyping, so every annotation stays unknown when a
+   reading leaves unsettled stay unknown. Java records no replaced roots, since source cannot rebind a class's
+   methods; repository code reaches a platform type through a subtype, a dynamic proxy or an object stored in a platform
+   class's field, so every annotation stays unknown when a
    repository type names a supertype outside the repository (its own supertypes are not in the sources), or the sources
-   hold an anonymous class, a lambda or a method reference (an implementation of an interface they do not state), an
-   aspect, or a Java source that does not parse. The implicit supertypes of classes, enums and records
-   (`java.lang.Object`, `Enum` and the interfaces it implements, `Record`) stay unknown. Reflection from another class does not
-   weaken the proof: the runtime checks every reflective write against the field's declared type, so the field still
-   holds a platform object or a repository subtype, which the heritage rule above already keeps unknown (a write through
-   `sun.misc.Unsafe` is outside the promise, as an `any` cast is in TypeScript). The leaf's evidence is the module or the global it is rooted at, as for every other
+   hold an anonymous class, a lambda or a method reference (an implementation of an interface they do not state), a JDK
+   API that implements an interface at run time (`java.lang.reflect.Proxy`, `java.beans.EventHandler`,
+   `java.lang.invoke.MethodHandleProxies`, `java.lang.invoke.LambdaMetafactory`, named through an import, a qualified
+   name, a wildcard import or a name no import settles), an aspect, a Java source that does not parse, or a source of a
+   JVM language no extractor reads (`.kt`, `.kts`, `.groovy`, `.scala`). The implicit supertypes of classes, enums and records
+   (`java.lang.Object`, `Enum` and the interfaces it implements, `Record`) stay unknown. Reflection keeps the declared type: the runtime checks every
+   reflective write against the field's type. A dynamic proxy is a value of that type that runs repository code, so the
+   JDK APIs that make one fire the guard above, wherever their value is stored (a write through `sun.misc.Unsafe` is
+   outside the promise, as an `any` cast is in TypeScript). A Java root proves where a call's chain starts, not what it
+   runs past the root: Java records nothing the repository stores in a platform class's fields (`System.setOut`), so a
+   call that reads a member between its root and its own member (`System.out.println`) is not settled by its root. The leaf's evidence is the module or the global it is rooted at, as for every other
    leaf; the answer gains no field, so the declared type itself is not written.
 
 ## Consequences

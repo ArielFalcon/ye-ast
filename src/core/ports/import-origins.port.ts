@@ -133,5 +133,8 @@ export type RootBinding =
   | { kind: "this"; member?: string }
   | { kind: "unknown" };
 
-/** Reads the import bindings of one snapshot; composition supplies it, so no use case imports a parser. */
-export type ImportOriginsReader = (sources: readonly SourceFile[]) => ImportOrigins;
+/**
+ * Reads the import bindings of one snapshot; composition supplies it, so no use case imports a parser. `paths` is every path
+ * of the snapshot's scope, files no reader parses included; the sources' own paths when not given.
+ */
+export type ImportOriginsReader = (sources: readonly SourceFile[], paths?: readonly string[]) => ImportOrigins;

@@ -89,7 +89,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             const file = sources.get(path);
             return file === undefined ? NOTHING_DECLARED : declaredIn(file);
           };
-          const origins = deps.importOrigins(head.tree.sources);
+          const origins = deps.importOrigins(head.tree.sources, head.tree.export.files.map(({ path }) => path).filter(head.selected));
           const edgeTargets = createEdgeTargets({ origins, store, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: head.tree.sources } });
           let proven: ReturnType<typeof retainedRelations> | undefined;
           const memberProofs = () => (proven ??= retainedRelations(deps.relations, head.prepared, head.tree, request));

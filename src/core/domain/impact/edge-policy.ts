@@ -103,7 +103,12 @@ export function edgeConfidence({ confidence, provenance }: EdgeScore): number {
   return provenance === "heuristic" ? EDGE_POLICY.unscoredHeuristicConfidence : 1;
 }
 
-export type RootOrigin = Finding<ImportOrigin> & { bare?: true };
+/**
+ * `bare`: the site spells its root alone. `pastRoot`: a call that reads a member, or calls, between its root and its own
+ * member (`System.out.println`), under a reader that records nothing the repository stores there, so the root proves where
+ * the chain starts and not what the call runs.
+ */
+export type RootOrigin = Finding<ImportOrigin> & { bare?: true; pastRoot?: true };
 
 /** What an edge the graph resolved really reaches: its own target, nothing, or another declaration the source proves. */
 export type EdgeVerdict<D> = { kind: "keep" } | { kind: "drop" } | { kind: "redirect"; to: D };
