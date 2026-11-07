@@ -66,8 +66,9 @@ export const NOTHING: KnownShape = Object.freeze({
 });
 
 /**
- * Digests of what an operation exchanges beside its success body, each differing exactly when that part differs: its
- * request, its non-success responses, and its success responses without their schemas (status, media types, headers).
+ * Digests of what an operation exchanges beside its payload shapes, each differing exactly when that part differs: its
+ * request without the schemas its shapes read (media types, parameter serialization, consumed media), its non-success
+ * responses, and its success responses without their schemas (status, media types, headers).
  */
 export interface ExchangeDigests {
   request: string;

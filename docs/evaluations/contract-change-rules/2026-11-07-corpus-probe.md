@@ -96,6 +96,43 @@ the corpus generator turns into `@JsonInclude(NON_NULL)` or a validator); `unkno
 that became required, or a rejection the request vocabulary cannot state), `unclassified-difference` 8 at a request
 schema keyword (6 extensions, 2 `id`) and 1 at a request the comparison finds equal.
 
+## Structurally equal refactors
+
+The three altered parts left above were read again, schema by schema. None is a schema renamed behind its `$ref`, and
+in each the base and head shapes are equal, so no difference is the right answer:
+
+| Pair | Operation, part | Refactor |
+|---|---|---|
+| petclinic `83fede1b..2db3bcb1` | `GET /vets`, response | `Vet` split into an `allOf` of `VetFields` and its `id` |
+| restaurants `7e646d66..4f697b4b` | `POST /restaurants`, request | `CreateRestaurantRequest` became an `allOf` of `RestaurantData` (its former body) and an empty object |
+| restaurants `9fb6441f..d96ccaca` | `GET /restaurants`, response | the inline `metadata` object moved behind `$ref: Metadata` |
+
+The shape reader follows every reference and merges every open `allOf`, so the derivation already compares through
+them. The request was the exception: its digest held the schemas the request shapes compare, and a refactor they found
+equal still raised the `unclassified-difference` frontier. The request digest now leaves those schemas out, as the
+success envelope does: before and after, on the 93 pairs, the only output that changed is that frontier, now gone.
+
+What the `impact` family reports is unchanged: its digest follows the document as written, so the two responses are
+still `altered` there. With every reference replaced by its target, 1 of its 408 altered parts would read as equal.
+
+Across the pairs, 9 references of a schema point at another schema at the head; 1 keeps the structure, and 8 change it
+and are classified as any change is. 16 places moved between an inline schema and a reference; 5 keep the structure.
+None of the 44 `response-error-changed` differences is a rename alone (36 change a schema, 8 a status code).
+
+## Keywords beside a reference
+
+Before, a reference with any keyword beside it other than documentation was `unknown` at its place: 100 of the 134
+response `unknown-shape` frontiers on the 93 pairs. Of those, 84 were `type: object` beside a reference to an object
+schema of the same file (`GeoFeature.properties` and `GeoFeature.geometry` in the restaurants service), which every
+reading of the document agrees on; they read as the target now. That exposed 3 differences, each checked against the
+documents: `response-property-enum-value-added` at `features[].properties.cuisineType` of `GET
+/restaurants/countries/{countryCode}`, where `CuisineType` gained values (`10f284b6..a3a5a8cd` nine, `a3a5a8cd..f651bcc8`
+`FUSION`, `85eac321..81b268a3` `KOREAN`), each with its hypothesis. Nothing else changed.
+
+The 16 left are `nullable: true` beside `$ref: '#/components/schemas/GeolocationArea'` at `UserGeolocation.country` and
+`UserGeolocation.region` of the users service, an OpenAPI 3.1.1 document. OpenAPI 3.0 ignores the keyword, 3.1 combines
+it with the target (which admits no `null`), and code generators commonly honour it, so the place stays `unknown`.
+
 ## What the probe changed in the design
 
 - Extensions were first read as documentation. The corpus showed generator extensions that change what the wire
