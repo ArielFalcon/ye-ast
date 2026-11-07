@@ -7,15 +7,23 @@ import type { FlowStep } from "../../domain/contracts/consumer-flow.ts";
  */
 export type MethodResult = "same" | "element" | "returns" | "flattened-returns" | "none";
 
-/** What a method does with the value it is called on, by receiver kind; `callback` names the argument that receives the element or the value, and which of its parameters do. */
+/** What a callback parameter holds: one element of the receiver array, or the receiver array itself. A parameter that holds neither (the index) is not listed. */
+export interface CallbackParameter {
+  index: number;
+  holds: "element" | "array";
+}
+
+/** What a method does with the value it is called on, by receiver kind; `callback` names the argument that receives the value, and what each of its parameters holds. */
 export interface MethodRow {
   receiver: "array" | "container";
-  callback?: { argument: number; parameters: readonly number[] };
+  callback?: { argument: number; parameters: readonly CallbackParameter[] };
   result: MethodResult;
 }
 
 const array = (result: MethodResult, callback?: MethodRow["callback"]): MethodRow => ({ receiver: "array", result, ...(callback === undefined ? {} : { callback }) });
-const predicate = array("none", { argument: 0, parameters: [0] });
+const iteratee = { argument: 0, parameters: [{ index: 0, holds: "element" }, { index: 2, holds: "array" }] } as const satisfies MethodRow["callback"];
+const comparator = { argument: 0, parameters: [{ index: 0, holds: "element" }, { index: 1, holds: "element" }] } as const satisfies MethodRow["callback"];
+const predicate = array("none", iteratee);
 
 /**
  * The methods of the language's arrays, read when the carried value is an array that holds the change in its elements:
@@ -23,13 +31,13 @@ const predicate = array("none", { argument: 0, parameters: [0] });
  * table is not followed: `reduce` binds the accumulator to the callback's return, and `fill` and `copyWithin` replace elements.
  */
 export const METHODS: ReadonlyMap<string, MethodRow> = new Map<string, MethodRow>([
-  ["map", array("returns", { argument: 0, parameters: [0] })],
-  ["flatMap", array("flattened-returns", { argument: 0, parameters: [0] })],
-  ["filter", array("same", { argument: 0, parameters: [0] })],
-  ["sort", array("same", { argument: 0, parameters: [0, 1] })],
-  ["toSorted", array("same", { argument: 0, parameters: [0, 1] })],
-  ["find", array("element", { argument: 0, parameters: [0] })],
-  ["findLast", array("element", { argument: 0, parameters: [0] })],
+  ["map", array("returns", iteratee)],
+  ["flatMap", array("flattened-returns", iteratee)],
+  ["filter", array("same", iteratee)],
+  ["sort", array("same", comparator)],
+  ["toSorted", array("same", comparator)],
+  ["find", array("element", iteratee)],
+  ["findLast", array("element", iteratee)],
   ["findIndex", predicate],
   ["findLastIndex", predicate],
   ["some", predicate],

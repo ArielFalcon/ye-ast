@@ -5,7 +5,7 @@ import type { ConsumerFlowReader } from "../../ports/consumer-flow.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { lineOf } from "./http-call-sites.adapter.ts";
 import { buildProgram, resolverKey, type Program, type Unit } from "./consumer-flow.index.ts";
-import { lineage, methodDeclared } from "./consumer-flow.classes.ts";
+import { lineage, memberDeclaration, methodDeclared } from "./consumer-flow.classes.ts";
 import { declaredInput, memberSite, Walker, type Held } from "./consumer-flow.walker.ts";
 
 /**
@@ -50,12 +50,17 @@ function followInput(repo: string, unit: Unit, site: Extract<CarrierSite, { kind
   return { uses: [], next: [{ carrier: { site: memberSite(repo, unit, cls, site.owner, member.name.text), path }, hops }], frontiers: [] };
 }
 
-/** A component method a template calls, found on the component class or the nearest base that declares it. */
+/** A component method a template calls: the nearest declaration of its name along the class lineage, read when it is a method and a frontier when it is anything else. */
 function followMethodParameter(repo: string, program: Program, unit: Unit, site: Extract<CarrierSite, { kind: "method-parameter" }>, path: Carrier["path"]): FlowResult {
   const cls = unit.classes.get(site.owner);
   for (const held of cls === undefined ? [] : lineage(program, { unit, cls })) {
+    const declaration = memberDeclaration(held.cls, site.method);
+    if (declaration === undefined) continue;
     const method = methodDeclared(held.cls, site.method);
-    if (method === undefined) continue;
+    if (method === undefined) {
+      const at = { path: held.unit.file, line: lineOf(held.unit.tree, declaration) };
+      return { uses: [], next: [], frontiers: [{ at, cause: "unmodelled-flow", reason: "unresolved", detail: "component method is not a function", hops: [] }] };
+    }
     const walker = new Walker(repo, program, held.unit);
     walker.startFunctionParameter(method, site.index, path);
     return { uses: ordered(walker.uses), next: ordered(walker.next), frontiers: ordered(walker.frontiers) };

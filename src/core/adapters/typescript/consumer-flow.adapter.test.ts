@@ -721,6 +721,58 @@ test("a method of the language's arrays called on the carried array is read from
   assert.deepEqual(frontiers(result), []);
 });
 
+test("the original-array parameter of an array callback carries the receiver's own change, in an inline callback of any row, and the index parameter carries none", async () => {
+  const file = plain(["o.items.forEach((i, n, all) => show(all[0].owner.name))", "o.items.map((i, n, all) => all.length)", "o.items.some((i, n) => show(n))"]);
+  const result = await follow([file], paramO, "items[].owner");
+
+  assert.deepEqual(uses(result), ["2 [].owner.name|[].owner []"]);
+  assert.deepEqual(frontiers(result), []);
+});
+
+test("an array callback written as a named function receives the element and the original array at their parameters, and one that declares fewer parameters loses nothing", async () => {
+  const file = source("p.ts", [
+    "function inspect(item, index, all) { show(all[0].owner.name) }",
+    "function first(item) { show(item.owner.name) }",
+    "function use(o: Order) {",
+    "  o.items.forEach(inspect)",
+    "  o.items.forEach(first)",
+    "}",
+  ]);
+  const result = await follow([file], { ...paramO, line: at(3) }, "items[].owner");
+
+  assert.deepEqual(next(result), ["parameter inspect#0@1 owner", "parameter inspect#2@1 [].owner", "parameter first#0@2 owner"]);
+  assert.deepEqual(frontiers(result), []);
+});
+
+test("a callback that gathers its parameters in a rest parameter is a frontier, never a binding of the array of arguments", async () => {
+  const file = plain(["o.items.forEach((...args) => show(args[0].owner.name))"]);
+  const result = await follow([file], paramO, "items[].owner");
+
+  assert.deepEqual([uses(result), frontiers(result)], [[], ["2 unmodelled-flow:parameter position"]]);
+});
+
+test("a callback expression the reader cannot resolve is one frontier at the call however many parameters it receives", async () => {
+  const file = plain(["o.items.sort(makeComparator())", "o.items.forEach(makeVisitor())"]);
+  const result = await follow([file], paramO, "items[].owner");
+
+  assert.deepEqual(frontiers(result).map((line) => line.slice(0, 1)), ["2", "3", "3"]);
+});
+
+test("a template call enters the nearest declaration of the method name along the class lineage: a subclass field or accessor that shadows a base method is a frontier, never the base method", async () => {
+  const base = source("base.ts", ["export class Base {", "  label(order: Order) { return order.owner.name }", "}"]);
+  const page = reader(
+    ["class Page extends Base {", "  label = helper", "}", "class Getter extends Base {", "  get label() { return helper }", "}", "class Arrow extends Base {", "  label = (order: Order) => order.owner.title", "}"],
+    "import { Base } from './base'\n",
+  );
+  const site = (owner: string): CarrierSite => ({ kind: "method-parameter", repo: "repo", file: "page.ts", owner, method: "label", index: 0 });
+
+  for (const [owner, line] of [["Page", 3], ["Getter", 6]] as const) {
+    const shadowed = await follow([base, page], site(owner), "owner");
+    assert.deepEqual([uses(shadowed), frontiers(shadowed)], [[], [`${line} unmodelled-flow:component method is not a function`]]);
+  }
+  assert.deepEqual(uses(await follow([base, page], site("Arrow"), "owner")), ["9 owner.title|owner []"]);
+});
+
 test("a method of the callee table that holds no row for the carried value stays a frontier: an accumulator, an in-place replacement, a method the language's arrays do not hold", async () => {
   const file = plain(["o.items.reduce((a, i) => a, 0)", "o.items.fill(null)", "o.items.customMethod()", "o.name.map((i) => i.owner)"]);
   const result = await follow([file], paramO, "items[].owner");

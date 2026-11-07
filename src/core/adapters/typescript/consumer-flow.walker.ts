@@ -126,6 +126,7 @@ export class Walker {
   readonly frontiers: Held<FlowFrontier>[] = [];
   private readonly visited = new Set<string>();
   private readonly reported = new Set<string>();
+  private readonly reportedFrontiers = new Set<string>();
   private readonly clauseTests = new WeakMap<ts.CaseOrDefaultClause, ClauseTest>();
   private readonly callbackResults = new Map<FunctionNode, MethodResult>();
 
@@ -261,6 +262,9 @@ export class Walker {
   }
 
   private frontier(node: ts.Node, cause: FrontierCause, detail: string | undefined, t: Trail, reason: UnknownReason = "unresolved"): void {
+    const key = `${node.pos}\0${cause}\0${detail}\0${reason}\0${JSON.stringify(t.origin)}\0${JSON.stringify(t.hops)}`;
+    if (this.reportedFrontiers.has(key)) return;
+    this.reportedFrontiers.add(key);
     this.frontierAt(node, cause, detail, t.hops, reason);
   }
 
@@ -438,11 +442,11 @@ export class Walker {
         : attached;
     const callback = row.callback === undefined ? undefined : call.arguments[row.callback.argument];
     if (callback !== undefined && row.callback !== undefined) {
-      if (isFunctionNode(callback)) {
-        this.callbackResults.set(callback, row.result);
-        for (const index of row.callback.parameters) this.bindLambda(callback, index, element);
-      } else {
-        for (const index of row.callback.parameters) this.passTo(unwrap(callback), index, call, this.hopped(element, "argument", call));
+      if (isFunctionNode(callback)) this.callbackResults.set(callback, row.result);
+      for (const { index, holds } of row.callback.parameters) {
+        const held = this.hopped(holds === "element" ? element : attached, "argument", call);
+        if (isFunctionNode(callback)) this.bindLambda(callback, index, held);
+        else this.passToCallback(unwrap(callback), index, call, held);
       }
     }
     if (row.result === "same") this.read(call, this.hopped(attached, "pipe", call));
@@ -677,7 +681,15 @@ export class Walker {
 
   private bindLambda(fn: FunctionNode, index: number, t: Trail): void {
     const parameter = fn.parameters[index];
+    if (parameter?.dotDotDotToken !== undefined) return this.frontier(fn, "unmodelled-flow", "parameter position", t);
     if (parameter !== undefined) this.bind(parameter.name, fn, t);
+  }
+
+  /** The value reaches the parameter at `index` of a callback that is not written inline; a callback that declares no such parameter never receives it. */
+  private passToCallback(callee: ts.Expression, index: number, call: ts.Node, t: Trail): void {
+    const target = this.resolveFunction(callee);
+    if (target?.kind === "function" && target.named.node.parameters.length <= index) return;
+    this.passTo(callee, index, call, t);
   }
 
   /** The value is an argument of `call` at the top of the chain. */
