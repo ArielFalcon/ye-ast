@@ -61,17 +61,47 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
 7. Trace's receiver bindings are a consumer: the binding of a receiver's root name, and of every store into a receiver
    bound in the file (its initializer and each assignment), comes from the resolver. A receiver whose root is dynamic
    stays a cut.
-8. Admitted for trace slice 2's declared external annotations (S5), not yet used: a name in a type position (a type
-   annotation's type reference, an `implements` or `extends` clause) may be looked up as a name, through
-   `getSymbolAtLocation` on that identifier, so a declared type can be told apart from a library, primitive or package
-   one. It stays no type API: no `getTypeAtLocation`, no `getTypeOfSymbol`, no inference, and the `typeCount` test is to
-   cover the type positions when S5 adds them. Until then the resolver answers `none` for a name in a type position.
-   The root bindings of a use (`ImportOrigins.rootBindings`, read by outline) already answer a type name, without the
-   resolver: by the type scopes written around it (a type parameter, an `infer`, a mapped type's key, a declaration in an
-   enclosing block, namespace or the file), then the file's imports and the language's globals.
-9. Admitted for S5, not yet used: a receiver annotated with a library, primitive or package type is an external leaf
-   carrying the declared type as its evidence only when no in-scope repository type extends or implements that name and
-   the name is not imported from one of the repository's own packages. A type declared nowhere (generated code) stays unknown.
+8. A name in a type position (a type annotation's type reference, an `implements` or `extends` clause) is looked up
+   as a name, so a declared type can be told apart from a library, primitive or package one. It stays no type API: no
+   `getTypeAtLocation`, no `getTypeOfSymbol`, no inference. The lookup is the root bindings' (`ImportOrigins`), shared by
+   outline and trace slice 2's declared external annotations (S5): the type scopes written around the name (a type
+   parameter, an `infer`, a mapped type's key, a declaration in an enclosing block, namespace or the file), then the
+   file's imports and the language's globals. The resolver itself still answers `none` for a name in a type position,
+   and the `typeCount` test still holds: no type is created.
+9. A receiver annotated with a library, primitive or package type is an external leaf (trace slice 2, S5) only when no
+   in-scope repository class or interface extends or implements that type and the type is not imported from one of the
+   repository's own packages (the module resolver never resolves those to a package). A heritage name is followed
+   through `const` aliases, type aliases and imports of the repository's own files to a repository class, interface or
+   type literal, or to a library or package type. Heritage that reaches neither (a mixin call, a parameter, a `let`, a
+   dynamic scope, a deeper chain, a source that does not parse) proves nothing about any type, so every annotation stays
+   unknown in that snapshot. A type declared nowhere (generated code) stays unknown. A field annotation (`this.r`) holds
+   only for a field the language keeps inside its class, a `#name` or a TypeScript `private` field or constructor
+   parameter property, while the class's `this` never escapes and the class names the field through no other receiver
+   (a key no literal states, a rest or a reflecting call on another receiver may name every field, and is not resolved);
+   a `protected`, `public` or unmodified field stays unknown, since a subclass, a superclass method or another module
+   could write it, and no class hierarchy is read across files. In Java (trace slice 2, S6) the same proof reads the
+   project's one name resolver (`JavaProject.bindName`, strict): a receiver whose one declaration (a parameter, a typed
+   lambda parameter, a local or loop variable, or a `private` field the file names only through `this` and never by
+   reflection) states a type a single import names under a platform package is a leaf under that package. A repository
+   type, a type variable, a type outside the platform packages (a dependency or generated code) and a name the strict
+   reading leaves unsettled stay unknown. Java records no replaced roots, since source cannot rebind a class's
+   methods; repository code reaches a platform type through a subtype, a dynamic proxy or an object stored in a platform
+   class's field, so every annotation stays unknown when a
+   repository type names a supertype outside the repository (its own supertypes are not in the sources), or the sources
+   hold an anonymous class, a lambda or a method reference (an implementation of an interface they do not state), a JDK
+   API that implements an interface at run time (`java.lang.reflect.Proxy`, `java.beans.EventHandler`,
+   `java.lang.invoke.MethodHandleProxies`, `java.lang.invoke.LambdaMetafactory`, named through an import, a qualified
+   name, a wildcard import or a name no import settles), an aspect, a Java source that does not parse, or a source of a
+   JVM language no extractor reads (`.kt`, `.kts`, `.groovy`, `.scala`). The implicit supertypes of classes, enums and records
+   (`java.lang.Object`, `Enum` and the interfaces it implements, `Record`) stay unknown. Reflection keeps the declared type: the runtime checks every
+   reflective write against the field's type. A dynamic proxy is a value of that type that runs repository code, so the
+   JDK APIs that make one fire the guard above, wherever their value is stored (a write through `sun.misc.Unsafe` is
+   outside the promise, as an `any` cast is in TypeScript). A root, in Java as in TypeScript, proves where a call's chain
+   starts, not what it runs past the root: nothing records what the repository stores in a platform class's fields or a
+   package's or global's members (`System.setOut`, `other.setLogger`), so a call that reads a member between its root and
+   its own member (`System.out.println`, `other.logger.flush`, `document.body.appendChild`) is not settled by its root,
+   whether the index left it pending or resolved it into an edge: trace keeps such an edge instead of dropping it. The leaf's evidence is the module or the global it is rooted at, as for every other
+   leaf; the answer gains no field, so the declared type itself is not written.
 
 ## Consequences
 
@@ -85,8 +115,9 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
 - Decision 9 trusts a declaration, not a value. TypeScript types are structural: a repository object that has the
   members of a library type can be passed where that type is declared without extending or implementing it, and an
   `any` or a cast can put any value there. A receiver declared as such a type is reported external although it may run
-  repository code; the guards of decision 9 only catch the nominal cases. The owner accepted this limitation with the
-  decision.
+  repository code; the guards of decision 9 only catch the nominal cases. The same holds for a TypeScript `private` field
+  written from outside its class through an `any` or a cast (`(page as any).cache.get = f`). The owner accepted this
+  limitation with the decision.
 
 ## Not decided here
 

@@ -320,3 +320,185 @@ test("a direct eval, strict or not, in the scope of a local or in a scope inside
     "}",
   ])).receiverBindings.map(({ receiver }) => receiver), ["c"]);
 });
+
+test("a receiver declared once with one type, a parameter, a local no store binds, a field or a constructor property, is held by that annotation", async () => {
+  assert.deepEqual((await read([
+    "import { Router } from '@angular/router';",
+    "export class Page {",
+    "  private label: string = '';",
+    "  constructor(private router: Router) {}",
+    "  go(list: readonly number[], cache: (Map<string, number>) | null): void {",
+    "    this.router.navigate([]);",
+    "    this.label.trim();",
+    "    list.at(0);",
+    "    cache.get('a');",
+    "    let pending: Router;",
+    "    pending.navigate([]);",
+    "    const items: unknown[] = [];",
+    "    items.push(1);",
+    "  }",
+    "}",
+  ])).receiverBindings, [
+    { line: 6, column: 5, receiver: "router", member: "navigate", holds: { kind: "annotated", type: "Router", line: 4, column: 31 } },
+    { line: 7, column: 5, receiver: "label", member: "trim", holds: { kind: "annotated", type: "string", line: 3, column: 18 } },
+    { line: 8, column: 5, receiver: "list", member: "at", holds: { kind: "annotated", type: "Array", line: 5, column: 21 } },
+    { line: 9, column: 5, receiver: "cache", member: "get", holds: { kind: "annotated", type: "Map", line: 5, column: 39 } },
+    { line: 11, column: 5, receiver: "pending", member: "navigate", holds: { kind: "annotated", type: "Router", line: 10, column: 18 } },
+    { line: 13, column: 5, receiver: "items", member: "push", holds: { kind: "literal", type: "Array" } },
+  ]);
+  assert.deepEqual((await read(["export class Label {", "  private text: string;", "  #mark: string;", "  set(value: string): void { this.text = value; this.text.trim(); this.#mark.trim(); }", "}"])).receiverBindings, [
+    { line: 4, column: 49, receiver: "text", member: "trim", holds: { kind: "annotated", type: "string", line: 2, column: 17 } },
+    { line: 4, column: 67, receiver: "#mark", member: "trim", holds: { kind: "annotated", type: "string", line: 3, column: 10 } },
+  ]);
+});
+
+test("a destructured, untyped, any, union, function-typed, getter or static receiver, one declared twice or exported, one that escapes or is written through, or one a direct eval or a with body may write is held by no annotation", async () => {
+  assert.deepEqual((await read([
+    "import { Router } from '@angular/router';",
+    "class Repo { navigate(): void {} }",
+    "export class Page {",
+    "  private get current(): Router { return undefined!; }",
+    "  private shared: Router;",
+    "  private static shared: Router;",
+    "  private static only: Router;",
+    "  run({ nested }: { nested: Router }, plain, loose: any, either: Router | Repo, call: () => void): void {",
+    "    nested.navigate([]);",
+    "    plain.navigate([]);",
+    "    loose.navigate([]);",
+    "    either.navigate([]);",
+    "    call.call(undefined);",
+    "    this.current.navigate([]);",
+    "    this.shared.navigate([]);",
+    "  }",
+    "  static reset(): void { this.only.navigate([]); }",
+    "}",
+    "export function scoped(target: Router, scope: object): void {",
+    "  with (scope) { target = other; }",
+    "  target.navigate([]);",
+    "}",
+  ])).receiverBindings, []);
+  assert.deepEqual((await read(["import { Router } from '@angular/router';", "var twice: Router;", "var twice: Router;", "twice.navigate([]);"])).receiverBindings, []);
+  assert.deepEqual((await read([
+    "import { keep } from './keep';",
+    "export function escapes(param: string[]): string[] {",
+    "  const passed: string[] = [];",
+    "  keep(passed);",
+    "  passed.push('a');",
+    "  const patched: string[] = [];",
+    "  patched.push = keep;",
+    "  patched.push('a');",
+    "  param.push('a');",
+    "  shared.push('a');",
+    "  return param;",
+    "}",
+    "export const shared: string[] = [];",
+    "export class Holder {",
+    "  private passed: string[] = [];",
+    "  private patched: string[] = [];",
+    "  go(): void {",
+    "    keep(this.passed);",
+    "    this.passed.push('a');",
+    "    this.patched.push = keep;",
+    "    this.patched.push('a');",
+    "  }",
+    "}",
+  ])).receiverBindings, []);
+  assert.deepEqual((await read([
+    "import { Router } from '@angular/router';",
+    "export function patched(router: Router): void {",
+    "  eval('router = other');",
+    "  router.navigate([]);",
+    "}",
+    "export class Patched {",
+    "  private router: Router;",
+    "  go(): void { eval('this.router = other'); this.router.navigate([]); }",
+    "}",
+  ])).receiverBindings, []);
+});
+
+test("a public, protected or unmodified field, which a subclass, a superclass method or another module can write, is held by no annotation", async () => {
+  assert.deepEqual((await read([
+    "import { keep } from './keep';",
+    "export class Page { cache: Map<string, string> = new Map(); run(): void { this.cache.get('k'); } }",
+    "export class Sub extends Page { patch(): void { this.cache.get = keep; } }",
+  ])).receiverBindings, []);
+  assert.deepEqual((await read([
+    "import { keep } from './keep';",
+    "class Base { patch(): void { const self = this as any; self.cache.get = keep; } }",
+    "export class Page extends Base { protected cache: Map<string, string> = new Map(); run(): void { super.patch(); this.cache.get('k'); } }",
+  ])).receiverBindings, []);
+  assert.deepEqual((await read([
+    "import { keep } from './keep';",
+    "export class Page { public cache: Map<string, string> = new Map(); run(): void { this.cache.get('k'); } }",
+    "new Page().cache.get = keep;",
+  ])).receiverBindings, []);
+});
+
+test("a private field the class reaches through another receiver than its own `this` is held by no annotation", async () => {
+  assert.deepEqual((await read([
+    "import { keep } from './keep';",
+    "export class Page {",
+    "  private cache: Map<string, string> = new Map();",
+    "  run(): void { this.cache.get('k'); }",
+    "  static patch(page: Page): void { page.cache.get = keep; }",
+    "}",
+    "export class Held {",
+    "  #cache: Map<string, string> = new Map();",
+    "  run(): void { this.#cache.get('k'); }",
+    "  copy(other: Held): void { other.#cache.get = keep; }",
+    "}",
+    "export class Spread {",
+    "  private cache: Map<string, string> = new Map();",
+    "  run(): void { this.cache.get('k'); }",
+    "  copy(other: Spread): void { const { cache } = other; cache.get = keep; }",
+    "}",
+    "export class Indexed {",
+    "  private cache: Map<string, string> = new Map();",
+    "  run(): void { this.cache.get('k'); }",
+    "  copy(other: Indexed): void { other['cache'].get = keep; }",
+    "}",
+    "export class Nested {",
+    "  private cache: Map<string, string> = new Map();",
+    "  run(): void { this.cache.get('k'); const patch = function (this: Nested) { this.cache.get = keep; }; keep(patch); }",
+    "}",
+  ])).receiverBindings, []);
+});
+
+test("a private field of a class that indexes, destructures or reflects on another receiver by a key no literal states is held by no annotation", async () => {
+  const reaches = [
+    "static mutate(other: Page0): void { const key = 'cache'; other[key].get = keep; }",
+    "static mutate(other: Page1): void { other[`cache`].get = keep; }",
+    "static mutate(other: Page2, key: string): void { other[String(key)].get = keep; }",
+    "static mutate(other: Page3, key: 'cache'): void { const { [key]: found } = other; found.get = keep; }",
+    "static mutate(other: Page4): void { const { ...rest } = other; keep(rest); }",
+    "static mutate(other: Page5, key: string): void { Reflect.get(other, key).get = keep; }",
+    "static mutate(other: Page6, key: string): void { Reflect.set(other, key, keep); }",
+    "static mutate(other: Page7, key: string): void { Object.defineProperty(other, key, { value: keep }); }",
+    "run2(): void { const patch = function (this: Page8) { const key = 'cache'; this[key].get = keep; }; keep(patch); }",
+  ];
+  const classes = reaches.map((reach, index) => `export class Page${index} { private cache: Map<string, string> = new Map(); run(): void { this.cache.get('k'); } ${reach} }`);
+  assert.deepEqual((await read(["import { keep } from './keep';", ...classes])).receiverBindings, []);
+  assert.deepEqual((await read([
+    "import { keep } from './keep';",
+    "export class Page { constructor(private cache: Map<string, string>) {} run(): void { this.cache.get('k'); } static mutate(other: Page): void { const key = 'cache'; other[key].get = keep; } }",
+  ])).receiverBindings, []);
+  assert.deepEqual((await read([
+    "import { keep } from './keep';",
+    "export class Page { private cache: Map<string, string> = new Map(); run(): void { this.cache.get('k'); } static mutate(other: { [key: string]: Map<string, string> }): void { other['labels'].get = keep; other[0].get = keep; Reflect.get(other, 'labels'); } }",
+  ])).receiverBindings.map(({ receiver }) => receiver), ["cache"]);
+});
+
+test("a field of a class whose own `this` escapes it, is computed into, assigned into or destructured is held by no annotation", async () => {
+  const escapes = [
+    "const self = this; self.r.navigate = keep;",
+    "this['r'].navigate = keep;",
+    "Object.assign(this, { r: { navigate: keep } });",
+    "keep(this);",
+    "const copy = { ...this }; keep(copy);",
+    "const { r } = this; r.navigate = keep;",
+    "const self = (): Page => this; self().r.navigate = keep;",
+  ];
+  const classes = escapes.map((escape, index) => `export class Page${index} { private r: Router; run(): void { ${escape} this.r.navigate([]); } }`);
+  assert.deepEqual((await read(["import { Router } from '@angular/router';", "import { keep } from './keep';", ...classes])).receiverBindings, []);
+  assert.deepEqual((await read(["import { Router } from '@angular/router';", "export class Page { private r: Router; run(): Page { this.r.navigate([]); return this; } }"])).receiverBindings, []);
+});

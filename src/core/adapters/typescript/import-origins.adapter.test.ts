@@ -241,7 +241,7 @@ test("an import-equals require binds its name to the module it names, unless the
 
 test("a reader parses a file once however many times its sites are asked, and answers each ask the same", async () => {
   const parsed: string[] = [];
-  const reader = createImportOrigins(SOURCES, (file) => (parsed.push(file.path), sourceTree({ ...file }, ts.ScriptTarget.Latest, true)));
+  const reader = createImportOrigins(SOURCES, (file) => (parsed.push(file.path), sourceTree({ ...file }, ts.ScriptTarget.Latest)));
   const ask = (line: number, name: string) => reader.origins([{ file: PAGE.path, line, column: 1, name, fullName: name, kind: "calls" }]);
 
   const answers = [await ask(11, "Store"), await ask(12, "helper"), await ask(11, "Store")];
@@ -700,4 +700,98 @@ test("super is rooted at its class's extends expression, bound as that name is",
   const [binding] = await createImportOrigins([...USE_SOURCES, derived]).rootBindings([{ file: derived.path, line: 2, column: 19, spelled: "super", owner: { name: "constructor", line: 2, endLine: 2 } }]);
 
   assert.deepEqual(binding, { kind: "ambient", root: "Error" });
+});
+
+/**
+ * The type a `value` parameter is annotated with on the last line, after the given lines, among the given extra sources,
+ * placed where the receiver reader places it: past `readonly`.
+ */
+async function declaredTypeOf(annotation: string, spelled: string, lines: readonly string[] = [], extra: readonly SourceFile[] = []) {
+  const content = [...lines, `export function run(value: ${annotation}): void { value.go(); }`];
+  const file: SourceFile = { path: "src/use.ts", content: content.join("\n") };
+  const manifest: SourceFile = { path: "package.json", content: JSON.stringify({ name: "shop", dependencies: { "@angular/router": "1.0.0" } }) };
+  const site = { file: file.path, line: content.length, column: content.at(-1)!.indexOf(annotation.replace(/^readonly /, "")) + 1, spelled, owner: { name: "run", line: content.length, endLine: content.length } };
+  const [type] = await createImportOrigins([CONFIG, manifest, LOCAL, file, ...extra]).declaredTypes([site]);
+  return type;
+}
+
+test("an annotation names a library type by its keyword, array syntax or an unbound name, and a package's export by its exported name", async () => {
+  for (const [annotation, spelled, lines, expected] of [
+    ["Map<string, number>", "Map", [], { kind: "global", name: "Map" }],
+    ["string", "string", [], { kind: "global", name: "String" }],
+    ["number", "number", [], { kind: "global", name: "Number" }],
+    ["readonly number[]", "Array", [], { kind: "global", name: "Array" }],
+    ["Router", "Router", ["import { Router } from '@angular/router';"], { kind: "package", module: "@angular/router", name: "Router" }],
+    ["Base", "Base", ["import { Router as Base } from '@angular/router';"], { kind: "package", module: "@angular/router", name: "Router" }],
+    ["ng.Router", "ng", ["import * as ng from '@angular/router';"], { kind: "package", module: "@angular/router", name: "Router" }],
+  ] as const) assert.deepEqual(await declaredTypeOf(annotation, spelled, lines), expected, annotation);
+});
+
+test("an annotation the repository declares, imports from its own files or packages, binds to nothing, or a repository type extends or implements, is unknown", async () => {
+  const subtypes: SourceFile = {
+    path: "src/subtypes.ts",
+    content: ["import { Router as Base } from '@angular/router';", "export class AppRouter extends Base {}", "export class Cache extends Map<string, number> {}", "export interface Labels extends ReadonlyArray<string> {}"].join("\n"),
+  };
+  for (const [annotation, spelled, lines, extra] of [
+    ["Local", "Local", ["class Local {}"], []],
+    ["T", "T", ["type T = { go(): void };"], []],
+    ["helper", "helper", ["import { helper } from './local';"], []],
+    ["Shared", "Shared", ["import { Shared } from 'shop';"], []],
+    ["ApiClient", "ApiClient", [], []],
+    ["any", "any", [], []],
+    ["Router", "Router", ["import { Router } from '@angular/router';"], [subtypes]],
+    ["Map<string, number>", "Map", [], [subtypes]],
+    ["ReadonlyArray<string>", "ReadonlyArray", [], [subtypes]],
+  ] as const) assert.deepEqual(await declaredTypeOf(annotation, spelled, lines, extra), { kind: "unknown" }, `${annotation} ${extra.length}`);
+});
+
+test("a repository type whose heritage follows constants, type aliases and imports of the repository to a library type makes that type unknown", async () => {
+  const aliases: SourceFile = {
+    path: "src/aliases.ts",
+    content: [
+      "import { Router } from '@angular/router';",
+      "import { Base } from './bases';",
+      "const Fault = Error;",
+      "type Items = Array<string>;",
+      "const Navigator = Router;",
+      "export class RepoError extends Fault {}",
+      "export class RepoItems implements Items {}",
+      "export class Repo extends Navigator {}",
+      "export class Cache extends Base {}",
+    ].join("\n"),
+  };
+  const bases: SourceFile = { path: "src/bases.ts", content: "export const Base = Map;" };
+  for (const [annotation, spelled, lines] of [
+    ["Error", "Error", []],
+    ["string[]", "Array", []],
+    ["Router", "Router", ["import { Router } from '@angular/router';"]],
+    ["Map<string, number>", "Map", []],
+  ] as const) assert.deepEqual(await declaredTypeOf(annotation, spelled, lines, [aliases, bases]), { kind: "unknown" }, annotation);
+});
+
+test("heritage that names no repository class or interface and no library type makes every annotation unknown", async () => {
+  const holder: SourceFile = { path: "src/holder.ts", content: "export class Holder { static Inner = Map; }" };
+  for (const heritage of [
+    ["function Mixin(Base: ErrorConstructor) { return class extends Base {}; }", "export class RepoError extends Mixin(Error) {}"],
+    ["import { mixinWith } from '@angular/router';", "export class Mixed extends mixinWith(Map) {}"],
+    ["export class Dynamic extends (globalThis as any).Base {}"],
+    ["export class Collating extends Intl.Collator {}"],
+    ["import * as holders from './holder';", "export class Deep extends holders.Holder.Inner {}"],
+    ["import { Holder } from './holder';", "export function scoped(scope: object) { with (scope) { return class extends Holder {}; } }"],
+    ["let Kind = Map;", "Kind = Set;", "export class Changing extends Kind {}"],
+    ["export class Chosen extends (Math.random() > 0.5 ? Error : Map) {}"],
+    ["export class Broken extends Set {", "  run(: void {}"],
+  ]) {
+    const extra: SourceFile = { path: "src/heritage.ts", content: heritage.join("\n") };
+    assert.deepEqual(await declaredTypeOf("Set<string>", "Set", [], [extra, holder]), { kind: "unknown" }, heritage.at(-1));
+  }
+});
+
+test("heritage between repository classes and interfaces, imported or local, proves the library types they do not reach", async () => {
+  const shapes: SourceFile = {
+    path: "src/shapes.ts",
+    content: ["import { Shape } from './shape';", "import * as kinds from './shape';", "interface Named {}", "export class Square extends Shape implements Named {}", "export class Round extends kinds.Shape {}", "const Alias = Square;", "export class Box extends Alias {}", "type Outline = Named;", "export class Frame implements Outline {}", "import type { Outlined } from './shape';", "export interface Drawn extends Outlined, kinds.Outlined {}", "type Sized = { size: number };", "export interface Measured extends Sized {}"].join("\n"),
+  };
+  const shape: SourceFile = { path: "src/shape.ts", content: "export class Shape {}\nexport interface Outlined {}" };
+  assert.deepEqual(await declaredTypeOf("Map<string, number>", "Map", [], [shapes, shape]), { kind: "global", name: "Map" });
 });

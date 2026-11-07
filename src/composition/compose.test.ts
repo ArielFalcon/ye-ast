@@ -673,7 +673,7 @@ test("a trace over a real index charges an anonymous callback to its encloser, d
   assert.deepEqual(answer.value.status === "complete" && answer.value.value.steps, [{
     id: 0, depth: 0, file: "src/flow.ts", symbol: "run", kind: "function", line: 1, endLine: 6,
     leaves: [{ symbol: "helper", file: "src/flow.ts", start: 7, end: 9 }, { symbol: "named", file: "src/flow.ts", start: 3, end: 3, deferred: true }],
-    external: [{ kind: "unnamed", names: ["items.forEach", "items.map"] }],
+    external: [{ kind: "global", names: ["items.forEach", "items.map"] }],
   }]);
 });
 
@@ -735,6 +735,114 @@ test("a trace over a real index leaves a library global's member call as a globa
   assert.deepEqual(plain.value.status === "complete" && plain.value.value.steps[0]?.external, [{ kind: "global", names: ["Math.max"] }]);
   assert.equal(shadowed.value.status, "partial");
   assert.deepEqual(shadowed.value.status === "partial" && shadowed.value.cuts.map((cut) => cut.at[0]), ["src/shadow.ts:4 Math.max"]);
+});
+
+const JAVA_ORDERS = [
+  "package shop;",
+  "",
+  "import java.util.Collections;",
+  "import java.util.List;",
+  "import org.springframework.web.client.RestTemplate;",
+  "",
+  "class Orders {",
+  "  private final RestTemplate rest;",
+  "  Orders(RestTemplate rest) { this.rest = rest; }",
+  "  List<String> run(List<String> items) {",
+  "    items.add(\"a\");",
+  "    this.rest.getForObject(\"/x\", String.class);",
+  "    return Collections.emptyList();",
+  "  }",
+  "}",
+  "",
+].join("\n");
+
+/** Repository methods named like the platform members `Orders.run` calls, so a call settled by its name alone is a cut. */
+const JAVA_HOMONYMS = ["package shop;", "", "class Store {", "  void add(String value) {}", "  String getForObject(String url, Class<?> type) { return \"\"; }", "  java.util.List<String> emptyList() { return null; }", "}", ""];
+
+test("a Java trace over a real index leaves a call on a platform-typed parameter or private field, or on a platform class, as a leaf under its package, and keeps the typed calls cuts once a lambda may implement any platform type", async () => {
+  writeFileSync(join(repo, "src", "Orders.java"), JAVA_ORDERS);
+  writeFileSync(join(repo, "src", "Store.java"), JAVA_HOMONYMS.join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "orders");
+  const { trace } = composeQueries({ scratchRoot });
+  const target = { file: "src/Orders.java", symbol: "Orders.run" };
+
+  const typed = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [target] });
+  writeFileSync(join(repo, "src", "Store.java"), JAVA_HOMONYMS.join("\n").replace("class Store {", "class Store {\n  Runnable task = () -> {};"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "lambda");
+  const lambda = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [target] });
+
+  assert.ok(typed.ok && lambda.ok);
+  assert.equal(typed.value.status, "complete");
+  assert.deepEqual(typed.value.status === "complete" && typed.value.value.steps[0]?.external, [
+    { kind: "import", module: "java.util", names: ["Collections.emptyList", "items.add"] },
+    { kind: "import", module: "org.springframework.web.client", names: ["rest.getForObject"] },
+  ]);
+  assert.equal(lambda.value.status, "partial");
+  assert.deepEqual(lambda.value.status === "partial" && lambda.value.cuts.map((cut) => cut.at[0]), ["src/Orders.java:11 items.add", "src/Orders.java:12 rest.getForObject"]);
+});
+
+/** The cuts a Java trace of `Use.entry` gives over a fresh repository holding `files`. */
+async function javaTraceCuts(name: string, files: Readonly<Record<string, string>>): Promise<readonly (readonly string[])[]> {
+  const root = join(workspace, name);
+  mkdirSync(root);
+  const run = (...args: string[]): string => execFileSync("git", args, { cwd: root, env: GIT_ENV, encoding: "utf8" }).trim();
+  run("init", "-q");
+  for (const [file, content] of Object.entries(files)) writeFileSync(join(root, file), content);
+  run("add", "-A");
+  run("commit", "-q", "-m", name);
+  const answer = await composeQueries({ scratchRoot }).trace.walk({ repo: root, repoId: name, revision: "HEAD", targets: [{ file: "Use.java", symbol: "Use.entry" }] });
+  assert.ok(answer.ok);
+  return answer.value.status === "partial" ? answer.value.cuts.map((cut) => [cut.kind, ...cut.at]) : [];
+}
+
+test("a Java trace keeps a call a cut when a dynamic proxy may implement its platform type, when a JVM source no extractor reads may, or when the call reads a platform class's field", async () => {
+  const proxy = ["import java.lang.Runnable;", "import java.beans.EventHandler;", "public class Use {", "  public void run() { System.out.println(\"REPOSITORY_RUN\"); }", "  public void entry(Runnable task) { task.run(); }", "  public static void main(String[] args) { Use owner = new Use(); owner.entry(EventHandler.create(Runnable.class, owner, \"run\")); }", "}", ""].join("\n");
+  const field = ["import java.lang.Runnable;", "public class Use {", "  private Runnable task;", "  public void run() { System.out.println(\"REPOSITORY_RUN\"); }", "  public void entry() { this.task.run(); }", "}", ""].join("\n");
+  const wiring = ["import java.lang.Runnable;", "import java.beans.EventHandler;", "import java.lang.reflect.Field;", "public class Wiring {", "  public static void main(String[] args) throws Exception {", "    Use owner = new Use();", "    Field field = Use.class.getDeclaredField(\"task\");", "    field.setAccessible(true);", "    field.set(owner, EventHandler.create(Runnable.class, owner, \"run\"));", "  }", "}", ""].join("\n");
+  const system = ["import java.lang.System;", "public class Use {", "  public void entry() { System.out.println(\"x\"); }", "  public static void main(String[] args) { System.setOut(new RepoStream()); new Use().entry(); }", "}", "class RepoStream extends java.io.PrintStream {", "  RepoStream() { super(new java.io.ByteArrayOutputStream()); }", "  public void println(String text) { System.err.println(\"REPOSITORY_PRINTLN\"); }", "}", ""].join("\n");
+  const kotlin = ["import java.lang.Runnable;", "class Use { void entry(Runnable task) { task.run(); } }", "class Other { void run() {} }", ""].join("\n");
+
+  assert.deepEqual(await javaTraceCuts("eventhandler", { "Use.java": proxy }), [["unresolved-link", "Use.java:5 task.run", "Use.java::Use.run"]]);
+  assert.deepEqual(await javaTraceCuts("reflectproxy", { "Use.java": field, "Wiring.java": wiring }), [["unresolved-link", "Use.java:5 task.run", "Use.java::Use.run"]]);
+  assert.deepEqual(await javaTraceCuts("systemout", { "Use.java": system }), [["unresolved-link", "Use.java:3 System.out.println", "Use.java::RepoStream.println"]]);
+  assert.deepEqual(await javaTraceCuts("kotlin", { "Use.java": kotlin, "Repo.kt": "class Repo: Runnable { override fun run() { println(\"repo\") } }\n" }), [["unresolved-link", "Use.java:2 task.run", "Use.java::Other.run"], ["no-extractor", "Repo.kt"]]);
+});
+
+/** The status, cuts and steps (symbol and external calls) a trace of `target` gives over a fresh repository holding `files`. */
+async function traceOf(name: string, files: Readonly<Record<string, string>>, target = { file: "Use.java", symbol: "Use.entry" }) {
+  const root = join(workspace, name);
+  mkdirSync(root);
+  const run = (...args: string[]): string => execFileSync("git", args, { cwd: root, env: GIT_ENV, encoding: "utf8" }).trim();
+  run("init", "-q");
+  for (const [file, content] of Object.entries(files)) writeFileSync(join(root, file), content);
+  run("add", "-A");
+  run("commit", "-q", "-m", name);
+  const answer = await composeQueries({ scratchRoot }).trace.walk({ repo: root, repoId: name, revision: "HEAD", targets: [target] });
+  assert.ok(answer.ok);
+  const { status } = answer.value;
+  return { status, cuts: status === "partial" ? answer.value.cuts.map((cut) => [cut.kind, ...cut.at]) : [], steps: status === "unknown" ? [] : answer.value.value.steps.map((step) => [step.symbol, step.external ?? null]) };
+}
+
+test("a Java trace never settles a call by a root it reads past, whether the graph resolved the call or left it pending", async () => {
+  const stream = ["class RepoStream extends java.io.PrintStream {", "  RepoStream() { super(new java.io.ByteArrayOutputStream()); }", "  public void println(String text) { System.err.println(\"REPOSITORY_PRINTLN\"); }", "}", ""];
+  const qualified = ["import java.lang.System;", "public class Use {", "  public void entry() { java.lang.System.out.println(\"x\"); }", "  public static void main(String[] args) {", "    System.setOut(new RepoStream());", "    new Use().entry();", "  }", "}", ...stream].join("\n");
+  const field = ["public class Use {", "  public void entry() { java.util.Collections.EMPTY_LIST.size(); }", "}", "class Other { int size() { return 1; } }", ""].join("\n");
+  const alias = ["public class Use {", "  public void entry() { var o = System.out; o.println(\"x\"); }", "  public static void main(String[] args) { System.setOut(new RepoStream()); new Use().entry(); }", "}", ...stream].join("\n");
+
+  assert.deepEqual(await traceOf("qualified", { "Use.java": qualified }), { status: "partial", cuts: [["unresolved-link", "Use.java:11 System.err.println", "Use.java::RepoStream.println"]], steps: [["entry", null], ["println", null]] });
+  assert.deepEqual(await traceOf("qualifiedfield", { "Use.java": field }), { status: "complete", cuts: [], steps: [["entry", null]] });
+  assert.deepEqual(await traceOf("varalias", { "Use.java": alias }), { status: "complete", cuts: [], steps: [["entry", null], ["println", null], ["println", null]] });
+});
+
+test("a TypeScript trace settles a call by its package or global root only when the call reads one member below it", async () => {
+  const manifest = JSON.stringify({ name: "use", dependencies: { "other-lib": "1.0.0" } });
+  const logger = ["import * as other from \"other-lib\";", "class Sink {", "  flush(): void { console.log(\"REPOSITORY_FLUSH\"); }", "}", "export function entry(): void {", "  other.setLogger(new Sink());", "  other.logger.flush();", "}", ""].join("\n");
+  const dom = ["export function entry(node: Node): void {", "  document.body.appendChild(node);", "}", ""].join("\n");
+
+  assert.deepEqual(await traceOf("tslogger", { "package.json": manifest, "use.ts": logger }, { file: "use.ts", symbol: "entry" }), { status: "partial", cuts: [["unresolved-link", "use.ts:7 other.logger.flush", "use.ts::Sink.flush"]], steps: [["entry", [{ kind: "import", module: "other-lib", names: ["other.setLogger"] }]]] });
+  assert.deepEqual(await traceOf("tsdom", { "package.json": manifest, "use.ts": dom }, { file: "use.ts", symbol: "entry" }), { status: "complete", cuts: [], steps: [["entry", [{ kind: "unnamed", names: ["document.body.appendChild"] }]]] });
 });
 
 /** Repository functions named like library members, so a member call settled by its name alone is a cut. */
@@ -822,12 +930,12 @@ test("a trace over a real index keeps a member call on a local a cut when a stor
   assert.deepEqual(guarded.value.status === "partial" && guarded.value.cuts.map((cut) => cut.at[0]), [
     "src/guarded.ts:11 leaked.push",
     "src/guarded.ts:14 patched.push",
-    "src/guarded.ts:15 param.push",
     "src/guarded.ts:17 first.push",
     "src/guarded.ts:18 exported.push",
     "src/guarded.ts:5 mixed.set",
     "src/guarded.ts:8 counted.test",
   ]);
+  assert.deepEqual(guarded.value.status === "partial" && guarded.value.value.steps.flatMap((step) => (step.external ?? []).flatMap((group) => group.names.map((name) => `${group.kind} ${name}`))).sort(), ["global Map", "global Map", "global param.push"]);
   assert.deepEqual(scripted.value.status === "partial" && scripted.value.cuts.map((cut) => cut.at[0]), ["src/script.ts:3 shared.push", "src/script.ts:6 dynamic.push"]);
 });
 
@@ -1517,7 +1625,7 @@ test("a trace over a real index keeps a member call a cut when the code declares
   const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/members.ts", symbol: "run" }] });
 
   assert.ok(answer.ok && answer.value.status === "partial");
-  assert.deepEqual(answer.value.value.steps[0]?.external, [{ kind: "unnamed", names: ["items.map", "s.deepOnly", "s.paramOnly"] }]);
+  assert.deepEqual(answer.value.value.steps[0]?.external, [{ kind: "global", names: ["items.map"] }, { kind: "unnamed", names: ["s.deepOnly", "s.paramOnly"] }]);
   const cut = (call: string, name: string): string[] => [`src/members.ts:${lineOf(`  ${call}(${call === "s.setErrors" ? "\"x\"" : ""});`)} ${call}`, `src/members.ts::${name}`];
   assert.deepEqual(answer.value.cuts.map((entry) => entry.at), [
     cut("s.aliasKey", "aliasKey"), cut("s.assigned", "assigned"), cut("s.fieldMethod", "fieldMethod"),

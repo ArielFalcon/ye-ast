@@ -16,7 +16,7 @@ export function createDynamicLoadReader(): DynamicLoadReader {
 }
 
 function loadsOf(file: SourceFile): DynamicLoad[] {
-  const source = sourceTree(file, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const source = sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
   const loads: DynamicLoad[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && loadsModule(node)) {

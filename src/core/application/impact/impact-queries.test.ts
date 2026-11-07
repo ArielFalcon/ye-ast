@@ -233,7 +233,7 @@ function origins(answer: (site: ImportOriginSite) => ImportOrigin | undefined, r
       }),
     rootOrigins: async (sites) => sites.map((site) => originFinding(site, root(site))),
     replacedRoots: async () => NOTHING_REPLACED,
-    rootBindings: NO_BINDINGS,
+    rootBindings: NO_BINDINGS, declaredTypes: NO_DECLARED_TYPES,
   });
 }
 
@@ -244,6 +244,7 @@ function originFinding(site: { file: string; line: number }, value: ImportOrigin
 
 const NO_ROOTS: ImportOrigins["rootOrigins"] = async (sites) => sites.map((site) => originFinding(site, undefined));
 const NO_BINDINGS: ImportOrigins["rootBindings"] = async (sites) => sites.map(() => ({ kind: "unknown" }));
+const NO_DECLARED_TYPES: ImportOrigins["declaredTypes"] = async (sites) => sites.map(() => ({ kind: "unknown" }));
 
 const SOURCE_NODES = [fakeNode("f", "function", "src/A.java", 1, 3), fakeNode("g", "function", "src/B.java", 1, 3)];
 const SOURCE_EDGES: FakeEdge[] = [{ from: "g", to: "f", kind: "calls", confidence: 0.9 }];
@@ -1366,7 +1367,7 @@ test("a bare call the import reader places on this, inside the class that declar
 test("cancellation during origin batch stops before the walk", async () => {
   const controller = new AbortController();
   const source = "src/use.ts";
-  const reader: ImportOriginsReader = () => ({ origins: async () => { controller.abort(); return []; }, rootOrigins: NO_ROOTS, replacedRoots: async () => NOTHING_REPLACED, rootBindings: NO_BINDINGS });
+  const reader: ImportOriginsReader = () => ({ origins: async () => { controller.abort(); return []; }, rootOrigins: NO_ROOTS, replacedRoots: async () => NOTHING_REPLACED, rootBindings: NO_BINDINGS, declaredTypes: NO_DECLARED_TYPES });
   const result = await setup({ signal: controller.signal, changes: { ok: true, value: [change("src/target.ts")] }, nodes: [fakeNode("target", "function", "src/target.ts", 1)], unresolved: [{ from: "use", file: source, line: 1, column: 0, name: "target", kind: "calls" }], exports: { [HEAD]: { files: [source, "src/target.ts"].map((path) => ({ path, blob: path, written: true })), skipped: [] } }, importOrigins: reader }).ask();
   assert.ok(!result.ok && result.fault.kind === "aborted");
 });
@@ -1374,7 +1375,7 @@ test("cancellation during origin batch stops before the walk", async () => {
 test("field settlement does not hide a same-line unverified use", async () => {
   const target = "src/svc.ts", source = "src/cmp.ts";
   const refs = [0, 12].map((column) => ({ from: "caller", file: source, line: 2, column, name: "this.svc.hit", kind: "calls" }));
-  const validateFirst: ImportOriginsReader = () => ({ origins: async (sites) => sites.map((site) => ({ status: "unknown" as const, reason: "unresolved" as const, evidence: [], ...(site.column === 1 ? { occurrence: true as const } : {}) })), rootOrigins: NO_ROOTS, replacedRoots: async () => NOTHING_REPLACED, rootBindings: NO_BINDINGS });
+  const validateFirst: ImportOriginsReader = () => ({ origins: async (sites) => sites.map((site) => ({ status: "unknown" as const, reason: "unresolved" as const, evidence: [], ...(site.column === 1 ? { occurrence: true as const } : {}) })), rootOrigins: NO_ROOTS, replacedRoots: async () => NOTHING_REPLACED, rootBindings: NO_BINDINGS, declaredTypes: NO_DECLARED_TYPES });
   const answer = fact(await setup({ changes: { ok: true, value: [change(target, { added: [{ start: 3, end: 3 }] })] }, nodes: [fakeNode("Svc", "class", target, 1, 5), fakeNode("hit", "method", target, 3, 3), fakeNode("Cmp", "class", source, 1, 5), fakeNode("caller", "method", source, 2, 2)], edges: [{ from: "Svc", to: "hit", kind: "contains" }, { from: "Cmp", to: "caller", kind: "contains" }], unresolved: refs, fields: [{ owner: { path: source, symbol: "Cmp", line: 1 }, field: "svc", holds: { class: { path: target, symbol: "Svc", line: 1 } } }], exports: { [HEAD]: { files: [target, source].map((path) => ({ path, blob: path, written: true })), skipped: [] } }, importOrigins: validateFirst }).ask());
   assert.ok(answer.status === "partial");
   assert.ok(answer.value.symbols.some((symbol) => symbol.symbol === "caller"));
@@ -1959,7 +1960,7 @@ test("importers judge only the edges from other files, with the module statement
       judged.push(...sites.map((site) => site.file));
       return sites.map((site) => ({ ...originFinding(site, { kind: "repository", file: "src/Order.java" }), bare: true as const }));
     },
-    rootBindings: NO_BINDINGS,
+    rootBindings: NO_BINDINGS, declaredTypes: NO_DECLARED_TYPES,
   });
   const moduleDependencies: ModuleDependenciesReader = { extract: async () => { extractions++; return { files: [], dependencies: [], unread: [] }; } };
   const { importers } = setup({
@@ -1979,4 +1980,38 @@ test("importers judge only the edges from other files, with the module statement
   assert.deepEqual(answer.status !== "unknown" && answer.value.files.map(({ users }) => users), [["src/Svc.java"]]);
   assert.deepEqual(judged, ["src/Svc.java"]);
   assert.equal(extractions, 1);
+});
+
+test("a graph edge whose bare root Java places in another file leaves the graph's target: dropped when that declaration has no node, moved to it when the containment path finds one", async () => {
+  const nodes = [
+    fakeNode("dto", "namespace", "src/dto/Visits.java", 1, 20, "app.dto"),
+    fakeNode("dtoVisits", "function", "src/dto/Visits.java", 5, 7, "Visits"),
+    fakeNode("gateway", "namespace", "src/gateway/Visits.java", 1, 20, "app.gateway"),
+    fakeNode("gatewayVisits", "function", "src/gateway/Visits.java", 5, 7, "Visits"),
+    fakeNode("read", "method", "src/web/Resource.java", 3, 5),
+    fakeNode("list", "method", "src/gateway/Client.java", 3, 5),
+  ];
+  const edges: FakeEdge[] = [
+    { from: "dto", to: "dtoVisits", kind: "contains" },
+    { from: "gateway", to: "gatewayVisits", kind: "contains" },
+    { from: "read", to: "dtoVisits", kind: "references", line: 4, column: 2 },
+    { from: "list", to: "dtoVisits", kind: "references", line: 4, column: 2 },
+  ];
+  const roots: Record<string, ImportOrigin> = {
+    "src/web/Resource.java": { kind: "repository", file: "src/web/Resource.java", declared: "app.web.Resource.Visits" },
+    "src/gateway/Client.java": { kind: "repository", file: "src/gateway/Visits.java", declared: "app.gateway.Visits" },
+  };
+  const importOrigins: ImportOriginsReader = () => ({
+    origins: async (sites) => sites.map((site) => originFinding(site, undefined)),
+    rootOrigins: async (sites) => sites.map((site) => ({ ...originFinding(site, roots[site.file]), bare: true as const })),
+    replacedRoots: async () => NOTHING_REPLACED,
+    rootBindings: NO_BINDINGS,
+    declaredTypes: NO_DECLARED_TYPES,
+  });
+  const { callers } = setup({ nodes, edges, importOrigins });
+
+  const answer = callersFact(await callers({ targets: [{ file: "src/dto/Visits.java", symbol: "Visits" }, { file: "src/gateway/Visits.java", symbol: "Visits" }] }));
+
+  assert.ok(answer.status !== "unknown", JSON.stringify(answer));
+  assert.deepEqual(answer.value.symbols.filter(({ depth }) => depth > 0).map(({ file, symbol, via }) => [file, symbol, via?.file]), [["src/gateway/Client.java", "list", "src/gateway/Visits.java"]]);
 });

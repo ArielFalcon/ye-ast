@@ -94,8 +94,9 @@ function typeBinding(name: Node, file: JavaFile, project: JavaProject, owner: Us
   const type = enclosingType(name, file, project);
   const variable = typeVariableAround(name);
   if (variable !== undefined) return declaredBinding(name, variable, owner);
-  const declared = project.lookupType(name.text, { file, type });
-  if (declared === "ambiguous") return { kind: "ambiguous", root: name.text };
+  const declared = project.bindName(name.text, { file, type, at: name }, "lenient");
+  if (typeof declared === "object" && "local" in declared) return declaredBinding(name, declared.local, owner);
+  if (declared === "ambiguous" || declared === "unsettled") return { kind: "ambiguous", root: name.text };
   if (declared !== undefined && project.lookupType(name.text, { file: { ...file, onDemandImports: [] }, type }) === undefined) return { kind: "ambiguous", root: name.text };
   if (declared !== undefined) return { kind: "located", root: name.text, file: declared.file.path, path: declared.fqn };
   const named = qualifiedTypeName(name.text, { file, type }, project);
@@ -153,7 +154,7 @@ function fieldIn(name: Node): boolean {
   return false;
 }
 
-function typeVariableAround(name: Node): Node | undefined {
+export function typeVariableAround(name: Node): Node | undefined {
   for (let scope = name.parent; scope !== null; scope = scope.parent) {
     const parameters = scope.childForFieldName("type_parameters");
     const found = parameters?.namedChildren.find((parameter) => parameter?.namedChildren[0]?.text === name.text);
@@ -162,7 +163,7 @@ function typeVariableAround(name: Node): Node | undefined {
   return undefined;
 }
 
-function enclosingType(node: Node, file: JavaFile, project: JavaProject): TypeDecl | undefined {
+export function enclosingType(node: Node, file: JavaFile, project: JavaProject): TypeDecl | undefined {
   return project.types.filter((type) => type.file === file && type.node.startIndex <= node.startIndex && node.endIndex <= type.node.endIndex).sort((a, b) => b.node.startIndex - a.node.startIndex)[0];
 }
 

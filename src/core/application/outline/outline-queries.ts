@@ -10,12 +10,12 @@ import type { OutlineValue } from "../../domain/outline/outline-fact.ts";
 import type { OutlineFault, OutlineQueries, OutlineSelector } from "../../ports/outline-queries.port.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps } from "../snapshot/head-reading.ts";
-import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
 import { focusWithUses, readFocus, readOutline } from "./outline.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
+import { combinedModuleReader } from "../navigation/module-readers.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 
 export interface OutlineQueriesDeps extends HeadReaderDeps {
@@ -62,7 +62,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
           const focused = focus === undefined ? undefined : readFocus(store, focus.filter(({ file }) => isReadableFile(file)));
           if (focused !== undefined && focused.unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${focused.unknown.map(unknownTargetKey).join(", ")}${unmodelledNote(focused.unknown, unmodelled)}`, entries: focused.unknown } };
           if (focused !== undefined && focused.topLevel.length > 0) return { ok: false, fault: { kind: "top-level-line", detail: `no declaration holds ${focused.topLevel.map(({ file, line }) => `${file}:${line}`).join(", ")}; the line is at the top level of its file`, entries: focused.topLevel } };
-          const modules = await readModules(deps.moduleReaders, sources, covered);
+          const modules = await combinedModuleReader(deps.moduleReaders).extract(sources, { files: covered });
           if (request.signal?.aborted) return ABORTED;
           const listed = focused === undefined ? readOutline(store, covered, modules) : undefined;
           const used = focused === undefined ? undefined : await focusWithUses(store, focused, deps.importOrigins(sources), modules, request.signal);
@@ -81,17 +81,6 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
         }
       });
     },
-  };
-}
-
-/** The module statements of the requested files from every reader, each resolved against every source, as one read. */
-async function readModules(readers: readonly ModuleDependenciesReader[], sources: readonly SourceFile[], files: readonly string[]): Promise<ModuleDependencies> {
-  const reads = await Promise.all(readers.map((reader) => reader.extract(sources, { files })));
-  return {
-    files: reads.flatMap((read) => read.files),
-    dependencies: reads.flatMap((read) => read.dependencies),
-    unread: reads.flatMap((read) => read.unread),
-    untraversed: reads.flatMap((read) => read.untraversed ?? []),
   };
 }
 

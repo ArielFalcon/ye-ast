@@ -3,6 +3,8 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
 import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, FunctionValueCall } from "../../ports/declared-member-names.port.ts";
 import { javaFunctionValueCalls } from "./java-function-value-calls.ts";
+import { javaReceiverBindings } from "./java-receiver-bindings.ts";
+import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { JavaParser } from "./java-parser.adapter.ts";
 
 const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [] };
@@ -16,8 +18,8 @@ const MEMBER_FIELDS: readonly string[] = ["field_declaration", "constant_declara
 
 /**
  * The member names a Java source declares: the methods and fields of every type, local and anonymous classes included,
- * enum constants, and a record's components, which name its accessors; and every method as a callable. The tree is
- * freed before they return.
+ * enum constants, and a record's components, which name its accessors; every method as a callable; and the member calls
+ * whose receiver one declaration types (`javaReceiverBindings`). The tree is freed before they return.
  */
 export function createJavaMemberNames(createParser: () => Promise<JavaParser>): DeclaredMemberNamesReader {
   let parser: Promise<JavaParser> | undefined;
@@ -44,13 +46,15 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
         for (const child of node.namedChildren) if (child !== null) visit(child);
       };
       let functionValueCalls: FunctionValueCall[];
+      let receiverBindings: ReceiverBinding[];
       try {
         visit(parsed.value.root);
         functionValueCalls = javaFunctionValueCalls(parsed.value.root);
+        receiverBindings = javaReceiverBindings(parsed.value.root);
       } finally {
         parsed.value.dispose();
       }
-      return { names: [...names].sort(compareText), functionValueCalls, callables, receiverBindings: [] };
+      return { names: [...names].sort(compareText), functionValueCalls, callables, receiverBindings };
     },
   };
 }

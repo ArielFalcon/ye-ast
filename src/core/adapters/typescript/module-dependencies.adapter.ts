@@ -21,7 +21,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
       const texts = new Map(sources.map(({ path, content }) => [path, content]));
       const packages = manifestPackages(sources);
       const resolver = createModuleResolver(async (file) => texts.get(file), packages, { jsonModules: true });
-      const parse = (file: string): ts.SourceFile => sourceTree(held.get(file)!, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+      const parse = (file: string): ts.SourceFile => sourceTree(held.get(file)!, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
       const files: ModuleSource[] = [];
       const pending: PendingDependency[] = [];
       const unread: { file: string; reason: "source-unreadable" | "no-extractor" }[] = [];

@@ -121,7 +121,7 @@ async function read(files: readonly SourceFile[], repo: string): Promise<readonl
   return found.sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
 }
 function describe(file: SourceFile): FileShape {
-  const source = sourceTree(file, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const source = sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
   const shape: FileShape = { source, bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], localExports: new Map(), classes: new Map(), enums: new Map() };
   for (const statement of source.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {

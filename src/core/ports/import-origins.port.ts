@@ -52,7 +52,8 @@ export interface ImportOrigins {
    * in the site's `name`; a computed chain (`f().b`, `this.b`, `a[b]`), another name or a file that does not parse is
    * `unknown`. `bare` marks a site that spells its root alone (`a`), so a binding of the root is the binding of the name;
    * such a root in a value position that, by the file's own scoping (ADR-0029), binds a parameter of a function around
-   * it with no default, rest or destructuring, never declared again, is `local-parameter`.
+   * it with no default, rest or destructuring, never declared again, is `local-parameter`. `pastRoot` marks a call that
+   * reads past its root (`readsPastRoot`: `a.b.c()`), whose root proves where the chain starts and not what the call runs.
    */
   rootOrigins(sites: readonly ResolvedNameSite[], signal?: AbortSignal): Promise<readonly RootOrigin[]>;
   /**
@@ -63,6 +64,17 @@ export interface ImportOrigins {
    * spells another name, the name is dynamic, or nothing proves a binding.
    */
   rootBindings(sites: readonly UseSite[], signal?: AbortSignal): Promise<readonly RootBinding[]>;
+  /**
+   * One entry per site, in the order received: the library or package type the annotation written at the site states,
+   * its first name spelled as `spelled` (a primitive keyword, `Array` for an array type, or a type name). A keyword is
+   * its library type (`string` is `String`); a name the type scopes and the file leave unbound is a global of the
+   * language's libraries, and an import of a package the repository depends on is that package's export by its exported
+   * name. `unknown` when the repository declares the type, the name binds nothing (generated code), the package is one
+   * the repository declares itself, or an in-scope repository type extends or implements the same type, so a value of
+   * it may run repository code; every site is `unknown` when some heritage reaches no repository class, interface or type
+   * literal and no library or package type (ADR-0029 decision 9).
+   */
+  declaredTypes(sites: readonly UseSite[], signal?: AbortSignal): Promise<readonly DeclaredType[]>;
   /**
    * Where the repository may run its own code where a library's is expected: the path of every global the snapshot
    * declares, every member path a source writes from a global (`Math.max = f`, `Array.prototype[k] = f`,
@@ -85,6 +97,9 @@ export interface ReplacedRoots {
   /** Package names, as an import specifier's first one or two segments name them (`lodash`, `@angular/core`). */
   packages: ReadonlySet<string>;
 }
+
+/** A type from outside the repository: a global of the language's libraries, or a package's export. */
+export type DeclaredType = { kind: "global"; name: string } | { kind: "package"; module: string; name: string } | { kind: "unknown" };
 
 /** A place a declaration uses a name, where the index places the use: repository-relative and 1-based. */
 export interface UseSite {
@@ -119,5 +134,8 @@ export type RootBinding =
   | { kind: "this"; member?: string }
   | { kind: "unknown" };
 
-/** Reads the import bindings of one snapshot; composition supplies it, so no use case imports a parser. */
-export type ImportOriginsReader = (sources: readonly SourceFile[]) => ImportOrigins;
+/**
+ * Reads the import bindings of one snapshot; composition supplies it, so no use case imports a parser. `paths` is every path
+ * of the snapshot's scope, files no reader parses included; the sources' own paths when not given.
+ */
+export type ImportOriginsReader = (sources: readonly SourceFile[], paths?: readonly string[]) => ImportOrigins;

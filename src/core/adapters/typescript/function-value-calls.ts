@@ -135,14 +135,47 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
     const holds = binding?.kind === "declared" && (binding.declarations.some(declaresFunction) || assignedSymbols().has(binding.symbol));
     return holds ? [{ line, receiver: receiver.text, member: access.name.text }] : [];
   });
+  /**
+   * The type the one declaration of a bare receiver states: a parameter, or a local `isExactLocal` admits. None when a
+   * direct `eval` or a dynamic scope may store into it, or the value leaves the file's sight (`staysLocal`), where its
+   * members could be replaced.
+   */
+  const annotationOf = (binding: Extract<LexicalBinding, { kind: "declared" }>, name: string): ReceiverValue | undefined => {
+    const [declaration, ...others] = binding.declarations;
+    if (declaration === undefined || others.length > 0) return undefined;
+    if (!(ts.isParameter(declaration) && ts.isIdentifier(declaration.name)) && !isExactLocal(declaration, fileIsModule)) return undefined;
+    const scope = ts.isParameter(declaration) ? declaration.parent : scopeOf(declaration);
+    if (evals.some((call) => isInside(call, scope)) || storesOf(binding, name) === undefined || !staysLocal(binding, name)) return undefined;
+    return annotated(declaration.type, tree);
+  };
+  /** The type the enclosing class states for `this.<name>`, when it declares the name once, as an instance field or a constructor property. */
+  const fieldAnnotationOf = (access: ts.PropertyAccessExpression): ReceiverValue | undefined => {
+    const owner = thisClassOf(access);
+    if (owner === undefined || evals.some((call) => isInside(call, owner))) return undefined;
+    const name = access.name.text;
+    const declared = owner.members.flatMap((member): ts.Node[] => {
+      if (ts.isConstructorDeclaration(member)) return member.parameters.filter((parameter) => ts.isParameterPropertyDeclaration(parameter, member) && ts.isIdentifier(parameter.name) && parameter.name.text === name);
+      return member.name !== undefined && !ts.isComputedPropertyName(member.name) && member.name.text === name ? [member] : [];
+    });
+    const [field, ...others] = declared;
+    if (field === undefined || others.length > 0 || !isClassPrivate(field) || !fieldStaysLocal(owner, name)) return undefined;
+    if (ts.isParameter(field)) return annotated(field.type, tree);
+    const isStatic = ts.isPropertyDeclaration(field) && field.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword);
+    return ts.isPropertyDeclaration(field) && !isStatic ? annotated(field.type, tree) : undefined;
+  };
   const receiverBindings = accesses.flatMap((access): ReceiverBinding[] => {
     const receiver = access.expression;
-    if (!ts.isIdentifier(receiver) || access.questionDotToken !== undefined) return [];
-    const binding = bindingOf(receiver);
-    const holds = binding?.kind === "declared" ? valueOf(binding, receiver.text) : undefined;
+    if (access.questionDotToken !== undefined) return [];
+    let holds: ReceiverValue | undefined;
+    if (isThisMember(receiver)) holds = fieldAnnotationOf(receiver);
+    else if (ts.isIdentifier(receiver)) {
+      const binding = bindingOf(receiver);
+      holds = binding?.kind === "declared" ? (valueOf(binding, receiver.text) ?? annotationOf(binding, receiver.text)) : undefined;
+    }
     if (holds === undefined) return [];
     const at = tree.getLineAndCharacterOfPosition(access.parent.getStart(tree));
-    return [{ line: at.line + 1, column: at.character + 1, receiver: receiver.text, member: access.name.text, holds }];
+    const name = isThisMember(receiver) ? receiver.name.text : (receiver as ts.Identifier).text;
+    return [{ line: at.line + 1, column: at.character + 1, receiver: name, member: access.name.text, holds }];
   });
   return { functionValueCalls, receiverBindings };
 }
@@ -164,6 +197,29 @@ function isInside(node: ts.Node, scope: ts.Node): boolean {
   return scope.pos <= node.pos && node.end <= scope.end;
 }
 
+/**
+ * Whether every `this` the class writes for its own instance names one member, the class names the field through no
+ * other receiver, and every `this.<name>` only reads one of the field's members or stores a value into the field: an
+ * instance or a field passed, returned, copied, indexed or written through could have its members replaced.
+ */
+function fieldStaysLocal(owner: ts.ClassLikeDeclaration, name: string): boolean {
+  let stays = true;
+  const visit = (node: ts.Node): void => {
+    if (!stays) return;
+    if (node.kind === ts.SyntaxKind.ThisKeyword && thisClassOf(node) === owner && !isThisMember(node.parent)) stays = false;
+    else if (namesMember(node, name) && !(isThisMember(node) && thisClassOf(node) === owner)) stays = false;
+    else if (isThisMember(node) && node.name.text === name && thisClassOf(node) === owner) {
+      const parent = node.parent;
+      const read = ts.isPropertyAccessExpression(parent) && parent.expression === node && !isWritten(parent);
+      const stored = ts.isBinaryExpression(parent) && parent.left === node && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken;
+      if (!read && !stored) stays = false;
+    }
+    node.forEachChild(visit);
+  };
+  visit(owner);
+  return stays;
+}
+
 /** Whether an access is the target of an assignment, an update, a `delete` or a destructuring or iteration store. */
 function isWritten(access: ts.Expression): boolean {
   let node: ts.Node = access;
@@ -173,6 +229,46 @@ function isWritten(access: ts.Expression): boolean {
   if ((ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) && (parent.operator === ts.SyntaxKind.PlusPlusToken || parent.operator === ts.SyntaxKind.MinusMinusToken)) return true;
   if ((ts.isForInStatement(parent) || ts.isForOfStatement(parent)) && parent.initializer === node) return true;
   return ts.isDeleteExpression(parent);
+}
+
+/**
+ * Whether a member access, an element access, a destructured key or a reflecting call may name `name` on its receiver: a
+ * key no string or numeric literal states, a rest element and a reflecting call without such a key may name every member.
+ */
+function namesMember(node: ts.Node, name: string): boolean {
+  if (ts.isPropertyAccessExpression(node)) return node.name.text === name;
+  if (ts.isElementAccessExpression(node)) return keyMayName(node.argumentExpression, name);
+  if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) {
+    if (node.dotDotDotToken !== undefined) return true;
+    const key = node.propertyName ?? node.name;
+    if (ts.isComputedPropertyName(key)) return keyMayName(key.expression, name);
+    return (ts.isIdentifier(key) || ts.isStringLiteralLike(key) || ts.isNumericLiteral(key)) && key.text === name;
+  }
+  if (ts.isCallExpression(node) && isReflectingCall(node.expression)) {
+    const key = node.arguments[1];
+    return key === undefined || keyMayName(key, name);
+  }
+  return false;
+}
+
+function keyMayName(key: ts.Expression, name: string): boolean {
+  return !(ts.isStringLiteralLike(key) || ts.isNumericLiteral(key)) || key.text === name;
+}
+
+/** `Reflect.<any>(target, key, ...)` and the `Object` functions that read or write a target's members by key or by source. */
+function isReflectingCall(callee: ts.Expression): boolean {
+  if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression)) return false;
+  if (callee.expression.text === "Reflect") return true;
+  return callee.expression.text === "Object" && OBJECT_REFLECTION.has(callee.name.text);
+}
+
+const OBJECT_REFLECTION: ReadonlySet<string> = new Set(["assign", "defineProperty", "defineProperties", "getOwnPropertyDescriptor", "getOwnPropertyDescriptors"]);
+
+/** A field only its own class can reach: a `#name`, or one TypeScript declares `private`. */
+function isClassPrivate(field: ts.Node): boolean {
+  const name = ts.getNameOfDeclaration(field as ts.Declaration);
+  if (name !== undefined && ts.isPrivateIdentifier(name)) return true;
+  return ts.canHaveModifiers(field) && (ts.getModifiers(field) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword);
 }
 
 function isAssignment(kind: ts.SyntaxKind): boolean {
@@ -236,7 +332,37 @@ function storedValue(value: ts.Expression, bindingOf: (identifier: ts.Identifier
 function sameValue(a: ReceiverValue, b: ReceiverValue): boolean {
   if (a.kind === "literal") return b.kind === "literal" && a.type === b.type;
   if (a.kind === "declared") return b.kind === "declared" && a.name === b.name && a.line === b.line;
-  return b.kind === "constructed" && a.name === b.name;
+  return a.kind === "constructed" && b.kind === "constructed" && a.name === b.name;
+}
+
+const KEYWORD_TYPES: ReadonlySet<ts.SyntaxKind> = new Set([ts.SyntaxKind.StringKeyword, ts.SyntaxKind.NumberKeyword, ts.SyntaxKind.BooleanKeyword, ts.SyntaxKind.BigIntKeyword, ts.SyntaxKind.SymbolKeyword]);
+
+/**
+ * The one type an annotation states, through parentheses, `readonly` and a union with `null` or `undefined`, at the
+ * place it is written: a primitive keyword, an array type as `Array`, or a type reference by its first name. None for
+ * any other type, or no annotation.
+ */
+function annotated(type: ts.TypeNode | undefined, tree: ts.SourceFile): ReceiverValue | undefined {
+  let inner = type;
+  for (;;) {
+    if (inner !== undefined && ts.isParenthesizedTypeNode(inner)) inner = inner.type;
+    else if (inner !== undefined && ts.isTypeOperatorNode(inner) && inner.operator === ts.SyntaxKind.ReadonlyKeyword) inner = inner.type;
+    else if (inner !== undefined && ts.isUnionTypeNode(inner)) {
+      const kept = inner.types.filter((member) => member.kind !== ts.SyntaxKind.UndefinedKeyword && !(ts.isLiteralTypeNode(member) && member.literal.kind === ts.SyntaxKind.NullKeyword));
+      inner = kept.length === 1 ? kept[0] : undefined;
+    } else break;
+  }
+  if (inner === undefined) return undefined;
+  const placed = (node: ts.Node, name: string): ReceiverValue => {
+    const at = tree.getLineAndCharacterOfPosition(node.getStart());
+    return { kind: "annotated", type: name, line: at.line + 1, column: at.character + 1 };
+  };
+  if (KEYWORD_TYPES.has(inner.kind)) return placed(inner, inner.getText());
+  if (ts.isArrayTypeNode(inner)) return placed(inner, "Array");
+  if (!ts.isTypeReferenceNode(inner)) return undefined;
+  let head: ts.EntityName = inner.typeName;
+  while (ts.isQualifiedName(head)) head = head.left;
+  return placed(head, head.text);
 }
 
 /**

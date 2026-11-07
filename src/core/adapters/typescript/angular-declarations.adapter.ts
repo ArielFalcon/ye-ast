@@ -19,7 +19,7 @@ function readDeclarations(files: readonly SourceFile[]): AngularDeclaration[] {
 }
 
 function declarationsOf(file: SourceFile): AngularDeclaration[] {
-  const source = sourceTree(file, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  const source = sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
   const found: AngularDeclaration[] = [];
   for (const statement of source.statements) {
     if (!ts.isClassDeclaration(statement) || statement.name === undefined) continue;

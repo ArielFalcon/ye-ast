@@ -31,6 +31,13 @@ export type TypeKind = "class" | "interface" | "annotation" | "other";
 export interface Scope {
   file: JavaFile;
   type: TypeDecl | undefined;
+  /** The place a name is read at, when there is one: a class an enclosing block declares before it is in scope there. */
+  at?: Node;
+}
+
+/** A class, interface, enum or record a block declares (JLS 14.3), which no project type stands for. */
+export interface LocalType {
+  local: Node;
 }
 
 /** An expression and the scope its names are resolved in; a constant also carries the type its field declares. */
@@ -105,6 +112,15 @@ export interface JavaProject {
   /** The files whose declarations could not be read; none of their types is in the project. */
   unreadable: readonly JavaFile[];
   lookupType(name: string, scope: Scope): TypeLookup;
+  /**
+   * The type a simple name denotes in a scope, in Java's order (JLS 6.4): a local type an enclosing block declares before
+   * the scope's place, a member type of a type around it, declared or inherited, then a single-type import, the scope's
+   * package and an on-demand import. `lenient` reads the imports as `lookupType` does; `strict` answers `unsettled`
+   * where the snapshot cannot exclude another meaning: a supertype it does not declare may declare a member type of the
+   * name, a static import may import one, a member type shadows a single-type import of the name, or no single on-demand
+   * import is the only one that can offer it.
+   */
+  bindName(name: string, scope: Scope, reading: "strict" | "lenient"): TypeLookup | "unsettled" | LocalType;
   /**
    * Whether a name no source declares belongs to the platform: it sits under a platform package, and no package the
    * sources declare claims the segment after that prefix.
@@ -248,27 +264,79 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     return found === undefined ? undefined : found.length === 1 ? found[0] : "ambiguous";
   }
 
-  function resolveSimple(head: string, scope: Scope): TypeLookup {
-    for (let type = scope.type; type !== undefined; type = type.outer) {
-      if (type.name === head) return type;
-      const member = type.members.get(head);
-      if (member !== undefined) return member;
-    }
+  function resolveSimple(head: string, scope: Scope, strict: boolean): TypeLookup | "unsettled" | LocalType {
+    const local = scope.at === undefined ? undefined : localTypeAt(head, scope.at);
+    if (local !== undefined) return { local };
     const { file } = scope;
+    for (let type = scope.type; type !== undefined; type = type.outer) {
+      const member = type.members.get(head) ?? inheritedMember(type, head, strict);
+      if (member !== undefined) return strict && typeof member === "object" && file.singleImports.has(head) ? "unsettled" : member;
+      if (type.name === head) return type;
+    }
+    if (strict && (file.staticImports.some(({ member }) => member === head) || file.staticOnDemandImports.length > 0)) return "unsettled";
     const imported = file.singleImports.get(head);
     if (imported !== undefined) return byFqn(imported);
     const samePackage = byFqn(file.packageName === "" ? head : `${file.packageName}.${head}`);
     if (samePackage !== undefined) return samePackage;
-    for (const container of file.onDemandImports) {
-      const found = byFqn(`${container}.${head}`);
-      if (found !== undefined) return found;
-    }
-    return undefined;
+    const offered = file.onDemandImports.map((container) => byFqn(`${container}.${head}`));
+    if (!strict) return offered.find((found) => found !== undefined);
+    if (offered.length === 0) return undefined;
+    if (offered.includes("ambiguous")) return "ambiguous";
+    const found = offered.filter((type): type is TypeDecl => type !== undefined);
+    const repositoryPackage = (container: string): boolean => types.some((type) => type.file.packageName === container);
+    return found.length === 1 && file.onDemandImports.every((container, index) => offered[index] !== undefined || repositoryPackage(container)) ? found[0] : "unsettled";
+  }
+
+  const inherited = { strict: new Map<TypeDecl, Map<string, TypeLookup | "unsettled">>(), lenient: new Map<TypeDecl, Map<string, TypeLookup | "unsettled">>() };
+
+  /**
+   * The member type of the name `type` inherits (JLS 8.5): from each supertype the nearest declaration of the name, kept
+   * only when it is not private and, package-private, when every class on the way shares its package. Two inherited
+   * declarations are ambiguous; a supertype the snapshot does not declare leaves a strict reading unsettled.
+   */
+  function inheritedMember(type: TypeDecl, head: string, strict: boolean): TypeLookup | "unsettled" {
+    const cache = strict ? inherited.strict : inherited.lenient;
+    const byName = cache.get(type) ?? new Map<string, TypeLookup | "unsettled">();
+    cache.set(type, byName);
+    if (byName.has(head)) return byName.get(head);
+    const found = new Set<TypeDecl>();
+    let unsettled = false;
+    const visited = new Set<TypeDecl>([type]);
+    const visit = (sub: TypeDecl, packages: ReadonlySet<string>): void => {
+      for (const node of [...interfaceNodes(sub), ...[superclassNode(sub)].filter((parent) => parent !== undefined)]) {
+        const parent = lookupType(typeNodeName(node), { file: sub.file, type: sub.outer });
+        if (typeof parent !== "object") {
+          unsettled = true;
+          continue;
+        }
+        if (visited.has(parent)) continue;
+        visited.add(parent);
+        const member = parent.members.get(head);
+        if (member === undefined) visit(parent, new Set([...packages, parent.file.packageName]));
+        else if (inherits(member, parent, packages)) found.add(member);
+      }
+    };
+    visit(type, new Set([type.file.packageName]));
+    const result = found.size > 1 ? "ambiguous" : strict && unsettled ? "unsettled" : found.values().next().value;
+    byName.set(head, result);
+    return result;
+  }
+
+  function inherits(member: TypeDecl, declaring: TypeDecl, packages: ReadonlySet<string>): boolean {
+    const words = modifierWords(member.node);
+    if (words.includes("private")) return false;
+    if (declaring.kind === "interface" || declaring.kind === "annotation" || words.includes("public") || words.includes("protected")) return true;
+    return [...packages].every((name) => name === member.file.packageName);
+  }
+
+  function bindName(name: string, scope: Scope, reading: "strict" | "lenient"): TypeLookup | "unsettled" | LocalType {
+    return resolveSimple(name, scope, reading === "strict");
   }
 
   function lookupType(name: string, scope: Scope): TypeLookup {
     const [head = "", ...rest] = name.split(".");
-    let type = resolveSimple(head, scope);
+    const resolved = resolveSimple(head, { file: scope.file, type: scope.type }, false);
+    let type = resolved === "unsettled" || (typeof resolved === "object" && "local" in resolved) ? undefined : resolved;
     if (type === "ambiguous") return type;
     for (const part of rest) type = type?.members.get(part);
     return type ?? byFqn(name);
@@ -442,6 +510,7 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     types,
     unreadable,
     lookupType,
+    bindName,
     isPlatformName,
     hierarchy,
     classChain,
@@ -628,6 +697,22 @@ function parameterType(parameter: Node): string {
   }
   const erased = text.replace(/\s+/g, "").split(".").pop() ?? "";
   return parameter.type === "spread_parameter" ? `${erased}[]` : erased;
+}
+
+const LOCAL_TYPE_DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration", "interface_declaration", "enum_declaration", "record_declaration"]);
+const BLOCKS: ReadonlySet<string> = new Set(["block", "constructor_body", "switch_block_statement_group"]);
+
+/**
+ * The local type of the name in scope at `at` (JLS 6.3): declared by a block around it, before it or around it; one a
+ * switch block's earlier group declares is in scope for the rest of that switch block.
+ */
+function localTypeAt(name: string, at: Node): Node | undefined {
+  for (let inner: Node = at, around = at.parent; around !== null; inner = around, around = around.parent) {
+    const statements = around.type === "switch_block" ? around.namedChildren.filter((group) => group.startIndex <= inner.startIndex).flatMap((group) => group.namedChildren) : BLOCKS.has(around.type) ? around.namedChildren : [];
+    const declared = statements.find((statement) => statement.startIndex <= inner.startIndex && LOCAL_TYPE_DECLARATIONS.has(statement.type) && statement.childForFieldName("name")?.text === name);
+    if (declared !== undefined) return declared;
+  }
+  return undefined;
 }
 
 function modifierWords(declaration: Node): string[] {
