@@ -128,7 +128,7 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
       held = (async () => {
         const source = await read(file);
         if (source === undefined) return undefined;
-        const sf = sourceTree(contents.get(file)!, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+        const sf = sourceTree(contents.get(file)!, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
         const shape = readAngularRouteFile(sf);
         if (shape === undefined) return undefined;
         const usesCore = [...shape.imports.values()].some((binding) => binding.module === ANGULAR_CORE);
