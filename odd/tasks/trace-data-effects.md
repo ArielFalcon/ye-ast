@@ -2,7 +2,7 @@
 
 Objective: report framework-proven data-access effects at their exact call sites without guessing targets or amplifying getter noise.
 Branch: `feat/trace-data-effects`, base `b4b421439792b2eb108e6342402dcce1aec24890` (local main).
-Status: implementation and measurement in progress; owner cleared the contract checkpoint.
+Status: implementation and verification complete; no push.
 
 ## Specs
 
@@ -18,11 +18,11 @@ Status: implementation and measurement in progress; owner cleared the contract c
 | Task | Status |
 |---|---|
 | Copy and read instructions, create branch and isolated scratch | done |
-| Discover corpus, collect initial framework evidence | done; call inventory reconciliation pending |
+| Discover corpus, collect initial framework evidence | done |
 | Record design and contract decision | done; owner confirmed no bump and MyBatis deferral |
-| Freeze baseline workload and measure all 111 traces plus differential | pending |
+| Freeze baseline workload and measure all 111 traces plus differential | done |
 | RED conformance fixtures, GREEN implementation, break-proof | done |
-| Measure candidate, cleanup, final Node 24.22.2 check | pending |
+| Measure candidate, cleanup, final Node 24.22.2 check | done |
 
 ## Log
 
@@ -84,3 +84,7 @@ At the design checkpoint, the before/after and checks were not measured. Histori
 - L8: Preserve all earlier candidate attempts. Candidate refresh reuses only facts whose expanded steps and folded leaves do not touch any of the three files with newly admitted fluent sites; changed/unmeasured traces are re-run with the final reader. Baseline correction artifacts override the invalid advice target and supply the four acceptance traces. Manifests, raw stdout/stderr, render text and exact pinned SHAs are retained under scratch. Inventory is extraction evidence, distinct from effects reached by traces.
 
 - L9: Final Node v24.22.2 gate: npm run check exited 0; 3714 tests, 3714 pass, 0 fail (154736.923 ms), typecheck and arch:check clean. Catalogue measurement is exactly 36,100 bytes for original tools, with unchanged descriptions. Cleanup over the implementation diff found no remaining issue; broad effect-kind consumers were searched and the old test helper's union narrowing was updated. SCHEMA remains 0.21.0. Final completed full gate log: check-final.log; one earlier run was intentionally interrupted to fix the newly reproduced fluent-query gap.
+
+- L10: The corpus selector also matched a class comment in RestaurantModel (target encapsulates). Both engines failed equally; corrected to RestaurantModel and re-ran both, retaining failed attempts. Acceptance selectors were reconciled with the actual checkout API and OrderPage UI route, and all four re-run on both engines. Final manifests and comparison.json select the corrected results explicitly. All 111 final cases exit 0.
+- L11: Final measurements: pfe 0→0, pbr 0→74 (43 read/31 write), rwf 0→0, rwb 0→0, shop 0→21 (21 read), ord 0→3 (3 write), web 0→0, self 0→0, acceptance 0→0. No new data cuts. 95/111 raw traces identical; stripping only data effects makes all 111 structured facts equal. Differential 14/14 byte-identical, all exit 0.
+- L12: Summary UTF-8 text 301146→314247 bytes (+13101, 4.35%). Maximum 16 data effects per trace; keep reads and writes visible and getters excluded. Detailed per-repository figures are in RFC-0013's Data effects measured section. Cleanup of the final documentation diff: clean; no source changed after the final gate except wording/comment clarification.

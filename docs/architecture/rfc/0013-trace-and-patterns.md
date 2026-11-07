@@ -719,3 +719,39 @@ Fresh paired measurements against current main2f3569b8, at identical pinned corp
 Evidence: callback-final-summary.json, callback-red.log, callback-green2.log, callback-mutant-typecheck.log, callback-mutation.log, callback-pair/results.json, measure/base and measure/head under the same owned scratch. Prior rejected c600 raw outputs are preserved under measure/rejected-c600. Main source export is reused; HOME/XDG/TMPDIR stay isolated. The earlier c600 table records a rejected result and does not establish correctness.
 
 Final bounded-round verification: Node v24.22.2 foreground `npm run check` exited0; typecheck, architecture and all3,700 tests pass, none failed/cancelled/skipped. Global/repo cleanup reviewed only this correction and reused existing range/settlement components; no other production rule changed. `git diff --check` passes. No source implementation changed after this check.
+
+
+### Data effects measured (2026-11-07)
+
+Baseline `b4b42143`, implementation `a61e8bd8`, Node 24.22.2, untrusted, identical pinned corpus SHAs.
+The slice 4 workload is 15 largest class-file traces per repository plus two engine functions and four acceptance
+traces: checkout API method, UI-route page, service checkout route and event publisher. Counts are occurrences
+across traces, so a source site reached by several roots counts several times. Raw artifacts and corrected manifests
+are retained outside the repository in the task scratch.
+
+| Repository shape | Traces | Data before → after | Read / write | Summary text bytes before → after |
+|---|---:|---:|---:|---:|
+| Frontend A | 15 | 0 → 0 | 0 / 0 | 17,838 → 17,838 |
+| REST backend | 15 | 0 → 74 | 43 / 31 | 23,877 → 33,092 |
+| Frontend B | 15 | 0 → 0 | 0 / 0 | 14,040 → 14,040 |
+| MyBatis backend | 15 | 0 → 0 | 0 / 0 | 25,316 → 25,316 |
+| Commerce backend | 15 | 0 → 21 | 21 / 0 | 73,943 → 77,217 |
+| Acceptance service | 15 | 0 → 3 | 0 / 3 | 29,113 → 29,725 |
+| Acceptance frontend | 15 | 0 → 0 | 0 / 0 | 50,106 → 50,106 |
+| Engine | 2 | 0 → 0 | 0 / 0 | 45,023 → 45,023 |
+| Acceptance service traces | 2 | 0 → 0 | 0 / 0 | 5,551 → 5,551 |
+| Acceptance frontend traces | 2 | 0 → 0 | 0 / 0 | 16,339 → 16,339 |
+
+Total: 98 data effects (64 reads, 34 writes), no new data-effect cuts; summary text 301,146 → 314,247
+UTF-8 bytes (+13,101, 4.35%). Reads remain explicit: the maximum is 16 data effects per trace,
+and getters contribute none. Keeping per-call operation/access/location preserves ordering and useful read dependencies;
+there is no measurement-based reason to group away that information. The syntax inventory has 140 data sites in the
+REST backend, 303 in the commerce backend and 1 in the acceptance service; unreachable bodies remain behind the trace's
+existing receiver/dispatch cuts, so this is not a claim that every source site is reached.
+
+95/111 raw trace answers are byte-identical. Removing only new data effects makes all 111 structured trace facts
+equal; roots, steps, existing HTTP/message effects, cuts and reading plans are unchanged. The 14-command differential
+(3 maps, 4 callers, 2 importers, 2 outlines, 3 impacts) is byte-identical in stdout/stderr/exit code, all exit 0.
+Conformance fixtures were RED first, GREEN, then mutation-checked, including generic substitution, override bodies,
+query annotation precedence, exact ownership, function values and fluent JPA query execution.
+`npm run check`: 3714 tests, 3714 pass, 0 fail; typecheck and arch:check pass. MCP catalogue: 36,100 bytes; SCHEMA 0.21.0 unchanged.
