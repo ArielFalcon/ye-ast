@@ -6,7 +6,7 @@ import { relation, type Relation, type SymbolRef } from "../../domain/relations/
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
 import type { AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { RelationExtraction, RelationExtractor } from "./relation-extractor.ts";
+import type { ComponentTemplate, RelationExtraction, RelationExtractor } from "./relation-extractor.ts";
 import type { ScopeMember, TemplateEffects, TemplateUnit, TemplateUsageReader } from "../../ports/template-usage.port.ts";
 
 export interface AngularRelationsDeps {
@@ -26,14 +26,46 @@ export function createAngularRelationExtractor(deps: AngularRelationsDeps): Rela
 
 async function extractRelations(deps: AngularRelationsDeps, files: readonly SourceFile[], options?: { memberProofs?: MemberProofContext }): Promise<RelationExtraction> {
   const contents = new Map(files.map((file) => [file.path, file.content]));
-  const templateEffects = (component: Extract<AngularClass, { kind: "component" }>): TemplateEffects => {
-    const source = component.template === undefined ? undefined : templateOf(component, component.template, contents);
-    if (source === undefined) return { calls: [], writes: [], passed: [] };
-    return "unknown" in source ? { calls: [], writes: [], passed: [], unreadable: true } : deps.templates.effects(source);
+  const read = new Map<string, TemplateRead>();
+  /** Each component's template read once, for the metadata reader's proofs and for its handlers alike. */
+  const templateRead = (component: Extract<AngularClass, { kind: "component" }>): TemplateRead => {
+    const key = classKey(component.ref);
+    let done = read.get(key);
+    if (done === undefined) {
+      done = readTemplate(deps.templates, component, contents);
+      read.set(key, done);
+    }
+    return done;
   };
+  const templateEffects = (component: Extract<AngularClass, { kind: "component" }>): TemplateEffects => templateRead(component).effects;
   const { classes, findings, fields, locals, memberUses, externalUses } = await deps.metadata.read(files, { ...options, templateEffects });
   const { units, findings: unitFindings } = templateUnitsOf(classes, contents);
-  return { relations: sortFindings([...findings, ...unitFindings, ...deps.templates.read(units)]), fields, locals, ...(memberUses === undefined ? {} : { memberUses }), ...(externalUses === undefined ? {} : { externalUses }) };
+  const usage = deps.templates.read(units);
+  const usesOf = new Map(usage.uses.map(({ component, uses }) => [classKey(component), uses]));
+  const templates = classes.flatMap((candidate): ComponentTemplate[] => {
+    if (candidate.kind !== "component") return [];
+    const { effects, unreadable, lines } = templateRead(candidate);
+    return [{ component: candidate.ref, ...(lines === undefined ? {} : { lines }), handlers: effects.handlers, eventCalls: effects.eventCalls, uses: usesOf.get(classKey(candidate.ref)) ?? [], ...(unreadable === undefined ? {} : { unreadable }) }];
+  });
+  return { relations: sortFindings([...findings, ...unitFindings, ...usage.relations]), fields, locals, ...(memberUses === undefined ? {} : { memberUses }), ...(externalUses === undefined ? {} : { externalUses }), templates };
+}
+
+const NO_EFFECTS: TemplateEffects = { calls: [], handlers: [], eventCalls: [], writes: [], passed: [] };
+
+interface TemplateRead {
+  effects: TemplateEffects;
+  lines?: ComponentTemplate["lines"];
+  unreadable?: Evidence;
+}
+
+/** What a component's template does, and the place it cannot be read from: its own place, or where it names its file. */
+function readTemplate(templates: TemplateUsageReader, component: Extract<AngularClass, { kind: "component" }>, contents: ReadonlyMap<string, string>): TemplateRead {
+  const source = component.template === undefined ? undefined : templateOf(component, component.template, contents);
+  if (source === undefined) return { effects: NO_EFFECTS, unreadable: { path: component.ref.path, line: component.ref.line } };
+  if ("unknown" in source) return { effects: { ...NO_EFFECTS, unreadable: true }, unreadable: source.unknown.evidence[0]! };
+  const effects = templates.effects(source);
+  const lines = { path: source.path, start: source.firstLine, end: source.firstLine + source.text.split("\n").length - 1 };
+  return effects.unreadable === true ? { effects, lines, unreadable: { path: source.path, line: source.firstLine } } : { effects, lines };
 }
 
 /**

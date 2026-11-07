@@ -1,3 +1,4 @@
+import type { Entrypoint } from "../domain/entrypoints/entrypoint.ts";
 import type { Fact, WalkBounds } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { ScopeRequest } from "../domain/shared/scope.ts";
@@ -12,12 +13,36 @@ export const TRACE_BOUND_FIELDS = ["depth", "expansions"] as const;
 /** Bounds on the walk; without one the walk runs to its end. */
 export type TraceBudget = Pick<WalkBounds, (typeof TRACE_BOUND_FIELDS)[number]>;
 
+/** Every kind of entrypoint the map reads, in the map's own spelling. */
+export const ENTRYPOINT_KINDS = ["http-route", "ui-route", "listener", "job"] as const satisfies readonly Entrypoint["kind"][];
+
+/** An entrypoint of the map, by its kind and its name as the map spells it (`POST /orders`, `/orders/:id`). */
+export interface EntrypointTarget {
+  kind: Entrypoint["kind"];
+  name: string;
+}
+
+/** A declaration, a line range, or an entrypoint of the map at the same snapshot. */
+export type TraceTarget = CallersTarget | EntrypointTarget;
+
+/** A trace starts from declarations or from entrypoints, never both: a request that mixes them is refused before any work. */
+export function mixesTargetKinds(targets: readonly TraceTarget[]): boolean {
+  return new Set(targets.map((target) => "kind" in target)).size > 1;
+}
+
+/** No entrypoint of the map has a requested kind and name; each entry lists the names the map holds of that kind. */
+export interface UnknownEntrypointFault {
+  kind: "unknown-entrypoint";
+  detail: string;
+  entries: readonly (EntrypointTarget & { candidates: readonly string[] })[];
+}
+
 interface TraceBase {
   /** Path of the root of a git repository to read. */
   repo: string;
   /** Stable name of the repository in the snapshot of every fact; never a path. */
   repoId: string;
-  targets: readonly CallersTarget[];
+  targets: readonly TraceTarget[];
   budget?: TraceBudget;
   scope?: ScopeRequest;
   /** Aborting stops the work, removes every temporary directory and answers an `aborted` fault. */
@@ -26,13 +51,15 @@ interface TraceBase {
 
 export type TraceRequest = TraceBase & ({ revision: string; live?: undefined } | ({ revision?: undefined } & LiveSelector));
 
-export type TraceFault = VcsFault | LiveFault | UnknownSymbolFault;
+export type TraceFault = VcsFault | LiveFault | UnknownSymbolFault | UnknownEntrypointFault;
 
 export interface TraceQueries {
   /**
    * What the requested declarations execute, in the order their bodies call it: every declaration a target selects is a
    * root, each declaration is expanded once, and a call no rule settles is an `unresolved-link` cut with its candidates.
-   * A target outside the declared scope is `unknown`; a symbol that names no declaration an `unknown-symbol` fault.
+   * An entrypoint target roots at the handler of every entrypoint of the map with its kind and name, a UI route at its
+   * component. A target outside the declared scope is `unknown`; a symbol that names no declaration an `unknown-symbol`
+   * fault; an entrypoint the map does not hold an `unknown-entrypoint` fault.
    */
   walk(request: TraceRequest): Promise<Result<Fact<TraceValue>, TraceFault>>;
 }

@@ -17,7 +17,7 @@ const pipe = (symbol: string, name: string): ScopeMember => ({ kind: "pipe", ref
 
 function read(text: string, scope: ScopeMember[], firstLine = 1): readonly Finding<Relation>[] {
   const unit: TemplateUnit = { component: HOST, path: "src/app/host.html", text, firstLine, scope };
-  return createTemplateUsageReader().read([unit]);
+  return createTemplateUsageReader().read([unit]).relations;
 }
 
 /** `<kind> <to>@<line>` for each relation and `<reason>@<line>` for each unknown item. */
@@ -88,4 +88,69 @@ test("the same units give the same findings in the same order", () => {
 
   assert.deepEqual(read(text, scope), read(text, scope));
   assert.deepEqual(read(text, scope), read(text, [...scope].reverse()));
+});
+
+test("the handlers a template binds to events are the component's own methods its event bindings call, in text order, never a template local's or a field's member", () => {
+  const text = [
+    '<button (click)="save(); this.reset()">x</button>',
+    "<p>{{ total() }}</p>",
+    '<ng-template let-item let-act><a (click)="item.open(); act(); pick(item)">y</a></ng-template>',
+    '<input #box (keyup)="box.focus(); store.load()">',
+    '@defer { <i></i> } @loading { <b (click)="wait()"></b> } @placeholder { <s (click)="hold()"></s> }',
+  ].join("\n");
+  const effects = createTemplateUsageReader().effects({ path: "src/app/host.html", text, firstLine: 4 });
+  assert.deepEqual(effects.handlers.map(({ file, line, column, member }) => `${file}:${line}:${column} ${member}`), [
+    "src/app/host.html:4:18 save",
+    "src/app/host.html:4:26 reset",
+    "src/app/host.html:6:63 pick",
+    "src/app/host.html:8:43 wait",
+    "src/app/host.html:8:85 hold",
+  ]);
+});
+
+test("every other call an event binding makes is listed with its spelling, so none is dropped: a field's method, a template local's, the event's", () => {
+  const text = ['<ng-template let-act><b (click)="store.save(); act(); save()"></b></ng-template>', '<i (keyup)="$event.stopPropagation()"></i>', "<p>{{ store.total() }}</p>", '@defer { } @loading { <a (click)="x.wait()"></a> } @placeholder { <b (click)="x.hold()"></b> }'].join("\n");
+  const effects = createTemplateUsageReader().effects({ path: "src/app/host.html", text, firstLine: 1 });
+  assert.deepEqual(effects.eventCalls.map(({ line, column, name }) => `${line}:${column} ${name}`), ["1:34 store.save", "1:48 act", "2:13 $event.stopPropagation", "4:35 x.wait", "4:79 x.hold"]);
+  assert.deepEqual(effects.handlers.map(({ member }) => member), ["save"]);
+});
+
+test("the declarations a template uses are listed in the order they first appear in its text, whatever their kind", () => {
+  const scope = [directive("Mark", "[mark]"), pipe("Fmt", "fmt"), component("Child", "child-x")];
+  const deferred = { ...HOST, symbol: "Deferred" };
+  const twice = { ...HOST, symbol: "Twice" };
+  const usage = createTemplateUsageReader().read([
+    { component: HOST, path: "src/app/host.html", text: "<div *mark>{{ value | fmt }}</div><child-x />", firstLine: 1, scope },
+    { component: deferred, path: "src/app/deferred.html", text: "@defer { <child-x /> } @loading { {{ value | fmt }}<i mark></i> } @placeholder { <b mark></b> }", firstLine: 1, scope },
+    { component: twice, path: "src/app/twice.html", text: "@defer { } @loading { <i mark></i><child-x /> } @placeholder { <b mark></b> }", firstLine: 1, scope },
+  ]);
+  assert.deepEqual(usage.uses, [
+    { component: HOST, uses: [ref("Mark"), ref("Fmt"), ref("Child")] },
+    { component: deferred, uses: [ref("Child"), ref("Fmt"), ref("Mark")] },
+    { component: twice, uses: [ref("Mark"), ref("Child")] },
+  ]);
+});
+
+test("every call an event binding makes, whatever its shape, is an own-method handler or an event call; none is dropped", () => {
+  const shapes: readonly [string, readonly string[]][] = [
+    ["save()", ["handler save"]],
+    ["this.save()", ["handler save"]],
+    ["save?.()", ["handler save"]],
+    ["store.save()", ["call store.save"]],
+    ["store.save?.()", ["call store.save"]],
+    ["store?.save()", ["call store?.save"]],
+    ["store['save']()", ["call store['save']"]],
+    ["items.forEach(i => save(i))", ["call items.forEach", "handler save"]],
+    ["$any(store).save()", ["call $any(store).save", "handler $any"]],
+    ["save(load())", ["handler load", "handler save"]],
+    ["make()()", ["call make()", "handler make"]],
+    ["tag`x`", ["handler tag"]],
+    ["store.tag`x`", ["call store.tag"]],
+    ["$event()", ["call $event"]],
+  ];
+  for (const [handler, expected] of shapes) {
+    const effects = createTemplateUsageReader().effects({ path: "src/app/host.html", text: `<button (click)="${handler.replaceAll('"', "&quot;")}"></button>`, firstLine: 1 });
+    const found = [...effects.handlers.map(({ member }) => `handler ${member}`), ...effects.eventCalls.map(({ name }) => `call ${name}`)].sort();
+    assert.deepEqual([effects.unreadable, found], [undefined, [...expected].sort()], handler);
+  }
 });

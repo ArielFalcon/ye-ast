@@ -230,3 +230,68 @@ test("the three transports accept the trace's own bounds and refuse the caller-c
     assert.deepEqual([cli, protocol, mcp], expected ? [[accepted], [accepted], [accepted]] : [[], [], []], JSON.stringify(budget));
   }
 });
+
+function traceTargets(asked: unknown[], answer: unknown): TraceQueries {
+  return { walk: async (request: { targets: unknown }) => (asked.push(request.targets), answer as never) } as unknown as TraceQueries;
+}
+
+/** One trace through the CLI, the protocol and the MCP with the same targets: what each asked the family and how it answered. */
+async function traceThroughEach(cliTargets: readonly string[], targets: readonly unknown[], answer: unknown) {
+  const [cli, protocol, mcp]: [unknown[], unknown[], unknown[]] = [[], [], []];
+  const stderr: string[] = [];
+  const cliCode = await run(["trace", REPO, ...cliTargets], { out: () => undefined, err: (line: string) => void stderr.push(line) }, {
+    version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceTargets(cli, answer), workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries,
+    install, mcpCommand: ["/bin/ye-ast"], redaction,
+    canonicalRepositoryRoot: async (path: string) => ({ ok: true, value: path }), repositoryName: async () => ({ ok: true, value: "repo" }), signal: new AbortController().signal,
+  });
+  let written = "";
+  await serveQueries(
+    { version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceTargets(protocol, answer), workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
+    {
+      input: Readable.from([
+        `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "trust.declare", params: { mode: "untrusted" } })}\n`,
+        `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "trace.walk", params: { repo: REPO, repoId: "shop", revision: "HEAD", targets } })}\n`,
+      ]),
+      output: { write: (chunk: string) => void (written += chunk) },
+    },
+  );
+  const reply = written.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { id?: number; error?: { code: number; data?: unknown } }).find((message) => message.id === 2);
+  const session = await openSession(createMcpServer({
+    digest: createSha256Digest(), version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceTargets(mcp, answer),
+    workspace: {} as WorkspaceQueries, workspaceImpact: {} as WorkspaceImpactQueries, decisions: {} as DecisionQueries, redaction, repository: { path: REPO, repoId: "shop" },
+  }));
+  const result = (await session.callTool("ye_ast_trace", { targets }).finally(() => session.close())) as ToolResult;
+  return { asked: [cli, protocol, mcp], cliCode, stderr, reply, result };
+}
+
+test("the three transports pass an entrypoint target, by kind and the name split at the first colon, alike", async () => {
+  const targets = [{ kind: "ui-route", name: "/orders/:id" }, { kind: "http-route", name: "POST /orders" }];
+  const { asked, cliCode, reply, result } = await traceThroughEach(["--entrypoint", "ui-route:/orders/:id", "--entrypoint", "http-route:POST /orders"], targets, { ok: true, value: TRACE_FACT });
+  assert.deepEqual([cliCode, reply?.error, result.isError === true], [0, undefined, false]);
+  assert.deepEqual(asked, [[targets], [targets], [targets]]);
+});
+
+test("the three transports refuse an entrypoint kind the map does not read, asking nothing", async () => {
+  const { asked, cliCode, reply, result } = await traceThroughEach(["--entrypoint", "page:/orders"], [{ kind: "page", name: "/orders" }], { ok: true, value: TRACE_FACT });
+  assert.deepEqual([cliCode, reply?.error?.code, result.isError], [2, -32602, true]);
+  assert.deepEqual(asked, [[], [], []]);
+});
+
+test("the three transports answer an unknown entrypoint as its own fault with the names of that kind", async () => {
+  const entries = [{ kind: "http-route", name: "POST /orders", candidates: ["GET /orders"] }];
+  const { cliCode, stderr, reply, result } = await traceThroughEach(["--entrypoint", "http-route:POST /orders"], [{ kind: "http-route", name: "POST /orders" }], { ok: false, fault: { kind: "unknown-entrypoint", detail: "no entrypoint", entries } });
+  assert.deepEqual([cliCode, stderr.slice(1)], [1, ["  - http-route:POST /orders: the map's http-route names: GET /orders"]]);
+  assert.deepEqual([reply?.error?.code, reply?.error?.data], [-32023, { kind: "unknown-entrypoint", entries }]);
+  const text = result.content.map((part) => ("text" in part ? part.text : "")).join("");
+  assert.deepEqual([result.isError, /fault: unknown-entrypoint/.test(text), text.includes("http-route POST /orders: the map's http-route names: GET /orders")], [true, true, true]);
+});
+
+test("declaration targets together with entrypoint targets are refused before any query: a CLI usage error, protocol invalid params, and the MCP's invalid-argument tool error", async () => {
+  const mixed = await traceThroughEach(["src/a.ts:run", "--entrypoint", "ui-route:/orders"], [{ file: "src/a.ts", symbol: "run" }, { kind: "ui-route", name: "/orders" }], { ok: true, value: TRACE_FACT });
+  const badKind = await traceThroughEach(["--entrypoint", "page:/orders"], [{ kind: "page", name: "/orders" }], { ok: true, value: TRACE_FACT });
+  const shape = (result: ToolResult) => [result.isError, result.content.map((part) => ("text" in part ? part.text.slice(0, part.text.indexOf(": targets")) : "")).join("")];
+  assert.deepEqual([mixed.cliCode, mixed.reply?.error?.code], [2, -32602]);
+  assert.deepEqual(shape(mixed.result), shape(badKind.result));
+  assert.equal(shape(mixed.result)[0], true);
+  assert.deepEqual(mixed.asked, [[], [], []]);
+});

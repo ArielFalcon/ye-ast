@@ -132,8 +132,9 @@ results retain `repositorySources` host read-location metadata for existing clie
 ### Errors
 
 An error is `{code, message, data: {kind}}`; `kind` names the code and `data` adds `entries` for `unknown-symbol`, each
-`{file, symbol, candidates}`, or `{file, start, end, candidates}` for a line range that selects no declaration, where `candidates` holds the dotted containment paths of the seedable declarations of the file, sorted and once each, and
-`globs` for `unknown-change-path`. The set is closed:
+`{file, symbol, candidates}`, or `{file, start, end, candidates}` for a line range that selects no declaration, where `candidates` holds the dotted containment paths of the seedable declarations of the file, sorted and once each,
+`entries` for `unknown-entrypoint`, each `{kind, name, candidates}` with the names the map holds of that kind, sorted
+and once each, and `globs` for `unknown-change-path`. The set is closed:
 
 | Kind | Code | Meaning |
 |---|---|---|
@@ -161,6 +162,7 @@ An error is `{code, message, data: {kind}}`; `kind` names the code and `data` ad
 | `live-requires-trusted` | -32019 | a live read was requested without repository trust |
 | `unsupported-object-format` | -32020 | live capture does not support the repository object format |
 | `live-mirror-failed` | -32021 | a live mirror operation failed |
+| `unknown-entrypoint` | -32023 | a trace target names an entrypoint kind and name the map at that revision does not hold |
 
 ## Fixed layer (MVP)
 

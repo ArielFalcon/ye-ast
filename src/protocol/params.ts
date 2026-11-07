@@ -7,7 +7,7 @@ import { isWalkBoundField, WALK_BOUND_FIELDS, type WalkBoundsField } from "../co
 import type { MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactImportersRequest, ImpactOfChangeRequest } from "../core/ports/impact-queries.port.ts";
 import type { OutlineRequest, OutlineSelector } from "../core/ports/outline-queries.port.ts";
-import { TRACE_BOUND_FIELDS, type TraceRequest } from "../core/ports/trace-queries.port.ts";
+import { ENTRYPOINT_KINDS, mixesTargetKinds, TRACE_BOUND_FIELDS, type TraceRequest, type TraceTarget } from "../core/ports/trace-queries.port.ts";
 import type { WorkspaceRequest } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionsRequest } from "../core/ports/decision-queries.port.ts";
 import type { WorkspaceRepositoryRequest } from "../core/ports/workspace-repos.port.ts";
@@ -177,7 +177,18 @@ type Unsignaled<T> = T extends unknown ? Omit<T, "signal"> : never;
 
 export function readTrace(params: unknown): Unsignaled<Extract<TraceRequest, { live?: undefined }>> {
   const p = only(params, ["repo", "repoId", "revision", "targets", "scope", "budget"]);
-  return { repo: text(p, "repo"), repoId: text(p, "repoId"), revision: text(p, "revision"), targets: list(p, "targets", targetOf), ...scopeOf(p), ...budgetOf(p, TRACE_BOUND_FIELDS) };
+  const targets = list(p, "targets", traceTargetOf);
+  if (mixesTargetKinds(targets)) throw new InvalidParamsError("targets are declarations or entrypoints, not both");
+  return { repo: text(p, "repo"), repoId: text(p, "repoId"), revision: text(p, "revision"), targets, ...scopeOf(p), ...budgetOf(p, TRACE_BOUND_FIELDS) };
+}
+
+/** A declaration target, or an entrypoint of the map by its kind and name. */
+function traceTargetOf(value: unknown): TraceTarget {
+  if (!isRecord(value) || !("kind" in value)) return targetOf(value);
+  only(value, ["kind", "name"]);
+  const kind = ENTRYPOINT_KINDS.find((known) => known === value.kind);
+  if (kind === undefined) throw new InvalidParamsError(`kind must be one of ${ENTRYPOINT_KINDS.join(", ")}`);
+  return { kind, name: text(value, "name") };
 }
 
 export function readOutline(params: unknown): Unsignaled<Extract<OutlineRequest, { live?: undefined }>> {

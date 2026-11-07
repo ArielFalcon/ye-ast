@@ -17,3 +17,6 @@ export type AngularClass =
 export function classKey(ref: SymbolRef): string {
   return `${ref.path}\0${ref.symbol}`;
 }
+
+/** The lifecycle hooks Angular calls on a component or directive, in the order it calls them. */
+export const ANGULAR_LIFECYCLE_HOOKS = ["ngOnChanges", "ngOnInit", "ngDoCheck", "ngAfterContentInit", "ngAfterContentChecked", "ngAfterViewInit", "ngAfterViewChecked", "ngOnDestroy"] as const;

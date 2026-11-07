@@ -19,7 +19,7 @@ export interface RootSelection extends SeedSelection<GraphSymbol> {
 }
 
 /** The targets once each, in a fixed order, so the same request in any order is the same fact. */
-export function distinctTargets(targets: readonly CallersTarget[]): CallersTarget[] {
+export function distinctTargets<Target>(targets: readonly Target[]): Target[] {
   const byKey = new Map(targets.map((target) => [JSON.stringify(target), target]));
   return [...byKey].sort(([a], [b]) => compareText(a, b)).map(([, target]) => target);
 }
