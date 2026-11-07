@@ -231,8 +231,9 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
   } };
 
   /**
-   * The repository class an annotation names alone, when it is nominal: its one declaration, or a class it extends through
-   * the heritage proof, declares a `private`, `protected` or `#` instance member.
+   * The repository class an annotation names alone, when it is nominal: its one declaration itself declares a `private`,
+   * `protected` or `#` instance member, so only an instance of it or of a subclass fits. An inherited one proves nothing:
+   * every class below the one that declares it fits, siblings of the annotated class included.
    */
   async function nominalAt(file: string, tree: FileIndex, text: string, site: UseSite): Promise<DeclaredType> {
     const head = nodesAt(tree, text, site).find((node): node is ts.Identifier => ts.isIdentifier(node) && node.text === site.spelled && isTypeName(node));
@@ -243,14 +244,8 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
       return bound.get(path)!;
     };
     const named = classOf(await heritageOf(file, head, boundOf, 0));
-    if (named === undefined || !ts.isClassDeclaration(named.declaration) || named.declaration.name === undefined) return UNKNOWN_TYPE;
-    const nominal: DeclaredType = { kind: "nominal", file: named.file, name: named.declaration.name.text, line: lineOf(named.declaration.getSourceFile(), named.declaration.name) };
-    for (let declaring: typeof named | undefined = named, depth = 0; declaring !== undefined && depth < ALIAS_DEPTH; depth += 1) {
-      if (declaresRestricted(declaring.declaration)) return nominal;
-      const written = superclassOf(declaring.declaration);
-      declaring = written === undefined ? undefined : classOf(await heritageOf(declaring.file, written, boundOf, 0));
-    }
-    return UNKNOWN_TYPE;
+    if (named === undefined || !ts.isClassDeclaration(named.declaration) || named.declaration.name === undefined || !declaresRestricted(named.declaration)) return UNKNOWN_TYPE;
+    return { kind: "nominal", file: named.file, name: named.declaration.name.text, line: lineOf(named.declaration.getSourceFile(), named.declaration.name) };
   }
 
   /** The library or package type an annotation's first name, keyword or array syntax names at the site. */

@@ -787,14 +787,15 @@ test("heritage that names no repository class or interface and no library type m
   }
 });
 
-test("a repository class with a private, protected or # instance member of its own, or of a class it extends through imports and aliases, is nominal", async () => {
+test("a repository class that itself declares a private, protected or # instance member is nominal, and one that inherits it through imports and aliases is not", async () => {
   const store: SourceFile = { path: "src/store.ts", content: ["import { Base } from './base';", "const Parent = Base;", "export class Store extends Parent {}"].join("\n") };
   const base: SourceFile = { path: "src/base.ts", content: "export class Base { protected id = 0; }" };
   for (const [annotation, lines, expected] of [
     ["Local", ["class Local { private items: number[] = []; }"], { kind: "nominal", file: "src/use.ts", name: "Local", line: 1 }],
     ["Local", ["class Local { #items = 0; }"], { kind: "nominal", file: "src/use.ts", name: "Local", line: 1 }],
     ["Local", ["class Local {", "  constructor(protected readonly id: number) {}", "}"], { kind: "nominal", file: "src/use.ts", name: "Local", line: 1 }],
-    ["Store", ["import { Store } from './store';"], { kind: "nominal", file: "src/store.ts", name: "Store", line: 3 }],
+    ["Store", ["import { Store } from './store';"], { kind: "unknown" }],
+    ["Base", ["import { Base } from './base';"], { kind: "nominal", file: "src/base.ts", name: "Base", line: 1 }],
     ["Local", ["class Local { private static count = 0; save(): void {} }"], { kind: "unknown" }],
     ["Local", ["class Local { constructor(id: number) {} }"], { kind: "unknown" }],
   ] as const) assert.deepEqual(await declaredTypeOf(annotation, annotation, lines, [store, base]), expected, lines.join(" "));

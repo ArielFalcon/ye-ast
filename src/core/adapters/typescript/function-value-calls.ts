@@ -102,7 +102,7 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
       if (stored.has(identifier) || (ts.isVariableDeclaration(parent) && parent.name === identifier)) return true;
       const target = bindingOf(identifier);
       if (target?.kind !== "declared" || target.symbol !== binding.symbol) return target?.kind !== "dynamic";
-      return ts.isPropertyAccessExpression(parent) && parent.expression === identifier && !isWritten(parent);
+      return readsMember(identifier);
     });
   };
   const fileIsModule = ts.isExternalModule(tree);
@@ -174,17 +174,20 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
     return ts.isPropertyDeclaration(field) && !isStatic ? annotated(field.type, tree) : undefined;
   };
   const receiverBindings = accesses.flatMap((access): ReceiverBinding[] => {
-    const receiver = access.expression;
-    if (access.questionDotToken !== undefined && isNameChain(unwrapped(receiver))) return [];
+    const receiver = seenThrough(access.expression);
+    /** A receiver the rules see only through a wrapper binds nothing else they could leave to its root. */
+    const wrapped = receiver !== access.expression ? COMPUTED : undefined;
     let holds: ReceiverValue | undefined;
-    if (isThisMember(receiver)) holds = fieldAnnotationOf(receiver);
+    if (access.questionDotToken !== undefined) holds = COMPUTED;
+    else if (isThisMember(receiver)) holds = fieldAnnotationOf(receiver) ?? wrapped;
     else if (ts.isIdentifier(receiver)) {
       const binding = bindingOf(receiver);
-      holds = binding?.kind === "declared" ? (valueOf(binding, receiver.text) ?? annotationOf(binding, receiver.text)) : undefined;
-    } else if (!isNameChain(unwrapped(receiver))) holds = storedValue(receiver, bindingOf, tree) ?? returnedValue(receiver, tree);
+      holds = (binding?.kind === "declared" ? (valueOf(binding, receiver.text) ?? annotationOf(binding, receiver.text)) : undefined) ?? wrapped;
+    } else if (isNameChain(receiver)) holds = wrapped;
+    else holds = ts.isAsExpression(receiver) || ts.isTypeAssertionExpression(receiver) ? COMPUTED : (storedValue(receiver, bindingOf, tree) ?? returnedValue(receiver, tree));
     if (holds === undefined) return [];
     const at = tree.getLineAndCharacterOfPosition(access.parent.getStart(tree));
-    const name = isThisMember(receiver) ? receiver.name.text : ts.isIdentifier(receiver) ? receiver.text : "";
+    const name = holds.kind === "computed" ? "" : isThisMember(receiver) ? receiver.name.text : ts.isIdentifier(receiver) ? receiver.text : "";
     return [{ line: at.line + 1, column: at.character + 1, receiver: name, member: access.name.text, holds }];
   });
   return { functionValueCalls, receiverBindings };
@@ -221,7 +224,7 @@ function fieldStaysLocal(owner: ts.ClassLikeDeclaration, name: string, copies: R
     else if (namesMember(node, name) && !(isThisMember(node) && thisClassOf(node) === owner)) stays = false;
     else if (isThisMember(node) && node.name.text === name && thisClassOf(node) === owner) {
       const parent = node.parent;
-      const read = ts.isPropertyAccessExpression(parent) && parent.expression === node && !isWritten(parent);
+      const read = readsMember(node);
       const stored = ts.isBinaryExpression(parent) && parent.left === node && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken;
       if (!read && !stored && !copies.has(node)) stays = false;
     }
@@ -229,6 +232,14 @@ function fieldStaysLocal(owner: ts.ClassLikeDeclaration, name: string, copies: R
   };
   visit(owner);
   return stays;
+}
+
+/** Whether a value, seen through the wrappers a receiver is seen through, only has one of its members read. */
+function readsMember(value: ts.Expression): boolean {
+  let at: ts.Expression = value;
+  while ((ts.isParenthesizedExpression(at.parent) || ts.isNonNullExpression(at.parent) || ts.isSatisfiesExpression(at.parent)) && at.parent.expression === at) at = at.parent;
+  const parent = at.parent;
+  return ts.isPropertyAccessExpression(parent) && parent.expression === at && !isWritten(parent);
 }
 
 /** Whether an access is the target of an assignment, an update, a `delete` or a destructuring or iteration store. */
@@ -345,13 +356,24 @@ function isNameChain(node: ts.Expression): boolean {
   return ts.isPropertyAccessExpression(node) && node.questionDotToken === undefined && isNameChain(node.expression);
 }
 
+const COMPUTED: ReceiverValue = { kind: "computed" };
+
+/**
+ * A receiver through the wrappers that keep its value and its type: parentheses, a non-null `!` and `satisfies`. A type
+ * assertion is not seen through, since it states a type the value need not have.
+ */
+function seenThrough(expression: ts.Expression): ts.Expression {
+  let inner = expression;
+  while (ts.isParenthesizedExpression(inner) || ts.isNonNullExpression(inner) || ts.isSatisfiesExpression(inner)) inner = inner.expression;
+  return inner;
+}
+
 /** What a receiver that is no name holds: the result of a call whose callee ends in a name, or an expression no rule binds. */
-function returnedValue(receiver: ts.Expression, tree: ts.SourceFile): ReceiverValue {
-  const inner = unwrapped(receiver);
-  if (!ts.isCallExpression(inner) || inner.questionDotToken !== undefined) return { kind: "computed" };
+function returnedValue(inner: ts.Expression, tree: ts.SourceFile): ReceiverValue {
+  if (!ts.isCallExpression(inner) || inner.questionDotToken !== undefined) return COMPUTED;
   const callee = unwrapped(inner.expression);
   const name = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : undefined;
-  if (name === undefined) return { kind: "computed" };
+  if (name === undefined) return COMPUTED;
   const at = tree.getLineAndCharacterOfPosition(inner.getStart(tree));
   return { kind: "returned", name, line: at.line + 1, column: at.character + 1 };
 }

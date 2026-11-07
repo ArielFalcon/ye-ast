@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, test } from "node:test";
+import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -735,6 +736,70 @@ test("a trace over a real index leaves a library global's member call as a globa
   assert.deepEqual(plain.value.status === "complete" && plain.value.value.steps[0]?.external, [{ kind: "global", names: ["Math.max"] }]);
   assert.equal(shadowed.value.status, "partial");
   assert.deepEqual(shadowed.value.status === "partial" && shadowed.value.cuts.map((cut) => cut.at[0]), ["src/shadow.ts:4 Math.max"]);
+});
+
+/** Whether a trace answered steps or folded leaves at a declaration named `symbol`. */
+function reaches(fact: Awaited<ReturnType<TraceQueries["walk"]>>, symbol: string): boolean {
+  if (!fact.ok || fact.value.status === "unknown") return true;
+  return fact.value.value.steps.some((step) => step.symbol === symbol || (step.leaves ?? []).some((leaf) => leaf.symbol === symbol));
+}
+
+test("a trace over a real index never takes a class's method as what runs on a type a sibling also fits through a brand both inherit", async () => {
+  writeFileSync(join(repo, "src", "kinds.ts"), ["export abstract class Base { protected brand = 0; }", "export class Plain extends Base { save(): number { return 1; } }", "export class Twin extends Base { save(): number { return 2; } }", "export function use(p: Plain): number { return p.save(); }", "use(new Twin());", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "siblings");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const fact = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/kinds.ts", symbol: "use" }] });
+
+  assert.ok(fact.ok);
+  assert.equal(fact.value.status, "partial");
+  assert.equal(reaches(fact, "save"), false);
+});
+
+test("a trace over a real index takes no method as what runs on a receiver it sees only through a wrapper, a cast, an index, an optional chain, a comma, a condition or a call", async () => {
+  const forms: Record<string, string> = {
+    paren: "(p).save()",
+    bang: "p!.save()",
+    satisfied: "(p satisfies Plain).save()",
+    cast: "(p as Plain).save()",
+    angle: "(<Plain>p).save()",
+    element: "[p][0].save()",
+    optional: "p?.save()",
+    comma: "(0, p).save()",
+    conditional: "(p ? p : p).save()",
+    called: "(() => p)().save()",
+  };
+  writeFileSync(join(repo, "src", "forms.ts"), [
+    "export class Plain { save(): number { return 1; } }",
+    "export class Twin { save(): number { return 2; } }",
+    ...Object.entries(forms).map(([name, call]) => `export function ${name}(p: Plain): number { return ${call}; }`),
+    "export class Holder { field: Plain = new Plain(); run(): number { return (this.field).save(); } }",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "forms");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const indexed = ["paren", "bang", "satisfied", "cast", "angle", "optional", "Holder.run"];
+  for (const name of [...Object.keys(forms), "Holder.run"]) {
+    const fact = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/forms.ts", symbol: name }] });
+    assert.equal(reaches(fact, "save"), false, name);
+    if (indexed.includes(name)) assert.ok(fact.ok && fact.value.status === "partial", name);
+  }
+  const proven: Record<string, boolean> = { paren: true, bang: true, satisfied: true, cast: false, angle: false, optional: false, constructedCast: false, constructedAngle: false };
+  writeFileSync(join(repo, "src", "branded.ts"), [
+    "export class Branded { private id = 0; save(): number { return this.id; } }",
+    "export class Twin { save(): number { return 2; } }",
+    ...Object.keys(proven).map((name) => `export function ${name}(p: Branded): number { return ${{ ...forms, constructedCast: "(new Branded() as Branded).save()", constructedAngle: "(<Branded>new Branded()).save()" }[name]}; }`),
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "branded");
+  for (const [name, step] of Object.entries(proven)) {
+    const fact = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/branded.ts", symbol: name }] });
+    assert.equal(reaches(fact, "save"), step, `branded ${name}`);
+  }
 });
 
 const JAVA_ORDERS = [

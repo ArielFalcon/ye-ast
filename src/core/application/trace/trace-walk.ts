@@ -364,9 +364,10 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const kept = edges.flatMap(({ edge, target }, index) => (verdicts[index]!.kind === "keep" && edge.line !== null && edge.column !== null && navigation.ownersOf(target).some((owner) => CLASS_KINDS.includes(owner.kind)) ? [{ index, edge, target }] : []));
     if (kept.length === 0) return new Map();
     const syntax = (await syntaxIndexOf(node.file)).receiverBindings;
-    const resultOf = (edge: GraphEdge, target: GraphSymbol): boolean => {
+    /** The receiver the source's syntax binds at the call, whatever it holds: its rules decide, never the root alone. */
+    const boundReceiver = (edge: GraphEdge, target: GraphSymbol): string | undefined => {
       const binding = syntax.get(bindingKey(edge.line!, edge.column! + 1, target.name));
-      return binding === "ambiguous" || binding?.holds.kind === "returned" || binding?.holds.kind === "computed";
+      return binding === "ambiguous" ? "" : binding?.receiver;
     };
     const owner = { name: node.name, line: node.startLine, endLine: node.endLine };
     const bindings = await origins.rootBindings(kept.map(({ edge, target }): UseSite => ({ file: node.file, line: edge.line!, column: edge.column! + 1, spelled: target.name, owner })), signal);
@@ -376,7 +377,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       (binding?.kind === "declared" && !navigation.symbolsInFile(node.file).some((symbol) => symbol.name === binding.root && !VALUE_KINDS.includes(symbol.kind) && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
     return new Map(kept.flatMap(({ index }, k) => {
       const binding = bindings[k];
-      if (resultOf(kept[k]!.edge, kept[k]!.target)) return [[index, ""] as const];
+      const receiver = boundReceiver(kept[k]!.edge, kept[k]!.target);
+      if (receiver !== undefined) return [[index, receiver] as const];
       if (binding?.kind === "this") return binding.member === undefined || binding.member === kept[k]!.target.name ? [] : [[index, binding.member] as const];
       return isValue(binding) ? [[index, binding.root] as const] : [];
     }));

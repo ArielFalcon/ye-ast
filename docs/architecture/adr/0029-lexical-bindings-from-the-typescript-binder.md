@@ -102,25 +102,27 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    its own member (`System.out.println`, `other.logger.flush`, `document.body.appendChild`) is not settled by its root,
    whether the index left it pending or resolved it into an edge: trace, impact, callers, importers and outline keep such an edge instead of dropping it, and keep such a pending call a cut (ADR-0019, amendment). The leaf's evidence is the module or the global it is rooted at, as for every other
    leaf; the answer gains no field, so the declared type itself is not written.
-10. A call the index resolved into a method of a repository class, on a receiver whose root is a value (a parameter or
-   a variable, by the binder's scoping, not a class, a function or an import), a field read through `this`
-   (`this.f.m`, not `this.m`) or no name at all (a call result `f().m`, an element access, an `await`), is not proof
-   that the method runs:
-   the index matched the call by name, and TypeScript types structurally, so any object with that member may stand
-   there (trace slice 3, S6). Trace takes it as a step only when the receiver's origin proves the class (a store-bound
-   local of decision 7, or a member proof of the relations, such as an `inject(T)` local or a field's `FieldOrigin`), or
-   when the receiver's one annotation (for a field, a `#` or `private` one decision 9 admits; for a local every store
-   fills with one such field read, `const h = this.handler`, that field's, the copy counting as no escape of the field
-   while the local itself stays in the file's sight) names a nominal class: a repository class that, or a class it extends through the heritage proof of
-   decision 9, declares a `private`, `protected` or `#` instance member, which TypeScript compares by declaration, so
-   only an instance of it or of a subclass fits. The step is the method the class or its nearest ancestor declares;
-   a subclass that overrides it is the step's dispatch cut (RFC-0013 R7). The rule holds only while every heritage of
-   the snapshot is proven (decision 9) and the index resolves the heritage of every class that declares the member, so
-   no subclass is unseen. A call result is proven only when the call is itself an edge of the body whose receiver needs
-   no proof and its declaration states a nominal class as its return type (RFC-0013 R5); two calls of one member name
-   starting at one place prove nothing. A field the relations prove holds a package or global type makes the call a leaf
-   under it.
-   Otherwise the call is a cut listing the declarations of its name. A call into an interface
+10. A call the index resolved into a method of a repository class is not proof that the method runs when its receiver is
+   a value (a parameter or a variable, by the binder's scoping), a field read through `this` (`this.f.m`) or any other
+   expression: the index matched the call by name, and TypeScript types structurally, so any object with that member may
+   stand there (trace slice 3, S6). The receiver is read through parentheses, a non-null `!` and `satisfies` only. The
+   only receivers left to the index's edge are a plain chain of names rooted at a class, a function, an import or a
+   namespace, `this` itself (`this.m()`), and a plain chain whose root no binding proves. Every other receiver, a type
+   assertion (`as`, `<T>x`), an optional call, an element access, a comma, a condition, an `await` or a call result
+   included, needs a proof, and is a cut listing the declarations of its name without one. Trace takes it as a step
+   only when the receiver's origin proves the class (a store-bound local of decision 7, or a member proof of the
+   relations, such as an `inject(T)` local or a field's `FieldOrigin`), or when the receiver's one annotation (for a
+   field, a `#` or `private` one decision 9 admits; for a local every store fills with one such field read, `const h =
+   this.handler`, that field's, the copy counting as no escape of the field while the local itself stays in the file's
+   sight) names a nominal class: a repository class that itself declares a `private`, `protected` or `#` instance
+   member, which TypeScript compares by declaration, so only an instance of it or of a subclass fits. A brand the class
+   inherits proves nothing: every class below the one that declares it fits, the annotated class's siblings included.
+   The step is the method the class or its nearest ancestor declares; a subclass that overrides it is the step's
+   dispatch cut (RFC-0013 R7). The rule holds only while every heritage of the snapshot is proven (decision 9) and the
+   index resolves the heritage of every class that declares the member, so no subclass is unseen. A call result is
+   proven only when the call is itself an edge of the body whose receiver needs no proof and its declaration states a
+   nominal class as its return type (RFC-0013 R5); two calls of one member name starting at one place prove nothing. A
+   field the relations prove holds a package or global type makes the call a leaf under it. A call into an interface
    keeps its dispatch cut. Impact, callers, importers and outline still read such an edge as a possible dependence.
 
 ## Consequences

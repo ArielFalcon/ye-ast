@@ -14,7 +14,9 @@ export interface DeclaredMemberNames {
 
 /**
  * A member call `r.m(...)` or `this.r.m(...)` whose receiver the source binds to one kind of value, or a member call
- * whose receiver is no name: a call result (`returned`) or another expression (`computed`), with `receiver` empty. A bare `r` is bound
+ * whose receiver is no name: a call result (`returned`) or another expression (`computed`), with `receiver` empty. The
+ * rules see a receiver through parentheses, a non-null `!` and `satisfies` only; one they see through a wrapper and do
+ * not bind, a type assertion, and any receiver of an optional call is `computed`. A bare `r` is bound
  * when every store into the binding (each initializer and each assignment) stores one kind: a literal of a library type,
  * an instance of one class the file names in `new`, or an instance of a class the file declares; failing that, when its
  * one declaration, a parameter or a variable, is annotated with one type. `this.r` is bound when the enclosing class

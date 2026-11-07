@@ -287,7 +287,7 @@ test("a callable states the type it returns as an annotation states a receiver's
   ]);
 });
 
-test("a member call on a call result is held by what the callee's last name returns, and one on another expression no name roots by nothing a rule binds", async () => {
+test("a member call on a call result is held by what the callee's last name returns, and one on another expression, a type assertion or an optional call by nothing a rule binds", async () => {
   assert.deepEqual((await read([
     "export async function run(list: Repo[]): Promise<void> {",
     "  make().save();",
@@ -303,9 +303,10 @@ test("a member call on a call result is held by what the callee's last name retu
   ])).receiverBindings, [
     { line: 2, column: 3, receiver: "", member: "save", holds: { kind: "returned", name: "make", line: 2, column: 3 } },
     { line: 3, column: 3, receiver: "", member: "save", holds: { kind: "returned", name: "create", line: 3, column: 3 } },
-    { line: 4, column: 3, receiver: "", member: "save", holds: { kind: "returned", name: "make", line: 4, column: 3 } },
+    { line: 4, column: 3, receiver: "", member: "save", holds: { kind: "computed" } },
     { line: 5, column: 3, receiver: "", member: "save", holds: { kind: "computed" } },
     { line: 6, column: 3, receiver: "", member: "save", holds: { kind: "computed" } },
+    { line: 7, column: 3, receiver: "", member: "at", holds: { kind: "computed" } },
     { line: 10, column: 3, receiver: "", member: "save", holds: { kind: "returned", name: "make", line: 10, column: 3 } },
   ]);
 });
