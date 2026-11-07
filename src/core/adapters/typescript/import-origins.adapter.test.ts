@@ -241,7 +241,7 @@ test("an import-equals require binds its name to the module it names, unless the
 
 test("a reader parses a file once however many times its sites are asked, and answers each ask the same", async () => {
   const parsed: string[] = [];
-  const reader = createImportOrigins(SOURCES, (file) => (parsed.push(file.path), sourceTree({ ...file }, ts.ScriptTarget.Latest, true)));
+  const reader = createImportOrigins(SOURCES, (file) => (parsed.push(file.path), sourceTree({ ...file }, ts.ScriptTarget.Latest)));
   const ask = (line: number, name: string) => reader.origins([{ file: PAGE.path, line, column: 1, name, fullName: name, kind: "calls" }]);
 
   const answers = [await ask(11, "Store"), await ask(12, "helper"), await ask(11, "Store")];

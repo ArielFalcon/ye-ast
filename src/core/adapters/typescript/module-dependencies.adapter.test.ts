@@ -190,7 +190,7 @@ test("sources and default-export targets are read through the shared tree source
   const user: SourceFile = { path: "src/user.ts", content: "import widget from './widget';\nexport const x = widget;" };
   const widget: SourceFile = { path: "src/widget.ts", content: "export default class Widget {}" };
   const shared = ts.createSourceFile("other.ts", "export default class Shared {}", ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
-  Object.assign(sourceTree(widget, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS), { statements: shared.statements });
+  Object.assign(sourceTree(widget, ts.ScriptTarget.Latest, ts.ScriptKind.TS), { statements: shared.statements });
   const result = await createModuleDependenciesReader().extract([user, widget]);
   assert.equal(result.dependencies[0]!.bindings[0]!.exportedAs, "Shared");
 });

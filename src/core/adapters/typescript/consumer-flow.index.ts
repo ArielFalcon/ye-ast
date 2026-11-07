@@ -49,7 +49,7 @@ export async function buildProgram(files: readonly SourceFile[]): Promise<Progra
   const units = new Map<string, Unit>();
   const shapes = new Map<string, NonNullable<ReturnType<typeof readAngularRouteFile>>>();
   for (const file of files.filter((candidate) => isTypeScriptSource(candidate.path))) {
-    const tree = sourceTree(file, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const tree = sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
     const shape = readAngularRouteFile(tree);
     if (shape === undefined) continue;
     shapes.set(file.path, shape);

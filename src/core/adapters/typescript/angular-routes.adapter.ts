@@ -34,7 +34,7 @@ async function extractRoutes(files: readonly SourceFile[]): Promise<readonly Fin
 async function extractProject(sources: readonly string[], packages: ManifestPackages, contents: ReadonlyMap<string, SourceFile>): Promise<Finding<Entrypoint>[]> {
   const loaded = await loadRouteTables(sources, async (path) => contents.get(path)?.content, packages, (path) => {
     const file = contents.get(path);
-    return file === undefined ? undefined : readAngularRouteFile(sourceTree(file, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS));
+    return file === undefined ? undefined : readAngularRouteFile(sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS));
   });
   const { roots, unparsed, unresolvedReferences } = loaded;
   const walk: Walk = { findings: [], blockers: loaded.declared ? [] : unresolvedReferences };

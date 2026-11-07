@@ -20,7 +20,7 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
   return {
     memberNames: async (file) => {
       if (!isTypeScriptSource(file.path)) return NONE;
-      const tree = sourceTree(file, ts.ScriptTarget.Latest, true);
+      const tree = sourceTree(file, ts.ScriptTarget.Latest);
       const names = new Set<string>();
       const callables: DeclaredCallable[] = [];
       const lineOf = (node: ts.Node): number => tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1;
