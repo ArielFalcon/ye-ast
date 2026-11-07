@@ -72,7 +72,7 @@ function sources(files: Record<string, string>): SourceFile[] {
   return Object.entries(files).map(([path, content]) => ({ path, content }));
 }
 
-test("a call binds the declaration its callee's name binds by type, a package's or the repository's, and an any binds nothing", async () => {
+test("a call, placed where it starts, binds the declaration its callee's name binds by type, a package's or the repository's, and an any binds nothing", async () => {
   const answer = await createTypeBindings({
     digest: DIGEST,
     trees: declared({
@@ -102,11 +102,11 @@ test("a call binds the declaration its callee's name binds by type, a package's 
     [OUTPUT],
   );
   assert.deepEqual(
-    bound(answer).bindings.filter(({ file, name }) => file === "src/page.ts" && (name === "get" || name === "term")).map(({ line, target }) => ({ line, target })),
+    bound(answer).bindings.filter(({ file, name }) => file === "src/page.ts" && (name === "get" || name === "term")).map(({ line, column, target }) => ({ line, column, target })),
     [
-      { line: 7, target: { kind: "external", module: "router-kit", name: "get" } },
-      { line: 8, target: { kind: "repository", file: "src/crud.ts", line: 2, name: "get" } },
-      { line: 10, target: { kind: "repository", file: "src/page.ts", line: 4, name: "term" } },
+      { line: 7, column: 5, target: { kind: "external", module: "router-kit", name: "get" } },
+      { line: 8, column: 5, target: { kind: "repository", file: "src/crud.ts", line: 2, name: "get" } },
+      { line: 10, column: 5, target: { kind: "repository", file: "src/page.ts", line: 4, name: "term" } },
     ],
   );
 });

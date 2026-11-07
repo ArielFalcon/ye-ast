@@ -232,7 +232,7 @@ function bindingsIn(tree: ts.SourceFile, file: string, checker: ts.TypeChecker, 
       const name = calleeName(node.expression);
       const target = name === undefined ? undefined : targetOf(node, name, checker, confined);
       if (name !== undefined && target !== undefined) {
-        const start = tree.getLineAndCharacterOfPosition(name.getStart(tree));
+        const start = tree.getLineAndCharacterOfPosition(node.getStart(tree));
         found.push({ file, line: start.line + 1, column: start.character + 1, name: name.text, target });
       }
     }

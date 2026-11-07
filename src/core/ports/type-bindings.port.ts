@@ -7,7 +7,10 @@ export type TypeTarget =
   | { kind: "external"; module: string; name: string }
   | { kind: "ambient"; name: string };
 
-/** A call or `new` the checker bound; `line` and `column` are where the callee's name starts, 1-based. */
+/**
+ * A call or `new` the checker bound; `line` and `column` are where the call starts, 1-based, as the index places its
+ * edges. Calls of a chain start at one place and are told apart by `name`; two of one name there are ambiguous.
+ */
 export interface TypeBinding {
   file: string;
   line: number;
