@@ -170,14 +170,14 @@ function listener(protocol: Listener["protocol"], destination: string, handler =
   return { kind: "listener", name: `${protocol} ${destination}`, protocol, destination, handler };
 }
 
-function published(protocol: EventTarget["protocol"], destination: string, repo = "shop-web"): CallSite {
+function published(protocol: EventTarget["protocol"], destination: string, repo = "shop-web", exchange?: string): CallSite {
   return {
     repo,
     file: "src/main/java/app/Orders.java",
     line: 7,
     symbol: "Orders.publish",
     transport: "event",
-    target: { status: "complete", value: { protocol, destination, role: "publish" }, evidence: [] },
+    target: { status: "complete", value: { protocol, destination, role: "publish", ...(exchange === undefined ? {} : { exchange }) }, evidence: [] },
   };
 }
 
@@ -186,16 +186,20 @@ function eventTargetOf(call: CallSite): EventTarget {
 }
 
 function consumed(result: ReturnType<typeof matchEventCallSite>): string {
-  if (result.links === undefined) return result.ambiguous === undefined ? "none" : `ambiguous ${result.ambiguous.repos.join(",")}`;
-  return result.links.map(({ basis, confidence, transport, to }) => `${basis} ${confidence} ${transport} -> ${to.repo} ${to.kind} ${to.name} at ${to.handler.symbol}`).join(" | ");
+  const answers = [
+    ...(result.links ?? []).map(({ basis, confidence, transport, to }) => `${basis} ${confidence} ${transport} -> ${to.repo} ${to.kind} ${to.name} at ${to.handler.symbol}`),
+    ...(result.undecided === undefined ? [] : [`could-match ${result.undecided}`]),
+  ];
+  if (answers.length > 0) return answers.join(" | ");
+  return result.ambiguous === undefined ? "none" : `ambiguous ${result.ambiguous.repos.join(",")}`;
 }
 
 function consumedBy(call: CallSite, listeners: readonly Listener[], repo = "orders"): string {
   return consumed(matchEventCallSite(call, eventTargetOf(call), [{ repo, entrypoints: listeners }]));
 }
 
-test("a published destination equal to a listener's is one link at full confidence, for every protocol that matches by destination", () => {
-  for (const protocol of ["kafka", "rabbit", "jms", "event"] as const) {
+test("a published destination equal to a listener's of another repository is one link at full confidence, for every cross-process protocol", () => {
+  for (const protocol of ["kafka", "rabbit", "jms"] as const) {
     assert.equal(consumedBy(published(protocol, "orders.created"), [listener(protocol, "orders.created")]), `event-destination 1 event -> orders listener ${protocol} orders.created at OrdersListener.on`);
   }
 });
@@ -209,6 +213,38 @@ test("a listener of the repository that publishes is never a candidate", () => {
   const call = published("kafka", "orders.created", "orders");
 
   assert.equal(consumedBy(call, [listener("kafka", "orders.created")]), "none");
+});
+
+test("an in-process application event reaches the listeners of the repository that publishes it, and no other repository's", () => {
+  const call = published("event", "app.OrderPlaced", "orders");
+  const repositories: RepositoryEntrypoints[] = [
+    { repo: "orders", entrypoints: [listener("event", "app.OrderPlaced")] },
+    { repo: "billing", entrypoints: [listener("event", "app.OrderPlaced", { ...CONSUMER, symbol: "BillingListener.on" })] },
+  ];
+
+  assert.equal(consumed(matchEventCallSite(call, eventTargetOf(call), repositories)), "event-destination 1 event -> orders listener event app.OrderPlaced at OrdersListener.on");
+});
+
+test("a destination with a part the publisher fills at run time could match a listener whose name that part may hold, never a silent miss", () => {
+  assert.equal(consumedBy(published("kafka", "orders-{}"), [listener("kafka", "orders-eu")]), "could-match orders-{}");
+  assert.equal(consumedBy(published("nats", "orders.created-{}"), [listener("nats", "orders.created-eu")]), "could-match orders.created-{}");
+  assert.equal(consumedBy(published("kafka", "orders-{}"), [listener("kafka", "billing-eu")]), "none");
+});
+
+test("a listener subject with a part the subscriber fills at run time could match any token that part may hold", () => {
+  assert.equal(consumedBy(published("nats", "orders.created"), [listener("nats", "orders.{}")]), "could-match orders.created");
+});
+
+test("a message some listeners consume and others could is their links plus one could-match, never a silent drop", () => {
+  const call = published("nats", "orders.created");
+  assert.equal(
+    consumedBy(call, [listener("nats", "orders.*"), listener("nats", "orders.{}", { ...CONSUMER, symbol: "OrdersListener.audit", line: 20 })]),
+    "event-destination 1 event -> orders listener nats orders.* at OrdersListener.on | could-match orders.created",
+  );
+});
+
+test("a RabbitMQ message published to a named exchange reaches queues through bindings the snapshot does not read: it could match, never a link", () => {
+  assert.equal(consumedBy(published("rabbit", "orders.created", "shop-web", "orders"), [listener("rabbit", "orders.created")]), "could-match orders.created");
 });
 
 test("a listener that states another protocol does not consume the message", () => {

@@ -2,8 +2,9 @@ import type { Entrypoint, Listener } from "../entrypoints/entrypoint.ts";
 import type { HttpRoute } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
 import { callPlaceOf, type CallSite, type EventTarget, type HttpTarget } from "./call-site.ts";
+import { consumption, delivers } from "./event-destination.ts";
 import { linkIdentity, type Link, type LinkBasis } from "./link.ts";
-import { callTemplate, CANNOT_MATCH, literalText, looseness, namesHost, prefixText, routeSegments, RUN_TIME_HOLE, statedLength, unify, type CallTemplate, type TemplateSegment, type Unification } from "./path-template.ts";
+import { callTemplate, CANNOT_MATCH, literalText, looseness, namesHost, prefixText, routeSegments, statedLength, unify, type CallTemplate, type TemplateSegment, type Unification } from "./path-template.ts";
 
 /** A repository's entrypoints, as the join reads them. */
 export interface RepositoryEntrypoints {
@@ -38,7 +39,7 @@ export interface JoinResult {
   unmatched?: string;
   /** Two repositories, or two routes of one, matched the call at one rung of the ladder. */
   ambiguous?: AmbiguousMatch;
-  /** The path of an HTTP call some route could take, depending on the value the code fills at run time: neither a link nor drift. */
+  /** The path of an HTTP call some route could take, or the destination of a message some listener could consume, depending on a value filled at run time: neither a link nor drift. */
   undecided?: string;
   /** No route takes an HTTP call that names a host, or no listener consumes a message: the call leaves the workspace. */
   external?: true;
@@ -293,36 +294,11 @@ export function inferGateways(calls: readonly CallSite[], repositories: readonly
   return [...declared.map((gateway): Gateway => ({ ...gateway, basis: "gateway-prefix" })), ...inferred].sort((a, b) => compareText(a.prefix, b.prefix));
 }
 
-const NATS_SEPARATOR = ".";
-const NATS_ONE_TOKEN = "*";
-const NATS_REST = ">";
 /** A destination that matches is exact, so its link is at full confidence (decision 9). */
 const EVENT_CONFIDENCE = 1;
 
 function listenersOf(repository: RepositoryEntrypoints): Listener[] {
   return repository.entrypoints.flatMap((entrypoint) => (entrypoint.kind === "listener" ? [entrypoint] : []));
-}
-
-/**
- * Whether a consumed subject takes a published one: NATS compares token by token, where a listener's `*` stands for one
- * token, its `>` for one or more trailing tokens, and a token the publisher fills at run time for one token as well.
- */
-function sameSubject(published: string, consumed: string): boolean {
-  const tokens = published.split(NATS_SEPARATOR);
-  const pattern = consumed.split(NATS_SEPARATOR);
-  let index = 0;
-  for (; index < pattern.length; index++) {
-    const token = pattern[index];
-    if (token === NATS_REST) return index < tokens.length;
-    const own = tokens[index];
-    if (own === undefined) return false;
-    if (token !== NATS_ONE_TOKEN && own !== RUN_TIME_HOLE && token !== own) return false;
-  }
-  return index === tokens.length;
-}
-
-function consumes(target: EventTarget, listener: Listener): boolean {
-  return listener.protocol === target.protocol && (target.protocol === "nats" ? sameSubject(target.destination, listener.destination) : listener.destination === target.destination);
 }
 
 function eventLinkTo(site: CallSite, repo: string, listener: Listener): Link {
@@ -337,13 +313,17 @@ function eventLinkTo(site: CallSite, repo: string, listener: Listener): Link {
 }
 
 /**
- * The link a published message makes against the listeners of the repositories given: those of another repository, with
- * the protocol the message declares and a destination that takes it. Every consuming listener is one link, whether the
- * listeners are in several repositories or in one: pub/sub delivers a message to each subscriber.
+ * The links a published message makes against the listeners of the repositories given: those its protocol delivers to
+ * (another repository's, or for an in-process event its own), with the protocol the message declares and a destination
+ * that takes it. Every consuming listener is one link, since pub/sub delivers a message to each subscriber; a listener
+ * that could consume it, depending on a value filled at run time, makes the message `undecided` beside those links.
  */
 export function matchEventCallSite(site: CallSite, target: EventTarget, repositories: readonly RepositoryEntrypoints[]): JoinResult {
-  const reached = repositories
-    .filter((repository) => repository.repo !== site.repo)
-    .flatMap((repository) => listenersOf(repository).flatMap((listener) => (consumes(target, listener) ? [{ repo: repository.repo, listener }] : [])));
-  return reached.length === 0 ? { external: true } : { links: reached.map(({ repo, listener }) => eventLinkTo(site, repo, listener)) };
+  const candidates = repositories
+    .filter((repository) => delivers(target.protocol, site.repo, repository.repo))
+    .flatMap((repository) => listenersOf(repository).map((listener) => ({ repo: repository.repo, listener, outcome: consumption(target, listener) })));
+  const reached = candidates.filter(({ outcome }) => outcome === "matches");
+  const could = candidates.some(({ outcome }) => outcome === "could-match");
+  if (reached.length === 0 && !could) return { external: true };
+  return { ...(reached.length === 0 ? {} : { links: reached.map(({ repo, listener }) => eventLinkTo(site, repo, listener)) }), ...(could ? { undecided: target.destination } : {}) };
 }

@@ -12,16 +12,18 @@ import { qualifiedTypeName, scopeOf, type JavaFile, type JavaProject } from "./j
 import { JavaValueEvaluator } from "./java-value-evaluator.ts";
 import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 import { undecidedTarget } from "../../domain/topology/evaluated.ts";
+import { statesDestination } from "../../domain/topology/event-destination.ts";
 
-/** One publish call: where it is written, the client that publishes and the argument that names the destination. */
+/** One publish call: where it is written, the client that publishes, the argument that names the destination and the one that names the exchange. */
 interface Publish {
   invocation: Invocation;
   client: PublishClient;
   argument: Node;
+  exchange?: Node;
 }
 
-
-const TOKEN_SEPARATOR = ".";
+/** The exchange the broker routes through when the code names none, or names it empty. */
+const DEFAULT_EXCHANGE = "";
 
 /** The messages a Java snapshot publishes: one call site per publish of a client the vocabulary knows. */
 export class JavaEventReader {
@@ -82,7 +84,9 @@ export class JavaEventReader {
     if (client === undefined || destination === undefined) return undefined;
     const args = argumentsOf(node);
     const argument = args[destination(args.length)];
-    return argument === undefined ? undefined : { invocation, client, argument };
+    const exchangeAt = client.exchange?.(args.length);
+    const exchange = exchangeAt === undefined ? undefined : args[exchangeAt];
+    return argument === undefined ? undefined : { invocation, client, argument, ...(exchange === undefined ? {} : { exchange }) };
   }
 
   /** The library a publish goes through when the sources of its client type are not read to the destination. */
@@ -100,14 +104,21 @@ export class JavaEventReader {
     const destination = this.text.evaluated(scope, () => this.destination(publish, scope));
     return destination.status === "undecided"
       ? undecidedTarget(destination, spanOf(publish.invocation.type.file.path, publish.invocation.node))
-      : { target: complete({ protocol: publish.client.protocol, destination: destination.value, role: "publish" }) };
+      : { target: complete({ protocol: publish.client.protocol, destination: destination.value, role: "publish", ...this.exchangeOf(publish, scope) }) };
+  }
+
+  /** The exchange a publish names, unless it is the default one; `{}` when the snapshot does not decide it. */
+  private exchangeOf(publish: Publish, scope: UrlScope): { exchange?: string } {
+    if (publish.exchange === undefined) return {};
+    const exchange = this.text.of(publish.exchange, scope) ?? RUN_TIME_HOLE;
+    return exchange === DEFAULT_EXCHANGE ? {} : { exchange };
   }
 
   /** The destination a publish names, `{}` for a part the code fills at run time; undefined when it names none. */
   private destination(publish: Publish, scope: UrlScope): string | undefined {
     if (publish.client.byType === true) return this.eventType(publish.argument, scope);
     const text = this.text.of(publish.argument, scope);
-    return text === undefined || text.split(TOKEN_SEPARATOR).every((token) => token === RUN_TIME_HOLE) ? undefined : text;
+    return text === undefined || !statesDestination(text, publish.client.protocol) ? undefined : text;
   }
 
   /** The qualified type of an event expression: an instantiation, or a name whose declared type the sources state. */

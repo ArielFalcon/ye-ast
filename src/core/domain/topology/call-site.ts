@@ -57,6 +57,8 @@ export interface EventTarget {
   protocol: "kafka" | "rabbit" | "jms" | "event" | "nats";
   destination: string;
   role: "publish";
+  /** The RabbitMQ exchange the code publishes to when it names one other than the default, `{}` when the snapshot does not decide it. */
+  exchange?: string;
 }
 
 /** The call sites of a repository's snapshot, read from its sources; reading them resolves the modules they import. */
