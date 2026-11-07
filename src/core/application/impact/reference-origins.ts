@@ -6,15 +6,16 @@ import { readsPastRoot } from "../../domain/impact/edge-policy.ts";
 import type { CodeGraphReader, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
+import { unresolvedReferencesIn } from "../navigation/declaration-uses.ts";
 
 /** The head's sources the walk reads: written, in scope, and of a kind an extractor covers. */
 function sourceFilesOf(headTree: Pick<CommitExtraction, "export">): string[] {
   return headTree.export.files.filter((file) => file.written && kindOfChangedFile(file.path) === "source").map((file) => file.path);
 }
 
-/** The references the index could not settle in the head's sources. */
+/** The references the index could not settle in the head's sources, retyped calls included (`unresolvedReferencesIn`). */
 export function unresolvedOf(store: CodeGraphReader, headTree: Pick<CommitExtraction, "export">): readonly GraphUnresolvedReference[] {
-  return store.unresolvedReferences(sourceFilesOf(headTree));
+  return unresolvedReferencesIn(store, sourceFilesOf(headTree));
 }
 
 /**

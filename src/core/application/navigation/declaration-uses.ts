@@ -1,4 +1,4 @@
-import { EDGE_POLICY, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
+import { CALL_EDGE_KINDS, EDGE_POLICY, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import { referenceKey } from "../../domain/impact/impact-cuts.ts";
 import type { OutlinePlace, OutlineUseTarget } from "../../domain/outline/outline-fact.ts";
 import type { FoundUse, UnprovedUse } from "../../domain/outline/outline-uses.ts";
@@ -31,11 +31,27 @@ export function unresolvedOncePerFile(store: CodeGraphReader): UnresolvedIn {
   return (file) => {
     let references = read.get(file);
     if (references === undefined) {
-      references = store.unresolvedReferences([file]);
+      references = unresolvedReferencesIn(store, [file]);
       read.set(file, references);
     }
     return references;
   };
+}
+
+/**
+ * The references the index left unresolved in `files`, and the calls a resolver consumed into an edge of another kind
+ * (an Angular `this.router.navigate(...)` that became a `navigates` edge to a route), read back as the references they
+ * were: such an edge reaches the resolver's target, not what the call runs.
+ */
+export function unresolvedReferencesIn(store: CodeGraphReader, files: readonly string[]): GraphUnresolvedReference[] {
+  const symbols = new Map(store.symbolsInFiles(files).map((symbol) => [symbol.id, symbol]));
+  const retyped = store.outgoingEdges([...symbols.keys()]).flatMap((edge): GraphUnresolvedReference[] => {
+    const { resolvedFrom, line, column } = edge;
+    const source = symbols.get(edge.source);
+    const isRetypedCall = resolvedFrom !== null && CALL_EDGE_KINDS.includes(resolvedFrom.kind) && !CALL_EDGE_KINDS.includes(edge.kind);
+    return isRetypedCall && source !== undefined && line !== null && column !== null ? [{ from: source.id, name: resolvedFrom.name, kind: resolvedFrom.kind, file: source.file, line, column, candidates: [] }] : [];
+  });
+  return [...store.unresolvedReferences(files), ...retyped];
 }
 
 export function createDeclarationUses(store: CodeGraphReader, navigation: GraphNavigation, unresolvedIn: UnresolvedIn = unresolvedOncePerFile(store)): DeclarationUses {

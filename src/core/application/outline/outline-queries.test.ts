@@ -400,6 +400,16 @@ test("a name nothing proves is one unresolved-link cut at the declaration listin
   assert.deepEqual(cuts.map((cut) => [cut.kind, cut.at]), [["unresolved-link", [`${USE}::run`, `${USE}:16 process.exit`, `${USE}:20 process.cwd`]]]);
 });
 
+test("a call the index resolved into an edge of another kind is a use of the body like the call it was, here a cut", async () => {
+  const navigates = { from: "A.n", to: "route", kind: "navigates", line: 9, column: 4, resolvedFrom: { name: "this.router.navigate", kind: "calls" } };
+  const { queries } = setup({ ...TWO_CLASSES, nodes: [...TWO_CLASSES.nodes, fakeNode("route", "route", "src/routes.ts", 1, 1, "route")], edges: [...TWO_CLASSES.edges, navigates] });
+
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: API, symbol: "A.n" }] });
+
+  assert.ok(answer.ok);
+  assert.deepEqual(answer.value.status === "partial" && answer.value.cuts.map((cut) => [cut.kind, cut.at]), [["unresolved-link", [`${API}::A.n`, `${API}:9 this.router.navigate`]]]);
+});
+
 test("a repository import the join reaches no declaration of is a cut, never a top-level homonym of the name after it", async () => {
   const { uses, cuts } = await usesAnswer("Svc.load");
   assert.deepEqual(uses, []);

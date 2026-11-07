@@ -53,7 +53,8 @@ A call is `callee(args)` or `receiver.member(args)`; each rule settles it to one
 (a step), an external target `module#Type.member` or `global#name.member` (a leaf), or a cut with the candidates.
 A call the index resolved into an edge of another kind (a router resolver turns `this.router.navigate([...])` into a
 `navigates` edge to a route) is read back as the call it was, with the spelling and place the edge records, and settled
-by R2 to R6b like a call the index left unresolved; it is never dropped.
+by R2 to R6b like a call the index left unresolved; it is never dropped. Outline's uses of a body and impact's
+`unresolved-link` cuts read it through the same reader, as the unresolved reference it was.
 
 | # | Rule | Settles |
 |---|---|---|
