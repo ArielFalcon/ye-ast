@@ -1032,12 +1032,12 @@ test("a call the join reaches without a link is an explicit outcome: unmatched u
   assert.deepEqual(section?.status === "partial" ? section.cuts : [], [{ kind: "unresolved-link", at: ["src/app/shop-web.api.ts", "src/app/shop-web.api.ts:3"] }]);
 });
 
-test("the path prefix a call states is its first path segment, after the origin of an absolute URL, and never a value filled at run time", async () => {
+test("an absolute URL names its origin as the host and its first path segment as the prefix, never a value filled at run time", async () => {
   const queries = setup({ "/work/shop-web": { files: {} } }, sitesOf({ "shop-web": [postSite("shop-web", "http://localhost:9966/petclinic/api/owners", 3), postSite("shop-web", "/user-{}/orders", 5)] }));
 
   const section = valueOf(await queries.outwardNames({ repo: { path: "/work/shop-web" } })).sections["shop-web"];
 
-  assert.deepEqual(section?.status === "unknown" ? [] : section?.value.names.map((name) => `${name.kind} ${name.name}`), ["path-prefix petclinic"]);
+  assert.deepEqual(section?.status === "unknown" ? [] : section?.value.names.map((name) => `${name.kind} ${name.name}`), ["http-host http://localhost:9966", "path-prefix petclinic"]);
 });
 
 test("a call no route takes and that names no host is unmatched; one a route could take is listed as could-match and is the only cut", async () => {

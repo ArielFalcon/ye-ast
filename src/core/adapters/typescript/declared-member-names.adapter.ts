@@ -4,9 +4,9 @@ import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import { annotated, isFunctionValueNode, localReceivers } from "./function-value-calls.ts";
 import type { SourcePosition, SourceSpan } from "../../domain/trace/owning-body.ts";
-import { isStatic } from "./syntax-names.ts";
-import { lineOf, unwrapped } from "./syntax.ts";
+import { hasModifier, isStatic, lineOf, unwrapped } from "./syntax.ts";
 import { sourceTree } from "./source-tree.ts";
+import { defaultExportOf } from "./import-bindings.ts";
 
 const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
 
@@ -90,7 +90,7 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
         if (ts.isConstructorDeclaration(node)) for (const parameter of node.parameters) if (ts.isParameterPropertyDeclaration(parameter, node)) add(parameter.name);
         if (ts.isEnumDeclaration(node)) for (const member of node.members) add(member.name);
         if (ts.isExportDeclaration(node) && !node.isTypeOnly) for (const name of exportedValueNames(node)) names.add(name);
-        if ((ts.isExportAssignment(node) && !node.isExportEquals) || isDefaultExport(node)) names.add("default");
+        if (defaultExportOf(node) !== undefined) names.add("default");
         if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
           if (ts.isPropertyAccessExpression(node.left)) names.add(node.left.name.text);
           else if (ts.isElementAccessExpression(node.left)) {
@@ -121,15 +121,10 @@ function exportedValueNames(declaration: ts.ExportDeclaration): string[] {
   return clause.elements.filter((specifier) => !specifier.isTypeOnly).map((specifier) => specifier.name.text);
 }
 
-function isDefaultExport(node: ts.Node): boolean {
-  return (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && (ts.getModifiers(node) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword);
-}
-
 function isOverridable(method: ts.MethodDeclaration): boolean {
-  const isPrivate = (ts.getModifiers(method) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword);
-  return !ts.isPrivateIdentifier(method.name) && !isPrivate && !isStatic(method);
+  return !ts.isPrivateIdentifier(method.name) && !hasModifier(method, ts.SyntaxKind.PrivateKeyword) && !isStatic(method);
 }
 
 function isDeclareOnly(node: ts.Node): boolean {
-  return ts.canHaveModifiers(node) && (ts.getModifiers(node) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword);
+  return hasModifier(node, ts.SyntaxKind.DeclareKeyword);
 }

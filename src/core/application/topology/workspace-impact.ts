@@ -1,6 +1,6 @@
 import type { ChangedEntrypoint } from "../../domain/impact/changed-entrypoints.ts";
 import type { ImpactValue, Seed } from "../../domain/impact/impact-fact.ts";
-import type { HttpMethod, HttpRoute } from "../../domain/entrypoints/http-route.ts";
+import { parseHttpRouteName, type HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { Cut, Fact, FactBase, SnapshotRef } from "../../domain/shared/fact.ts";
 import { incompleteSectionCuts, provenanceOf, withCuts } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
@@ -58,7 +58,6 @@ interface UpstreamWalk {
   sites: Map<string, CallSite[]>;
 }
 
-const HTTP_METHODS: ReadonlySet<string> = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "ANY"]);
 
 type CommittedRequest<T> = Omit<T, "repo" | "repos"> & { repo: WorkspaceRepositoryDeclaration & { live?: never }; repos?: readonly (WorkspaceRepositoryDeclaration & { live?: never })[] };
 
@@ -402,13 +401,12 @@ function drift(part: Section, site: CallSite, joined: JoinResult): void {
   else if (joined.external === true) part.external.push(site);
 }
 
-/** A route the change removed no longer exists at head, so it is rebuilt from the name the change reports: `METHOD path`. */
+/** A route the change removed no longer exists at head, so it is rebuilt from the name the change reports. */
 function routesOfRemoved(changes: readonly ChangedEntrypoint[]): HttpRoute[] {
   return changes.flatMap((change): HttpRoute[] => {
     if (change.kind !== "http-route" || change.change !== "removed") return [];
-    const [method, path] = change.name.split(" ");
-    if (method === undefined || path === undefined || !HTTP_METHODS.has(method)) return [];
-    return [{ kind: "http-route", name: change.name, method: method as HttpMethod, path, handler: change.handler, basePath: { status: "unknown", reason: "unresolved", evidence: [] } }];
+    const named = parseHttpRouteName(change.name);
+    return named === undefined ? [] : [{ kind: "http-route", name: change.name, ...named, handler: change.handler, basePath: { status: "unknown", reason: "unresolved", evidence: [] } }];
   });
 }
 

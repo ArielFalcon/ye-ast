@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { hasModifier } from "./syntax.ts";
 import type { ModuleBinding, ModuleDependency } from "../../domain/impact/module-dependency.ts";
 
 /** One import, `import x = …` or re-export statement as its syntax states it. */
@@ -68,12 +69,15 @@ function specifierOf(expression: ts.Expression): { specifier?: string } {
   return ts.isStringLiteral(expression) ? { specifier: expression.text } : {};
 }
 
+/** The value a statement exports as default: what `export default` holds, or the class or function it declares. */
+export function defaultExportOf(statement: ts.Node): ts.Expression | ts.ClassDeclaration | ts.FunctionDeclaration | undefined {
+  if (ts.isExportAssignment(statement)) return statement.isExportEquals ? undefined : statement.expression;
+  const declares = (ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) && hasModifier(statement, ts.SyntaxKind.ExportKeyword) && hasModifier(statement, ts.SyntaxKind.DefaultKeyword);
+  return declares ? statement : undefined;
+}
+
 /** The name of the declaration a file exports as default, when that export is a named declaration. */
 export function defaultDeclarationName(tree: ts.SourceFile): string | undefined {
-  for (const statement of tree.statements) {
-    if (!ts.isFunctionDeclaration(statement) && !ts.isClassDeclaration(statement)) continue;
-    const modifiers = ts.getModifiers(statement);
-    if (modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) && modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) return statement.name?.text;
-  }
-  return undefined;
+  const held = tree.statements.map(defaultExportOf).find((value) => value !== undefined);
+  return held === undefined || ts.isExpression(held) ? undefined : held.name?.text;
 }

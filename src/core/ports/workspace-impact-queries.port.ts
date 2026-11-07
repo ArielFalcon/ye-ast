@@ -3,7 +3,6 @@ import type { ImpactValue } from "../domain/impact/impact-fact.ts";
 import type { CallSite, UnresolvedCallSite } from "../domain/topology/call-site.ts";
 import type { ImpactedLink } from "../domain/topology/link.ts";
 import type { Fact, FactProvenance, SnapshotRef } from "../domain/shared/fact.ts";
-import type { ScopeRequest } from "../domain/shared/scope.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { Gateway, GatewayDeclaration } from "../domain/topology/link-match.ts";
 import type { CallersTarget, ImpactFault } from "./impact-queries.port.ts";
