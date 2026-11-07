@@ -11,7 +11,9 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 import { injectedClass } from "./angular-injection.ts";
 import { declarationCounts } from "./syntax-names.ts";
-import { bindingNames, constructorParameters, lineOf, propertyOf, thisClass, typeName } from "./syntax.ts";
+import { bindingNames, constructorParameters, hasModifier, lineOf, propertyOf, thisClass, typeName } from "./syntax.ts";
+import { ANONYMOUS_DEFAULT, recoveredModuleShape, type ModuleShape } from "./module-shape.ts";
+import { createDeclarationLookup, type DeclarationLookup } from "./declaration-lookup.ts";
 
 export const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
 const HTTP_CLIENT_PACKAGE = "@angular/common/http";
@@ -32,13 +34,8 @@ interface FileShape {
   bindings: ReadonlySet<string>;
   unsafeEncoder: boolean;
   consts: Map<string, ts.Expression>;
-  imports: Map<string, { module: string; imported: string }>;
-  /** The names this file re-exports from another module: `export { X } from './m'`. */
-  reexports: Map<string, { module: string; imported: string }>;
-  /** The modules this file star-exports: `export * from './m'`. */
-  stars: string[];
-  /** The local names this file exports under another name: `export { a as b }`, by `b`. */
-  localExports: Map<string, string>;
+  module: ModuleShape;
+  imports: ModuleShape["imports"];
   /** What `export default` holds: an expression, or the class or function it declares. */
   defaultExport?: ts.Node;
   classes: Map<string, ts.ClassDeclaration>;
@@ -155,17 +152,9 @@ async function readPlaced(files: readonly SourceFile[], repo: string): Promise<r
 }
 function describe(file: SourceFile): FileShape {
   const source = sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
-  const shape: FileShape = { source, declared: declarationCounts(source), bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], localExports: new Map(), classes: new Map(), enums: new Map() };
+  const module = recoveredModuleShape(source);
+  const shape: FileShape = { source, declared: declarationCounts(source), bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), module, imports: module.imports, classes: new Map(), enums: new Map() };
   for (const statement of source.statements) {
-    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
-      const module = statement.moduleSpecifier.text;
-      collectImports(statement.importClause, module, shape);
-      continue;
-    }
-    if (ts.isExportDeclaration(statement)) {
-      collectExports(statement, shape);
-      continue;
-    }
     if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
       shape.defaultExport = statement.expression;
       continue;
@@ -176,42 +165,11 @@ function describe(file: SourceFile): FileShape {
       }
       continue;
     }
-    if ((ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) && isDefaultExport(statement)) shape.defaultExport = statement;
+    if ((ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) && hasModifier(statement, ts.SyntaxKind.ExportKeyword) && hasModifier(statement, ts.SyntaxKind.DefaultKeyword)) shape.defaultExport = statement;
     if (ts.isClassDeclaration(statement) && statement.name !== undefined) shape.classes.set(statement.name.text, statement);
     if (ts.isEnumDeclaration(statement)) shape.enums.set(statement.name.text, statement);
   }
   return shape;
-}
-
-function isDefaultExport(statement: ts.ClassDeclaration | ts.FunctionDeclaration): boolean {
-  const modifiers = ts.getModifiers(statement) ?? [];
-  return modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) && modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword);
-}
-
-function collectImports(clause: ts.ImportClause | undefined, module: string, into: FileShape): void {
-  if (clause === undefined) return;
-  if (clause.name !== undefined) into.imports.set(clause.name.text, { module, imported: "default" });
-  if (clause.namedBindings === undefined) return;
-  if (ts.isNamespaceImport(clause.namedBindings)) into.imports.set(clause.namedBindings.name.text, { module, imported: "*" });
-  else for (const element of clause.namedBindings.elements) into.imports.set(element.name.text, { module, imported: element.propertyName?.text ?? element.name.text });
-}
-
-/** The names a file re-exports, by name or through `export *`, and the local names it exports under another name. */
-function collectExports(statement: ts.ExportDeclaration, shape: FileShape): void {
-  if (statement.moduleSpecifier === undefined) {
-    if (statement.exportClause !== undefined && ts.isNamedExports(statement.exportClause)) {
-      for (const element of statement.exportClause.elements) shape.localExports.set(element.name.text, element.propertyName?.text ?? element.name.text);
-    }
-    return;
-  }
-  if (!ts.isStringLiteral(statement.moduleSpecifier)) return;
-  const module = statement.moduleSpecifier.text;
-  if (statement.exportClause === undefined) {
-    shape.stars.push(module);
-    return;
-  }
-  if (!ts.isNamedExports(statement.exportClause)) return;
-  for (const element of statement.exportClause.elements) shape.reexports.set(element.name.text, { module, imported: element.propertyName?.text ?? element.name.text });
 }
 
 function calls(source: ts.SourceFile): ts.CallExpression[] {
@@ -543,16 +501,23 @@ interface ReadTarget {
 /** Reads one file's call sites, resolving the module specifiers it meets through the snapshot. */
 class Reader {
   private readonly unsafeEncoder: boolean;
+  private readonly fileOf: (from: string, specifier: string) => Promise<string | undefined>;
+  private readonly declarationOf: DeclarationLookup;
   /** The classes of the snapshot that extend a class, by the declaration their `extends` resolves to; built once, when first read. */
   private subclassIndex: Promise<ReadonlyMap<ts.ClassDeclaration, readonly HeldClass[]>> | undefined;
 
   constructor(
     private readonly shapes: ReadonlyMap<string, FileShape>,
-    private readonly modules: ModuleResolver,
+    modules: ModuleResolver,
     private readonly wrappers: ReadonlyMap<string, ReadonlyMap<string, string>>,
     private readonly defines: BuildDefines,
   ) {
     this.unsafeEncoder = [...shapes.values()].some((shape) => shape.unsafeEncoder);
+    this.fileOf = async (from, specifier) => {
+      const resolved = await modules.resolve(from, specifier);
+      return "file" in resolved ? resolved.file : undefined;
+    };
+    this.declarationOf = createDeclarationLookup(async (file) => shapes.get(file)?.module, this.fileOf, { anonymousDefault: true });
   }
 
   private async subclassesOf(declaration: ts.ClassDeclaration): Promise<readonly HeldClass[]> {
@@ -808,7 +773,7 @@ class Reader {
     }
     const imported = shape.imports.get(name);
     if (imported === undefined || imported.imported === "*") return undefined;
-    const target = await this.moduleShape(shape, imported.module);
+    const target = await this.importedShape(shape, imported.module);
     return target === undefined ? undefined : this.exported(target, imported.imported, trail);
   }
 
@@ -824,40 +789,24 @@ class Reader {
     if (own !== undefined) return { shape, declaration: own, trail };
     const imported = shape.imports.get(name);
     if (imported === undefined || imported.imported === "*") return undefined;
-    const target = await this.moduleShape(shape, imported.module);
+    const target = await this.importedShape(shape, imported.module);
     return target === undefined ? undefined : this.exportedAs(target, imported.imported, kind, trail);
   }
 
   /**
-   * The declaration a module exports under a name: its own, the one a local `export { a as b }` or `export default`
-   * names, a named re-export, or one reached through `export *`, which a barrel chain answers. Undefined when the module
-   * states none, and when the chain repeats a module and a name it already visited.
+   * The declaration a module exports under a name, through any re-export chain (`declaration-lookup.ts`), when it is of
+   * the kind asked. Undefined when the module states none, when two `export *` could supply it, and when the evaluation
+   * already visited that declaration.
    */
   private async exportedAs<T>(shape: FileShape, name: string, kind: DeclarationKind<T>, trail: ReadonlySet<string>): Promise<Resolved<T> | undefined> {
-    const visited = `${shape.source.fileName}\0export ${name}`;
+    const found = await this.declarationOf(shape.source.fileName, name);
+    const holder = found === undefined ? undefined : this.shapes.get(found.file);
+    if (found === undefined || holder === undefined) return undefined;
+    const visited = `${found.file}\0${found.name}`;
     if (trail.has(visited)) return undefined;
-    const next = new Set(trail).add(visited);
-    if (name === "default") {
-      const held = shape.defaultExport;
-      if (held !== undefined && ts.isIdentifier(held)) return this.declaredAs(shape, held.text, kind, next);
-      const declaration = held === undefined ? undefined : kind.defaulted(held);
-      return declaration === undefined ? undefined : { shape, declaration, trail: next };
-    }
-    const local = shape.localExports.get(name);
-    if (local !== undefined) return this.declaredAs(shape, local, kind, next);
-    const own = kind.named(shape, name);
-    if (own !== undefined) return { shape, declaration: own, trail: next };
-    const reexport = shape.reexports.get(name);
-    if (reexport !== undefined) {
-      const target = await this.moduleShape(shape, reexport.module);
-      return target === undefined ? undefined : this.exportedAs(target, reexport.imported, kind, next);
-    }
-    for (const star of shape.stars) {
-      const target = await this.moduleShape(shape, star);
-      const found = target === undefined ? undefined : await this.exportedAs(target, name, kind, next);
-      if (found !== undefined) return found;
-    }
-    return undefined;
+    const held = holder.defaultExport;
+    const declaration = found.name !== ANONYMOUS_DEFAULT ? kind.named(holder, found.name) : held === undefined ? undefined : kind.defaulted(held);
+    return declaration === undefined ? undefined : { shape: holder, declaration, trail: new Set(trail).add(visited) };
   }
 
   /**
@@ -901,7 +850,7 @@ class Reader {
     if (!ts.isIdentifier(owner)) return undefined;
     const namespace = shape.imports.get(owner.text);
     if (namespace?.imported === "*") {
-      const target = await this.moduleShape(shape, namespace.module);
+      const target = await this.importedShape(shape, namespace.module);
       return target === undefined ? undefined : this.exported(target, name, trail);
     }
     const found = await this.classOf(shape, owner.text);
@@ -970,7 +919,7 @@ class Reader {
     if (held !== undefined) return { shape, expression: held, trail };
     const imported = shape.imports.get(name);
     if (imported === undefined || imported.imported === "*") return undefined;
-    const target = await this.moduleShape(shape, imported.module);
+    const target = await this.importedShape(shape, imported.module);
     if (target === undefined) return undefined;
     const found = await this.exported(target, imported.imported, trail);
     const literal = found === undefined ? undefined : objectOf(found.expression);
@@ -1108,9 +1057,9 @@ class Reader {
     return agreed;
   }
 
-  private async moduleShape(shape: FileShape, specifier: string): Promise<FileShape | undefined> {
-    const resolved = await this.modules.resolve(shape.source.fileName, specifier);
-    return "file" in resolved ? this.shapes.get(resolved.file) : undefined;
+  private async importedShape(shape: FileShape, specifier: string): Promise<FileShape | undefined> {
+    const file = await this.fileOf(shape.source.fileName, specifier);
+    return file === undefined ? undefined : this.shapes.get(file);
   }
 }
 

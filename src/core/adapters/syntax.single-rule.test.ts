@@ -53,7 +53,13 @@ const RULES: readonly Rule[] = [
     concept: "reading the bindings of an import statement",
     pattern: /\.importClause\b/,
     owners: ["typescript/import-bindings.ts"],
-    pending: ["typescript/http-call-sites.adapter.ts"],
+    pending: [],
+  },
+  {
+    concept: "whether a TypeScript file parsed without syntax errors",
+    pattern: /\.parseDiagnostics\b/,
+    owners: ["typescript/syntax.ts"],
+    pending: ["typescript/import-origins.adapter.ts"],
   },
   {
     concept: "parsing Java sources into files of a project",

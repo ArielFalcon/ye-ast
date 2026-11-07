@@ -31,6 +31,11 @@ export function thisClass(node: ts.Node): ts.ClassLikeDeclaration | undefined {
   return undefined;
 }
 
+/** Whether the parser met a syntax error in the file, so its tree does not state what the source means. */
+export function hasSyntaxErrors(tree: ts.SourceFile): boolean {
+  return (tree as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics.length > 0;
+}
+
 export function lineOf(source: ts.SourceFile, node: ts.Node): number {
   return source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
 }

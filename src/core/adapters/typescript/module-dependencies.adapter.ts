@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { bindingNames } from "./syntax.ts";
+import { bindingNames, hasSyntaxErrors } from "./syntax.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { ModuleDependencies, ModuleDependency, ModuleSource, UntraversedReference } from "../../domain/impact/module-dependency.ts";
@@ -29,7 +29,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
       for (const file of [...held.keys()].sort(compareText)) {
         if (!isTypeScriptFile(file) || (selected !== undefined && !selected.has(file))) continue;
         const tree = parse(file);
-        if ((tree as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics.length > 0) {
+        if (hasSyntaxErrors(tree)) {
           unread.push({ file, reason: "source-unreadable" });
           continue;
         }

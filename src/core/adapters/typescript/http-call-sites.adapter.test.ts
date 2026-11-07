@@ -399,6 +399,22 @@ test("a name a barrel re-exports with `export *` resolves through it", async () 
   assert.deepEqual(sites(await reader.of([orders, barrel, service], "shop-web")), ["GET orders-api/orders@src/app/order/order.service.ts:7"]);
 });
 
+test("a barrel resolves only a name the language exports through it: never one two star exports both supply, nor one its target does not export", async () => {
+  const service = (path: string, from: string) =>
+    source(path, ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", `import { ORDERS } from '${from}'`, "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(): void {", "    this.http.get(ORDERS)", "  }", "}"].join("\n"));
+  const files = [
+    source("src/a/orders.ts", "export const ORDERS = 'a/orders'"),
+    source("src/a/legacy.ts", "export const ORDERS = 'legacy/orders'"),
+    source("src/a/index.ts", "export * from './orders'\nexport * from './legacy'"),
+    source("src/b/hidden.ts", "const ORDERS = 'hidden/orders'\nexport const OTHER = 'other'"),
+    source("src/b/index.ts", "export * from './hidden'"),
+    service("src/ambiguous.ts", "./a"),
+    service("src/hidden.ts", "./b"),
+  ];
+
+  assert.deepEqual(sites(await reader.of(files, "shop-web")), ["unknown unresolved@src/ambiguous.ts:7", "unknown unresolved@src/hidden.ts:7"]);
+});
+
 test("a name a barrel re-exports by name resolves through it", async () => {
   const orders = source("src/app/api/orders.ts", "export const ORDERS = 'orders-api/orders'");
   const barrel = source("src/app/api/index.ts", "export { ORDERS } from './orders'");
@@ -428,6 +444,9 @@ test("a member of a default-exported object resolves", async () => {
   );
 
   assert.deepEqual(sites(await reader.of([environment, service], "shop-web")), ["GET shop-api/orders@src/app/order/order.service.ts:7"]);
+  const barrel = source("src/environments/index.ts", "export { default as environment } from './environment'");
+  const throughBarrel = source("src/app/order/order.service.ts", service.content.replace("import environment from '../../environments/environment'", "import { environment } from '../../environments'"));
+  assert.deepEqual(sites(await reader.of([environment, barrel, throughBarrel], "shop-web")), ["GET shop-api/orders@src/app/order/order.service.ts:7"]);
 });
 
 test("a path two literals add resolves", async () => {
