@@ -168,6 +168,11 @@ const TYPE_KINDS: Readonly<Record<string, TypeKind>> = {
   record_declaration: "class",
 };
 
+/** Whether a node declares a type: a class, an interface, an enum, a record or an annotation type. */
+export function isTypeDeclaration(node: Node): boolean {
+  return Object.hasOwn(TYPE_KINDS, node.type);
+}
+
 /** A placeholder is resolved at run time; U+FFFD stands for source bytes that were not UTF-8. */
 export const UNKNOWABLE_TEXT = /\$\{|#\{|\uFFFD/;
 
