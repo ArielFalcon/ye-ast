@@ -8,6 +8,11 @@ import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, res
 import { createJavaProject, isTypeDeclaration, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: DispatchTargets = { kind: "unknown", reason: "dispatch not proven" };
+const ASPECT = { kind: "unknown", reason: "aspect may replace the body" } as const satisfies DispatchTargets;
+/** The advice annotations of an aspect: each runs code around, before or after the join points its pointcut selects. */
+const ADVICE: ReadonlySet<string> = new Set(["Around", "Before", "After", "AfterReturning", "AfterThrowing"]);
+/** Aspect members that make a type implement more than its declarations state. */
+const INTRODUCTIONS: ReadonlySet<string> = new Set(["DeclareParents", "DeclareMixin"]);
 const PARAMETERS: ReadonlySet<string> = new Set(["formal_parameter", "spread_parameter"]);
 /** Annotations the language itself defines, which no generator or proxy reads to implement a type. */
 const LANGUAGE_ANNOTATIONS: ReadonlySet<string> = new Set(["Override", "Deprecated", "SuppressWarnings", "FunctionalInterface"]);
@@ -58,12 +63,14 @@ export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sou
       const project = createJavaProject(files);
       if (project.unreadable.length > 0) return results;
       const veto = globalVeto(files, project);
-      if (veto !== undefined) return sites.map(({ file }) => isJavaSource(file) ? { kind: "unknown", reason: veto } : { kind: "unknown" });
+      if ("reason" in veto) return sites.map(({ file }) => isJavaSource(file) ? { kind: "unknown", reason: veto.reason } : { kind: "unknown" });
       const hierarchy = readHierarchy(files, project);
       for (const [index, site] of sites.entries()) {
         if (signal?.aborted) break;
         const method = project.types.flatMap((type) => (type.file.path === site.file ? type.methods : [])).find((candidate) => candidate.name === site.name && !candidate.hasBody && spansLine(candidate.node, site.line));
-        if (method !== undefined) results[index] = targetsOf(method, hierarchy);
+        if (method === undefined) continue;
+        const targets = targetsOf(method, hierarchy);
+        results[index] = targets.kind === "bodies" && advised(method, hierarchy, veto.advice) ? ASPECT : targets;
       }
       return results;
     });
@@ -205,7 +212,7 @@ function belowOf(type: TypeDecl, hierarchy: Hierarchy): ReadonlySet<TypeDecl> {
 
 /** Reads every declaration's supertypes; `undefined` when an aspect or a JDK API that implements an interface at run time may run code behind any type. */
 export function hierarchyOf(files: readonly JavaFile[], project: JavaProject): Hierarchy | undefined {
-  return globalVeto(files, project) === undefined ? readHierarchy(files, project) : undefined;
+  return "reason" in globalVeto(files, project) ? undefined : readHierarchy(files, project);
 }
 
 function readHierarchy(files: readonly JavaFile[], project: JavaProject): Hierarchy {
@@ -268,15 +275,193 @@ function spansLine(declaration: Node, line: number): boolean {
   return declaration.startPosition.row + 1 <= line && line <= (declaration.childForFieldName("name") ?? declaration).startPosition.row + 1;
 }
 
-function globalVeto(files: readonly JavaFile[], project: JavaProject): Extract<DispatchTargets, { kind: "unknown" }>["reason"] {
+/**
+ * What may run code behind any type: an aspect whose advice the closed pointcut subset does not bound, then a JDK API that
+ * implements an interface at run time; otherwise the bounded advice of every aspect.
+ */
+function globalVeto(files: readonly JavaFile[], project: JavaProject): { reason: NonNullable<Extract<DispatchTargets, { kind: "unknown" }>["reason"]> } | { advice: readonly JoinPoints[] } {
   let dynamic = false;
+  let unbounded = false;
+  const advice: JoinPoints[] = [];
   for (const file of files) {
     const pending: Node[] = [file.root];
     for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-      if (isAspect(node)) return "aspect may replace the body";
+      if (isAspect(node)) {
+        const read = adviceOf(node);
+        if (read === undefined) unbounded = true;
+        else advice.push(...read);
+      }
       if (namesDynamicImplementation(node, file, project)) dynamic = true;
       for (const child of node.namedChildren) if (child !== null) pending.push(child);
     }
   }
-  return dynamic ? "generated implementation" : undefined;
+  if (unbounded) return { reason: ASPECT.reason };
+  return dynamic ? { reason: "generated implementation" } : { advice };
+}
+
+/**
+ * The call a dispatch site stands for: its method, every repository type a value may have at run time (the owner, the
+ * types below it and every type above those), and whether one of those has a supertype outside the repository.
+ */
+interface AdvisedCall {
+  method: MethodDecl;
+  types: readonly TypeDecl[];
+  outside: boolean;
+}
+
+/** Whether an advice's pointcut may select the execution of a body the call dispatches to. */
+type JoinPoints = (call: AdvisedCall) => boolean;
+
+function advised(method: MethodDecl, hierarchy: Hierarchy, advice: readonly JoinPoints[]): boolean {
+  if (advice.length === 0) return false;
+  const types = new Set([method.owner, ...belowOf(method.owner, hierarchy)]);
+  for (let frontier = [...types]; frontier.length > 0; ) {
+    frontier = frontier.flatMap((type) => hierarchy.supertypes.get(type) ?? []).filter((above) => !types.has(above));
+    for (const above of frontier) types.add(above);
+  }
+  const call = { method, types: [...types], outside: [...types].some((type) => hierarchy.outside.has(type)) };
+  return advice.some((joinPoints) => joinPoints(call));
+}
+
+/**
+ * The join points of each advice of the aspect an `@Aspect` annotation marks, read from string pointcuts of a closed
+ * subset: `within` of a type name pattern or of `@Annotation *`, `@within`, `@annotation` and `execution` with a type
+ * name pattern, combined with `&&` and `||`. `undefined` when an advice or an introduction escapes that subset.
+ */
+function adviceOf(annotation: Node): JoinPoints[] | undefined {
+  const declaration = annotation.parent?.parent;
+  const body = declaration?.type === "class_declaration" ? declaration.childForFieldName("body") : null;
+  if (body === null || body === undefined) return undefined;
+  const advice: JoinPoints[] = [];
+  for (const member of body.namedChildren) {
+    for (const annotated of annotationsOf(member)) {
+      const name = simpleName(annotated.childForFieldName("name") ?? annotated);
+      if (INTRODUCTIONS.has(name)) return undefined;
+      if (!ADVICE.has(name)) continue;
+      const pointcut = pointcutText(annotated);
+      const joinPoints = pointcut === undefined ? undefined : parsePointcut(pointcut);
+      if (joinPoints === undefined) return undefined;
+      advice.push(joinPoints);
+    }
+  }
+  return advice;
+}
+
+function annotationsOf(declaration: Node | null): Node[] {
+  const modifiers = declaration?.namedChildren.find((child) => child?.type === "modifiers");
+  return (modifiers?.namedChildren ?? []).filter((child): child is Node => child?.type === "marker_annotation" || child?.type === "annotation");
+}
+
+/** The pointcut an advice annotation states as one plain string literal, its sole argument or its `value` or `pointcut` element. */
+function pointcutText(annotation: Node): string | undefined {
+  const values = (annotation.childForFieldName("arguments")?.namedChildren ?? []).flatMap((argument) => {
+    if (argument === null) return [];
+    if (argument.type !== "element_value_pair") return [argument];
+    const key = argument.childForFieldName("key")?.text;
+    return key === "value" || key === "pointcut" ? [argument.childForFieldName("value")] : [];
+  });
+  const [literal] = values;
+  return values.length === 1 && literal?.type === "string_literal" && !literal.text.includes("\\") ? literal.text.slice(1, -1) : undefined;
+}
+
+/** A pointcut of the closed subset as a test; `undefined` for any other designator, a negation or a named pointcut. */
+function parsePointcut(text: string): JoinPoints | undefined {
+  let at = 0;
+  const skip = (): void => { while (/\s/.test(text[at] ?? "")) at++; };
+  const take = (...tokens: string[]): boolean => {
+    skip();
+    const token = tokens.find((candidate) => text.startsWith(candidate, at));
+    if (token === undefined) return false;
+    at += token.length;
+    return true;
+  };
+  const either = (): JoinPoints | undefined => {
+    const parts: JoinPoints[] = [];
+    do {
+      const part = both();
+      if (part === undefined) return undefined;
+      parts.push(part);
+    } while (take("||"));
+    return (call) => parts.some((part) => part(call));
+  };
+  const both = (): JoinPoints | undefined => {
+    const parts: JoinPoints[] = [];
+    do {
+      const part = primary();
+      if (part === undefined) return undefined;
+      parts.push(part);
+    } while (take("&&"));
+    return (call) => parts.every((part) => part(call));
+  };
+  const primary = (): JoinPoints | undefined => {
+    if (take("(")) {
+      const inner = either();
+      return inner !== undefined && take(")") ? inner : undefined;
+    }
+    skip();
+    const designator = /^@?[A-Za-z]+/.exec(text.slice(at))?.[0];
+    if (designator === undefined) return undefined;
+    at += designator.length;
+    if (!take("(")) return undefined;
+    const start = at;
+    for (let depth = 1; depth > 0; at++) {
+      if (at >= text.length) return undefined;
+      if (text[at] === "(") depth++;
+      else if (text[at] === ")") depth--;
+    }
+    return designatorOf(designator, text.slice(start, at - 1).trim());
+  };
+  const joinPoints = either();
+  skip();
+  return at === text.length ? joinPoints : undefined;
+}
+
+function designatorOf(designator: string, argument: string): JoinPoints | undefined {
+  if (designator === "within") {
+    const annotation = /^@(\S+)\s+\*$/.exec(argument)?.[1];
+    if (annotation !== undefined) return annotationName(annotation, (name) => (call) => call.outside || call.types.some((type) => annotatedWith(type.node, name)));
+    const pattern = typePattern(argument);
+    return pattern === undefined ? undefined : (call) => call.types.some((type) => pattern.test(type.fqn));
+  }
+  if (designator === "@within") return annotationName(argument, (name) => (call) => call.outside || call.types.some((type) => annotatedWith(type.node, name)));
+  if (designator === "@annotation") return annotationName(argument, (name) => (call) => call.types.some((type) => type.methods.some((method) => method.name === call.method.name && annotatedWith(method.node, name))));
+  return designator === "execution" ? executionOf(argument) : undefined;
+}
+
+/** An annotation type's simple name, for a written type name; a bound advice parameter (`@annotation(timed)`) is not one. */
+function annotationName(written: string, test: (name: string) => JoinPoints): JoinPoints | undefined {
+  const name = /^(?:[a-z_$][\w$]*\.)*([A-Z][\w$]*)$/.exec(written)?.[1];
+  return name === undefined ? undefined : test(name);
+}
+
+/** `execution([modifiers] <return> [<declaring type pattern>.]<name pattern>(<parameters>))`, read without modifiers, return or parameters. */
+function executionOf(argument: string): JoinPoints | undefined {
+  const parameters = argument.lastIndexOf("(");
+  if (parameters < 0 || !argument.endsWith(")") || /@|\bthrows\b|&&|\|\||!/.test(argument)) return undefined;
+  const words = argument.slice(0, parameters).trim().split(/\s+/);
+  const named = words.at(-1) ?? "";
+  if (words.length < 2) return undefined;
+  const cut = named.lastIndexOf(".");
+  const name = named.slice(cut + 1);
+  if (!/^[\w$*]+$/.test(name)) return undefined;
+  const declaring = cut < 0 ? undefined : typePattern(named.slice(0, cut).endsWith(".") ? `${named.slice(0, cut)}.*` : named.slice(0, cut));
+  if (cut >= 0 && declaring === undefined) return undefined;
+  const method = globOf(name);
+  return (call) => method.test(call.method.name) && (declaring === undefined || call.outside || call.types.some((type) => declaring.test(type.fqn)));
+}
+
+/** A qualified type name pattern with `*` and `..`; a simple name, `+`, an array or a type argument is outside the subset. */
+function typePattern(pattern: string): RegExp | undefined {
+  if (pattern === "*") return /^/;
+  return /^[\w$*]+(?:\.\.?[\w$*]+)+$/.test(pattern) ? globOf(pattern) : undefined;
+}
+
+/** `*` stands for any characters but a dot, `..` for any run of packages. */
+function globOf(pattern: string): RegExp {
+  const words = pattern.split("..").map((part) => part.split("*").map((text) => text.replace(/[.$]/g, "\\$&")).join("[^.]*"));
+  return new RegExp(`^${words.join("(?:\\.[^.]+)*\\.")}$`);
+}
+
+function annotatedWith(declaration: Node, name: string): boolean {
+  return annotationsOf(declaration).some((annotation) => simpleName(annotation.childForFieldName("name") ?? annotation) === name);
 }

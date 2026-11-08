@@ -191,7 +191,7 @@ test("a type variable in the method's signature, or a name the strict reading le
 
 
 test("global aspect veto reasons precede dynamic generators and owner annotations regardless of source order", async () => {
-  const aspect = java("Hooks.java", ["package app; @Aspect class Hooks {}"]);
+  const aspect = java("Hooks.java", ["package app; @Aspect class Hooks { @Around(\"bean(sender)\") Object run() { return null; } }"]);
   const proxy = java("ProxyUse.java", ["package app; class ProxyUse { Object p = java.lang.reflect.Proxy.newProxyInstance(null, null, null); }"]);
   const service = { ...PORT, content: PORT.content.replace("public interface Port", "@Service public interface Port") };
   for (const sources of [[SENDER, proxy, aspect], [aspect, proxy, SENDER]]) {
@@ -222,4 +222,37 @@ test("two files of one text at two paths are two implementations, read with or w
   } finally {
     hold.release();
   }
+});
+
+test("an aspect vetoes dispatch only where a pointcut of the closed subset may match the bodies, and everywhere when any pointcut is outside it", async () => {
+  const advising = (...pointcuts: string[]) => java("Hooks.java", ["package app;", "@Aspect class Hooks {", ...pointcuts.map((pointcut, index) => `  @Around(${JSON.stringify(pointcut)}) Object a${index}() { return null; }`), "}"]);
+  const repository = { ...SENDER, content: SENDER.content.replace("public class Sender", "@org.springframework.stereotype.Repository public class Sender") };
+  const timed = { ...SENDER, content: SENDER.content.replace("  public void send", "  @Timed public void send") };
+  const VETO: DispatchTargets = { kind: "unknown", reason: "aspect may replace the body" };
+  const RUNS: DispatchTargets = { kind: "bodies", bodies: [body(SENDER, 4)] };
+
+  for (const pointcut of ["within(@org.springframework.stereotype.Repository *)", "@within(Repository)", "@annotation(Timed)", "execution(* other..*.*(..))", "within(other.*)", "within(app.Port) && execution(* app..*.close(..))"]) {
+    assert.deepEqual(await targetsOf([SENDER, advising(pointcut)]), RUNS, pointcut);
+  }
+  assert.deepEqual(await targetsOf([repository, advising("within(@org.springframework.stereotype.Repository *)")]), VETO);
+  assert.deepEqual(await targetsOf([repository, advising("@within(Repository)")]), VETO);
+  assert.deepEqual(await targetsOf([timed, advising("@annotation(com.acme.Timed)")]), VETO);
+  for (const pointcut of ["execution(* app.Sender.send(..))", "execution(public * app..*.*(..))", "within(app.*)", "within(other.*) || execution(* *(..))"]) {
+    assert.deepEqual(await targetsOf([SENDER, advising(pointcut)]), VETO, pointcut);
+  }
+  for (const pointcut of ["bean(sender)", "!within(other.*)", "monitored()", "@annotation(timed)", "within(Sender)", "within(app.Port+)", "execution(@Timed * *(..))", "args(String)"]) {
+    assert.deepEqual(await targetsOf([SENDER, advising("execution(* other..*.*(..))", pointcut)]), VETO, pointcut);
+  }
+  const timedClose = { ...SENDER, content: SENDER.content.replace("  public void close", "  @Timed public void close") };
+  assert.deepEqual(await targetsOf([timedClose, advising("@annotation(Timed)")]), { kind: "bodies", bodies: [body(timedClose, 4)] }, "another method carries the annotation");
+  const base = java("Base.java", ["package app;", "", "@Repository public class Base {", "  public void send(String message) {}", "}"]);
+  const inherits = java("Leaf.java", ["package app;", "", "public class Leaf extends Base implements Port {", "  public void close() {}", "}"]);
+  assert.deepEqual(await targetsOf([base, inherits, advising("@within(Repository)")]), VETO, "the body a class inherits is declared by an annotated class above it");
+  const based = { ...SENDER, content: SENDER.content.replace("public class Sender implements Port", "public class Sender implements Port, java.io.Serializable") };
+  const close = async (pointcut: string) => (await createJavaNameBindings(createJavaParser, [PORT, based, advising(pointcut)]).dispatchTargets([{ file: PORT.path, line: 5, name: "close" }]))[0];
+  assert.deepEqual(await close("@within(Repository)"), VETO, "a supertype outside the repository may carry an inherited annotation");
+  assert.deepEqual(await close("within(other.*)"), { kind: "bodies", bodies: [body(based, 5)] });
+  const introduced = java("Hooks.java", ["package app;", "@Aspect class Hooks {", "  @DeclareParents(value = \"other.*\", defaultImpl = Object.class) static Port mixin;", "}"]);
+  const concatenated = java("Hooks.java", ["package app;", "@Aspect class Hooks {", "  @Around(\"within(other.*)\" + \"\") Object a() { return null; }", "}"]);
+  for (const aspect of [introduced, concatenated]) assert.deepEqual(await targetsOf([SENDER, aspect]), VETO, aspect.content);
 });

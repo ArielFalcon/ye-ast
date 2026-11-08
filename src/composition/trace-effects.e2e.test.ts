@@ -448,7 +448,7 @@ class Worker implements Processor {
   private ApplicationEventPublisher publisher;
   public void process() { publisher.publishEvent(new ImageEvent()); }
 }
-@Aspect class Advice {}
+@Aspect class Advice { @org.aspectj.lang.annotation.Around("bean(worker)") Object around() { return null; } }
 class Flow {
   private Processor processor;
   public void run() { processor.process(); }
@@ -600,7 +600,7 @@ export function proven(client: NominalClient) { client.post('/proven'); }
 
 test("Java declaration selection preserves private helper traversal while aspect dispatch remains cut", async () => {
   commit({
-    "src/Flow.java": `@org.aspectj.lang.annotation.Aspect class Advice {}
+    "src/Flow.java": `@org.aspectj.lang.annotation.Aspect class Advice { @org.aspectj.lang.annotation.Around("bean(worker)") Object around() { return null; } }
 interface Port { void save(); }
 class Worker implements Port { public void save() {} }
 class Flow {
