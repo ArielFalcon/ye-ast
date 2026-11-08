@@ -60,7 +60,7 @@ export class OrderPage {
     this.http.get("shop-api/orders/7");
   }
   missing(): void {
-    this.http.get("shop-api/refunds/7");
+    this.http.get("billing-api/refunds/7");
   }
   label(): string {
     return orderPath(7);

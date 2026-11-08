@@ -372,7 +372,7 @@ test("an importers fact declares no template engine and a callers fact declares 
 test("the decisions family answers over a composed workspace read: an outward name no clone serves is a free-text decision", async () => {
   const frontend = join(workspace, "shop-web");
   mkdirSync(join(frontend, "src/app"), { recursive: true });
-  writeFileSync(join(frontend, "src/app/order.page.ts"), ORDER_PAGE);
+  writeFileSync(join(frontend, "src/app/order.page.ts"), ORDER_PAGE.replace("shop-api/orders/7", "shop-api/refunds/7"));
   const inFrontend = (...args: string[]): string => execFileSync("git", args, { cwd: frontend, env: GIT_ENV, encoding: "utf8" }).trim();
   inFrontend("init", "-q");
   inFrontend("add", "-A");
