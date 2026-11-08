@@ -115,3 +115,28 @@ test("with the index digest and derived facts, a second read finds the calls the
   assert.deepEqual(again.read, []);
   assert.deepEqual(other.read, ["owned src/a.ts", "a"]);
 });
+
+test("a retained call whose body the index no longer holds realigns its source instead of being dropped", async () => {
+  const kept = new Map<string, string>();
+  const facts: DerivedFacts = {
+    ofFile: (_slot, _file, derive) => derive(),
+    async ofInputs(slot, inputs, derive) {
+      const key = JSON.stringify([slot, inputs]);
+      if (!kept.has(key)) kept.set(key, JSON.stringify(await derive()));
+      return JSON.parse(kept.get(key)!);
+    },
+    fingerprint: (inputs) => JSON.stringify(inputs),
+    drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
+  };
+  const read = (body: string) => {
+    const world = setup([fakeNode("fetch", "function", "src/api.ts", 1, 3), fakeNode(body, "constant", "src/a.ts", 2, 4)], [], [{ body, line: 3, name: "fetch" }], () => declaration(world.symbol("fetch")), {}, { "src/a.ts": "fetch();" }, { facts, index: "same" });
+    return world;
+  };
+
+  await read("a").reverse.into([read("a").symbol("fetch")]);
+  const moved = read("a2");
+  const found = await moved.reverse.into([moved.symbol("fetch")]);
+
+  assert.deepEqual(found.edges.map(({ source, edge }) => `${source.id}@${edge.line}`), ["a2@3"]);
+  assert.deepEqual(moved.read.filter((entry) => !entry.startsWith("owned ")), ["a2"]);
+});

@@ -258,7 +258,11 @@ refuse a binding or add facts the base does not model, so one call never has two
    `reverse-looked-up-names` (the names its owned calls are looked up by, which decide whether it can contribute) and
    `reverse-unbound-calls` (its written calls alignment leaves unmatched, `deferred` ones included). With the whole
    index's digest in the key, the value holds the references as the index places them, node ids included; no read of
-   the file's records is needed for the key. The name index is rebuilt per read from them. Only an index the index
+   the file's records is needed for the key. Codegraph's node ids are content hashes: two indexes built from identical
+   content give identical ids, edges and references (petclinic `backend-rest`, 2,028 symbols, and shopizer `backend`,
+   27,628 symbols, 2026-11-09; pinned by `codegraph.adapter.test.ts`, "the same snapshot gives the same answers wherever
+   it is indexed"). A retained alignment naming a body the index does not hold is never used: the source is aligned
+   again. The name index is rebuilt per read from them. Only an index the index
    cache keeps by content has a digest, so a read without the index cache, and a `--live` read, retain nothing and pay
    the alignment on every read, as before U4c.
 10. **Laziness.** Nothing runs at indexing. The full alignment runs the first time a read needs the name index, inside

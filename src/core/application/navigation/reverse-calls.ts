@@ -3,7 +3,7 @@ import { isJavaSource } from "../../domain/languages/java.ts";
 import { isClassKind } from "../../domain/impact/edge-policy.ts";
 import { calleeOf } from "../../domain/shared/call-place.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { CodeGraphReader, GraphEdge, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
+import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { CallBindings, SettledBinding, UnboundCall } from "./call-binding.ts";
@@ -77,6 +77,7 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, im
   /**
    * Aligns the sources not aligned yet with a written call looked up by one of `keys` there (ADR-0041 open question 1):
    * their text spells the key, and so does a call one of their declarations owns, the only calls alignment leaves unmatched.
+   * A retained alignment naming a body the index no longer holds is not used: the source is aligned again.
    */
   async function align(keys: readonly LookupKey[]): Promise<void> {
     const keysIn = (file: string): ReadonlySet<string> => new Set(keys.flatMap(({ name, files }) => (files === undefined || files.has(file) ? [name] : [])));
@@ -85,8 +86,12 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, im
       const looked = keysIn(file.path);
       if (!(await lookedUpIn(file)).some((name) => looked.has(name))) continue;
       aligned.add(file.path);
-      const references = await unboundIn(file);
-      const bodies = new Map(store.symbolsByIds([...new Set(references.map(({ from }) => from))]).map((body) => [body.id, body]));
+      let references = await retainedOf(REVERSE_UNBOUND, file, () => unboundIn(file));
+      let bodies = bodiesOf(references);
+      if (references.some(({ from }) => !bodies.has(from))) {
+        references = await unboundIn(file);
+        bodies = bodiesOf(references);
+      }
       for (const reference of references) {
         const name = lookupName(reference.file, reference.name);
         const body = bodies.get(reference.from);
@@ -104,11 +109,13 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, im
   }
 
   /** A source's written calls alignment leaves unmatched, `deferred` ones included, by body in the index's order. */
-  function unboundIn(file: SourceFile): Promise<readonly GraphUnresolvedReference[]> {
-    return retainedOf(REVERSE_UNBOUND, file, async () => {
-      const calls = await Promise.all(store.symbolsInFiles([file.path]).map((body) => reconciled.callsOf(body)));
-      return calls.flatMap(({ writtenOnly, deferredOnly }) => [...writtenOnly, ...deferredOnly]);
-    });
+  async function unboundIn(file: SourceFile): Promise<readonly GraphUnresolvedReference[]> {
+    const calls = await Promise.all(store.symbolsInFiles([file.path]).map((body) => reconciled.callsOf(body)));
+    return calls.flatMap(({ writtenOnly, deferredOnly }) => [...writtenOnly, ...deferredOnly]);
+  }
+
+  function bodiesOf(references: readonly GraphUnresolvedReference[]): ReadonlyMap<GraphNodeId, GraphSymbol> {
+    return new Map(store.symbolsByIds([...new Set(references.map(({ from }) => from))]).map((body) => [body.id, body]));
   }
 
   /** What `derive` answers for a source, kept by its path, its content and the index digest when the read has both (ADR-0041 decision 9). */
