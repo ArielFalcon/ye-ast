@@ -14,7 +14,7 @@ async function countingParser(): Promise<{ parser: JavaParser; live: () => numbe
   let live = 0;
   const parser: JavaParser = {
     parse(source) {
-      if (source === "throws") throw new RangeError("parser failure");
+      if (source.content === "throws") throw new RangeError("parser failure");
       const result = real.parse(source);
       if (!result.ok) return result;
       live++;

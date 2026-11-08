@@ -1943,7 +1943,7 @@ test("a file whose parsing throws is that file's source-unreadable item and the 
   const base = await createJavaParser();
   const parser: JavaParser = {
     parse(source) {
-      if (source.includes("Explodes")) throw new RangeError("Maximum call stack size exceeded");
+      if (source.content.includes("Explodes")) throw new RangeError("Maximum call stack size exceeded");
       return base.parse(source);
     },
   };
@@ -1976,7 +1976,7 @@ function poisonedParser(base: JavaParser, failsAt: (node: Node, member: string) 
   return {
     parse(source) {
       const result = base.parse(source);
-      return result.ok && source.includes("Poisoned") ? { ok: true, value: { ...result.value, root: wrap(result.value.root) } } : result;
+      return result.ok && source.content.includes("Poisoned") ? { ok: true, value: { ...result.value, root: wrap(result.value.root) } } : result;
     },
   };
 }

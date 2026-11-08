@@ -7,11 +7,12 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { OperationShape, PayloadShapes } from "../../ports/payload-shapes.port.ts";
-import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
+import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { canonicalKey, configurationsOf, type Configuration } from "./application-config.ts";
 import { spanOf } from "./findings.ts";
 import { enumerationNames, serializedProperties, type WireProperty } from "./jackson-properties.ts";
-import { createJavaProject, describeFile, externalNames, scopeOf, type JavaFile, type JavaProject, type MethodDecl, type Scope, type TypeDecl } from "./java-symbols.ts";
+import { withJavaSources } from "./java-project.ts";
+import { createJavaProject, externalNames, scopeOf, type JavaProject, type MethodDecl, type Scope, type TypeDecl } from "./java-symbols.ts";
 import { BEAN } from "./java-value-vocabulary.ts";
 import { annotationUses, isAnnotation } from "./request-mapping.ts";
 
@@ -471,17 +472,8 @@ export function createSpringPayloadShapes(parser: JavaParser, readRoutes: RouteR
     responses(files) {
       const routes = readRoutes(files).flatMap((finding) => (finding.status === "complete" && finding.value.kind === "http-route" ? [{ route: finding.value, evidence: finding.evidence }] : []));
       if (routes.length === 0) return [];
-      const trees: JavaSyntaxTree[] = [];
-      try {
-        const parsed: JavaFile[] = [];
-        for (const source of files) {
-          if (!isJavaSource(source.path) || isJvmTestFile(source.path)) continue;
-          const result = parser.parse(source.content);
-          if (!result.ok) continue;
-          trees.push(result.value);
-          parsed.push(describeFile(source.path, result.value.root));
-        }
-        const project = createJavaProject(parsed);
+      return withJavaSources(parser, (parse) => {
+        const project = createJavaProject(parse(files.filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path))).files);
         const handlers = handlerIndex(project);
         const code = codeMapperConfiguration(project);
         const configurationOf = configurationsOf(files.filter((file) => isSpringConfigFile(file.path)));
@@ -511,9 +503,7 @@ export function createSpringPayloadShapes(parser: JavaParser, readRoutes: RouteR
           }
           return { status: "complete", value: { operationId: undefined, method: route.method, path: route.path, basePath: "", ...read }, evidence };
         });
-      } finally {
-        for (const tree of trees) tree.dispose();
-      }
+      });
     },
   };
 }

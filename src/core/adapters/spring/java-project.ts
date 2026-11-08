@@ -52,7 +52,7 @@ export function thisType(node: Node, file: JavaFile, project: JavaProject): Type
 
 function readSource(parser: JavaParser, source: SourceFile, trees: JavaSyntaxTree[]): { file: JavaFile } | { unparsed: UnparsedSource } {
   try {
-    const result = parser.parse(source.content);
+    const result = parser.parse(source);
     if (!result.ok) return { unparsed: { path: source.path, line: result.fault.line } };
     trees.push(result.value);
     return { file: describeFile(source.path, result.value.root) };

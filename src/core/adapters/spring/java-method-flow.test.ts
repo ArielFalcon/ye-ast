@@ -13,7 +13,7 @@ test("independent dispatch edges retain linear leaf evaluations", async () => {
     + `class W { ${Array.from({ length: count }, (_, i) => `G${i} g${i};`).join(" ")}
     void all(String p) { ${Array.from({ length: count }, (_, i) => `g${i}.send(p);`).join(" ")} } }
     class D { W w; void load() { w.all("/x"); } }`;
-  const parsed = (await createJavaParser()).parse(source);
+  const parsed = (await createJavaParser()).parse({ path: "src/D.java", content: source });
   assert.ok(parsed.ok);
   try {
     const project = createJavaProject([describeFile("Probe.java", parsed.value.root)]);
@@ -31,7 +31,7 @@ test("nested dispatch reuses the same forwarded binding context", async () => {
     class A${i} implements G${i} { G${i+1} next; public void send(String p) { next.send(p); } }
     class B${i} implements G${i} { G${i+1} next; public void send(String p) { next.send(p); } }`).join("\n")
     + 'class G12 { void send(String p) { sink(p); } } class D { G0 g; void load() { g.send("/x"); } }';
-  const parsed = (await createJavaParser()).parse(source);
+  const parsed = (await createJavaParser()).parse({ path: "src/D.java", content: source });
   assert.ok(parsed.ok);
   try {
     const project = createJavaProject([describeFile("Probe.java", parsed.value.root)]);

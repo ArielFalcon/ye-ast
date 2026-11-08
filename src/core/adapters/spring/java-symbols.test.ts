@@ -16,7 +16,7 @@ const SOURCE = [
 ].join("\n");
 
 test("a type declaration is a class, an interface, an enum, a record or an annotation type, never a method or a constructor", async () => {
-  const parsed = (await createJavaParser()).parse(SOURCE);
+  const parsed = (await createJavaParser()).parse({ path: "src/A.java", content: SOURCE });
   assert.ok(parsed.ok);
   const declared: string[] = [];
   const visit = (node: Node): void => {
