@@ -85,6 +85,9 @@ in `impact-queries.ts:627` (`t3/reverse-call-reconciliation`, confirmed).
 | E14 | Call sites and data effects (Spring, Java) | `PlacedCallSiteReader`, `DataEffectReader` | Trace (`trace-queries.ts:165-167`), topology | Data effects `ofInputs("trace-data-effects")` in trace only |
 | E15 | Java syntax trees and the Java project | `ParseHolds` (ADR-0040, `withScratch`, `read-snapshot.ts:121`; `withLiveCaptures`, `head-reading.ts:82`); `withJavaSources` (`java-project.ts:22`) | Through adapters; nine adapters each build their own `createJavaProject` per call (`java-name-bindings.adapter.ts:51`, `java-receiver-methods.ts:60`, `java-dispatch-targets.ts:63`, `java-imports.adapter.ts:43`, `java-call-sites.adapter.ts:35`, `data-effects.adapter.ts:21`, `spring-routes.adapter.ts:113`, `:142`, `spring-payload-shapes.adapter.ts:476`) | Trees per read; projects per adapter call |
 | E16 | Derived facts view | `PreparedCommit.facts` (`DerivedFacts`, `derived-facts.port.ts`) | Threaded by hand into each reader call | ADR-0035 |
+| E17 | TypeScript value flow: the consumer flow and the request origins | `ConsumerFlowReader` builds its own program (`typescript/consumer-flow.adapter.ts:15-16`, `buildProgram`); `RequestOriginReader` builds it again over the same files (`typescript/request-origins.adapter.ts:17-19`) | Contracts assembles both itself, per repository read (`consumer-sources.ts:112-113`) | Per reader: the request reader holds its program for the prepared workspace's life (`request-origins.adapter.ts:13-15`); the flow reader per call |
+| E18 | Java URL flow: which methods a call may run | `methodsOf` selects constructors and methods on its own (`spring/java-method-flow.ts:73`), beside `receiverMethods` and `dispatchTargets` | Contracts and topology through the call-site flow | Per adapter call over its own `JavaProject` |
+| E19 | Transversal wrappers: redaction and measurement | `redaction` at egress (AGENTS.md invariant), `measured*` and `staged` wrappers in composition (`compose.ts`, `measurement.ts`) | Every family, wrapped by composition | None: they carry no evidence |
 
 ### Family × source matrix (`main` c2861dba)
 
@@ -211,21 +214,27 @@ retention silently becomes a per-call cost.
    |---|---|---|---|
    | B0 tree, sources, findings, store | — | Snapshot cache (written listing); index cache (content) | Store: codegraph's own sync on the live mirror, a new index per commit |
    | B1 syntax per file (E3) | B0 | Derived fact per file, both languages | That file |
-   | B2 import and root origins (E4, TypeScript) | B0 | Per file; module resolution by layout (paths and JSON contents) | That file; a file added, removed or a JSON edit invalidates every resolution (`module-resolver.ts:218-221`) |
+   | B2a per-file projections of origins (E4, TypeScript): a file's module shape, its bindings and annotations | B0 | Derived fact per file (`import-origins.adapter.ts:56`) | That file |
+   | B2b cross-file origin answers (E4, TypeScript): repository globals from every `.d.ts`, `declare global` and script (`import-origins.adapter.ts:130-140`); the heritage of every class for `declaredTypes` (`:243`, `subtypedTypes` `:299`); namespace members through other files' exports (`importBinding`, `:379`); module resolution by layout (`module-resolver.ts:218-221`) | B2a, B0 | A whole-snapshot key over every TypeScript path and content (plus the layout for resolution) until a narrower key is proven (decision 10) | Every B2b answer |
    | B3 module dependencies, every language (E5) | B0 | Snapshot slot today; per-file fact plus a join after migration L4 | Today the whole stage; after L4 that file and the join |
    | B4 relations (E6) | B0 | Snapshot slot today; per-file extraction plus a cross-file join after L4 | Today the whole stage; after L4 that file and the join |
-   | B5 Java project and its readings (E4 Java, E14, E15) | B0, the read's hold | Trees and one `JavaProject` per read hold; plain outputs (member names, call sites, data effects, receiver methods by sites) as facts keyed by every Java source | Every Java fact keyed by all Java sources; one parse of that file inside the next read |
-   | B6 reference proofs (E7) | B0, B2 | Per read | Recomputed per read |
+   | B5 Java project and its readings (E4 Java, E14, E15, E18) | B0, the read's hold | Trees and one `JavaProject` per read hold; plain outputs (call sites, data effects, receiver methods by sites) as facts keyed by every Java source's path and content and the snapshot's whole path universe, as the branch keys receiver methods (`java: [path, content]` and `paths`, `java-receiver-methods.ts:99` on `t3/reverse-call-reconciliation`), since a new non-Java file (a `.kt`) can withdraw a proof; member names per file (B1) | Every cross-file Java fact; a file added or removed anywhere; one parse of that file inside the next read |
+   | B6 reference proofs (E7) | B0, B2a, B2b | Per read | Recomputed per read |
    | B7 typed bindings (E8) | B0, a declared build output | ADR-0037 decision 8 (snapshot content and install records) | The whole pass of its key: 3.0-4.5 s CPU today; the per-program key is open question 3 |
    | B8 edge targets, binder, base bindings (E9, E10) | B1-B4, B6, B7, B5 through `ImportOrigins` | Per read; inputs retained above | Nothing retained |
    | B9 alignment deltas and forward calls (E11) | B1, B0 | ADR-0041 decision 9: per file content and the file's index digest | That file, and files whose index records moved |
-   | B10 name index and reverse calls (E11) | B9, B8 | Per read, rebuilt from retained deltas | Rebuilt per read (cost to measure, M2) |
+   | B10a retainable reverse lookup (E11): a file's call names and its unbound reverse calls | B9 | Derived fact per file, keyed by path, content and the snapshot's index digest (U4c's final step, `reverse-calls.ts:100-126` on the branch) | That file; every file when the index digest changes |
+   | B10b name index and reverse binding (E11) | B10a, B8 | Per read: the name index is assembled from B10a, and the bindings of reached declarations are bound per read | Rebuilt per read; its cost is measured (M5), not assumed small |
    | B11 framework readers (E13, E14) | B0, B4 | Per file where the reader allows, otherwise a snapshot slot | As its key states |
+   | B12 TypeScript value-flow program (E17) | B0 | One program per read hold, shared by the consumer flow and the request origins; never a cache entry (it holds compiler trees, ADR-0035 decision 1) | Rebuilt in the next read |
 
-   Every row is confirmed against the cited code except the B10 rebuild cost and the L4 rows, which are design.
+   Every row is confirmed against the cited code except the B10b rebuild cost, the B12 sharing and the L4 rows, which
+   are design. **A per-file projection and a cross-file answer are two stages, never one:** a per-file key is allowed
+   only for a value derived from that file alone; every cross-file answer declares all its inputs, a whole-snapshot key
+   at first.
 3. **Lazy and memoized by stage.** A stage runs the first time a family asks for it, once per read, and a family that
    never asks for a stage never pays it. `importers` without a call edge to judge never runs B7; an outline without a
-   focus runs none of B4 to B10. A stage's memo is a promise shared by every consumer of the read.
+   focus runs none of B4 to B10b. A stage's memo is a promise shared by every consumer of the read.
 4. **Every family receives the full reading.** The proofs B8 binds with are the same for every family: syntax,
    relations, reference proofs, typed bindings where declared, Java readings, every module reader of every language. No
    family passes its own proof set or reader selection. `importers`, `outline` and contract consequences thereby gain
@@ -236,21 +245,48 @@ retention silently becomes a per-call cost.
    - ADR-0036 decision 4 assumed `importers` and `outline` read no relations because they did not extract them. With
      the line they read the same binding; a family whose answer must stay syntax-only states it as a narrowing in its
      own policy, never by withholding inputs. Recommended: no such narrowing (open question 1).
-   - ADR-0037 decision 10's last sentence ("Trace keeps ADR-0029 decision 11") becomes a narrowing: trace receives the
-     typed binding as every family does; its execution policy keeps the compile-time target and refuses to run it as
-     proven where the receiver is a value a provider may replace (ADR-0029 decision 11, the U3 rule), and a typed
-     binding to an interface or abstract member is the start of dispatch (ADR-0044 decision 1) below it. A typed binding
-     never makes trace run a body ADR-0029 decision 11 refuses, and is never excluded.
+   - ADR-0037 decision 10's last sentence ("Trace keeps ADR-0029 decision 11") becomes a narrowing, and the binding
+     must carry what the narrowing reads. Today it does not: `typedVerdictOf` answers `typed` or a redirect without the
+     receiver (`edge-targets.ts:179-188`), the receiver is computed only for the edges the checker left unsettled
+     (`:164-170`), and trace reads the verdict's `receiver` to decide what runs (`trace-walk.ts:349` on the branch). So a
+     binding states three things independently: its target, its derivation (`typed`, `proven`, `resolved`,
+     `name-match`), and its receiver classification with the proofs about it (a value receiver and its root, `this`, a
+     rooted chain, none; each proof link of the chain that holds). The checker sets the target and the derivation and
+     never erases the receiver classification.
+   - Trace expands a target only on positive execution evidence: a proof that the receiver holds that class (constructed
+     there, `this`, a nominal Java receiver with its closure, ADR-0044 (Proposed) decision 1), never the derivation alone.
+     A `typed` binding on a structural value receiver proves the dependence, not the execution: trace keeps the target
+     as the compile-time declaration and states the step as unproven, as it does without the checker. The
+     replaceable-provider rule (the U3 rule) is one source of that refusal, not the whole of it. A typed binding to an
+     interface or abstract member is the start of dispatch below it.
+   - Mandatory fixtures, through `callers` and trace: **structural parameter**, `function run(x: Service) { x.execute(); }`
+     with a declared build output: `callers` of `Service.execute` lists `run`, `typed`; trace from `run` does not expand
+     `Service.execute` as run. **Replaceable provider**, a component that declares
+     `providers: [{ provide: Service, useClass: Other }]` and calls `inject(Service).execute()`: `callers` lists the call,
+     `typed`; trace does not run `Service.execute` as proven.
 6. **Prebuilt for the bound snapshot.** A server bound to a repository prebuilds that repository's reading in the
    background after it starts, so the first tool call finds it ready:
    - the bound snapshot is the launch repository's live capture under `trusted` (extending `warmLive`) and its `HEAD`
      commit under `untrusted`;
-   - B0 to B5, B9 and B11 are prebuilt always; B7 only when a build output is declared for that repository; B6, B8 and
-     B10 are per read and never prebuilt;
+   - B0 to B5, B9, B10a and B11 are prebuilt always; B7 only when a build output is declared for that repository; B6,
+     B8, B10b and B12 are per read and never prebuilt;
    - a call that arrives before prebuilding ends waits on the in-flight stage, never builds it a second time. This
      amends ADR-0035 decision 4 for the line's stages only: in one process, one in-flight derivation per stage key is
-     shared; a caller's abort ends its wait, never the shared derivation; a derivation that fails keeps nothing, and the
-     next asker derives again;
+     shared; a derivation that fails keeps nothing, and the next asker derives again;
+   - **a shared derivation owns its lifetime.** Today a read's resources end with its callback: `withScratch` frees the
+     held trees and removes its directories when `use` returns (`read-snapshot.ts:119-134`), and the typed pass
+     captures the first requester's signal (`derive(sources, outputs, signal)` inside the shared pass,
+     `type-bindings.adapter.ts:142-144`), so a shared job cannot outlive the read that started it, and the first
+     requester's abort cuts every waiter. A shared derivation therefore opens its own read scope and hold, its own live
+     capture lease where it reads a live tree, and its own abort signal, linked only to the server's shutdown; it frees
+     them when it ends, answered or failed. Waiters receive only its plain result; a waiter's abort ends its wait and
+     never frees the job's resources nor aborts it;
+   - **shutdown** aborts every job; an aborted job keeps nothing (ADR-0035 decision 4);
+   - **identity of a live capture**: a job is keyed by the content of the capture it read (its export fingerprint),
+     never by "the mirror now"; it holds its capture until it ends, so the mirror may advance under it. A job whose
+     capture a newer sync superseded is aborted when no waiter remains, and otherwise finishes on its capture; its
+     per-file results stay valid for the next capture wherever content is unchanged. Whether holding a capture lease
+     delays the next sync is measured (M3); if it does, the job copies the plain inputs it needs and releases the lease;
    - a snapshot nobody prebuilt (impact's base revision, another `--revision`, a workspace's other repositories) is read
      lazily by decision 3.
 7. **Incremental after a change.** Per-file stages are keyed by file content, so a change re-derives only the changed
@@ -261,12 +297,25 @@ retention silently becomes a per-call cost.
    CPU on the measured applications; a live tree is never typed (ADR-0037 Gate), so live syncs never pay it, and a new
    commit pays it once in the background when prebuilt.
 8. **A stage enters with its retention, its measurement and its fixtures, in one place.** A new mechanism (ADR-0044's
-   Java closure, a future Java class-file reader under ADR-0037's build-output model, Java value flow of [RFC-0021](../rfc/0021-java-value-flow.md)) is one
+   Java closure, ADR-0044 being Proposed, a future Java class-file reader under ADR-0037's build-output model, Java value flow of [RFC-0021](../rfc/0021-java-value-flow.md)) is one
    row of decision 2: its dependencies, its retention and what one changed file invalidates, one measurement stage line
    (RFC-0012), and conformance fixtures through a family's public seam (ADR-0013). A whole-snapshot derivation without a
    retention other than per read is refused at review: that is the cause of the measured 1.9× warm regression. A
    cross-file stage over Java trees keeps them in the read's hold (ADR-0040) and its plain outputs as facts keyed by all
    its inputs (ADR-0035 decision 1: never a tree or a node in the cache).
+   Existing assemblies outside the evidence stages are assigned now:
+   - **The TypeScript value flow (E17)** becomes B12, one program per read hold shared by the consumer flow and the
+     request origins, which build it twice today. Each keeps its own rule as a declared contracts extension: the
+     carrier walk (`consumer-flow.walker.ts`) and the backward request walk (`request-origins.walker.ts`) stay
+     contracts' own; their name resolution reads B2a/B2b instead of re-resolving through the program where the answers
+     agree (measured by the gate, never assumed).
+   - **The Java URL flow (E18)** is a declared extension of B5: its method selection (`methodsOf`,
+     `java-method-flow.ts:73`) reads ADR-0044's `receiverMethods` and `dispatchTargets` once ADR-0044 V3 lands; until
+     then it is listed as a second Java selector in the single-owner fitness test, frozen. Its lenient following is
+     ADR-0044 open question 2's to decide, not this ADR's.
+   - **Redaction and measurement (E19)** are transversal wrappers, never stages: composition wraps the families and the
+     line's stages (one measurement line per stage, RFC-0012) and redaction applies at egress. Neither reads nor
+     changes evidence, and no stage depends on them.
 9. **Who prebuilds.** Today the stdio MCP server (`ye-ast mcp`) prebuilds its launch repository, and `ye-ast serve`
    prebuilds nothing until a host asks through the protocol (open question 4). The future daemon (ADR-0011) owns
    prebuilding for every repository it serves, schedules it on its watcher, and is the single writer of retained
@@ -280,6 +329,12 @@ retention silently becomes a per-call cost.
       `ModuleDependenciesReader`, `RelationExtractor`, `TypeBindings`): composition hands them once to the line.
     - Each stage row carries a retention tier from a closed set (per file, named inputs, snapshot slot, read hold, per
       read); a test lists the per-read ones, so a new one is a reviewed diff.
+    - **Complete keys.** For every retained cross-file stage, a conformance test changes one file the stage does not
+      own and asserts a miss where the answer depends on it: a new ambient `.d.ts` global, an edited superclass for
+      `declaredTypes`, a namespace re-export, a new non-Java file for a Java proof. A narrower key than the whole
+      snapshot is accepted only with such a test passing (as ADR-0041 open question 2 requires for the index digest).
+    - **Warm cost.** M1 and M5 (below) gate every unit that touches a stage; the guarantee against another per-call
+      whole-snapshot derivation is these tests and these measurements, not the structure alone.
 11. **No answer shape changes from the line itself.** Each moved answer comes from a unit of the migration, gated with
     its stated expectations (ADR-0039).
 12. **A language-agnostic line, one language pack per language.** RFC-0007's Language plugin kind becomes the pack the
@@ -293,9 +348,13 @@ retention silently becomes a per-call cost.
       is generalized when a second language implements it, never before.
     - **A language pack** (`core/ports/language-pack.port.ts`, a contract the core consumes; built by composition from
       that language's adapters) declares which paths it owns, implements the stage contracts it can, and declares every
-      other stage as an absent capability. The line routes each file to the one pack that owns it, which replaces the
-      hand merges of `compose.ts:177-200`, `:237-238`, `import-origins-by-language.ts` and `module-readers.ts`. A file no
-      pack owns is `unread` (ADR-0041 decision 2), never "no call".
+      other stage as an absent capability. First, a pack wraps today's readers and the line keeps each merge's
+      aggregation order and rule exactly (concatenation, set union, "first complete answer" over every reader,
+      `import-origins-by-language.ts:37-39`); the merges move out of `compose.ts:177-200`, `:237-238` and
+      `module-readers.ts` into the line unchanged. Routing a site to one pack is a later, optional refinement, accepted
+      only where it is byte-identical. **Routing chooses who answers a site; it never narrows the evidence universe:**
+      every pack reads the whole snapshot (Java proofs read the whole path universe, B5; TypeScript globals and heritage
+      read every TypeScript source, B2b). A file no pack reads is `unread` (ADR-0041 decision 2), never "no call".
     - **An absent capability is a statement, never an empty result.** Where a family asserts an item an absent stage
       would decide, the line answers what the stage already answers today: `unknown` per site (the TypeScript
       `receiverMethods` and `dispatchTargets`), a `no-extractor` cut for a file no pack reads, or the cut the family's
@@ -328,15 +387,16 @@ retention silently becomes a per-call cost.
     |---|---|---|
     | B0 index | codegraph | codegraph |
     | B1 syntax: written calls, receiver bindings, function values | yes (`declared-member-names.adapter.ts`) | yes (`java-member-names.adapter.ts`) |
-    | B2 origins, root origins, root bindings | yes (`import-origins.adapter.ts`) | root origins and bindings yes; import `origins` answered unresolved per site (`java-name-bindings.adapter.ts:38`) |
-    | B2 declared types | yes (`import-origins.adapter.ts:243`) | yes (`java-declared-types.ts`) |
-    | B2 receiver methods, dispatch targets | absent: `unknown` per site (`:240`, `:242`); structural typing keeps trace's R7 cut | yes (`java-receiver-methods.ts`, `java-dispatch-targets.ts`; ADR-0044) |
-    | B2 replaced roots | yes | absent: none replaced (`java-name-bindings.adapter.ts:43`) |
+    | B2a/B2b origins, root origins, root bindings | yes (`import-origins.adapter.ts`) | root origins and bindings yes; import `origins` answered unresolved per site (`java-name-bindings.adapter.ts:38`) |
+    | B2b declared types | yes (`import-origins.adapter.ts:243`) | yes (`java-declared-types.ts`) |
+    | B2b receiver methods, dispatch targets | absent: `unknown` per site (`:240`, `:242`); structural typing keeps trace's R7 cut | yes (`java-receiver-methods.ts`, `java-dispatch-targets.ts`; ADR-0044, Proposed) |
+    | B2b replaced roots | yes | absent: none replaced (`java-name-bindings.adapter.ts:43`) |
     | B3 module statements | yes, JSON module resources included | yes (`java-imports.adapter.ts`) |
     | B4 relations (fields, locals, member proofs) | through the Angular framework plugin | absent: no Java relations reader; Java receivers settle through B2 |
     | B5 cross-file project in the read's hold | absent (B7 is TypeScript's cross-file reading) | yes (`JavaProject`, ADR-0040) |
-    | B7 typed bindings over declared build outputs | yes (ADR-0037) | absent until a class-file or generated-source reader (ADR-0044 decision 6) |
+    | B7 typed bindings over declared build outputs | yes (ADR-0037) | absent until a class-file or generated-source reader (ADR-0044 decision 6, Proposed) |
     | B9 alignment | yes (base rule over B1 and B0) | yes |
+    | B12 value-flow program | yes (consumer flow, request origins) | absent: the Java URL flow is B5's extension (E18) |
     | B11 trivia | yes | yes |
     | B11 call sites | yes (`http-call-sites.adapter.ts`) | yes (`java-call-sites.adapter.ts`, Spring) |
     | B11 dynamic loads | yes | absent |
@@ -364,16 +424,20 @@ interface BaseReading {
 
 Every figure below is a measurement to obtain on warm stdio MCP calls (M1 to M4), except those cited.
 
-- **First call.** With prebuilding, the first `callers` on the bound snapshot pays B6, B8 and B10 only; without it, it
+- **First call.** With prebuilding, the first `callers` on the bound snapshot pays B6, B8 and B10b only; without it, it
   pays every stage it reaches. B7 cold is 3-7 s CPU (ADR-0037), prebuilt in the background when declared.
 - **Warm calls.** Every whole-snapshot stage is retained (decision 8), so a warm call pays per-read compositions over
-  retained data: B6, B8, B10, and the Java parses a site reading needs inside its hold. The measured regression cannot
-  recur by construction, because a per-call whole-snapshot stage is a reviewed exception, not a default.
+  retained data: B6, B8, B10b, and the Java parses a site reading needs inside its hold. That is a design target, not a
+  guarantee: B10b assembles the name index on every read (`createReverseCalls`, `reverse-calls.ts:62` on the branch), and
+  retention can refuse or lose an entry: a fact larger than the budget is not admitted (`putFact`,
+  `snapshot-data-cache.ts:80-85`) and any fact can be evicted by the least-recently-used order. The guarantee is the
+  fitness tests of decision 10 and M1/M5 below under the real budget. U4c's result, the per-file retention of reverse
+  lookups (B10a), is a prerequisite of L1.
 - **Memory.** Plain data shares the cache's 32 MiB default budget (ADR-0021); no new budget without a measurement.
   Prebuilt facts the budget evicts before use are waste: M3 measures them. B7's peak (up to 1.46 GB, 2.59 GB with test
   files) is transient and retains 66-74 MB; it runs only where declared.
-- **Incremental.** One edited file re-derives its B1, B2, B9 entries, the B3 and B4 joins after L4, every Java fact keyed
-  by all Java sources (B5), and B7's whole key on a commit.
+- **Incremental.** One edited file re-derives its B1, B2a, B9 and B10a entries, every B2b answer (whole TypeScript key),
+  the B3 and B4 joins after L4, every cross-file Java fact (B5), and B7's whole key on a commit.
 
 | # | Measure | Gate of |
 |---|---|---|
@@ -381,20 +445,25 @@ Every figure below is a measurement to obtain on warm stdio MCP calls (M1 to M4)
 | M2 | Per stage: CPU, retained bytes, hits and misses per call (the measurement stage lines) | L2, L3 |
 | M3 | Prebuild: time to ready, peak heap and WASM memory, retained bytes, evictions of prebuilt entries before first use | L5 |
 | M4 | After one edited leaf and one edited hub file on the live mirror: CPU of the re-prebuild per stage | L4, L5 |
+| M5 | Under the default 32 MiB budget, per warm call and stage: B10b rebuilds and their CPU, facts refused by `putFact`, evictions of line entries, and misses those cause | L1 and every later unit |
 
 ## Migration
 
 Each unit is its own commit, failing fixture first, `npm run check`, and the corpus gate before `main` (ADR-0039).
 ADR-0041's units U0 to U4c stay as delivered; the line takes them over by moving their construction, not their rules.
+**Prerequisite of L1:** U4c finished on `t3/reverse-call-reconciliation`, its last step retaining the unbound reverse
+calls per file by path, content and index digest, with its M1 acceptance met (warm `callers`/`impact` within +15%, no
+query worse than max(+30%, +100 ms)).
 
 | Unit | Change | Gate expectation |
 |---|---|---|
 | L0 | Fitness tests of decision 10 written against today's code, listing the five `createEdgeTargets` sites and two `createReconciledCalls` sites as the frozen set that may only shrink; the cruiser rule extended; the language-check test of decision 12 with its frozen list of 22 lines in 10 files (plus the branch's `CHAINING` sites when it lands) | `none` |
-| L1 | `BaseReading` created; `callers`, `impact` and trace read B1-B10 from it with today's proof sets kept per family (a refactor); the typed reading, reference proofs and the two `ReconciledCalls` constructions move into it; Java member names receive the facts view | `none`, answers byte-identical (ADR-0041 M6); M1 no worse |
-| L1b | Language packs (decision 12): the pack port; composition builds the TypeScript and Java packs from today's adapters; the line routes each file to its pack and the hand merges of `compose.ts`, `import-origins-by-language.ts` and `module-readers.ts` go; the profiles gain the typing discipline and constructor chaining, which replace the checks at `edge-targets.ts:199`, `trace-walk.ts:457`, `inbound-origins.ts:36` and the branch's two `CHAINING` constants; `retained-relations.ts:28` reads the Angular plugin's language. The frozen list shrinks by those sites | `none`, answers byte-identical; M1 no worse (routing removes calls of every reader on every site) |
-| L1c | File rules from the profiles: the remaining checks of the frozen list (`impact-queries.ts`, `module-impact.ts`, `entrypoint-map.ts`, `changed-file.ts`, `importers.ts`, `live-export.ts`) read the profile list of `domain/languages`; the list ends empty or with each survivor justified in the test | `none`, answers byte-identical |
-| L2 | One proof set (decision 4): `importers`, `outline` focus and contract consequences read the line, which is ADR-0041 U5; contracts stops re-extracting relations | `importers:±`, `outline:+`, `contract-consequences:±` with a declared build output; `none` without one |
-| L3 | Trace reads typed bindings and the Java module readers, narrowed by decision 5 | `trace:±` with a declared build output; `trace:+` on Java import redirects |
+| L1 | `BaseReading` created; `callers`, `impact` and trace read B1-B10b from it with today's proof sets kept per family (a refactor); the typed reading, reference proofs and the two `ReconciledCalls` constructions move into it; Java member names receive the facts view | `none`, answers byte-identical (ADR-0041 M6); M1 no worse |
+| L1b | Language packs (decision 12): the pack port; composition builds the TypeScript and Java packs by wrapping today's readers; the line keeps every merge's aggregation order and rule as it is and the merges move out of `compose.ts`, `import-origins-by-language.ts` and `module-readers.ts`; no site routing; the profiles gain the typing discipline and constructor chaining, which replace the checks at `edge-targets.ts:199`, `trace-walk.ts:457`, `inbound-origins.ts:36` and the branch's two `CHAINING` constants; `retained-relations.ts:28` reads the Angular plugin's language. The frozen list shrinks by those sites | `none`, answers byte-identical; M1 no worse |
+| L1c (optional) | File rules from the profiles: the remaining checks of the frozen list (`impact-queries.ts`, `module-impact.ts`, `entrypoint-map.ts`, `changed-file.ts`, `importers.ts`, `live-export.ts`) read the profile list of `domain/languages`; the list ends empty or with each survivor justified in the test | `none`, answers byte-identical |
+| L2 | One proof set (decision 4): `importers`, `outline` focus and contract consequences read the line, which is ADR-0041 U5; contracts stops re-extracting relations | Without a build output: `importers:±` (relations and field-origin namers, ADR-0036; Java module readers), `outline:+` (ADR-0041 U5, ADR-0041 Migration), `contract-consequences:±` (relations retained, reconciled calls). With one: the same plus the checker's moves. The gate runs both ways and the report separates the moves of relations and reconciliation (without outputs) from the checker's (the difference between the two runs) |
+| L3 | Bindings carry the receiver classification and proofs independently of the derivation (decision 5); trace reads typed bindings and the Java module readers and expands a target only on positive execution evidence; the structural-parameter and replaceable-provider fixtures first | Without a build output: `trace:+` on Java import redirects only. With one: `trace:±`, every move inspected; the two fixtures green; `callers`/`impact` `none` (the receiver field is added, not read by them) |
+| L5a | Shared derivations own their lifetime (decision 6): own read scope, hold, capture lease and signal; the typed pass stops capturing the first requester's signal; shutdown and superseded captures | `none`; a test aborts the first waiter and asserts the second gets the answer; a test superseding a capture with and without waiters |
 | L4 | B3 and B4 split into per-file facts and a join | `none`; M2 and M4 |
 | L5 | Prebuilding (decision 6) in the stdio MCP server and incremental re-prebuild on live sync | `none` in answers; M1 first-call and M3 |
 | L6 | ADR-0041 U6 (`contradicted` pruning in the reverse families, merged into U5 by the owner) lands as a stage policy of the line | As ADR-0041 states |
@@ -405,11 +474,11 @@ from raw index spans (`trace-effects.ts`, `seeds.ts`, `link-graph.ts`) read B-st
 rule divergence between `impact-cuts.ts` and `trace-walk.ts` becomes one stage rule; and the split-on-dot callee names
 move to the base's `nameTail`. U6 is L6.
 
-Cost of L1b and L1c, stated honestly (estimate, not measured): a pack port and two packs assembled from existing
-adapters, a router in the line, two profile fields, and every hand merge and inline check rewritten, about 400 to 700
-authored lines across composition, `snapshot`, `navigation`, `domain/languages` and four families, with no new behavior
-to show for it in the answers. The merges' rules differ today (concatenation, union, "first complete answer"), so routing
-must reproduce each one's answer for files of the owning language; M6 (byte-identical answers) and the corpus gate are
+Cost of L1b and L1c, stated honestly (estimate, not measured): a pack port and two packs wrapping existing readers,
+the merges moved as they are, two profile fields, and the inline checks rewritten: about 250 to 450 authored lines for
+L1b, and 150 to 250 for the optional L1c, with no new behavior to show for it in the answers. Wrapping instead of
+routing keeps each merge's rule (concatenation, union, "first complete answer"), so byte identity does not depend on
+reproducing them; M6 (byte-identical answers) and the corpus gate are
 the proof. L1b lands after L1 so the line already owns the construction it routes; L1c may follow any later unit.
 
 ## Alternatives
@@ -433,6 +502,7 @@ Alternatives to decision 12 (language split):
 | Keep per-stage merges in composition, add the language-check fitness test only | Smallest change | Each new language edits every merge and every inline check; each merge keeps its own rule, so absence stays implicit (the U0 defect class) | Discarded |
 | A plugin registry with per-language hooks into each stage (strategy per language inside the line) | One call site per decision | The line would call language code at its decision points: the inversion ADR-0041 rejected for families; profiles as data cover the same need without callbacks | Discarded |
 | One pack per language with every stage contract generalized now, a third-language shape included (for example value flow or a generic project stage) | Ready for any language | Speculative: no third language, and `TypeBindings`, unmodelled constructs and dynamic loads have one implementation each; AGENTS.md "shared types are earned" | Discarded |
+| **Simpler path (the reviewer's): explicit accessors on `BaseReading`, packs that first wrap today's readers keeping their aggregation order, L1c optional** | No generic stage registry; byte identity of L1b does not depend on reproducing four merge rules by routing; L1c's cost is paid only if wanted | Language checks outside packs survive until L1c; site routing deferred | Chosen as the delivery shape of decision 12: four merges with four rules exist today (Context, "Languages today"), so wrapping is the smallest change that keeps answers byte-identical |
 | Frameworks as packs (Angular and Spring beside TypeScript and Java) | One kind of plugin | A framework reads a language's outputs and spans one or more languages; RFC-0007 keeps the kinds apart; Spring would duplicate the Java pack's parse | Discarded |
 
 ## Consequences
@@ -469,6 +539,13 @@ Alternatives to decision 12 (language split):
   readers live in `core/adapters/spring/` (confirmed: `java-receiver-methods.ts`, `java-dispatch-targets.ts`,
   `java-declared-types.ts`, `java-name-bindings.adapter.ts`). Composition assembles the Java pack across folders; moving
   them is open question 7, not part of L1b.
+
+- **Incomplete cross-file keys.** A retained cross-file answer keyed narrower than its inputs answers stale after an
+  edit to another file. Mitigated by whole-snapshot keys first and the complete-key tests of decision 10.
+- **Typed bindings widen trace.** Mitigated by decision 5: the receiver classification survives the checker and trace
+  needs positive execution evidence; the two mandatory fixtures fail first in L3.
+- **A shared job outliving its readers.** Its own scope, hold, lease and signal (decision 6); a leak shows as resources
+  held after shutdown, which L5a's tests assert against.
 
 ## Not decided here
 
