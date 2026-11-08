@@ -1,0 +1,106 @@
+import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+/**
+ * ADR-0045 decision 10 and decision 12, against the code as it is before the assembly line exists. Each frozen list
+ * may only shrink: a site that leaves is removed from its list in the same change, and no site enters one.
+ */
+const SOURCE = fileURLToPath(new URL("../", import.meta.url));
+const BASE_READING = "core/application/snapshot/base-reading.ts";
+
+/** The calls of each stage constructor of decision 1 outside `BASE_READING`, by file. */
+const STAGE_CONSTRUCTOR_SITES: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+  createEdgeTargets: { "core/application/contracts/consumer-sources.ts": 1, "core/application/impact/impact-queries.ts": 2, "core/application/outline/outline.ts": 1, "core/application/trace/trace-queries.ts": 1 },
+  createCallBinder: { "core/application/navigation/edge-targets.ts": 1 },
+  createCallBindings: { "core/application/navigation/edge-targets.ts": 1 },
+  createReconciledCalls: { "core/application/impact/impact-queries.ts": 1, "core/application/trace/trace-walk.ts": 1 },
+  createReverseCalls: { "core/application/impact/impact-queries.ts": 1 },
+  createDeclarationUses: { "core/application/impact/impact-queries.ts": 1, "core/application/outline/outline.ts": 1, "core/application/trace/trace-walk.ts": 1 },
+  retainedRelations: { "core/application/impact/impact-queries.ts": 1, "core/application/trace/trace-queries.ts": 1 },
+  referenceProofsOf: { "core/application/contracts/consumer-sources.ts": 1, "core/application/impact/impact-queries.ts": 2 },
+  syntaxOfSources: { "core/application/contracts/consumer-sources.ts": 1, "core/application/impact/impact-queries.ts": 3, "core/application/outline/outline-queries.ts": 1 },
+};
+
+/** The language checks of decision 12. */
+const LANGUAGE_CHECKS = ["isJavaSource", "isTypeScriptSource", "isTypeScriptFile", "isJvmTestFile", "isTypeScriptTestFile", "isJsonModuleResource", "isTypeCheckerInput"];
+
+/** Lines outside `core/domain/languages/` that call a language check, by file, in `core/application` and `core/domain`. */
+const LANGUAGE_CHECK_LINES: Readonly<Record<string, number>> = {
+  "core/application/impact/impact-queries.ts": 8,
+  "core/application/impact/importers.ts": 1,
+  "core/application/impact/inbound-origins.ts": 1,
+  "core/application/navigation/call-binding.ts": 2,
+  "core/application/navigation/edge-targets.ts": 2,
+  "core/application/navigation/reverse-calls.ts": 3,
+  "core/application/relations/retained-relations.ts": 1,
+  "core/domain/change/changed-file.ts": 2,
+  "core/domain/impact/module-impact.ts": 5,
+  "core/domain/map/entrypoint-map.ts": 2,
+  "core/domain/snapshot/live-export.ts": 1,
+};
+
+const FAMILIES = ["composition", "contracts", "decisions", "entrypoints", "impact", "outline", "topology", "trace"];
+
+/** The imports from one query family into another, tests included, that `.dependency-cruiser.cjs` exempts. */
+const CROSS_FAMILY_IMPORTS: readonly string[] = [
+  "contracts/consumer-callers.test.ts → impact/inbound-edges.ts",
+  "contracts/consumer-callers.ts → impact/inbound-edges.ts",
+  "contracts/consumer-sources.ts → impact/inbound-edges.ts",
+  "contracts/consumer-sources.ts → impact/inbound-origins.ts",
+  "contracts/consumer-sources.ts → impact/reference-origins.ts",
+  "contracts/consumer-sources.ts → topology/workspace-join.ts",
+  "contracts/consumer-sources.ts → topology/workspace-operation.ts",
+  "contracts/consumer-sources.ts → topology/workspace-snapshots.ts",
+  "decisions/decision-queries.test.ts → topology/workspace-operation.ts",
+  "decisions/decision-queries.test.ts → topology/workspace-snapshots.ts",
+  "decisions/decision-queries.ts → topology/workspace-defaults.ts",
+  "decisions/decision-queries.ts → topology/workspace-join.ts",
+  "decisions/decision-queries.ts → topology/workspace-operation.ts",
+  "decisions/decision-queries.ts → topology/workspace-plan.ts",
+  "topology/workspace-discovery-live.test.ts → decisions/decision-queries.ts",
+  "topology/workspace-queries.test.ts → decisions/decision-queries.ts",
+  "trace/trace-queries.ts → topology/workspace-operation.ts",
+];
+
+function files(directory: string, tests: boolean): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return files(path, tests);
+    const isTest = entry.name.endsWith(".test.ts") || entry.name.endsWith(".testing.ts");
+    return entry.name.endsWith(".ts") && (tests || !isTest) ? [relative(SOURCE, path)] : [];
+  });
+}
+
+const read = (file: string): string => readFileSync(join(SOURCE, file), "utf8");
+const counted = (entries: readonly (readonly [string, number])[]): Record<string, number> => Object.fromEntries(entries.filter(([, count]) => count > 0).sort(([a], [b]) => a.localeCompare(b)));
+
+for (const [constructor, frozen] of Object.entries(STAGE_CONSTRUCTOR_SITES)) {
+  test(`${constructor} is called outside the assembly line only at its frozen sites`, () => {
+    const call = new RegExp(`(?<!function )\\b${constructor}\\(`, "g");
+    const sites = counted(files(SOURCE, false).filter((file) => file !== BASE_READING).map((file) => [file, read(file).match(call)?.length ?? 0] as const));
+
+    assert.deepEqual(sites, counted(Object.entries(frozen)));
+  });
+}
+
+test("language checks outside core/domain/languages stay at their frozen lines", () => {
+  const check = new RegExp(`\\b(${LANGUAGE_CHECKS.join("|")})\\b`);
+  const scanned = [...files(join(SOURCE, "core/application"), false), ...files(join(SOURCE, "core/domain"), false)].filter((file) => !file.startsWith("core/domain/languages/"));
+  const lines = counted(scanned.map((file) => [file, read(file).split("\n").filter((line) => check.test(line) && !/^\s*import\b/.test(line)).length] as const));
+
+  assert.deepEqual(lines, counted(Object.entries(LANGUAGE_CHECK_LINES)));
+});
+
+test("a query family imports another only at its frozen imports", () => {
+  const family = new RegExp(`(?:from |import\\()"\\.\\./(${FAMILIES.join("|")})/([^"]+)"`, "g");
+  const imports = FAMILIES.flatMap((owner) =>
+    files(join(SOURCE, "core/application", owner), true).flatMap((file) =>
+      [...read(file).matchAll(family)].filter(([, to]) => to !== owner).map(([, to, path]) => `${relative(join(SOURCE, "core/application"), join(SOURCE, file))} → ${to}/${path}`),
+    ),
+  );
+
+  assert.deepEqual([...new Set(imports)].sort(), [...CROSS_FAMILY_IMPORTS].sort());
+});

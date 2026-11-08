@@ -49,10 +49,13 @@ module.exports = {
     {
       name: "one-query-family-never-imports-another",
       comment:
-        "A use case answers one query family. To read a revision it goes through application/snapshot, never by composing another family's use case.",
+        "A use case answers one query family. To read a revision it goes through application/snapshot, never by composing another family's use case. The files exempted here import another family today; src/composition/assembly-line.fitness.test.ts pins those imports pair by pair, and the list only shrinks (ADR-0045 decision 10).",
       severity: "error",
-      from: { path: "^src/core/application/(entrypoints|impact|outline|trace)/" },
-      to: { path: "^src/core/application/(entrypoints|impact|outline|trace)/", pathNot: "^src/core/application/$1/" },
+      from: {
+        path: "^src/core/application/(composition|contracts|decisions|entrypoints|impact|outline|topology|trace)/",
+        pathNot: "^src/core/application/(contracts/consumer-callers(\\.test)?|contracts/consumer-sources|decisions/decision-queries(\\.test)?|topology/workspace-discovery-live\\.test|topology/workspace-queries\\.test|trace/trace-queries)\\.ts$",
+      },
+      to: { path: "^src/core/application/(composition|contracts|decisions|entrypoints|impact|outline|topology|trace)/", pathNot: "^src/core/application/$1/" },
     },
     {
       name: "adapters-never-import-use-cases",
