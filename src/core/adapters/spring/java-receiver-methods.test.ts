@@ -145,3 +145,31 @@ test("unread sources withhold declared receiver proof, while a bare call or supe
   assert.deepEqual(await at([plain, use("this.save(\"x\")", ["  void save(String value) {}"])]), { kind: "unproven" });
   assert.deepEqual(await at([plain, use("super.save(\"x\")")]), { kind: "unknown" });
 });
+
+/** The constructor a `super(...)` or `this(...)` written on `line` of `source` names, by the column it starts at. */
+async function chainedAt(sources: readonly SourceFile[], source: SourceFile, line: number, keyword: "super" | "this"): Promise<ReceiverMethod> {
+  const column = source.content.split("\n")[line - 1]!.indexOf(`${keyword}(`) + 1;
+  const [found] = await createJavaNameBindings(createJavaParser, sources).receiverMethods([{ file: source.path, line, column, member: keyword }]);
+  return found!;
+}
+
+test("super(...) and this(...) name the one constructor of the superclass or of the class with the call's arity; several at that arity, or a superclass outside the repository, name none", async () => {
+  const a = java("A.java", ["package app;", "", "public class A {", "  public A(int a) {}", "  public A(int a, int b) {}", "}"]);
+  const b = java("B.java", ["package app;", "", "public class B extends A {", "  public B() { super(1); }", "  public B(String s) { this(); }", "}"]);
+  const overloaded = java("A.java", ["package app;", "", "public class A {", "  public A(int a) {}", "  public A(String a) {}", "}"]);
+  const outside = java("C.java", ["package app;", "", "public class C extends RuntimeException {", "  public C() { super(\"c\"); }", "}"]);
+
+  assert.deepEqual(await chainedAt([a, b], b, 4, "super"), method(a, 4));
+  assert.deepEqual(await chainedAt([a, b], b, 5, "this"), method(b, 4));
+  assert.deepEqual(await chainedAt([overloaded, b], b, 4, "super"), { kind: "unproven" });
+  assert.deepEqual(await chainedAt([outside], outside, 4, "super"), { kind: "unknown" });
+});
+
+test("this(...) in a record names its declared constructor of the call's arity, a compact canonical constructor by the record's components, and none for an implicit canonical one", async () => {
+  const compact = java("R.java", ["package app;", "", "public record R(int a, int b) {", "  public R(int a) { this(a, 0); }", "  public R() { this(1); }", "  public R { System.out.println(a); }", "}"]);
+  const implicit = java("V.java", ["package app;", "", "public record V(int a) {", "  public V() { this(0); }", "}"]);
+
+  assert.deepEqual(await chainedAt([compact], compact, 4, "this"), method(compact, 6));
+  assert.deepEqual(await chainedAt([compact], compact, 5, "this"), method(compact, 4));
+  assert.deepEqual(await chainedAt([implicit], implicit, 4, "this"), { kind: "unknown" });
+});

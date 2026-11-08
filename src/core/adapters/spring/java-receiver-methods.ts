@@ -78,10 +78,15 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         const source = readFile(site.file);
         const invocations = source?.invocations.get(callKey(site.line, site.column, site.member)) ?? [];
         if (source === undefined || invocations.length !== 1) continue;
-        const method = proves ? resolver.methodOf(invocations[0]!, source) : undefined;
-        if (method !== undefined) {
-          results[index] = { kind: "method", file: method.owner.file.path, start: method.node.startPosition.row + 1, nameLine: (method.node.childForFieldName("name") ?? method.node).startPosition.row + 1 };
-        } else if (resolver.hasDeclaredReceiver(invocations[0]!, source) || resolver.holdsValue(invocations[0]!, source.file)) results[index] = UNPROVEN;
+        const invocation = invocations[0]!;
+        if (invocation.type === "explicit_constructor_invocation") {
+          const chained = resolver.constructorOf(invocation, source.file);
+          results[index] = chained === undefined ? UNKNOWN : chained === "unproven" || !proves ? UNPROVEN : placedAt(chained);
+          continue;
+        }
+        const method = proves ? resolver.methodOf(invocation, source) : undefined;
+        if (method !== undefined) results[index] = placedAt(method);
+        else if (resolver.hasDeclaredReceiver(invocation, source) || resolver.holdsValue(invocation, source.file)) results[index] = UNPROVEN;
       }
       return results;
     });
@@ -175,7 +180,26 @@ function createResolver(project: JavaProject) {
     return own !== undefined && others !== undefined && sameSignature(own, others);
   };
 
+  /**
+   * The constructor a `super(...)` or `this(...)` names: the one of the superclass, or of the class, with the call's
+   * arity, a compact canonical constructor counting the record's components. None when the superclass is outside the
+   * repository or the record's canonical constructor is implicit; `unproven` when the type declares no single
+   * constructor of that arity, or one with varargs.
+   */
+  const constructorOf = (invocation: Node, file: JavaFile): MethodDecl | "unproven" | undefined => {
+    const type = thisType(invocation, file, project);
+    const target = type === undefined ? undefined : invocation.childForFieldName("constructor")?.text === "super" ? project.classChain(type)[1] : type;
+    if (target === undefined) return undefined;
+    const arity = argumentCount(invocation);
+    if (target.constructors.some(hasVarargs)) return "unproven";
+    const candidates = target.constructors.filter((constructor) => constructorArity(constructor) === arity);
+    if (candidates.length === 1) return candidates[0];
+    const implicitCanonical = target.node.type === "record_declaration" && arity === recordComponents(target.node) && candidates.length === 0;
+    return implicitCanonical || (target.constructors.length === 0 && arity === 0) ? undefined : "unproven";
+  };
+
   return {
+    constructorOf,
     hasDeclaredReceiver: (invocation: Node, source: ReadFile): boolean => receiverOf(invocation, source) !== undefined,
     /** The method the call names through its declared receiver and one settled signature; dispatch decides its body separately. */
     methodOf: methodNamed,
@@ -227,12 +251,14 @@ function rewritesCalls(root: Node): boolean {
   return false;
 }
 
+/** Method invocations by their member, and `super(...)`/`this(...)` by their keyword, at the place each starts. */
 function invocationsOf(root: Node): ReadonlyMap<string, readonly Node[]> {
   const found = new Map<string, Node[]>();
   const pending: Node[] = [root];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node.type === "method_invocation") {
-      const key = callKey(node.startPosition.row + 1, node.startPosition.column + 1, node.childForFieldName("name")?.text ?? "");
+    if (node.type === "method_invocation" || node.type === "explicit_constructor_invocation") {
+      const member = node.type === "method_invocation" ? node.childForFieldName("name")?.text : node.childForFieldName("constructor")?.text;
+      const key = callKey(node.startPosition.row + 1, node.startPosition.column + 1, member ?? "");
       found.set(key, [...(found.get(key) ?? []), node]);
     }
     for (const child of node.namedChildren) if (child !== null) pending.push(child);
@@ -242,6 +268,20 @@ function invocationsOf(root: Node): ReadonlyMap<string, readonly Node[]> {
 
 function argumentCount(invocation: Node): number {
   return (invocation.childForFieldName("arguments")?.namedChildren ?? []).filter((argument) => argument !== null && !NOT_ARGUMENTS.has(argument.type)).length;
+}
+
+/** The arguments a constructor takes: a compact canonical one takes the record's components. */
+function constructorArity(constructor: MethodDecl): number {
+  return constructor.node.type === "compact_constructor_declaration" ? recordComponents(constructor.owner.node) : constructor.parameterTypes.length;
+}
+
+function recordComponents(record: Node): number {
+  return (record.childForFieldName("parameters")?.namedChildren ?? []).filter((component) => component?.type === "formal_parameter").length;
+}
+
+/** A method the index places by its file and the lines from its first token to its name (a compact constructor's first line). */
+function placedAt(method: MethodDecl): ReceiverMethod {
+  return { kind: "method", file: method.owner.file.path, start: method.node.startPosition.row + 1, nameLine: (method.node.childForFieldName("name") ?? method.node).startPosition.row + 1 };
 }
 
 export function hasVarargs(method: MethodDecl): boolean {

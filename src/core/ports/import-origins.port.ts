@@ -94,7 +94,10 @@ export interface ImportOrigins {
    * `unproven` when a value or declared repository receiver has no settled member: an unread hierarchy, an unsettled
    * signature of the call's arity, varargs, an inaccessible private or an `Object` method. Such an index target cannot
    * prove a step. `unknown` when this reader does not establish a receiver obligation, including TypeScript sites.
-   * Runtime body selection remains the separate `dispatchTargets` obligation.
+   * Runtime body selection remains the separate `dispatchTargets` obligation. A Java `super(...)` or `this(...)`, asked
+   * with `super` or `this` as its member, names the one constructor of the superclass or of the class with the call's
+   * arity (a compact canonical constructor takes the record's components); `unproven` when several or none have that
+   * arity, `unknown` when the superclass is outside the repository or the constructor is implicit.
    */
   receiverMethods(sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ReceiverMethod[]>;
   /**
