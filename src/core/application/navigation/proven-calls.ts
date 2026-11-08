@@ -1,5 +1,6 @@
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import type { ExternalMemberUseOrigin, MemberUseOrigin } from "../../domain/relations/member-use.ts";
+import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { TypeBinding, TypeTarget } from "../../ports/type-bindings.port.ts";
 
 /** What the relations prove a member call runs. */
@@ -35,4 +36,10 @@ export function provenCallsOf(memberUses: readonly MemberUseOrigin[] | undefined
 export function typedCallsOf(bindings: readonly TypeBinding[]): ReadonlyMap<string, TypeTarget> {
   const byPlace = Map.groupBy(bindings, ({ file, line, column, name }) => provenKey(file, line, column, name));
   return new Map([...byPlace].flatMap(([key, found]) => (found.length === 1 ? [[key, found[0]!.target] as const] : [])));
+}
+
+/** The one declaration of the graph a repository binding names: its name, with the line its name stands on inside it. */
+export function typedDeclaration(store: CodeGraphReader, target: Extract<TypeTarget, { kind: "repository" }>): GraphSymbol | undefined {
+  const named = store.symbolsInFiles([target.file]).filter((symbol) => symbol.name === target.name && symbol.startLine <= target.line && target.line <= symbol.endLine);
+  return named.length === 1 ? named[0] : undefined;
 }

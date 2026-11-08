@@ -47,7 +47,7 @@ import { readImporters } from "./importers.ts";
 import { inboundEdgesOf } from "./inbound-origins.ts";
 import type { EdgeCorrections, InboundEdges } from "./inbound-edges.ts";
 import { retainedRelations } from "../relations/retained-relations.ts";
-import { referenceProofsOf, unresolvedOf, type ReferenceProofs } from "./reference-origins.ts";
+import { referenceProofsOf, typedReferencesOf, unresolvedOf, type ReferenceProofs } from "./reference-origins.ts";
 import { unresolvedReferencesIn } from "../navigation/declaration-uses.ts";
 import { walkImpact, type Walk } from "./walk.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
@@ -553,12 +553,13 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const { seeds } = selection;
   const build = (corrections: EdgeCorrections): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, corrections);
   const targets = input.origins === undefined ? undefined : createEdgeTargets({ origins: input.origins, store, modules: input.modules, syntaxOf: input.syntaxOf, proofs: async () => ({ fields, locals, memberUses, externalUses: input.externalUses }), typed: input.typed });
-  const { inbound, walk } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal);
+  const typedReferences = input.typed === undefined ? undefined : typedReferencesOf(store, unresolved, input.typed);
+  const { inbound, walk } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges);
 
   const walked = walk.reached.map(({ symbol }) => symbol);
   const reachedIds = new Set(walked.map((symbol) => symbol.id));
   /** Both proofs of a known target: an admitted joined settlement and an import that names something outside. */
-  const knownPlaces = new Set(input.proofs?.external ?? []);
+  const knownPlaces = new Set([...(input.proofs?.external ?? []), ...(typedReferences?.settled ?? [])]);
   const unread = found.flatMap((finding): UnreadRelation[] => (finding.status === "unknown" ? finding.evidence.slice(0, 1).map(({ path, line }) => ({ path, line, reason: finding.reason })) : []));
 
   const cuts: Cut[] = [
@@ -605,11 +606,11 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
 }
 
 /**
- * Walks from the seeds with the edges as `EdgeTargets` judges them: the edges each walk read, and the edges an import
- * proves reach a symbol it reached. When a verdict changes what a symbol depends on, the walk runs again, because a bound
+ * Walks from the seeds with the edges as `EdgeTargets` judges them: the edges each walk read, the edges an import
+ * proves reach a symbol it reached, and the `typed` edges the checker made of unresolved calls. When a verdict changes what a symbol depends on, the walk runs again, because a bound
  * it frees, or an edge it moves, can read edges no earlier walk read.
  */
-async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal): Promise<{ inbound: InboundEdges; walk: Walk }> {
+async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = []): Promise<{ inbound: InboundEdges; walk: Walk }> {
   const dropped = new Set<string>();
   const settled = new Map<string, ReceiverSettlement>();
   const into = new Map<GraphNodeId, Map<string, FollowedEdge>>();
@@ -622,6 +623,10 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
     held.set(edgeKey(followed.edge), { ...followed, target: to });
     return true;
   };
+  for (const followed of typedEdges) {
+    moveTo(followed.target, followed);
+    settled.set(edgeKey(followed.edge), "typed");
+  }
   for (;;) {
     const inbound = build({ dropped, into: new Map([...into].map(([id, edges]) => [id, [...edges.values()]])), settled });
     const walk = walkImpact(seeds, inbound, budget);

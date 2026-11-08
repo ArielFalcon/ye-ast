@@ -14,7 +14,7 @@ import type { ModuleDependenciesReader } from "../../ports/module-dependencies.p
 import type { TypeTarget } from "../../ports/type-bindings.port.ts";
 import { createGraphNavigation, isInside } from "./graph-navigation.ts";
 import { declarationAt, importBindings } from "./import-bindings.ts";
-import { provenCallsOf, provenKey, type ProvenCalls } from "./proven-calls.ts";
+import { provenCallsOf, provenKey, typedDeclaration, type ProvenCalls } from "./proven-calls.ts";
 
 /**
  * What the edges the graph resolved really reach, read from the root of the name each spells at its position through
@@ -217,7 +217,7 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
     if (bound === undefined) return undefined;
     if (bound.kind === "external") return { kind: "drop", root: { kind: "external", module: bound.module } };
     if (bound.kind === "ambient") return { kind: "drop", root: { kind: "ambient", name: bound.name } };
-    const declared = single(navigation.symbolsInFile(bound.file).filter((symbol) => symbol.name === bound.name && symbol.startLine <= bound.line && bound.line <= symbol.endLine));
+    const declared = typedDeclaration(store, bound);
     if (declared === undefined) return undefined;
     return declared.id === target.id ? TYPED : { kind: "redirect", to: declared, derivation: "typed" };
   }

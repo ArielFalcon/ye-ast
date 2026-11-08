@@ -2129,3 +2129,30 @@ test("a live tree is not typed: the call keeps its derivation and a build-output
   assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "build-output", at: ["node_modules"] }]);
   assert.equal(seen.length, 0);
 });
+
+/** `Reader.id` calls `this.store.get` at line 8, column 5, a reference the index left unresolved. */
+const UNSETTLED: FakeUnresolved[] = [{ from: "id", name: "this.store.get", kind: "calls", file: "src/reader.ts", line: 8, column: 4 }];
+
+async function unsettledCallers(typeBindings?: ImpactQueriesDeps["typeBindings"]): Promise<Fact<ImpactValue>> {
+  const exports: Options["exports"] = { [HEAD]: { files: ["src/store.ts", "src/other.ts", "src/reader.ts"].map((path) => ({ path, blob: path, written: true })), skipped: [] } };
+  return callersFact(await setup({ nodes: TYPED_NODES, unresolved: UNSETTLED, exports, importOrigins: origins(() => undefined), ...(typeBindings && { typeBindings }) }).callers({ targets: [{ file: "src/store.ts", symbol: "get" }] }));
+}
+
+test("an unresolved call the type checker binds to a repository declaration is a typed dependence on it, and no cut", async () => {
+  const before = await unsettledCallers();
+  const typed = await unsettledCallers(checker(boundTo(STORE_GET)));
+
+  assert.equal(viaOf(before, "id"), undefined);
+  assert.deepEqual(before.status === "partial" && before.cuts.map(({ kind }) => kind), ["unresolved-link"]);
+  assert.equal(viaOf(typed, "id")?.derivation, "typed");
+  assert.equal(typed.status, "complete");
+});
+
+test("an unresolved call the type checker binds outside the repository, or to another declaration, retires its cut and depends on nothing walked", async () => {
+  for (const target of [{ kind: "external", module: "router-kit", name: "get" }, { kind: "repository", file: "src/other.ts", line: 1, name: "get" }] as const) {
+    const answer = await unsettledCallers(checker(boundTo(target)));
+
+    assert.equal(viaOf(answer, "id"), undefined, target.kind);
+    assert.equal(answer.status, "complete", target.kind);
+  }
+});

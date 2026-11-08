@@ -151,8 +151,9 @@ same checker binds 86.7% of its calls, not 100%.
     for a library, retires its cut as ADR-0019 does; no binding, or one to a declaration the graph does not hold, leaves
     ADR-0036's settlement. The checker also reads, apart from the export the index reads, the snapshot's lockfiles and
     the repository's own declaration files, through a second read of the same commit; the index's export, its listing
-    and its cache key do not change, and the derived fact keys on what the checker read. An unresolved reference the checker binds to a repository declaration
-    becomes a `typed` inbound edge before the walk. This replaces ADR-0036 decision 3 ("no settled edge is dropped") for
+    and its cache key do not change, and the derived fact keys on what the checker read. An unresolved call the checker binds is settled, so its
+    `unresolved-link` cut retires; bound to a repository declaration the graph holds, it becomes a `typed` inbound edge
+    before the walk. This replaces ADR-0036 decision 3 ("no settled edge is dropped") for
     typed bindings. Trace keeps ADR-0029 decision 11: a declared type proves what a call depends on, not what runs.
 11. **Placement.** Every use of the compiler API stays in `core/adapters/typescript/` (ADR-0008). The confined reader
     is a port the TypeScript adapter declares and `core/adapters/fs/` implements, synchronous because the compiler host
@@ -201,6 +202,11 @@ ten commits, with and without the declaration:
 Six symbols left name-webapp's `impact`, all at confidence 0.3 and reached only through name matches the checker
 refuted (`x.toUpperCase()` had been matched to a repository method). Ten derivations changed without becoming `typed`
 (9 `resolved` to `proven`, 1 `proven` to `resolved`): certain steps on their paths changed the step the walk reports.
+
+Unresolved calls the checker settles, measured on the same queries against the edges alone: no symbol lost, 6 gained
+in name-webapp (`typed`, for example a `super.writeValue(...)` into the base class), 122 dependences reported through a
+`typed` step where a `proven` one stood at the same confidence, and the `unresolved-link` cut entries fall from 2 to 0
+(petclinic), 147 to 88 (shopizer), 583 to 245 (jhipster), 8 to 8 (realworld-nx) and 1766 to 110 (name-webapp).
 
 Revisit when TypeScript 7.1 ships a stable programmatic API: a measured spike, first the API's coverage of what
 `core/adapters/typescript/` uses, then the pass time on the corpus against 6.0.3. If it wins, a new ADR supersedes
