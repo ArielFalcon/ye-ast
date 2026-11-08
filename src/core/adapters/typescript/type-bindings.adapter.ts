@@ -9,7 +9,7 @@ import type { DeclaredEntry, DeclaredTrees } from "../../ports/declared-tree.por
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { TypeBinding, TypeBindings, TypeBindingsAnswer, TypeTarget, UnownedSource, UnusedOutput } from "../../ports/type-bindings.port.ts";
+import type { TypeBinding, TypeBindings, TypeBindingsAnswer, TypeBindingsFault, TypeTarget, UnownedSource, UnusedOutput } from "../../ports/type-bindings.port.ts";
 import type { BuildOutputInput } from "../../domain/shared/fact.ts";
 import { REPOSITORY_ROOT, createConfinedHost, type ConfinedHost, type DeclaredRead, type DirectoryEntries } from "./confined-compiler-host.ts";
 import { installPathOf, lockedVersions } from "./installed-packages.ts";
@@ -52,6 +52,13 @@ interface Derivation {
 
 const SLOT = "ts-type-bindings";
 
+/** A derivation that could not complete; thrown so no derived fact keeps it, and answered as a `fault`. */
+class DerivationFault extends Error {
+  constructor(readonly fault: TypeBindingsFault) {
+    super(fault.kind);
+  }
+}
+
 /**
  * Binds every call and `new` of the snapshot's TypeScript sources by type, test files left out as no answer follows
  * their calls (`kindOfChangedFile`), in one pass over programs that live only for
@@ -67,11 +74,21 @@ export function createTypeBindings({ trees, digest, facts }: { trees: DeclaredTr
     if (entry.kind === "directory") return `directory:${entry.path}:${entry.names.join("/")}`;
     if (entry.kind === "snapshot") return `snapshot:${entry.path}`;
     if (entry.kind === "refused") return `refused:${entry.link}`;
+    if (entry.kind === "unreadable") return `unreadable:${entry.path}`;
     return "absent";
   };
   const derive = (sources: readonly SourceFile[], outputs: readonly DeclaredBuildOutput[], signal?: AbortSignal): Derivation => {
     const opened = outputs.map((output) => trees.open(output));
-    const { answer, reads } = bindAll(sources, outputs, trees, signal);
+    unreadableIn(outputs, opened.map((tree, output) => ({ output, path: "", entry: tree.entry("") })));
+    let bound: ReturnType<typeof bindAll>;
+    try {
+      bound = bindAll(sources, outputs, trees, signal);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      throw new DerivationFault({ kind: "checker-failed", detail: error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error) });
+    }
+    const { answer, reads } = bound;
+    unreadableIn(outputs, reads);
     const asked = new Map<string, AskedPath>();
     const ask = (output: number, path: string, entry: DeclaredEntry) => asked.set(`${output}\0${path}`, { output, path, found: tagOf(entry) });
     for (const { output, path, entry } of reads) ask(output, path, entry);
@@ -99,37 +116,55 @@ export function createTypeBindings({ trees, digest, facts }: { trees: DeclaredTr
   };
   return {
     async of(sources, outputs, signal) {
-      if (facts === undefined) return derive(sources, outputs, signal).answer;
-      const inputs = {
-        layout: facts.fingerprint(sources.map(({ path, content }) => [path, content]).toSorted(([a], [b]) => compareText(a!, b!))),
-        outputs: outputs.map((output) => {
-          const tree = trees.open(output);
-          return { ...output, record: tagOf(tree.entry(".package-lock.json")), listing: tagOf(tree.entry("")) };
-        }),
-      };
-      const key = facts.fingerprint(inputs);
-      let fresh = false;
-      let pass = running.get(key);
-      const shared = pass !== undefined;
-      if (pass === undefined) {
-        pass = facts.ofInputs(SLOT, inputs, async () => {
-          fresh = true;
-          return derive(sources, outputs, signal);
-        });
-        running.set(key, pass);
-        void pass.then(
-          () => running.delete(key),
-          () => running.delete(key),
-        );
+      try {
+        return await answerOf(sources, outputs, signal);
+      } catch (error) {
+        if (error instanceof DerivationFault) return { status: "fault", fault: error.fault };
+        throw error;
       }
-      const kept = await pass.catch((error: unknown) => {
-        if (!shared || signal?.aborted) throw error;
+    },
+  };
+
+  async function answerOf(sources: readonly SourceFile[], outputs: readonly DeclaredBuildOutput[], signal?: AbortSignal): Promise<TypeBindingsAnswer> {
+    if (facts === undefined) return derive(sources, outputs, signal).answer;
+    const inputs = {
+      layout: facts.fingerprint(sources.map(({ path, content }) => [path, content]).toSorted(([a], [b]) => compareText(a!, b!))),
+      outputs: outputs.map((output) => {
+        const tree = trees.open(output);
+        return { ...output, record: tagOf(tree.entry(".package-lock.json")), listing: tagOf(tree.entry("")) };
+      }),
+    };
+    const key = facts.fingerprint(inputs);
+    let fresh = false;
+    let pass = running.get(key);
+    const shared = pass !== undefined;
+    if (pass === undefined) {
+      pass = facts.ofInputs(SLOT, inputs, async () => {
         fresh = true;
         return derive(sources, outputs, signal);
       });
-      return fresh || unchanged(outputs, kept.asked) ? kept.answer : derive(sources, outputs, signal).answer;
-    },
-  };
+      running.set(key, pass);
+      void pass.then(
+        () => running.delete(key),
+        () => running.delete(key),
+      );
+    }
+    const kept = await pass.catch((error: unknown) => {
+      if (!shared || signal?.aborted) throw error;
+      fresh = true;
+      return derive(sources, outputs, signal);
+    });
+    return fresh || unchanged(outputs, kept.asked) ? kept.answer : derive(sources, outputs, signal).answer;
+  }
+}
+
+/** Throws the fault of every declared path among `reads` the file system would not give, by output, in path order. */
+function unreadableIn(outputs: readonly DeclaredBuildOutput[], reads: readonly DeclaredRead[]): void {
+  const unreadable = outputs.flatMap((output, index) => {
+    const paths = [...new Set(reads.flatMap((read) => (read.output === index && read.entry.kind === "unreadable" ? [read.entry.path] : [])))].toSorted(compareText);
+    return paths.length === 0 ? [] : [{ kind: output.kind, at: output.at, paths }];
+  });
+  if (unreadable.length > 0) throw new DerivationFault({ kind: "unreadable", outputs: unreadable });
 }
 
 function lockfileOf(sources: readonly SourceFile[], output: DeclaredBuildOutput): string | undefined {

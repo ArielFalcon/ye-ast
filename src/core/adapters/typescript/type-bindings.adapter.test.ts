@@ -205,3 +205,20 @@ test("a kept answer is not used once the snapshot's lockfile changed", async () 
   assert.equal((await bindings.of(sources({ ...USE_KIT, "package-lock.json": lock("1.0.0") }), [OUTPUT])).status, "unused");
   assert.equal(facts.derivations, 2);
 });
+
+test("a declared directory that will not be read is a fault naming each path, never kept, and binds nothing from it", async () => {
+  const unreadable: DeclaredTrees = { open: () => ({ entry: (path) => (path === "" ? declared(KIT).open(OUTPUT).entry(path) : { kind: "unreadable", path: "kit" }) }) };
+  const facts = memo();
+  const bindings = createTypeBindings({ digest: DIGEST, trees: unreadable, facts });
+  const snapshot = sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") });
+  for (let ask = 0; ask < 2; ask += 1) assert.deepEqual(await bindings.of(snapshot, [OUTPUT]), { status: "fault", fault: { kind: "unreadable", outputs: [{ kind: "node-modules", at: "", paths: ["kit"] }] } });
+  assert.equal(facts.derivations, 2);
+  const root: DeclaredTrees = { open: () => ({ entry: () => ({ kind: "unreadable", path: "" }) }) };
+  assert.deepEqual(await createTypeBindings({ digest: DIGEST, trees: root }).of(sources({ "tsconfig.json": CONFIG, "src/plain.ts": "export const plain = 1;" }), [OUTPUT]), { status: "fault", fault: { kind: "unreadable", outputs: [{ kind: "node-modules", at: "", paths: [""] }] } });
+});
+
+test("the compiler failing while it binds is a fault, not an exception out of the query", async () => {
+  const crashing: DeclaredTrees = { open: () => ({ entry: (path) => (path.startsWith("kit") ? (() => { throw new Error("Debug Failure. False expression."); })() : declared(KIT).open(OUTPUT).entry(path)) }) };
+  const answer = await createTypeBindings({ digest: DIGEST, trees: crashing, facts: memo() }).of(sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") }), [OUTPUT]);
+  assert.equal(answer.status === "fault" && answer.fault.kind, "checker-failed");
+});

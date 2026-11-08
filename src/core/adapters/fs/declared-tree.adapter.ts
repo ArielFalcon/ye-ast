@@ -24,6 +24,7 @@ export const defaultDeclaredTreeDeps: DeclaredTreeDeps = {
 };
 
 const ABSENT: DeclaredEntry = { kind: "absent" };
+const UNREADABLE_ROOT: DeclaredEntry = { kind: "unreadable", path: "" };
 
 /**
  * Reads declared directories one path segment at a time with `lstat`, so no link is followed by the operating system:
@@ -32,12 +33,34 @@ const ABSENT: DeclaredEntry = { kind: "absent" };
 export function createDeclaredTrees(deps: DeclaredTreeDeps = defaultDeclaredTreeDeps): DeclaredTrees {
   return {
     open(output): DeclaredTree {
-      return { entry: (path) => (path === "" || isRepositoryDirectory(path) ? entryOf(output, path, deps) : ABSENT) };
+      let root: EntryStatus | undefined;
+      try {
+        root = deps.lstat(output.path);
+      } catch (error) {
+        if (!isFileSystemFault(error)) throw error;
+      }
+      const readable = root !== undefined && (root.isDirectory() || root.isSymbolicLink());
+      return { entry: (path) => (!readable ? UNREADABLE_ROOT : path === "" || isRepositoryDirectory(path) ? entryOf(output, path, deps) : ABSENT) };
     },
   };
 }
 
+/** The entry at `path`; a path the file system would not read is `unreadable` there, never absent. */
 function entryOf(output: DeclaredBuildOutput, path: string, deps: DeclaredTreeDeps): DeclaredEntry {
+  try {
+    return walkTo(output, path, deps);
+  } catch (error) {
+    if (!isFileSystemFault(error)) throw error;
+    return { kind: "unreadable", path };
+  }
+}
+
+/** A refusal of the host's file system (`EACCES`, `ENOTDIR`, `ELOOP`...), which carries its error code. */
+function isFileSystemFault(error: unknown): boolean {
+  return error instanceof Error && typeof (error as { code?: unknown }).code === "string";
+}
+
+function walkTo(output: DeclaredBuildOutput, path: string, deps: DeclaredTreeDeps): DeclaredEntry {
   const mount = mountOf(output);
   const followed = new Set<string>();
   let segments = path === "" ? [] : path.split("/");

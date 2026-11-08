@@ -60,7 +60,7 @@ import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, reques
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
-import { mountOf, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
+import { unreadOutputCuts, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
 import type { BuildOutputInput } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { TypeBindings, TypeTarget } from "../../ports/type-bindings.port.ts";
@@ -153,14 +153,15 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   /**
    * What the type checker binds at a commit over the declared build outputs: the head's sources with the lockfiles and
    * declaration files a second read of the same commit takes, which the index's export never holds. A live tree is not
-   * typed (ADR-0037, Gate): its answer keeps the derivation it had, and a `build-output` cut names each declaration it
-   * did not read. A declaration the lockfile contradicts is not read either, and its cut names each package it states otherwise.
+   * typed (ADR-0037, Gate): its answer keeps the derivation it had. Neither is any declaration when one the lockfile
+   * contradicts, one that would not be read, or a failing checker withholds them all; then every declaration is named
+   * in a `build-output` cut, at what withheld it where that is known.
    */
   async function typedReading(request: { repo: string; scope?: ScopeRequest; signal?: AbortSignal | undefined }, snapshot: SnapshotRef, sources: readonly SourceFile[]): Promise<TypedReading | "aborted"> {
     const declared = deps.typeBindings;
     if (declared === undefined || checkerInputs === undefined || declared.outputs.length === 0) return NOT_TYPED;
     const { signal } = request;
-    const unread: TypedReading = { cuts: declared.outputs.map((output): Cut => ({ kind: "build-output", at: [mountOf(output)] })) };
+    const unread: TypedReading = { cuts: unreadOutputCuts(declared.outputs) };
     if (snapshot.kind === "live") return unread;
     const read = await checkerInputs.filesAt({ repo: { path: request.repo }, scope: { exclude: request.scope?.exclude ?? [] }, ...(signal === undefined ? {} : { signal }) }, snapshot.sha);
     if (!read.ok) return read.fault.kind === "aborted" ? "aborted" : unread;
@@ -171,7 +172,8 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (signal?.aborted) return "aborted";
       throw error;
     }
-    if (answer.status === "unused") return { cuts: [...read.value.cuts, ...answer.outputs.map((output): Cut => ({ kind: "build-output", at: output.stale.map(({ path }) => `${mountOf(output)}/${path}`) }))] };
+    if (answer.status === "unused") return { cuts: [...read.value.cuts, ...unreadOutputCuts(declared.outputs, new Map(answer.outputs.map(({ at, stale }) => [at, stale.map(({ path }) => path)])))] };
+    if (answer.status === "fault") return { cuts: [...read.value.cuts, ...unreadOutputCuts(declared.outputs, new Map(answer.fault.kind === "unreadable" ? answer.fault.outputs.map(({ at, paths }) => [at, paths]) : []))] };
     return { typed: typedCallsOf(answer.bindings), outputs: answer.outputs, cuts: [...read.value.cuts, ...(answer.refused.length === 0 ? [] : [{ kind: "build-output" as const, at: answer.refused }])] };
   }
 

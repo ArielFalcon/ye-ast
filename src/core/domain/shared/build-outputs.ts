@@ -1,4 +1,5 @@
 import { compareText } from "./code-node.ts";
+import type { Cut } from "./fact.ts";
 
 /** The lockfiles npm reads for a directory, the first present one deciding, as npm does. */
 export const LOCKFILE_NAMES = ["npm-shrinkwrap.json", "package-lock.json"] as const;
@@ -17,6 +18,17 @@ export interface DeclaredBuildOutput {
 /** Where a declared `node_modules` directory stands in the snapshot. */
 export function mountOf(output: Pick<DeclaredBuildOutput, "at">): string {
   return output.at === "" ? "node_modules" : `${output.at}/node_modules`;
+}
+
+/**
+ * The cuts of an answer that read none of `outputs` (ADR-0037 decision 9): every output named once, at the paths under
+ * it that say why (`named`, by `at`: a stale package, a path that would not be read), or at its directory otherwise.
+ */
+export function unreadOutputCuts(outputs: readonly Pick<DeclaredBuildOutput, "at">[], named: ReadonlyMap<string, readonly string[]> = new Map()): Cut[] {
+  return outputs.map((output) => {
+    const paths = named.get(output.at) ?? [];
+    return { kind: "build-output", at: paths.length === 0 ? [mountOf(output)] : paths.map((path) => (path === "" ? mountOf(output) : `${mountOf(output)}/${path}`)) };
+  });
 }
 
 /** Whether `at` names a repository directory: relative, normalized, with no `.` or `..` segment; `""` is the root. */

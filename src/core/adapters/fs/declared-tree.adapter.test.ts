@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
-import { createDeclaredTrees } from "./declared-tree.adapter.ts";
+import { createDeclaredTrees, defaultDeclaredTreeDeps } from "./declared-tree.adapter.ts";
 
 let scratch: string;
 let counter = 0;
@@ -67,4 +67,25 @@ test("a cycle of links is refused instead of followed forever", async () => {
 test("a path that climbs out of the declared directory reads nothing", async () => {
   const output = await checkout("", { "checkout/index.d.ts": "export declare const repository: 1;" }, {});
   assert.deepEqual(createDeclaredTrees().open(output).entry("../index.d.ts"), { kind: "absent" });
+});
+
+test("a declared directory that is missing or not a directory is unreadable at every path, never an absent package", async () => {
+  await writeFile(join(scratch, "a-file"), "x");
+  for (const path of [join(scratch, "no-such", "node_modules"), join(scratch, "a-file")]) {
+    const tree = createDeclaredTrees().open({ kind: "node-modules", at: "", path });
+    assert.deepEqual([tree.entry(""), tree.entry("kit/index.d.ts")], [{ kind: "unreadable", path: "" }, { kind: "unreadable", path: "" }], path);
+  }
+});
+
+test("a path the file system refuses to list or read is unreadable at that path", async () => {
+  const output = await checkout("", { "checkout/node_modules/kit/index.d.ts": "export {};" }, {});
+  const denied = Object.assign(new Error("permission denied"), { code: "EACCES" });
+  const refusing = createDeclaredTrees({
+    ...defaultDeclaredTreeDeps,
+    readdir: (path) => (path.endsWith("kit") ? (() => { throw denied; })() : defaultDeclaredTreeDeps.readdir(path)),
+    readFile: () => {
+      throw denied;
+    },
+  }).open(output);
+  assert.deepEqual([refusing.entry("kit"), refusing.entry("kit/index.d.ts")], [{ kind: "unreadable", path: "kit" }, { kind: "unreadable", path: "kit/index.d.ts" }]);
 });

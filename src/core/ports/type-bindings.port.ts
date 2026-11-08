@@ -33,9 +33,15 @@ export interface UnusedOutput {
   stale: readonly StaleInstall[];
 }
 
+/** Why no declaration could be used: a path a declared directory would not give, or the compiler failing while it ran. */
+export type TypeBindingsFault =
+  | { kind: "unreadable"; outputs: readonly { kind: DeclaredBuildOutput["kind"]; at: string; paths: readonly string[] }[] }
+  | { kind: "checker-failed"; detail: string };
+
 /**
  * `bound`: a call the checker leaves unbound is absent from `bindings`, and its syntactic settlement answers (ADR-0037
  * decision 9). `unused`: some declaration does not match the snapshot, so none is used and every call settles as before.
+ * `fault`: no declaration could be read whole, or the checker failed; every call settles as before.
  */
 export type TypeBindingsAnswer =
   | {
@@ -47,7 +53,8 @@ export type TypeBindingsAnswer =
       /** Every declaration, used; a snapshot without a lockfile leaves it unverified. */
       outputs: readonly BuildOutputInput[];
     }
-  | { status: "unused"; outputs: readonly UnusedOutput[] };
+  | { status: "unused"; outputs: readonly UnusedOutput[] }
+  | { status: "fault"; fault: TypeBindingsFault };
 
 export interface TypeBindings {
   of(sources: readonly SourceFile[], outputs: readonly DeclaredBuildOutput[], signal?: AbortSignal): Promise<TypeBindingsAnswer>;

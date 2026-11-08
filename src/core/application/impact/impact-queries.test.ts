@@ -2058,7 +2058,7 @@ const TYPED_NODES = [fakeNode("store-get", "method", "src/store.ts", 4, 6, "get"
 const TYPED_EDGES: FakeEdge[] = [{ from: "id", to: "store-get", kind: "calls", line: 8, column: 4, confidence: 0.6, provenance: "heuristic" }];
 const DECLARED = [{ kind: "node-modules" as const, at: "", path: "/host/checkout/node_modules" }];
 const USED = [{ kind: "node-modules" as const, at: "", verified: false, digest: "read" }];
-const boundTo = (target: TypeTarget): TypeBindingsAnswer => ({ status: "bound", bindings: [{ file: "src/reader.ts", line: 8, column: 5, name: "get", target }], unowned: [], refused: [], outputs: USED });
+const boundTo = (target: TypeTarget): Extract<TypeBindingsAnswer, { status: "bound" }> => ({ status: "bound", bindings: [{ file: "src/reader.ts", line: 8, column: 5, name: "get", target }], unowned: [], refused: [], outputs: USED });
 const STORE_GET: TypeTarget = { kind: "repository", file: "src/store.ts", line: 4, name: "get" };
 
 function checker(answer: TypeBindingsAnswer, seen: (readonly SourceFile[])[] = []): NonNullable<ImpactQueriesDeps["typeBindings"]> {
@@ -2155,4 +2155,35 @@ test("an unresolved call the type checker binds outside the repository, or to an
     assert.equal(viaOf(answer, "id"), undefined, target.kind);
     assert.equal(answer.status, "complete", target.kind);
   }
+});
+
+test("a checker fault leaves every call to the syntactic settlement and names each declaration it could not read", async () => {
+  const unreadable = await typedCallers({ file: "src/store.ts", symbol: "get" }, checker({ status: "fault", fault: { kind: "unreadable", outputs: [{ kind: "node-modules", at: "", paths: ["kit"] }] } }));
+  const crashed = await typedCallers({ file: "src/store.ts", symbol: "get" }, checker({ status: "fault", fault: { kind: "checker-failed", detail: "Debug Failure." } }));
+
+  assert.deepEqual([viaOf(unreadable, "id")?.derivation, viaOf(crashed, "id")?.derivation], ["name-match", "name-match"]);
+  assert.deepEqual([unreadable.inputs.buildOutputs, crashed.inputs.buildOutputs], [undefined, undefined]);
+  assert.deepEqual(unreadable.status === "partial" && unreadable.cuts, [{ kind: "build-output", at: ["node_modules/kit"] }]);
+  assert.deepEqual(crashed.status === "partial" && crashed.cuts, [{ kind: "build-output", at: ["node_modules"] }]);
+});
+
+test("when one declaration is stale, every declaration the answer did not read is named, the clean one included", async () => {
+  const two = { ...checker({ status: "unused", outputs: [{ kind: "node-modules", at: "", stale: [{ path: "kit", installed: "2.0.0", locked: "1.0.0" }] }] }), outputs: [...DECLARED, { kind: "node-modules" as const, at: "apps/web", path: "/host/checkout/apps/web/node_modules" }] };
+  const answer = await typedCallers({ file: "src/store.ts", symbol: "get" }, two);
+
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "build-output", at: ["apps/web/node_modules"] }, { kind: "build-output", at: ["node_modules/kit"] }]);
+});
+
+test("a link the declared directory refused is named in a build-output cut", async () => {
+  const answer = await typedCallers({ file: "src/store.ts", symbol: "get" }, checker({ ...boundTo(STORE_GET), refused: ["node_modules/evil"] }));
+
+  assert.equal(viaOf(answer, "id")?.derivation, "typed");
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "build-output", at: ["node_modules/evil"] }]);
+});
+
+test("an unresolved call the checker binds to a declaration the graph does not hold keeps its cut", async () => {
+  const answer = await unsettledCallers(checker(boundTo({ kind: "repository", file: "src/types.d.ts", line: 1, name: "get" })));
+
+  assert.equal(viaOf(answer, "id"), undefined);
+  assert.deepEqual(answer.status === "partial" && answer.cuts.map(({ kind }) => kind), ["unresolved-link"]);
 });

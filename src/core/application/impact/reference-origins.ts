@@ -70,8 +70,9 @@ export interface ReferenceProofs {
 
 
 /**
- * What the type checker binds the calls the index left unresolved to (ADR-0037 decision 10): every place it binds is
- * settled, so its cut retires, and a call bound to a repository declaration the graph holds is an edge into it.
+ * What the type checker binds the calls the index left unresolved to (ADR-0037 decision 10): a call bound outside the
+ * repository is settled, so its cut retires, and one bound to a repository declaration the graph holds is settled as an
+ * edge into it. A call bound to a declaration the graph does not hold keeps its cut.
  */
 export function typedReferencesOf(store: CodeGraphReader, unresolved: readonly GraphUnresolvedReference[], typed: ReadonlyMap<string, TypeTarget>): { settled: ReadonlySet<string>; edges: readonly FollowedEdge[] } {
   const settled = new Set<string>();
@@ -80,8 +81,9 @@ export function typedReferencesOf(store: CodeGraphReader, unresolved: readonly G
     const key = referenceKey(reference);
     const bound = CALL_EDGE_KINDS.includes(reference.kind) ? typed.get(provenKey(reference.file, reference.line, reference.column + 1, reference.name.slice(reference.name.lastIndexOf(".") + 1))) : undefined;
     if (key === undefined || bound === undefined) continue;
-    settled.add(key);
     const target = bound.kind === "repository" ? typedDeclaration(store, bound) : undefined;
+    if (bound.kind === "repository" && target === undefined) continue;
+    settled.add(key);
     if (target !== undefined) into.push({ reference, target });
   }
   const sources = new Map(store.symbolsByIds([...new Set(into.map(({ reference }) => reference.from))]).map((symbol) => [symbol.id, symbol]));

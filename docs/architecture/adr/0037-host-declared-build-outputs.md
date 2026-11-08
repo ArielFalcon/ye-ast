@@ -138,11 +138,13 @@ same checker binds 86.7% of its calls, not 100%.
    directory, or a file's digest); a hit is used only when asking those paths again gives the same answers, since the
    compiler's answers are a function of its host's answers. Concurrent first requests for one key share one derivation
    inside the adapter. A
-   derivation the per-call deadline cuts is discarded and never kept; that answer falls back to decision 9 with a
-   `deadline` cut. No memory or file budget is set until a host measures one.
-9. **Fallback.** Without a declaration, on a live tree (Gate), or where decision 5 or 7 withholds it, or for a call the
-   checker leaves unbound (an `any`, an error type), the current syntactic settlement answers, unchanged. A declaration
-   an answer did not read is named by a `build-output` cut, never dropped silently. Every answer without a
+   derivation the per-call deadline cuts is discarded and never kept, and the query it served ends as every query its
+   deadline cuts does. No memory or file budget is set until a host measures one.
+9. **Fallback.** Without a declaration, on a live tree (Gate), where decision 5 or 7 withholds it, where a declared path
+   cannot be read (the directory missing or not a directory, a permission refused) or the compiler fails, or for a call
+   the checker leaves unbound (an `any`, an error type), the current syntactic settlement answers, unchanged. Every
+   declaration an answer did not read is named by a `build-output` cut, at what withheld it where that is known, never
+   dropped silently; a fault of a declared output never fails the query. Every answer without a
    declaration is byte-identical to the answer before this decision, in both modes.
 10. **Where it settles.** `EdgeTargets`, the one owner of edge verdicts, takes the bindings as one more proof source and
     consults them first, for calls and `new`: a binding to the edge's own target makes the edge `typed` at confidence 1;
@@ -230,5 +232,7 @@ ADR-0008, and the derivation on live trees is reconsidered then.
 - Java class paths, generated OpenAPI sources and SCIP indexes: each needs a measured application where it changes an
   answer.
 - yarn and pnpm lockfiles. A check of installed versions against the manifest's ranges is out (decision 5).
+- npm workspaces: the lockfile is looked for only at the declaration's `at`, so a declaration below a workspace root
+  whose lockfile sits at the root is used and stated unverified.
 - Reusing a previous program for an edited live tree.
 - Whether trace may use a typed binding of a nominal class (ADR-0029 decision 11).
