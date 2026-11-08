@@ -3,6 +3,7 @@ import ts from "typescript";
 import { mountOf, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
 import type { DeclaredEntry, DeclaredTree, DeclaredTrees } from "../../ports/declared-tree.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import { programTree } from "./source-tree.ts";
 
 /** Where the snapshot and the compiler's own `lib` files stand for the compiler; no other path exists for it. */
 export const REPOSITORY_ROOT = "/repo";
@@ -113,7 +114,7 @@ export function createConfinedHost(sources: readonly SourceFile[], outputs: read
       const key = `${fileName}\0${JSON.stringify(languageVersion)}`;
       if (!parsed.has(key)) {
         const found = lookup(fileName);
-        parsed.set(key, found?.kind === "file" ? ts.createSourceFile(fileName, found.text, languageVersion, true) : undefined);
+        parsed.set(key, found?.kind === "file" ? programTree(fileName, found.text, languageVersion) : undefined);
       }
       return parsed.get(key);
     },

@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { programTree } from "./source-tree.ts";
 import { unwrapped } from "./syntax.ts";
 
 /** What a name binds at one place: the symbol and its declarations, nothing the file declares, or a scope decided at run time (a `with` body, or one a sloppy direct `eval` can extend). */
@@ -26,7 +27,7 @@ const DYNAMIC: LexicalBinding = { kind: "dynamic" };
  */
 export function bindFile(path: string, content: string): BoundFile {
   const fileName = `/${path}`;
-  const tree = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+  const tree = programTree(fileName, content, ts.ScriptTarget.Latest);
   const host: ts.CompilerHost = {
     getSourceFile: (name) => (name === fileName ? tree : undefined),
     getDefaultLibFileName: () => "lib.d.ts",

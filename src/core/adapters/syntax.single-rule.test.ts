@@ -22,12 +22,12 @@ const RULES: readonly Rule[] = [
     concept: "parsing a file",
     pattern: /\bts\.createSourceFile\(/,
     owners: ["typescript/source-tree.ts", "typescript/url-define.ts", "typescript/typescript-lib-globals.extract.ts"],
-    pending: ["typescript/lexical-bindings.ts"],
+    pending: [],
   },
   {
-    concept: "a program over a file",
+    concept: "a program: one file's lexical bindings, or a snapshot's type bindings over declared build outputs",
     pattern: /\bts\.createProgram\(/,
-    owners: ["typescript/lexical-bindings.ts"],
+    owners: ["typescript/lexical-bindings.ts", "typescript/type-bindings.adapter.ts"],
     pending: [],
   },
   {
