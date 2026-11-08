@@ -61,6 +61,17 @@ test("a link of a chain whose receiver type has a supertype outside the reposito
   assert.deepEqual(await methodAt([STORE, JDBC, plain, use("plain.find().find()", [], "Plain plain")], "find"), { kind: "unknown" });
 });
 
+test("a platform interface that declares no members leaves the receiver's method selectable, while a supertype with members or a homonym from another package still withholds it", async () => {
+  const entity = (header: string, imports: readonly string[] = []) => java("Entity.java", ["package app;", ...imports, `class Entity ${header} {`, "  void save(String value) {}", "}"]);
+  const select = (source: SourceFile) => methodAt([source, use("entity.save(\"x\")", [], "Entity entity")]);
+  const imported = entity("implements Serializable", ["import java.io.Serializable;"]);
+
+  assert.deepEqual(await select(imported), method(imported, 4));
+  assert.deepEqual(await select(entity("implements Cloneable")), method(imported, 3));
+  assert.deepEqual(await select(entity("implements Comparable<Entity>")), { kind: "unproven" });
+  assert.deepEqual(await select(entity("implements Serializable", ["import com.vendor.Serializable;"])), { kind: "unproven" });
+});
+
 test("unsettled signatures, varargs, inaccessible private members and Object methods retain an unproven call", async () => {
   const overloaded = java("Store.java", ["package app;", "", "public interface Store {", "  void save(String value);", "  void save(Integer value);", "  Store find();", "}"]);
   const varargs = java("Store.java", ["package app;", "", "public interface Store {", "  void save(String... value);", "  Store find();", "}"]);

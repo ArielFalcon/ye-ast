@@ -22,6 +22,8 @@ const NOT_ARGUMENTS: ReadonlySet<string> = new Set(["line_comment", "block_comme
  * no member accepts run a static method of another class.
  */
 const CALL_REWRITING_ANNOTATIONS: ReadonlySet<string> = new Set(["Delegate", "ExtensionMethod"]);
+/** Platform interfaces that declare no members, so a type below one inherits no method from it. */
+const MEMBERLESS_PLATFORM_INTERFACES: ReadonlySet<string> = new Set(["java.io.Serializable", "java.lang.Cloneable", "java.util.RandomAccess", "java.util.EventListener"]);
 
 /** One Java source as the resolver reads it: its description, and its receiver bindings by the call's place, member and receiver. */
 interface ReadFile {
@@ -39,7 +41,7 @@ interface ReadFile {
  * that a receiver call names in the same way, the enclosing class's for `f()` and `this.f()` (R5): an overriding method
  * may only return a subtype, which dispatch covers. No method, beyond what `dispatchTargets` refuses, when the type is a
  * type variable, an enum or an annotation type; when a type at or above it is outside the repository, whose members the
- * sources do not state; when its members of the name, its own and inherited, are not exactly one signature of the call's
+ * sources do not state, unless it is a platform interface that declares none (`MEMBERLESS_PLATFORM_INTERFACES`); when its members of the name, its own and inherited, are not exactly one signature of the call's
  * arity with no varargs and no inaccessible private declaration, or the name is one of `Object`'s methods; when the call sits in an
  * anonymous or a local class; when a source holds an annotation by which a processor adds overloads or rewrites calls
  * (`CALL_REWRITING_ANNOTATIONS`); or when the declared hierarchy does not settle the member. Declaration selection and
@@ -88,11 +90,15 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
 
 function createResolver(project: JavaProject) {
   const hierarchies = new Map<TypeDecl, ReturnType<JavaProject["hierarchy"]>>();
+  /** The supertype clauses, by file and offset, that name a platform interface declaring no members. */
+  const memberless = new Set<string>();
+  const clauseKey = (file: JavaFile, node: Node): string => `${file.path}:${node.startIndex}`;
   const declaredHierarchy = (type: TypeDecl) => {
     let known = hierarchies.get(type);
     if (known === undefined) {
       known = project.hierarchy(type, (node, owner) => {
         const found = resolve(node, owner.file, project, enclosingType(owner.node.parent ?? owner.node, owner.file, project), node);
+        if (found?.kind === "platform" && MEMBERLESS_PLATFORM_INTERFACES.has(found.fqn)) memberless.add(clauseKey(owner.file, node));
         return found?.kind === "repository" ? found.type : undefined;
       });
       hierarchies.set(type, known);
@@ -148,7 +154,7 @@ function createResolver(project: JavaProject) {
   const memberOf = (type: TypeDecl, name: string, arity: number, caller: TypeDecl | undefined): MethodDecl | undefined => {
     if (OBJECT_METHODS.has(name)) return undefined;
     const above = declaredHierarchy(type);
-    if (above.gaps.length > 0) return undefined;
+    if (above.gaps.some((gap) => !memberless.has(clauseKey(gap.file, gap.node)))) return undefined;
     const named = above.types.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
     if (named.some(hasVarargs)) return undefined;
     const candidates = named.filter((method) => method.parameterTypes.length === arity);
