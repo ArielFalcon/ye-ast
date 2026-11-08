@@ -16,9 +16,8 @@ import type { DeclaredType, DispatchTargets, ImportOriginSite, ImportOrigins, Re
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
-import type { RelationExtraction } from "../relations/relation-extractor.ts";
-import { holdsAt, receiverBindingsByPlace, type EdgeTargets, type FollowedEdge } from "../navigation/edge-targets.ts";
-import { provenCallsOf, provenKey, type ProvenCall, type ProvenCalls } from "../navigation/proven-calls.ts";
+import type { EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
+import type { ReceiverProof } from "../navigation/call-binder.ts";
 import { createDeclarationUses, unsettledBy, type UnresolvedIn } from "../navigation/declaration-uses.ts";
 import { callEdgesOf, createReconciledCalls } from "../navigation/reconciled-calls.ts";
 
@@ -65,8 +64,6 @@ export interface TraceWalkInput {
   syntaxOf: (file: string) => Promise<DeclaredMemberNames>;
   /** A line of a source, as the reconciliation of the index's calls with the written ones reads it. */
   lineOf: (file: string, line: number) => string | undefined;
-  /** The relations impact reads, for the member calls they prove; read when a member call first needs them. */
-  memberProofs: () => Promise<Pick<RelationExtraction, "memberUses" | "externalUses">>;
   budget: TraceBudget;
   /** The roots an entrypoint starts at, of which a class (a UI route's component) runs as a page (R9), and what a component runs as one; absent without such a root. */
   pages?: { roots: ReadonlySet<GraphNodeId>; of: (component: GraphSymbol) => Promise<PagePlan | undefined> };
@@ -152,7 +149,8 @@ interface Body {
  * cut that leaves it free to expand at a later, shallower one. Every read is cached for this walk only.
  */
 export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkInput): Promise<TraceWalk | "aborted"> {
-  const { store, unresolvedIn, origins, targets, inScope, memberDeclarations, syntaxOf, lineOf, memberProofs, budget, pages, signal } = input;
+  const { store, unresolvedIn, origins, targets, inScope, memberDeclarations, syntaxOf, lineOf, budget, pages, signal } = input;
+  const binder = targets.binder;
   const navigation = createGraphNavigation(store, () => false);
   const uses = createDeclarationUses(store, navigation, unresolvedIn);
   const callsFrom = (node: GraphSymbol): readonly GraphUnresolvedReference[] => uses.referencesFrom(node, CALL_EDGE_KINDS);
@@ -194,22 +192,11 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
    */
   /** A source's callables by name and its function-value calls by place, built once per file for the walk. */
   const syntaxIndexOf = memoizedBy((file: string) => file, async (file): Promise<SyntaxIndex> => {
-    const { callables, functionValueCalls, receiverBindings } = await syntaxOf(file);
+    const { callables, functionValueCalls } = await syntaxOf(file);
     const byName = new Map<string, DeclaredCallable[]>();
     for (const callable of callables) byName.set(callable.name, [...(byName.get(callable.name) ?? []), callable]);
-    return { callables: byName, functionValueCalls: new Set(functionValueCalls.map(functionValueKey)), receiverBindings: receiverBindingsByPlace(receiverBindings) };
+    return { callables: byName, functionValueCalls: new Set(functionValueCalls.map(functionValueKey)) };
   });
-  let provenByPlace: Promise<ProvenCalls> | undefined;
-  const provenProofs = () => (provenByPlace ??= memberProofs().then(({ memberUses, externalUses }) => provenCallsOf(memberUses, externalUses)));
-  const provenAt = async (reference: GraphUnresolvedReference): Promise<ProvenCall | undefined> => (await provenProofs()).bySpelling.get(provenKey(reference.file, reference.line, reference.column + 1, reference.name));
-  /** What the relations prove the call that starts at an edge's place runs, by the member the edge reaches. */
-  const provenAtEdge = async (file: string, edge: GraphEdge, member: string): Promise<ProvenCall | undefined> => (await provenProofs()).byMember.get(provenKey(file, edge.line!, edge.column! + 1, member));
-  /** The one method a member proof names, declared by the one class it names; none when the index does not place it so. */
-  const provenMember = (call: Extract<ProvenCall, { kind: "member" }>): GraphSymbol | undefined => {
-    const members = store.symbolsInFiles([call.member.path]).filter((symbol) => symbol.kind === "method" && joinsFact(symbol, call.member));
-    const owners = members.length === 1 ? navigation.ownersOf(members[0]!) : [];
-    return owners.length === 1 && owners[0]!.kind === "class" && joinsFact(owners[0]!, call.receiver) ? members[0] : undefined;
-  };
   let replacedRoots: Promise<ReplacedRoots> | undefined;
   /**
    * Whether the repository declares or writes a path that covers what an external leaf calls, writes the member on a
@@ -222,15 +209,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const onPrototype = (written: readonly string[]): boolean => (written.at(-2) === "prototype" || written.at(-2) === "*") && (written.at(-1) === "*" || written.at(-1) === root.member);
     return paths.some((written) => (path.length > 0 && covers(written, path, root.open)) || onPrototype(written));
   };
-  /** The receiver binding the call's own source proves at the place the call starts, for the member and receiver it spells. */
-  const boundAt = async (reference: GraphUnresolvedReference, member: string, receiver = receiverOf(reference.name) ?? ""): Promise<ReceiverBinding["holds"] | undefined> =>
-    holdsAt((await syntaxIndexOf(reference.file)).receiverBindings, reference.line, reference.column + 1, member, receiver);
-  /** The one method named `member` the one class of `name` in `file` (at `line`, when given) declares itself; none otherwise. */
-  const ownMethodOf = (file: string, name: string, member: string, line?: number): GraphSymbol | undefined => {
-    const classes = store.symbolsInFiles([file]).filter((symbol) => symbol.kind === "class" && joinsFact(symbol, { path: file, line: line ?? symbol.startLine, symbol: name }));
-    const methods = classes.length === 1 ? navigation.methodsOf(classes[0]!).filter((method) => method.name === member) : [];
-    return methods.length === 1 ? methods[0] : undefined;
-  };
+  /** What the binder proves the receiver of a member call holds; nothing without a binder. */
+  const receiverAt = async (body: GraphSymbol, reference: GraphUnresolvedReference, member: string, receiver: string, spelling?: string): Promise<ReceiverProof> =>
+    binder === undefined ? { link: "none" } : binder.receiverOf({ body, line: reference.line, column: reference.column + 1, member, receiver, ...(spelling === undefined ? {} : { spelling }) });
   const unresolvedAt = (reference: GraphUnresolvedReference, declarations: readonly GraphSymbol[]): Cut => ({
     kind: "unresolved-link",
     at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declarations.map(candidateOf)])],
@@ -414,19 +395,11 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     };
     const bare: { reference: GraphUnresolvedReference; name: string }[] = [];
     const rooted: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[] }[] = [];
+    /** Constructed receivers whose class the binder places in no repository declaration: a global's instance is a leaf. */
     const constructed: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; holds: Extract<ReceiverBinding["holds"], { kind: "constructed" }> }[] = [];
-    const annotated: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; holds: Extract<ReceiverBinding["holds"], { kind: "annotated" }> }[] = [];
+    const annotated: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; holds: Extract<ReceiverBinding["holds"], { kind: "annotated" }>; type: GraphSymbol | undefined }[] = [];
     /** Member calls no other proof settles, which the type the sources declare the receiver to hold may (R3, R5). */
     const typed: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[] }[] = [];
-    /** A member call on a receiver its source binds, settled by what the binding holds. */
-    const settleBound = async (reference: GraphUnresolvedReference, name: string, named: readonly GraphSymbol[], bound: ReceiverBinding["holds"]): Promise<void> => {
-      const declared = bound.kind === "declared" ? ownMethodOf(reference.file, bound.name, name, bound.line) : undefined;
-      if (bound.kind === "literal") await leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(bound.type, name), () => settleByName(reference, name, named, true));
-      else if (bound.kind === "constructed") constructed.push({ reference, name, named, holds: bound });
-      else if (bound.kind === "annotated") annotated.push({ reference, name, named, holds: bound });
-      else if (declared !== undefined) children.push(childAt(declared, reference.line, reference.column, reference.name, "call"));
-      else await settleByName(reference, name, named);
-    };
     /**
      * The method `member` names on what a call returns, when the call is a resolved edge of this body whose own receiver
      * needs no proof and whose declaration states a nominal class as its return type (RFC-0013 R5).
@@ -444,24 +417,39 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       return type?.kind === "nominal" ? nominalMethod(type, member) : undefined;
     };
     /**
-     * A resolved call whose receiver is a value or a field the walk has not proven: settled by what the relations or the
-     * source's binding prove the receiver holds, otherwise a cut listing the declarations of its name.
+     * A member call settled by what the binder proves its receiver holds (ADR-0041 decision 4), narrowed by execution: a
+     * receiver a provider may replace runs no proven class, and an annotation binds only a nominal class (ADR-0029
+     * decision 11). `unproved` decides a call the binder proves nothing about.
+     */
+    const settleReceiver = async (reference: GraphUnresolvedReference, name: string, named: readonly GraphSymbol[], proof: ReceiverProof, returned: boolean, unproved: () => void): Promise<void> => {
+      const step = (method: GraphSymbol | undefined) => (method === undefined ? settleByName(reference, name, named) : void children.push(childAt(method, reference.line, reference.column, reference.name, "call")));
+      const outside = (holds: string) => leafUnlessReplaced(externalOf(holds, reference.name), rootOfHolds(holds, name), () => settleByName(reference, name, named, true));
+      if (proof.link === "member") return step(proof.method);
+      if (proof.link === "external") return outside(proof.holds);
+      if (proof.link === "field" || proof.link === "local") {
+        if (proof.replaceable === true) return settleByName(reference, name, named);
+        if ("external" in proof.holds) return outside(proof.holds.external);
+        return step(proof.type === undefined ? undefined : binder?.memberOf(proof.type, name));
+      }
+      if (proof.link === "none") return unproved();
+      if (proof.link !== "syntax") return;
+      const { holds, type } = proof;
+      if (holds.kind === "returned" && returned) return step(await returnedMethod(holds, name));
+      if (holds.kind === "literal") return leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(holds.type, name), () => settleByName(reference, name, named, true));
+      if (holds.kind === "annotated") return void annotated.push({ reference, name, named, holds, type });
+      if (holds.kind === "constructed" && type === undefined) return void constructed.push({ reference, name, named, holds });
+      if (holds.kind === "constructed" || holds.kind === "declared") return step(type === undefined ? undefined : binder?.memberOf(type, name));
+      return settleByName(reference, name, named);
+    };
+    /**
+     * A resolved call whose receiver is a value or a field the walk has not proven: settled by what the binder proves the
+     * receiver holds, otherwise a cut listing the declarations of its name.
      */
     for (const { edge, target, receiver } of unproven) {
       const reference: GraphUnresolvedReference = { from: node.id, file: node.file, line: edge.line!, column: edge.column!, kind: edge.kind, name: target.name, candidates: [] };
       const members = membersNamed(target.name, node.file);
       const named = members.length > 0 ? members : [target];
-      const proven = await provenAtEdge(node.file, edge, target.name);
-      const member = proven?.kind === "member" ? provenMember(proven) : undefined;
-      const bound = await boundAt(reference, target.name, receiver);
-      if (member !== undefined) children.push(childAt(member, edge.line, edge.column, target.name, "call"));
-      else if (proven?.kind === "external") await leafUnlessReplaced(externalOf(proven.holds, target.name), rootOfHolds(proven.holds, target.name), () => cuts.push(unresolvedAt(reference, named)));
-      else if (bound?.kind === "returned") {
-        const method = await returnedMethod(bound, target.name);
-        if (method !== undefined) children.push(childAt(method, edge.line, edge.column, target.name, "call"));
-        else cuts.push(unresolvedAt(reference, named));
-      } else if (bound !== undefined) await settleBound(reference, target.name, named, bound);
-      else cuts.push(unresolvedAt(reference, named));
+      await settleReceiver(reference, target.name, named, await receiverAt(node, reference, target.name, receiver), true, () => void cuts.push(unresolvedAt(reference, named)));
     }
     for (const reference of ambiguous) cuts.push(unresolvedAt(reference, []));
     for (const reference of unsettledBy([...indexed, ...missing], called)) {
@@ -474,36 +462,31 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         if (callee.form === "computed") cuts.push(unresolvedAt(reference, []));
         else if (callee.form === "bare") bare.push({ reference, name: callee.name });
         else {
-          const proven = await provenAt(reference);
-          let bound: ReceiverBinding["holds"] | undefined;
-          const member = proven?.kind === "member" ? provenMember(proven) : undefined;
           const named = membersNamed(callee.name, reference.file);
-          if (member !== undefined) children.push(childAt(member, reference.line, reference.column, reference.name, "call"));
-          else if (proven?.kind === "external") await leafUnlessReplaced(externalOf(proven.holds, reference.name), rootOfHolds(proven.holds, callee.name), () => settleByName(reference, callee.name, named, true));
-          else if ((bound = await boundAt(reference, callee.name)) !== undefined) await settleBound(reference, callee.name, named, bound);
-          else if (PLAIN_CHAIN.test(reference.name) && !reference.name.startsWith("this.")) rooted.push({ reference, name: callee.name, named });
-          else typed.push({ reference, name: callee.name, named });
+          const proof = await receiverAt(node, reference, callee.name, receiverOf(reference.name) ?? "", reference.name);
+          await settleReceiver(reference, callee.name, named, proof, false, () => {
+            if (PLAIN_CHAIN.test(reference.name) && !reference.name.startsWith("this.")) rooted.push({ reference, name: callee.name, named });
+            else typed.push({ reference, name: callee.name, named });
+          });
         }
       }
     }
     if (constructed.length > 0) {
       const sites = constructed.map(({ reference, holds }): ResolvedNameSite => ({ file: reference.file, line: holds.line, column: holds.column, kind: "instantiates", name: holds.name }));
       const roots = await origins.rootOrigins(sites, signal);
-      for (const [index, { reference, name, named, holds }] of constructed.entries()) {
+      for (const [index, { reference, name, named }] of constructed.entries()) {
         const root = roots[index];
         const origin = root?.status === "complete" ? root.value : undefined;
-        const method = origin?.kind === "repository" ? ownMethodOf(origin.file, holds.name, name) : undefined;
         if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(origin.name, name), () => settleByName(reference, name, named, true));
-        else if (method !== undefined) children.push(childAt(method, reference.line, reference.column, reference.name, "call"));
         else await settleByName(reference, name, named);
       }
     }
     if (annotated.length > 0) {
       const owner = { name: node.name, line: node.startLine, endLine: node.endLine };
       const types = await origins.declaredTypes(annotated.map(({ reference, holds }) => ({ file: reference.file, line: holds.line, column: holds.column, spelled: holds.type, owner })), signal);
-      for (const [index, { reference, name, named }] of annotated.entries()) {
+      for (const [index, { reference, name, named, type: bound }] of annotated.entries()) {
         const type = types[index];
-        const nominal = type?.kind === "nominal" ? nominalMethod(type, name) : undefined;
+        const nominal = type?.kind === "nominal" && bound !== undefined && joinsFact(bound, { path: type.file, line: type.line, symbol: type.name }) ? nominalMethod(type, name) : undefined;
         if (nominal !== undefined) children.push(childAt(nominal, reference.line, reference.column, reference.name, "call"));
         else if (type?.kind === "global") await leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(type.name, name), () => settleByName(reference, name, named, true));
         else if (type?.kind === "package") await leafUnlessReplaced({ kind: "import", module: type.module, name: reference.name }, { module: type.module }, () => settleByName(reference, name, named, true));
@@ -701,9 +684,6 @@ type Dispatch = { to: GraphSymbol; alternatives: readonly GraphSymbol[]; cut?: u
 interface SyntaxIndex {
   callables: ReadonlyMap<string, readonly DeclaredCallable[]>;
   functionValueCalls: ReadonlySet<string>;
-  /** By the place the call starts. */
-  /** By the place the call starts and the member it calls; `ambiguous` when two calls start there under one member name. */
-  receiverBindings: ReadonlyMap<string, ReceiverBinding | "ambiguous">;
 }
 
 function functionValueKey({ line, receiver, member }: FunctionValueCall): string {

@@ -348,7 +348,9 @@ reaches `main` with the expectations stated (ADR-0039).
 | U1 | Alignment of call-bearing records moves to `ReconciledCalls`, today's matching rule kept byte for byte; domain rules to `core/domain/shared/`; trace reads `callsOf` | `none` (M6) |
 | U2 | `synthesized`, column comparability, `misowned` and `contradicted` replace trace's blind `unplaced`; the name rule at a shared place is decided on M4 | `trace:±` |
 | U3 | One binder: trace's static chain and `EdgeTargets`' receiver settlement become one; trace hands over field and local origins. Before the move, regression tests pin through `callers` and `impact` every settlement `EdgeTargets` makes today: `proven` and `name-match` for a field origin, an `inject()` local, a constructed, a declared and an annotated receiver, `typed`, a drop and a redirect | `trace:+`; `callers` and `impact` `none`, answers byte-identical |
+| U3 (delivered) | `CallBinder` (`navigation/call-binder.ts`) owns the receiver chain: member proof, outside proof, field and `inject()` local origins, the receiver's syntax binding with the repository type a `declared`, `annotated` or `constructed` binding names (the import join or the file's one declaration), and the nearest class method. `EdgeTargets` reads it and still accepts only the member, field, local, declared, annotated and constructed links under its "declares or lies below" rule, so `callers` and `impact` answer as before; trace reads it and narrows: a receiver a provider may replace runs no proven class, and an annotation binds only the same class `declaredTypes` names nominal | `trace:±`; `callers` and `impact` `none` |
 | U4 | Name index with its complete candidate lookup, `into`, constructor chaining, the attribution rule of decision 8; `impact` and `callers` read it in the fixpoint; accepted only after the M5 report is inspected | `callers:+`, `impact:+`, `±` where an attributed cut appears |
+| U3b | The reverse families read the base binding instead of the index's target where the base binds one: the residual divergences below close, each moved answer inspected before acceptance | `callers:±`, `impact:±` |
 | U5 | `outline` focus, `importers` and `contract_consequences` read the base | `outline:+`, `importers:±`, `contract_consequences:±` |
 | U6 | `contradicted` pruning in the reverse families | `callers:±`, `impact:±`; none expected (M4 first) |
 
@@ -429,6 +431,20 @@ first in the unit named:
 - **Alignment depends on codegraph's places.** A codegraph upgrade that moves its columns changes the classes;
   conformance fixtures 2, 4 and 6 and the version-checked adapter (RFC-0003) catch it.
 - **A family keeps a private binder.** The import fitness test of decision 1.
+
+### Residual divergences after U3
+
+Until U3b the reverse families narrow by accepting fewer links than trace. Three cases are not a narrowing: they keep a
+target the base does not bind, so one call still has two targets across families.
+
+| # | Case | `callers` and `impact` | Base binding (trace) |
+|---|---|---|---|
+| R1 | A Java call whose `receiverMethods` names a method other than the index's target | The index's target, `resolved` | The method `receiverMethods` names (ADR-0044 decision 1) |
+| R2 | `new Sub().m()` with `m` declared in `Sub` and in `Base`, the index's edge at `Base.m` | `Base.m`, `proven` ("declares or lies below") | `Sub.m`, the nearest class method |
+| R3 | A member proof whose member the index does not place as the one method of the one class it names (an arrow-function property, overload signatures) | The edge's target, `proven` when it joins the proof | Unbound: trace cuts the call |
+
+A field origin that holds a class not declaring the member is excluded from `impact` by `inbound-edges.ts` (a cut at the
+call), not by the base: a second owner of that settlement, open for U4 or U6 and pending in the single-rule fitness test.
 
 ## Not decided here
 

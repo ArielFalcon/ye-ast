@@ -62,10 +62,12 @@ interface Options {
   receiverRoots?: Readonly<Record<string, RootBinding>>;
   /** The callables each source's syntax states, by path. */
   callables?: Readonly<Record<string, readonly DeclaredCallable[]>>;
+  /** The names each source imports from a repository file, by path, as its module statements bind them; none by default. */
+  imports?: Readonly<Record<string, readonly { local: string; from: string }[]>>;
   /** The type each annotation names, by the name it is spelled with; unknown by default. */
   declared?: Readonly<Record<string, DeclaredType>>;
-  /** The member calls the relations prove. */
-  proofs?: Pick<RelationExtraction, "memberUses" | "externalUses">;
+  /** The member calls the relations prove, and the classes fields and `inject()` locals hold. */
+  proofs?: Pick<RelationExtraction, "memberUses" | "externalUses"> & Partial<Pick<RelationExtraction, "fields" | "locals">>;
   /** The bodies the declared hierarchy proves a body-less method runs, by its name; unknown by default. */
   dispatch?: Readonly<Record<string, DispatchTargets>>;
   /** The template relations, each component's template and the template calls they prove, as the relations read them; none by default. */
@@ -129,6 +131,7 @@ function setup(options: Options) {
       }),
     }),
     relations: { extract: async () => ({ relations: [], fields: [], locals: [], ...options.proofs, ...options.relations }) },
+    ...(options.imports === undefined ? {} : { moduleDependencies: { extract: async () => ({ dependencies: Object.entries(options.imports!).flatMap(([file, bound]) => bound.map(({ local, from }, index) => ({ file, line: index + 1, endLine: index + 1, specifier: from, kind: "import", typeOnly: false, target: { kind: "repository", file: from }, bindings: [{ local, imported: local, line: index + 1, column: 10, typeOnly: false, exportedAs: local }] }))) }) } }),
     callSites: { placed: async () => (options.onCallSites?.(), options.placedSites ?? (options.callSites ?? []).map((site) => ({ site, column: 0 }))) },
     engines: {},
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
@@ -746,9 +749,9 @@ const boundCall = (holds: ReceiverBinding["holds"], member = "save"): Options =>
   sources: [{ path: A, content: "" }],
 });
 
-test("a member call on a local the source binds to a class it declares, or to one whose name is rooted at a repository file, is a step at that class's method", async () => {
+test("a member call on a local the source binds to a class it declares, or to one its imports bind, is a step at that class's method", async () => {
   const declared = await factOf({ ...boundCall({ kind: "declared", name: "Repo", line: 1 }), nodes: [SVC, RUN, fakeNode("Repo", "class", A, 22, 28), fakeNode("Repo.save", "method", A, 24, 26, "save"), fakeNode("Other.save", "method", B, 30, 32, "save")], edges: [...CONTAINS, { from: "Repo", to: "Repo.save", kind: "contains" }], unresolved: [{ from: "run", name: "store.save", kind: "calls", file: A, line: 9, column: 4 }, OUTWARD_CALL("Repo.save", A, 25)], receiverBindings: { [A]: [{ line: 9, column: 5, receiver: "store", member: "save", holds: { kind: "declared", name: "Repo", line: 22 } }] }, sources: [{ path: A, content: "" }] });
-  const constructed = await factOf({ ...boundCall({ kind: "constructed", name: "Repo", line: 8, column: 17 }), roots: { Repo: { kind: "repository", file: B, bare: true } } });
+  const constructed = await factOf({ ...boundCall({ kind: "constructed", name: "Repo", line: 8, column: 17 }), imports: { [A]: [{ local: "Repo", from: B }] } });
 
   for (const fact of [declared, constructed]) {
     assert.equal(fact.status, "complete");
@@ -1075,6 +1078,7 @@ const nominalCall = (extra: { nodes?: FakeNode[]; edges?: FakeEdge[]; unresolved
     edges: [...base.edges!, ...(extra.edges ?? [])],
     unresolved: [...base.unresolved!, ...(extra.unresolved ?? [])],
     declared: { Repo: { kind: "nominal", file: B, name: "Repo", line: 1 } },
+    imports: { [A]: [{ local: "Repo", from: B }] },
     callables: { [B]: [{ name: "save", start: 3, nameLine: 3, body: true, overridable: true }] },
     sources: [{ path: A, content: "" }, { path: B, content: "" }],
   };
@@ -1117,6 +1121,33 @@ test("a call the index resolved on a field of this is a step only at what the re
   assert.deepEqual(valueOf(unproven).steps.map((step) => step.symbol), ["run"]);
   for (const fact of [proven, nominal]) assert.deepEqual(valueOf(fact).steps.slice(1).map(({ symbol, file }) => [symbol, file]), [["save", B]]);
   assert.deepEqual(valueOf(external).steps.map(({ symbol, external }) => [symbol, external]), [["run", [{ kind: "import", module: "@ngrx/store", names: ["save"] }]]]);
+});
+
+test("a call the index resolved on a field or an inject() local whose origin holds a class is a step at its method, unless a provider may replace the class", async () => {
+  const holds = { class: { path: B, symbol: "Repo", line: 1 } };
+  const owner = { path: A, symbol: "Svc", line: 1 };
+  const written = (name: string): SyntaxCall => ({ kind: "calls", line: 9, column: 5, name, callee: "save", owners: [] });
+  const field = await factOf({ ...resolvedOnParameter(), receiverRoots: { save: { kind: "this", member: "store" } }, syntaxCalls: { [A]: [written("this.store.save")] }, proofs: { fields: [{ owner, field: "store", holds }], memberUses: [], externalUses: [] } });
+  const local = await factOf({ ...resolvedOnParameter(), syntaxCalls: { [A]: [written("store.save")] }, proofs: { locals: [{ owner, local: "store", holds }], memberUses: [], externalUses: [] } });
+  const replaceable = await factOf({ ...resolvedOnParameter(), syntaxCalls: { [A]: [written("store.save")] }, proofs: { locals: [{ owner, local: "store", holds }], memberUses: [{ ...SAVE_PROOF, reference: { ...SAVE_PROOF.reference, name: "store.save" }, substitutes: [] }], externalUses: [] } });
+
+  for (const fact of [field, local]) {
+    assert.equal(fact.status, "complete");
+    assert.deepEqual(valueOf(fact).steps.slice(1).map(({ symbol, file, at }) => [symbol, file, at]), [["save", B, { line: 9, column: 5 }]]);
+  }
+  assert.deepEqual(cutsOf(replaceable), PARAMETER_CUT);
+});
+
+test("a member call on a value constructed from an imported class is a step at the method the nearest class above it declares", async () => {
+  const fact = await factOf({
+    ...boundCall({ kind: "constructed", name: "Child", line: 8, column: 17 }),
+    nodes: [SVC, RUN, REPO, REPO_SAVE, fakeNode("Child", "class", B, 12, 20)],
+    edges: [...CONTAINS, { from: "Repo", to: "Repo.save", kind: "contains" }, { from: "Child", to: "Repo", kind: "extends" }],
+    imports: { [A]: [{ local: "Child", from: B }] },
+  });
+
+  assert.equal(fact.status, "complete");
+  assert.deepEqual(valueOf(fact).steps.slice(1).map(({ symbol, file }) => [symbol, file]), [["save", B]]);
 });
 
 /** `this.make().save()` at line 9 of `run`: the index resolved both links, `make` to `Svc.make` and `save` to `Repo.save`. */
