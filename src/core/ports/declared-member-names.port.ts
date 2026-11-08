@@ -4,7 +4,10 @@ import type { SourceSpan } from "../domain/trace/owning-body.ts";
 
 /** The member names one source declares where a value can live, and its callable declarations, read from its syntax. */
 export interface DeclaredMemberNames {
-  /** Every syntactic call or construction, at its callee start (1-based UTF-16). */
+  /**
+   * Every syntactic call or construction, at its callee start (1-based UTF-16). Absent when no reader parsed the source:
+   * its calls are unknown, never none (ADR-0041 decision 2).
+   */
   calls?: readonly SyntaxCall[];
   initializedFields?: readonly Pick<DeclaredCallable, "name" | "start" | "nameLine">[];
   /** Sorted, once each. */

@@ -1331,6 +1331,24 @@ test("line-only call records settle only a unique site in their own body", async
   }
 });
 
+test("a call record in a source no reader parsed is kept as the index has it, while a parsed source writing no call cuts it", async () => {
+  const nodes = [
+    { ...fakeNode("run", "function", A, 1), startColumn: 0, endColumn: 80 },
+    { ...fakeNode("target", "function", B, 5), startColumn: 0, endColumn: 30 },
+  ];
+  const edges = [{ from: "run", to: "target", kind: "calls" as const, line: 1, column: 9 }];
+  const sources = [{ path: A, content: "run" }, { path: B, content: "target" }];
+  const leavesOf = (fact: Awaited<ReturnType<typeof factOf>>) => valueOf(fact).steps.flatMap((step) => step.leaves ?? []).map((leaf) => leaf.symbol);
+
+  const unread = await factOf({ nodes, sources, edges });
+  assert.equal(unread.status, "complete");
+  assert.deepEqual(leavesOf(unread), ["target"]);
+
+  const writesNone = await factOf({ nodes, sources, edges, syntaxCalls: { [A]: [] } });
+  assert.equal(writesNone.status, "partial");
+  assert.deepEqual(leavesOf(writesNone), []);
+});
+
 test("a workspace live trace forwards the root stale notice once and never substitutes a library notice", async () => {
   const fact = await factOf({ nodes: [SVC, RUN], edges: CONTAINS });
   const rootNotice = { stateId: "root-state", changed: [A] };

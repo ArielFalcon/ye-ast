@@ -182,6 +182,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const memberNames: DeclaredMemberNamesReader = {
     memberNames: async (file, facts) => {
       const [typescript, java] = [await typescriptMemberNames.memberNames(file, facts), await javaMemberNames.memberNames(file)];
+      const calls = typescript.calls === undefined && java.calls === undefined ? undefined : [...typescript.calls ?? [], ...java.calls ?? []];
       return {
         names: [...new Set([...typescript.names, ...java.names])].sort(compareText),
         functionValueCalls: [...typescript.functionValueCalls, ...java.functionValueCalls],
@@ -189,7 +190,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
         initializedFields: [...typescript.initializedFields ?? [], ...java.initializedFields ?? []],
         receiverBindings: [...typescript.receiverBindings, ...java.receiverBindings],
         functionValues: [...typescript.functionValues, ...java.functionValues],
-        calls: [...typescript.calls ?? [], ...java.calls ?? []],
+        ...(calls === undefined ? {} : { calls }),
       };
     },
   };
