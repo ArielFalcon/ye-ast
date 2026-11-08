@@ -22,6 +22,15 @@ export type MeasurementSink = (line: string) => void;
 export interface MeasurementDeps {
   sink: MeasurementSink;
   redaction: Redaction;
+  /** Where tallied stages sum their calls until the query they ran in writes its line. */
+  tallies?: StageTallies;
+}
+
+/** The calls of each tallied stage since the last query line: how many, their summed time, and the first outcome not `ok`. */
+export type StageTallies = Map<string, { calls: number; durationMs: number; outcome: string }>;
+
+export function stageTallies(): StageTallies {
+  return new Map();
 }
 
 /**
@@ -134,6 +143,27 @@ export function measuredStages<T extends object>(port: T, stages: { readonly [K 
   return aroundMethods(port, Object.keys(stages), (method, call) => measuredStage(stages[method as keyof T]!, call, deps));
 }
 
+/**
+ * A port whose named methods a request calls once per file: without `tallies` each call writes its stage line; with it
+ * the calls are summed, and the query they ran in writes one line per stage before its own.
+ */
+export function measuredTalliedStages<T extends object>(port: T, stages: { readonly [K in keyof T]?: string }, deps: MeasurementDeps): T {
+  const { tallies } = deps;
+  if (tallies === undefined) return measuredStages(port, stages, deps);
+  return aroundMethods(port, Object.keys(stages), (method, call) =>
+    timedStage(call, (outcome, started) => {
+      const stage = stages[method as keyof T]!;
+      const held = tallies.get(stage) ?? { calls: 0, durationMs: 0, outcome: "ok" };
+      tallies.set(stage, { calls: held.calls + 1, durationMs: held.durationMs + performance.now() - started, outcome: held.outcome === "ok" ? outcome : held.outcome });
+    }),
+  );
+}
+
+function reportTallies(deps: MeasurementDeps): void {
+  for (const [stage, { calls, durationMs, outcome }] of deps.tallies ?? []) reportBestEffort({ event: "stage", stage, outcome, calls, duration_ms: Math.round(durationMs) }, deps);
+  deps.tallies?.clear();
+}
+
 /** One `derived-facts` line per call of `reader` that found or derived a fact (ADR-0035): what it kept, and what the cache holds after. */
 export function measuredDerivedFacts<T extends object>(port: T, facts: DerivedFacts, reader: string, deps: MeasurementDeps): T {
   return aroundMethods(port, Object.keys(port), async (_, call) => {
@@ -148,8 +178,13 @@ export function measuredDerivedFacts<T extends object>(port: T, facts: DerivedFa
 
 /** One stage line per call, synchronous or not: `ok`, `threw`, or the kind of the fault a result answered. */
 function measuredStage<T>(stage: string, call: () => T, deps: MeasurementDeps): T {
+  return timedStage(call, (outcome, started) => reportBestEffort({ event: "stage", stage, outcome, start_ms: Math.round(started), duration_ms: elapsed(started) }, deps));
+}
+
+/** Runs `call` and hands `done` its outcome once it settles, synchronous or not, with the time it started. */
+function timedStage<T>(call: () => T, settled: (outcome: string, started: number) => void): T {
   const started = performance.now();
-  const done = (outcome: string) => reportBestEffort({ event: "stage", stage, outcome, start_ms: Math.round(started), duration_ms: elapsed(started) }, deps);
+  const done = (outcome: string) => settled(outcome, started);
   let answer: T;
   try {
     answer = call();
@@ -192,9 +227,11 @@ async function measured<T>(method: string, call: () => Promise<T>, deps: Measure
   const cpuAtStart = process.cpuUsage();
   try {
     const answer = await call();
+    reportTallies(deps);
     reportBestEffort(queryRecord({ method, durationMs: elapsed(started), outcome: outcomeOf(answer), answer, cpu: process.cpuUsage(cpuAtStart) }), deps);
     return answer;
   } catch (error) {
+    reportTallies(deps);
     reportBestEffort({ event: "query", method, duration_ms: elapsed(started), outcome: "threw" }, deps);
     throw error;
   }

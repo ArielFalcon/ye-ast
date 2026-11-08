@@ -217,6 +217,15 @@ so stages that overlap, or that follow one another with a gap, can be told apart
 of one agent it precedes its query line in order; under concurrent requests lines interleave and a host correlates them
 by time only.
 
+A reader a request calls once per file writes one **tallied stage line** per query instead, just before the query line:
+the calls it made and their summed time, with no `start_ms`. Its outcome is the first one that was not `ok`. Today that
+is `member-names`, the syntax of each source a family reads. The batch readers `root-bindings`, `declared-types` and
+`receiver-methods` write ordinary stage lines.
+
+```json
+{"ye_ast":{"event":"stage","stage":"member-names","outcome":"ok","calls":1187,"duration_ms":79}}
+```
+
 The stages also cover the live lifecycle, each port call `openLive` makes: `live-lock`, `live-read-state`,
 `live-list` (the working-tree listing, both the refresh and the staleness re-list; `start_ms` tells them apart),
 `live-discard`, `live-reconcile`, `live-write-state`, `live-materialize`, `live-prune`, `live-touch`,

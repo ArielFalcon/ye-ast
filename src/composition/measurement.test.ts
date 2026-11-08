@@ -10,7 +10,7 @@ import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { LiveMirror } from "../core/ports/live-mirror.port.ts";
 import type { DerivedFacts, DerivedFactsTally } from "../core/ports/derived-facts.port.ts";
-import { measuredDerivedFacts, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredStages, measuredTrace } from "./measurement.ts";
+import { measuredDerivedFacts, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredStages, measuredTalliedStages, measuredTrace, stageTallies } from "./measurement.ts";
 
 const SECRET = "s3cr3t";
 const SHA = "a".repeat(40);
@@ -381,4 +381,20 @@ test("a reader call writes one derived-facts line with what it found and kept, a
   await reader.read();
 
   assert.deepEqual(lines.map(recordOf), [{ event: "derived-facts", reader: "import-origins", hits: 3, misses: 1, admitted: 1, admitted_bytes: 40, evicted: 0, skipped: 0, fact_bytes: 120, retained_bytes: 900 }]);
+});
+
+test("a tallied stage writes one line per query, before the query line, with its calls and their summed time", async () => {
+  const { lines, sink } = collecting();
+  const deps = { sink, redaction, tallies: stageTallies() };
+  const port = { read: async (file: string) => file };
+  const tallied = measuredTalliedStages(port, { read: "member-names" }, deps);
+  const queries = measuredImpact({ ...impactOf(fact("complete")), callers: async (request) => ((await tallied.read("a")), await tallied.read("b"), await tallied.read("c"), impactOf(fact("complete")).callers(request)) }, deps);
+
+  await queries.callers({} as never);
+  await queries.callers({} as never);
+
+  assert.deepEqual(lines.map((line) => recordOf(line).event), ["stage", "query", "stage", "query"]);
+  assert.equal(recordOf(lines[0]).stage, "member-names");
+  assert.equal(recordOf(lines[0]).calls, 3);
+  assert.equal(recordOf(lines[2]).calls, 3);
 });

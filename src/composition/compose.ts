@@ -85,7 +85,7 @@ import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
-import { measuredContractConsequences, measuredDecisions, measuredDerivedFacts, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredTrace, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
+import { measuredContractConsequences, measuredDecisions, measuredDerivedFacts, measuredStages, measuredTalliedStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredTrace, measuredWorkspace, stageTallies, type MeasurementSink } from "./measurement.ts";
 
 const PRODUCER_NAME = "ye-ast";
 export const LIVE_STAGING_VERSION = `${STAGING_RULES_VERSION}:${WRITTEN_UNIVERSE_VERSION}`;
@@ -159,7 +159,7 @@ export interface ComposedQueries {
 export function composeQueries(options: Omit<CompositionOptions, "signal"> = {}): ComposedQueries {
   const version = ownVersion();
   const redaction = createPatternRedaction();
-  const measurement = options.measure === undefined ? undefined : { sink: options.measure, redaction };
+  const measurement = options.measure === undefined ? undefined : { sink: options.measure, redaction, tallies: stageTallies() };
   const holds = createJavaTreeHolds();
   const javaParser = () => createJavaParser(holds);
   const staged = <T extends object>(port: T, stages: { readonly [K in keyof T]?: string }): T => (measurement === undefined ? port : measuredStages(port, stages, measurement));
@@ -179,7 +179,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   };
   const typescriptMemberNames = createTypeScriptMemberNames();
   const javaMemberNames = createJavaMemberNames(javaParser);
-  const memberNames = staged<DeclaredMemberNamesReader>({
+  const memberNamesReader: DeclaredMemberNamesReader = {
     memberNames: async (file, facts) => {
       const [typescript, java] = [await typescriptMemberNames.memberNames(file, facts), await javaMemberNames.memberNames(file, facts)];
       const calls = typescript.calls === undefined && java.calls === undefined ? undefined : [...typescript.calls ?? [], ...java.calls ?? []];
@@ -193,7 +193,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
         ...(calls === undefined ? {} : { calls }),
       };
     },
-  }, { memberNames: "member-names" });
+  };
+  const memberNames = measurement === undefined ? memberNamesReader : measuredTalliedStages(memberNamesReader, { memberNames: "member-names" }, measurement);
   const callSites = staged<CallSiteReader>({
     of: async (files, repo, libraries) => {
       const java = await createJavaCallSites(await javaParser()).of(files, repo, libraries);
