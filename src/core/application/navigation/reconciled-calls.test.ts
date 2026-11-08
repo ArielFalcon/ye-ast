@@ -14,10 +14,20 @@ function written(line: number, column: number, name: string, callee: string): Sy
   return { kind: "calls", line, column, name, callee, owners: [] };
 }
 
-async function callsOf(body: string, nodes: readonly FakeNode[], edges: readonly FakeEdge[], calls: readonly SyntaxCall[], unresolved: readonly FakeUnresolved[] = []): Promise<BodyCalls> {
+type Scope = SyntaxCall["owners"][number];
+
+function scope(name: string, start: number, startColumn: number, endLine: number, endColumn: number): Scope {
+  return { name, start, nameLine: start, nameColumn: startColumn, startColumn, endLine, endColumn };
+}
+
+function ownedBy(owners: readonly Scope[], call: SyntaxCall): SyntaxCall {
+  return { ...call, owners };
+}
+
+async function callsOf(body: string, nodes: readonly FakeNode[], edges: readonly FakeEdge[], calls: readonly SyntaxCall[], unresolved: readonly FakeUnresolved[] = [], functionValues: DeclaredMemberNames["functionValues"] = []): Promise<BodyCalls> {
   const store = fakeCodeGraph(nodes, edges, unresolved);
   const uses = createDeclarationUses(store, createGraphNavigation(store, () => false));
-  const syntax: DeclaredMemberNames = { ...NOTHING_DECLARED, calls };
+  const syntax: DeclaredMemberNames = { ...NOTHING_DECLARED, calls, functionValues };
   const reconciled = createReconciledCalls({ store, uses, syntaxOf: async (file) => (file === FILE ? syntax : NOTHING_DECLARED) });
   const [node] = store.symbolsByIds([body as GraphNodeId]);
   return reconciled.callsOf(node!);
@@ -80,4 +90,28 @@ test("homonym calls on one line pair each record with the call at its own column
   const unresolved: FakeUnresolved[] = [{ from: "load", name: "a.save", kind: "calls", file: FILE, line: 4, column: 4 }];
   const found = placed(await callsOf("load", CHAIN_NODES, edges, calls, unresolved));
   assert.deepEqual(found, { edges: ["save@4:14"], references: ["a.save@4:4"], indexOnly: [], writtenOnly: [], ambiguous: [] });
+});
+
+test("the construction of an anonymous class belongs to the body that runs it, the calls inside to the class", async () => {
+  // Map<String, Object> build() {     (2)
+  //   return new HashMap<>() {        (3)
+  //     { put("k", v); }              (4)
+  //   };                              (5)
+  // }                                 (6)
+  const method = scope("build", 2, 2, 6, 3);
+  const anonymous = scope("", 3, 27, 5, 5);
+  const nodes: FakeNode[] = [{ ...fakeNode("build", "method", FILE, 2, 6), startColumn: 2, endColumn: 3 }, { ...fakeNode("anonymous", "class", FILE, 3, 5), startColumn: 11, endColumn: 5 }];
+  const calls = [ownedBy([method], { ...written(3, 12, "HashMap", "HashMap"), kind: "instantiates" }), ownedBy([method, anonymous], written(4, 7, "put", "put"))];
+  assert.deepEqual(placed(await callsOf("build", nodes, [], calls)).writtenOnly, ["HashMap"]);
+  assert.deepEqual(placed(await callsOf("anonymous", nodes, [], calls)).writtenOnly, ["put"]);
+});
+
+test("a call no body encloses belongs to its file's top level, deferred inside a function value the top level does not run", async () => {
+  // enableProdMode();                          (1)
+  // boot().catch((e) => console.log(e));       (2)
+  const arrow = scope("", 2, 13, 2, 35);
+  const nodes = [fakeNode("main", "file", FILE, 1, 3)];
+  const calls = [written(1, 1, "enableProdMode", "enableProdMode"), written(2, 1, "boot().catch", "catch"), written(2, 1, "boot", "boot"), ownedBy([arrow], written(2, 21, "console.log", "log"))];
+  const values = [{ start: { line: 2, column: 13 }, end: { line: 2, column: 35 } }];
+  assert.deepEqual(placed(await callsOf("main", nodes, [], calls, [], values)).writtenOnly, ["enableProdMode", "boot().catch", "boot"]);
 });

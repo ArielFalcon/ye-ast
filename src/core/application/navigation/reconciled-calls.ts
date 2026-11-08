@@ -1,6 +1,6 @@
 import { calleeOf } from "../../domain/shared/call-place.ts";
 import { CALL_EDGE_KINDS, holdsValue, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
-import { containsPosition, declarationSpan, executesInBody, owningBody, type SourceSpan } from "../../domain/shared/owning-body.ts";
+import { comparePositions, containsPosition, declarationSpan, executesInBody, owningBody, type SourceSpan } from "../../domain/shared/owning-body.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { DeclaredMemberNames, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import type { DeclarationUses } from "./declaration-uses.ts";
@@ -23,25 +23,40 @@ function positionedBodies(declarations: readonly GraphSymbol[], calls: readonly 
     const anchors = scopes.filter(({ scope }) => scope.nameLine === symbol.startLine && scope.nameColumn === symbol.startColumn);
     const header = atStart !== undefined && ((atStart.start.line === symbol.startLine && atStart.start.column === symbol.startColumn) ||
       symbol.startLine < atStart.scope.nameLine || (symbol.startLine === atStart.scope.nameLine && symbol.startColumn <= atStart.scope.nameColumn));
-    const scope = anchors.length === 1 ? anchors[0] : header ? atStart : undefined;
+    const scope = anchors.length === 1 ? anchors[0] : header ? atStart : symbol.kind === "class" ? classBodyScope(scopes, indexed) : undefined;
     const initializer = holdsValue(symbol.kind) && !declarations.some((other) => other.id !== symbol.id && ["function", "method"].includes(other.kind) && containsPosition(declarationSpan(other), { line: symbol.startLine, column: symbol.startColumn }));
     if (!BODY_KINDS.includes(symbol.kind) && scope === undefined && !initializer) return [];
     return [{ ...indexed, ...(scope === undefined ? {} : { ...scopeSpan(scope.scope), scope: scope.scope }) }];
   });
 }
 
-/** Exact lexical ownership, with uninvoked function-value boundaries retained for reconciliation only. */
+/**
+ * The body of a class the index places at its construction (`new X() { ... }`): the one scope inside it that ends where it
+ * ends, so the construction itself stays with the body that runs it.
+ */
+function classBodyScope<T extends SourceSpan>(scopes: readonly T[], indexed: SourceSpan): T | undefined {
+  const inside = scopes.filter((scope) => comparePositions(indexed.start, scope.start) < 0 && comparePositions(scope.end, indexed.end) === 0);
+  return inside.length === 1 ? inside[0] : undefined;
+}
+
+/**
+ * Exact lexical ownership, with uninvoked function-value boundaries retained for reconciliation only. A call no body
+ * encloses belongs to its file's top level.
+ */
 export function callsByOwner(calls: readonly SyntaxCall[], declarations: readonly GraphSymbol[], functionValues: readonly SourceSpan[]): ReadonlyMap<GraphNodeId, readonly OwnedCall[]> {
   const found = new Map<GraphNodeId, OwnedCall[]>();
   const bodies = positionedBodies(declarations, calls);
+  const topLevel = declarations.find((symbol) => symbol.kind === "file");
   for (const call of calls) {
     const scopeKeys = new Set(call.owners.map(scopeKey));
     const valuesInScope = functionValues.filter((value) => scopeKeys.has(spanKey(value)));
     const eligible = bodies.filter((body) => body.scope === undefined || scopeKeys.has(scopeKey(body.scope)));
     const owner = owningBody(eligible, { line: call.line, column: call.column - 1 });
-    const possible = owner === undefined ? declarations.filter((symbol) => BODY_KINDS.includes(symbol.kind) &&
-      ((symbol.startLine <= call.line && call.line <= symbol.endLine) || call.owners.some((scope) => scope.start <= symbol.startLine && symbol.startLine <= scope.endLine))) : [owner];
-    for (const body of possible) found.set(body.id, [...found.get(body.id) ?? [], owner === undefined ? { ...call, ambiguous: true } : executesInBody(owner, valuesInScope, { line: call.line, column: call.column - 1 }) ? call : { ...call, deferred: true }]);
+    const enclosing = owner === undefined ? declarations.filter((symbol) => BODY_KINDS.includes(symbol.kind) &&
+      ((symbol.startLine <= call.line && call.line <= symbol.endLine) || call.owners.some((scope) => scope.start <= symbol.startLine && symbol.startLine <= scope.endLine))) : [];
+    const sole = owner ?? (enclosing.length === 0 && topLevel !== undefined ? { ...topLevel, ...declarationSpan(topLevel) } : undefined);
+    if (sole !== undefined) found.set(sole.id, [...found.get(sole.id) ?? [], executesInBody(sole, valuesInScope, { line: call.line, column: call.column - 1 }) ? call : { ...call, deferred: true }]);
+    else for (const body of enclosing) found.set(body.id, [...found.get(body.id) ?? [], { ...call, ambiguous: true }]);
   }
   return found;
 }
