@@ -783,3 +783,38 @@ implementation. Unread parents remain explicit hierarchy gaps. The default hiera
 is unchanged.
 
 Unresolved Java `this.member` calls also pass through that receiver selection. The own-member name shortcut is not a Java overload proof.
+
+
+### False-fact correction measured (2026-11-08)
+
+Paired source baseline: local main `84ca43617d4ef2e22256e8415e77bc943b351dbe`; implementation:
+`de07f1bc0119e24d1eac3cf5c132e4488c2f9b11`. Both sides use the same pinned corpus revisions, Node 24.22.2, untrusted snapshots and
+isolated HOME/XDG/TMPDIR. ThingsBoard is excluded. The workload is the four affected cases plus slice 4's original
+111 traces and 14 non-trace commands. All commands exited 0.
+
+| Case | Steps | Cuts | Effects | Status |
+|---|---:|---:|---:|---|
+| SHJ-1 | 11 → 6 | 12 → 29 | 2 → 0 | partial → partial |
+| SHJ-4 | 16 → 12 | 12 → 39 | 0 → 0 | partial → partial |
+| RWN-1 | 28 → 24 | 15 → 15 | 0 → 0 | partial → partial |
+| PCM-4 | 1 → 1 | 2 → 2 | 0 → 1 | partial → partial |
+
+| Traces | Steps | Cuts | Complete | Effects |
+|---:|---:|---:|---:|---:|
+| 111 | 12,192 → 11,394 | 8,734 → 10,568 | 2 → 1 | 67 → 47 |
+
+The 111-probe cut increase is **1,834**. Per-repository counts, added/retired case cut places, raw facts and source
+proofs are retained in the scratch. These are count comparisons, not latency measurements: baseline elapsed times
+include pauses for serial regression checks.
+
+The only `complete` transition is probe 34, RealWorld frontend `ApiService`, complete → partial: 0 → 4 cuts.
+At pinned revision `bc7158d61319b6748b94cef301dc347efcc23f00`, `libs/core/http-client/src/lib/api.service.ts`
+lines 12, 20, 27 and 34 call HttpClient GET/POST/PUT/DELETE with `${this.api_url}${url}`. The injected API_URL and
+method parameter do not state a URL at this root. The former forwarding-body suppression silently omitted all four
+sites; the corrected placed read reports their HTTP effect cuts. There are no partial → complete transitions.
+The four affected cases remain partial.
+
+The 14-command differential (map, impact, callers, importers and outline) is byte-identical in stdout, stderr and
+exit code. Every source read is pinned; the source implementation adds no stored SCHEMA version.
+
+Final Node 24.22.2 `npm run check`: exit 0; typecheck and architecture pass; 3,741 tests pass, 0 fail. Evidence: `/tmp/ye-ast-trace.jKk16G/all-five-check-complete.log`.
