@@ -65,9 +65,18 @@ export async function originCallsOf(store: CodeGraphReader, bindings: CallBindin
   const isTest = (path: string): boolean => kindOfChangedFile(path) === "test";
   const navigation = createGraphNavigation(store, isTest);
   const calls = new Map<string, UnboundCall>();
+  const memberUses = new Map<string, readonly GraphUnresolvedReference[]>();
+  const memberUsesIn = (file: string): readonly GraphUnresolvedReference[] => {
+    let found = memberUses.get(file);
+    if (found === undefined) {
+      found = store.unresolvedReferences([file]).filter((use) => (EDGE_POLICY.fieldMemberUses as readonly string[]).includes(use.kind));
+      memberUses.set(file, found);
+    }
+    return found;
+  };
   const collect = (holder: GraphSymbol | undefined, prefix: string, certified: (use: GraphUnresolvedReference) => boolean = () => true): void => {
     if (holder === undefined || isTest(holder.file)) return;
-    const uses = store.unresolvedReferences([holder.file]).filter((use) => (EDGE_POLICY.fieldMemberUses as readonly string[]).includes(use.kind) && use.name.startsWith(prefix) && certified(use));
+    const uses = memberUsesIn(holder.file).filter((use) => use.name.startsWith(prefix) && certified(use));
     for (const use of uses) {
       const [body] = store.symbolsByIds([use.from]);
       if (body !== undefined && body.file === use.file && body.startLine <= use.line && use.line <= body.endLine) calls.set(JSON.stringify([use.from, use.line, use.column, use.name]), { body, reference: use });

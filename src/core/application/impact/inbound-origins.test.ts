@@ -15,8 +15,13 @@ const TYPES: readonly FakeNode[] = [{ id: "Base", kind: "class", file: SVC, star
 const TYPE_EDGES: readonly FakeEdge[] = [{ from: "Base", to: "Base.list", kind: "contains" }, { from: "Child", to: "Base", kind: "extends" }, { from: "Over", to: "Over.list1", kind: "contains" }, { from: "Over", to: "Over.list2", kind: "contains" }];
 
 /** The declarations each member call through an origin reaches, as `caller→target@line`. */
+/** The files each `unresolvedReferences` read of the last `reached` asked for. */
+let referenceReads: string[][] = [];
+
 async function reached(nodes: readonly FakeNode[], uses: readonly FakeUnresolved[], origins: { fields?: FieldOrigin[]; locals?: LocalOrigin[] }): Promise<string[]> {
-  const store = fakeCodeGraph([...TYPES, ...nodes], [...TYPE_EDGES, { from: "Owner", to: "caller", kind: "contains" }], uses);
+  const graph = fakeCodeGraph([...TYPES, ...nodes], [...TYPE_EDGES, { from: "Owner", to: "caller", kind: "contains" }], uses);
+  referenceReads = [];
+  const store: typeof graph = { ...graph, unresolvedReferences: (files) => (referenceReads.push([...files]), graph.unresolvedReferences(files)) };
   const unknown = async (sites: readonly unknown[]) => sites.map(() => ({ status: "unknown", reason: "unresolved", evidence: [] }));
   const importOrigins = { origins: unknown, rootOrigins: unknown, rootBindings: async (sites) => sites.map(() => ({ kind: "unknown" })), receiverMethods: async (sites) => sites.map(() => ({ kind: "unknown" })) } as Pick<ImportOrigins, "origins" | "rootOrigins" | "rootBindings" | "receiverMethods"> as ImportOrigins;
   const fields = origins.fields ?? [];
@@ -49,4 +54,12 @@ test("a call on an inject() local counts only at a site the extractor certifies,
   assert.deepEqual(await reached(owner, use("caller", 7, 4), { locals: local(undefined) }), []);
   assert.deepEqual(await reached(owner, use("caller", 7, 5), { locals: local([site]) }), []);
   assert.deepEqual(await reached(owner, use("outside", 35, 4), { locals: local([{ ...site, line: 35 }]) }), []);
+});
+
+test("the holder file of several origins is read once", async () => {
+  const use: FakeUnresolved[] = [{ from: "caller", name: "this.svc.list", kind: "calls", file: CMP, line: 7, column: 4 }, { from: "caller", name: "this.api.list", kind: "calls", file: CMP, line: 8, column: 4 }];
+  const owner = { path: CMP, symbol: "Owner", line: 1 };
+
+  assert.deepEqual(await reached(FIELD_OWNER, use, { fields: [{ owner, field: "svc", holds: HOLDS }, { owner, field: "api", holds: HOLDS }] }), ["caller→Base.list@7", "caller→Base.list@8"]);
+  assert.deepEqual(referenceReads.filter((files) => files.includes(CMP)).length, 1);
 });
