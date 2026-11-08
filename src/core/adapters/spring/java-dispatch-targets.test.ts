@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
+import { createJavaParser, createJavaTreeHolds } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchTargets } from "../../ports/import-origins.port.ts";
@@ -187,4 +187,19 @@ test("a type variable in the method's signature, or a name the strict reading le
   const relay = java("Sender.java", ["package app;", "", "public class Sender<U> implements Port<String> {", "  public void send(U value) {}", "}"]);
   assert.deepEqual(await targetsOf([relay], generic), { kind: "unknown" });
   assert.deepEqual(await targetsOf([listed], port), { kind: "unknown" });
+});
+
+test("two files of one text at two paths are two implementations, read with or without a parse hold", async () => {
+  const impl = (module: string): SourceFile => ({ path: `${module}/src/main/java/app/Sender.java`, content: SENDER.content });
+  const twins = [impl("m1"), impl("m2")];
+  const holds = createJavaTreeHolds();
+  const hold = holds.open();
+  const kept = hold.keep([PORT, ...twins]);
+  try {
+    const [held] = await createJavaNameBindings(() => createJavaParser(holds), kept).dispatchTargets([{ file: PORT.path, line: 4, name: "send" }]);
+    assert.deepEqual(held, { kind: "bodies", bodies: twins.map((twin) => body(twin, 4)) });
+    assert.deepEqual(await targetsOf(twins), held);
+  } finally {
+    hold.release();
+  }
 });
