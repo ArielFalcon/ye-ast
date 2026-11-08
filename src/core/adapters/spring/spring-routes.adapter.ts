@@ -19,7 +19,6 @@ import { natsListenersOf } from "./nats-listeners.ts";
 import { basePathConfigurations, pathPrefixConfigurations } from "./path-prefix.ts";
 import {
   counterpart,
-  asLibrarySources,
   createJavaProject,
   isLibraryPath,
   externalNames,
@@ -139,7 +138,7 @@ function natsListeners(project: JavaProject, text: JavaValueEvaluator, parsed: r
 }
 
 function withLibraries(parsed: readonly JavaFile[], libraries: readonly LibrarySource[], files: readonly SourceFile[], parse: ParseJava): { project: JavaProject; text: JavaValueEvaluator } {
-  const foreign = parse(asLibrarySources(libraries)).files;
+  const foreign = parse(libraries).files;
   const project = createJavaProject([...parsed, ...foreign]);
   return { project, text: new JavaValueEvaluator(project, configurationsOf(files.filter((file) => isSpringConfigFile(file.path)))) };
 }

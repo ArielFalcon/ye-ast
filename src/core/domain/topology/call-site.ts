@@ -126,9 +126,9 @@ export function callPlaceEvidence(site: CallPlace): (Evidence & { column: number
   return column === undefined ? undefined : { path: file, line, column };
 }
 
-/** The order of call places: repository, file, line, symbol, then column. */
-export function compareCallPlaces(a: CallPlace, b: CallPlace): number {
-  return compareText(a.repo, b.repo) || compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol) || (a.column ?? 0) - (b.column ?? 0);
+/** The order of call places: repository, file, line, symbol, then an optional tiebreaker before column. */
+export function compareCallPlaces(a: CallPlace, b: CallPlace, beforeColumn = 0): number {
+  return compareText(a.repo, b.repo) || compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol) || beforeColumn || (a.column ?? 0) - (b.column ?? 0);
 }
 
 /** The order of the unresolved call sites of one repository: by the place each is written. */
@@ -138,7 +138,7 @@ export function compareUnresolvedCallSites(a: UnresolvedCallSite, b: UnresolvedC
 
 /** The order of call sites: by place, then by the status of the target at one place. */
 export function compareCallSites(a: CallSite, b: CallSite): number {
-  return compareCallPlaces(a, b) || compareText(a.target.status, b.target.status);
+  return compareCallPlaces(a, b, compareText(a.target.status, b.target.status));
 }
 
 /** The place a call site is written, as the evidence of the finding that reports it. */

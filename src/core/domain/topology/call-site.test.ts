@@ -69,3 +69,10 @@ test("exact call evidence requires a column and joins occurrences independently 
   assert.deepEqual(callPlaceEvidence(site({ column: 0, endLine: 20 })), { path: "src/app/order.api.ts", line: 4, column: 0 });
   assert.deepEqual(callPlaceEvidence(site({ column: 12, symbol: "Other.create" })), { path: "src/app/order.api.ts", line: 4, column: 12 });
 });
+
+test("same-line target status precedes column, which only orders otherwise tied sites", () => {
+  const early = site({ column: 2 });
+  const late = site({ column: 20, target: { status: "complete", value: { method: "GET", path: "/orders" }, evidence: [] } });
+  const tied = site({ column: 5 });
+  assert.deepEqual([early, late, tied].toSorted(compareCallSites), [late, early, tied]);
+});

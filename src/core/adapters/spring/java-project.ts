@@ -1,3 +1,4 @@
+import { libraryPath, type LibrarySource } from "../../domain/topology/library-source.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { Node } from "web-tree-sitter";
 import { enclosingBody } from "../tree-sitter/java-function-value-calls.ts";
@@ -15,7 +16,7 @@ export interface ParsedJava {
   unparsed: UnparsedSource[];
 }
 
-export type ParseJava = (sources: readonly SourceFile[]) => ParsedJava;
+export type ParseJava = (sources: readonly (SourceFile | LibrarySource)[]) => ParsedJava;
 
 /** Runs `use` with a reader of Java sources and frees every syntax tree it parsed once `use` returns or throws. */
 export function withJavaSources<T>(parser: JavaParser, use: (parse: ParseJava) => T): T {
@@ -50,13 +51,14 @@ export function thisType(node: Node, file: JavaFile, project: JavaProject): Type
   return holder === null || holder === undefined ? undefined : project.types.find((type) => type.file === file && type.node.id === holder.id);
 }
 
-function readSource(parser: JavaParser, source: SourceFile, trees: JavaSyntaxTree[]): { file: JavaFile } | { unparsed: UnparsedSource } {
+function readSource(parser: JavaParser, source: SourceFile | LibrarySource, trees: JavaSyntaxTree[]): { file: JavaFile } | { unparsed: UnparsedSource } {
+  const path = "repo" in source ? libraryPath(source.repo, source.path) : source.path;
   try {
     const result = parser.parse(source);
-    if (!result.ok) return { unparsed: { path: source.path, line: result.fault.line } };
+    if (!result.ok) return { unparsed: { path, line: result.fault.line } };
     trees.push(result.value);
-    return { file: describeFile(source.path, result.value.root) };
+    return { file: describeFile(path, result.value.root) };
   } catch {
-    return { unparsed: { path: source.path, line: 1 } };
+    return { unparsed: { path, line: 1 } };
   }
 }

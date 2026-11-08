@@ -10,7 +10,7 @@ import { withJavaSources } from "./java-project.ts";
 import { configurationsOf, type Configuration } from "./application-config.ts";
 import { JavaEventReader } from "./event-call-sites.adapter.ts";
 import { JavaHttpReader } from "./http-call-sites.adapter.ts";
-import { createJavaProject, asLibrarySources, type JavaFile, type JavaProject } from "./java-symbols.ts";
+import { createJavaProject, type JavaFile, type JavaProject } from "./java-symbols.ts";
 
 /** A reader of one kind of call site, over a project the snapshot was parsed into once. */
 export interface JavaSiteReader {
@@ -28,10 +28,10 @@ const eventSites: JavaSiteReader = { transport: "event", read: (project, configu
  * the first reader's transport: none of its calls can be read.
  */
 function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[], libraries: readonly LibrarySource[], repo: string, readers: readonly JavaSiteReader[], includeNested = false): CallSite[] {
-  const readable = (sources: readonly SourceFile[]): SourceFile[] => sources.filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path));
+  const readable = <T extends SourceFile>(sources: readonly T[]): T[] => sources.filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path));
   return withJavaSources(parser, (parse) => {
     const { files: owned, unparsed: unreadable } = parse(readable(files));
-    const { files: foreign, unparsed: unreadableLibraries } = parse(readable(asLibrarySources(libraries)));
+    const { files: foreign, unparsed: unreadableLibraries } = parse(readable(libraries));
     const project = createJavaProject([...owned, ...foreign]);
     const configuration = configurationsOf(files.filter((file) => isSpringConfigFile(file.path)));
     const held = new Set(owned);
