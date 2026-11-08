@@ -19,7 +19,10 @@
   (`path:line`) were written against `main` at `ac475e50` and re-verified against `main` at `8c5f181a` on 2026-11-09: the
   trace rows moved with ADR-0041's alignment and binder commits (`69337f5b`, `c2861dba`), which also made trace emit the
   `contradicted` and `unowned` cuts this design had listed as future. The open questions became decisions 5, 7, 1 and
-  11.
+  11. Review of `65a8baaa` (2026-11-09): decision 11 counts only over an exhaustive proof; B7 answers
+  evidence and one shared builder makes the `build-output` cuts (decision 10); `inputs-unreadable` cited at
+  `impact-queries.ts:170-171`; every trace, trace-queries, impact-cuts and build-output citation re-checked line by line
+  on `8c5f181a`.
 
 **In short:** today any cut a query meets anywhere in the snapshot makes the whole answer `partial`, and no cut says
 why it exists. Measured on the 2026-11-08 evaluation, 55 of 94 answers are `partial`, 681 cuts reach the agent and none
@@ -111,8 +114,10 @@ ADR-0045 (Accepted 2026-11-09) makes one owner, `BaseReading` in `core/applicati
 every family reads (stages B0 to B12), with one language pack per language that declares the stages it cannot
 implement as absent capabilities. Four of its effects reach this ADR:
 
-- some cut emitters move: the typed reading, which emits the `build-output` cuts (`impact-queries.ts:168-181`), becomes
-  stage B7 of the line (ADR-0045 L1), and the reference proofs move to `navigation` (ADR-0045 decision 1);
+- some evidence moves: the typed reading (`impact-queries.ts:163-182`) becomes stage B7 of the line (ADR-0045 L1), and
+  the reference proofs move to `navigation` (ADR-0045 decision 1). Today the typed reading also builds the
+  `build-output` cuts (`:168-181`); decision 10 splits that job, so B7 answers evidence and a shared builder makes the
+  cuts;
 - the families keep their own policies over the line's answers (ADR-0045 decision 5, "narrow or add"), and the line
   itself changes no answer shape (ADR-0045 decision 11), so it never builds a cut;
 - an absent capability must answer a statement, never silence: "`unknown` per site, … a `no-extractor` cut for a file
@@ -159,7 +164,7 @@ implement as absent capabilities. Four of its effects reach this ADR:
    | Unmodelled construct: `impact-queries.ts:578`, `outline-queries.ts:80` | `no-extractor` | `unmodelled` |
    | Module reader did not read: `impact-queries.ts:288`, `module-impact.ts:56`, `src/core/application/outline/outline.ts:41` | `no-extractor` | `module-unread` |
    | Contract document finding unknown: `src/core/domain/impact/changed-contracts.ts:66` | `no-extractor` | `contract-unread` |
-   | Build outputs (`src/core/domain/shared/build-outputs.ts:27-30` from `impact-queries.ts:168-181`; the emitter moves into the line's B7 at ADR-0045 L1, with these reasons) | `build-output` | `live-tree` (`:169`), `inputs-unreadable` (`:172`), `version-mismatch` (`:179`, `unused`), `outputs-unreadable` (`:180`, fault `unreadable`), `checker-failed` (`:180`, fault `checker-failed`, `src/core/ports/type-bindings.port.ts:37-39`), `link-outside` (`:181`, `refused`) |
+   | Build outputs (`src/core/domain/shared/build-outputs.ts:27-30` from `impact-queries.ts:168-181`; from ADR-0045 L1 B7 answers the typed evidence and the shared builder of decision 10 makes these cuts) | `build-output` | `live-tree` (`:169`), `inputs-unreadable` (`:170-171`), `version-mismatch` (`:179`, `unused`), `outputs-unreadable` (`:180`, fault `unreadable`), `checker-failed` (`:180`, fault `checker-failed`, `src/core/ports/type-bindings.port.ts:37-39`), `link-outside` (`:181`, `refused`) |
    | `unresolvedLinkCuts`, `src/core/domain/impact/impact-cuts.ts:128-187` | `unresolved-link` | `hidden-caller` (`hidden`), `dynamic-load` (`loaders`), `name-only` (`unattributed`) |
    | `unresolvedPlaceCuts`, `impact-cuts.ts:97` (from `impact-queries.ts:289`); `module-impact.ts:47` | `unresolved-link` | `specifier` |
    | `module-impact.ts:41` | `unresolved-link` | `dynamic-load` |
@@ -269,6 +274,14 @@ implement as absent capabilities. Four of its effects reach this ADR:
       reach. Where two families cut from the same stage answer, one builder owns the reason: the `contradicted` and
       `unowned` cuts, built today by trace (`trace-walk.ts:215-218`), move beside `ReconciledCalls` in `navigation`
       when the reverse families emit them, so the reverse families never map the reconciliation's classes again.
+    - **B7 answers evidence; one builder outside the stages makes its cuts.** Today `typedReading` both derives the
+      bindings and builds the `build-output` cuts (`impact-queries.ts:168-181`). From ADR-0045 L1, B7 answers only the
+      typed evidence of its run: the bindings it used, and per declared output why it was not used (a live tree, the
+      checker's inputs unreadable, `unused` with its stale paths, the `unreadable` and `checker-failed` faults, the
+      `refused` links), as the `TypeBindings` port already types it (`src/core/ports/type-bindings.port.ts:37-39`). One
+      shared builder in `core/domain/shared/build-outputs.ts`, beside today's `unreadOutputCuts` (`:27-30`), turns that
+      evidence into `build-output` cuts with their reasons and reach; every family that reads B7 (`callers`, `impact`
+      today; `importers`, `outline` and contract consequences after L2) calls it, and none maps the evidence itself.
     - **What each part reads.** The reason and the reach are filled from the line's outputs: the `module` reach's
       resolver classification from B2b's module resolution and B3's statements, the runtime from the language profile
       (`sharesRuntime` today; the profile list of `core/domain/languages/` after ADR-0045 L1c), `callers-of` anchors
@@ -298,8 +311,9 @@ implement as absent capabilities. Four of its effects reach this ADR:
       absent stage never counts as "nothing there".
     - **Order against ADR-0045's migration.** ADR-0045 L0, L1 and L1b first; then this ADR's U1 to U6 as one feature;
       then ADR-0045 L2, L3, L5a, L4, L5 and L6. L1c may land on either side: it is byte-identical and keeps reasons.
-      - After L1b, because L1 moves the `build-output` emitter into B7 and the reference proofs into `navigation`, so
-        U1 inventories each emitter once, where it stays; because `capability-absent` reads L1b's pack declarations;
+      - After L1b, because L1 moves the typed reading into B7, which separates its evidence from the shared
+        `build-output` builder, and the reference proofs into `navigation`, so U1 inventories each emitter once, where
+        it stays; because `capability-absent` reads L1b's pack declarations;
         and because L1 and L1b are gated `none` (byte-identical), which a cut metadata change made before them would
         break. ADR-0041 U4 (the reverse reconciliation, the prerequisite of L1) is then on `main`, so its
         `contradicted` and `unowned` cuts in `callers` and `impact` are emitters U1 covers.
@@ -321,19 +335,37 @@ implement as absent capabilities. Four of its effects reach this ADR:
     ADR-0045 L2; but L3 (typed bindings and the receiver classification in trace) and L6 (reconciliation pruning in the
     reverse families) still change the cuts both counts read, so a count before them measures cuts those units remove or
     add.
+    - **A count decides only over an exhaustive proof.** A cut's candidates are not, by themselves, everything the call
+      may run: `receiver-unproven` lists the declarations of the callee's name (`trace-walk.ts:215-218,386`), and a
+      structural receiver may run an implementation no listed declaration is
+      (`src/core/adapters/typescript/import-origins.adapter.ts:239-242`), which is why ADR-0045 decision 5 keeps
+      dependence and execution apart. So a cut counts toward a claim's completeness only when a proof closes what lies
+      beyond it:
+      - for trace's effects, a nominal receiver whose static type the receiver reading proves and whose implementations
+        `dispatchTargets` answers as a proven closure (`bodies`, ADR-0044 decision 1), which is ADR-0045 decision 5's
+        positive execution evidence; every body of that closure expanded by the same walk, its subtree without effect and
+        without in-question cut;
+      - for callers' direct dependents, a reference whose binding chain (ADR-0041 decision 4) excludes the asked
+        declarations and those at depth 1 by proof, not only because its name tail differs; a name-only reach
+        (`name-only`, `hidden-caller` by name tail) proves nothing.
     - **Measurement and trigger.** On the head answers of the first corpus gate run after ADR-0045 L3 and L6 are on
-      `main`, read from that run's report (no extra run; it needs this ADR's reasons and reach, which land before L2):
-      - T: trace answers that are `partial` where every in-question cut is `receiver-unproven` and every candidate it
-        lists is a declaration the same walk expanded, whose subtree has no effect and no in-question cut;
-      - C: `callers` answers that are `partial` where every in-question cut has a `callers-of` reach naming only
-        declarations at depth greater than 1.
-    - **T = 0 and C = 0:** one status per fact is final and option E is closed; the lead records both counts in this
-      ADR's Revisions, and reopening needs a new ADR.
-    - **T > 0 or C > 0:** each counted answer has a claim that is provably complete while its answer is `partial`, a
-      verdict the agent cannot read today. A new ADR proposes a status per claim for that family only (trace: steps and
-      effects; callers: direct and transitive), with the counted answers as its conformance fixtures and its own gate
-      (`trace:±` or `callers:±`), because a second status adds a field to every answer of the family. This ADR is not
-      amended; until that ADR is accepted, one status per fact stands.
+      `main`, read from that run's report (no extra run; it needs this ADR's reasons and reach, which land before L2).
+      Four numbers, per family:
+      - T: trace answers that are `partial` where every in-question cut is closed by the effects proof above;
+      - C: `callers` answers that are `partial` where every in-question cut is closed by the direct-dependents proof
+        above;
+      - T' and C': the answers that would meet the same condition if the listed candidates (trace) or the name-tail
+        anchors (callers) were taken as exhaustive. They decide nothing: the report lists them as cases for resolution
+        work (ADR-0041, ADR-0044, ADR-0045 L3), never as evidence for a status.
+      Where ADR-0044's closure is not on `main` at the trigger (it is Proposed), no trace cut can be closed, so T is 0 by
+      construction, and the outcome below applies to trace as it reads.
+    - **T = 0 and C = 0:** one status per fact is final and option E is closed; the lead records the four numbers in
+      this ADR's Revisions, and reopening needs a new ADR that brings a closure proof this decision does not count.
+    - **T > 0 or C > 0:** each counted answer has a claim proved complete, by an exhaustive proof, while its answer is
+      `partial`, a verdict the agent cannot read today. A new ADR proposes a status per claim for that family only
+      (trace: steps and effects; callers: direct and transitive), with the counted answers as its conformance fixtures
+      and its own gate (`trace:±` or `callers:±`), because a second status adds a field to every answer of the family.
+      This ADR is not amended; until that ADR is accepted, one status per fact stands.
 
 ### Relation to RFC-0002
 
