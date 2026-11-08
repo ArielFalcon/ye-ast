@@ -15,7 +15,7 @@ import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { TemplateEffects } from "../../ports/template-usage.port.ts";
 import type { AngularMetadata, AngularMetadataReader, AngularMetadataReadOptions } from "../../ports/angular-metadata.port.ts";
-import { readAngularMetadataFile, type RawAngularClass, type RawAngularFile, type RawInstanceMethod, type RawInjection, type RawOperand, type RawReference, type RawTemplate, type RawText, type RawWrite } from "./angular-metadata.extractor.ts";
+import { readAngularMetadataFile, type RawAngularClass, type RawAngularFile, type RawInstanceMethod, type RawInjection, type RawOperand, type RawReference, type RawTemplate, type RawText, type RawWrite, type RawWriteTarget } from "./angular-metadata.extractor.ts";
 import { readAngularRouteFile, type RawRouteFile } from "./angular-router.extractor.ts";
 import { createDeclarationLookup } from "./declaration-lookup.ts";
 import { manifestsOf, pathsByProject, projectOf } from "./angular-projects.ts";
@@ -370,9 +370,13 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
       opaque = true;
       for (const ref of await namedClasses(file, source)) reach(ref);
     };
+    const writtenMembers = new Set<string>();
+    const belowFields: { file: string; source: Parsed; below: Extract<RawWriteTarget, { below: unknown }>["below"] }[] = [];
     const place = async (file: string, source: Parsed, write: RawWrite): Promise<void> => {
       const { target, member } = write;
+      if (member !== undefined) writtenMembers.add(member);
       if ("unplaced" in target) return unplaced(file, source, member);
+      if ("below" in target) return member === undefined ? void belowFields.push({ file, source, below: target.below }) : unplaced(file, source, member);
       if ("self" in target) return reach({ path: file, symbol: target.self.name, line: target.self.line }, member);
       if ("field" in target) {
         const held = fieldsByOwner.get(`${file}\0${target.field.owner.line}\0${target.field.field}`) ?? [];
@@ -483,6 +487,19 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
         await place(file, source, { target, ...(write.member === undefined ? {} : { member: write.member }), line: write.line });
       }
       passedOn.push(...done.passed.map((field) => ({ file, passed: { field: { owner, field } } })));
+    }
+    /**
+     * Members no syntax names written below a field change an object of the field's package type, never an instance of
+     * the repository, while the class fixes the field to a package type no provider replaces and nothing writes the field
+     * or a member read on the way; otherwise the object is unplaced.
+     */
+    for (const { file, source, below } of belowFields) {
+      const owner = { path: file, symbol: below.owner.name, line: below.owner.line };
+      const held = fields.filter((field) => field.owner.path === file && field.owner.line === owner.line && field.field === below.field);
+      const holds = held.length === 1 ? held[0]!.holds : undefined;
+      const packaged = holds !== undefined && "external" in holds && !holds.external.startsWith("global#");
+      const rewritten = [below.field, ...below.path].some((name) => writtenMembers.has(name)) || unsafe.has(`${classKey(owner)}\0*`) || unsafe.has(`${classKey(owner)}\0${below.field}`);
+      if (!packaged || rewritten) await unplaced(file, source);
     }
     /** An instance its holder passes on can reach such a write wherever it lands, so its class proves none of its members. */
     if (opaque) {

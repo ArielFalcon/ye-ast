@@ -57,12 +57,13 @@ export interface RawFieldCall { owner: { name: string; line: number }; field: st
 export interface RawLocalCall { owner: { name: string; line: number }; local: string; member: string; offset: number; line: number; column: number }
 /**
  * The object a write or a reflective mutation changes: an instance of the class around `this`, what a field of that class
- * holds, a class or a value the file binds by import or top-level declaration (`prototype`: the class's prototype), or
- * an object the syntax does not place.
+ * holds, an object read through named members below such a field (`below`, outermost first), a class or a value the file
+ * binds by import or top-level declaration (`prototype`: the class's prototype), or an object the syntax does not place.
  */
 export type RawWriteTarget =
   | { self: { name: string; line: number } }
   | { field: { owner: { name: string; line: number }; field: string } }
+  | { below: { owner: { name: string; line: number }; field: string; path: readonly string[] } }
   | { binding: RawReference; whole?: true }
   | { prototype: RawReference }
   | { unplaced: true };
@@ -438,8 +439,25 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
   };
   const isPrototypeAccess = (node: ts.Node): node is ts.PropertyAccessExpression | ts.ElementAccessExpression =>
     (ts.isPropertyAccessExpression(node) && PROTOTYPE_KEYS.includes(node.name.text)) || (ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression) && PROTOTYPE_KEYS.includes(node.argumentExpression.text));
+  /** `this.f.a.b`: the object read through named members below a field of the class around `this`. */
+  const belowField = (object: ts.Expression): RawWriteTarget | undefined => {
+    const path: string[] = [];
+    let at = object;
+    for (;;) {
+      const member = ts.isPropertyAccessExpression(at) && ts.isIdentifier(at.name) ? at.name.text : ts.isElementAccessExpression(at) ? literalKey(at.argumentExpression) : undefined;
+      if (member === undefined || PROTOTYPE_KEYS.includes(member)) return undefined;
+      const read = unwrapped((at as ts.PropertyAccessExpression | ts.ElementAccessExpression).expression);
+      if (read.kind === ts.SyntaxKind.ThisKeyword) {
+        const owner = topLevelThisClass(read);
+        return owner === undefined || path.length === 0 ? undefined : { below: { owner: owned(owner), field: member, path } };
+      }
+      path.unshift(member);
+      at = read;
+    }
+  };
   const targetOf = (object: ts.Expression): RawWriteTarget | undefined => {
     const o = unwrapped(object);
+    if (isFresh(o)) return undefined;
     if (o.kind === ts.SyntaxKind.ThisKeyword) {
       const owner = topLevelThisClass(o);
       return owner === undefined ? { unplaced: true } : { self: owned(owner) };
@@ -451,6 +469,8 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
       return literalField(owner, o.name.text) ? undefined : { field: { owner: owned(owner), field: o.name.text } };
     }
     if (ts.isIdentifier(o)) return named(o.text);
+    const below = belowField(o);
+    if (below !== undefined) return below;
     const reference = namespaced(o);
     return reference?.member === undefined ? { unplaced: true } : { binding: reference };
   };

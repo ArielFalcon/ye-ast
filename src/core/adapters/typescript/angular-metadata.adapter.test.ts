@@ -826,3 +826,27 @@ test("an instance passed on proves none of its class's members once members no s
   ]) assert.ok((await memberProofs(OWNER, undefined, passing(body))).memberUses?.some((use) => use.owner.symbol === "Owner"), body);
   assert.equal((await memberProofs(OWNER, undefined, { "src/pass.ts": `${CORE}import { Store } from './store';\nexport function pass(changes: object) { return inject(Store); }` })).memberUses?.length, PROVEN);
 });
+
+test("members no syntax names written on an object made fresh where it is written leave a passed-on instance's members proven", async () => {
+  const proven = async (write: string) => (await memberProofs(OWNER, undefined, {
+    "src/pass.ts": `${CORE}import { Store } from './store';\nexport class Other { store = inject(Store); pass(changes: object) { ${write} return [this.store]; } }`,
+  })).memberUses?.some((use) => use.owner.symbol === "Owner");
+  assert.equal(await proven("Object.assign({}, changes);"), true);
+  assert.equal(await proven("Object.assign({ __proto__: this.store }, changes);"), false, "the literal sets its prototype");
+});
+
+test("members no syntax names written below a fixed field that holds an unreplaced package type leave a passed-on instance's members proven", async () => {
+  const ELEMENT = "import { Directive, ElementRef, NgModule, inject } from '@angular/core';\n";
+  const files = (host: string, extra: Record<string, string> = {}) => ({
+    "src/pass.ts": `${CORE}import { Store } from './store';\nexport class Other { store = inject(Store); pass() { return [this.store]; } }`,
+    "src/dir.ts": `${ELEMENT}import { Store } from './store';\n@Directive({})\nexport class Dir { ${host} paint(style: object) { Object.assign(this.host.nativeElement.style, style); } }`,
+    ...extra,
+  });
+  const proven = async (host: string, extra?: Record<string, string>) => (await memberProofs(OWNER, undefined, files(host, extra))).memberUses?.some((use) => use.owner.symbol === "Owner");
+  assert.equal(await proven("private readonly host = inject(ElementRef);"), true);
+  assert.equal(await proven("constructor(private readonly host: ElementRef) {}"), true);
+  assert.equal(await proven("private readonly host = inject(Store);"), false, "the field holds a repository class");
+  assert.equal(await proven("private host = inject(ElementRef); swap(other: ElementRef) { this.host = other; }"), false, "the field is reassigned");
+  assert.equal(await proven("private readonly host = inject(ElementRef);", { "src/store-it.ts": "export function keep(ref: { nativeElement: object }, value: object) { ref.nativeElement = value; }" }), false, "a member of the chain is written");
+  assert.equal(await proven("private readonly host = inject(ElementRef);", { "src/module.ts": `${ELEMENT}@NgModule({ providers: [{ provide: ElementRef, useValue: {} }] })\nexport class AppModule {}` }), false, "a provider replaces the package type");
+});
