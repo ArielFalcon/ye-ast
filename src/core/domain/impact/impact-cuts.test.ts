@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { referenceKey, nameTail, removedDeclarationCuts, unreadRelationCuts, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
+import { referenceKey, removedDeclarationCuts, unreadRelationCuts, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
 
 const SAVE: WalkedDeclaration = { file: "src/Repo.java", name: "save", kind: "method", qualifiedName: "Repo::save" };
 
@@ -11,10 +11,6 @@ function use(name: string, kind: string, file = "src/Use.java", line = 3): Unres
 function qualified(name: string, kind: string, candidates: readonly string[], file = "src/Use.java", line = 3): UnresolvedUse {
   return { name, kind, file, line, from: "caller", column: 0, candidates };
 }
-
-test("the tail of a name is what follows its last separator", () => {
-  assert.deepEqual(["x.save", "this.svc.load", "Class.forName", "a::b", "Plain"].map(nameTail), ["save", "load", "forName", "b", "Plain"]);
-});
 
 test("a bare call that never resolved and shares a declared method's name is a cut at it, with every place", () => {
   const cuts = unresolvedLinkCuts([use("save", "calls", "src/Repo.java", 9), use("save", "calls", "src/Repo.java", 4)], [SAVE], []);

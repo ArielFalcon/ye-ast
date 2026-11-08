@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calleeOf, compareOccurrence, ownMemberOf, receiverOf, sameOccurrence, type OrderedPlace } from "./call-place.ts";
+import { calleeOf, compareOccurrence, countedAlike, nameTail, normalizedSpelling, ownMemberOf, receiverOf, receiverRootOf, sameOccurrence, type OrderedPlace } from "./call-place.ts";
 
 test("a bare name is a bare callee, a dotted or chained spelling a member callee named by its last name", () => {
   assert.deepEqual(calleeOf("helper"), { form: "bare", name: "helper" });
@@ -60,4 +60,30 @@ test("places order by line, column, spelling and target, with an unplaced one la
     place(9, 0, "a", "t1"),
     place(null, null, "a", "t1"),
   ]);
+});
+
+test("the tail of a name is what follows its last separator", () => {
+  assert.deepEqual(["x.save", "this.svc.load", "Class.forName", "a::b", "Plain"].map(nameTail), ["save", "load", "forName", "b", "Plain"]);
+});
+
+test("a chain spelled with its arguments, line breaks and comments normalizes to the spelling without them", () => {
+  const written = 'sb.append("a(", x.get())\n    // .append(old)\n    .append(\')\') /* note */ .append';
+  assert.equal(normalizedSpelling(written), "sb.append().append().append");
+  assert.equal(normalizedSpelling("sb.append().append().append"), "sb.append().append().append");
+});
+
+test("a member's type arguments are dropped and a constructor's are kept", () => {
+  assert.equal(normalizedSpelling("ImmutableMap.<String, List<String>>builder().put"), "ImmutableMap.builder().put");
+  assert.equal(normalizedSpelling("new HashMap<String, Object>().put"), "newHashMap<String,Object>().put");
+});
+
+test("a member call's receiver root is the name its chain starts from; a bare call has none", () => {
+  assert.deepEqual(["SCHEMA.safeParse", "this.items.map", "ITEMS.flatMap(f).slice", "run", "make().run", "this.run"].map(receiverRootOf), ["SCHEMA", "items", "ITEMS", undefined, undefined, undefined]);
+});
+
+test("a column is counted alike up to its line's first character outside ASCII and not past it", () => {
+  assert.equal(countedAlike(4, "a.b(); 'é'.c()"), true);
+  assert.equal(countedAlike(8, "a.b(); 'é'.c()"), true);
+  assert.equal(countedAlike(9, "a.b(); 'é'.c()"), false);
+  assert.equal(countedAlike(40, "plain ascii"), true);
 });

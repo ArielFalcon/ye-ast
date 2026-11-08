@@ -1,6 +1,6 @@
 import type { Handler } from "../entrypoints/http-route.ts";
 import type { ReachedEntrypoint, Seed } from "../impact/impact-fact.ts";
-import { nameTail } from "../impact/impact-cuts.ts";
+import { nameTail } from "../shared/call-place.ts";
 import { compareText, joinsFact } from "../shared/code-node.ts";
 import type { CallSite } from "./call-site.ts";
 import { compareLink, type ImpactedLink, type Reach } from "./link.ts";

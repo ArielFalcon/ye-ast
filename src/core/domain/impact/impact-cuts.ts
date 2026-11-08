@@ -1,5 +1,6 @@
 import type { RemovedDeclaration } from "../change/seeds.ts";
 import { sharesRuntime } from "../languages/call-targets.ts";
+import { nameTail } from "../shared/call-place.ts";
 import { compareText } from "../shared/code-node.ts";
 import type { Cut, UnknownReason } from "../shared/fact.ts";
 
@@ -97,10 +98,6 @@ export function unresolvedPlaceCuts(places: readonly { file: string; line: numbe
   return [...Map.groupBy(places, (place) => place.file)]
     .sort(([left], [right]) => compareText(left, right))
     .map(([file, here]) => ({ ...unresolvedLinkAt(file, new Set(here.map((place) => placeAt(place.file, place.line, place.reason)))), ...(reason === undefined ? {} : { reason }) }));
-}
-
-export function nameTail(name: string): string {
-  return name.slice(Math.max(name.lastIndexOf("."), name.lastIndexOf(":"), name.lastIndexOf("#")) + 1);
 }
 
 /** Whether the reference names a declaration without qualifying it, so its tail is the whole name. */

@@ -1,3 +1,4 @@
+import { countedAlike } from "../../domain/shared/call-place.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
@@ -11,8 +12,6 @@ import type { UnresolvedIn } from "../navigation/declaration-uses.ts";
 
 /** Edges that state where a declaration sits or what it extends, never a call its body makes. */
 const STRUCTURAL_KINDS: readonly string[] = ["contains", "extends", "implements"];
-
-const NOT_ASCII = /[^\x00-\x7F]/;
 
 export interface TraceEffectsInput {
   store: CodeGraphReader;
@@ -121,16 +120,6 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
 
 function originKey(at: { file: string; line: number; column: number }): string {
   return JSON.stringify([at.file, at.line, at.column]);
-}
-
-/**
- * Whether the site lies before its line's first character outside ASCII. Up to there the parser that placed the site and
- * the one that placed the declarations count alike, and past it both only count further, so comparing the site with any
- * declaration boundary on the line gives the same answer in either count.
- */
-function countedAlike(column: number, text: string): boolean {
-  const first = NOT_ASCII.exec(text)?.index;
-  return first === undefined || column <= first;
 }
 
 function markCut(step: WalkedStep, cut: Cut, cuts: Cut[]): void {
