@@ -1,4 +1,4 @@
-import { EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, LOCAL_OWNER_KINDS, type EdgeVerdict } from "../../domain/impact/edge-policy.ts";
+import { CALL_EDGE_KINDS, EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, LOCAL_OWNER_KINDS, type EdgeVerdict, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { ExternalMemberUseOrigin, MemberUseOrigin } from "../../domain/relations/member-use.ts";
@@ -11,6 +11,7 @@ import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-ori
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { ModuleDependencies, ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
+import type { TypeTarget } from "../../ports/type-bindings.port.ts";
 import { createGraphNavigation, isInside } from "./graph-navigation.ts";
 import { declarationAt, importBindings } from "./import-bindings.ts";
 import { provenCallsOf, provenKey, type ProvenCalls } from "./proven-calls.ts";
@@ -52,6 +53,11 @@ export interface EdgeTargetsDeps {
    * that names a receiver is settled (`EdgeTarget.derivation`).
    */
   proofs?: (() => Promise<ReceiverProofs>) | undefined;
+  /**
+   * The declaration the type checker binds each call to, by `provenKey` (`typedCallsOf`), consulted before any other
+   * proof (ADR-0037 decision 10); without it every edge is settled as ADR-0036 settles it.
+   */
+  typed?: ReadonlyMap<string, TypeTarget> | undefined;
 }
 
 /** What the relations prove a receiver holds: a field's or an `inject()` local's origin, and the member calls they prove. */
@@ -94,14 +100,17 @@ export function edgeKey({ source, target, kind, line, column }: GraphEdge): stri
  * What an edge reaches (`EdgeVerdict`); a dropped one carries the root that binds its name outside the repository's
  * declarations. `receiver` is the value a kept call into a member of a class or interface is made on: the field's name for `this.f.m`, the parameter's or
  * variable's root for `v.m`, and empty for a call result or another expression. With the relations' proofs such an edge is
- * `proven` when a source proof binds the receiver to the class of the member it reaches, and a `name-match` otherwise.
+ * `proven` when a source proof binds the receiver to the class of the member it reaches, and a `name-match` otherwise. A
+ * kept call the type checker binds to the edge's own target is `typed`, receiver or not, as is a call it moves to the declaration it binds.
  */
 export type EdgeTarget =
-  | Exclude<EdgeVerdict<GraphSymbol>, { kind: "keep" | "drop" }>
-  | { kind: "keep"; receiver?: string; derivation?: "proven" | "name-match" }
+  | Exclude<EdgeVerdict<GraphSymbol>, { kind: "keep" | "drop" | "redirect" }>
+  | { kind: "keep"; receiver?: string; derivation?: ReceiverSettlement }
+  | { kind: "redirect"; to: GraphSymbol; derivation?: "typed" }
   | { kind: "drop"; root: ImportOrigin };
 
 const KEEP: EdgeTarget = { kind: "keep" };
+const TYPED: EdgeTarget = { kind: "keep", derivation: "typed" };
 const IMPORT = "imports";
 /** Declarations that hold a value, which a call may find any object in. */
 const VALUE_KINDS: readonly string[] = ["constant", "variable"];
@@ -132,7 +141,7 @@ interface SyntaxIndex {
   callees: ReadonlyMap<string, readonly string[]>;
 }
 
-export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs }: EdgeTargetsDeps): EdgeTargets {
+export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, typed }: EdgeTargetsDeps): EdgeTargets {
   const verdicts = new Map<string, EdgeTarget>();
   const navigation = createGraphNavigation(store, () => false);
   const syntaxIndexes = new Map<string, Promise<SyntaxIndex>>();
@@ -168,7 +177,13 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs }:
   }
 
   async function verdictsOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<readonly EdgeTarget[]> {
-    const fresh = [...new Map(edges.filter(({ edge }) => edge.line !== null && edge.column !== null && !verdicts.has(edgeKey(edge))).map((followed) => [edgeKey(followed.edge), followed])).values()];
+    const placed = [...new Map(edges.filter(({ edge }) => edge.line !== null && edge.column !== null && !verdicts.has(edgeKey(edge))).map((followed) => [edgeKey(followed.edge), followed])).values()];
+    const fresh: FollowedEdge[] = [];
+    for (const followed of placed) {
+      const verdict = typedVerdictOf(followed);
+      if (verdict === undefined) fresh.push(followed);
+      else verdicts.set(edgeKey(followed.edge), verdict);
+    }
     if (fresh.length > 0) {
       const roots = await origins.rootOrigins(fresh.map(({ edge, source, target }) => ({ file: source.file, line: edge.line!, column: edge.column! + 1, kind: edge.kind, name: target.name })), signal);
       const kept: FollowedEdge[] = [];
@@ -190,6 +205,21 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs }:
       }
     }
     return edges.map(({ edge }) => verdicts.get(edgeKey(edge)) ?? KEEP);
+  }
+
+  /**
+   * What the type checker binds an edge's call to: its own target keeps it, another declaration the graph holds takes it,
+   * and a declaration outside the repository drops it. A call bound to nothing the graph places is settled as before.
+   */
+  function typedVerdictOf({ edge, source, target }: FollowedEdge): EdgeTarget | undefined {
+    if (typed === undefined || !CALL_EDGE_KINDS.includes(edge.kind)) return undefined;
+    const bound = typed.get(provenKey(source.file, edge.line!, edge.column! + 1, target.name));
+    if (bound === undefined) return undefined;
+    if (bound.kind === "external") return { kind: "drop", root: { kind: "external", module: bound.module } };
+    if (bound.kind === "ambient") return { kind: "drop", root: { kind: "ambient", name: bound.name } };
+    const declared = single(navigation.symbolsInFile(bound.file).filter((symbol) => symbol.name === bound.name && symbol.startLine <= bound.line && bound.line <= symbol.endLine));
+    if (declared === undefined) return undefined;
+    return declared.id === target.id ? TYPED : { kind: "redirect", to: declared, derivation: "typed" };
   }
 
   /**

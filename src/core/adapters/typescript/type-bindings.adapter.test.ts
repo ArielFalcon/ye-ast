@@ -191,3 +191,17 @@ test("a derivation whose deadline passed rejects instead of answering what it ha
   const signal = AbortSignal.abort();
   await assert.rejects(createTypeBindings({ digest: DIGEST, trees: declared(KIT), facts: memo() }).of(sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") }), [OUTPUT], signal), { name: "AbortError" });
 });
+
+test("a snapshot without a lockfile uses the declaration and states it unverified", async () => {
+  const answer = bound(await createTypeBindings({ digest: DIGEST, trees: declared(KIT) }).of(sources(USE_KIT), [OUTPUT]));
+  assert.deepEqual(answer.outputs.map(({ at, verified }) => ({ at, verified })), [{ at: "", verified: false }]);
+  assert.equal(answer.bindings.filter(({ name }) => name === "make").length, 1);
+});
+
+test("a kept answer is not used once the snapshot's lockfile changed", async () => {
+  const facts = memo();
+  const bindings = createTypeBindings({ digest: DIGEST, trees: declared(KIT), facts });
+  assert.equal((await bindings.of(sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") }), [OUTPUT])).status, "bound");
+  assert.equal((await bindings.of(sources({ ...USE_KIT, "package-lock.json": lock("1.0.0") }), [OUTPUT])).status, "unused");
+  assert.equal(facts.derivations, 2);
+});

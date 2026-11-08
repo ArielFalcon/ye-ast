@@ -4,14 +4,15 @@ import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import { installVerdict, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
+import { installVerdict, LOCKFILE_NAMES, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
 import type { DeclaredEntry, DeclaredTrees } from "../../ports/declared-tree.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { TypeBinding, TypeBindings, TypeBindingsAnswer, TypeTarget, UnownedSource, UnusedOutput, UsedOutput } from "../../ports/type-bindings.port.ts";
+import type { TypeBinding, TypeBindings, TypeBindingsAnswer, TypeTarget, UnownedSource, UnusedOutput } from "../../ports/type-bindings.port.ts";
+import type { BuildOutputInput } from "../../domain/shared/fact.ts";
 import { REPOSITORY_ROOT, createConfinedHost, type ConfinedHost, type DeclaredRead, type DirectoryEntries } from "./confined-compiler-host.ts";
-import { LOCKFILE_NAMES, installPathOf, lockedVersions } from "./installed-packages.ts";
+import { installPathOf, lockedVersions } from "./installed-packages.ts";
 import { packageOf } from "./module-resolver.ts";
 
 /** The compiler's own `include`/`exclude` matcher; internal in 6.0.3 (ADR-0008 pins that version, a test holds the call). */
@@ -74,7 +75,7 @@ export function createTypeBindings({ trees, digest, facts }: { trees: DeclaredTr
     const asked = new Map<string, AskedPath>();
     const ask = (output: number, path: string, entry: DeclaredEntry) => asked.set(`${output}\0${path}`, { output, path, found: tagOf(entry) });
     for (const { output, path, entry } of reads) ask(output, path, entry);
-    const used: UsedOutput[] = [];
+    const used: BuildOutputInput[] = [];
     const unused: UnusedOutput[] = [];
     for (const [index, output] of outputs.entries()) {
       const read = reads.filter((each) => each.output === index && each.entry.kind === "file");
@@ -274,7 +275,8 @@ function targetOf(call: ts.CallExpression | ts.NewExpression, name: CalleeName, 
 
 function placeOf(declaration: ts.Declaration, symbol: ts.Symbol | undefined, confined: ConfinedHost): TypeTarget | undefined {
   const source = declaration.getSourceFile();
-  const name = ts.getNameOfDeclaration(declaration)?.getText(source) ?? symbol?.getName();
+  const named = ts.getNameOfDeclaration(declaration);
+  const name = named?.getText(source) ?? symbol?.getName();
   if (name === undefined) return undefined;
   if (confined.isLibrary(source.fileName)) return { kind: "ambient", name };
   const declared = confined.declaredPlace(source.fileName);
@@ -284,5 +286,5 @@ function placeOf(declaration: ts.Declaration, symbol: ts.Symbol | undefined, con
     return module === undefined ? undefined : { kind: "external", module, name };
   }
   if (!source.fileName.startsWith(`${REPOSITORY_ROOT}/`)) return undefined;
-  return { kind: "repository", file: source.fileName.slice(REPOSITORY_ROOT.length + 1), line: source.getLineAndCharacterOfPosition(declaration.getStart(source)).line + 1, name };
+  return { kind: "repository", file: source.fileName.slice(REPOSITORY_ROOT.length + 1), line: source.getLineAndCharacterOfPosition((named ?? declaration).getStart(source)).line + 1, name };
 }

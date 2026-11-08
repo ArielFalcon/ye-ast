@@ -1,9 +1,6 @@
 import { posix } from "node:path";
 import { packageOf } from "./module-resolver.ts";
 
-/** The lockfiles npm reads for a directory, the first present one deciding, as npm does. */
-export const LOCKFILE_NAMES = ["npm-shrinkwrap.json", "package-lock.json"] as const;
-
 /**
  * The version an npm lockfile (versions 2 and 3) states at each install path under `node_modules`: `@scope/name`, or
  * `a/node_modules/b` for a nested one. A text that is not such a lockfile states nothing (`undefined`).

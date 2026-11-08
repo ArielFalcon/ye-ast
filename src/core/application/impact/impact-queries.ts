@@ -16,7 +16,7 @@ import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
 import type { Relation } from "../../domain/relations/relation.ts";
 import type { ExternalMemberUseOrigin, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import { isExtractorConfiguration } from "../../domain/languages/configuration.ts";
-import { isAngularTemplate, isJsonModuleResource, isTypeScriptFile, isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import { isAngularTemplate, isJsonModuleResource, isTypeCheckerInput, isTypeScriptFile, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
 import { moduleImpact, moduleResources } from "../../domain/impact/module-impact.ts";
 import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
@@ -60,6 +60,12 @@ import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, reques
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
+import { mountOf, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
+import type { BuildOutputInput } from "../../domain/shared/fact.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { TypeBindings, TypeTarget } from "../../ports/type-bindings.port.ts";
+import { typedCallsOf } from "../navigation/proven-calls.ts";
+import { createRevisionSources } from "../snapshot/revision-sources.ts";
 
 export interface ImpactQueriesDeps extends HeadReaderDeps {
   /** The walk reads the change between two revisions, which no other family asks for. */
@@ -94,6 +100,25 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
   declarationEvidence?: DeclarationEvidenceReader;
   /** The changed or targeted files whose declarations the graph cannot place; without it no such file is cut. */
   unmodelled?: UnmodelledConstructsReader;
+  /**
+   * The type checker over the build outputs a host declared (ADR-0037); without it, or with none declared, every answer
+   * is the one ye-ast gave before.
+   */
+  typeBindings?: { bindings: TypeBindings; outputs: readonly DeclaredBuildOutput[] };
+}
+
+/** What the type checker contributes to one answer: its bindings by call place, the declarations it read, and its cuts. */
+interface TypedReading {
+  typed?: ReadonlyMap<string, TypeTarget>;
+  outputs?: readonly BuildOutputInput[];
+  cuts: readonly Cut[];
+}
+
+const NOT_TYPED: TypedReading = { cuts: [] };
+
+/** A fact base that records the declared build outputs its answer read, if any. */
+function withOutputs(base: FactBase, outputs: readonly BuildOutputInput[] | undefined): FactBase {
+  return outputs === undefined ? base : { ...base, inputs: { ...base.inputs, buildOutputs: outputs } };
 }
 
 type Answer = Result<Fact<ImpactValue>, OfChangeFault>;
@@ -123,6 +148,32 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   const changeReader = createHeadReader(changeDeps);
   const importerSource = (file: string): boolean => moduleSource(file) || isTypeScriptFile(file) || isJavaSource(file);
   const importerReader = createHeadReader({ ...deps, sourceSelection: importerSource });
+  const checkerInputs = deps.typeBindings === undefined ? undefined : createRevisionSources({ ...deps, sourceSelection: isTypeCheckerInput });
+
+  /**
+   * What the type checker binds at a commit over the declared build outputs: the head's sources with the lockfiles and
+   * declaration files a second read of the same commit takes, which the index's export never holds. A live tree is not
+   * typed (ADR-0037, Gate): its answer keeps the derivation it had, and a `build-output` cut names each declaration it
+   * did not read. A declaration the lockfile contradicts is not read either, and its cut names each package it states otherwise.
+   */
+  async function typedReading(request: { repo: string; scope?: ScopeRequest; signal?: AbortSignal | undefined }, snapshot: SnapshotRef, sources: readonly SourceFile[]): Promise<TypedReading | "aborted"> {
+    const declared = deps.typeBindings;
+    if (declared === undefined || checkerInputs === undefined || declared.outputs.length === 0) return NOT_TYPED;
+    const { signal } = request;
+    const unread: TypedReading = { cuts: declared.outputs.map((output): Cut => ({ kind: "build-output", at: [mountOf(output)] })) };
+    if (snapshot.kind === "live") return unread;
+    const read = await checkerInputs.filesAt({ repo: { path: request.repo }, scope: { exclude: request.scope?.exclude ?? [] }, ...(signal === undefined ? {} : { signal }) }, snapshot.sha);
+    if (!read.ok) return read.fault.kind === "aborted" ? "aborted" : unread;
+    let answer;
+    try {
+      answer = await declared.bindings.of([...sources, ...read.value.files], declared.outputs, signal);
+    } catch (error) {
+      if (signal?.aborted) return "aborted";
+      throw error;
+    }
+    if (answer.status === "unused") return { cuts: [...read.value.cuts, ...answer.outputs.map((output): Cut => ({ kind: "build-output", at: output.stale.map(({ path }) => `${mountOf(output)}/${path}`) }))] };
+    return { typed: typedCallsOf(answer.bindings), outputs: answer.outputs, cuts: [...read.value.cuts, ...(answer.refused.length === 0 ? [] : [{ kind: "build-output" as const, at: answer.refused }])] };
+  }
 
   return {
     async ofChange(request) {
@@ -178,9 +229,11 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const unmodelled = await unmodelledIn(deps, headTree, [...changes.map(({ path }) => path), ...requested.map(({ file }) => file)]);
           if (signal?.aborted) return ABORTED;
-          const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources), signal });
+          const typed = await typedReading(request, head.base(content).snapshot, headTree.sources);
+          if (typed === "aborted") return ABORTED;
+          const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources), typed: typed.typed, signal });
           if (signal?.aborted) return ABORTED;
-          return { ok: true, value: impactFact(head.base(content, true), read.value, [...fixed, ...read.cuts]) };
+          return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), read.value, [...fixed, ...typed.cuts, ...read.cuts]) };
         } finally {
           store.close();
         }
@@ -419,9 +472,11 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       });
       const unmodelled = await unmodelledIn(deps, headTree, validatedChanges.filter((file) => !file.deleted).map(({ path }) => path));
       if (signal?.aborted) return ABORTED;
-      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources), signal });
+      const typed = await typedReading(request, head.base(content).snapshot, headTree.sources);
+      if (typed === "aborted") return ABORTED;
+      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources), typed: typed.typed, signal });
       if (signal?.aborted) return ABORTED;
-      return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...unaccounted([...fixed, ...read.cuts]), ...moduleCuts]) };
+      return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), { ...value, ...read.value }, [...unaccounted([...fixed, ...typed.cuts, ...read.cuts]), ...moduleCuts]) };
     } finally {
       store.close();
     }
@@ -480,6 +535,8 @@ interface WalkInput {
   modules?: EdgeTargetsDeps["modules"];
   /** What each source's syntax states, for settling the edges on value receivers. */
   syntaxOf?: EdgeTargetsDeps["syntaxOf"];
+  /** What the type checker binds each call to, consulted first. */
+  typed?: EdgeTargetsDeps["typed"];
   signal?: AbortSignal | undefined;
 }
 
@@ -495,7 +552,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
 
   const { seeds } = selection;
   const build = (corrections: EdgeCorrections): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, corrections);
-  const targets = input.origins === undefined ? undefined : createEdgeTargets({ origins: input.origins, store, modules: input.modules, syntaxOf: input.syntaxOf, proofs: async () => ({ fields, locals, memberUses, externalUses: input.externalUses }) });
+  const targets = input.origins === undefined ? undefined : createEdgeTargets({ origins: input.origins, store, modules: input.modules, syntaxOf: input.syntaxOf, proofs: async () => ({ fields, locals, memberUses, externalUses: input.externalUses }), typed: input.typed });
   const { inbound, walk } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal);
 
   const walked = walk.reached.map(({ symbol }) => symbol);
@@ -587,10 +644,17 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
       }
       dropped.add(edgeKey(followed.edge));
       changed = true;
-      if (verdict.kind === "redirect") moveTo(verdict.to, followed);
+      if (verdict.kind === "redirect") {
+        moveTo(verdict.to, followed);
+        if (verdict.derivation !== undefined) settled.set(edgeKey(followed.edge), verdict.derivation);
+      }
     }
-    for (const followed of await targets.redirectedInto(reached, signal)) {
+    const moved = await targets.redirectedInto(reached, signal);
+    const movedVerdicts = await targets.verdictsOf(moved, signal);
+    for (const [index, followed] of moved.entries()) {
+      const verdict = movedVerdicts[index]!;
       dropped.add(edgeKey(followed.edge));
+      if (verdict.kind === "redirect" && verdict.derivation !== undefined) settled.set(edgeKey(followed.edge), verdict.derivation);
       if (moveTo(followed.target, followed)) changed = true;
     }
     if (!changed) return { inbound, walk };

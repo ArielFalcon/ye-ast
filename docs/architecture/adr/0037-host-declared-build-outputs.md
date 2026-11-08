@@ -10,7 +10,10 @@
   every restriction that blocks a real attack stays; no limit without a measurement; duplicated logic is unified, not
   patched. On 2026-11-08 the owner approved this design (translated): "we go on with B6 as you recommend", with a
   measurement gate before any surface is exposed (below), and decided the snapshot without a lockfile (decision 5): "yes,
-  as you recommend".
+  as you recommend". On 2026-11-08 the owner chose, from the gate's numbers, the derivation on `sha` snapshots only,
+  answering the tech lead's "¿Vamos con A y dejo registrada en ADR-0037 esa revisión para cuando salga la 7.1 estable?"
+  (shall we go with A, and I record that revisit in ADR-0037 for when 7.1 ships stable?): "si, vamos asi" (yes, let's
+  go that way).
 - Supersedes in part: [ADR-0010](0010-trust-modes.md) decisions 2 and 6, [ADR-0013](0013-coverage-grows-only-with-evidence.md)
   decision 2, [ADR-0014](0014-angular-and-spring-from-own-extractors.md) the definition-of-done item on fixtures,
   [ADR-0036](0036-dependence-is-the-compile-time-binding.md) decision 3. Reopens the host contract that
@@ -125,8 +128,9 @@ same checker binds 86.7% of its calls, not 100%.
    that includes it, else the one of its references, transitively, that includes it. Files whose owners have equal
    options share one program, and every program shares one parse of each declaration file. A configuration's `include`,
    `exclude` and `files` are matched by the compiler's own matcher (`matchFiles`, internal in 6.0.3 and held by a test),
-   never by a second glob implementation. A file with no owner, or with two, is answered by decision 9 and carries an
-   `unresolved-link` cut naming the configurations.
+   never by a second glob implementation. A file with no owner, or with two, is not bound: an edge the checker did not
+   type keeps the derivation ADR-0036 gives it, with its confidence, so the answer states how each of its edges is
+   known and no cut repeats it per file. `inputs.buildOutputs` states what the checker read.
 8. **One derivation per snapshot, retained as data.** The adapter binds every call and reference of the snapshot's
    TypeScript sources in one pass, drops the programs, and keeps the bindings as a derived fact (ADR-0035). Its key is the
    snapshot's content, each declaration's kind, `at` and path, and a fingerprint of each directory's install record. The
@@ -136,13 +140,18 @@ same checker binds 86.7% of its calls, not 100%.
    inside the adapter. A
    derivation the per-call deadline cuts is discarded and never kept; that answer falls back to decision 9 with a
    `deadline` cut. No memory or file budget is set until a host measures one.
-9. **Fallback.** Without a declaration, or where decision 5 or 7 withholds it, or for a call the checker leaves
-   unbound (an `any`, an error type), the current syntactic settlement answers, unchanged. Every answer without a
+9. **Fallback.** Without a declaration, on a live tree (Gate), or where decision 5 or 7 withholds it, or for a call the
+   checker leaves unbound (an `any`, an error type), the current syntactic settlement answers, unchanged. A declaration
+   an answer did not read is named by a `build-output` cut, never dropped silently. Every answer without a
    declaration is byte-identical to the answer before this decision, in both modes.
 10. **Where it settles.** `EdgeTargets`, the one owner of edge verdicts, takes the bindings as one more proof source and
-    consults them first: a binding to the edge's member, or to a declaration it overrides, makes the edge `typed` at
-    confidence 1; a binding to another declaration removes the edge and, for a library, retires its cut as ADR-0019
-    does; no binding leaves ADR-0036's settlement. An unresolved reference the checker binds to a repository declaration
+    consults them first, for calls and `new`: a binding to the edge's own target makes the edge `typed` at confidence 1;
+    a binding to another repository declaration the graph holds moves the edge there, `typed` (a dispatch to an override
+    is then the bridge's to state); a binding to a library or to the language's own declarations removes the edge and,
+    for a library, retires its cut as ADR-0019 does; no binding, or one to a declaration the graph does not hold, leaves
+    ADR-0036's settlement. The checker also reads, apart from the export the index reads, the snapshot's lockfiles and
+    the repository's own declaration files, through a second read of the same commit; the index's export, its listing
+    and its cache key do not change, and the derived fact keys on what the checker read. An unresolved reference the checker binds to a repository declaration
     becomes a `typed` inbound edge before the walk. This replaces ADR-0036 decision 3 ("no settled edge is dropped") for
     typed bindings. Trace keeps ADR-0029 decision 11: a declared type proves what a call depends on, not what runs.
 11. **Placement.** Every use of the compiler API stays in `core/adapters/typescript/` (ADR-0008). The confined reader
@@ -152,19 +161,58 @@ same checker binds 86.7% of its calls, not 100%.
 
 ## Gate
 
-Before any surface of decision 1 is exposed, the cost is measured inside the real process (the composition the MCP server
-runs): peak memory with codegraph and the derivation together, on the three largest measured applications, and a live
-tree after one edit (whether the whole snapshot is derived again, the first query's latency and CPU, and whether a key
-per file or per program spares an edit the whole pass, still never retaining a program). The owner decides from those
-numbers whether the derivation also runs on live trees or on `sha` snapshots only.
+Before any surface of decision 1 is exposed, the cost was measured inside the real process (the composition the MCP
+server runs), on the three largest measured applications without their test files (decision 7), on 2026-11-08. The
+machine was loaded, so CPU time and memory are reported, not wall time.
+
+| Measurement | name-webapp | jhipster | realworld-nx |
+|---|---|---|---|
+| Peak memory, query + pass + query + pass, no forced collection | 1.39-1.46 GB | 0.89-0.93 GB | 0.92-1.10 GB |
+| Peak memory, forced collection | 0.84 GB | 0.66 GB | 0.81 GB |
+| Heap after each pass (no program retained) | 66-74 MB | 66-74 MB | 66-74 MB |
+| Query alone, peak memory | 0.86 GB | 0.48 GB | 0.41 GB |
+| CPU, pass | 6.0-6.9 s | 3.2-3.3 s | 5.1-5.2 s |
+| CPU after one edit, whole-snapshot key | 3.9-4.5 s | 3.0-3.4 s | 3.3-4.0 s |
+| CPU after one edit, per-program key | 3.3-3.7 s (one program) | 1.8-2.0 s | 0.43-0.93 s |
+| CPU after one edit, per-file key (importers' closure), leaf / hub | 0.35-0.53 s / 3.0 s | 0.66-0.80 s (hub) | 1.1 s (hub) |
+
+With test files the pass costs 13.6-15.3, 5.5-6.5 and 4.8-5.2 s of CPU and peaks at up to 2.59 GB.
+
+Decided (the owner, 2026-11-08): **A, the derivation runs on `sha` snapshots only.** A live tree keeps the syntactic
+settlement, with no `typed` derivation, and every answer over it names each declared output in a `build-output` cut.
+
+- Discarded, B (a live tree re-derived under a per-program key): an edit still re-derives the program that holds the
+  file, which on a one-program application is the whole pass (3.3-3.7 s of CPU per edit).
+- Discarded, C (a live tree re-derived under a per-file key, the edited file's importers' closure): a hub edit costs
+  what the whole pass costs, and the key is unsound for an edit of a `declare global`, a `declare module`, a
+  `/// <reference>` or a configuration, which reaches files no import names.
+
+Measured after the integration (2026-11-08), `callers` on up to 15 services per application and `impact` over the last
+ten commits, with and without the declaration:
+
+| Application | Lockfile | Edges now `typed` (were `resolved` / `proven` / `name-match`) | Certain edges lost |
+|---|---|---|---|
+| petclinic | verified | 40 / 0 / 0 | 0 |
+| shopizer | unverified (none committed) | 39 / 22 / 2 | 0 |
+| jhipster | unverified (none committed) | 13 / 1 / 0 | 0 |
+| realworld-nx | verified | 3 / 0 / 0 | 0 |
+| name-webapp | verified | 373 / 13 / 6 | 0 |
+
+Six symbols left name-webapp's `impact`, all at confidence 0.3 and reached only through name matches the checker
+refuted (`x.toUpperCase()` had been matched to a repository method). Ten derivations changed without becoming `typed`
+(9 `resolved` to `proven`, 1 `proven` to `resolved`): certain steps on their paths changed the step the walk reports.
+
+Revisit when TypeScript 7.1 ships a stable programmatic API: a measured spike, first the API's coverage of what
+`core/adapters/typescript/` uses, then the pass time on the corpus against 6.0.3. If it wins, a new ADR supersedes
+ADR-0008, and the derivation on live trees is reconsidered then.
 
 ## Consequences
 
 - With a declaration, `callers`, `impact`, `importers`, `outline` and contract consequences lose the false callers a
   name match produced and gain the dependences the index left unresolved; trace, entrypoints, URLs and `map` do not
   change. The cut lists change little (ADR-0018's measurement); that is not the benefit claimed.
-- The first query on a snapshot pays 3-6 s and up to 1.1 GB on the measured applications; later queries on it pay a
-  cache hit and a re-digest of 4.5-14.9 MB. An edit of a live tree re-derives the whole snapshot.
+- The first query on a snapshot pays 3-7 s of CPU and up to 1.46 GB on the measured applications (Gate); later queries
+  on it pay a cache hit and a re-digest of 4.5-14.9 MB. A live tree is not typed.
 - No hand-written resolution is deleted: the binder, import origins, the generated `lib` globals, the member proofs
   and ADR-0036's settlement all answer the calls without a declaration, the bindings the checker leaves open, and
   trace. The code grows by the adapter, the confined reader, the lockfile rule and the surfaces.

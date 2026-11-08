@@ -1,5 +1,9 @@
 import { compareText } from "./code-node.ts";
 
+/** The lockfiles npm reads for a directory, the first present one deciding, as npm does. */
+export const LOCKFILE_NAMES = ["npm-shrinkwrap.json", "package-lock.json"] as const;
+
+
 /**
  * A directory a host's own install produced, declared outside the repository (ADR-0037). `path` is a `node_modules`
  * directory on the host; it stands for `<at>/node_modules` in the snapshot, `at` being repository-relative.
@@ -11,7 +15,7 @@ export interface DeclaredBuildOutput {
 }
 
 /** Where a declared `node_modules` directory stands in the snapshot. */
-export function mountOf(output: DeclaredBuildOutput): string {
+export function mountOf(output: Pick<DeclaredBuildOutput, "at">): string {
   return output.at === "" ? "node_modules" : `${output.at}/node_modules`;
 }
 

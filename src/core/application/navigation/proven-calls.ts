@@ -1,5 +1,6 @@
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import type { ExternalMemberUseOrigin, MemberUseOrigin } from "../../domain/relations/member-use.ts";
+import type { TypeBinding, TypeTarget } from "../../ports/type-bindings.port.ts";
 
 /** What the relations prove a member call runs. */
 export type ProvenCall = { kind: "member"; receiver: SymbolRef; member: SymbolRef } | { kind: "external"; holds: string } | { kind: "replaceable" };
@@ -28,4 +29,10 @@ export function provenCallsOf(memberUses: readonly MemberUseOrigin[] | undefined
   for (const use of externalUses ?? []) add(use.reference, { kind: "external", holds: use.holds });
   const unique = (byPlace: Map<string, ProvenCall[]>) => new Map([...byPlace].flatMap(([key, calls]) => (calls.length === 1 ? [[key, calls[0]!] as const] : [])));
   return { bySpelling: unique(bySpelling), byMember: unique(byMember) };
+}
+
+/** The declaration the type checker binds each call to, by `provenKey` of the place the call starts and the name it spells; a place two bindings name binds nothing. */
+export function typedCallsOf(bindings: readonly TypeBinding[]): ReadonlyMap<string, TypeTarget> {
+  const byPlace = Map.groupBy(bindings, ({ file, line, column, name }) => provenKey(file, line, column, name));
+  return new Map([...byPlace].flatMap(([key, found]) => (found.length === 1 ? [[key, found[0]!.target] as const] : [])));
 }

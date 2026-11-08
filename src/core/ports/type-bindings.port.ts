@@ -1,7 +1,8 @@
 import type { DeclaredBuildOutput, StaleInstall } from "../domain/shared/build-outputs.ts";
+import type { BuildOutputInput } from "../domain/shared/fact.ts";
 import type { SourceFile } from "./entrypoint-extractor.port.ts";
 
-/** The declaration a call's callee binds by type: one of the repository's, a package's, or the language's own libraries'. */
+/** The declaration a call's callee binds by type: one of the repository's (`line` is where its name stands), a package's, or the language's own libraries'. */
 export type TypeTarget =
   | { kind: "repository"; file: string; line: number; name: string }
   | { kind: "external"; module: string; name: string }
@@ -25,14 +26,6 @@ export interface UnownedSource {
   configurations: readonly string[];
 }
 
-/** A declaration the derivation used: whether the snapshot's lockfile verified it (a snapshot without one leaves it unverified), and the digest of what it read from it. */
-export interface UsedOutput {
-  kind: DeclaredBuildOutput["kind"];
-  at: string;
-  verified: boolean;
-  digest: string;
-}
-
 /** A declaration the snapshot's lockfile contradicts (ADR-0037 decision 5), with each package it states otherwise. */
 export interface UnusedOutput {
   kind: DeclaredBuildOutput["kind"];
@@ -51,7 +44,8 @@ export type TypeBindingsAnswer =
       unowned: readonly UnownedSource[];
       /** Links under a declared directory that led out of it and of the repository, where they stand in the snapshot. */
       refused: readonly string[];
-      outputs: readonly UsedOutput[];
+      /** Every declaration, used; a snapshot without a lockfile leaves it unverified. */
+      outputs: readonly BuildOutputInput[];
     }
   | { status: "unused"; outputs: readonly UnusedOutput[] };
 
