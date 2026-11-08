@@ -1665,6 +1665,10 @@ function countedBy(labels: readonly string[]): string {
 const findingKind = (finding: ConsequenceFinding<UseConsequence | ProducerConsequence>): string =>
   finding.status === "unknown" ? `unknown (${finding.reason})` : finding.value.verdict.kind;
 
+/** How an answer names the empty access path, which is the body itself. */
+export const ROOT_PATH_TEXT = "(whole body)";
+const accessPathText = (path: string): string => (path === "" ? ROOT_PATH_TEXT : path);
+
 function findingLine(finding: ConsequenceFinding<UseConsequence | ProducerConsequence>): string {
   const places = finding.evidence.map(repositoryEvidenceText).join(", ");
   if (finding.status === "unknown") return `    - unknown (${finding.reason})${places === "" ? "" : ` at ${places}`}`;
@@ -1672,11 +1676,11 @@ function findingLine(finding: ConsequenceFinding<UseConsequence | ProducerConseq
   const call = `${value.link.call.file}:${value.link.call.line} ${value.link.call.symbol} -> ${value.link.handler.repo}:${placeText(value.link.handler.path, value.link.handler.line)} ${value.link.handler.symbol}`;
   if ("operation" in value) {
     const { verdict } = value;
-    return `    - use ${verdict.kind}${verdict.kind === "review" ? ` (${verdict.reason})` : ""} at ${places}; reads ${value.path}, changed ${value.changed}; via ${call}${verdict.kind === "incompatible" ? `; witness ${verdict.witness}` : ""}`;
+    return `    - use ${verdict.kind}${verdict.kind === "review" ? ` (${verdict.reason})` : ""} at ${places}; reads ${accessPathText(value.path)}, changed ${accessPathText(value.changed)}; via ${call}${verdict.kind === "incompatible" ? `; witness ${verdict.witness}` : ""}`;
   }
   const { verdict } = value;
   const witness = verdict.kind === "incompatible" ? `; witness ${verdict.witness.value} at ${verdict.witness.at.path}:${verdict.witness.at.line}` : "";
-  return `    - producer ${verdict.kind}${verdict.kind === "review" ? ` (${verdict.reason})` : ""} at ${places || value.repo}; writes ${value.path}; via ${call}${witness}`;
+  return `    - producer ${verdict.kind}${verdict.kind === "review" ? ` (${verdict.reason})` : ""} at ${places || value.repo}; writes ${accessPathText(value.path)}; via ${call}${witness}`;
 }
 
 function answerLines(answer: HypothesisAnswer, index: number, detail: ResponseMode): string[] {

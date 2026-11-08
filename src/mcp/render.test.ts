@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderContractConsequences, renderEntrypointMap, renderImpact, renderTrace, renderWorkspaceImpact } from "./render.ts";
+import { renderContractConsequences, renderEntrypointMap, renderImpact, renderTrace, renderWorkspaceImpact, ROOT_PATH_TEXT } from "./render.ts";
 import type { Fact } from "../core/domain/shared/fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
@@ -321,6 +321,16 @@ test("a contract consequences summary counts each answer's verdicts and keeps it
   assert.ok(details.includes("at web:src/broken.ts:99"));
   assert.ok(details.includes("api:openapi.yaml:12"));
   assert.ok(Buffer.byteLength(summary) <= Buffer.byteLength(details));
+});
+
+test("a contract consequences finding on the body root names the whole body instead of an empty path", () => {
+  const root = useAt(1, { kind: "review", reason: "consumed" });
+  const producer = { ...root, value: { ...root.value, operation: undefined, path: "", verdict: { kind: "admits" } } };
+  delete (producer.value as { operation?: unknown }).operation;
+  const details = renderContractConsequences(consequences([{ ...root, value: { ...root.value, path: "", changed: "" } }, producer]), "details");
+
+  assert.ok(details.includes(`reads ${ROOT_PATH_TEXT}, changed ${ROOT_PATH_TEXT};`), details);
+  assert.ok(details.includes(`writes ${ROOT_PATH_TEXT};`), details);
 });
 
 test("a contract consequences answer with no findings says so and an unknown fact keeps only its header", () => {
