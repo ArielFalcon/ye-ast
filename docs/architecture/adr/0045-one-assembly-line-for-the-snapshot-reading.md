@@ -1,6 +1,7 @@
 # ADR-0045: One assembly line builds, ahead of time and incrementally, the reading every query family consumes
 
-- Status: Proposed
+- Status: Accepted, 2026-11-09. The owner accepted it after an independent review and its recheck, verbatim:
+  "Apruebo". The ADR-0041 U4c result (warm acceptance M1) is the prerequisite of L1.
 - Decision source: the owner, 2026-11-08, verbatim, on the symptom: "Vuelve el mismo patrón de que se configura un
   recursos para 2 herramientas y el resto no la usa. Por qué eso no es algo de base para todas si se supone que debería
   alimentar desde el análisis de base hasta el análisis específico de cada herramienta? Es el mismo tema que con trace
