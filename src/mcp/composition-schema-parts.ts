@@ -26,6 +26,7 @@ export const cut = z.strictObject({
   kind: z.enum(["depth", "hub", "caller-budget", "node-cap", "unresolved-link", "deadline", "section", "not-exported", "no-extractor"]),
   at: strings,
   reason: unknownReason.exactOptional(),
+  detail: z.enum(["aspect may replace the body", "generated implementation", "dispatch not proven"]).exactOptional(),
   dependency: dependencyDiagnostic.exactOptional(),
   limit: z.number().exactOptional(),
 });

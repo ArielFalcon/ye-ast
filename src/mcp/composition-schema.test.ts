@@ -189,3 +189,17 @@ test("dependency selection reasons remain closed in runtime and advertised compo
   assert.equal(runtime(invalid), false);
   assert.equal(ajv(invalid).valid, false);
 });
+
+test("dispatch cut details pass both strict composition schemas and unknown details are rejected", () => {
+  for (const detail of ["aspect may replace the body", "generated implementation", "dispatch not proven"] as const) {
+    const value = json(full);
+    const read = value.graph.reads.find((read) => read.analysis.status === "partial");
+    assert.ok(read?.analysis.status === "partial");
+    Object.assign(read.analysis.cuts[0]!, { detail });
+    assert.equal(runtime(value), true);
+    assert.equal(ajv(value).valid, true);
+    Object.assign(read.analysis.cuts[0]!, { detail: "unproven guess" });
+    assert.equal(runtime(value), false);
+    assert.equal(ajv(value).valid, false);
+  }
+});

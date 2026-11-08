@@ -1310,3 +1310,13 @@ test("line-only call records settle only a unique site in their own body", async
     }
   }
 });
+
+test("a dispatch veto projects its fixed reason onto the existing cut", async () => {
+  const nodes = [SVC, RUN, fakeNode("Port", "interface", B, 1, 3), fakeNode("Port.send", "method", B, 2, 2, "send")];
+  const edges: FakeEdge[] = [...CONTAINS, { from: "Port", to: "Port.send", kind: "contains" }, call("run", "Port.send", 8, 4)];
+  for (const reason of ["aspect may replace the body", "generated implementation", "dispatch not proven"] as const) {
+    const fact = await factOf({ nodes, edges, sources: [{ path: B, content: "" }], callables: { [B]: [{ name: "send", start: 2, nameLine: 2, body: false, overridable: true }] }, dispatch: { send: { kind: "unknown", reason } } });
+    assert.equal(fact.status, "partial");
+    assert.ok(fact.status === "partial" && fact.cuts.some((cut) => cut.kind === "unresolved-link" && cut.detail === reason));
+  }
+});

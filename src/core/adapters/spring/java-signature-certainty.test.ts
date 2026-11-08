@@ -11,7 +11,7 @@ async function dispatch(parameter: string, imports: string, extra: SourceFile[] 
   return (await createJavaNameBindings(createJavaParser, [port, sender, ...extra]).dispatchTargets([{ file: port.path, line: 3, name: "send" }]))[0];
 }
 const BODY = { kind: "bodies", bodies: [{ file: "b/Sender.java", start: 3, nameLine: 3 }] };
-const UNKNOWN = { kind: "unknown" };
+const UNKNOWN = { kind: "unknown", reason: "dispatch not proven" };
 
 test("implicit java.lang identities cross packages, while an own-package homonym shadows them", async () => {
   assert.deepEqual(await dispatch("String", ""), BODY);
