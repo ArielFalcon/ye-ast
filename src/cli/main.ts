@@ -70,7 +70,7 @@ const USAGE = [
   "       ye-ast importers [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
   "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
   "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] --focus <file>:<symbol> | --focus <file>:<line> ... <repo>",
-  "       ye-ast trace [--revision <rev> | --live] [--repo-id <id>] [scope] [--depth <n>] [--expansions <n>] [--entrypoint <kind>:<name>]... <repo> [<file>:<symbol> | <file>:<start>-<end>] ...   (declarations or entrypoints, not both: what they execute, in source order, with a reading plan)",
+  "       ye-ast trace [--revision <rev> | --live] [--repo-id <id>] [--workspace <file>] [--offline] [scope] [--depth <n>] [--expansions <n>] [--entrypoint <kind>:<name>]... <repo> [<file>:<symbol> | <file>:<start>-<end>] ...   (declarations or entrypoints, not both: what they execute, in source order, with a reading plan)",
   "       ye-ast workspace [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast decisions [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast contract-consequences --hypothesis <json> [--hypothesis <json>]... [--revision <rev>] [--repo-id <id>] [scope] <repo>",

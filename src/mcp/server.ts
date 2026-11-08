@@ -64,7 +64,7 @@ When to call:
 - ye_ast_contract_consequences: consumers/producers affected by a contract hypothesis or diff.
 - ye_ast_compose: 1..16 queries, merging identities. Reruns; stores nothing; captures non-atomic. Obtain dependent coordinates first.
 
-Reading answers: complete is relative to the declared scope, supported constructs and change selection; partial keeps known findings and lists cuts (where coverage stopped; per-repository sections and file reads can have their own limits); unknown never means no impact. TypeScript tests are not indexed; template bindings are not resolved. References need not be calls or edits; confidence measures resolution, not safety; entrypoint origins are associations, not complete call chains. Content carries presentation text (summary and details findings, full navigation), then a "result JSON:" line with the result fields. Recovery is the recovery field.
+Reading answers: complete is relative to the declared scope, supported constructs and change selection; partial keeps known findings and lists cuts (where coverage stopped; per-repository sections and file reads can have their own limits); unknown never means no impact. callers/impact skip TypeScript test dependents and Angular template bindings (importers lists tests; trace UI routes and contract_consequences read templates). References need not be calls or edits; confidence measures resolution, not safety; entrypoint origins are associations, not complete call chains. Content carries presentation text (summary and details findings, full navigation), then a "result JSON:" line with the result fields. Recovery is the recovery field.
 
 Repositories and snapshots: declared repository IDs: ${available.join(", ")}. repo selects one (default ${repository.repoId}); registration grants no trust or membership. Reads use HEAD unless revision (impact: head) names a commit. live reads staged, unstaged and untracked changes of a repository the user declared trusted (repository content cannot grant trust), excludes revision/head and recaptures per call; head and stateId identify the captured working-tree state, so compare them between answers. For cross-repository reads, set workspace on ye_ast_callers, ye_ast_impact or ye_ast_trace: {} uses the persisted membership, workspace.repos replaces defaults with existing local Git roots (never downloaded); stable IDs default to root basename and must match across clone/worktrees; declared gateways override inference, never guess them; untrusted repositories cannot supply defaults. offline skips refreshing trusted remotes; live repositories never refresh. Paths are relative to their owner's snapshot; locate clones via repositoryRoots, not cwd. Base-side line numbers come from the merge-base commit, so they may not match your working copy.
 
@@ -640,7 +640,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_trace",
     {
       title: "What declarations execute",
-      description: "Forward calls in source order from declarations/ranges or entrypoints. Each declaration expands once; repeats=seen; branches unevaluated. Terminal callees fold into leaves; externals group by module. Proven HTTP/message targets=effects, undecided targets=cut; unsettled calls list candidates. Reading plan merges spans per file. workspace reads declared library sources; runtime URL policies stay cuts. For incoming dependents use callers.",
+      description: "Forward calls in source order from declarations/ranges or entrypoints. Each declaration expands once; repeats=seen; branches unevaluated. Terminal callees fold into leaves; externals group by module. HTTP/message calls with proven targets and data operations=effects, undecided targets=cut; unsettled calls list candidates. Reading plan merges spans per file. workspace reads declared library sources; runtime URL policies stay cuts. For incoming dependents use callers.",
       inputSchema: compactInput(TOOL_INPUTS.trace),
       annotations,
     },
@@ -673,7 +673,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_contract_consequences",
     {
       title: "Consequences of a contract change",
-      description: "Assess how hypothetical or committed HTTP request/response contract changes affect consumers and request producers, with code evidence and explicit unknowns.",
+      description: "Consumers and request producers an HTTP request/response contract change affects, each with a verdict and code evidence; lost flow=unknown. Subject: hypotheses (path as the served route spells it) or base/head diff. workspace reads other clones. For non-contract code changes use impact.",
       inputSchema: compactInput(TOOL_INPUTS.contract_consequences),
       annotations,
     },

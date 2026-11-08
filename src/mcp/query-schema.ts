@@ -221,7 +221,7 @@ const crossingFields = { workspace, replay: replaySchema.optional() };
 const changeEntry = z.union([z.string(), z.record(z.string(), z.unknown())]);
 const hypothesis = z.strictObject({
   method: z.string().describe("HTTP method of the operation, e.g. GET."),
-  path: z.string().describe("Operation path starting with /, as the contract states it, e.g. /owners/{id}."),
+  path: z.string().describe("Operation path starting with /, as the served route spells it (context prefix included), e.g. /api/owners/{id}."),
   target: z.string().describe("response: what the handler returns; request: what the handler reads from the body."),
   property: z.string().describe("Access path of the changed property from the body root; [] marks array elements, e.g. pets[].name."),
   change: z.union([changeEntry, z.array(changeEntry).min(1)]).describe("One change entry or a non-empty list on the same property: a name (nullable, optional, removed; required, non-nullable for a request) or an object ({renamed}, {type}, {values}, {wrapped}, {meaning})."),
