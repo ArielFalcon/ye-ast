@@ -37,19 +37,23 @@ test("a source with a syntax error is a fault at its line, never a throw", async
   assert.deepEqual(result, { ok: false, fault: { kind: "syntax-error", line: 4 } });
 });
 
-test("sources an open hold kept parse once by content, and their tree outlives every reader's dispose until the hold is released", async () => {
+test("a file an open hold kept parses once by its path and content, in every snapshot the hold reads it, and its tree outlives every reader's dispose until the hold is released", async () => {
   const holds = createJavaTreeHolds();
   const parser = await createJavaParser(holds);
   const hold = holds.open();
-  const [first, same] = hold.keep([{ path: "src/A.java", content: "class A {}" }, { path: "other/A.java", content: "class A {}" }]);
+  const [base, twin] = hold.keep([{ path: "src/A.java", content: "class A {}" }, { path: "other/A.java", content: "class A {}" }]);
+  const [head] = hold.keep([{ path: "src/A.java", content: "class A {}" }]);
 
-  const read = parser.parse(first!);
+  const read = parser.parse(base!);
   assert.ok(read.ok);
   read.value.dispose();
-  const again = parser.parse(same!);
+  const again = parser.parse(head!);
   assert.ok(again.ok);
   assert.equal(again.value.root.id, read.value.root.id);
-  assert.deepEqual([native.parses, native.alive.size], [1, 1]);
+  const other = parser.parse(twin!);
+  assert.ok(other.ok);
+  assert.notEqual(other.value.root.tree, read.value.root.tree);
+  assert.deepEqual([native.parses, native.alive.size], [2, 2]);
 
   hold.release();
   assert.equal(native.alive.size, 0);

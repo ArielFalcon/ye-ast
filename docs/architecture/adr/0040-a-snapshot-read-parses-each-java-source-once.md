@@ -44,8 +44,10 @@ once, every reader of the read shares that tree, and the read frees them all whe
    (`withScratch`, and the preparation an operation shares) and the live captures of a live read (`withLiveCaptures`)
    each open one hold when they start and release it when they end, whether their use answers, throws or rejects.
 2. A read hands its readers its own copies of its sources, kept by its hold. A reader that parses a kept source gets
-   the tree the hold parsed once, by content, so the snapshots one read scope prepares share the tree of an unchanged
-   file. A reader's `dispose` of a held tree does nothing; the release frees it.
+   the tree the hold parsed once for that file, by its path and content, so the snapshots one read scope prepares share
+   the tree of an unchanged file, and two files of one text at two paths never share a tree, since readers tell nodes
+   apart by their ids. A renamed or duplicated file parses again. A reader's `dispose` of a held tree does nothing; the
+   release frees it.
 3. Holds are told apart by those copies, never by process-wide or asynchronous context: two concurrent reads, of one
    snapshot or of two, never share or free each other's trees. A source no open hold kept (a retained source of the
    cache, the copy of a released read, a source a reader writes itself) parses into a tree of its own that the reader

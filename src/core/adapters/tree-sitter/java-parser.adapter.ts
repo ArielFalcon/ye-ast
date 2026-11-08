@@ -23,7 +23,7 @@ export interface JavaParser {
   parse(source: SourceFile): Parsed;
 }
 
-/** The trees of the sources open holds kept, each hold's by content, so a source two snapshots of one read share parses once. */
+/** The trees of the sources open holds kept, one per file of each hold by its path and content, so a file two snapshots of one read share unchanged parses once. */
 export interface JavaTreeHolds extends ParseHolds {
   /** What `parse` answers for `source`, owned by the open hold that kept it; without one, `parse`'s own answer. */
   held(source: SourceFile, parse: () => Parsed): Parsed;
@@ -55,11 +55,12 @@ export function createJavaTreeHolds(): JavaTreeHolds {
     held(source, parse) {
       const trees = keptBy.get(source)?.trees;
       if (trees === undefined) return parse();
-      let tree = trees.get(source.content);
+      const file = `${source.path}\0${source.content}`;
+      let tree = trees.get(file);
       if (tree === undefined) {
         const parsed = parse();
         tree = parsed.ok ? { parsed: { ok: true, value: { root: parsed.value.root, dispose: () => {} } }, free: parsed.value.dispose } : { parsed, free: () => {} };
-        trees.set(source.content, tree);
+        trees.set(file, tree);
       }
       return tree.parsed;
     },
