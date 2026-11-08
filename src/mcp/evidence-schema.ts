@@ -23,7 +23,7 @@ const findingSelection = z.strictObject({kind: z.literal('entrypoint-evidence'),
 const cutSelection = z.strictObject({kind: z.literal('cut-places'), owner: cutOwner, cutIndex: index});
 const linkSelection = z.strictObject({kind: z.literal('workspace-link-evidence'), linkId: text});
 const selection = z.discriminatedUnion('kind', [handlerSelection, moduleSelection, findingSelection, cutSelection, linkSelection]);
-const pageRequest = z.strictObject({limit: positive.describe('Explicit positive safe integer counting primary records; no default page size.'), cursor: z.string().optional().describe('Returned nextCursor for the same selection and limit; source identity is verified again.')});
+const pageRequest = z.strictObject({limit: positive.describe('Positive safe count of primary records; no default.'), cursor: z.string().optional().describe('Returned nextCursor, same selection/limit; rechecks identity.')});
 
 type OwnerKind = 'local' | 'section' | 'fact' | 'entrypoints' | 'read';
 type SelectionKind = z.infer<typeof selection>['kind'];
@@ -106,7 +106,7 @@ const SELECTIONS = {entrypoints: selectionsFor('entrypoints'), callers: selectio
 
 export function recoveryControlShapeFor(tool: Tool) {
   const selections = SELECTIONS[tool];
-  return {select: selections.optional().describe('Recorded evidence selected by its public owner and coordinates; requires page and does not change analysis coverage.'), page: pageRequest.optional(), expect: z.string().regex(RESULT_IDENTITY_PATTERN).optional().describe('Assert the complete public source resultIdentity, with or without selection. Must agree with a supplied cursor.')};
+  return {select: selections.optional().describe('Evidence by public owner/coordinates; requires page; coverage unchanged.'), page: pageRequest.optional(), expect: z.string().regex(RESULT_IDENTITY_PATTERN).optional().describe('Assert full source resultIdentity; selection-independent; must agree with cursor.')};
 }
 
 /** The violated control constraint, typed by `constraint` and anchored at the control a caller must change. */

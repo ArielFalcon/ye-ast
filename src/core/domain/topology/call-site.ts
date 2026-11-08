@@ -5,6 +5,7 @@ import { declarationSpan, type Cut, type Evidence, type Finding, type UnknownRea
 
 /** A call one repository makes out of itself: an HTTP request or a published message, with where it is written. */
 export interface CallSite {
+  column?: number;
   /** The repository the call site is in. */
   repo: string;
   file: string;
@@ -75,17 +76,20 @@ export interface CallSiteReader {
 /**
  * A call site with where its call starts on `site.line`, 0-based in the language parser's own count, or `declaration`
  * when the site is a client method a declaration states (Feign, `@HttpExchange`) rather than a call. No column when no
- * call was read (a source that does not parse). Only a trace reads it; the facts that report call sites never carry it.
+ * call was read (a source that does not parse). Only a trace reads it; call-site facts carry it 1-based as
+ * `CallSite.column`.
  */
 export interface PlacedCallSite {
   site: CallSite;
   column?: number;
   declaration?: true;
+  /** Source bodies and occurrences used by extraction; empty means no propagated proof, absent means a direct site. */
+  origins?: readonly { file: string; line: number; column: number }[];
 }
 
 /** The call sites of a snapshot with their exact places, read as `CallSiteReader.of` reads them. */
 export interface PlacedCallSiteReader {
-  placed(files: readonly { path: string; content: string }[], repo: string): Promise<readonly PlacedCallSite[]>;
+  placed(files: readonly { path: string; content: string }[], repo: string, libraries?: readonly LibrarySource[]): Promise<readonly PlacedCallSite[]>;
 }
 
 /**
@@ -109,15 +113,22 @@ export interface UnresolvedCallSite {
 }
 
 /** Where a call site is written in the workspace: the place a link starts from. */
-export type CallPlace = Pick<CallSite, "repo" | "file" | "line" | "symbol">;
+export type CallPlace = Pick<CallSite, "repo" | "file" | "line" | "column" | "symbol">;
 
-export function callPlaceOf(site: CallSite): CallPlace {
-  return { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol };
+export function callPlaceOf(site: CallPlace): CallPlace {
+  const place = { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol };
+  return site.column === undefined ? place : { ...place, column: site.column };
 }
 
-/** The order of call places: repository, file, line, then symbol. */
-export function compareCallPlaces(a: CallPlace, b: CallPlace): number {
-  return compareText(a.repo, b.repo) || compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol);
+/** Exact occurrence evidence omits the enclosing symbol and requires a column. */
+export function callPlaceEvidence(site: CallPlace): (Evidence & { column: number }) | undefined {
+  const { file, line, column } = callPlaceOf(site);
+  return column === undefined ? undefined : { path: file, line, column };
+}
+
+/** The order of call places: repository, file, line, symbol, then an optional tiebreaker before column. */
+export function compareCallPlaces(a: CallPlace, b: CallPlace, beforeColumn = 0): number {
+  return compareText(a.repo, b.repo) || compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol) || beforeColumn || (a.column ?? 0) - (b.column ?? 0);
 }
 
 /** The order of the unresolved call sites of one repository: by the place each is written. */
@@ -127,7 +138,7 @@ export function compareUnresolvedCallSites(a: UnresolvedCallSite, b: UnresolvedC
 
 /** The order of call sites: by place, then by the status of the target at one place. */
 export function compareCallSites(a: CallSite, b: CallSite): number {
-  return compareCallPlaces(a, b) || compareText(a.target.status, b.target.status);
+  return compareCallPlaces(a, b, compareText(a.target.status, b.target.status));
 }
 
 /** The place a call site is written, as the evidence of the finding that reports it. */

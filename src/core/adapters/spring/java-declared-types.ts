@@ -26,8 +26,8 @@ export const UNREAD_JVM_SOURCE = /\.(kt|kts|groovy|scala)$/;
 /** The supertypes every repository class, enum and record has without writing them (JLS 8.1.4, 8.9, 8.10). */
 const IMPLICIT_SUPERTYPES: readonly string[] = ["java.lang.Object", "java.lang.Enum", "java.lang.Comparable", "java.io.Serializable", "java.lang.constant.Constable", "java.lang.Record"];
 
-/** Where a type name written in a Java source leads: a type of the repository, a platform type by its qualified name, or nothing proven. */
-export type Resolved = { kind: "repository"; type?: TypeDecl } | { kind: "platform"; fqn: string } | undefined;
+/** Strict type identity: a repository type, a platform type, optionally another named library, or nothing proven. */
+export type Resolved = { kind: "repository"; type?: TypeDecl } | { kind: "platform"; fqn: string } | { kind: "library"; fqn: string } | undefined;
 
 /**
  * `ImportOrigins.declaredTypes` for Java sources: a platform type (`JavaProject.isPlatformName`) the annotation names
@@ -124,18 +124,18 @@ export function annotationAt(root: Node, line: number, column: number, spelled: 
 }
 
 /** Where a type name leads, read through the project's one resolver in its strict reading. */
-export function resolve(type: Node, file: JavaFile, project: JavaProject, scope: ReturnType<typeof enclosingType>, at: Node): Resolved {
-  return resolveName((type.type === "generic_type" ? type.namedChildren[0] : type)?.text.replace(/\s+/g, "") ?? "", file, project, scope, at);
+export function resolve(type: Node, file: JavaFile, project: JavaProject, scope: ReturnType<typeof enclosingType>, at: Node, libraries = false): Resolved {
+  return resolveName((type.type === "generic_type" ? type.namedChildren[0] : type)?.text.replace(/\s+/g, "") ?? "", file, project, scope, at, libraries);
 }
 
-function resolveName(name: string, file: JavaFile, project: JavaProject, scope: ReturnType<typeof enclosingType>, at: Node): Resolved {
+function resolveName(name: string, file: JavaFile, project: JavaProject, scope: ReturnType<typeof enclosingType>, at: Node, libraries = false): Resolved {
   if (!QUALIFIED.test(name)) return undefined;
   const [head = "", ...rest] = name.split(".");
   const where = { file, type: scope };
   if (rest.length > 0 && PACKAGE_SEGMENT.test(head)) {
     const declared = project.lookupType(name, where);
     if (declared !== undefined) return declared === "ambiguous" ? undefined : { kind: "repository", type: declared };
-    return project.isPlatformName(name) ? { kind: "platform", fqn: name } : undefined;
+    return project.isPlatformName(name) ? { kind: "platform", fqn: name } : libraries ? { kind: "library", fqn: name } : undefined;
   }
   if (typeVariableAround(at)?.namedChildren[0]?.text === head) return undefined;
   const bound = project.bindName(head, { ...where, at }, "strict");
@@ -146,7 +146,7 @@ function resolveName(name: string, file: JavaFile, project: JavaProject, scope: 
     return typeof declared === "object" ? { kind: "repository", type: declared } : undefined;
   }
   const fqn = qualifiedTypeName(name, where, project);
-  return fqn !== undefined && project.isPlatformName(fqn) ? { kind: "platform", fqn } : undefined;
+  return fqn === undefined ? undefined : project.isPlatformName(fqn) ? { kind: "platform", fqn } : libraries ? { kind: "library", fqn } : undefined;
 }
 
 /** A platform type by its package, the segments before the first one that starts uppercase, and its name below it. */

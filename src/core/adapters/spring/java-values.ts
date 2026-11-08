@@ -16,6 +16,7 @@ export interface UrlScope {
   env: ReadonlyMap<string, Closure>;
   receiver?: TypeDecl;
   instance?: ObjectValue;
+  deferred?: boolean;
   /** Why method flow leaves every value written in this scope undecided. */
   undecided?: UndecidedCause;
   configurationFile?: JavaFile;

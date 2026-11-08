@@ -950,9 +950,9 @@ test("a Java trace never settles a call by a root it reads past, whether the gra
   const field = ["public class Use {", "  public void entry() { java.util.Collections.EMPTY_LIST.size(); }", "}", "class Other { int size() { return 1; } }", ""].join("\n");
   const alias = ["public class Use {", "  public void entry() { var o = System.out; o.println(\"x\"); }", "  public static void main(String[] args) { System.setOut(new RepoStream()); new Use().entry(); }", "}", ...stream].join("\n");
 
-  assert.deepEqual(await traceOf("qualified", { "Use.java": qualified }), { status: "partial", cuts: [["unresolved-link", "Use.java:11 System.err.println", "Use.java::RepoStream.println"]], steps: [["entry", null], ["println", null]] });
-  assert.deepEqual(await traceOf("qualifiedfield", { "Use.java": field }), { status: "complete", cuts: [], steps: [["entry", null]] });
-  assert.deepEqual(await traceOf("varalias", { "Use.java": alias }), { status: "complete", cuts: [], steps: [["entry", null], ["println", null], ["println", null]] });
+  assert.deepEqual(await traceOf("qualified", { "Use.java": qualified }), { status: "partial", cuts: [["unresolved-link", "Use.java:3 println", "Use.java::RepoStream.println"]], steps: [["entry", null]] });
+  assert.deepEqual(await traceOf("qualifiedfield", { "Use.java": field }), { status: "partial", cuts: [["unresolved-link", "Use.java:2 size", "Use.java::Other.size"]], steps: [["entry", null]] });
+  assert.deepEqual(await traceOf("varalias", { "Use.java": alias }), { status: "partial", cuts: [["unresolved-link", "Use.java:2 println", "Use.java::RepoStream.println"]], steps: [["entry", null]] });
 });
 
 /** The status, cuts and steps (symbol, place, parent, via, the step it repeats and its leaves) of a trace of `Use.entry` over a fresh repository holding `files`. */
@@ -1041,16 +1041,25 @@ test("a Java method that names a parameter type like an inherited one's, from an
   assert.ok(!answer.steps.some(([place]) => place === "b/Sub.java:3 save"));
 });
 
-test("a Java call the index resolved on a non-private field or a var local stays a step under an aspect, since nothing falsifies the declared type", async () => {
+test("a Java declared field is proven while a var receiver retains a cut without a declared-type proof", async () => {
   const use = ["public class Use {", "  Plain field;", "  public void entry() {", "    field.save();", "    var local = new Plain();", "    local.save();", "  }", "}"];
   const plain = ["class Plain {", "  void save() {}", "}"];
-  const aspect = ["@org.aspectj.lang.annotation.Aspect", "class Logging {}"];
 
-  assert.deepEqual(await javaTrace("aspect", { "Use.java": use, "Plain.java": plain, "Logging.java": aspect }), {
-    status: "complete",
-    cuts: [],
-    steps: [["Use.java:3 entry", null, null, null, ["Plain.java:2 save", "Plain.java:1 Plain"]]],
-  });
+  const result = await javaTrace("declared-field", { "Use.java": use, "Plain.java": plain });
+  assert.equal(result.status, "partial");
+  assert.deepEqual(result.cuts, [["unresolved-link", "Use.java:5 Plain", "Plain.java::Plain"], ["unresolved-link", "Use.java:6 save", "Plain.java::Plain.save"]]);
+  assert.ok(result.steps.some((step) => JSON.stringify(step).includes("Plain.java:2 save")));
+});
+
+test("a Java aspect veto retains cuts for declared fields and var receivers", async () => {
+  const use = ["public class Use {", "  Plain field;", "  public void entry() {", "    field.save();", "    var local = new Plain();", "    local.save();", "  }", "}"];
+  const plain = ["class Plain {", "  void save() {}", "}"];
+
+  const aspect = ["@org.aspectj.lang.annotation.Aspect", "class Logging {}"];
+  const result = await javaTrace("aspect", { "Use.java": use, "Plain.java": plain, "Logging.java": aspect });
+  assert.equal(result.status, "partial");
+  assert.deepEqual(result.cuts, [["unresolved-link", "Use.java:5 Plain", "Plain.java::Plain"], ["unresolved-link", "Use.java:6 save", "Plain.java::Plain.save"]]);
+  assert.ok(result.steps.some((step) => JSON.stringify(step).includes("Plain.java:2 save")));
 });
 
 test("a TypeScript trace settles a call by its package or global root only when the call reads one member below it", async () => {
@@ -1058,7 +1067,7 @@ test("a TypeScript trace settles a call by its package or global root only when 
   const logger = ["import * as other from \"other-lib\";", "class Sink {", "  flush(): void { console.log(\"REPOSITORY_FLUSH\"); }", "}", "export function entry(): void {", "  other.setLogger(new Sink());", "  other.logger.flush();", "}", ""].join("\n");
   const dom = ["export function entry(node: Node): void {", "  document.body.appendChild(node);", "}", ""].join("\n");
 
-  assert.deepEqual(await traceOf("tslogger", { "package.json": manifest, "use.ts": logger }, { file: "use.ts", symbol: "entry" }), { status: "partial", cuts: [["unresolved-link", "use.ts:7 other.logger.flush", "use.ts::Sink.flush"]], steps: [["entry", [{ kind: "import", module: "other-lib", names: ["other.setLogger"] }]]] });
+  assert.deepEqual(await traceOf("tslogger", { "package.json": manifest, "use.ts": logger }, { file: "use.ts", symbol: "entry" }), { status: "partial", cuts: [["unresolved-link", "use.ts:6 Sink", "use.ts::Sink"], ["unresolved-link", "use.ts:7 other.logger.flush", "use.ts::Sink.flush"]], steps: [["entry", [{ kind: "import", module: "other-lib", names: ["other.setLogger"] }]]] });
   assert.deepEqual(await traceOf("tsdom", { "package.json": manifest, "use.ts": dom }, { file: "use.ts", symbol: "entry" }), { status: "complete", cuts: [], steps: [["entry", [{ kind: "unnamed", names: ["document.body.appendChild"] }]]] });
 });
 
@@ -1123,8 +1132,9 @@ test("a trace over a real index settles a member call on a local every store bin
   const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/locals.ts", symbol: "locals" }] });
 
   assert.ok(answer.ok);
-  assert.equal(answer.value.status, "complete");
-  const [root, ...steps] = answer.value.status === "complete" ? answer.value.value.steps : [];
+  assert.equal(answer.value.status, "partial");
+  assert.deepEqual(answer.value.status === "partial" && answer.value.cuts.map(cut => cut.at[0]), ["src/locals.ts:18 Local", "src/locals.ts:21 Store"]);
+  const [root, ...steps] = answer.value.value.steps;
   assert.deepEqual(root?.external, [{ kind: "global", names: ["Map", "cache.set", "label.toString", "parts.push", "pattern.test"] }]);
   assert.deepEqual(steps.map(({ file, symbol, at }) => [file, symbol, at?.line]), [["src/locals.ts", "save", 19], ["src/store.ts", "save", 22]]);
 });
@@ -1375,7 +1385,7 @@ test("a trace over a real index never expands the initializer of a property a ca
   assert.deepEqual(root.value.value.steps.map(({ symbol, leaves }) => ({ symbol, leaves: leaves?.map((leaf) => leaf.symbol) })), [{ symbol: "owner", leaves: ["emptyOwnerForm"] }]);
 });
 
-test("a trace over a real index expands a class root into its members even when an earlier root reached the class below it, and a later call still sees the first expansion", async () => {
+test("a requested class root expands its members independently of unsettled constructor calls in other roots", async () => {
   writeFileSync(join(repo, "src", "make.ts"), ["export function make() { return new Page(); }", "export class Page { work() { unknown(); } }", "export function again() { return new Page(); }", ""].join("\n"));
   git("add", "-A");
   git("commit", "-q", "-m", "make");
@@ -1385,12 +1395,12 @@ test("a trace over a real index expands a class root into its members even when 
 
   assert.ok(answer.ok && answer.value.status === "partial");
   assert.deepEqual(answer.value.value.steps.map(({ symbol, parent, via, seen, leaves }) => ({ symbol, parent, via, seen, leaves: leaves?.map((leaf) => leaf.symbol) })), [
-    { symbol: "make", parent: undefined, via: undefined, seen: undefined, leaves: ["Page"] },
+    { symbol: "make", parent: undefined, via: undefined, seen: undefined, leaves: undefined },
     { symbol: "Page", parent: undefined, via: undefined, seen: undefined, leaves: undefined },
     { symbol: "work", parent: 1, via: "member", seen: undefined, leaves: undefined },
-    { symbol: "again", parent: undefined, via: undefined, seen: undefined, leaves: ["Page"] },
+    { symbol: "again", parent: undefined, via: undefined, seen: undefined, leaves: undefined },
   ]);
-  assert.deepEqual(answer.value.cuts.map((cut) => cut.at[0]), ["src/make.ts:2 unknown"]);
+  assert.deepEqual(answer.value.cuts.map((cut) => cut.at[0]), ["src/make.ts:1 Page", "src/make.ts:2 unknown", "src/make.ts:3 Page"]);
 });
 
 test("a trace over a real index reads dispatch from syntax: a body expands, static or unoverridden ones settle, a body-less method expands the one body its declared hierarchy proves", async () => {
@@ -1629,7 +1639,9 @@ test("a trace over a real index never follows an edge whose name a package binds
   };
   assert.deepEqual(shape(make), [{ symbol: "make", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["Base"] }] }]);
   assert.deepEqual(shape(pass), [{ symbol: "pass", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["evaluate"] }, { kind: "global", names: ["[1].map"] }] }]);
-  assert.deepEqual(shape(real), [{ symbol: "real", leaves: ["src/model.ts", "src/model.ts"], external: undefined }]);
+  assert.deepEqual(shape(real, "partial"), [{ symbol: "real", leaves: ["src/model.ts"], external: undefined }]);
+  assert.ok(real.ok && real.value.status === "partial");
+  assert.deepEqual(real.value.cuts.map(cut => cut.at[0]), ["src/uses-repo.ts:3 Base"]);
 });
 
 test("a trace over a real index counts every same-named declaration below an overridable method's owner, interfaces included, as a replacement", async () => {
@@ -1852,7 +1864,7 @@ test("a trace over a real index keeps a call to a Java record accessor a cut, an
 
   assert.ok(answer.ok && answer.value.status === "partial");
   assert.equal(answer.value.value.steps[0]?.external, undefined);
-  assert.deepEqual(answer.value.cuts.map((entry) => entry.at), [["src/Shapes.java:7 p.coordinate", "src/Point.java::coordinate"]]);
+  assert.deepEqual(answer.value.cuts.map((entry) => entry.at), [["src/Shapes.java:7 p.coordinate", "src/Point.java::coordinate"], ["src/Shapes.java:8 anonymousOnly", "src/Shapes.java::Shapes.task.<Runnable$anon@2>.anonymousOnly"]]);
 });
 
 test("trace accounts for every syntactic call even when the index omits its receiver shape", async () => {

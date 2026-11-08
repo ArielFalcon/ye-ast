@@ -7,7 +7,7 @@ import { enclosingType, withJavaSources } from "./java-project.ts";
 import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import { createJavaProject, isTypeDeclaration, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
-const UNKNOWN: DispatchTargets = { kind: "unknown" };
+const UNKNOWN: DispatchTargets = { kind: "unknown", reason: "dispatch not proven" };
 const PARAMETERS: ReadonlySet<string> = new Set(["formal_parameter", "spread_parameter"]);
 /** Annotations the language itself defines, which no generator or proxy reads to implement a type. */
 const LANGUAGE_ANNOTATIONS: ReadonlySet<string> = new Set(["Override", "Deprecated", "SuppressWarnings", "FunctionalInterface"]);
@@ -49,7 +49,7 @@ export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sou
   const java = sources.filter(({ path }) => isJavaSource(path));
   const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
   return async (sites, signal) => {
-    const results: DispatchTargets[] = sites.map(() => UNKNOWN);
+    const results: DispatchTargets[] = sites.map(({ file }) => isJavaSource(file) ? UNKNOWN : { kind: "unknown" });
     if (unreadJvm || !sites.some(({ file }) => isJavaSource(file))) return results;
     const read = await parser();
     return withJavaSources(read, (parse) => {
@@ -57,8 +57,9 @@ export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sou
       if (unparsed.length > 0) return results;
       const project = createJavaProject(files);
       if (project.unreadable.length > 0) return results;
-      const hierarchy = hierarchyOf(files, project);
-      if (hierarchy === undefined) return results;
+      const veto = globalVeto(files, project);
+      if (veto !== undefined) return sites.map(({ file }) => isJavaSource(file) ? { kind: "unknown", reason: veto } : { kind: "unknown" });
+      const hierarchy = readHierarchy(files, project);
       for (const [index, site] of sites.entries()) {
         if (signal?.aborted) break;
         const method = project.types.flatMap((type) => (type.file.path === site.file ? type.methods : [])).find((candidate) => candidate.name === site.name && !candidate.hasBody && spansLine(candidate.node, site.line));
@@ -71,8 +72,8 @@ export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sou
 
 /** The bodies a call of `method` runs on a value of `owner`, the method's own owner unless a declared type below it states the value. */
 export function targetsOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl = method.owner): DispatchTargets {
-  if (isAnnotated(owner.node) || isAnnotated(method.node)) return UNKNOWN;
-  if (ancestorsOf(owner, hierarchy).some((type) => hierarchy.outside.has(type))) return UNKNOWN;
+  if (isAnnotated(owner.node) || isAnnotated(method.node)) return { kind: "unknown", reason: "generated implementation" };
+  if (ancestorsOf(owner, hierarchy).some((type) => hierarchy.outside.has(type))) return { kind: "unknown", reason: "generated implementation" };
   const below = belowOf(owner, hierarchy);
   const names = new Set([owner, ...below].map((type) => type.name));
   if ([...hierarchy.unsettled].some((name) => names.has(name))) return UNKNOWN;
@@ -204,6 +205,10 @@ function belowOf(type: TypeDecl, hierarchy: Hierarchy): ReadonlySet<TypeDecl> {
 
 /** Reads every declaration's supertypes; `undefined` when an aspect or a JDK API that implements an interface at run time may run code behind any type. */
 export function hierarchyOf(files: readonly JavaFile[], project: JavaProject): Hierarchy | undefined {
+  return globalVeto(files, project) === undefined ? readHierarchy(files, project) : undefined;
+}
+
+function readHierarchy(files: readonly JavaFile[], project: JavaProject): Hierarchy {
   const placed = new Map(project.types.map((type) => [type.node.id, type]));
   const subtypes = new Map<TypeDecl, TypeDecl[]>();
   const supertypes = new Map<TypeDecl, TypeDecl[]>();
@@ -215,7 +220,6 @@ export function hierarchyOf(files: readonly JavaFile[], project: JavaProject): H
   for (const file of files) {
     const pending: Node[] = [file.root];
     for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-      if (isAspect(node) || namesDynamicImplementation(node, file, project)) return undefined;
       if (FUNCTION_VALUES.has(node.type)) functionValues = true;
       if (isTypeDeclaration(node) || isAnonymous(node)) {
         const scope = enclosingType(node.parent ?? node, file, project);
@@ -262,4 +266,17 @@ function simpleName(type: Node): string {
 /** Whether the line lies between a declaration's first token and its name. */
 function spansLine(declaration: Node, line: number): boolean {
   return declaration.startPosition.row + 1 <= line && line <= (declaration.childForFieldName("name") ?? declaration).startPosition.row + 1;
+}
+
+function globalVeto(files: readonly JavaFile[], project: JavaProject): Extract<DispatchTargets, { kind: "unknown" }>["reason"] {
+  let dynamic = false;
+  for (const file of files) {
+    const pending: Node[] = [file.root];
+    for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+      if (isAspect(node)) return "aspect may replace the body";
+      if (namesDynamicImplementation(node, file, project)) dynamic = true;
+      for (const child of node.namedChildren) if (child !== null) pending.push(child);
+    }
+  }
+  return dynamic ? "generated implementation" : undefined;
 }

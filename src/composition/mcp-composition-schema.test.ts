@@ -193,6 +193,37 @@ test("dependency selection reasons remain closed in runtime and advertised compo
   assert.equal(ajv(invalid).valid, false);
 });
 
+test("compose accepts structured data effects with and without an entity and rejects invalid access", () => {
+  const source = sourceFixture("trace");
+  const built = composeFull(resultOf([source]));
+  const step = built.graph.parts.find((part) => part.kind === "trace-step");
+  assert.ok(step?.kind === "trace-step");
+  step.effects = [
+    { kind: "data", line: 11, operation: "save", access: "write", target: { kind: "entity", name: "shop.Order" } },
+    { kind: "data", line: 12, operation: "query", access: "read" },
+  ];
+  assert.equal(COMPOSE_OUTPUT.safeParse(built).success, true);
+  const invalid = structuredClone(built);
+  const changed = invalid.graph.parts.find((part) => part.kind === "trace-step");
+  assert.ok(changed?.kind === "trace-step");
+  Object.assign(changed.effects![0]!, { access: "guessed" });
+  assert.equal(COMPOSE_OUTPUT.safeParse(invalid).success, false);
+});
+
+test("dispatch cut details pass both strict composition schemas and unknown details are rejected", () => {
+  for (const detail of ["aspect may replace the body", "generated implementation", "dispatch not proven"] as const) {
+    const value = json(full);
+    const read = value.graph.reads.find((read) => read.analysis.status === "partial");
+    assert.ok(read?.analysis.status === "partial");
+    Object.assign(read.analysis.cuts[0]!, { detail });
+    assert.equal(runtime(value), true);
+    assert.equal(ajv(value).valid, true);
+    Object.assign(read.analysis.cuts[0]!, { detail: "unproven guess" });
+    assert.equal(runtime(value), false);
+    assert.equal(ajv(value).valid, false);
+  }
+});
+
 test("a read whose fact used a declared build output, and one that names an unread declaration, pass the schema", () => {
   const plain = sourceFixture("callers-local").read.fact;
   const declared = { ...plain, inputs: { ...plain.inputs, buildOutputs: [{ kind: "node-modules" as const, at: "", verified: false, digest: "d" }] } };

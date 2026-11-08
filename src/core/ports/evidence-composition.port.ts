@@ -180,8 +180,8 @@ export type FileCategory = keyof Omit<ImportedFile, "file">;
 export type FileDependencyCategory = "importer" | "reexporter" | "dynamic-importer" | "type-importer" | "user" | "unresolved-namer" | "outline-import";
 
 /** A call-site location: never a declaration start. */
-export type CallLocation = { file: FileId; line: number; endLine?: number };
-export type CallSiteData = Omit<CallSite, "file" | "line" | "endLine" | "target"> & {
+export type CallLocation = { file: FileId; line: number; column?: number; endLine?: number; place?: EvidenceId };
+export type CallSiteData = Omit<CallSite, "file" | "line" | "column" | "endLine" | "target"> & {
   location: CallLocation;
   target: EvidenceFinding<HttpTarget | EventTarget>;
 };
@@ -243,7 +243,7 @@ export type PartPayload =
       /** Every body a call to this body-less method may run, when the declared hierarchy names them all. */
       alternatives?: readonly AnchorId[];
       /** The requests and messages its body makes through a declared client (RFC-0013 R12). */
-      effects?: readonly TraceEffect[];
+      effects?: readonly (TraceEffect & { place?: EvidenceId })[];
     }
   | { kind: "trace-root"; target: string; steps: readonly number[] }
   | { kind: "reading-range"; file: FileId; start: number; end: number; steps: readonly number[] }

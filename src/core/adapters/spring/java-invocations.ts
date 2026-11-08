@@ -31,7 +31,7 @@ export function invocationsOf(type: TypeDecl): Invocation[] {
   return memberNodes(type).flatMap((member) => {
     const locals = isMember(member) ? localBindings(member) : NO_VARIABLES;
     return descendants(member)
-      .filter((node) => node.type === "method_invocation")
+      .filter((node) => node.type === "method_invocation" || node.type === "object_creation_expression" || node.type === "explicit_constructor_invocation")
       .map((node): Invocation => ({ node, type, member: isMember(member) ? member : undefined, locals }));
   });
 }

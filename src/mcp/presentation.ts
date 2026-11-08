@@ -8,7 +8,7 @@ import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
 export const responseModeSchema = z
   .enum(["summary", "details", "full"])
   .default("summary")
-  .describe("Presentation only; coverage/traversal unchanged. summary=findings; details=evidence/locations; full=complete result JSON + navigation text.");
+  .describe("Presentation: summary=findings, details=evidence, full=result JSON+navigation. Coverage unchanged.");
 
 export type ResponseMode = z.infer<typeof responseModeSchema>;
 export type RenderContext = { tool: QueryFamily; recovery?: Recovery };
@@ -23,8 +23,9 @@ export function dependencyDiagnosticText(dependency: NonNullable<Cut["dependency
   return `dependency ${dependency.name}: ${dependency.reason} (${dependency.candidates.join(", ")})`;
 }
 
-/** An effect as one phrase: the request a call makes, or the message it publishes. */
+/** An effect as one phrase, with its operation and proven target. */
 export function effectText(effect: TraceEffect): string {
+  if (effect.kind === "data") return `data ${effect.access} ${effect.operation}${effect.target === undefined ? "" : ` ${effect.target.kind} ${effect.target.name}`}`;
   if (effect.kind === "http") return `http ${effect.target.method} ${effect.target.path}${effect.target.base === undefined ? "" : ` base ${effect.target.base}`}`;
   return `message ${effect.target.protocol} ${effect.target.destination}`;
 }

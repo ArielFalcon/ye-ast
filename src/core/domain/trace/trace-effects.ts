@@ -1,6 +1,7 @@
 import type { Cut } from "../shared/fact.ts";
 import { placeAt } from "../impact/impact-cuts.ts";
 import type { CallSite } from "../topology/call-site.ts";
+import type { DataEffectSite } from "./data-effect-site.ts";
 import type { TraceEffect } from "./trace-fact.ts";
 
 /**
@@ -8,7 +9,8 @@ import type { TraceEffect } from "./trace-fact.ts";
  * extraction resolves the target, otherwise an `unresolved-link` cut at its place naming the library it goes through.
  * The kind is the extraction's transport, never a guess from a name.
  */
-export function effectOf(site: CallSite): { effect: TraceEffect } | { cut: Cut } {
+export function effectOf(site: CallSite | DataEffectSite): { effect: TraceEffect } | { cut: Cut } {
+  if (!("transport" in site)) return site.effect === undefined ? { cut: unplacedEffect(site) } : { effect: site.effect };
   const kind = site.transport === "http" ? "http" : "message";
   const { target } = site;
   if (target.status === "complete") {
@@ -19,7 +21,8 @@ export function effectOf(site: CallSite): { effect: TraceEffect } | { cut: Cut }
 }
 
 /** A call site the trace cannot carry as an effect: a cut at its place, naming the library its target goes through when the extraction names one. */
-export function unplacedEffect(site: CallSite): Cut {
+export function unplacedEffect(site: CallSite | DataEffectSite): Cut {
+  if (!("transport" in site)) return { kind: "unresolved-link", at: [placeAt(site.file, site.line, "data effect")] };
   const kind = site.transport === "http" ? "http" : "message";
   const via = site.target.status === "unknown" ? site.target.evidence[0]?.via : undefined;
   return { kind: "unresolved-link", at: [placeAt(site.file, site.line, `${kind} effect${via === undefined ? "" : ` through ${via}`}`)] };

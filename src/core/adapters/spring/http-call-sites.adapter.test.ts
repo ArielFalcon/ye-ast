@@ -324,7 +324,7 @@ test("library summaries evaluate source return methods as well as direct paramet
   );
   const configuration = file(RESOURCES, "acme.base: http://billing-svc:8080\n");
 
-  assert.deepEqual(await read([client, configuration], library), ["GET /k BillingClient.a@BillingClient.java:9", "GET http://billing-svc:8080/invoices BillingClient.a@BillingClient.java:9"]);
+  assert.deepEqual(await read([client, configuration], library), ["GET http://billing-svc:8080/invoices BillingClient.a@BillingClient.java:9", "GET /k BillingClient.a@BillingClient.java:9"]);
 });
 
 test("test sources are not call sites", async () => {

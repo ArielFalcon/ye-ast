@@ -44,6 +44,7 @@ import { createContractRoutes } from "../core/adapters/openapi/contract-document
 import { createWorkspaceEvidence } from "../core/adapters/workspace/outward-names.adapter.ts";
 import { createHttpCallSites } from "../core/adapters/typescript/http-call-sites.adapter.ts";
 import { createPatternRedaction } from "../core/adapters/redaction/pattern-redaction.adapter.ts";
+import { createJavaDataEffects } from "../core/adapters/spring/data-effects.adapter.ts";
 import { createJavaCallSites } from "../core/adapters/spring/java-call-sites.adapter.ts";
 import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-routes.adapter.ts";
 import { createJavaRecordsReader } from "../core/adapters/tree-sitter/java-records.adapter.ts";
@@ -185,6 +186,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
         names: [...new Set([...typescript.names, ...java.names])].sort(compareText),
         functionValueCalls: [...typescript.functionValueCalls, ...java.functionValueCalls],
         callables: [...typescript.callables, ...java.callables],
+        initializedFields: [...typescript.initializedFields ?? [], ...java.initializedFields ?? []],
         receiverBindings: [...typescript.receiverBindings, ...java.receiverBindings],
         functionValues: [...typescript.functionValues, ...java.functionValues],
         calls: [...typescript.calls ?? [], ...java.calls ?? []],
@@ -198,8 +200,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     },
   }, { of: "call-sites" });
   const placedCallSites = staged<PlacedCallSiteReader>({
-    placed: async (files, repo) => {
-      const java = await createJavaCallSites(await javaParser()).placed(files, repo);
+    placed: async (files, repo, libraries) => {
+      const java = await createJavaCallSites(await javaParser()).placed(files, repo, libraries);
       return [...(await typescriptCallSites.placed(files, repo)), ...java].sort(({ site: a }, { site: b }) => compareCallPlaces(a, b));
     },
   }, { placed: "call-sites" });
@@ -300,31 +302,6 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   };
   const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders: [moduleDependencies, javaImports], unmodelled, importOrigins, memberNames });
   const outline = measurement === undefined ? bareOutline : measuredOutline(bareOutline, measurement);
-  const bareTrace = createTraceQueries({
-    ...snapshotCache,
-    vcs,
-    scratch,
-    holds,
-    reader,
-    extractor,
-    graph,
-    ...(indexes && { indexes }),
-    digest,
-    matcher,
-    producer: { name: PRODUCER_NAME, version },
-    engines: { ...entrypointEngines, [CODEGRAPH_PACKAGE]: codegraph, ...impactDeps.angularEngines },
-    live,
-    ...budget,
-    ...trust,
-    importOrigins,
-    moduleDependencies,
-    sourceTrivia,
-    memberNames,
-    relations: impactDeps.relations,
-    callSites: placedCallSites,
-    sourceSelection: isWritten,
-  });
-  const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);
   const defaults = createWorkspaceDefaults(createFixedLayerStore());
   const refresh = options.refresh ?? (options.cacheDirectory === undefined ? undefined : createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory: options.cacheDirectory, digest }));
   const workspaceDeps: WorkspaceQueriesDeps = {
@@ -348,6 +325,33 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...trust,
   };
   const operation = createWorkspaceReadOperation(workspaceDeps);
+  const bareTrace = createTraceQueries({
+    workspace: operation,
+    holds,
+    ...snapshotCache,
+    vcs,
+    scratch,
+    reader,
+    extractor,
+    graph,
+    ...(indexes && { indexes }),
+    digest,
+    matcher,
+    producer: { name: PRODUCER_NAME, version },
+    engines: { ...entrypointEngines, [CODEGRAPH_PACKAGE]: codegraph, ...impactDeps.angularEngines },
+    live,
+    ...budget,
+    ...trust,
+    importOrigins,
+    moduleDependencies,
+    sourceTrivia,
+    memberNames,
+    relations: impactDeps.relations,
+    callSites: placedCallSites,
+    dataEffects: { placed: async (files) => createJavaDataEffects(await javaParser()).placed(files) },
+    sourceSelection: isWritten,
+  });
+  const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);
   const bareWorkspace = createWorkspaceQueries(workspaceDeps, operation);
   const workspace = measurement === undefined ? bareWorkspace : measuredWorkspace(bareWorkspace, measurement);
   // One measurement line per read: the workspace impact reports through the impact family it walks with.

@@ -198,10 +198,11 @@ export function readImporters(params: unknown): Omit<AtRevision<ImpactImportersR
 type Unsignaled<T> = T extends unknown ? Omit<T, "signal"> : never;
 
 export function readTrace(params: unknown): Unsignaled<Extract<TraceRequest, { live?: undefined }>> {
-  const p = only(params, ["repo", "repoId", "revision", "targets", "scope", "budget"]);
+  const p = only(params, ["repo", "repoId", "revision", "targets", "scope", "budget", "workspace", "offline"]);
+  const workspace = p.workspace === undefined ? undefined : membershipOf(only(p.workspace, ["repos", "gateways"]));
   const targets = list(p, "targets", traceTargetOf);
   if (mixesTargetKinds(targets)) throw new InvalidParamsError("targets are declarations or entrypoints, not both");
-  return { repo: text(p, "repo"), repoId: text(p, "repoId"), revision: text(p, "revision"), targets, ...scopeOf(p), ...budgetOf(p, TRACE_BOUND_FIELDS) };
+  return { repo: text(p, "repo"), repoId: text(p, "repoId"), revision: text(p, "revision"), targets, ...(workspace === undefined ? {} : { workspace }), ...(p.offline === undefined ? {} : { offline: flag(p, "offline") }), ...scopeOf(p), ...budgetOf(p, TRACE_BOUND_FIELDS) };
 }
 
 /** A declaration target, or an entrypoint of the map by its kind and name. */
@@ -224,14 +225,20 @@ export function readWorkspace(params: unknown): Omit<WorkspaceRequest, "signal">
   return workspaceFields(only(params, ["repo", "repos", "gateways", "scope", "offline", "replay"]));
 }
 
+function membershipOf(p: Params): Pick<WorkspaceRequest, "repos" | "gateways"> {
+  return {
+    ...(p.repos === undefined ? {} : { repos: list(p, "repos", repositoryOf) }),
+    ...(p.gateways === undefined ? {} : { gateways: list(p, "gateways", gatewayOf) }),
+  };
+}
+
 function workspaceFields(p: Params): Omit<WorkspaceRequest, "signal"> {
   const replay = p.replay;
   if (replay !== undefined && (!isWorkspaceReplayContext(replay) || replay.snapshots.length === 0)) throw new InvalidParamsError("invalid workspace replay");
   return {
     ...(replay === undefined ? {} : { replay }),
     repo: repositoryOf(p.repo),
-    ...(p.repos === undefined ? {} : { repos: list(p, "repos", repositoryOf) }),
-    ...(p.gateways === undefined ? {} : { gateways: list(p, "gateways", gatewayOf) }),
+    ...membershipOf(p),
     ...scopeOf(p),
     ...(p.offline === undefined ? {} : { offline: flag(p, "offline") }),
   };

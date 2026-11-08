@@ -175,6 +175,7 @@ class CompactView {
       ...(this.details ? [] : [this.joinedLine()]),
       ...(this.result.verification.status === "available" ? [] : [verificationLine(this.result)]),
       ...this.identityLines(),
+      ...(graph.sources.some(source => source.family === "trace") ? [`effects (${graph.parts.reduce((count, part) => count + (part.kind === "trace-step" ? part.effects?.length ?? 0 : 0), 0)})`] : []),
       ...connections,
       ...this.contextLines(),
       ...subjects,

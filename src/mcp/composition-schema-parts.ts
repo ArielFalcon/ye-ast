@@ -27,6 +27,7 @@ export const cut = z.strictObject({
   kind: z.enum(["depth", "hub", "caller-budget", "node-cap", "unresolved-link", "build-output", "deadline", "section", "not-exported", "no-extractor"]),
   at: strings,
   reason: unknownReason.exactOptional(),
+  detail: z.enum(["aspect may replace the body", "generated implementation", "dispatch not proven"]).exactOptional(),
   dependency: dependencyDiagnostic.exactOptional(),
   limit: z.number().exactOptional(),
 });
@@ -35,7 +36,7 @@ export const snapshotRef = z.discriminatedUnion("kind", [
   z.strictObject({ repo: z.string(), kind: z.literal("live"), head: z.string(), stateId: z.string() }),
 ]);
 export const evidenceValue = z.strictObject({
-  path: z.string(), line: int, endLine: int.exactOptional(), via: z.string().exactOptional(), confidence: z.number().exactOptional(),
+  path: z.string(), line: int, column: int.exactOptional(), endLine: int.exactOptional(), via: z.string().exactOptional(), confidence: z.number().exactOptional(),
 });
 export const producer = z.strictObject({ name: z.string(), version: z.string() });
 export const schemaVersion = z.templateLiteral([z.int().min(0), ".", z.int().min(0), ".", z.int().min(0)]);
@@ -129,7 +130,7 @@ export const moduleVia = z.strictObject({
   file: z.string(), line: int, specifier: z.string(), kind: z.enum(["import", "reexport"]), typeOnly: z.boolean(),
   form: z.enum(["dynamic-import", "type-query"]).exactOptional(),
 });
-export const callLocation = z.strictObject({ file: ids.file, line: int, endLine: int.exactOptional() });
+export const callLocation = z.strictObject({ file: ids.file, line: int, column: int.exactOptional(), endLine: int.exactOptional() });
 const stated = z.strictObject({ method: httpMethod, path: z.string() });
 const transport = z.enum(["http", "event"]);
 const httpTarget = z.strictObject({ method: httpMethod, path: z.string(), base: z.string().exactOptional() });
@@ -148,7 +149,7 @@ export const unresolvedCallSiteSchema = z.strictObject({
 
 export const linkBasis = z.enum(["exact", "base-path", "suffix", "event-destination", "gateway-prefix", "route-overlap"]);
 export const linkEndpoints = {
-  from: z.strictObject({ ...callLocation.shape, repo: z.string(), symbol: z.string() }),
+  from: z.strictObject({ ...callLocation.shape, repo: z.string(), symbol: z.string(), place: ids.evidence.exactOptional() }),
   to: <H extends z.ZodType>(handler: H) => z.strictObject({ repo: z.string(), kind: entrypointKind, name: z.string(), handler }),
 };
 const outwardKind = z.enum(["http-host", "path-prefix", "configuration-url", "destination", "dependency", "remote", "registry"]);
@@ -310,8 +311,9 @@ export const partSchema = z.discriminatedUnion("kind", [
     ])).exactOptional(),
     alternatives: z.array(ids.anchor).exactOptional(),
     effects: z.array(z.discriminatedUnion("kind", [
-      z.strictObject({ kind: z.literal("http"), line: count, target: httpTarget }),
-      z.strictObject({ kind: z.literal("message"), line: count, target: eventTarget }),
+      z.strictObject({ kind: z.literal("http"), line: count, column: count.exactOptional(), target: httpTarget, place: ids.evidence.exactOptional() }),
+      z.strictObject({ kind: z.literal("message"), line: count, column: count.exactOptional(), target: eventTarget, place: ids.evidence.exactOptional() }),
+      z.strictObject({ kind: z.literal("data"), line: count, column: count.exactOptional(), operation: z.string(), access: z.enum(["read", "write", "unknown"]), target: z.strictObject({ kind: z.enum(["entity", "table", "collection"]), name: z.string() }).exactOptional(), place: ids.evidence.exactOptional() }),
     ])).exactOptional(),
   }),
   part("trace-root", { target: z.string(), steps: z.array(count) }),
@@ -322,7 +324,7 @@ export const partSchema = z.discriminatedUnion("kind", [
     site: z.strictObject({
       repo: z.string(), symbol: z.string(),
       ancestors: z.array(z.strictObject({ symbol: z.string(), line: int, endLine: int })).exactOptional(),
-      transport, diagnostic: callSiteDiagnostic.exactOptional(), stated: stated.exactOptional(), location: callLocation,
+      transport, diagnostic: callSiteDiagnostic.exactOptional(), stated: stated.exactOptional(), location: z.strictObject({ ...callLocation.shape, place: ids.evidence.exactOptional() }),
       target: evidenceFinding(z.union([httpTarget, eventTarget])),
     }),
     disposition: z.enum(["matched", "unmatched", "external"]),

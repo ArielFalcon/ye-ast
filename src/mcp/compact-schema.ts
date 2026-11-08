@@ -1,10 +1,18 @@
 import type { z } from "zod";
 
+const SHARED_FIELDS = new Set(["repo", "revision", "head", "live", "offline", "scope", "include", "exclude", "mode", "workspace", "repos", "gateways"]);
+
+function publishedField(name: string, schema: unknown): unknown {
+  if (!SHARED_FIELDS.has(name) || schema === null || typeof schema !== "object" || Array.isArray(schema)) return schema;
+  const { description: _description, ...rest } = schema as Record<string, unknown>;
+  return rest;
+}
+
 function withOpaque(value: unknown, opaque: Readonly<Record<string, string>>): unknown {
   if (Array.isArray(value)) return value.map((item) => withOpaque(item, opaque));
   if (value === null || typeof value !== "object") return value;
   return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, key === "properties" && child !== null && typeof child === "object"
-    ? Object.fromEntries(Object.entries(child).map(([name, schema]) => [name, name in opaque ? { type: "object", description: opaque[name] } : withOpaque(schema, opaque)]))
+    ? Object.fromEntries(Object.entries(child).map(([name, schema]) => [name, name in opaque ? { type: "object", description: opaque[name] } : publishedField(name, withOpaque(schema, opaque))]))
     : withOpaque(child, opaque)]));
 }
 

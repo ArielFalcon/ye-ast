@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compareCallSites, unresolvedCallSite, unsettledCallSiteCut, type CallSite } from "./call-site.ts";
+import { callPlaceEvidence, compareCallSites, unresolvedCallSite, unsettledCallSiteCut, type CallSite } from "./call-site.ts";
 
 function site(overrides: Partial<CallSite> = {}): CallSite {
   return { repo: "shop", file: "src/app/order.api.ts", line: 4, symbol: "OrderApi.create", transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [{ path: "src/app/order.api.ts", line: 4 }] }, ...overrides };
@@ -62,4 +62,17 @@ test("call sites order by repository, file, line and symbol, then by the status 
     "shop src/b.ts:1 A unknown",
     "web a.ts:1 A unknown",
   ]);
+});
+
+test("exact call evidence requires a column and joins occurrences independently of the enclosing symbol", () => {
+  assert.equal(callPlaceEvidence(site()), undefined);
+  assert.deepEqual(callPlaceEvidence(site({ column: 0, endLine: 20 })), { path: "src/app/order.api.ts", line: 4, column: 0 });
+  assert.deepEqual(callPlaceEvidence(site({ column: 12, symbol: "Other.create" })), { path: "src/app/order.api.ts", line: 4, column: 12 });
+});
+
+test("same-line target status precedes column, which only orders otherwise tied sites", () => {
+  const early = site({ column: 2 });
+  const late = site({ column: 20, target: { status: "complete", value: { method: "GET", path: "/orders" }, evidence: [] } });
+  const tied = site({ column: 5 });
+  assert.deepEqual([early, late, tied].toSorted(compareCallSites), [late, early, tied]);
 });

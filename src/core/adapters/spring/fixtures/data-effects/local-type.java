@@ -1,0 +1,2 @@
+import org.springframework.jdbc.core.JdbcTemplate;
+class LocalType { void run() { class JdbcTemplate { int update(String sql) { return 0; } } JdbcTemplate db = new JdbcTemplate(); db.update("noop"); } }

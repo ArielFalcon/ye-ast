@@ -1,3 +1,5 @@
+import { LIBRARY_ROOT } from "../../domain/topology/library-source.ts";
+import { isFunctionValueNode } from "../tree-sitter/java-function-value-calls.ts";
 import { BEAN, NAMED_COMPONENTS, PRIMARY, QUALIFIER } from "./java-value-vocabulary.ts";
 import type { Node } from "web-tree-sitter";
 import { argumentsOf, descendants, localBindings, typeNameOf } from "./java-members.ts";
@@ -69,6 +71,14 @@ function indexBean(method: MethodDecl, project: JavaProject, register: (name: st
 }
 
 export function methodsOf(call: Invocation, project: JavaProject, text: FieldLookup, concrete = call.type): MethodSelection[] {
+  if (call.node.type === "object_creation_expression" || call.node.type === "explicit_constructor_invocation") {
+    const found = call.node.type === "object_creation_expression"
+      ? project.lookupType(typeNameOf(call.node.childForFieldName("type")), scopeOf(call.type))
+      : call.node.childForFieldName("constructor")?.text === "super" ? project.classChain(call.type)[1] : call.type;
+    if (typeof found !== "object" || found === null) return [];
+    const arity = argumentsOf(call.node).length;
+    return found.constructors.filter(method => method.hasBody && method.parameterTypes.length === arity).map(method => ({ method, receiver: found }));
+  }
   const object = call.node.childForFieldName("object");
   const held = object === null || object.type === "this" ? undefined : receiverOf(object, call, project, text);
   let declared = object === null || object.type === "this" ? concrete : held !== undefined && "decl" in held.resolved ? held.resolved.decl : undefined;
@@ -130,6 +140,7 @@ export function reachedTarget<T>(call: Invocation, group: readonly { leaf: { inv
 export function bindMethod(selection: MethodSelection, call: Node, scope: UrlScope): UrlScope {
   const args = argumentsOf(call);
   return {
+    deferred: scope.deferred === true || deferredLibraryCall(call, scope.type.file.path),
     type: selection.method.owner,
     receiver: selection.receiver,
     configurationFile: scope.configurationFile ?? scope.type.file,
@@ -191,8 +202,8 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
     return call.member !== undefined && this.called.has(call.member.id) && !this.roots.has(call.member.id);
   }
 
-  expand(call: Invocation, scope: UrlScope): { leaf: T; scope: UrlScope }[][] | undefined {
-    type Group = { leaf: T; scope: UrlScope }[];
+  expand(call: Invocation, scope: UrlScope): { leaf: T; scope: UrlScope; bodies: ReadonlySet<MethodDecl> }[][] | undefined {
+    type Group = { leaf: T; scope: UrlScope; bodies: Set<MethodDecl> }[];
     type Frame = { groups: Group[]; edges: Group[][][] };
     type Done = (groups: Group[]) => void;
     const cache = new Map<string, Group[]>();
@@ -214,7 +225,7 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
       return Array.from({ length }, (_, index) => {
         const present = [...new Set(branches.flatMap((branch) => branch[index] ?? []))];
         return branches.some((branch) => branch[index] === undefined)
-          ? present.map(({ leaf, scope }) => ({ leaf, scope: { ...scope, undecided: scope.undecided ?? "dispatch-disagreement" } })) : present;
+          ? present.map(({ leaf, scope, bodies }) => ({ leaf, bodies, scope: { ...scope, undecided: scope.undecided ?? "dispatch-disagreement" } })) : present;
       });
     };
     const selections = methodsOf(call, this.project, this.text, scope.receiver ?? scope.type);
@@ -225,15 +236,16 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
       pending.push(() => {
         const method = selection.method.node.id;
         if (active.has(method)) {
-          done([...(this.reachable.get(method) ?? [])].map((leaf) => [{ leaf, scope: { ...bound, undecided: "recursive" } }]));
+          done([...(this.reachable.get(method) ?? [])].map((leaf) => [{ leaf, bodies: new Set([selection.method]), scope: { ...bound, undecided: "recursive" } }]));
           return;
         }
-        const key = `${method}:${selection.receiver.node.id}:${bound.configurationFile?.path}:${[...bound.env].map(([name, value]) => `${name}=${closureKey(value.node, value.scope)}`).join(";")}`;
+        const key = `${method}:${bound.deferred === true}:${selection.receiver.node.id}:${bound.configurationFile?.path}:${[...bound.env].map(([name, value]) => `${name}=${closureKey(value.node, value.scope)}`).join(";")}`;
         const cached = cache.get(key);
         if (cached !== undefined) { done(cached); return; }
-        const frame: Frame = { groups: (this.leaves.get(method) ?? []).map((leaf) => [{ leaf, scope: { ...bound, locals: leaf.invocation.locals } }]), edges: [] };
+        const frame: Frame = { groups: (this.leaves.get(method) ?? []).map((leaf) => [{ leaf, bodies: new Set<MethodDecl>(), scope: { ...bound, deferred: bound.deferred === true || deferredLibraryCall(leaf.invocation.node, leaf.invocation.type.file.path), locals: leaf.invocation.locals } }]), edges: [] };
         pending.push(() => {
           const groups = [...frame.groups, ...frame.edges.flatMap(merge)];
+          for (const group of groups) for (const item of group) item.bodies.add(selection.method);
           cache.set(key, groups); done(groups);
         });
         const next = new Set(active).add(method);
@@ -250,4 +262,12 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
     for (let task = pending.pop(); task !== undefined; task = pending.pop()) task();
     return merge(roots);
   }
+}
+
+function deferredLibraryCall(call: Node, file: string): boolean {
+  if (!file.startsWith(`${LIBRARY_ROOT}/`)) return false;
+  for (let node = call.parent; node !== null; node = node.parent) {
+    if (isFunctionValueNode(node) || (node.type === "class_body" && node.parent?.type === "object_creation_expression")) return true;
+  }
+  return false;
 }

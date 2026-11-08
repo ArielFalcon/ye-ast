@@ -5,7 +5,7 @@ import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import { compareCallSites, type CallSite, type CallSiteDiagnostic, type EventTarget } from "../../domain/topology/call-site.ts";
 import type { Configuration } from "./application-config.ts";
 import { EVENT_CLIENT_NAME, PUBLISH_CLIENTS, PUBLISH_METHOD_NAME, type PublishClient } from "./event-vocabulary.ts";
-import { complete, placed, spanOf, unknown, withEvidence } from "./findings.ts";
+import { complete, fromBodies, placed, spanOf, unknown, withEvidence } from "./findings.ts";
 import { argumentsOf, typeNameOf } from "./java-members.ts";
 import { ancestorsOf, receiverOf, symbolOf, type Invocation } from "./java-invocations.ts";
 import { qualifiedTypeName, scopeOf, type JavaFile, type JavaProject } from "./java-symbols.ts";
@@ -37,11 +37,11 @@ export class JavaEventReader {
     this.text = new JavaValueEvaluator(project, configuration);
   }
 
-  sites(repo: string): CallSite[] {
+  sites(repo: string, includeNested = false): CallSite[] {
     const found: CallSite[] = [];
     const flow = new JavaMethodFlow<Publish>(this.project, this.text, (call) => this.publishOf(call));
     for (const invocation of flow.invocations.filter((call) => this.owned.has(call.type.file))) {
-      if (flow.nested(invocation)) continue;
+      if (!includeNested && flow.nested(invocation)) continue;
       const scope = this.scopeOf(invocation, new Map());
       const direct = this.publishOf(invocation);
       if (direct !== undefined) {
@@ -53,7 +53,7 @@ export class JavaEventReader {
       if (expanded !== undefined) {
         for (const group of expanded) {
           const reached = reachedTarget(invocation, group, group.map(({ leaf, scope }) => this.target(leaf, scope)), this.owned);
-          found.push(this.siteOf(repo, invocation, reached.target, reached.diagnostic));
+          found.push(fromBodies(this.siteOf(repo, invocation, reached.target, reached.diagnostic), group));
         }
       } else {
         const library = this.libraryOf(invocation);
@@ -103,7 +103,7 @@ export class JavaEventReader {
   private target(publish: Publish, scope: UrlScope): Reading<EventTarget> {
     const destination = this.text.evaluated(scope, () => this.destination(publish, scope));
     return destination.status === "undecided"
-      ? undecidedTarget(destination, spanOf(publish.invocation.type.file.path, publish.invocation.node))
+      ? undecidedTarget(destination, spanOf(publish.invocation.type.file.path, publish.invocation.node), scope.deferred === true ? "no-extractor" : "unresolved")
       : { target: complete({ protocol: publish.client.protocol, destination: destination.value, role: "publish", ...this.exchangeOf(publish, scope) }) };
   }
 

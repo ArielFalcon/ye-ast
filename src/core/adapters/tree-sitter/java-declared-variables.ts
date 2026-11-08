@@ -11,11 +11,12 @@ const PATTERN_OR_LAMBDA: ReadonlySet<string> = new Set(["lambda_expression", "in
 export interface DeclaredVariables {
   fields: ReadonlySet<string>;
   locals: ReadonlySet<string>;
+  localPlaces: ReadonlyMap<string, readonly { start: number; end: number }[]>;
 }
 
 /** Whether the scope declares a variable of the name anywhere but as a field. */
-export function declaresLocal(scope: DeclaredVariables, name: string): boolean {
-  return scope.locals.has(name);
+export function declaresLocal(scope: DeclaredVariables, name: string, at?: Node): boolean {
+  return at === undefined ? scope.locals.has(name) : (scope.localPlaces.get(name) ?? []).some(({ start, end }) => start <= at.startIndex && at.endIndex <= end);
 }
 
 /** Whether the scope declares a variable of the name anywhere, a field included. */
@@ -42,14 +43,21 @@ export function declaredVariablesOnce(): (scope: Node) => DeclaredVariables {
 function declaredVariables(scope: Node): DeclaredVariables {
   const fields = new Set<string>();
   const locals = new Set<string>();
+  const localPlaces = new Map<string, { start: number; end: number }[]>();
+  const keepLocal = (name: string, node: Node) => {
+    locals.add(name);
+    let owner = node.parent;
+    while (owner !== null && owner.type !== "method_declaration" && owner.type !== "constructor_declaration") owner = owner.parent;
+    localPlaces.set(name, [...(localPlaces.get(name) ?? []), { start: owner?.startIndex ?? scope.startIndex, end: owner?.endIndex ?? scope.endIndex }]);
+  };
   const pending: Node[] = [scope];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (VARIABLE_DECLARATIONS.has(node.type)) {
       const name = node.childForFieldName("name")?.text;
-      if (name !== undefined) (node.parent?.type === "field_declaration" ? fields : locals).add(name);
+      if (name !== undefined) (node.parent?.type === "field_declaration" ? fields.add(name) : keepLocal(name, node));
     }
-    if (node.type === "identifier" && PATTERN_OR_LAMBDA.has(node.parent?.type ?? "")) locals.add(node.text);
+    if (node.type === "identifier" && PATTERN_OR_LAMBDA.has(node.parent?.type ?? "")) keepLocal(node.text, node);
     for (const child of node.namedChildren) if (child !== null) pending.push(child);
   }
-  return { fields, locals };
+  return { fields, locals, localPlaces };
 }

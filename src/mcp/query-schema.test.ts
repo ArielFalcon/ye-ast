@@ -1,3 +1,4 @@
+import { COMPOSE_INPUT } from "./composition-input.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
@@ -154,4 +155,12 @@ test("published select shapes offer exactly the owners some workspace branch of 
       }
     }
   }
+});
+
+test("trace and composed trace accept workspace sources and reject local live offline", () => {
+  const args = { targets: [{ file: "src/a.ts", symbol: "run" }], workspace: { repos: [{ path: "/work/lib", revision: "v1" }] }, offline: true };
+  assert.ok(SEMANTIC_INPUTS.trace.safeParse(args).success);
+  assert.ok(TOOL_INPUTS.trace.safeParse(args).success);
+  assert.ok(COMPOSE_INPUT.safeParse({ queries: [{ name: "ye_ast_trace", arguments: args }] }).success);
+  assert.equal(SEMANTIC_INPUTS.trace.safeParse({ targets: args.targets, live: true, offline: true }).success, false);
 });

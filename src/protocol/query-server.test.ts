@@ -189,7 +189,7 @@ const OPERATIONS = [
   },
   { method: METHOD.impactImporters, operation: "importers", params: { repo: "/work/shop", repoId: "shop", revision: "v2", files: ["a.ts", "b.ts"] } },
   { method: METHOD.outlineFiles, operation: "outline", params: { repo: "/work/shop", repoId: "shop", revision: "v2", files: ["a.ts", "b.ts"] } },
-  { method: METHOD.traceWalk, operation: "walk", params: { repo: "/work/shop", repoId: "shop", revision: "v3", targets: [{ file: "a.ts", symbol: "run" }, { file: "b.ts", start: 2, end: 9 }], budget: { depth: 3, expansions: 5 } } },
+  { method: METHOD.traceWalk, operation: "walk", params: { repo: "/work/shop", repoId: "shop", revision: "v3", targets: [{ file: "a.ts", symbol: "run" }, { file: "b.ts", start: 2, end: 9 }], budget: { depth: 3, expansions: 5 }, workspace: { repos: [{ path: "/work/gateway", revision: "v2" }] }, offline: true } },
   {
     method: METHOD.workspaceOutwardNames,
     operation: "outwardNames",

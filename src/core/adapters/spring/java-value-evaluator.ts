@@ -56,6 +56,7 @@ export class JavaValueEvaluator {
    * flow left undecided keeps the flow's cause; otherwise the cause, the places and the alternatives the evaluation met.
    */
   evaluated<T>(scope: UrlScope, evaluate: () => T | undefined): Evaluated<T> {
+    if (scope.deferred === true) return undecided("destination-undecidable");
     if (scope.undecided !== undefined) return undecided(scope.undecided);
     const previous = this.diagnostics;
     const trace: NonNullable<JavaValueEvaluator["diagnostics"]> = { evidence: [], alternatives: new Set() };

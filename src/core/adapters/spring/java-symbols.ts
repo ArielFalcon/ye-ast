@@ -1,13 +1,8 @@
-import { LIBRARY_ROOT, libraryPath, type LibrarySource } from "../../domain/topology/library-source.ts";
+import { LIBRARY_ROOT } from "../../domain/topology/library-source.ts";
 import type { Node } from "web-tree-sitter";
-import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { charLiteralValue, integerLiteralValue, stringLiteralValue, type LiteralValue } from "./java-literals.ts";
+import { localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
-
-/** The sources of the repositories a snapshot depends on, under a root no repository path can have. */
-export function asLibrarySources(sources: readonly LibrarySource[]): SourceFile[] {
-  return sources.map(({ repo, path, content }) => ({ path: libraryPath(repo, path), content }));
-}
 
 export function isLibraryPath(path: string): boolean {
   return path.startsWith(`${LIBRARY_ROOT}/`);
@@ -107,6 +102,7 @@ export interface TypeDecl {
   members: Map<string, TypeDecl>;
   constants: Map<string, Expr>;
   methods: MethodDecl[];
+  constructors: MethodDecl[];
 }
 
 export interface JavaProject {
@@ -130,8 +126,8 @@ export interface JavaProject {
    * sources declare claims the segment after that prefix.
    */
   isPlatformName(fqn: string): boolean;
-  /** The type, then each interface with its own hierarchy, then the superclass with its own: the order Spring searches. */
-  hierarchy(type: TypeDecl): Hierarchy;
+  /** The type, its interfaces and superclass in Spring order; a supplied parent resolver leaves every unread parent as a gap. */
+  hierarchy(type: TypeDecl, resolveParent?: (node: Node, owner: TypeDecl) => TypeLookup): Hierarchy;
   /** The type and its superclasses declared in the project. */
   classChain(type: TypeDecl): readonly TypeDecl[];
   /** The string a constant expression evaluates to, or why the sources do not give it. */
@@ -297,6 +293,7 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
   }
 
   function resolveSimple(head: string, scope: Scope, strict: boolean): TypeLookup | "unsettled" | LocalType {
+    if (strict && scope.file.conflictingSingleImports.has(head)) return "unsettled";
     const lexical = lexicalType(head, scope, strict);
     if (lexical !== undefined) return lexical;
     const { file } = scope;
@@ -523,14 +520,14 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     return typeof found === "object" ? found : undefined;
   }
 
-  function supertypeGap(found: TypeLookup, node: Node, type: TypeDecl, isInterface: boolean, before: number): SupertypeGap | undefined {
+  function supertypeGap(found: TypeLookup, node: Node, type: TypeDecl, isInterface: boolean, before: number, strict = false): SupertypeGap | undefined {
     const name = typeNodeName(node);
     const gap = { isInterface, name, before, file: type.file, node };
     if (found === "ambiguous") return { ...gap, kind: "ambiguous" };
-    return found === undefined && !externalNames(name, type.file, true).every(isPlatformName) ? { ...gap, kind: "missing" } : undefined;
+    return found === undefined && (strict || !externalNames(name, type.file, true).every(isPlatformName)) ? { ...gap, kind: "missing" } : undefined;
   }
 
-  function hierarchy(root: TypeDecl): Hierarchy {
+  function hierarchy(root: TypeDecl, resolveParent?: (node: Node, owner: TypeDecl) => TypeLookup): Hierarchy {
     const members: TypeDecl[] = [];
     const gaps: SupertypeGap[] = [];
     const visited = new Set<TypeDecl>();
@@ -553,8 +550,8 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
         frames.pop();
         continue;
       }
-      const found = lookupType(typeNodeName(parent.node), scopeOf(frame.type));
-      const gap = supertypeGap(found, parent.node, frame.type, parent.isInterface, members.length);
+      const found = resolveParent === undefined ? lookupType(typeNodeName(parent.node), scopeOf(frame.type)) : resolveParent(parent.node, frame.type);
+      const gap = supertypeGap(found, parent.node, frame.type, parent.isInterface, members.length, resolveParent !== undefined);
       if (gap !== undefined) gaps.push(gap);
       if (typeof found === "object") enter(found);
     }
@@ -789,6 +786,7 @@ function declareTypes(file: JavaFile, types: TypeDecl[]): void {
     for (const declaration of declarations) {
       if (declaration.type === "field_declaration" || declaration.type === "constant_declaration") declareConstants(type, declaration);
       else if (declaration.type === "method_declaration") type.methods.push(describeMethod(type, declaration));
+      else if (declaration.type === "constructor_declaration" || declaration.type === "compact_constructor_declaration") type.constructors.push(describeMethod(type, declaration));
       else pending.push({ node: declaration, outer: type });
     }
   }
@@ -812,6 +810,7 @@ function describeType(file: JavaFile, node: Node, outer: TypeDecl | undefined): 
     members: new Map(),
     constants: new Map(),
     methods: [],
+    constructors: [],
   };
 }
 
@@ -916,6 +915,47 @@ export function readSignature(method: MethodDecl, project: JavaProject): Signatu
       if (name === undefined) return undefined;
       signature.push({ name, dimensions });
     }
+  }
+  return signature;
+}
+
+const INTEGER_LITERALS: ReadonlySet<string> = new Set(["decimal_integer_literal", "hex_integer_literal", "octal_integer_literal", "binary_integer_literal"]);
+
+/** Exact static argument types only; conversions, inference and expressions without a declared type remain unproven. */
+export function readArgumentSignature(invocation: Node, scope: Scope, project: JavaProject): Signature | undefined {
+  const list = invocation.childForFieldName("arguments");
+  const signature: Signature[number][] = [];
+  for (const argument of list === null ? [] : namedChildren(list)) {
+    let node = unwrapParentheses(argument);
+    if (node === undefined) return undefined;
+    if (node.type === "unary_expression") {
+      const operand = node.childForFieldName("operand");
+      if (operand === null || !INTEGER_LITERALS.has(operand.type)) return undefined;
+      node = operand;
+    }
+    if (INTEGER_LITERALS.has(node.type)) {
+      signature.push({ name: /[lL]$/.test(node.text) ? "long" : "int", dimensions: 0 });
+      continue;
+    }
+    if (node.type === "string_literal") {
+      signature.push({ name: "java.lang.String", dimensions: 0 });
+      continue;
+    }
+    if (node.type === "true" || node.type === "false") {
+      signature.push({ name: "boolean", dimensions: 0 });
+      continue;
+    }
+    if (node.type !== "identifier") return undefined;
+    const binding = localBinding(node);
+    if (binding === undefined || binding.startIndex > node.startIndex) return undefined;
+    const declaration = binding.type === "variable_declarator" ? binding.parent : binding;
+    const written = declaration?.childForFieldName("type");
+    if (written === null || written === undefined || written.type === "generic_type" || written.text === "var") return undefined;
+    const element = written.type === "array_type" ? written.childForFieldName("element") : written;
+    if (element === null || element.type === "generic_type" || typeVariableAround(element) !== undefined) return undefined;
+    const name = KEYWORD_TYPES.has(element.type) ? element.text : project.typeIdentity(element.text.replace(/\s+/g, ""), { ...scope, at: element });
+    if (name === undefined || name.startsWith("context:")) return undefined;
+    signature.push({ name, dimensions: dimensionsOf(written) + dimensionsOf(binding) });
   }
   return signature;
 }

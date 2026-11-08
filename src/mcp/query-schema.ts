@@ -16,17 +16,17 @@ import { ENTRYPOINT_KINDS, mixesTargetKinds, type TRACE_BOUND_FIELDS, type Trace
  * accept it without controls.
  */
 
-export const repo = z.string().min(1).optional().describe("Declared repo ID; default=launch repo.");
-const revision = z.string().min(1).optional().describe("Commit/ref for this repo; default HEAD. Match inspected source.");
-const workspaceRevision = z.string().regex(/\S/).optional().describe("Commit/ref for this repo; default HEAD.");
+export const repo = z.string().min(1).optional().describe("Repo ID; default=launch.");
+const revision = z.string().min(1).optional().describe("Commit/ref; default HEAD; match inspected source.");
+const workspaceRevision = z.string().regex(/\S/).optional().describe("Commit/ref; default HEAD.");
 const live = z
   .boolean()
   .optional()
-  .describe("Read trusted staged, unstaged and untracked changes; not with revision/head or local offline. Impact still requires base.");
+  .describe("Trusted working tree (staged/unstaged/untracked); excludes revision/head and local offline; impact needs base.");
 export const offline = z
   .boolean()
   .optional()
-  .describe("With workspace: skip refreshing trusted persisted remotes (live allowed). Without workspace: no effect; forbidden with live.");
+  .describe("Skip workspace remote refresh. Local: ignored, forbidden with live.");
 
 /** A violated cross-field constraint, typed by `constraint` and anchored at the field a caller must change. */
 type FieldIssue = { constraint: string; path: (string | number)[]; message: string };
@@ -57,14 +57,14 @@ const count = z.int().positive();
 
 /** Exhaustive over the fields, so a bound added to `ImpactBudget` fails to compile until it is described here. */
 const BUDGET_FIELDS: Readonly<Record<WalkBoundsField, z.ZodOptional<z.ZodNumber>>> = {
-  depth: count.optional().describe("Max incoming levels per symbol/module walk (seeds=0), not service hops. Stopping yields a depth cut."),
+  depth: count.optional().describe("Incoming depth per symbol/module (seeds=0), not service hops; stop=depth cut."),
   hubFanIn: count.optional().describe("Max fan-in for symbol/module expansion; larger hubs yield a hub cut."),
-  expansions: count.optional().describe("Max expansions per symbol/module walk; modules share the base+head allowance. Exhaustion: caller-budget cut."),
+  expansions: count.optional().describe("Expansion cap per symbol/module walk; modules share base+head; stop=caller-budget cut."),
 };
 export const budget = z
   .strictObject(BUDGET_FIELDS)
   .optional()
-  .describe("Optional traversal bounds, unset by default. Limits work, not result size; stopped branches report cuts.");
+  .describe("Optional work bounds, no defaults; stopped branches=cut; no output cap.");
 
 /** Exhaustive over the trace's own bounds; a caller-count bound has no outbound meaning, so the strict object refuses it. */
 const TRACE_BUDGET_FIELDS: Readonly<Record<(typeof TRACE_BOUND_FIELDS)[number], z.ZodOptional<z.ZodNumber>>> = {
@@ -77,13 +77,13 @@ const traceBudget = z
   .describe("Optional bounds on how far the trace follows calls, unset by default. Limits work, not result size; stopped steps report cuts.");
 
 const workspaceRepo = liveSchema({
-  path: z.string().regex(/\S/).describe("Existing local Git clone root; no cloning or new remote authorization."),
+  path: z.string().regex(/\S/).describe("Existing local Git root; no clone/remote authorization."),
   id: z
     .string()
     .regex(/\S/)
     .optional()
-    .describe("Repo ID, not path; default=root basename. Reuse the ID across clone/worktrees of the same repo."),
-  revision: z.string().regex(/\S/).optional().describe("Local default=HEAD; refreshed reads report revision resolution and pinned SHA."),
+    .describe("Stable repo ID across clone/worktrees; default=root basename."),
+  revision: z.string().regex(/\S/).optional().describe("Default=HEAD; refreshed reads report pinned SHA and resolution."),
   live: z.literal(true).optional(),
 }, ["revision"]);
 
@@ -91,13 +91,13 @@ const gateways = z
   .array(z.strictObject({ prefix: z.string().min(1).describe("Call's gateway prefix, e.g. first path segment."), repo: z.string().min(1).describe("Destination repo ID.") }))
   .min(1)
   .optional()
-  .describe("User-known gateway prefixes override overlap inference. Never invent mappings.");
+  .describe("Declared gateway prefixes override inference; never guess.");
 
 const workspaceRepos = z
   .array(workspaceRepo)
   .min(1)
   .optional()
-  .describe("Other clones; nonempty replaces persisted membership. Omit for eligible defaults; result names the source.");
+  .describe("Local clones replacing persisted membership; omit for defaults; result states source.");
 
 export const workspace = z
   .strictObject({
@@ -105,11 +105,11 @@ export const workspace = z
       .array(workspaceRepo)
       .min(1)
       .optional()
-      .describe("Other clones; nonempty replaces persisted membership. Omit for eligible ye-ast init --workspace defaults."),
+      .describe("Local clones replacing persisted membership; omit for eligible init defaults."),
     gateways,
   })
   .optional()
-  .describe("Cross-repo traversal: omit=local; {}=eligible persisted repos and gateways (else the selected repo only); repos supplies other clones. Incoming links; impact adds outgoing. Captures are per repo and not atomic.");
+  .describe("Workspace: omit=local; {}=eligible defaults (else selected repo); repos=local clones. Callers: incoming; impact: both directions. Captures per repo, not atomic.");
 
 const globs = z
   .array(z.string().refine(isValidGlob, "a glob is relative to the repository root, with / separators and no empty, . or .. segment"))
@@ -121,7 +121,7 @@ export const scope = z
     exclude: globs.describe("Exclude matching paths, even if included."),
   })
   .optional()
-  .describe("Coverage globs over repo-relative paths; omitted=all, exclude wins; include keeps manifests readable, exclude can remove them. Callers and entrypoints outside scope are unknown. Use mode to shorten output.");
+  .describe("Repo-relative coverage globs; omitted=all, exclude wins. Include retains manifests; exclude may remove them. Outside-scope callers/entrypoints=unknown; mode trims output.");
 
 const file = z.string().min(1).describe("Repo-relative file path.");
 
@@ -132,7 +132,7 @@ export const target = z.union([
       symbol: z
         .string()
         .min(1)
-        .describe("Declaration or dotted Class.member path, as ye_ast_outline nests it; matches every declaration whose path ends with it, including overloads. A bare name matches at any depth."),
+        .describe("Outline dotted path or bare name: suffix match at whole names, all overloads; bare names at any depth."),
     })
     .describe("Match by declaration name."),
   z
@@ -256,7 +256,7 @@ const fileFields = { repo, revision, live, files: z.array(z.string().min(1)).min
 const outlineFields = {
   repo, revision, live,
   files: fileFields.files.optional().describe("Repository-relative paths to list whole; exclusive with focus."),
-  focus: z.array(focusSelector).min(1).optional().describe("Instead of files: the declarations to answer, each with its containers, its subtree and the count of its file's declarations omitted, without imports."),
+  focus: z.array(focusSelector).min(1).optional().describe("Instead of files: declarations with containers/subtree/omitted count; no imports."),
   scope,
 };
 const exactlyOneSubject = (value: { files?: unknown; focus?: unknown }): boolean => (value.files === undefined) !== (value.focus === undefined);
@@ -266,7 +266,7 @@ const traceTarget = z.union([
   ...target.options,
   z.strictObject({ kind: z.enum(ENTRYPOINT_KINDS), name: z.string().min(1) }).describe("Entrypoint as ye_ast_entrypoints names it; starts at its handler, a UI route at its component."),
 ]);
-const traceFields = { repo, revision, live, targets: z.array(traceTarget).min(1).refine((targets) => !mixesTargetKinds(targets as TraceTarget[]), "declarations or entrypoints, not both").describe("Declarations, or entrypoints, to start from; every declaration a target selects is a root."), scope, budget: traceBudget };
+const traceFields = { repo, revision, live, workspace, offline, targets: z.array(traceTarget).min(1).refine((targets) => !mixesTargetKinds(targets as TraceTarget[]), "declarations or entrypoints, not both").describe("Declarations, or entrypoints, to start from; every declaration a target selects is a root."), scope, budget: traceBudget };
 const workspaceFields = { repo, revision: workspaceRevision, live: z.literal(true).optional(), offline, scope, repos: workspaceRepos, gateways };
 
 /** The semantic inputs: what the analysis reads, without `mode`, `select`, `page` or `expect`. */
@@ -280,7 +280,7 @@ export const SEMANTIC_INPUTS = {
     .meta(crossField(liveExclusion("head"), traversalConstraints("head"))),
   importers: liveSchema(fileFields, ["revision"]),
   outline: liveSchema(outlineFields, ["revision"]).refine(exactlyOneSubject, ONE_SUBJECT).meta(crossField(liveExclusion("revision"), subjectConstraint)),
-  trace: liveSchema(traceFields, ["revision"]),
+  trace: liveSchema(traceFields, ["revision"]).superRefine(reportIssues(traversalIssues)).meta(crossField(liveExclusion("revision"), traversalConstraints("revision"))),
   workspace: liveSchema(workspaceFields, ["revision"]),
   decisions: liveSchema(workspaceFields, ["revision"]),
   contract_consequences: consequencesInput({}),
@@ -301,7 +301,7 @@ export const TOOL_INPUTS = {
     .meta(crossField(liveExclusion("head"), traversalConstraints("head"), recoveryControlConstraintsFor("impact"))),
   importers: liveSchema({ ...fileFields, mode }, ["revision"]),
   outline: liveSchema({ ...outlineFields, mode }, ["revision"]).refine(exactlyOneSubject, ONE_SUBJECT).meta(crossField(liveExclusion("revision"), subjectConstraint)),
-  trace: liveSchema({ ...traceFields, mode }, ["revision"]),
+  trace: liveSchema({ ...traceFields, mode }, ["revision"]).superRefine(reportIssues(traversalIssues)).meta(crossField(liveExclusion("revision"), traversalConstraints("revision"))),
   workspace: liveSchema({ ...workspaceFields, mode }, ["revision"]),
   decisions: liveSchema({ ...workspaceFields, mode }, ["revision"]),
   contract_consequences: consequencesInput({ mode }),

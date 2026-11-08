@@ -1,5 +1,5 @@
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
-import { CALL_EDGE_KINDS, EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, holdsValue, type EdgeVerdict, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
+import { CALL_EDGE_KINDS, FIELD_KINDS, EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, holdsValue, type EdgeVerdict, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { ExternalMemberUseOrigin, MemberUseOrigin } from "../../domain/relations/member-use.ts";
@@ -229,7 +229,7 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
   async function receiversOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<readonly (string | undefined)[]> {
     const read = syntaxOf;
     if (read === undefined) return [];
-    const asked = edges.flatMap((followed, index) => (isTypeScriptFile(followed.source.file) && navigation.ownersOf(followed.target).some((owner) => TYPE_KINDS.includes(owner.kind)) ? [{ ...followed, index }] : []));
+    const asked = edges.flatMap((followed, index) => (isTypeScriptFile(followed.source.file) && ((FIELD_KINDS as readonly string[]).includes(followed.target.kind) || navigation.ownersOf(followed.target).some((owner) => TYPE_KINDS.includes(owner.kind))) ? [{ ...followed, index }] : []));
     if (asked.length === 0) return [];
     const bindings = await origins.rootBindings(asked.map(({ edge, source, target }): UseSite => ({ file: source.file, line: edge.line!, column: edge.column! + 1, spelled: target.name, owner: { name: source.name, line: source.startLine, endLine: source.endLine } })), signal);
     /** The body's own binding, or a declaration of the file the index holds as no class, function or other non-value node. */

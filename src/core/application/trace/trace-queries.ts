@@ -1,3 +1,6 @@
+import type { LibrarySource } from "../../domain/topology/library-source.ts";
+import type { WorkspaceReadOperation } from "../topology/workspace-operation.ts";
+import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { callsByOwner } from "./syntax-calls.ts";
 import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
@@ -31,11 +34,14 @@ import { createHeadReader, type FactSpec, type HeadReaderDeps, type HeadReading 
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
 import { isTraceRoot, walkTrace } from "./trace-walk.ts";
 import { placeEffects } from "./trace-effects.ts";
+import { comparePlacement, type DataEffectReader } from "../../domain/trace/data-effect-site.ts";
 import type { PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
 import { pagePlans } from "./page-plans.ts";
 import { unresolvedOncePerFile } from "../navigation/declaration-uses.ts";
 
 export interface TraceQueriesDeps extends HeadReaderDeps {
+  workspace?: WorkspaceReadOperation;
+  librarySources?: readonly LibrarySource[];
   /** Reads where the bare names a file calls come from, so a call to a package or a language global is external. */
   importOrigins: ImportOriginsReader;
   /** Reads the module statements that prove which declaration an imported name reaches; without it no edge is redirected. */
@@ -46,6 +52,7 @@ export interface TraceQueriesDeps extends HeadReaderDeps {
   relations: RelationExtractor;
   /** Reads the snapshot's call sites (RFC-0011), the declared rows a trace's effects come from (RFC-0013 R12). */
   callSites: PlacedCallSiteReader;
+  dataEffects?: DataEffectReader;
   /** Tells the trivia lines of a requested range apart, so they select nothing. */
   sourceTrivia: SourceTrivia;
   /** Version of each engine every operation runs on, by package name. */
@@ -61,6 +68,36 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
   return {
     async walk(request) {
       const { signal } = request;
+      if (request.workspace !== undefined) {
+        if (deps.workspace === undefined) return { ok: false, fault: { kind: "git-failed", detail: "workspace reader unavailable" } };
+        const result = await deps.workspace.withRead({
+          repo: { path: request.repo, id: request.repoId, ...(request.live ? { live: true as const } : { revision: request.revision }) },
+          ...request.workspace,
+          ...(request.scope === undefined ? {} : { scope: request.scope }),
+          ...(request.offline === undefined ? {} : { offline: request.offline }),
+          ...(signal === undefined ? {} : { signal }),
+        }, async (read, context) => {
+          const { workspace: _workspace, ...local } = request;
+          const selected = context.selectedSnapshots.find((snapshot) => snapshot.repo === request.repoId);
+          const plan = context.plans.find((plan) => plan.kind === "read" && plan.at.repoId === request.repoId);
+          const held = context.liveCaptures.get(request.repoId);
+          const at = selected?.kind === "live"
+            ? held === undefined ? undefined : { repo: held.repo, live: true as const, revision: undefined }
+            : selected?.kind === "sha" && plan?.kind === "read" ? { repo: request.repo, source: plan.at.source, revision: selected.sha, live: undefined } : undefined;
+          if (at === undefined) return { ok: false as const, fault: { kind: "git-failed" as const, detail: "trace snapshot unavailable" } };
+          const trace = createTraceQueries({ ...deps, preparation: context.preparation, heldLive: () => held, librarySources: context.librarySources?.get(request.repoId) ?? [] });
+          const answer = await trace.walk({ ...local, ...at });
+          if (!answer.ok) return answer;
+          const base = compositeBase(answer.value, [{ kind: "trace", fact: answer.value }, { kind: "workspace", fact: read.fact }], request.workspace, (value) => deps.digest.of(value));
+          return { ok: true as const, value: { ...answer.value, ...base } };
+        });
+        if (!result.ok) return result;
+        if (request.live) {
+          const stale = result.value.workspaceLive?.find(notice => notice.kind === "stale" && notice.repo === request.repoId);
+          if (stale?.kind === "stale") request.onStale?.(stale.notice);
+        }
+        return { ok: true, value: result.value.value };
+      }
       const targets = distinctTargets(request.targets);
       const declarations = targets.filter(isDeclarationTarget);
       const entrypoints = targets.filter(isEntrypointTarget);
@@ -124,7 +161,9 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const pages = pageRoots.size === 0 ? {} : { pages: { roots: pageRoots, of: pagePlans(store, memberProofs) } };
           const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, memberProofs, budget, ...pages, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
-          const effectCuts = await placeEffects(walk.roots, { store, unresolvedIn, sites: async () => (await deps.callSites.placed(head.tree.sources, request.repoId)).filter(({ site }) => head.selected(site.file)), lineOf: linesOncePerFile(sources), functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined) });
+          const dataEffects = () => deps.dataEffects?.placed(head.tree.sources) ?? Promise.resolve([]);
+          const dataSites = () => head.prepared?.facts === undefined ? dataEffects() : head.prepared.facts.ofInputs("trace-data-effects", { sources: head.tree.sources }, dataEffects);
+          const effectCuts = await placeEffects(walk.roots, { store, unresolvedIn, sites: async () => [...(await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources)), ...(await dataSites())].sort(comparePlacement).filter(({ site }) => head.selected(site.file)), lineOf: linesOncePerFile(sources), functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined) });
 
           const { steps, ids } = traceSteps(walk.roots);
           const rootIds = new Map(roots.map((root, index) => [root.id, ids.get(walk.roots[index]!)!]));

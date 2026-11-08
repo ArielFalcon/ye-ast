@@ -8,8 +8,7 @@ import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, thisType, withJavaSources } from "./java-project.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
-import { ancestorsOf, hierarchyOf, targetsOf, type Hierarchy, type Superclass } from "./java-dispatch-targets.ts";
-import { createJavaProject, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
@@ -41,12 +40,11 @@ interface ReadFile {
  * may only return a subtype, which dispatch covers. No method, beyond what `dispatchTargets` refuses, when the type is a
  * type variable, an enum or an annotation type; when a type at or above it is outside the repository, whose members the
  * sources do not state; when its members of the name, its own and inherited, are not exactly one signature of the call's
- * arity with no varargs and no private declaration, or the name is one of `Object`'s methods; when the call sits in an
+ * arity with no varargs and no inaccessible private declaration, or the name is one of `Object`'s methods; when the call sits in an
  * anonymous or a local class; when a source holds an annotation by which a processor adds overloads or rewrites calls
- * (`CALL_REWRITING_ANNOTATIONS`); and when the declared hierarchy does not prove every body a value of the type may run
- * for the method. `unproven` only when a source may make a value of a declared type run code no source shows (a source
- * that does not parse, a JVM language no extractor reads, a JDK API that implements an interface at run time) and the
- * call's receiver is a value it reads; otherwise the call is `unknown`.
+ * (`CALL_REWRITING_ANNOTATIONS`); or when the declared hierarchy does not settle the member. Declaration selection and
+ * runtime dispatch are separate obligations. An unproven value receiver or declared repository member remains a cut;
+ * no name-only index target proves it. Non-Java and non-invocation sites remain unknown.
  */
 export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[]): ImportOrigins["receiverMethods"] {
   const java = sources.filter(({ path }) => isJavaSource(path));
@@ -59,8 +57,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
       const { files, unparsed } = parse(java);
       const project = createJavaProject(files);
       const falsified = unparsed.length > 0 || unreadJvm || project.unreadable.length > 0 || files.some((file) => namesAnyDynamicImplementation(file, project));
-      const hierarchy = falsified ? undefined : hierarchyOf(files, project);
-      const proves = hierarchy !== undefined && !files.some(({ root }) => rewritesCalls(root));
+      const proves = !falsified && !files.some(({ root }) => rewritesCalls(root));
       const byPath = new Map(files.map((file) => [file.path, file]));
       const readFiles = new Map<string, ReadFile>();
       const readFile = (path: string): ReadFile | undefined => {
@@ -68,12 +65,12 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         if (file === undefined) return undefined;
         let known = readFiles.get(path);
         if (known === undefined) {
-          known = { file, bindings: new Map(javaReceiverBindings(file.root).map((binding) => [callKey(binding.line, binding.column, binding.member), binding])), invocations: invocationsOf(file.root) };
+          known = { file, bindings: new Map(javaReceiverBindings(file.root, { declaredFields: true }).map((binding) => [callKey(binding.line, binding.column, binding.member), binding])), invocations: invocationsOf(file.root) };
           readFiles.set(path, known);
         }
         return known;
       };
-      const resolver = createResolver(project, hierarchy);
+      const resolver = createResolver(project);
       for (const [index, site] of sites.entries()) {
         if (signal?.aborted) break;
         const source = readFile(site.file);
@@ -82,14 +79,31 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         const method = proves ? resolver.methodOf(invocations[0]!, source) : undefined;
         if (method !== undefined) {
           results[index] = { kind: "method", file: method.owner.file.path, start: method.node.startPosition.row + 1, nameLine: (method.node.childForFieldName("name") ?? method.node).startPosition.row + 1 };
-        } else if (falsified && resolver.holdsValue(invocations[0]!, source.file)) results[index] = UNPROVEN;
+        } else if (resolver.hasDeclaredReceiver(invocations[0]!, source) || resolver.holdsValue(invocations[0]!, source.file)) results[index] = UNPROVEN;
       }
       return results;
     });
   };
 }
 
-function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) {
+function createResolver(project: JavaProject) {
+  const hierarchies = new Map<TypeDecl, ReturnType<JavaProject["hierarchy"]>>();
+  const declaredHierarchy = (type: TypeDecl) => {
+    let known = hierarchies.get(type);
+    if (known === undefined) {
+      known = project.hierarchy(type, (node, owner) => {
+        const found = resolve(node, owner.file, project, enclosingType(owner.node.parent ?? owner.node, owner.file, project), node);
+        return found?.kind === "repository" ? found.type : undefined;
+      });
+      hierarchies.set(type, known);
+    }
+    return known;
+  };
+  const signatures = new Map<MethodDecl, ReturnType<typeof readSignature>>();
+  const signatureOf = (method: MethodDecl) => {
+    if (!signatures.has(method)) signatures.set(method, readSignature(method, project));
+    return signatures.get(method);
+  };
 
   /** The repository type the receiver of an invocation is declared to hold; none when nothing proves one. */
   const receiverOf = (invocation: Node, source: ReadFile): TypeDecl | undefined => {
@@ -101,7 +115,9 @@ function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) 
     }
     const binding = source.bindings.get(callKey(invocation.startPosition.row + 1, invocation.startPosition.column + 1, invocation.childForFieldName("name")?.text ?? ""));
     const receiver = object.type === "identifier" ? object.text : object.type === "field_access" ? object.childForFieldName("field")?.text : undefined;
-    if (binding === undefined || binding.receiver !== receiver || binding.holds.kind !== "annotated") return undefined;
+    if (binding === undefined || binding.receiver !== receiver || binding.holds.kind !== "annotated") {
+      return object.type === "identifier" && localBinding(object) === undefined && !fieldAround(object, source.file, project) ? repositoryType(object, source.file, object) : undefined;
+    }
     const name = annotationAt(source.file.root, binding.holds.line, binding.holds.column, binding.holds.type);
     return name === undefined ? undefined : repositoryType(name, source.file, name);
   };
@@ -110,7 +126,7 @@ function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) 
   const methodNamed = (invocation: Node, source: ReadFile): MethodDecl | undefined => {
     const type = receiverOf(invocation, source);
     const name = invocation.childForFieldName("name")?.text;
-    return type === undefined || name === undefined ? undefined : memberOf(type, name, argumentCount(invocation));
+    return type === undefined || name === undefined ? undefined : memberOf(type, name, argumentCount(invocation), enclosingType(invocation, source.file, project));
   };
 
   /** The repository type a method declares it returns: none for a type variable, an array, a primitive or a type outside the repository. */
@@ -129,15 +145,17 @@ function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) 
    * declared and inherited, must be one signature, so overload resolution has one candidate; the type's own, else the
    * nearest up its class chain, else the only one.
    */
-  const memberOf = (type: TypeDecl, name: string, arity: number): MethodDecl | undefined => {
-    if (hierarchy === undefined || OBJECT_METHODS.has(name)) return undefined;
-    const above = ancestorsOf(type, hierarchy);
-    if (above.some((ancestor) => hierarchy.outside.has(ancestor))) return undefined;
-    const candidates = above.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
+  const memberOf = (type: TypeDecl, name: string, arity: number, caller: TypeDecl | undefined): MethodDecl | undefined => {
+    if (OBJECT_METHODS.has(name)) return undefined;
+    const above = declaredHierarchy(type);
+    if (above.gaps.length > 0) return undefined;
+    const named = above.types.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
+    if (named.some(hasVarargs)) return undefined;
+    const candidates = named.filter((method) => method.parameterTypes.length === arity);
     const [first] = candidates;
-    if (first === undefined || first.parameterTypes.length !== arity) return undefined;
-    if (candidates.some((method) => method.modifiers.includes("private") || hasVarargs(method) || (method !== first && !sameStatedSignature(method, first)))) return undefined;
-    for (let current: Superclass = type; typeof current === "object"; current = hierarchy.superclasses.get(current) ?? "outside") {
+    if (first === undefined) return undefined;
+    if (candidates.some((method) => (method.modifiers.includes("private") && (method.owner !== type || method.owner !== caller)) || (method !== first && !sameStatedSignature(method, first)))) return undefined;
+    for (const current of project.classChain(type)) {
       const own = candidates.find((method) => method.owner === current);
       if (own !== undefined) return own;
     }
@@ -146,19 +164,15 @@ function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) 
 
   /** Whether two members certainly state the same parameter types, each as the strict reading settles them. */
   const sameStatedSignature = (method: MethodDecl, other: MethodDecl): boolean => {
-    const own = hierarchy?.signatureOf(method);
-    const others = hierarchy?.signatureOf(other);
+    const own = signatureOf(method);
+    const others = signatureOf(other);
     return own !== undefined && others !== undefined && sameSignature(own, others);
   };
 
   return {
-    /** The method the call names, when its receiver's declared type names one and the declared hierarchy proves what a value of that type may run for it. */
-    methodOf: (invocation: Node, source: ReadFile): MethodDecl | undefined => {
-      const type = receiverOf(invocation, source);
-      const name = invocation.childForFieldName("name")?.text;
-      const method = type === undefined || name === undefined ? undefined : memberOf(type, name, argumentCount(invocation));
-      return method !== undefined && hierarchy !== undefined && targetsOf(method, hierarchy, type).kind === "bodies" ? method : undefined;
-    },
+    hasDeclaredReceiver: (invocation: Node, source: ReadFile): boolean => receiverOf(invocation, source) !== undefined,
+    /** The method the call names through its declared receiver and one settled signature; dispatch decides its body separately. */
+    methodOf: methodNamed,
     /**
      * Whether the call's receiver is a value the call reads, whose class the call's own place does not state: a variable
      * (a parameter, a local or a field, `this.f` included), a member read through another value (`a.b`), or what another
@@ -169,7 +183,7 @@ function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) 
       if (object === null) return false;
       if (object.type === "method_invocation" || object.type === "field_access") return true;
       if (object.type !== "identifier") return false;
-      if (localBinding(object) !== undefined || fieldAround(object)) return true;
+      if (localBinding(object) !== undefined || fieldAround(object, file, project)) return true;
       const named = resolve(object, file, project, enclosingType(object, file, project), object);
       return named === undefined;
     },
@@ -186,10 +200,16 @@ function namesAnyDynamicImplementation(file: JavaFile, project: JavaProject): bo
   return false;
 }
 
-/** Whether a type body around the identifier declares a field of its name. */
-function fieldAround(identifier: Node): boolean {
+/** Whether a lexical type or its hierarchy declares, or may supply, a field of the name. */
+function fieldAround(identifier: Node, file: JavaFile, project: JavaProject): boolean {
   for (let body = enclosingBody(identifier); body !== undefined; body = enclosingBody(body)) if (fieldsOf(body).some((declarator) => declarator.childForFieldName("name")?.text === identifier.text)) return true;
-  return false;
+  const type = enclosingType(identifier, file, project);
+  if (type === undefined) return false;
+  const above = project.hierarchy(type);
+  return above.gaps.length > 0 || above.types.some((owner) => {
+    const body = owner.node.childForFieldName("body");
+    return body !== null && fieldsOf(body).some((declarator) => declarator.childForFieldName("name")?.text === identifier.text);
+  });
 }
 
 function rewritesCalls(root: Node): boolean {
@@ -218,10 +238,10 @@ function argumentCount(invocation: Node): number {
   return (invocation.childForFieldName("arguments")?.namedChildren ?? []).filter((argument) => argument !== null && !NOT_ARGUMENTS.has(argument.type)).length;
 }
 
-function hasVarargs(method: MethodDecl): boolean {
+export function hasVarargs(method: MethodDecl): boolean {
   return (method.node.childForFieldName("parameters")?.namedChildren ?? []).some((parameter) => parameter?.type === "spread_parameter");
 }
 
-function callKey(line: number, column: number, member: string): string {
+export function callKey(line: number, column: number, member: string): string {
   return `${line}:${column}:${member}`;
 }

@@ -6,6 +6,7 @@ import type { SourceSpan } from "../domain/trace/owning-body.ts";
 export interface DeclaredMemberNames {
   /** Every syntactic call or construction, at its callee start (1-based UTF-16). */
   calls?: readonly SyntaxCall[];
+  initializedFields?: readonly Pick<DeclaredCallable, "name" | "start" | "nameLine">[];
   /** Sorted, once each. */
   names: readonly string[];
   /** In source order. */
@@ -40,6 +41,8 @@ export interface ReceiverBinding {
   receiver: string;
   member: string;
   holds: ReceiverValue;
+  /** Candidate annotation only; the lexical reader did not prove the value is held by it. */
+  unproven?: true;
 }
 
 /**
@@ -77,6 +80,7 @@ export interface FunctionValueCall {
 
 /** A method or function declaration as its syntax states it: whether it has a body, and whether a subtype can override it. */
 export interface DeclaredCallable {
+  construction?: true;
   name: string;
   /** The line of its first token, an annotation or a decorator included. */
   start: number;

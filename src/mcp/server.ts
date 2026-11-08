@@ -50,30 +50,30 @@ export interface McpDeps extends QueryExecutionDeps {
 
 /** Common interpretation rules and a short routing guide, also useful before individual tools are loaded. */
 export function instructionsFor(repository: McpDeps["repository"], available: readonly string[] = [repository.repoId]): string {
-  return `ye-ast: deterministic, read-only facts about code, Git and declared contracts of ${repository.path} (id ${repository.repoId}). Prefer it to text search for dependency and reach questions. No quality judgment or change approval. Same question and snapshot, same answer: reuse results.
+  return `ye-ast: deterministic, read-only facts about code, Git and declared contracts of ${repository.path} (id ${repository.repoId}). Use for dependencies/reach, not quality or approval. Reuse identical snapshot queries.
 
 When to call:
 - ye_ast_entrypoints: orient, or find the handler of a route, listener or job.
-- ye_ast_callers: before changing, renaming or deleting a declaration (name or line range): its dependents and reaching entrypoints.
-- ye_ast_impact: review a diff (base..head, or trusted live edits): what changed declarations reach; entrypoints added, removed or altered.
-- ye_ast_importers: before moving, renaming or deleting a file or changing its exports: who imports or names it.
-- ye_ast_outline: declaration spans and imports, to choose line ranges to read or target; focus on one declaration by dotted path or line after the first listing.
-- ye_ast_trace: what a declaration executes, in source order, with a reading plan of the spans to open; call it before reading a flow file by file.
+- ye_ast_callers: declaration dependents and reaching entrypoints.
+- ye_ast_impact: diff dependents; added/removed/altered entrypoints.
+- ye_ast_importers: who imports or names a file.
+- ye_ast_outline: declaration spans/imports; focus by dotted path or line.
+- ye_ast_trace: forward calls, effects and reading plan; workspace supplies declared library sources.
 - ye_ast_workspace: which other repositories this one names (HTTP, messaging, dependencies), to choose clones.
 - ye_ast_decisions: workspace configuration gaps with evidence-backed options; it writes nothing.
-- ye_ast_contract_consequences: before changing a response or request contract, or to see what a diff of contracts breaks.
-- ye_ast_compose: 1..16 of these queries in one call, merging shared entities. Queries rerun; nothing is stored and captures are not atomic, so obtain dependent coordinates first.
+- ye_ast_contract_consequences: consumers/producers affected by a contract hypothesis or diff.
+- ye_ast_compose: 1..16 queries, merging identities. Reruns; stores nothing; captures non-atomic. Obtain dependent coordinates first.
 
 Reading answers: complete is relative to the declared scope, supported constructs and change selection; partial keeps known findings and lists cuts (where coverage stopped; per-repository sections and file reads can have their own limits); unknown never means no impact. TypeScript tests are not indexed; template bindings are not resolved. References need not be calls or edits; confidence measures resolution, not safety; entrypoint origins are associations, not complete call chains. Content carries presentation text (summary and details findings, full navigation), then a "result JSON:" line with the result fields. Recovery is the recovery field.
 
-Repositories and snapshots: declared repository IDs: ${available.join(", ")}. repo selects one (default ${repository.repoId}); registration grants no trust or membership. Reads use HEAD unless revision (impact: head) names a commit. live reads staged, unstaged and untracked changes of a repository the user declared trusted (repository content cannot grant trust), excludes revision/head and recaptures per call; head and stateId identify the captured working-tree state, so compare them between answers. For cross-repository links, set workspace on ye_ast_callers or ye_ast_impact: {} uses the persisted membership, workspace.repos supplies local clones (never downloaded); untrusted repositories cannot supply defaults. offline skips refreshing trusted remotes; live repositories never refresh. Paths are relative to their owner's snapshot; locate clones via repositoryRoots, not cwd. Base-side line numbers come from the merge-base commit, so they may not match your working copy.
+Repositories and snapshots: declared repository IDs: ${available.join(", ")}. repo selects one (default ${repository.repoId}); registration grants no trust or membership. Reads use HEAD unless revision (impact: head) names a commit. live reads staged, unstaged and untracked changes of a repository the user declared trusted (repository content cannot grant trust), excludes revision/head and recaptures per call; head and stateId identify the captured working-tree state, so compare them between answers. For cross-repository reads, set workspace on ye_ast_callers, ye_ast_impact or ye_ast_trace: {} uses the persisted membership, workspace.repos replaces defaults with existing local Git roots (never downloaded); stable IDs default to root basename and must match across clone/worktrees; declared gateways override inference, never guess them; untrusted repositories cannot supply defaults. offline skips refreshing trusted remotes; live repositories never refresh. Paths are relative to their owner's snapshot; locate clones via repositoryRoots, not cwd. Base-side line numbers come from the merge-base commit, so they may not match your working copy.
 
-Narrowing and paging: scope globs limit coverage (exclude wins). impact changed picks the diff paths that start the walk (the seeds); unlike scope, it does not limit where consequences are found. Unmatched globs are errors. budget limits traversal, not response length; raise a bound only when a cut names it. Entrypoints, callers and impact page evidence the text omits: supply select and page together, page.limit required; a cursor needs the same selection and limit. Answers give the coordinates and owner each selection needs; select lists the kinds per tool. expect asserts the recovery identity; replay reruns the query and fails if the result changed (no old capture is kept) and requires workspace.
+Narrowing and paging: scope globs limit coverage (exclude wins); omitted=all. Include retains manifests, exclude may remove them; outside-scope callers/entrypoints are unknown. mode changes presentation only: summary=findings, details=evidence/locations, full=result JSON+navigation. impact changed picks the diff paths that start the walk (the seeds); unlike scope, it does not limit where consequences are found. Unmatched globs are errors. budget limits traversal, not response length; raise a bound only when a cut names it. Entrypoints, callers and impact page evidence the text omits: supply select and page together, page.limit required; a cursor needs the same selection and limit. Answers give the coordinates and owner each selection needs; select lists the kinds per tool. expect asserts the recovery identity; replay reruns the query and fails if the result changed (no old capture is kept) and requires workspace.
 
 Errors: isError is a fault, not an empty fact: follow its next step if given, and "fault fields:". unknown-symbol: use a listed candidate path or a line range (ye_ast_outline lists them); top-level-line: focus on a line inside a declaration; unknown-change-path: correct the changed globs.`;
 }
 
-const REPLAY_GUIDE = { replay: "Copy verbatim from the recovery recipe of a previous workspace answer; requires workspace." };
+const REPLAY_GUIDE = { replay: "Copy workspace recovery recipe verbatim; requires workspace." };
 
 const recoverySchema = z.discriminatedUnion("status", [
   z.strictObject({ version: z.literal(1), status: z.literal("available"), resultIdentity: z.string().regex(/^mcp-r1:[0-9a-f]{64}$/), query: z.strictObject({ name: z.literal("ye_ast_entrypoints"), arguments: recipeArguments }) }),
@@ -563,8 +563,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
 
   server.registerTool("ye_ast_compose", {
     title: "Compose evidence from related queries",
-    description: "Run 1..16 queries of the other ye_ast tools in one call when they share entities, e.g. callers of a symbol plus the entrypoints of its repository. Combines findings, keeping each source's coverage, trust and snapshot checks. Each queries[].arguments takes the same analysis arguments as the named tool (no mode, select or page); queries rerun in a fixed order and nothing is stored. Generic dependencies do not prove breakage. Request limit: 1 MiB of canonical JSON.",
-    inputSchema: compactInput(COMPOSE_INPUT, { arguments: "The arguments of the tool named in name, without mode, select or page." }),
+    description: "Run 1..16 queries sequentially, merging shared identities with coverage/trust/snapshot checks. arguments uses the named tool schema without mode/select/page. Queries rerun; nothing stored. Dependencies do not prove breakage. Limit: 1 MiB canonical JSON.",
+    inputSchema: compactInput(COMPOSE_INPUT, { arguments: "Arguments of the tool named in name; no mode/select/page." }),
     annotations,
   }, async (input, ctx) => {
     try {
@@ -582,7 +582,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_entrypoints",
     {
       title: "Entrypoints of a revision",
-      description: "Use to orient in a repository or to find where an HTTP/UI route, message listener or job is handled. Lists entrypoints with handler locations. For dependents use ye_ast_callers; for a diff use ye_ast_impact.",
+      description: "Entrypoints with handler locations: HTTP/UI routes, listeners and jobs. For dependents use callers; for diffs use impact.",
       inputSchema: compactInput(TOOL_INPUTS.entrypoints),
       annotations,
     },
@@ -594,7 +594,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_impact",
     {
       title: "Impact of a change",
-      description: "Use to review a change: traces changed declarations from merge-base(base, head) to head, their incoming dependents, reached entrypoints and entrypoints added, removed or altered. base is required; head defaults to HEAD; live reads trusted uncommitted edits. workspace adds incoming and outgoing cross-repository links. For an unchanged symbol use ye_ast_callers.",
+      description: "Diff from merge-base(base, head): changed declarations, incoming dependents, reached and added/removed/altered entrypoints. base required; head=HEAD, or trusted live. workspace adds incoming/outgoing links. For unchanged symbols use callers.",
       inputSchema: compactInput(TOOL_INPUTS.impact, REPLAY_GUIDE),
       annotations,
     },
@@ -606,7 +606,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_callers",
     {
       title: "Callers of symbols or line ranges",
-      description: "Use before changing, renaming or deleting an existing declaration: traces its incoming dependents and the entrypoints reaching it, with dependency locations. Target a name (matches the final segment, possibly several declarations) or an inclusive line range; an unknown name is an error. workspace adds incoming cross-repository call sites. For a diff use ye_ast_impact.",
+      description: "Incoming dependents and reaching entrypoints with locations. Targets are names (all matching declarations) or inclusive ranges; unknown name is an error. workspace adds incoming cross-repo calls. For diffs use impact.",
       inputSchema: compactInput(TOOL_INPUTS.callers, REPLAY_GUIDE),
       annotations,
     },
@@ -618,7 +618,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_importers",
     {
       title: "Importers of files",
-      description: "Use before moving, renaming or deleting a file or changing its exports: lists static, reexport, dynamic and type importers, users and unresolved names; details lists each path once with its categories and positions, and users without a module category are additional. Import edges do not prove declaration use; unresolved names prove neither dependencies nor affected files. TypeScript includes alias/barrel edges and exported test consumers; omitted live tests yield partial. For declarations use ye_ast_callers.",
+      description: "Static/reexport/dynamic/type importers, users and unresolved names. Details: paths once, categories/positions; uncategorized users are additional. Imports do not prove declaration use; unresolved names prove neither dependency nor impact. TS: aliases/barrels and exported test consumers; omitted live tests=partial. For declarations use callers.",
       inputSchema: compactInput(TOOL_INPUTS.importers),
       annotations,
     },
@@ -629,7 +629,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_outline",
     {
       title: "Shape of files",
-      description: "Use to choose line ranges before reading or targeting code: indexed declaration spans and imports of files, without source. Each import gives its target (repository file, package, or unresolved with a reason) and the names it binds, with their proven declaration and line. Members nest under their contains edge; others stay top level. Instead of files, focus on declarations: {file, symbol} takes a dotted path (Class.member, a bare name at any depth), {file, line} the innermost declaration holding the line; a match gives its containers, subtree, omitted count and uses outside its body (file:line, package, global, else a cut), no imports. Its path works verbatim in ye_ast_callers; for callers too, use ye_ast_compose. Unavailable files report cuts, not empty lists. Match revision/live to the source you inspect.",
+      description: "Indexed declarations/imports without source. Imports: repository/package/unresolved target, bindings and proven declarations. Members nest by contains. files lists files; focus selects dotted suffix path (bare name at any depth) or innermost declaration at line, returning containers/subtree/omitted count and out-of-body uses (file:line/package/global, else cut), without imports. Reuse paths in callers; compose combines reads. Unavailable files=cut. Match revision/live.",
       inputSchema: compactInput(TOOL_INPUTS.outline),
       annotations,
     },
@@ -640,7 +640,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_trace",
     {
       title: "What declarations execute",
-      description: "Use to follow a flow forward before reading it file by file: from each declaration a target selects (a name, maybe several declarations, an inclusive line range, or an entrypoint), the calls its body makes in source order, then theirs, each declaration expanded once, repeats marked seen. Branches are not evaluated. Terminal callees fold into leaves with their spans; external calls group by module; declared-client requests and messages are effects with their target (undecided: a cut); a call no rule settles is a cut listing candidates. The reading plan lists the spans to open, merged per file. For who depends on a declaration use ye_ast_callers.",
+      description: "Forward calls in source order from declarations/ranges or entrypoints. Each declaration expands once; repeats=seen; branches unevaluated. Terminal callees fold into leaves; externals group by module. Proven HTTP/message targets=effects, undecided targets=cut; unsettled calls list candidates. Reading plan merges spans per file. workspace reads declared library sources; runtime URL policies stay cuts. For incoming dependents use callers.",
       inputSchema: compactInput(TOOL_INPUTS.trace),
       annotations,
     },
@@ -651,7 +651,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_workspace",
     {
       title: "Repositories a workspace names",
-      description: "Use to find which other repositories this one talks to: outward names (HTTP hosts and prefixes, config URLs, message destinations, dependency coordinates, remotes, registries), candidate repositories with match evidence, unserved names, and the links between the repositories read (HTTP calls and published messages joined to the routes and listeners they reach), with the calls that matched no or several entrypoints. Helps choose clones for workspace on ye_ast_callers/ye_ast_impact; never downloads or guesses unresolved targets. Trusted persisted remotes may refresh unless offline.",
+      description: "Outward names (HTTP hosts/prefixes, config URLs, message destinations, dependencies, remotes, registries), candidate repos with evidence, unserved names, links to routes/listeners and unmatched/ambiguous calls. Helps select workspace clones. Never downloads or guesses. Trusted persisted remotes refresh unless offline.",
       inputSchema: compactInput(TOOL_INPUTS.workspace),
       annotations,
     },
@@ -662,7 +662,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_decisions",
     {
       title: "Gaps a workspace leaves to the user",
-      description: "Use before ye-ast init --workspace or to build a workspace config form: configuration gaps (membership, identity, gateways, trust, remotes) with evidence-backed options and rule-based recommendations; some need free text. About configuration only, not code quality or change approval. Writes nothing.",
+      description: "Read-only workspace configuration gaps (membership/identity/gateways/trust/remotes), evidenced options and rule recommendations; may need free text. Not code quality or approval.",
       inputSchema: compactInput(TOOL_INPUTS.decisions),
       annotations,
     },

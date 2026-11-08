@@ -27,6 +27,7 @@ const WRITTEN_FIELDS = new WeakMap<ts.ClassDeclaration, ReadonlySet<string>>();
 const VARIABLE_WRITES = new WeakMap<ts.Node, ReadonlyMap<string, readonly ts.Expression[] | null>>();
 /** The request call through which a wrapper method forwards its parameters, by the method; set where the wrapper fixpoint settles it. */
 const FORWARDING_CALLS = new WeakMap<ts.Node, ts.CallExpression>();
+const CALL_ORIGINS = new WeakMap<CallSite, NonNullable<PlacedCallSite["origins"]>>();
 
 /** What one file declares at its top level, and the classes and enums it holds, as the reader needs them. */
 interface FileShape {
@@ -113,7 +114,7 @@ interface Located<E extends ts.Expression = ts.Expression> {
 }
 
 export function createHttpCallSites(): CallSiteReader & PlacedCallSiteReader {
-  return { of: async (files, repo) => (await readPlaced(files, repo)).map(({ site }) => site), placed: readPlaced };
+  return { of: async (files, repo) => (await readPlaced(files, repo)).map(({ site, column }) => ({ ...site, ...(column === undefined ? {} : { column: column + 1 }) })), placed: (files, repo) => readPlaced(files, repo, true) };
 }
 
 function readerOf(files: readonly SourceFile[]): { shapes: ReadonlyMap<string, FileShape>; reader: Reader } {
@@ -127,6 +128,7 @@ function readerOf(files: readonly SourceFile[]): { shapes: ReadonlyMap<string, F
 export interface WrapperCall {
   function: ts.MethodDeclaration | ts.ArrowFunction | ts.FunctionExpression;
   call: ts.CallExpression;
+  forwarded: ts.CallExpression;
 }
 
 /** The expression a request carries as its body and the wrapper methods the call enters before it, outermost first. */
@@ -144,13 +146,16 @@ export function createRequestBodies(files: readonly SourceFile[]): (call: ts.Cal
   };
 }
 
-async function readPlaced(files: readonly SourceFile[], repo: string): Promise<readonly PlacedCallSite[]> {
+async function readPlaced(files: readonly SourceFile[], repo: string, includeForwarding = false): Promise<readonly PlacedCallSite[]> {
   const { shapes, reader: read } = readerOf(files);
   const found: PlacedCallSite[] = [];
   for (const shape of shapes.values()) {
     for (const call of calls(shape.source)) {
       const column = shape.source.getLineAndCharacterOfPosition(call.getStart(shape.source)).character;
-      for (const site of await read.callSite(shape, call, repo)) found.push({ site, column });
+      for (const site of await read.callSite(shape, call, repo, includeForwarding)) {
+        const origins = CALL_ORIGINS.get(site);
+        found.push({ site, column, ...(origins === undefined ? {} : { origins }) });
+      }
     }
   }
   return found.sort(({ site: a }, { site: b }) => compareCallSites(a, b));
@@ -490,6 +495,7 @@ function ownBindings(node: ts.Node): ReadonlyMap<string, Binding> {
 
 /** A call's target, and the request the code states when the snapshot cannot decide where it goes. */
 interface ReadTarget {
+  throughWrapper?: true;
   target: Finding<HttpTarget>;
   stated?: StatedRequest;
   diagnostic?: CallSiteDiagnostic;
@@ -534,13 +540,18 @@ class Reader {
     return index;
   }
 
-  async callSite(shape: FileShape, call: ts.CallExpression, repo: string): Promise<CallSite[]> {
-    if (this.forwardsItsOwnParameter(shape, call)) return [];
+  async callSite(shape: FileShape, call: ts.CallExpression, repo: string, includeForwarding = false): Promise<CallSite[]> {
+    if (!includeForwarding && this.forwardsItsOwnParameter(shape, call)) return [];
     const read = await this.target(shape, call);
     if (read === undefined) return [];
     const start = shape.source.getLineAndCharacterOfPosition(call.getStart(shape.source)).line + 1;
     const end = shape.source.getLineAndCharacterOfPosition(call.getEnd()).line + 1;
-    return [{ repo, file: shape.source.fileName, line: start, endLine: end, symbol: symbolOf(call) ?? "(top level)", ancestors: ancestorsOf(call, shape.source), transport: "http", target: read.target, ...(read.diagnostic === undefined ? {} : { diagnostic: read.diagnostic }), ...(read.stated === undefined ? {} : { stated: read.stated }) }];
+    const site: CallSite = { repo, file: shape.source.fileName, line: start, endLine: end, symbol: symbolOf(call) ?? "(top level)", ancestors: ancestorsOf(call, shape.source), transport: "http", target: read.target, ...(read.diagnostic === undefined ? {} : { diagnostic: read.diagnostic }), ...(read.stated === undefined ? {} : { stated: read.stated }) };
+    if (includeForwarding && read.throughWrapper === true) {
+      const body = await this.requestBody(shape, call);
+      CALL_ORIGINS.set(site, body?.wrappers.flatMap((wrapper) => [originOf(wrapper.function), originOf(wrapper.forwarded)]) ?? []);
+    }
+    return [site];
   }
 
   async requestBody(shape: FileShape, call: ts.CallExpression): Promise<RequestBody | undefined> {
@@ -558,7 +569,7 @@ class Reader {
       const forwarded = member === undefined ? undefined : FORWARDING_CALLS.get(member);
       const entered = member === undefined ? undefined : functionOf(member);
       if (forwarded === undefined || entered === undefined || !ts.isPropertyAccessExpression(forwarded.expression) || wrappers.some((wrapper) => wrapper.function === entered)) return undefined;
-      wrappers.push({ function: entered, call: entering });
+      wrappers.push({ function: entered, call: entering, forwarded });
       if (forwarded.expression.expression.kind !== ts.SyntaxKind.ThisKeyword) return { expression: bodyArgument(forwarded.expression.name.text, forwarded), wrappers };
       entering = forwarded;
       name = forwarded.expression.name.text;
@@ -590,9 +601,9 @@ class Reader {
     const isHttpClient = isAngularHttpClientName(owner.shape, owner.name);
     const wrapped = isHttpClient ? undefined : this.wrappers.get(owner.name)?.get(name === "fetch" ? "request" : name);
     if (!isHttpClient && wrapped === undefined) return undefined;
-    if (name === "request") return this.explicitRequest(shape, call);
     const verb = wrapped === undefined || wrapped === "request" ? name : wrapped;
-    return this.request(shape, call, call.arguments[0], verb === "fetch" ? "GET" : verbOf(verb));
+    const read = name === "request" ? await this.explicitRequest(shape, call) : await this.request(shape, call, call.arguments[0], verb === "fetch" ? "GET" : verbOf(verb));
+    return wrapped === undefined ? read : { ...read, throughWrapper: true };
   }
 
   /** `fetch(url, init)`: the method is the one the init object states, GET without an init. */
@@ -1428,4 +1439,10 @@ export function symbolOf(node: ts.Node): string | undefined {
   }
   if (className === undefined) return member;
   return member === undefined ? className : `${className}.${member}`;
+}
+
+function originOf(node: ts.Node): NonNullable<PlacedCallSite["origins"]>[number] {
+  const source = node.getSourceFile();
+  const at = source.getLineAndCharacterOfPosition(node.getStart(source));
+  return { file: source.fileName, line: at.line + 1, column: at.character };
 }

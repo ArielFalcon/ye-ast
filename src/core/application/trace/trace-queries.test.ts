@@ -24,6 +24,7 @@ type Origin = Finding<ImportOrigin> & { occurrence?: true };
 const written = (...paths: string[][]): ReplacedRoots => ({ paths, globalObjects: new Set(["globalThis", "window"]), packages: new Set() });
 
 interface Options {
+  workspace?: TraceQueriesDeps["workspace"];
   syntaxCalls?: Readonly<Record<string, readonly SyntaxCall[]>>;
   nodes: readonly FakeNode[];
   edges?: readonly FakeEdge[];
@@ -96,6 +97,7 @@ function setup(options: Options) {
     return origin === undefined ? { status: "unknown", reason: "unresolved", evidence: [] } : { status: "complete", value: origin, evidence: [], occurrence: true };
   };
   const deps = {
+    ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
     vcs: {
       resolveCommit: async () => ({ ok: true, value: SHA }),
       exportCommit: async () => ({ ok: true, value: { files: [A, B].map((path) => ({ path, blob: "1", written: true })), skipped: [] } }),
@@ -283,7 +285,7 @@ test("a call the receiver's declared type names steps at that method, whatever m
   assert.deepEqual(valueOf(proven).steps[0]?.leaves?.map(({ file, start }) => [file, start]), [[B, 3], [B, 11]]);
   assert.deepEqual(cutsOf(unplaced), [
     ["unresolved-link", ["src/a.ts:10 this.repo.find", "src/b.ts::find"]],
-    ["unresolved-link", ["src/a.ts:9 save", "src/b.ts::save"]],
+    ["unresolved-link", ["src/a.ts:9 save", "src/b.ts:3 save", "src/b.ts:7 save"]],
   ]);
 });
 
@@ -1157,8 +1159,8 @@ test("a call site the extraction resolves at a call of an expanded body is an ef
 
   assert.equal(fact.status, "complete");
   assert.deepEqual(valueOf(fact).steps[0]!.effects, [
-    { kind: "http", line: 8, target: { method: "POST", path: "/orders/{}/checkout" } },
-    { kind: "message", line: 9, target: { protocol: "nats", destination: "orders.created", role: "publish" } },
+    { kind: "http", line: 8, column: 1, target: { method: "POST", path: "/orders/{}/checkout" } },
+    { kind: "message", line: 9, column: 1, target: { protocol: "nats", destination: "orders.created", role: "publish" } },
   ]);
 });
 
@@ -1219,7 +1221,7 @@ const at = (line: number, column: number, path = "/x", overrides: Partial<CallSi
   site: site(line, { target: { status: "complete", value: { method: "GET", path }, evidence: [{ path: A, line }] }, ...overrides }),
   column,
 });
-const effectPaths = (fact: Fact<TraceValue>) => valueOf(fact).steps.flatMap((step) => (step.effects ?? []).map((effect) => [step.symbol, effect.kind === "http" ? effect.target.path : effect.target.destination]));
+const effectPaths = (fact: Fact<TraceValue>) => valueOf(fact).steps.flatMap((step) => (step.effects ?? []).map((effect) => [step.symbol, effect.kind === "http" ? effect.target.path : effect.kind === "message" ? effect.target.destination : effect.target?.name]));
 const effectCuts = (fact: Fact<TraceValue>) => cutsOf(fact).filter(([, at]) => (at as readonly string[])[0]!.includes(" effect"));
 
 test("a call site in a function the walk did not expand is neither an effect nor a cut of the body around it, even on a line that body calls on", async () => {
@@ -1309,4 +1311,53 @@ test("line-only call records settle only a unique site in their own body", async
       assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["run"]);
     }
   }
+});
+
+test("a workspace live trace forwards the root stale notice once and never substitutes a library notice", async () => {
+  const fact = await factOf({ nodes: [SVC, RUN], edges: CONTAINS });
+  const rootNotice = { stateId: "root-state", changed: [A] };
+  const libraryNotice = { stateId: "library-state", changed: ["Library.java"] };
+  const workspace = { withRead: async () => ({ ok: true, value: { value: fact, workspaceLive: [
+    { kind: "stale", repo: "library", snapshot: { repo: "library", kind: "live", head: SHA, stateId: "library-state" }, notice: libraryNotice },
+    { kind: "stale", repo: "shop", snapshot: { repo: "shop", kind: "live", head: SHA, stateId: "root-state" }, notice: rootNotice },
+    { kind: "stale", repo: "shop", snapshot: { repo: "shop", kind: "live", head: SHA, stateId: "root-state" }, notice: rootNotice },
+  ] } }) } as unknown as NonNullable<TraceQueriesDeps["workspace"]>;
+  const notices: unknown[] = [];
+  const { queries } = setup({ nodes: [], workspace });
+  const result = await queries.walk({ repo: "/work/shop", repoId: "shop", live: true, workspace: {}, targets: [{ file: A, symbol: "run" }], onStale: notice => notices.push(notice) });
+  assert.ok(result.ok);
+  assert.deepEqual(notices, [rootNotice]);
+});
+
+test("a dispatch veto projects its fixed reason onto the existing cut", async () => {
+  const nodes = [SVC, RUN, fakeNode("Port", "interface", B, 1, 3), fakeNode("Port.send", "method", B, 2, 2, "send")];
+  const edges: FakeEdge[] = [...CONTAINS, { from: "Port", to: "Port.send", kind: "contains" }, call("run", "Port.send", 8, 4)];
+  for (const reason of ["aspect may replace the body", "generated implementation", "dispatch not proven"] as const) {
+    const fact = await factOf({ nodes, edges, sources: [{ path: B, content: "" }], callables: { [B]: [{ name: "send", start: 2, nameLine: 2, body: false, overridable: true }] }, dispatch: { send: { kind: "unknown", reason } } });
+    assert.equal(fact.status, "partial");
+    assert.ok(fact.status === "partial" && fact.cuts.some((cut) => cut.kind === "unresolved-link" && cut.detail === reason));
+  }
+});
+
+test("an unresolved Java this call uses the receiver proof before the own-member name shortcut", async () => {
+  const file = "src/Svc.java";
+  const save = fakeNode("save", "method", file, 25, 28);
+  const fact = await factOf({
+    nodes: [{ ...SVC, file }, { ...RUN, file }, save],
+    edges: [...CONTAINS, { from: "Svc", to: "save", kind: "contains" }],
+    unresolved: [{ from: "run", name: "this.save", kind: "calls", file, line: 9, column: 4 }],
+    receivers: { save: { kind: "unproven" } },
+  }, [{ file, symbol: "run" }]);
+  assert.equal(fact.status, "partial");
+  assert.deepEqual(valueOf(fact).steps.map((step) => [step.symbol, step.leaves ?? []]), [["run", []]]);
+  assert.ok(cutsOf(fact).some(([kind]) => kind === "unresolved-link"));
+});
+
+
+test("effect deduplication preserves distinct call columns", async () => {
+  const fact = await factOf({
+    ...EFFECTS_BODY,
+    placedSites: [at(8, 4), at(8, 4), at(8, 20)],
+  });
+  assert.deepEqual(valueOf(fact).steps[0]!.effects?.map((effect) => effect.column), [5, 21]);
 });

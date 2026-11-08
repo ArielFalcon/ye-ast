@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { importOriginsByLanguage } from "./import-origins-by-language.ts";
 import type { ImportOrigin } from "../core/domain/relations/resolved-reference.ts";
 import type { Finding } from "../core/domain/shared/fact.ts";
-import type { ImportOrigins, ResolvedNameSite, RootBinding, UseSite } from "../core/ports/import-origins.port.ts";
+import type { DispatchTargets, ImportOrigins, ResolvedNameSite, RootBinding, UseSite } from "../core/ports/import-origins.port.ts";
 
 const SITES: ResolvedNameSite[] = ["src/a.ts", "src/main/java/A.java"].map((file) => ({ file, line: 1, column: 1, kind: "calls", name: "a" }));
 const unknown = (site: ResolvedNameSite): Finding<ImportOrigin> => ({ status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] });
@@ -37,4 +37,17 @@ test("each use takes the binding of the reader of its language, an ambiguous one
   const combined = importOriginsByLanguage([reader(".ts", "ts", { kind: "local", root: "a" }), reader(".java", "java", { kind: "ambiguous", root: "a" })]);
 
   assert.deepEqual(await combined.rootBindings(uses), [{ kind: "local", root: "a" }, { kind: "ambiguous", root: "a" }, { kind: "unknown" }]);
+});
+
+test("dispatch preserves a veto reason when no language proves bodies and keeps body proof priority", async () => {
+  const java: ImportOrigins = { ...reader(".java", "java"), dispatchTargets: async (sites) => sites.map((site): DispatchTargets => site.file.endsWith(".java") ? { kind: "unknown", reason: "aspect may replace the body" } : { kind: "unknown" }) };
+  const ts: ImportOrigins = { ...reader(".ts", "ts"), dispatchTargets: async (sites) => sites.map((site): DispatchTargets => site.name === "settled" ? { kind: "bodies", bodies: [] } : { kind: "unknown" }) };
+  for (const readers of [[ts, java], [java, ts]]) {
+    const result = await importOriginsByLanguage(readers).dispatchTargets([
+      { file: "A.java", name: "work", line: 1 },
+      { file: "A.java", name: "settled", line: 1 },
+      { file: "A.py", name: "work", line: 1 },
+    ]);
+    assert.deepEqual(result, [{ kind: "unknown", reason: "aspect may replace the body" }, { kind: "bodies", bodies: [] }, { kind: "unknown" }]);
+  }
 });

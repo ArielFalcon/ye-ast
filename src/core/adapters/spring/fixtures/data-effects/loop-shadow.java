@@ -1,0 +1,2 @@
+import org.springframework.jdbc.core.JdbcTemplate;
+class LoopShadow { JdbcTemplate db; static class Other { void update(String sql) {} } void run(Other[] values) { for (Other db : values) { db.update("noop"); } } }

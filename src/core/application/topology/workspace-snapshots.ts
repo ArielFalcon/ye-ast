@@ -1,3 +1,4 @@
+import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import { declaredScope } from "../../domain/map/entrypoint-map.ts";
 import { isExtractorConfiguration } from "../../domain/languages/configuration.ts";
 import type { SnapshotRef } from "../../domain/shared/fact.ts";
@@ -34,6 +35,7 @@ export interface LivePreflight extends LivePlan {
 }
 
 export interface WorkspaceSnapshotContext {
+  readonly librarySources?: ReadonlyMap<string, readonly LibrarySource[]>;
   readonly plan: WorkspacePlan;
   readonly plans: readonly CommittedPlan[];
   readonly livePlans: readonly LivePreflight[];
