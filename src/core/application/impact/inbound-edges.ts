@@ -7,7 +7,7 @@ import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-orig
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import { createGraphNavigation, isInside, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
+import { createGraphNavigation, isInside, SUPERTYPE_EDGES, type HeldOrigin } from "../navigation/graph-navigation.ts";
 import { edgeKey, type FollowedEdge } from "../navigation/edge-targets.ts";
 
 /**
@@ -92,6 +92,11 @@ const NO_CORRECTIONS: EdgeCorrections = { dropped: new Set(), into: new Map() };
 
 const USAGE_EDGES = ["calls", "instantiates", "references"];
 
+/** Whether `origin` is the one origin the navigation found holding the receiver at a use. */
+function holdsAt<O>(held: HeldOrigin<O>, origin: O): boolean {
+  return typeof held === "object" && held.origin === origin;
+}
+
 function holdsReference(source: GraphSymbol, use: Pick<GraphUnresolvedReference, "file" | "line">): boolean {
   return source.file === use.file && source.startLine <= use.line && use.line <= source.endLine;
 }
@@ -108,13 +113,7 @@ export function createInboundEdges(
   corrections: EdgeCorrections = NO_CORRECTIONS,
 ): InboundEdges & InboundOccurrences {
   const relationsByTargetFile = Map.groupBy(relations, (candidate) => candidate.to.path);
-  /** The local names more than one owner of one file declares: an ambiguous name settles nothing. */
-  const sharedLocalNames = new Map<string, number>();
-  for (const origin of locals) {
-    const key = `${origin.owner.path}\0${origin.local}`;
-    sharedLocalNames.set(key, (sharedLocalNames.get(key) ?? 0) + 1);
-  }
-  const { load, symbolOf, ownersOf, typesAround, methodsOf, symbolsInFile, declarationAt, referencesThrough } = createGraphNavigation(reader, isTestFile);
+  const { load, symbolOf, ownersOf, typesAround, methodsOf, symbolsInFile, declarationAt, referencesThrough, fieldOriginAt, localOriginAt } = createGraphNavigation(reader, isTestFile);
 
   interface Into {
     edge: GraphEdge;
@@ -263,7 +262,7 @@ export function createInboundEdges(
       load(uses.map((use) => use.from));
       for (const use of uses) {
         const from = symbolOf(use.from);
-        if (from === undefined || !isInside(from, holder) || !holdsReference(from, use)) continue;
+        if (from === undefined || !holdsReference(from, use) || !holdsAt(fieldOriginAt(from, origin.field, fields), origin)) continue;
         const occurrence = uniqueUse(use);
         if (occurrence === undefined) continue;
         if (memberUses === undefined && uniqueAnchor(node)) settledUses.push({ key: declarationUseKey(anchor, occurrence), target: node.id, ...(holdsOwner ? { source: from.id } : {}) });
@@ -285,7 +284,6 @@ export function createInboundEdges(
     const callers: InboundEdge[] = [];
     for (const origin of locals) {
       const held = origin.holds.class;
-      if ((sharedLocalNames.get(`${origin.owner.path}\0${origin.local}`) ?? 0) > 1) continue;
       if (!owners.some((owner) => joinsFact(owner, { path: held.path, line: held.line, symbol: held.symbol }))) continue;
       const holder = declarationAt(origin.owner, LOCAL_OWNER_KINDS);
       if (holder === undefined || isTestFile(holder.file)) continue;
@@ -294,7 +292,7 @@ export function createInboundEdges(
       load(uses.map((use) => use.from));
       for (const use of uses) {
         const from = symbolOf(use.from);
-        if (from === undefined || !isInside(from, holder) || !holdsReference(from, use)) continue;
+        if (from === undefined || !holdsReference(from, use) || !holdsAt(localOriginAt(from, origin.local, locals), origin)) continue;
         const occurrence = uniqueUse(use);
         if (occurrence === undefined) continue;
         if (memberUses !== undefined && !origin.calls?.some((site) => site.file === use.file && site.line === use.line && site.column === use.column + 1 && site.name === use.name && site.kind === use.kind)) continue;

@@ -1,8 +1,7 @@
-import { EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, holdsValue, LOCAL_OWNER_KINDS, type EdgeVerdict } from "../../domain/impact/edge-policy.ts";
+import { EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, holdsValue, type EdgeVerdict } from "../../domain/impact/edge-policy.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { ExternalMemberUseOrigin, MemberUseOrigin } from "../../domain/relations/member-use.ts";
-import type { SymbolRef } from "../../domain/relations/relation.ts";
 import { joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { DeclaredMemberNames, DeclaredMemberNamesReader, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
@@ -11,7 +10,7 @@ import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-ori
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { ModuleDependencies, ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
-import { createGraphNavigation, isInside } from "./graph-navigation.ts";
+import { createGraphNavigation } from "./graph-navigation.ts";
 import { declarationAt, importBindings } from "./import-bindings.ts";
 import { provenCallsOf, provenKey, type ProvenCalls } from "./proven-calls.ts";
 
@@ -237,16 +236,13 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs }:
     if (receiver === "" || syntaxOf === undefined) return false;
     const syntax = await syntaxIn(syntaxOf, source.file);
     const callees = syntax.callees.get(`${line}:${column}`) ?? [];
-    const enclosing = (owner: SymbolRef, kinds: readonly string[]): boolean => {
-      const declaration = navigation.declarationAt(owner, kinds);
-      return declaration !== undefined && isInside(source, declaration);
-    };
-    const origin = callees.includes(`this.${receiver}.${target.name}`)
-      ? single(held.fields.filter((field) => field.field === receiver && enclosing(field.owner, EDGE_POLICY.relations.from)))
+    const found = callees.includes(`this.${receiver}.${target.name}`)
+      ? navigation.fieldOriginAt(source, receiver, held.fields)
       : callees.includes(`${receiver}.${target.name}`)
-        ? single(held.locals.filter((local) => local.local === receiver && enclosing(local.owner, LOCAL_OWNER_KINDS)))
+        ? navigation.localOriginAt(source, receiver, held.locals)
         : "unbound";
-    if (origin === "unbound") return false;
+    if (found === "unbound") return false;
+    const origin = typeof found === "object" ? found.origin : undefined;
     if (origin !== undefined) return "class" in origin.holds && declares(navigation.declarationAt(origin.holds.class, TYPE_KINDS));
     const holds = holdsAt(syntax.receiverBindings, line, column, target.name, receiver);
     if (holds === undefined) return false;
@@ -304,8 +300,4 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs }:
     collect(store.incomingEdges(homonyms.map((symbol) => symbol.id), FOLLOWED_EDGE_KINDS), () => true);
     return [...candidates.values()];
   }
-}
-
-function single<T>(items: readonly T[]): T | undefined {
-  return items.length === 1 ? items[0] : undefined;
 }
