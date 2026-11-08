@@ -1,4 +1,4 @@
-# ADR-0044: What a call may run below its static target has one owner per language, and its vetoes reach only what their cause may implement
+# ADR-0044: What a Java call names and what it may run have one owner per language, and its vetoes reach only what their cause may implement
 
 - Status: Proposed, 2026-11-08
 - Decision source: the owner, 2026-11-08, verbatim: "lanza un agente con esfuerzo high por cada propuesta para que la
@@ -18,11 +18,12 @@
 **In short:** the two symptoms do not share a cause. Petclinic stops before dispatch: a build-generated supertype leaves
 Java names unsettled, and dispatch already proves the single body. Nname stops at a repository-wide veto: any lambda
 anywhere vetoes every one-method interface, and the single body is proven only with that veto off. Contract consequences
-fails for a third reason: it starts at the root of a propagated call site and has no Java reader. What the code does
-show is two Java writers of "which bodies a call may run" that disagree, trace's strict one and the call-site flow's
-lenient one. The fact gets one owner per language behind the existing `dispatchTargets` port, a veto is released only by
-positive proof about every possible target type of its cause, dispatch stays trace's extension of ADR-0041's base, and
-the dependence families keep their bridges. A sound release of nname's veto needs library signatures that no reader has
+fails for a third reason: it starts at the root of a propagated call site, re-finds the request by line and name, and
+has no Java reader. What the code does show is more than one Java writer of what a call names and what it may run:
+trace's strict readers, and the call-site flow's lenient ones, disagree on both the declaration a call binds to and the
+bodies below it. Both facts get one owner per language behind the existing `receiverMethods` and `dispatchTargets`
+ports, the only Java link of ADR-0041's binder. A veto is released only by positive proof about every possible target
+type of its cause, dispatch stays trace's extension of ADR-0041's base, and the dependence families keep their bridges. A sound release of nname's veto needs library signatures that no reader has
 today, so that part is split out and gated on a measurement.
 
 ## Context
@@ -72,6 +73,31 @@ Side facts from the same probes, not causes of the symptoms:
 The last two are two writers of one fact. On the nname port the call-site flow propagates through the adapter while
 trace calls the same step not proven; with two implementations and `@Primary`, trace cuts while the call-site flow
 selects. AGENTS.md: "One owner per fact ... a second writer is a defect."
+
+### The static binding above it has more than one Java writer too
+
+Which declaration a Java member call names (the static binding ADR-0041 decision 4 calls the "Java declared receiver")
+is read three ways (main ac475e50):
+
+| Reader | Where | Receiver type | Overloads | Privacy, reflection, rewriting |
+|---|---|---|---|---|
+| Strict, behind `receiverMethods` | `java-receiver-methods.ts:51-90` | Bindings of a parameter, a local or a field (`javaReceiverBindings`), resolved by the strict reading (`java-declared-types.ts:127-150`), `unsettled` under an undeclared supertype | Exactly one signature at the call's arity | Vetoes: a dynamic-implementation API, an unparsed source, call-rewriting annotations |
+| Lenient, the call-site flow | `java-invocations.ts:59-77` (`receiverOf`), `java-method-flow.ts:82-109` (`methodsOf`) | `project.lookupType`, the non-strict reading that falls back past `unsettled` (`java-symbols.ts:495-498`), then `externalNames`; an identifier is taken as a type name whenever such a type exists (`:84-87`) | Every same-arity method of the name, all kept (`:101-108`) | None |
+| Data effects | `data-effects.adapter.ts:22`, `:37-110` | Bindings with `includeUnproven: true`, resolved strictly; an unproven one makes the effect unknown | Its own matching: the one overload whose parameters equal the arguments' signature | Reflection and privacy only through the binding's `unproven` flag |
+
+On `OwnerRestControllerV1.java:92` the strict reader answers `unproven` while `methodsOf` answers
+`ClinicServiceImpl.findOwnerById:200` (adapter probe), so a call site propagates through a binding trace refuses. With
+`find(String)` and `find(Long)` the strict reader cuts and the lenient one propagates both. ADR-0041 U3 makes one binder
+in the core; the adapter's own readers sit below its ports and are not covered by it.
+
+### The carrier re-finds its request
+
+The TypeScript request reader decides what a request is in one predicate (`http-call-sites.adapter.ts:592-608`). The
+consumer walker (`consumer-flow.walker.ts:136`, `:1005-1011`) and the request-origin reader
+(`request-origins.adapter.ts:26`, `:62-66`) re-find the request from the site's line and symbol, without its column,
+taking the first call that their own predicate accepts. On `return this.cache.get(id) ?? this.http.get<U>(url);` both
+calls start on the line and are named `get`, so the first syntactic match may be the cache's. The two re-finders also
+disagree with each other: `requestKind` accepts `httpResource.text(...)`, `namesRequest` does not.
 
 ### What a sound release of the function-value veto needs
 
@@ -127,15 +153,30 @@ would answer the single body that the probe with the veto disabled shows.
 
 ## Decision
 
-1. **One fact, one owner per language.** "The bodies a call of method `m` on a value whose static type is `T` may run,
-   and whether that set is closed" is the `DispatchTargets` value of `ImportOrigins.dispatchTargets`
-   (`src/core/ports/import-origins.port.ts:130-138`). For Java its only writer is the dispatch reading of
-   `core/adapters/spring/java-dispatch-targets.ts`. The call-site method flow stops computing implementations itself
-   (`dispatchIndex.implementations`, `java-method-flow.ts:28-56`) and asks that owner. A fitness test over imports holds
-   it. Inside the adapter the owner answers the declared candidates and the closure verdict apart, and the port's value
-   is derived from them: `bodies` when the closure is proven, `unknown` with its reason otherwise. The core never sees
-   the candidates of an unknown closure. Until V3 the call-site flow reads the candidates and ignores the verdict, as it
-   ignores closure today; from V3 it reads only proven closures.
+1. **Static binding plus closure, one owner per language.** Two facts, read in order: "the declaration a member call
+   names at compile time" (`ImportOrigins.receiverMethods`) and "the bodies a call of that declaration on a value whose
+   static type is `T` may run, and whether that set is closed" (`ImportOrigins.dispatchTargets`,
+   `src/core/ports/import-origins.port.ts:130-138`). For Java their only writers are
+   `core/adapters/spring/java-receiver-methods.ts` and `core/adapters/spring/java-dispatch-targets.ts`.
+   - The call-site flow stops binding and dispatching itself: `receiverOf` (`java-invocations.ts:68`) and `methodsOf`
+     (`java-method-flow.ts:73`) ask the owner for the declaration, then for its bodies, instead of `lookupType`,
+     `externalNames`, the identifier-as-type fallback, the same-arity list and `dispatchIndex.implementations`.
+   - Data effects ask the owner for the declaration and keep only their own vocabulary (what a repository operation does
+     to data). Their overload rule, "the one method whose parameters equal the arguments' signature", becomes a link of
+     the owner, since an exact match is the most specific applicable method (JLS 15.12.2.5). It applies to every
+     consumer once its fixture holds. An `unproven` answer keeps the effect unknown, as today.
+   - Inside the adapter the owner answers the declared candidates and the closure verdict apart, and the port's value
+     is derived from them: `bodies` when the closure is proven, `unknown` with its reason otherwise. The core never sees
+     the candidates of an unknown closure. Until V3 the call-site flow reads the owner in a staging form that keeps
+     today's lenient result (candidates whatever the verdict, the lenient binding where the strict one is unproven);
+     from V3 it reads only proven bindings and proven closures, and the staging form is deleted.
+   - The seam with ADR-0041: its base (`ReconciledCalls`, `core/application/navigation/`) owns the binding chain and
+     reaches Java only through these two ports, whose adapter is this owner. U3's "Java declared receiver" link is
+     `receiverMethods`; trace's dispatch extension reads `dispatchTargets`. The adapter's own readers (call sites, data
+     effects) are below the ports and call the same owner functions directly. No second chain exists in the adapter,
+     and no Java rule exists in the core.
+
+   Fitness tests hold both (Migration, "Fitness functions").
 2. **Separate from static binding, narrowing only.** ADR-0041's base binds the call to its compile-time declaration (the
    interface method, ADR-0041 decision 4); this fact answers what runs below it. A consumer never re-binds the call:
    the bodies are alternatives below the binding (ADR-0041 decision 6). No field of any answer changes.
@@ -192,7 +233,10 @@ would answer the single body that the probe with the veto disabled shows.
    bodies, contract consequences starts the carrier at the issuing owned call: the owned invocation whose expansion
    reaches the leaf without passing through another owned body (`RecipientRestRepositoryAdapter.java:47` above), read
    from the placed sites (`PlacedCallSiteReader`, the reader trace effects already use). The root stays in the chain as
-   the entry it was reached from. The workspace fact keeps its call sites as they are.
+   the entry it was reached from. The workspace fact keeps its call sites as they are. The carrier is located by the
+   placed site's line and column through the request reader's own predicate (`http-call-sites.adapter.ts:592-608`),
+   never re-found by line and symbol: the consumer walker and the request-origin reader stop keeping their own request
+   predicates (`requestKind`, `namesRequest`) and ask that owner for the call at the site's place.
 8. **A blocked propagation is a frontier, never a silence.** Once the call-site flow reads only proven closures (V3), a
    call whose candidates would reach a request but whose closure is unknown no longer expands
    (`java-method-flow.ts:231` answers nothing). Today the reader then emits a site only for a recognized library
@@ -208,7 +252,7 @@ would answer the single body that the probe with the veto disabled shows.
 | ADR-0041 unit | Effect of this ADR |
 |---|---|
 | U0 to U2 (coverage, alignment, classes) | None |
-| U3 (one binder) | None in the chain itself. Decision 6 gives its "Java declared receiver" link more declarations to resolve (the generated supertypes); it adds no link |
+| U3 (one binder) | None in the chain itself. Its "Java declared receiver" link is `receiverMethods`, whose adapter decision 1 makes the only Java binder, so the adapter's call sites and data effects bind as U3's chain does. Decision 6 gives that link more declarations to resolve (the generated supertypes); it adds no link |
 | U4 to U6 (reverse access, pruning) | None: reverse families read dependence, never this fact |
 | Decision 5 (dispatch is trace's extension) | Kept. Trace reads this fact where it reads it today (`trace-walk.ts:327-344`), with the call's place added for decision 4 |
 
@@ -222,16 +266,33 @@ replaced it.
 | Unit | Change | Gate expectation |
 |---|---|---|
 | M0 | Measurement only, no code (below) | Decides whether V1a and V1b land |
-| V0 | The owner answers candidates and closure apart (decision 1); the call-site flow takes its candidates and its Spring reading from the owner, still ignoring closure | `none`; any difference is a disagreement between the two hierarchy readings, listed and explained before V3 |
+| V0a | The owner answers candidates and closure apart (decision 1); `receiverOf` and `methodsOf` read the owner in its staging form, keeping today's lenient results | `none`; any difference is a disagreement between the readings, listed and explained before V3 |
+| V0b | Data effects read the owner's binding; their exact-signature overload rule becomes an owner link (decision 1) | `trace:±` where the link binds a call the strict reader cut (a step replaces the cut); data effects `none` expected |
 | V1a | Function values veto by decision 5 with repository signatures only; every library argument stays unsettled | `trace:±` where M0 found a release; `none` otherwise. Expected effect on nname: none (all 29 are library arguments). Lands only if M0 shows at least one corpus release, since otherwise it adds a reading that changes no answer |
 | V1b | A declared library signature source and receiver typing through library return types (open question 1) | `trace:±`; expected, not measured: the nname quote-checkout-discount query reaches the adapter. Owner decision first |
 | V2 | Call-local framework narrowing (decision 4) | `trace:±` where an injected receiver's qualifier or `@Primary` chooses among several proven bodies; `none` if the corpus has none (M2 says which) |
-| V3 | The call-site flow propagates only through a proven closure, with the frontier of decision 8 | `workspace:±`, `decisions:±`, `contract-consequences:±`, `trace:±` (effects); accepted only after the M3 report is inspected |
+| V3 | The call-site flow propagates only through a proven binding and a proven closure, with the frontier of decision 8; the staging form is deleted | `workspace:±`, `decisions:±`, `contract-consequences:±`, `trace:±` (effects); accepted only after the M3 report is inspected |
 | V4 | Generated Java sources as a declared build output (decision 6) | `none` without a declaration; `trace:±` for a manifest query that declares one (the petclinic owner route: the cut at `OwnerRestControllerV1.java:92` becomes steps) |
-| V5 | Contract consequences start a propagated link's carrier at its issuing call (decision 7) | `contract-consequences:±`: frontiers move from root lines to issuing lines |
+| V5 | Contract consequences start a propagated link's carrier at its issuing call, located by the placed site's column through the request reader's predicate (decision 7) | `contract-consequences:±`: frontiers move from root lines to issuing lines, and a carrier that started at another call of the same line and name moves to the request |
 
-V0 → V1a → V2 → V3 are ordered, and V1b, when decided, comes before V3. V4 and V5 are independent of them and of each
-other. V3 lands after the V1 units so the stricter flow does not inherit more of the repository-wide veto than it must.
+V0a → V1a → V2 → V3 are ordered, V0b comes before V3, and V1b, when decided, comes before V3. V4 and V5 are independent
+of them and of each other. V3 lands after the V1 units so the stricter flow does not inherit more of the repository-wide
+veto than it must.
+
+### Fitness functions
+
+Single-rule tests in the style of `src/core/adapters/syntax.single-rule.test.ts`: a pattern, its owners, and a pending
+list of the copies a later unit removes, which only shrinks:
+
+| Concept | Pattern | Owners | Pending, removed by |
+|---|---|---|---|
+| A Java member call's receiver type for selection | `export function receiverOf` under `adapters/spring` | `spring/java-receiver-methods.ts` | `spring/java-invocations.ts`, by V3 |
+| A Java call's declarations and bodies | `function methodsOf` under `adapters/spring` | `spring/java-receiver-methods.ts`, `spring/java-dispatch-targets.ts` | `spring/java-method-flow.ts`, by V3 |
+| What a TypeScript HTTP request is | an import of `VERBS` from `./http-call-sites.adapter.ts` | `typescript/http-call-sites.adapter.ts` (declares it) | `typescript/consumer-flow.walker.ts` and `typescript/request-origins.adapter.ts`, by V5 |
+
+The pattern `VERBS\.has\(` is not used: it also matches `spring/request-mapping.ts:175`, `:236` and
+`openapi/contract-document.adapter.ts:114`, which own other vocabularies (mapping annotations and OpenAPI path verbs)
+under the same local name. Only the HTTP client vocabulary is imported, so its imports are the copies.
 
 Measurements on the corpus manifest, each a gate of the unit it names. None sets a threshold:
 
@@ -284,6 +345,16 @@ vetoed (`dispatch not proven`) in every unit, whatever source of signatures is d
 16. **The carrier starts at the issuing call (V5).** A listener calls a use case, which calls a port, whose adapter calls
     a library client and reads the response: a hypothesis on a response property locates its finding or frontier at
     the adapter's client call, with the listener's call in the chain.
+17. **The carrier is located by column (V5).** `return this.cache.get(id) ?? this.http.get<U>(url);`: the carrier and
+    the request origin start at `this.http.get`, never at `this.cache.get`. `httpResource.text(...)`: the walker and the
+    origin reader treat it alike, as the request reader does.
+18. **One binding for call sites and trace (V0a, V3).** At `OwnerRestControllerV1.java:92` without a declared generated
+    supertype: in V0a the call-site flow keeps its lenient binding to `ClinicServiceImpl.findOwnerById`; from V3 it
+    agrees with trace (unproven, a frontier), and with V4's declaration both bind and dispatch alike.
+19. **Overloads (V0b, V3).** `find(String)` and `find(Long)` on a port, called with an argument whose static type is
+    `String`: the owner binds `find(String)` by the exact-signature link, for trace, data effects and call sites alike.
+    Called with an argument whose type the reading does not settle: a cut in trace, and from V3 no propagation through
+    both overloads.
 
 ## Consequences
 
@@ -312,6 +383,8 @@ vetoed (`dispatch not proven`) in every unit, whatever source of signatures is d
   the generator's input.
 - **Framework semantics.** Narrowing applies only at proven injection points; profiles and conditions refuse it
   (fixture 11); a framework variant the owner does not read keeps the cut.
+- **The exact-signature link widens trace (V0b).** It must hold only where the arguments' static types are settled
+  exactly; an argument the reading does not settle keeps the cut (fixture 19).
 
 ## Not decided here
 
