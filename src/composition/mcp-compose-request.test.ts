@@ -11,17 +11,18 @@ import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import type { FactRead } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
-import { repositoryCatalog } from "./repository-targeting.ts";
-import type { QueryExecutionDeps } from "./query-runner.ts";
-import type { ComposeInput, CompositionResult, ComposeFault } from "./composition-contract.ts";
-import { compositionIdentity } from "./composition-identity.ts";
-import { COMPOSE_LIMITS, COMPOSE_QUERY } from "./composition-input.ts";
-import { runComposition } from "./compose-request.ts";
-import { consequencesSource } from "./composition-consequences-fixture.testing.ts";
+import { repositoryCatalog } from "../mcp/repository-targeting.ts";
+import type { QueryExecutionDeps } from "../mcp/query-runner.ts";
+import type { ComposeInput, CompositionResult, ComposeFault } from "../mcp/composition-contract.ts";
+import { compositionIdentity } from "../core/application/composition/composition-identity.ts";
+import { COMPOSE_LIMITS, COMPOSE_QUERY } from "../mcp/composition-input.ts";
+import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
+import { runComposition } from "../mcp/compose-request.ts";
+import { consequencesSource } from "../core/application/composition/composition-consequences-fixture.testing.ts";
 import {
   SHA_A, callersValue, decisionsValue, entrypointsValue, factOf, impactValue, importersValue, inputsOf, outlineValue, shaRef, traceValue,
   unknownFactOf, workspaceValue,
-} from "./composition-fixtures.testing.ts";
+} from "../core/application/composition/composition-fixtures.testing.ts";
 
 const SECRET = /secret-[a-z]+/g;
 const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
@@ -68,6 +69,7 @@ function spies(hooks: Hooks = {}) {
     },
     redaction,
     digest,
+    evidenceComposition: createEvidenceComposition(digest),
   };
   return { deps, calls, ctx: (signal?: AbortSignal) => ({ deps, catalog: repositoryCatalog({ path: "/work/shop", repoId: "shop" }), ...(signal === undefined ? {} : { signal }) }) };
 }

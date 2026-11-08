@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
+import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import { run } from "../cli/main.ts";
@@ -101,7 +102,7 @@ async function throughProtocol(budget: unknown, budgets: (ImpactBudget | undefin
 /** The MCP tool answers a result or an error, and never closes the session over a bad argument. */
 async function throughMcp(budget: unknown, budgets: (ImpactBudget | undefined)[]): Promise<boolean> {
   const session = await openSession(createMcpServer({
-    digest: createSha256Digest(),
+    digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()),
     version: "0.0.0",
     entrypoints,
     impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries,
@@ -222,7 +223,7 @@ test("the three transports accept the trace's own bounds and refuse the caller-c
     const answer = written.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { id?: number; error?: unknown }).find((message) => message.id === 2);
 
     const session = await openSession(createMcpServer({
-      digest: createSha256Digest(), version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceFamily(mcp),
+      digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()), version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceFamily(mcp),
       workspace: {} as WorkspaceQueries, workspaceImpact: {} as WorkspaceImpactQueries, decisions: {} as DecisionQueries, contractConsequences: {} as unknown as ContractConsequencesQueries, redaction, repository: { path: REPO, repoId: "shop" },
     }));
     const result = await session.callTool("ye_ast_trace", { targets: [{ file: "src/a.ts", symbol: "run" }], budget }).finally(() => session.close());
@@ -259,7 +260,7 @@ async function traceThroughEach(cliTargets: readonly string[], targets: readonly
   );
   const reply = written.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { id?: number; error?: { code: number; data?: unknown } }).find((message) => message.id === 2);
   const session = await openSession(createMcpServer({
-    digest: createSha256Digest(), version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceTargets(mcp, answer),
+    digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()), version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceTargets(mcp, answer),
     workspace: {} as WorkspaceQueries, workspaceImpact: {} as WorkspaceImpactQueries, decisions: {} as DecisionQueries, contractConsequences: {} as unknown as ContractConsequencesQueries, redaction, repository: { path: REPO, repoId: "shop" },
   }));
   const result = (await session.callTool("ye_ast_trace", { targets }).finally(() => session.close())) as ToolResult;
@@ -363,7 +364,7 @@ async function consequencesThroughProtocol(subject: Subject, fact: Fact<Conseque
 async function consequencesThroughMcp(subject: Subject, fact: Fact<ConsequencesValue>): Promise<Outcome> {
   const requests: Outcome["requests"] = [];
   const session = await openSession(createMcpServer({
-    digest: createSha256Digest(), version: "0.0.0", entrypoints, impact: family().impact, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace: {} as WorkspaceQueries,
+    digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()), version: "0.0.0", entrypoints, impact: family().impact, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace: {} as WorkspaceQueries,
     workspaceImpact: {} as unknown as WorkspaceImpactQueries, decisions: {} as unknown as DecisionQueries, contractConsequences: consequencesPort(fact, requests), redaction, repository: { path: REPO, repoId: "shop" },
   }));
   try {

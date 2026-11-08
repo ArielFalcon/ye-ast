@@ -2,12 +2,22 @@
  * Small typed evidence sets for the materialization tests, built directly with the identity helpers (no normalizer).
  * Synthetic: they exercise the union and materialization rules, never a real MCP answer.
  */
-import { createHash } from "node:crypto";
-import { SCHEMA, type Evidence, type FactInputs, type Producer, type SchemaVersion, type SnapshotRef } from "../core/domain/shared/fact.ts";
-import type { AnchorId, EvidenceId, EvidenceOrigin, EvidenceRecord, EvidenceSet, FileId, FileRecord, AnchorRecord, Part, PartId, PartPayload, ReadId, ReadOwner, ReadRecord, RedactionRecord, SnapshotId, SnapshotRecord, SourceFamilyRef, SourceId, SourceRecord, Support } from "../core/ports/evidence-composition.port.ts";
+import type { Digest } from "../../ports/digest.port.ts";
+import { SCHEMA, type Evidence, type FactInputs, type Producer, type SchemaVersion, type SnapshotRef } from "../../domain/shared/fact.ts";
+import type { AnchorId, EvidenceId, EvidenceOrigin, EvidenceRecord, EvidenceSet, FileId, FileRecord, AnchorRecord, Part, PartId, PartPayload, ReadId, ReadOwner, ReadRecord, RedactionRecord, SnapshotId, SnapshotRecord, SourceFamilyRef, SourceId, SourceRecord, Support } from "../../ports/evidence-composition.port.ts";
 import { anchorId, compareSupport, compositionKey, evidenceId, fileId, partId, readId, snapshotId, sortById, unionSupports, type Occurrence } from "./composition-identity.ts";
 
-export const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
+const FNV_PRIME = 0x100000001b3n;
+const LANE_OFFSETS = [0xcbf29ce484222325n, 0x84222325cbf29ce4n, 0x9e3779b97f4a7c15n, 0xc2b2ae3d27d4eb4fn];
+
+/** A fake of the digest port without I/O: four 64-bit FNV-1a lanes with distinct offsets, 64 lowercase hex characters. */
+export const digest: Digest = {
+  of: (text) => LANE_OFFSETS.map((offset) => {
+    let hash = offset;
+    for (let at = 0; at < text.length; at++) hash = BigInt.asUintN(64, (hash ^ BigInt(text.charCodeAt(at))) * FNV_PRIME);
+    return hash.toString(16).padStart(16, "0");
+  }).join(""),
+};
 export const SHA_A = "a".repeat(40);
 export const SHA_B = "b".repeat(40);
 export const sha = (repo: string, value = SHA_A): SnapshotRef => ({ repo, kind: "sha", sha: value });

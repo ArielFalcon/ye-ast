@@ -1,20 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
-import type { Evidence, Fact, FactProvenance } from "../core/domain/shared/fact.ts";
-import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
-import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
-import type { Handler } from "../core/domain/entrypoints/http-route.ts";
-import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
-import type { ImportedFile } from "../core/domain/impact/importers-fact.ts";
-import type { OutlineDeclaration } from "../core/domain/outline/outline-fact.ts";
-import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
-import type { CallSite } from "../core/domain/topology/call-site.ts";
-import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
-import type { AnchorId, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceSet, FileCategory, FileId, Part, PartId, PartKind, PartOf, ReadRecord, SnapshotId, SourceId } from "../core/ports/evidence-composition.port.ts";
+import { digest } from "./compose-evidence-test-sets.testing.ts";
+import { canonicalJson } from "../../domain/shared/canonical-json.ts";
+import type { Evidence, Fact, FactProvenance } from "../../domain/shared/fact.ts";
+import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
+import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
+import type { Handler } from "../../domain/entrypoints/http-route.ts";
+import type { ImpactValue } from "../../domain/impact/impact-fact.ts";
+import type { ImportedFile } from "../../domain/impact/importers-fact.ts";
+import type { OutlineDeclaration } from "../../domain/outline/outline-fact.ts";
+import type { TraceValue } from "../../domain/trace/trace-fact.ts";
+import type { CallSite } from "../../domain/topology/call-site.ts";
+import type { RepoImpact, WorkspaceImpactValue } from "../../ports/workspace-impact-queries.port.ts";
+import type { AnchorId, ComposedSource, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceSet, FileCategory, FileId, Part, PartId, PartKind, PartOf, ReadRecord, SnapshotId, SourceId } from "../../ports/evidence-composition.port.ts";
 import { jsonPointer } from "./composition-identity.ts";
-import { isCompositionId } from "../core/domain/composition/composition-ids.ts";
+import { isCompositionId } from "../../domain/composition/composition-ids.ts";
 import {
   MERGE_BASE, SHA_A, SHA_B, entrypointsValue, factOf, impactValue, inputsOf, shaRef, sourceFixture, unknownFactOf, workspaceImpactValue,
   type FixtureKind,
@@ -24,11 +24,9 @@ import {
   API, CONTRACT_BASE, CONTRACT_HEAD, CREATE_HANDLER, DERIVATION_FRONTIER_PLACE, FIND_HANDLER, FRONTIER_PLACE, GUARD_PLACE, PRODUCER_CALL, SERVICE_FILE, USE_PLACE, WEB, WITNESS_PLACE,
   consequencesSource, consequencesValue, frontierOnlyValue,
 } from "./composition-consequences-fixture.testing.ts";
-import type { ExecutedSource } from "./query-runner.ts";
 
-const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
 const KINDS: readonly FixtureKind[] = ["entrypoints", "impact-local", "impact-workspace", "callers-local", "callers-workspace", "importers", "outline", "trace", "workspace", "decisions"];
-const fixture = (kind: FixtureKind): ExecutedSource => sourceFixture(kind as "entrypoints");
+const fixture = (kind: FixtureKind): ComposedSource => sourceFixture(kind as "entrypoints");
 
 // An independent index over the tables: it resolves references and finds parts by the public position they support.
 
@@ -226,7 +224,7 @@ function rebuildTrace(t: Tables): TraceValue {
 }
 
 /** Rebuilds the public fact of a fixture source from its evidence set; absent and empty are told apart only by tables. */
-function reconstruct(source: ExecutedSource, t: Tables): Fact<unknown> {
+function reconstruct(source: ComposedSource, t: Tables): Fact<unknown> {
   const root = found(t.read({ kind: "fact" }), "root read");
   return t.fact<unknown>(root, () => {
     switch (source.family) {
@@ -636,7 +634,7 @@ test("an anchor is shared across families only on the same exact snapshot", () =
 });
 
 test("source ids follow effective inputs, vector and public fact, never private arguments", () => {
-  const id = (source: ExecutedSource) => normalizeSource(source, digest).sources[0]!.id;
+  const id = (source: ComposedSource) => normalizeSource(source, digest).sources[0]!.id;
   const base = id(sourceFixture("callers-local"));
   assert.equal(id(sourceFixture("callers-local", { arguments: { repo: "shop", revision: "main", targets: [{ file: "src/OrderService.java", symbol: "find" }] } })), base, "a ref resolved to the same snapshot is the same source");
   assert.notEqual(id(sourceFixture("callers-local", { fact: factOf(impactValue(), { inputs: inputsOf({ declaredConfig: { targets: ["src/Other.java#x"] } }) }) })), base);
@@ -662,7 +660,7 @@ test("redaction makes the affected identities local to their occurrence and reco
   assert.deepEqual(guarded.redactions, [{ source: t.source, read: guarded.sources[0]!.rootRead, pointer: "/value/symbols/0/symbol" }]);
   assert.equal(t.list("/value/symbols", "symbol-reach")[1]!.anchor, plain.list("/value/symbols", "symbol-reach")[1]!.anchor, "unaffected positions keep shared ids");
   // A redacted snapshot is marked and kept local.
-  const snapshot = normalizeSource(sourceFixture("outline", { fact: factOf(sourceFixture("outline").read.fact.status === "unknown" ? { files: [], unheld: [] } : { files: [], unheld: ["x"] }, { snapshot: shaRef("[REDACTED]") }), identityGuard: { changedSnapshot: true, changedIdentityPointers: ["/snapshot/repo"] } }), digest);
+  const snapshot = normalizeSource(sourceFixture("outline", { fact: factOf(sourceFixture("outline").read.fact.status === "unknown" ? { files: [], unheld: [] } : { files: [], unheld: ["x"] }, { snapshot: shaRef("[REDACTED]") }), identityGuard: { changedIdentityPointers: ["/snapshot/repo"] } }), digest);
   assert.deepEqual(snapshot.snapshots.map((s) => s.identity), ["redacted"]);
   // A rewritten key set marks its whole object: every section below it is local.
   const sections = normalizeSource(sourceFixture("impact-workspace", { identityGuard: { changedIdentityPointers: ["/value/sections"] } }), digest);
@@ -699,7 +697,7 @@ test("an impact without parts tells an absent merge base, changedEntrypoints and
 });
 
 test("coordinator discriminator separates redaction-colliding source identities", () => {
-  const source = sourceFixture("entrypoints", { identityGuard: { changedIdentityPointers: [], changedArguments: true, changedSnapshot: false } });
+  const source = sourceFixture("entrypoints", { identityGuard: { changedIdentityPointers: [] } });
   const a = normalizeSource(source, digest, { discriminator: 0 });
   const b = normalizeSource(source, digest, { discriminator: 1 });
   assert.notEqual(a.sources[0]!.id, b.sources[0]!.id);

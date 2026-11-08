@@ -4,12 +4,11 @@
  * a derived answer with its contract places at both revisions, an unknown finding, a producer with a witness, and a
  * derivation that records a frontier.
  */
-import type { ConsequencesValue, ConsequenceFinding, HypothesisAnswer, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
-import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
-import { OLD_ACCEPTANCE, OLD_GUARANTEE } from "../core/domain/contracts/consequence-fact.ts";
-import { factOf, inputsOf, shaRef, SHA_A, SHA_B, SHA_C } from "./composition-fixtures.testing.ts";
-import type { ExecutedSource } from "./query-runner.ts";
-import type { PublicRead } from "../core/ports/evidence-composition.port.ts";
+import type { ConsequencesValue, ConsequenceFinding, HypothesisAnswer, ProducerConsequence, UseConsequence } from "../../domain/contracts/consequence-fact.ts";
+import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
+import { OLD_ACCEPTANCE, OLD_GUARANTEE } from "../../domain/contracts/consequence-fact.ts";
+import { factOf, inputsOf, shaRef, SHA_A, SHA_B, SHA_C, type FixtureSource } from "./composition-fixtures.testing.ts";
+import type { PublicRead } from "../../ports/evidence-composition.port.ts";
 
 export const API = "api";
 export const WEB = "web";
@@ -107,7 +106,7 @@ export function frontierOnlyValue(): ConsequencesValue {
   return { ...value, answers: [] };
 }
 
-export function consequencesSource(value: ConsequencesValue = consequencesValue()): Extract<ExecutedSource, { family: "contract_consequences" }> {
+export function consequencesSource(value: ConsequencesValue = consequencesValue()): Extract<FixtureSource, { family: "contract_consequences" }> {
   const read: PublicRead<ConsequencesValue> = {
     fact: factOf(value, { snapshot: shaRef(API, SHA_A), inputs: inputsOf({ declaredConfig: { base: "main", head: "HEAD" } }), evidence: [USE_PLACE, PRODUCER_CALL] }),
   };
@@ -115,6 +114,6 @@ export function consequencesSource(value: ConsequencesValue = consequencesValue(
     family: "contract_consequences",
     query: { name: "ye_ast_contract_consequences", arguments: { repo: API, base: "main", head: "HEAD" } },
     read,
-    identityGuard: { changedIdentityPointers: [], changedArguments: false, changedSnapshot: false },
+    identityGuard: { changedIdentityPointers: [] },
   };
 }

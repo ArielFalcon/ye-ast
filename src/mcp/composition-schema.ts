@@ -1,16 +1,15 @@
 /**
  * The runtime output contract of `ye_ast_compose`: closed schemas of every table, relation, connection,
  * issue, coverage, request and delivery shape, assembled into the receipt (summary/details) and the full composition.
- * Structural rules live in the schema; cross-id integrity of a full graph is checked by the materializer's own
- * `validateCompositionReferences`, never re-implemented here and never expressed as custom JSON Schema keywords.
+ * Structural rules live in the schema; cross-id integrity of a full graph is checked by the reference checks of the
+ * evidence composition it is built with, never re-implemented here and never expressed as custom JSON Schema keywords.
  * The input schema belongs to composition-input.ts; the query schema of `requests[].query` is supplied by it.
  */
 import { z } from "zod";
 import { HTTP_METHODS } from "../core/domain/entrypoints/http-route.ts";
-import { validateCompositionReferences, validateCompositionIssues } from "./compose-evidence.ts";
 import { COMPOSE_QUERY } from "./composition-input.ts";
 import type { ComposeFull, ComposeReceipt, CoverageSummary } from "./composition-contract.ts";
-import type { CompositionGraph, RelationValue } from "../core/ports/evidence-composition.port.ts";
+import type { CompositionGraph, EvidenceComposition, RelationValue } from "../core/ports/evidence-composition.port.ts";
 import {
   callLocation, candidateBasis, comparisonRef, cut, cutOwner, dependenceBasis, entrypointKind, evidenceOrigin, evidenceValue,
   factInputs, ids, linkBasis, linkEndpoints, moduleVia, partSchema, producer, readOwner, schemaVersion, snapshotRef,
@@ -179,7 +178,7 @@ function checkRequestIndices(sources: readonly { requestIndex: number }[], reque
  * every request, never duplicated findings/source states/coverage or graph tables; full carries
  * `graph.sources` once and its references must resolve.
  */
-export function composeOutputFor<Q extends z.ZodType>(query: Q) {
+export function composeOutputFor<Q extends z.ZodType>(query: Q, checks: Pick<EvidenceComposition, "checkReferences" | "checkIssues">) {
   const requests = z.array(repeatRequest(query));
   const receipt = z.strictObject({
     kind: z.literal("composition-receipt"), compositionSchema: z.literal(1), mode: z.enum(["summary", "details"]),
@@ -190,9 +189,9 @@ export function composeOutputFor<Q extends z.ZodType>(query: Q) {
     verification, requests, graph, coverage, counts, delivery: z.array(sourceDelivery).exactOptional(),
   }).superRefine((value, ctx) => {
     checkRequestIndices(value.graph.sources, value.requests.length, ctx);
-    const checked = validateCompositionReferences(value.graph);
+    const checked = checks.checkReferences(value.graph);
     if (!checked.ok) ctx.addIssue({ code: "custom", path: ["graph", checked.fault.table], message: `${checked.fault.kind}: ${checked.fault.id} ${checked.fault.field}` });
-    const issuesChecked = validateCompositionIssues(value.graph, value.coverage.issues);
+    const issuesChecked = checks.checkIssues(value.graph, value.coverage.issues);
     if (!issuesChecked.ok) ctx.addIssue({ code: "custom", path: ["coverage", "issues"], message: `${issuesChecked.fault.kind}: ${issuesChecked.fault.field}` });
   });
   return z.union([receipt, full]);
@@ -200,10 +199,12 @@ export function composeOutputFor<Q extends z.ZodType>(query: Q) {
 
 export { COMPOSE_INPUT } from "./composition-input.ts";
 /** The complete runtime output schema; the server validates every composition with it before delivery. */
-export const COMPOSE_OUTPUT = composeOutputFor(COMPOSE_QUERY);
+export function composeOutput(checks: Pick<EvidenceComposition, "checkReferences" | "checkIssues">) {
+  return composeOutputFor(COMPOSE_QUERY, checks);
+}
 
 export type GraphSchemaMatchesContract = Accepts<CompositionGraph, z.output<typeof graph>>;
 export type CoverageSchemaMatchesContract = Accepts<CoverageSummary, z.output<typeof coverage>>;
 export type RelationSchemaMatchesContract = Accepts<RelationValue, z.output<typeof relationValue>>;
 type WithoutRequests<T> = T extends unknown ? Omit<T, "requests"> : never;
-export type OutputSchemaMatchesContract = Accepts<WithoutRequests<ComposeReceipt | ComposeFull>, WithoutRequests<z.output<typeof COMPOSE_OUTPUT>>>;
+export type OutputSchemaMatchesContract = Accepts<WithoutRequests<ComposeReceipt | ComposeFull>, WithoutRequests<z.output<ReturnType<typeof composeOutput>>>>;

@@ -2,19 +2,21 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import { createHash } from "node:crypto";
-import { sourceFixture } from "./composition-fixtures.testing.ts";
-import { consequencesSource } from "./composition-consequences-fixture.testing.ts";
-import { normalizeSource } from "./composition-normalize.ts";
-import { mergeEvidence, materializeEvidence } from "./compose-evidence.ts";
-import { compositionIdentity } from "./composition-identity.ts";
-import { COMPOSE_OUTPUT } from "./composition-schema.ts";
-import { composeFull, composeReceipt } from "./render-composition.ts";
-import type { CompositionResult, CoverageSummary } from "./composition-contract.ts";
+import { sourceFixture, type FixtureSource } from "../core/application/composition/composition-fixtures.testing.ts";
+import { consequencesSource } from "../core/application/composition/composition-consequences-fixture.testing.ts";
+import { normalizeSource } from "../core/application/composition/composition-normalize.ts";
+import { mergeEvidence, materializeEvidence } from "../core/application/composition/compose-evidence.ts";
+import { compositionIdentity } from "../core/application/composition/composition-identity.ts";
+import { composeOutput } from "../mcp/composition-schema.ts";
+import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
+import type { ComposeQuery } from "../mcp/query-schema.ts";
+import { composeFull, composeReceipt } from "../mcp/render-composition.ts";
+import type { CompositionResult, CoverageSummary } from "../mcp/composition-contract.ts";
 import type { PartKind, ReadOwner } from "../core/ports/evidence-composition.port.ts";
-import type { ExecutedSource } from "./query-runner.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
 
 const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
+const COMPOSE_OUTPUT = composeOutput(createEvidenceComposition(digest));
 const ALL = [
   sourceFixture("entrypoints"), sourceFixture("impact-local"), sourceFixture("callers-local"), sourceFixture("importers"),
   sourceFixture("outline"), sourceFixture("workspace"), sourceFixture("decisions"), sourceFixture("impact-workspace"),
@@ -24,7 +26,7 @@ const ALL = [
 const ownerOf = (owner: ReadOwner): CutOwner => (owner.kind === "read" ? { kind: "read", repo: owner.repo, index: owner.index } : owner);
 
 /** A coordinator-shaped result over actual normalized and materialized fixtures; requests follow input order. */
-function resultOf(sources: readonly ExecutedSource[]): CompositionResult {
+function resultOf(sources: readonly FixtureSource[]): CompositionResult {
   const sets = sources.map((source) => normalizeSource(source, digest));
   const order = sets.map((set) => set.sources[0]?.id);
   const { graph, issues } = materializeEvidence(sets.slice(1).reduce(mergeEvidence, sets[0]!), digest);
@@ -49,7 +51,7 @@ function resultOf(sources: readonly ExecutedSource[]): CompositionResult {
       connections: graph.connections.length, unknownFindings: graph.parts.filter((part) => part.kind === "unknown-finding").length, unknownComponents: 0,
     },
     verification: { status: "available", identity: compositionIdentity(digest, graph.sources.map((source) => source.id)) },
-    requests: sources.map((source) => ({ status: "available", query: source.query, strategy: "fresh-read" })),
+    requests: sources.map((source) => ({ status: "available", query: source.query as ComposeQuery, strategy: "fresh-read" })),
   };
 }
 

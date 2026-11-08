@@ -5,6 +5,7 @@ import { repositoryCatalog, type RepositoryBinding } from "../mcp/repository-tar
 import { createMcpServer } from "../mcp/server.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import type { ProcessHost } from "./process-host.ts";
+import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
 
 const USAGE = "usage: ye-ast mcp [<launch-root>] [--repo <id> <root>]...";
 
@@ -66,7 +67,10 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
       done();
     };
   });
-  const handle = serveStdio(() => createMcpServer({ ...queries, digest: createSha256Digest(), repository, repositories: bindings }), {
+  const handle = serveStdio(() => {
+    const digest = createSha256Digest();
+    return createMcpServer({ ...queries, digest, evidenceComposition: createEvidenceComposition(digest), repository, repositories: bindings });
+  }, {
     transport: wire,
     onerror: (error) => host.err(`ye-ast: ${queries.redaction.redactError(error)}`),
   });

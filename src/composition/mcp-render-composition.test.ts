@@ -1,27 +1,29 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { callersValue, entrypointsValue, factOf, importersValue, inputsOf, liveRef, outlineValue, shaRef, SHA_A, SHA_B, sourceFixture, workspaceImpactValue, workspaceValue } from "./composition-fixtures.testing.ts";
-import { normalizeSource } from "./composition-normalize.ts";
-import { consequencesSource, FRONTIER_PLACE, TEMPLATE_FILE } from "./composition-consequences-fixture.testing.ts";
-import { mergeEvidence, materializeEvidence } from "./compose-evidence.ts";
-import { compositionIdentity } from "./composition-identity.ts";
+import { callersValue, entrypointsValue, factOf, importersValue, inputsOf, liveRef, outlineValue, shaRef, SHA_A, SHA_B, sourceFixture, type FixtureSource, workspaceImpactValue, workspaceValue } from "../core/application/composition/composition-fixtures.testing.ts";
+import { normalizeSource } from "../core/application/composition/composition-normalize.ts";
+import { consequencesSource, FRONTIER_PLACE, TEMPLATE_FILE } from "../core/application/composition/composition-consequences-fixture.testing.ts";
+import { mergeEvidence, materializeEvidence } from "../core/application/composition/compose-evidence.ts";
+import { compositionIdentity } from "../core/application/composition/composition-identity.ts";
 import { readFileSync, readdirSync } from "node:fs";
-import { composeReceipt, renderComposition } from "./render-composition.ts";
-import { COMPOSE_OUTPUT } from "./composition-schema.ts";
-import { RESULT_JSON_LABEL } from "./server.ts";
-import { renderEntrypointMap, renderImpact, renderOutline } from "./render.ts";
-import { blockBytes } from "./presentation-sharing.ts";
-import type { ComposeFull, CompositionResult, CoverageSummary, RepeatRequest } from "./composition-contract.ts";
+import { composeReceipt, renderComposition } from "../mcp/render-composition.ts";
+import { composeOutput } from "../mcp/composition-schema.ts";
+import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
+import type { ComposeQuery } from "../mcp/query-schema.ts";
+import { RESULT_JSON_LABEL } from "../mcp/server.ts";
+import { renderEntrypointMap, renderImpact, renderOutline } from "../mcp/render.ts";
+import { blockBytes } from "../mcp/presentation-sharing.ts";
+import type { ComposeFull, CompositionResult, CoverageSummary, RepeatRequest } from "../mcp/composition-contract.ts";
 import type { ReadOwner } from "../core/ports/evidence-composition.port.ts";
-import type { ExecutedSource } from "./query-runner.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
 
 const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
+const COMPOSE_OUTPUT = composeOutput(createEvidenceComposition(digest));
 const ownerOf = (owner: ReadOwner): CutOwner => (owner.kind === "read" ? { kind: "read", repo: owner.repo, index: owner.index } : owner);
 
 /** A coordinator-shaped result over actual normalized and materialized fixtures; requests follow input order. */
-function resultOf(sources: readonly ExecutedSource[], requests?: readonly RepeatRequest[]): CompositionResult {
+function resultOf(sources: readonly FixtureSource[], requests?: readonly RepeatRequest[]): CompositionResult {
   const sets = sources.map((source) => normalizeSource(source, digest));
   const order = sets.map((set) => set.sources[0]?.id);
   const { graph, issues } = materializeEvidence(sets.slice(1).reduce(mergeEvidence, sets[0]!), digest);
@@ -46,12 +48,12 @@ function resultOf(sources: readonly ExecutedSource[], requests?: readonly Repeat
       connections: graph.connections.length, unknownFindings: graph.parts.filter((part) => part.kind === "unknown-finding").length, unknownComponents: 1,
     },
     verification: { status: "available", identity: compositionIdentity(digest, graph.sources.map((source) => source.id)) },
-    requests: requests ?? sources.map((source) => ({ status: "available", query: source.query, strategy: "fresh-read" })),
+    requests: requests ?? sources.map((source) => ({ status: "available", query: source.query as ComposeQuery, strategy: "fresh-read" })),
   };
 }
 
 /** The outline without its duplicated `one` declaration, so the handler binds one unique declaration. */
-function uniqueOutline(snapshot = shaRef("shop")): ExecutedSource {
+function uniqueOutline(snapshot = shaRef("shop")): FixtureSource {
   const value = outlineValue();
   const [controller, ...rest] = value.files;
   assert.ok(controller);
@@ -60,7 +62,7 @@ function uniqueOutline(snapshot = shaRef("shop")): ExecutedSource {
 }
 
 /** Callers of the one `OrderService.find` declaration the diff seeds, so its `via` resolves exactly as impact's does. */
-function singleTargetCallers(): ExecutedSource {
+function singleTargetCallers(): FixtureSource {
   const value = callersValue();
   return sourceFixture("callers-local", { value: { ...value, seeds: value.seeds.slice(0, 1) } });
 }
@@ -179,7 +181,7 @@ test("summary counts omitted evidence and complete recovery controls stay in the
   const entrypointQuery = { name: "ye_ast_entrypoints" as const, arguments: { repo: "shop", revision: SHA_A }, expect: `mcp-r1:${"1".repeat(64)}` as const };
   const result = resultOf(sources, [
     { status: "available", query: entrypointQuery, strategy: "pinned-replay" },
-    { status: "available", query: sources[1]!.query, strategy: "fresh-read" },
+    { status: "available", query: sources[1]!.query as ComposeQuery, strategy: "fresh-read" },
     { status: "unavailable", reason: "redacted-context" },
   ]);
   const summary = renderComposition(result, "summary");

@@ -1,22 +1,20 @@
 /**
- * Typed `ExecutedSource` fixtures of the seven families (and both impact/callers branches) for normalization and later
+ * Typed `ComposedSource` fixtures of the seven families (and both impact/callers branches) for normalization and later
  * integration tests. Every value is built from the concrete domain types: no `any`, no untyped payload. The defaults are
  * deliberately rich (unknown findings, optional fields present and absent, nested sections, non-zero origin indices,
  * self/missing link reach, external decision evidence) so a single fixture exercises a family's whole public contract.
  */
-import { SCHEMA, type Cut, type Evidence, type Fact, type FactInputs, type Producer, type SnapshotRef, type UnknownReason } from "../core/domain/shared/fact.ts";
-import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
-import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
-import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
-import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
-import type { OutlineListing, OutlineValue } from "../core/domain/outline/outline-fact.ts";
-import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
-import type { CallSite } from "../core/domain/topology/call-site.ts";
-import type { WorkspaceImpactValue, RepoImpact } from "../core/ports/workspace-impact-queries.port.ts";
-import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
-import type { ExecutedSource, RedactionIdentityGuard } from "./query-runner.ts";
-import type { PublicRead, PublicWorkspaceValue } from "../core/ports/evidence-composition.port.ts";
-import type { SemanticArguments, SemanticQueryOf } from "./query-schema.ts";
+import { SCHEMA, type Cut, type Evidence, type Fact, type FactInputs, type Producer, type SnapshotRef, type UnknownReason } from "../../domain/shared/fact.ts";
+import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
+import type { EntrypointMap } from "../../domain/map/entrypoint-map.ts";
+import type { ImpactValue } from "../../domain/impact/impact-fact.ts";
+import type { ImportersValue } from "../../domain/impact/importers-fact.ts";
+import type { OutlineListing, OutlineValue } from "../../domain/outline/outline-fact.ts";
+import type { TraceValue } from "../../domain/trace/trace-fact.ts";
+import type { CallSite } from "../../domain/topology/call-site.ts";
+import type { WorkspaceImpactValue, RepoImpact } from "../../ports/workspace-impact-queries.port.ts";
+import type { DecisionValue } from "../../ports/decision-queries.port.ts";
+import type { ComposedSource, PublicRead, PublicWorkspaceValue } from "../../ports/evidence-composition.port.ts";
 
 export const SHA_A = "a".repeat(40);
 export const SHA_B = "b".repeat(40);
@@ -305,86 +303,91 @@ export function decisionsValue(): DecisionValue {
 
 export type FixtureKind = "entrypoints" | "impact-local" | "impact-workspace" | "callers-local" | "callers-workspace" | "importers" | "outline" | "trace" | "workspace" | "decisions";
 
+/** The query a fixture answers, as an MCP tool names it; composition reads only its `offline` argument. */
+export type FixtureQuery = { name: `ye_ast_${ComposedSource["family"]}`; arguments: ComposedSource["query"]["arguments"] };
+
+/** A fixture source: what composition reads, and the query it answers. */
+export type FixtureSource = ComposedSource & { query: FixtureQuery };
+
 /** What a test may replace; `value` keeps the default complete envelope, `fact` replaces the whole fact. */
-export type FixtureOverrides<V, F extends ExecutedSource["family"]> = {
+export type FixtureOverrides<V> = {
   value?: V;
   fact?: Fact<V>;
   read?: Omit<PublicRead<V>, "fact">;
-  arguments?: SemanticArguments<F>;
-  identityGuard?: Partial<RedactionIdentityGuard>;
+  arguments?: FixtureQuery["arguments"];
+  identityGuard?: ComposedSource["identityGuard"];
 };
 
 type AnyOverrides =
-  | FixtureOverrides<EntrypointMap, "entrypoints"> | FixtureOverrides<ImpactValue, "impact"> | FixtureOverrides<ImpactValue, "callers">
-  | FixtureOverrides<WorkspaceImpactValue, "impact"> | FixtureOverrides<WorkspaceImpactValue, "callers"> | FixtureOverrides<ImportersValue, "importers">
-  | FixtureOverrides<OutlineValue, "outline"> | FixtureOverrides<TraceValue, "trace"> | FixtureOverrides<PublicWorkspaceValue, "workspace"> | FixtureOverrides<DecisionValue, "decisions">;
+  | FixtureOverrides<EntrypointMap> | FixtureOverrides<ImpactValue> | FixtureOverrides<WorkspaceImpactValue> | FixtureOverrides<ImportersValue>
+  | FixtureOverrides<OutlineValue> | FixtureOverrides<TraceValue> | FixtureOverrides<PublicWorkspaceValue> | FixtureOverrides<DecisionValue>;
 
 /** A family's source; impact and callers share one payload member, so their branch is fixed by intersection. */
-type Of<F extends ExecutedSource["family"], B = never> = [B] extends [never] ? Extract<ExecutedSource, { family: F }> : Extract<ExecutedSource, { branch: B }> & { family: F; query: SemanticQueryOf<F> };
+type Of<F extends ComposedSource["family"], B = never> = ([B] extends [never] ? Extract<ComposedSource, { family: F }> : Extract<ComposedSource, { branch: B }> & { family: F }) & { query: FixtureQuery };
 
-const guardOf = (overrides: Partial<RedactionIdentityGuard> | undefined): RedactionIdentityGuard => ({ changedIdentityPointers: [], changedArguments: false, changedSnapshot: false, ...overrides });
+const guardOf = (overrides: ComposedSource["identityGuard"] | undefined): ComposedSource["identityGuard"] => overrides ?? { changedIdentityPointers: [] };
 const WORKSPACE_FACT = { snapshot: shaRef("shop"), inputs: inputsOf({ declaredConfig: { walk: { depth: 3 } } }) };
 const replay = { version: 1 as const, declaration: REPLAY_DECLARATION, snapshots: [shaRef("shop"), shaRef("web", SHA_B)] };
 
-function build<V, F extends ExecutedSource["family"]>(defaultValue: () => V, overrides: FixtureOverrides<V, F> | undefined, fact: FactOptions = {}): { read: PublicRead<V>; identityGuard: RedactionIdentityGuard } {
+function build<V>(defaultValue: () => V, overrides: FixtureOverrides<V> | undefined, fact: FactOptions = {}): { read: PublicRead<V>; identityGuard: ComposedSource["identityGuard"] } {
   return { read: { ...overrides?.read, fact: overrides?.fact ?? factOf(overrides?.value ?? defaultValue(), fact) }, identityGuard: guardOf(overrides?.identityGuard) };
 }
 
-function query<F extends ExecutedSource["family"]>(family: F, args: SemanticArguments<F>): SemanticQueryOf<F> {
-  return { name: `ye_ast_${family}`, arguments: args } as SemanticQueryOf<F>;
+function query(family: ComposedSource["family"], args: FixtureQuery["arguments"]): FixtureQuery {
+  return { name: `ye_ast_${family}`, arguments: args };
 }
 
-export function sourceFixture(kind: "entrypoints", overrides?: FixtureOverrides<EntrypointMap, "entrypoints">): Of<"entrypoints">;
-export function sourceFixture(kind: "impact-local", overrides?: FixtureOverrides<ImpactValue, "impact">): Of<"impact", "local">;
-export function sourceFixture(kind: "impact-workspace", overrides?: FixtureOverrides<WorkspaceImpactValue, "impact">): Of<"impact", "workspace">;
-export function sourceFixture(kind: "callers-local", overrides?: FixtureOverrides<ImpactValue, "callers">): Of<"callers", "local">;
-export function sourceFixture(kind: "callers-workspace", overrides?: FixtureOverrides<WorkspaceImpactValue, "callers">): Of<"callers", "workspace">;
-export function sourceFixture(kind: "importers", overrides?: FixtureOverrides<ImportersValue, "importers">): Of<"importers">;
-export function sourceFixture(kind: "outline", overrides?: FixtureOverrides<OutlineValue, "outline">): Of<"outline">;
-export function sourceFixture(kind: "trace", overrides?: FixtureOverrides<TraceValue, "trace">): Of<"trace">;
-export function sourceFixture(kind: "workspace", overrides?: FixtureOverrides<PublicWorkspaceValue, "workspace">): Of<"workspace">;
-export function sourceFixture(kind: "decisions", overrides?: FixtureOverrides<DecisionValue, "decisions">): Of<"decisions">;
-export function sourceFixture(kind: FixtureKind, overrides?: AnyOverrides): ExecutedSource {
+export function sourceFixture(kind: "entrypoints", overrides?: FixtureOverrides<EntrypointMap>): Of<"entrypoints">;
+export function sourceFixture(kind: "impact-local", overrides?: FixtureOverrides<ImpactValue>): Of<"impact", "local">;
+export function sourceFixture(kind: "impact-workspace", overrides?: FixtureOverrides<WorkspaceImpactValue>): Of<"impact", "workspace">;
+export function sourceFixture(kind: "callers-local", overrides?: FixtureOverrides<ImpactValue>): Of<"callers", "local">;
+export function sourceFixture(kind: "callers-workspace", overrides?: FixtureOverrides<WorkspaceImpactValue>): Of<"callers", "workspace">;
+export function sourceFixture(kind: "importers", overrides?: FixtureOverrides<ImportersValue>): Of<"importers">;
+export function sourceFixture(kind: "outline", overrides?: FixtureOverrides<OutlineValue>): Of<"outline">;
+export function sourceFixture(kind: "trace", overrides?: FixtureOverrides<TraceValue>): Of<"trace">;
+export function sourceFixture(kind: "workspace", overrides?: FixtureOverrides<PublicWorkspaceValue>): Of<"workspace">;
+export function sourceFixture(kind: "decisions", overrides?: FixtureOverrides<DecisionValue>): Of<"decisions">;
+export function sourceFixture(kind: FixtureKind, overrides?: AnyOverrides): FixtureSource {
   // Each overload pairs one kind with its own overrides type, so the implementation narrows by `kind` alone.
   switch (kind) {
     case "entrypoints": {
-      const o = overrides as FixtureOverrides<EntrypointMap, "entrypoints"> | undefined;
+      const o = overrides as FixtureOverrides<EntrypointMap> | undefined;
       return { family: "entrypoints", query: query("entrypoints", o?.arguments ?? { repo: "shop", revision: SHA_A }), ...build(entrypointsValue, o) };
     }
     case "impact-local": {
-      const o = overrides as FixtureOverrides<ImpactValue, "impact"> | undefined;
+      const o = overrides as FixtureOverrides<ImpactValue> | undefined;
       return { family: "impact", branch: "local", query: query("impact", o?.arguments ?? { repo: "shop", base: "main", head: SHA_A }), ...build(impactValue, o, { inputs: inputsOf({ declaredConfig: { walk: { depth: 2 }, changed: ["src/**"] } }), cuts: [{ kind: "depth", at: ["src/Root.java", "src/Report.java"], limit: 2 }] }) };
     }
     case "callers-local": {
-      const o = overrides as FixtureOverrides<ImpactValue, "callers"> | undefined;
+      const o = overrides as FixtureOverrides<ImpactValue> | undefined;
       return { family: "callers", branch: "local", query: query("callers", o?.arguments ?? { repo: "shop", revision: SHA_A, targets: [{ file: "src/OrderService.java", symbol: "find" }] }), ...build(callersValue, o, { inputs: inputsOf({ declaredConfig: { targets: ["src/OrderService.java#find"] } }) }) };
     }
     case "impact-workspace": {
-      const o = overrides as FixtureOverrides<WorkspaceImpactValue, "impact"> | undefined;
+      const o = overrides as FixtureOverrides<WorkspaceImpactValue> | undefined;
       return { family: "impact", branch: "workspace", query: query("impact", o?.arguments ?? { repo: "shop", base: "main", head: SHA_A, workspace: {}, offline: true }), ...build(() => workspaceImpactValue("impact"), { read: { workspaceReplay: replay }, ...o }, WORKSPACE_FACT) };
     }
     case "callers-workspace": {
-      const o = overrides as FixtureOverrides<WorkspaceImpactValue, "callers"> | undefined;
+      const o = overrides as FixtureOverrides<WorkspaceImpactValue> | undefined;
       return { family: "callers", branch: "workspace", query: query("callers", o?.arguments ?? { repo: "shop", revision: SHA_A, targets: [{ file: "src/OrderService.java", symbol: "find" }], workspace: {} }), ...build(() => workspaceImpactValue("callers"), { read: { workspaceReplay: replay }, ...o }, WORKSPACE_FACT) };
     }
     case "importers": {
-      const o = overrides as FixtureOverrides<ImportersValue, "importers"> | undefined;
+      const o = overrides as FixtureOverrides<ImportersValue> | undefined;
       return { family: "importers", query: query("importers", o?.arguments ?? { repo: "shop", revision: SHA_A, files: ["src/service.ts", "src/empty.ts"] }), ...build(importersValue, o, { inputs: inputsOf({ declaredConfig: { files: ["src/empty.ts", "src/service.ts"] } }) }) };
     }
     case "outline": {
-      const o = overrides as FixtureOverrides<OutlineValue, "outline"> | undefined;
+      const o = overrides as FixtureOverrides<OutlineValue> | undefined;
       return { family: "outline", query: query("outline", o?.arguments ?? { repo: "shop", revision: SHA_A, files: ["src/OrderController.java"] }), ...build(outlineValue, o, { inputs: inputsOf({ declaredConfig: { files: ["src/OrderController.java"] } }) }) };
     }
     case "trace": {
-      const o = overrides as FixtureOverrides<TraceValue, "trace"> | undefined;
+      const o = overrides as FixtureOverrides<TraceValue> | undefined;
       return { family: "trace", query: query("trace", o?.arguments ?? { repo: "shop", revision: SHA_A, targets: [{ file: "src/OrderController.java", symbol: "one" }] }), ...build(traceValue, o, { inputs: inputsOf({ declaredConfig: { targets: ["src/OrderController.java:one"] } }) }) };
     }
     case "workspace": {
-      const o = overrides as FixtureOverrides<PublicWorkspaceValue, "workspace"> | undefined;
+      const o = overrides as FixtureOverrides<PublicWorkspaceValue> | undefined;
       return { family: "workspace", query: query("workspace", o?.arguments ?? { repo: "shop", revision: SHA_A, offline: true }), ...build(workspaceValue, o) };
     }
     case "decisions": {
-      const o = overrides as FixtureOverrides<DecisionValue, "decisions"> | undefined;
+      const o = overrides as FixtureOverrides<DecisionValue> | undefined;
       return { family: "decisions", query: query("decisions", o?.arguments ?? { repo: "shop" }), ...build(decisionsValue, o) };
     }
     default:

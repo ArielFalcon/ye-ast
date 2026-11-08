@@ -4,9 +4,9 @@
  * never a semantic issue; the explicit missing variants (`OriginReference`/`LinkReference` missing, `ComparisonRef`
  * unavailable) are values, not references, and pass.
  */
-import type { Result } from "../core/domain/shared/result.ts";
-import type { CompositionInvariantFault, CompositionIssue, EvidenceOrigin, MaterializedGraph, Part, RelationValue, Support } from "../core/ports/evidence-composition.port.ts";
-import { isCompositionId, type IdKind } from "../core/domain/composition/composition-ids.ts";
+import type { Result } from "../../domain/shared/result.ts";
+import type { CompositionInvariantFault, CompositionIssue, EvidenceOrigin, MaterializedGraph, Part, RelationValue, Support } from "../../ports/evidence-composition.port.ts";
+import { isCompositionId, type IdKind } from "../../domain/composition/composition-ids.ts";
 
 /** One reference a record holds: the table it points into, the field that holds it, and the id. */
 export type Reference = { kind: IdKind; field: string; id: string };

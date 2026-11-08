@@ -17,7 +17,7 @@ import type { Fact } from "../core/domain/shared/fact.ts";
 import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type ComposeQuery, type SemanticQuery, type ToolArguments } from "./query-schema.ts";
 import { executeQuery, type ExecutedSource, type QueryExecutionDeps } from "./query-runner.ts";
 import type { PublicRead } from "../core/ports/evidence-composition.port.ts";
-import { COMPOSE_INPUT, COMPOSE_OUTPUT } from "./composition-schema.ts";
+import { COMPOSE_INPUT, composeOutput } from "./composition-schema.ts";
 import { runComposition } from "./compose-request.ts";
 import { composeFull, composeReceipt, renderComposition } from "./render-composition.ts";
 import { controlFault, faultContext, renderFault, type CodedFault, type FaultQueryContext, type PublicFault } from "./fault-presentation.ts";
@@ -559,6 +559,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
   }
 
   const annotations = { readOnlyHint: true, openWorldHint: false };
+  const output = composeOutput(deps.evidenceComposition);
 
   server.registerTool("ye_ast_compose", {
     title: "Compose evidence from related queries",
@@ -570,7 +571,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       const result = await runComposition(input, { deps, catalog, signal: ctx.mcpReq.signal });
       if (!result.ok) return failure(result.fault, sourceContext(input.queries, result.fault));
       const fields = input.mode === "full" ? composeFull(result.value) : composeReceipt(result.value, input.mode);
-      COMPOSE_OUTPUT.parse(fields);
+      output.parse(fields);
       return delivered(renderComposition(result.value, input.mode), fields, {});
     } catch (error) {
       return failure({ kind: "internal-fault", detail: redaction.redactError(error) });

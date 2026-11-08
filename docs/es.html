@@ -248,7 +248,7 @@
           <div><dt>Las conexiones exigen lecturas que coincidan</dt><dd><code>handler-declaration</code>, <code>reached-handler</code>, <code>linked-entrypoint</code>, <code>change-dependent</code>, <code>shared-file-import</code>, <code>used-import</code> y <code>shared-support</code> enlazan hallazgos solo entre lecturas con el mismo schema, producer, trust, engines, workspace y snapshot. <code>shared-file-import</code> y <code>shared-support</code> solo repiten una observación exacta, así que también aceptan otra versión del mismo producer. Si no, se informa un issue <code>context-mismatch</code> o <code>snapshot-difference</code>. <code>shares-evidence</code> significa la misma ubicación, no causalidad.</dd></div>
           <div data-tone="contract"><dt>Un recibo que puedes repetir</dt><dd>Los modos <code>summary</code> y <code>details</code> devuelven texto más un recibo: una identidad de verificación (<code>mcp-c1</code>) y las peticiones para repetirlas. Envíalas de vuelta con <code>expect</code> y el mismo conjunto debe seguir dando el mismo resultado.</dd></div>
         </dl>
-        <p class="ref"><code>src/mcp/composition-input.ts:13-19</code> · <code>src/mcp/compose-request.ts</code> · <code>src/mcp/compose-evidence.ts:207-237, 600-682</code> · <code>src/mcp/render-composition.ts:93</code></p>
+        <p class="ref"><code>src/mcp/composition-input.ts:13-19</code> · <code>src/mcp/compose-request.ts</code> · <code>src/core/application/composition/compose-evidence.ts:207-237, 600-682</code> · <code>src/mcp/render-composition.ts:93</code></p>
       </div>
     </section>
 

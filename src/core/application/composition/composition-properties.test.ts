@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { AnchorId, EvidenceSet } from "../core/ports/evidence-composition.port.ts";
+import type { AnchorId, EvidenceSet } from "../../ports/evidence-composition.port.ts";
 import { materializeEvidence, mergeEvidence, validateCompositionReferences } from "./compose-evidence.ts";
 import { digest, SetBuilder, sha, SHA_B } from "./compose-evidence-test-sets.testing.ts";
 

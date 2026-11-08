@@ -26,6 +26,7 @@ import type { FactRead, WorkspaceValue } from "./workspace-queries.port.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "./workspace-impact-queries.port.ts";
 import type { DecisionValue } from "./decision-queries.port.ts";
 import type { Analysis, CutOwner } from "../domain/composition/source-read.ts";
+import type { Result } from "../domain/shared/result.ts";
 import type { EntrypointMap } from "../domain/map/entrypoint-map.ts";
 
 export type QueryFamily = "entrypoints" | "callers" | "impact" | "importers" | "outline" | "trace" | "workspace" | "decisions" | "contract_consequences";
@@ -45,6 +46,15 @@ export type SourcePayload =
   | { family: "workspace"; read: PublicRead<PublicWorkspaceValue> }
   | { family: "decisions"; read: PublicRead<DecisionValue> }
   | { family: "contract_consequences"; read: PublicRead<ConsequencesValue> };
+
+/**
+ * One executed query as composition reads it: its public payload, the offline policy its arguments asked for, and the
+ * public positions redaction changed, whose values never join an identity across appearances.
+ */
+export type ComposedSource = SourcePayload & {
+  query: { arguments: { readonly [name: string]: unknown; offline?: boolean | undefined } };
+  identityGuard: { changedIdentityPointers: readonly string[] };
+};
 
 // Identifiers. Every digest is 64 lowercase hex; the prefixes are part of the wire (composition-identity.ts builds them).
 
@@ -377,3 +387,17 @@ export type CompositionGraph = GraphTables & { sources: readonly SourceDescripto
 export type MaterializedComposition = { graph: MaterializedGraph; issues: readonly CompositionIssue[] };
 /** A broken internal reference: a defect of normalization or materialization, never a semantic issue. Values are public ids. */
 export type CompositionInvariantFault = { kind: "invalid-composition-reference"; table: string; id: string; field: string };
+
+/**
+ * The derivation of an evidence graph from executed sources (ADR-0038): each source normalizes into an evidence set,
+ * sets merge, and the merged set materializes into the graph and its issues. Read-only and deterministic.
+ */
+export interface EvidenceComposition {
+  /** `discriminator` separates sources whose public identities redaction made indistinguishable. */
+  normalize(source: ComposedSource, options?: { discriminator: number }): EvidenceSet;
+  merge(left: EvidenceSet, right: EvidenceSet): EvidenceSet;
+  materialize(set: EvidenceSet): MaterializedComposition;
+  checkReferences(graph: MaterializedGraph): Result<void, CompositionInvariantFault>;
+  checkIssues(graph: MaterializedGraph, issues: readonly CompositionIssue[]): Result<void, CompositionInvariantFault>;
+  identity(sources: readonly SourceId[]): CompositionIdentity;
+}

@@ -16,6 +16,7 @@ const session = await openSession(createMcpServer({
   decisions: unused<McpDeps["decisions"]>(),
   contractConsequences: unused<McpDeps["contractConsequences"]>(),
   digest: unused<McpDeps["digest"]>(),
+  evidenceComposition: unused<McpDeps["evidenceComposition"]>(),
   redaction: {
     redact: value => value,
     redactValue: value => value,

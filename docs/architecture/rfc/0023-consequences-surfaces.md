@@ -28,7 +28,7 @@ What does not fit the shared surfaces as is: the change answer is not a fact; it
 request beside `base`/`head`; `consequencesOfEach` answers a list; `unknown-operation` is a call fault where a
 multi-hypothesis call needs a per-hypothesis answer; hop evidence is typed without its repository
 (`src/core/domain/contracts/consumer-flow.ts:91`); the value names no per-repository snapshots, which compose's
-multi-repository normalization reads (`vectorOf`, `src/mcp/composition-normalize.ts:281`); the name `contract-change`
+multi-repository normalization reads (`vectorOf`, `src/core/application/composition/composition-normalize.ts:292`); the name `contract-change`
 is already a compose part kind (impact's changed contracts).
 
 ## The family
@@ -144,7 +144,7 @@ every protocol workspace read.
 References are added to `partReferences` for each new kind. The existing relations then join them without a new rule:
 `shares-evidence` on equal places, file relations on equal files, and the handler anchor with the entrypoint and
 impact parts that name the same handler. Joined queries need equal snapshots, schema, producer and trust
-(`src/mcp/compose-evidence.ts:216-247`); compose re-reads per query (`src/mcp/compose-request.ts:169`), so joins with
+(`src/core/application/composition/compose-evidence.ts:216-247`); compose re-reads per query (`src/mcp/compose-request.ts:169`), so joins with
 `impact` or `entrypoints` hold at pinned revisions and report `snapshot-difference` under `live`, as for any family.
 
 ## What stays unchanged

@@ -1,16 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { SCHEMA, type Fact } from "../core/domain/shared/fact.ts";
-import type { PartPayload, SourceId, Support } from "../core/ports/evidence-composition.port.ts";
+import { digest } from "./compose-evidence-test-sets.testing.ts";
+import { SCHEMA, type Fact } from "../../domain/shared/fact.ts";
+import type { PartPayload, SourceId, Support } from "../../ports/evidence-composition.port.ts";
 import {
   anchorId, compositionIdentity, compositionKey, evidenceId, fileId, jsonPointer, partId, readId,
   snapshotId, sortById, sourceId, unionSupports, type SourceIdentityInput,
 } from "./composition-identity.ts";
-import { isCompositionId } from "../core/domain/composition/composition-ids.ts";
-import { sortedUnique } from "../core/domain/impact/importers-fact.ts";
+import { isCompositionId } from "../../domain/composition/composition-ids.ts";
+import { sortedUnique } from "../../domain/impact/importers-fact.ts";
 
-const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
 const SHA = "a".repeat(40);
 const sha = (repo: string, value = SHA) => ({ repo, kind: "sha" as const, sha: value });
 const v = (repo: string, value = SHA) => snapshotId(digest, sha(repo, value));

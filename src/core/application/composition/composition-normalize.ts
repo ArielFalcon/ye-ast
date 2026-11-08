@@ -5,35 +5,34 @@
  * multiplicity are recovered by position. No relation is inferred, no text is parsed and no coordinate is invented: a
  * repository outside the source vector, a missing merge base or external configuration keep a `query-context` origin.
  */
-import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
-import { compareText } from "../core/domain/shared/code-node.ts";
-import type { Cut, Evidence, Fact, FactProvenance, Finding, SnapshotRef } from "../core/domain/shared/fact.ts";
-import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
-import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
-import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
-import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
-import type { OutlineDeclaration, OutlineValue } from "../core/domain/outline/outline-fact.ts";
-import { hasUnprovedUses } from "../core/domain/outline/outline-uses.ts";
-import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
-import type { CallSite } from "../core/domain/topology/call-site.ts";
-import type { Link } from "../core/domain/topology/link.ts";
-import type { Decision } from "../core/domain/decisions/decision.ts";
-import type { ConsequencesValue, HypothesisAnswer, LocatedHop, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
-import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
-import type { Digest } from "../core/ports/digest.port.ts";
-import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
-import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
-import type { ExecutedSource } from "./query-runner.ts";
-import type { PublicWorkspaceValue } from "../core/ports/evidence-composition.port.ts";
-import { analysis, recoveryContext, type RecoveryContext } from "../core/domain/composition/source-read.ts";
-import type { AnchorId, AnchorRecord, ComparisonRef, ConsequenceHopData, ConsequenceLinkData, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceRecord, EvidenceSet, FileCategory, FileDependencyCategory, FileId, FileRecord, GuardData, HypothesisIdentity, LinkData, LinkReference, OriginReference, OutlineImportRecord, OutlineUseRecord, Part, PartId, PartPayload, ReadAnalysis, ReadId, ReadOwner, ReadRecord, RedactionRecord, RecordedCollectionState, SnapshotId, SnapshotRecord, SnapshotVectorEntry, SourceFamilyRef, SourceId, Support } from "../core/ports/evidence-composition.port.ts";
+import { canonicalJson } from "../../domain/shared/canonical-json.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
+import type { Cut, Evidence, Fact, FactProvenance, Finding, SnapshotRef } from "../../domain/shared/fact.ts";
+import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
+import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
+import type { ImpactValue } from "../../domain/impact/impact-fact.ts";
+import type { ImportedFile, ImportersValue } from "../../domain/impact/importers-fact.ts";
+import type { OutlineDeclaration, OutlineValue } from "../../domain/outline/outline-fact.ts";
+import { hasUnprovedUses } from "../../domain/outline/outline-uses.ts";
+import type { TraceValue } from "../../domain/trace/trace-fact.ts";
+import type { CallSite } from "../../domain/topology/call-site.ts";
+import type { Link } from "../../domain/topology/link.ts";
+import type { Decision } from "../../domain/decisions/decision.ts";
+import type { ConsequencesValue, HypothesisAnswer, LocatedHop, ProducerConsequence, UseConsequence } from "../../domain/contracts/consequence-fact.ts";
+import type { EntrypointMap } from "../../domain/map/entrypoint-map.ts";
+import type { Digest } from "../../ports/digest.port.ts";
+import type { RepoImpact, WorkspaceImpactValue } from "../../ports/workspace-impact-queries.port.ts";
+import type { DecisionValue } from "../../ports/decision-queries.port.ts";
+import type { ComposedSource, PublicWorkspaceValue } from "../../ports/evidence-composition.port.ts";
+import { analysis, recoveryContext, type RecoveryContext } from "../../domain/composition/source-read.ts";
+import type { AnchorId, AnchorRecord, ComparisonRef, ConsequenceHopData, ConsequenceLinkData, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceRecord, EvidenceSet, FileCategory, FileDependencyCategory, FileId, FileRecord, GuardData, HypothesisIdentity, LinkData, LinkReference, OriginReference, OutlineImportRecord, OutlineUseRecord, Part, PartId, PartPayload, ReadAnalysis, ReadId, ReadOwner, ReadRecord, RedactionRecord, RecordedCollectionState, SnapshotId, SnapshotRecord, SnapshotVectorEntry, SourceFamilyRef, SourceId, Support } from "../../ports/evidence-composition.port.ts";
 import {
   anchorId, evidenceId, fileId, jsonPointer, partId, readId, snapshotId, sortById, sourceId, unionSupports,
   type Occurrence, type SourceContext,
 } from "./composition-identity.ts";
 
 /** Normalizes one executed source. Pure and deterministic: the same public source always yields the same set. */
-export function normalizeSource(source: ExecutedSource, digest: Digest, options?: { discriminator: number }): EvidenceSet {
+export function normalizeSource(source: ComposedSource, digest: Digest, options?: { discriminator: number }): EvidenceSet {
   const family = familyRef(source);
   if (options !== undefined && (!Number.isSafeInteger(options.discriminator) || options.discriminator < 0)) throw new Error("Invalid normalization discriminator");
   const id = sourceId(digest, { ...family, context: contextOf(source), fact: source.read.fact, ...(options === undefined ? {} : { discriminator: options.discriminator }) });
@@ -48,7 +47,7 @@ function located(fact: Fact<ConsequencesValue>): { field: string; entries: reado
   return { field: "repositorySnapshots", entries: fact.status === "unknown" ? [] : fact.value.repositorySnapshots };
 }
 
-function familyRef(source: ExecutedSource): SourceFamilyRef {
+function familyRef(source: ComposedSource): SourceFamilyRef {
   return source.family === "impact" || source.family === "callers" ? { family: source.family, branch: source.branch } : { family: source.family };
 }
 
@@ -56,7 +55,7 @@ function familyRef(source: ExecutedSource): SourceFamilyRef {
  * The context half of the source identity. The three recoverable families reuse the `mcp-r1` context; the other six
  * take the same fields from the public fact, with the effective offline policy where the family has one.
  */
-function contextOf(source: ExecutedSource): SourceContext {
+function contextOf(source: ComposedSource): SourceContext {
   const fact: Fact<unknown> = source.read.fact;
   const selected = fact.snapshot.repo;
   const fresh = (context: RecoveryContext): SourceContext => {
@@ -250,7 +249,7 @@ class Builder {
 
 // Adapters. Each returns the source's snapshot vector, sorted by repository.
 
-function adapt(source: ExecutedSource, b: Builder, root: ReadContext): readonly SnapshotVectorEntry[] {
+function adapt(source: ComposedSource, b: Builder, root: ReadContext): readonly SnapshotVectorEntry[] {
   switch (source.family) {
     case "entrypoints":
       return local(b, root, source.read.fact, (value) => entrypoints(b, value));

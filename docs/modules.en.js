@@ -18,12 +18,12 @@ window.MODULE_DETAILS_EN = {
       may: "core/ports, core/domain",
       never: "core/adapters, a write of any kind",
       facts: [
-        "McpDeps extends QueryExecutionDeps, which holds only read query families (entrypoints, impact, outline, trace, workspace, workspace impact, decisions) plus redaction and digest, so a write is impossible by type.",
+        "McpDeps extends QueryExecutionDeps, which holds only read query families (entrypoints, impact, outline, trace, workspace, workspace impact, decisions), the evidence composition, redaction and digest, so a write is impossible by type.",
         "Ten tools: ye_ast_entrypoints, ye_ast_impact, ye_ast_callers, ye_ast_importers, ye_ast_outline, ye_ast_trace, ye_ast_workspace, ye_ast_decisions, ye_ast_contract_consequences and ye_ast_compose.",
         "The server instructions tell the agent how to read an answer: complete is relative to the declared scope, partial lists its cuts, and unknown never means no impact.",
         "ye_ast_compose combines 1 to 16 queries of the eight families into one set of evidence with a verification identity; it exists only over MCP.",
       ],
-      files: ["src/mcp/server.ts", "src/mcp/query-runner.ts", "src/mcp/composition-input.ts", "src/mcp/compose-request.ts", "src/mcp/compose-evidence.ts", "src/mcp/composition-schema.ts", "src/mcp/composition-contract.ts", "src/mcp/render-composition.ts", "src/composition/mcp.ts"],
+      files: ["src/mcp/server.ts", "src/mcp/query-runner.ts", "src/mcp/composition-input.ts", "src/mcp/compose-request.ts", "src/mcp/composition-schema.ts", "src/mcp/composition-contract.ts", "src/core/ports/evidence-composition.port.ts", "src/mcp/render-composition.ts", "src/composition/mcp.ts"],
     },
     protocol: {
       layer: "entrypoints",

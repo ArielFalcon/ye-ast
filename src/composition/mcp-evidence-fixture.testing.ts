@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { composeQueries } from "./compose.ts";
+import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import type { McpDeps } from "../mcp/server.ts";
 import type { ComposeQuery } from "../mcp/query-schema.ts";
@@ -135,7 +136,7 @@ export async function createCompositionFixture(): Promise<CompositionFixture> {
     const queries = composeQueries({ scratchRoot: join(state, "scratch"), indexCache: join(state, "index"), cacheDirectory: join(state, "cache"), trustDirectory });
     const deps: McpDeps = {
       ...queries,
-      digest: createSha256Digest(),
+      digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()),
       repository: { path: shop.root, repoId: SHOP },
       repositories: [{ path: web.root, repoId: WEB }],
     };

@@ -23,6 +23,7 @@ function discoveryServer() {
     contractConsequences: unused<McpDeps["contractConsequences"]>(),
     decisions: unused<McpDeps["decisions"]>(),
     digest: unused<McpDeps["digest"]>(),
+    evidenceComposition: unused<McpDeps["evidenceComposition"]>(),
     version: "0",
     repository: { path: "/work/shop", repoId: "shop" },
     redaction: {

@@ -21,7 +21,7 @@ import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { repositoryCatalog, RepositoryBinding, RepositoryTargetFault } from "./repository-targeting.ts";
 import { callersRecovery, entrypointRecovery, impactRecovery, type Recovery } from "./recovery.ts";
 import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type SemanticArguments, type SemanticQuery, type SemanticQueryOf } from "./query-schema.ts";
-import type { PublicRead, PublicWorkspaceValue, QueryFamily, SourcePayload } from "../core/ports/evidence-composition.port.ts";
+import type { EvidenceComposition, PublicRead, PublicWorkspaceValue, QueryFamily, SourcePayload } from "../core/ports/evidence-composition.port.ts";
 
 /** The read ports and the public-boundary services a query needs; `McpDeps` extends it with version and bindings. */
 export interface QueryExecutionDeps {
@@ -34,6 +34,7 @@ export interface QueryExecutionDeps {
   workspaceImpact: WorkspaceImpactQueries;
   decisions: DecisionQueries;
   contractConsequences: ContractConsequencesQueries;
+  evidenceComposition: EvidenceComposition;
   redaction: Redaction;
   digest: Digest;
 }

@@ -3,15 +3,15 @@
  * kind, key]))`, and the orders and set operations every table uses. Pure: no alias resolution, compatibility, relation
  * inference or merging lives here. Normalization and materialization both build ids only through these functions.
  */
-import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
-import { compareText } from "../core/domain/shared/code-node.ts";
-import { sortedUnique } from "../core/domain/impact/importers-fact.ts";
-import type { Evidence, Fact, SnapshotRef } from "../core/domain/shared/fact.ts";
-import type { Digest } from "../core/ports/digest.port.ts";
-import type { RecoveryContext } from "../core/domain/composition/source-read.ts";
-import { escapePointer } from "../core/domain/shared/json-pointer.ts";
-import { COMPOSITION_KEY_VERSION, DIGEST_ID, ID_PREFIXES, type IdKind, type IdOf } from "../core/domain/composition/composition-ids.ts";
-import type { AnchorId, CompositionIdentity, EvidenceId, EvidenceOrigin, FileId, PartId, PartPayload, ReadId, ReadOwner, SnapshotId, SourceFamilyRef, SourceId, Support } from "../core/ports/evidence-composition.port.ts";
+import { canonicalJson } from "../../domain/shared/canonical-json.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
+import { sortedUnique } from "../../domain/impact/importers-fact.ts";
+import type { Evidence, Fact, SnapshotRef } from "../../domain/shared/fact.ts";
+import type { Digest } from "../../ports/digest.port.ts";
+import type { RecoveryContext } from "../../domain/composition/source-read.ts";
+import { escapePointer } from "../../domain/shared/json-pointer.ts";
+import { COMPOSITION_KEY_VERSION, DIGEST_ID, ID_PREFIXES, type IdKind, type IdOf } from "../../domain/composition/composition-ids.ts";
+import type { AnchorId, CompositionIdentity, EvidenceId, EvidenceOrigin, FileId, PartId, PartPayload, ReadId, ReadOwner, SnapshotId, SourceFamilyRef, SourceId, Support } from "../../ports/evidence-composition.port.ts";
 
 /** The one id builder: the key is canonical JSON, so object member order never matters and array order always does. */
 export function compositionKey<K extends IdKind>(digest: Digest, kind: K, key: unknown): IdOf<K> {

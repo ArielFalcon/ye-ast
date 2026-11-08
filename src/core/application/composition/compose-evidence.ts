@@ -4,16 +4,16 @@
  * the closed connections and the issues from the whole set at once, so the result never depends on arrival order.
  * No alias is fused irreversibly, no relation is inferred from text, no transitive walk or breakage is derived.
  */
-import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
-import { compareText, joinsFact } from "../core/domain/shared/code-node.ts";
-import type { Digest } from "../core/ports/digest.port.ts";
-import type { AnchorId, AnchorRecord, Attestation, BindingRecord, BoundAnchor, CallLocation, CompositionIssue, Connection, ConnectionRule, EntityId, EntityRecord, EntryIdentity, EvidenceId, EvidenceSet, FileId, FileRecord, IssueDetail, MaterializedComposition, Part, PartId, PartOf, ReadId, ReadOwner, ReadRecord, RedactionRecord, RelationId, RelationRecord, RelationValue, SnapshotId, SourceId, Support } from "../core/ports/evidence-composition.port.ts";
-import type { CutOwner } from "../core/domain/composition/source-read.ts";
+import { canonicalJson } from "../../domain/shared/canonical-json.ts";
+import { compareText, joinsFact } from "../../domain/shared/code-node.ts";
+import type { Digest } from "../../ports/digest.port.ts";
+import type { AnchorId, AnchorRecord, Attestation, BindingRecord, BoundAnchor, CallLocation, CompositionIssue, Connection, ConnectionRule, EntityId, EntityRecord, EntryIdentity, EvidenceId, EvidenceSet, FileId, FileRecord, IssueDetail, MaterializedComposition, Part, PartId, PartOf, ReadId, ReadOwner, ReadRecord, RedactionRecord, RelationId, RelationRecord, RelationValue, SnapshotId, SourceId, Support } from "../../ports/evidence-composition.port.ts";
+import type { CutOwner } from "../../domain/composition/source-read.ts";
 import {
   compareSupport, compositionKey, fileId, sameCanonical, sortById, unionSupports,
 } from "./composition-identity.ts";
-import { COMPOSITION_KEY_VERSION, isCompositionId } from "../core/domain/composition/composition-ids.ts";
-import { sortedUnique } from "../core/domain/impact/importers-fact.ts";
+import { COMPOSITION_KEY_VERSION, isCompositionId } from "../../domain/composition/composition-ids.ts";
+import { sortedUnique } from "../../domain/impact/importers-fact.ts";
 import { partReferences } from "./compose-evidence-references.ts";
 
 export { validateCompositionReferences, validateCompositionIssues } from "./compose-evidence-references.ts";

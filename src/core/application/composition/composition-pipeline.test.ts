@@ -1,13 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
+import { digest } from "./compose-evidence-test-sets.testing.ts";
+import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { sourceFixture } from "./composition-fixtures.testing.ts";
 import { normalizeSource } from "./composition-normalize.ts";
 import { mergeEvidence, materializeEvidence, validateCompositionReferences } from "./compose-evidence.ts";
-import type { EvidenceSet } from "../core/ports/evidence-composition.port.ts";
+import type { EvidenceSet } from "../../ports/evidence-composition.port.ts";
 
-const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
 const sources = [
   sourceFixture("entrypoints"), sourceFixture("impact-local"), sourceFixture("callers-local"),
   sourceFixture("importers"), sourceFixture("outline"), sourceFixture("workspace"), sourceFixture("decisions"),

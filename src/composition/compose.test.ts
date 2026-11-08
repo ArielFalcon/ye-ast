@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { EXIT_CODE } from "../cli/main.ts";
 import { REDACTED } from "../core/ports/redaction.port.ts";
+import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { createRemoteRefresh, defaultRemoteRefreshDeps } from "../core/adapters/git/remote-refresh.adapter.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
@@ -441,7 +442,7 @@ test("a trusted sibling whose remote is passed is read at the remote's sha, and 
   assert.equal(read.repositorySources?.find(({ repo: id }) => id === "orders")?.path, join(cacheDirectory, "remotes", digest.of(url)));
 
   const { version, entrypoints, impact, outline, trace, workspace: workspaceQueries, workspaceImpact, decisions, contractConsequences, redaction } = composeQueries({ scratchRoot, trustDirectory, refresh });
-  const session = await openSession(createMcpServer({ version, entrypoints, impact, outline, trace, workspace: workspaceQueries, workspaceImpact, decisions, contractConsequences, digest: createSha256Digest(), redaction, repository: { path: repo, repoId: "shop-service" } }));
+  const session = await openSession(createMcpServer({ version, entrypoints, impact, outline, trace, workspace: workspaceQueries, workspaceImpact, decisions, contractConsequences, digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()), redaction, repository: { path: repo, repoId: "shop-service" } }));
   try {
     const answer = await session.callTool("ye_ast_callers", { targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }], workspace: {}, mode: "full" });
     assert.notEqual(answer.isError, true);
