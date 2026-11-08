@@ -134,7 +134,7 @@ export interface DispatchSite {
 }
 
 /** The method bodies a call to a body-less method may run, each by its file and the 1-based lines from its first token to its name, sorted. */
-export type DispatchTargets = { kind: "bodies"; bodies: readonly { file: string; start: number; nameLine: number }[] } | { kind: "unknown" };
+export type DispatchTargets = { kind: "bodies"; bodies: readonly { file: string; start: number; nameLine: number }[] } | { kind: "unknown"; reason?: "aspect may replace the body" | "generated implementation" | "dispatch not proven" };
 
 /** A member call by the place it starts, repository-relative and 1-based with a UTF-16 column, and the member it calls. */
 export interface ReceiverCallSite {

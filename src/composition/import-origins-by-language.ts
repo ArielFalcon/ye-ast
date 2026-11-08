@@ -21,7 +21,7 @@ export function importOriginsByLanguage(readers: readonly ImportOrigins[]): Impo
     },
     dispatchTargets: async (sites, signal) => {
       const answers = await Promise.all(readers.map((reader) => reader.dispatchTargets(sites, signal)));
-      return sites.map((_, index) => answers.find((answer) => answer[index]?.kind !== "unknown")?.[index] ?? { kind: "unknown" });
+      return sites.map((_, index) => answers.find((answer) => answer[index]?.kind !== "unknown")?.[index] ?? answers.find((answer) => { const target = answer[index]; return target?.kind === "unknown" && target.reason !== undefined; })?.[index] ?? { kind: "unknown" });
     },
     receiverMethods: async (sites, signal) => {
       const answers = await Promise.all(readers.map((reader) => reader.receiverMethods(sites, signal)));

@@ -135,6 +135,7 @@ export interface Cut {
   /** Where the computation stopped: repo-relative paths or symbols, or the section of a composite. */
   at: readonly string[];
   limit?: number;
+  detail?: "aspect may replace the body" | "generated implementation" | "dispatch not proven";
   reason?: UnknownReason;
   dependency?: {
     name: string;

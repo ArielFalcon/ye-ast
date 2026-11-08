@@ -365,7 +365,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     if (!declared.body) {
       const [targets] = await origins.dispatchTargets([{ file: symbol.file, line: symbol.startLine, name: symbol.name }], signal);
       const bodies = targets === undefined ? undefined : placedBodies(targets);
-      if (bodies === undefined || bodies.length === 0) return { cut: dispatchCut(symbol, implementationsBelow(symbol, owners)) };
+      if (bodies === undefined || bodies.length === 0) return { cut: { ...dispatchCut(symbol, implementationsBelow(symbol, owners)), ...(targets?.kind === "unknown" && targets.reason !== undefined ? { detail: targets.reason } : {}) } };
       return bodies.length === 1 ? { to: bodies[0]!, alternatives: bodies } : { cut: dispatchCut(symbol, bodies), alternatives: bodies };
     }
     if (!declared.overridable) return undefined;
