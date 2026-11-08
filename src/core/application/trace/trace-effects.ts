@@ -1,3 +1,4 @@
+import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
 import type { PlacedDataEffect } from "../../domain/trace/data-effect-site.ts";
@@ -42,9 +43,19 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
   if (expanded.size === 0) return [];
   const files = new Set([...expanded.values()].map((step) => step.declaration.file));
   const cuts: Cut[] = [];
+  const pending: { step: WalkedStep; owner: GraphNodeId; at: string; column: number; origins: PlacedCallSite["origins"]; bodies: ReadonlySet<GraphNodeId>; read: ReturnType<typeof effectOf> }[] = [];
+  const knownBodies = new Map<string, Body[]>();
+  const bodiesOf = (file: string): Body[] => {
+    let bodies = knownBodies.get(file);
+    if (bodies === undefined) {
+      bodies = store.symbolsInFiles([file]).filter((symbol) => !NOT_DECLARED_KINDS.includes(symbol.kind)).map((symbol) => ({ symbol, ...declarationSpan(symbol) }));
+      knownBodies.set(file, bodies);
+    }
+    return bodies;
+  };
   const byFile = Map.groupBy((await sites()).filter(({ site }) => files.has(site.file)), ({ site }) => site.file);
   for (const [file, inFile] of byFile) {
-    const bodies: Body[] = store.symbolsInFiles([file]).filter((symbol) => !NOT_DECLARED_KINDS.includes(symbol.kind)).map((symbol) => ({ symbol, ...declarationSpan(symbol) }));
+    const bodies = bodiesOf(file);
     const values = await functionValuesOf(file);
     const lines = new Map<GraphNodeId, ReadonlySet<number>>();
     const callLinesOf = (symbol: GraphSymbol) => lines.get(symbol.id) ?? lines.set(symbol.id, callLines(store, unresolvedIn, symbol)).get(symbol.id)!;
@@ -64,12 +75,52 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
         markCut(step, unplacedEffect(site), cuts);
         continue;
       }
-      const read = effectOf(site);
-      if ("effect" in read) (step.effects ??= []).push({ ...read.effect, column: placed.column! + 1 });
-      else markCut(step, read.cut, cuts);
+      const origins = "origins" in placed ? placed.origins : undefined;
+      const reached = origins === undefined ? undefined : expandedSteps(step.children.filter((child) => child.at?.line === site.line && child.at.column === placed.column! + 1));
+      const producingBodies = new Set<GraphNodeId>();
+      let proven = origins === undefined || origins.length > 0;
+      for (const origin of origins ?? []) {
+        const sourceBodies = bodiesOf(origin.file);
+        const body = owningBody(sourceBodies, origin);
+        const ranges = await functionValuesOf(origin.file);
+        if (body === undefined || !reached!.has(body.symbol.id) || !countedAlike(origin.column, lineOf(origin.file, origin.line) ?? "") || ranges === undefined || !executesInBody(body, ranges, origin)) {
+          proven = false;
+          break;
+        }
+        producingBodies.add(body.symbol.id);
+      }
+      if (!proven) {
+        markCut(step, unplacedEffect(site), cuts);
+        continue;
+      }
+      pending.push({ step, owner: owner.symbol.id, at: originKey({ file, ...at }), column: placed.column! + 1, origins, bodies: producingBodies, read: effectOf(site) });
     }
   }
+  const coveredBodies = new Set<GraphNodeId>();
+  const coveredOrigins = new Set<string>();
+  const retained = new Set<(typeof pending)[number]>();
+  for (const item of pending.toSorted((a, b) => (b.origins?.length ?? 0) - (a.origins?.length ?? 0))) {
+    const covered = item.origins === undefined ? coveredOrigins.has(item.at) : item.origins.every((origin) => coveredOrigins.has(originKey(origin)));
+    if (coveredBodies.has(item.owner) && covered) continue;
+    retained.add(item);
+    if ("effect" in item.read) {
+      for (const origin of item.origins ?? []) coveredOrigins.add(originKey(origin));
+      for (const body of item.bodies) coveredBodies.add(body);
+    }
+  }
+  for (const item of pending) {
+    if (!retained.has(item)) continue;
+    if ("effect" in item.read) {
+      const effects = (item.step.effects ??= []);
+      const effect = { ...item.read.effect, column: item.column };
+      if (!effects.some((existing) => canonicalJson(existing) === canonicalJson(effect))) effects.push(effect);
+    } else markCut(item.step, item.read.cut, cuts);
+  }
   return cuts;
+}
+
+function originKey(at: { file: string; line: number; column: number }): string {
+  return JSON.stringify([at.file, at.line, at.column]);
 }
 
 /**
@@ -91,9 +142,13 @@ function markCut(step: WalkedStep, cut: Cut, cuts: Cut[]): void {
 function expandedSteps(roots: readonly WalkedStep[]): Map<GraphNodeId, WalkedStep> {
   const found = new Map<GraphNodeId, WalkedStep>();
   const pending = [...roots];
+  const visited = new Set<WalkedStep>();
   for (let step = pending.pop(); step !== undefined; step = pending.pop()) {
+    if (visited.has(step)) continue;
+    visited.add(step);
     if (step.expanded && !found.has(step.declaration.key as GraphNodeId)) found.set(step.declaration.key as GraphNodeId, step);
     pending.push(...step.children);
+    if (step.seen !== undefined) pending.push(step.seen);
   }
   return found;
 }

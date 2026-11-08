@@ -41,17 +41,17 @@ function commit(files: Readonly<Record<string, string>>): void {
   execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: repo, env: GIT_ENV });
 }
 
-async function trace(target: string): Promise<{ status: string; value: TraceValue; cuts?: Cut[] }> {
+async function trace(target: string, ...also: string[]): Promise<{ status: string; value: TraceValue; cuts?: Cut[] }> {
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const code = await composeCli({ scratchRoot: join(workspace, "scratch"), indexCache: join(workspace, "cache") })(["trace", repo, target], { out: (line) => stdout.push(line), err: (line) => stderr.push(line) });
+  const code = await composeCli({ scratchRoot: join(workspace, "scratch"), indexCache: join(workspace, "cache") })(["trace", repo, target, ...also], { out: (line) => stdout.push(line), err: (line) => stderr.push(line) });
   assert.equal(code, EXIT_CODE.ok, stderr.join("\n"));
   return JSON.parse(stdout.join("\n"));
 }
 
 const effectsOf = (value: TraceValue) => value.steps.flatMap((step) => (step.effects ?? []).map(({ column: _column, ...effect }) => [step.symbol, effect]));
 
-test("an Angular HttpClient request is an http effect of the body that makes it, with its path; through a wrapper, of the caller that names the path", async () => {
+test("a direct Angular HttpClient request has its effect and an unexpanded wrapper remains an effect cut", async () => {
   commit({
     "src/api.client.ts": `import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
@@ -88,7 +88,8 @@ export class OrdersApi {
   const checkout = await trace("src/orders.api.ts:OrdersApi.checkout");
   const cancel = await trace("src/orders.api.ts:OrdersApi.cancel");
 
-  assert.deepEqual(effectsOf(checkout.value), [["checkout", { kind: "http", line: 11, target: { method: "POST", path: "/orders/checkout" } }]]);
+  assert.deepEqual(effectsOf(checkout.value), []);
+  assert.ok(checkout.cuts?.some((cut) => cut.at[0]?.includes("http effect")));
   assert.deepEqual(effectsOf(cancel.value), [["cancel", { kind: "http", line: 15, target: { method: "DELETE", path: "/api/orders/{}" } }]]);
 });
 
@@ -380,4 +381,206 @@ class Entry {
       assert.ok(result.value.value.steps.some(step => step.symbol === field), `${file}: ${field}`);
     }
   }
+});
+
+test("unproven signal reads never step into interface or unrelated model fields", async () => {
+  commit({
+    "src/article.ts": `export interface Article { title: string; body: string; }`,
+    "src/comment.ts": `export interface Comment { body: string; }`,
+    "src/state.ts": `import { inject } from '@angular/core';
+import { signalStore, withState } from '@ngrx/signals';
+import { Article } from './article';
+const Store = signalStore(withState({ data: {} as Article }));
+export class Editor {
+  private store = inject(Store);
+  edit() {
+    this.store.data.title();
+    this.store.data.body();
+  }
+}
+`,
+  });
+  const result = await trace("src/state.ts:Editor.edit");
+  assert.deepEqual(result.value.steps.map((step) => step.symbol), ["edit"]);
+  assert.equal(result.status, "partial");
+  assert.equal(result.cuts?.filter((cut) => cut.kind === "unresolved-link").length, 2);
+});
+
+test("effects propagated through an unexpanded Java body remain cuts", async () => {
+  commit({
+    "src/Flow.java": `import org.springframework.context.ApplicationEventPublisher;
+import org.aspectj.lang.annotation.Aspect;
+interface Processor { void process(); }
+class ImageEvent {}
+class Worker implements Processor {
+  private ApplicationEventPublisher publisher;
+  public void process() { publisher.publishEvent(new ImageEvent()); }
+}
+@Aspect class Advice {}
+class Flow {
+  private Processor processor;
+  public void run() { processor.process(); }
+}
+`,
+  });
+  const result = await trace("src/Flow.java:Flow.run");
+  assert.deepEqual(effectsOf(result.value), []);
+  assert.equal(result.status, "partial");
+  assert.ok(result.cuts?.some((cut) => cut.at[0]?.includes("message effect")));
+  const separateRoot = await trace("src/Flow.java:Flow.run", "src/Flow.java:Worker.process");
+  assert.equal(separateRoot.value.steps.find((step) => step.symbol === "run")?.effects, undefined);
+});
+
+test("identical effects at one propagated Java call are deduplicated", async () => {
+  commit({
+    "src/Flow.java": `import org.springframework.context.ApplicationEventPublisher;
+class ImageEvent {}
+class Flow {
+  private ApplicationEventPublisher publisher;
+  public void run() { publish(); }
+  private void publish() {
+    publisher.publishEvent(new ImageEvent());
+    publisher.publishEvent(new ImageEvent());
+  }
+}
+`,
+  });
+  const result = await trace("src/Flow.java:Flow.run");
+  assert.equal(result.value.steps.find((step) => step.symbol === "run")?.effects?.length, 1);
+});
+
+test("Java overloads select the sole signature of the call arity and cut unresolved signatures", async () => {
+  commit({
+    "src/Flow.java": `class Facade {
+  void process(String a, String b, String c, String d) { }
+  void process(String a, String b, String c, String d, String e) { }
+  void ambiguous(String value) { }
+  void ambiguous(Integer value) { }
+}
+class Flow {
+  private Facade facade;
+  void run() { facade.process(null, null, null, null, null); }
+  void unsettled() { facade.ambiguous((String) null); }
+}
+`,
+  });
+  const run = await trace("src/Flow.java:Flow.run");
+  const reached = run.value.steps.flatMap((step) => [
+    { symbol: step.symbol, line: step.line },
+    ...(step.leaves ?? []).map((leaf) => ({ symbol: leaf.symbol, line: leaf.start })),
+  ]).filter(({ symbol }) => symbol === "process");
+  assert.deepEqual(reached, [{ symbol: "process", line: 3 }]);
+  const unsettled = await trace("src/Flow.java:Flow.unsettled");
+  assert.deepEqual(unsettled.value.steps.map((step) => step.symbol), ["unsettled"]);
+  assert.equal(unsettled.status, "partial");
+  assert.ok(unsettled.cuts?.some((cut) => cut.at.includes("src/Flow.java:4 Facade.ambiguous") && cut.at.includes("src/Flow.java:5 Facade.ambiguous")));
+});
+
+test("Java inherited members follow the declared receiver instead of a sibling name match", async () => {
+  commit({
+    "src/base/Port.java": `package base; public interface Port<T> { void create(T value); }`,
+    "src/left/Left.java": `package left; public interface Left extends base.Port<String> { }`,
+    "src/right/Right.java": `package right; public interface Right extends base.Port<Integer> { void create(Integer value); }`,
+    "src/base/Base.java": `package base; public class Base { public Other Left; public void create(String value) { } }`,
+    "src/base/Other.java": `package base; public class Other { public void create(String value) {} }`,
+    "src/Flow.java": `import left.Left;
+class Flow extends base.Base {
+  Left receiver;
+  Flow(Left receiver) { this.receiver = receiver; }
+  void run() { receiver.create("value"); this.create("value"); }
+  <T extends Left> void unknown(T value) { value.create("value"); }
+  void shadow() { var Left = new Other(); Left.create("value"); }
+  void inheritedShadow() { Left.create("value"); }
+}
+class Other { void create(String value) {} }
+`,
+  });
+  const result = await trace("src/Flow.java:Flow.run");
+  const declarations = result.value.steps.flatMap((step) => [step.file, ...(step.leaves ?? []).map((leaf) => leaf.file)]);
+  assert.ok(!declarations.includes("src/right/Right.java"));
+  assert.ok(declarations.includes("src/base/Port.java"));
+  assert.ok(declarations.includes("src/base/Base.java"));
+  assert.equal(result.status, "partial");
+  const unknown = await trace("src/Flow.java:Flow.unknown");
+  assert.equal(unknown.status, "partial");
+  assert.deepEqual(unknown.value.steps.map((step) => step.symbol), ["unknown"]);
+  const shadow = await trace("src/Flow.java:Flow.shadow");
+  assert.equal(shadow.status, "partial");
+  assert.ok(!shadow.value.steps.some((step) => step.symbol === "create"));
+  assert.ok(!shadow.value.steps.flatMap((step) => step.leaves ?? []).some((leaf) => leaf.symbol === "create"));
+  const inheritedShadow = await trace("src/Flow.java:Flow.inheritedShadow");
+  assert.equal(inheritedShadow.status, "partial");
+  assert.ok(!inheritedShadow.value.steps.some((step) => step.symbol === "create"));
+});
+
+test("a Java client method root retains its own effect or effect cut even when another method calls it", async () => {
+  commit({
+    "src/Flow.java": `import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.context.ApplicationEventPublisher;
+class ImageEvent {}
+class Client {
+  private WebClient web = WebClient.create("http://customers");
+  private ApplicationEventPublisher publisher;
+  Object fetch(String id) { return web.get().uri("/customers/" + id); }
+  Object undecided(String path) { return web.get().uri(path); }
+  void emit() { publisher.publishEvent(new ImageEvent()); }
+}
+class Flow {
+  private Client client;
+  void run() { client.fetch("one"); client.undecided("/known"); client.emit(); }
+}
+`,
+  });
+  const fetch = await trace("src/Flow.java:Client.fetch");
+  assert.ok(effectsOf(fetch.value).some(([, effect]) => typeof effect === "object" && effect.kind === "http"));
+  const undecided = await trace("src/Flow.java:Client.undecided");
+  assert.equal(undecided.status, "partial");
+  assert.ok(undecided.cuts?.some((cut) => cut.at[0]?.includes("http effect")));
+  const emit = await trace("src/Flow.java:Client.emit");
+  assert.ok(effectsOf(emit.value).some(([, effect]) => typeof effect === "object" && effect.kind === "message"));
+});
+
+test("TypeScript wrapper effects require a traversed wrapper body and remain visible at that body as a root", async () => {
+  commit({
+    "src/client.ts": `import { HttpClient } from '@angular/common/http';
+import { inject } from '@angular/core';
+export class Client {
+  http = inject(HttpClient);
+  post(path: string) { return this.http.post(path, {}); }
+}
+export function run(client: Client) { client.post('/unproven'); }
+export class NominalClient {
+  private readonly http = inject(HttpClient);
+  post(path: string) { return this.http.post('/api' + path, {}); }
+}
+export function proven(client: NominalClient) { client.post('/proven'); }
+`,
+  });
+  const run = await trace("src/client.ts:run");
+  assert.deepEqual(effectsOf(run.value), []);
+  assert.ok(run.cuts?.some((cut) => cut.at[0]?.includes("http effect")));
+  const proven = await trace("src/client.ts:proven");
+  assert.equal(effectsOf(proven.value).length, 1);
+  assert.ok(!proven.cuts?.some((cut) => cut.at[0]?.includes("http effect")));
+  const client = await trace("src/client.ts:Client.post");
+  assert.ok(client.cuts?.some((cut) => cut.at[0]?.includes("http effect")));
+});
+
+test("Java declaration selection preserves private helper traversal while aspect dispatch remains cut", async () => {
+  commit({
+    "src/Flow.java": `@org.aspectj.lang.annotation.Aspect class Advice {}
+interface Port { void save(); }
+class Worker implements Port { public void save() {} }
+class Flow {
+  private Port service;
+  void run() { helper(); }
+  private void helper() { service.save(); }
+}
+`,
+  });
+  const result = await trace("src/Flow.java:Flow.run");
+  assert.deepEqual(result.value.steps.map((step) => step.symbol), ["run", "helper", "save"]);
+  assert.equal(result.status, "partial");
+  assert.equal(result.value.steps.find((step) => step.symbol === "save")?.line, 2);
+  assert.ok(result.cuts?.some((cut) => cut.at[0]?.includes("src/Flow.java:2 save")));
 });

@@ -187,8 +187,8 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
     return call.member !== undefined && this.called.has(call.member.id) && !this.roots.has(call.member.id);
   }
 
-  expand(call: Invocation, scope: UrlScope): { leaf: T; scope: UrlScope }[][] | undefined {
-    type Group = { leaf: T; scope: UrlScope }[];
+  expand(call: Invocation, scope: UrlScope): { leaf: T; scope: UrlScope; bodies: ReadonlySet<MethodDecl> }[][] | undefined {
+    type Group = { leaf: T; scope: UrlScope; bodies: Set<MethodDecl> }[];
     type Frame = { groups: Group[]; edges: Group[][][] };
     type Done = (groups: Group[]) => void;
     const cache = new Map<string, Group[]>();
@@ -210,7 +210,7 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
       return Array.from({ length }, (_, index) => {
         const present = [...new Set(branches.flatMap((branch) => branch[index] ?? []))];
         return branches.some((branch) => branch[index] === undefined)
-          ? present.map(({ leaf, scope }) => ({ leaf, scope: { ...scope, undecided: true, undecidedCause: scope.undecidedCause ?? "dispatch-disagreement" } })) : present;
+          ? present.map(({ leaf, scope, bodies }) => ({ leaf, bodies, scope: { ...scope, undecided: true, undecidedCause: scope.undecidedCause ?? "dispatch-disagreement" } })) : present;
       });
     };
     const selections = methodsOf(call, this.project, this.text, scope.receiver ?? scope.type);
@@ -221,15 +221,16 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
       pending.push(() => {
         const method = selection.method.node.id;
         if (active.has(method)) {
-          done([...(this.reachable.get(method) ?? [])].map((leaf) => [{ leaf, scope: { ...bound, undecided: true, undecidedCause: "recursive" } }]));
+          done([...(this.reachable.get(method) ?? [])].map((leaf) => [{ leaf, bodies: new Set([selection.method]), scope: { ...bound, undecided: true, undecidedCause: "recursive" } }]));
           return;
         }
         const key = `${method}:${bound.deferred === true}:${selection.receiver.node.id}:${bound.configurationFile?.path}:${[...bound.env].map(([name, value]) => `${name}=${closureKey(value.node, value.scope)}`).join(";")}`;
         const cached = cache.get(key);
         if (cached !== undefined) { done(cached); return; }
-        const frame: Frame = { groups: (this.leaves.get(method) ?? []).map((leaf) => [{ leaf, scope: { ...bound, deferred: bound.deferred === true || deferredLibraryCall(leaf.invocation.node, leaf.invocation.type.file.path), locals: leaf.invocation.locals } }]), edges: [] };
+        const frame: Frame = { groups: (this.leaves.get(method) ?? []).map((leaf) => [{ leaf, bodies: new Set<MethodDecl>(), scope: { ...bound, deferred: bound.deferred === true || deferredLibraryCall(leaf.invocation.node, leaf.invocation.type.file.path), locals: leaf.invocation.locals } }]), edges: [] };
         pending.push(() => {
           const groups = [...frame.groups, ...frame.edges.flatMap(merge)];
+          for (const group of groups) for (const item of group) item.bodies.add(selection.method);
           cache.set(key, groups); done(groups);
         });
         const next = new Set(active).add(method);

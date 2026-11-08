@@ -17,9 +17,10 @@ const REFLECTIVE = /Field|VarHandle|Getter|Setter/;
  * the name is declared in the type body, to a field; `this.r` to a field. A field counts only when the enclosing type
  * body declares it once and `private`, and the file names it through no receiver but `this` and reads no field by
  * reflection. The binding holds the type where it is written, by its first name (ADR-0029 decision 9).
+ * `declaredFields` admits other fields for nominal repository-member selection, never external-leaf proof.
  * `includeUnproven` also retains annotation candidates marked unproven; they prove no receiver value.
  */
-export function javaReceiverBindings(root: Node, includeUnproven = false): ReceiverBinding[] {
+export function javaReceiverBindings(root: Node, { includeUnproven = false, declaredFields = false }: { includeUnproven?: boolean; declaredFields?: boolean } = {}): ReceiverBinding[] {
   const invocations: Node[] = [];
   const otherReceivers = new Set<string>();
   let reflects = false;
@@ -39,9 +40,9 @@ export function javaReceiverBindings(root: Node, includeUnproven = false): Recei
     const field = declared.length === 1 ? declared[0]!.parent : undefined;
     if (field?.type !== "field_declaration") return undefined;
     const unproven = reflects || otherReceivers.has(name) || !isPrivate(field);
-    if (unproven && !includeUnproven) return undefined;
+    if (unproven && !includeUnproven && !declaredFields) return undefined;
     const node = field.childForFieldName("type");
-    return node === null ? undefined : { node, unproven };
+    return node === null ? undefined : { node, unproven: unproven && !declaredFields };
   };
 
   return invocations.flatMap((invocation): ReceiverBinding[] => {
@@ -64,7 +65,7 @@ export function javaReceiverBindings(root: Node, includeUnproven = false): Recei
       const local = localBinding(object);
       if (local !== undefined) type = statedType(local);
       else {
-        const shadowed = declaresVariable(enclosingBody(object), receiver);
+        const shadowed = declaresVariable(enclosingBody(object), receiver, declaredFields ? object : undefined);
         if (!shadowed || includeUnproven) {
           type = fieldAt(object, receiver);
           unproven ||= shadowed;
@@ -101,9 +102,10 @@ function isPrivate(field: Node): boolean {
 }
 
 /** Whether a type body declares a variable of the name anywhere but as a field: it may shadow the field where it is used. */
-function declaresVariable(body: Node | undefined, name: string): boolean {
+function declaresVariable(body: Node | undefined, name: string, at?: Node): boolean {
   const pending: Node[] = body === undefined ? [] : [body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (at !== undefined && (node.type === "method_declaration" || node.type === "constructor_declaration") && !(node.startIndex <= at.startIndex && at.endIndex <= node.endIndex)) continue;
     if (VARIABLE_DECLARATIONS.has(node.type) && node.parent?.type !== "field_declaration" && node.childForFieldName("name")?.text === name) return true;
     if (node.type === "identifier" && node.text === name && PATTERN_OR_LAMBDA.has(node.parent?.type ?? "")) return true;
     for (const child of node.namedChildren) if (child !== null) pending.push(child);

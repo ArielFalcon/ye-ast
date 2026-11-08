@@ -132,8 +132,8 @@ export interface JavaProject {
    * sources declare claims the segment after that prefix.
    */
   isPlatformName(fqn: string): boolean;
-  /** The type, then each interface with its own hierarchy, then the superclass with its own: the order Spring searches. */
-  hierarchy(type: TypeDecl): Hierarchy;
+  /** The type, its interfaces and superclass in Spring order; a supplied parent resolver leaves every unread parent as a gap. */
+  hierarchy(type: TypeDecl, resolveParent?: (node: Node, owner: TypeDecl) => TypeLookup): Hierarchy;
   /** The type and its superclasses declared in the project. */
   classChain(type: TypeDecl): readonly TypeDecl[];
   /** The string a constant expression evaluates to, or why the sources do not give it. */
@@ -521,14 +521,14 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     return typeof found === "object" ? found : undefined;
   }
 
-  function supertypeGap(found: TypeLookup, node: Node, type: TypeDecl, isInterface: boolean, before: number): SupertypeGap | undefined {
+  function supertypeGap(found: TypeLookup, node: Node, type: TypeDecl, isInterface: boolean, before: number, strict = false): SupertypeGap | undefined {
     const name = typeNodeName(node);
     const gap = { isInterface, name, before, file: type.file, node };
     if (found === "ambiguous") return { ...gap, kind: "ambiguous" };
-    return found === undefined && !externalNames(name, type.file, true).every(isPlatformName) ? { ...gap, kind: "missing" } : undefined;
+    return found === undefined && (strict || !externalNames(name, type.file, true).every(isPlatformName)) ? { ...gap, kind: "missing" } : undefined;
   }
 
-  function hierarchy(root: TypeDecl): Hierarchy {
+  function hierarchy(root: TypeDecl, resolveParent?: (node: Node, owner: TypeDecl) => TypeLookup): Hierarchy {
     const members: TypeDecl[] = [];
     const gaps: SupertypeGap[] = [];
     const visited = new Set<TypeDecl>();
@@ -551,8 +551,8 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
         frames.pop();
         continue;
       }
-      const found = lookupType(typeNodeName(parent.node), scopeOf(frame.type));
-      const gap = supertypeGap(found, parent.node, frame.type, parent.isInterface, members.length);
+      const found = resolveParent === undefined ? lookupType(typeNodeName(parent.node), scopeOf(frame.type)) : resolveParent(parent.node, frame.type);
+      const gap = supertypeGap(found, parent.node, frame.type, parent.isInterface, members.length, resolveParent !== undefined);
       if (gap !== undefined) gaps.push(gap);
       if (typeof found === "object") enter(found);
     }

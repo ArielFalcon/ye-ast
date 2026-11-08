@@ -1,6 +1,7 @@
 import { declarationSpan, executesInBody, owningBody } from "../../domain/trace/owning-body.ts";
 import { callsByOwner, matchOwnedCall, positionedBodies, type OwnedCall } from "./syntax-calls.ts";
 import { isSeedable } from "../../domain/change/seeds.ts";
+import { isJavaSource } from "../../domain/languages/java.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { CALL_EDGE_KINDS, FIELD_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor, placeAt } from "../../domain/impact/impact-cuts.ts";
@@ -194,7 +195,10 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       paths = new Map(branchesOf(containmentTree(store, store.symbolsInFiles([symbol.file]))).map((branch) => [branch.declaration.id, declarationPath(branch)]));
       pathsByFile.set(symbol.file, paths);
     }
-    return declarationAnchor(symbol.file, paths.get(symbol.id) ?? symbol.name);
+    const path = paths.get(symbol.id) ?? symbol.name;
+    return [...paths.values()].filter((candidate) => candidate === path).length > 1
+      ? placeAt(symbol.file, symbol.startLine, path)
+      : declarationAnchor(symbol.file, path);
   };
   /**
    * The place reads `<path>:<line> <spelling>`: the path is repository-relative and the line digits, so the first
@@ -401,7 +405,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   };
 
   /**
-   * By the index of each kept edge of a TypeScript source into a member of a class, the receiver it is called on when
+   * By the index of each kept edge of a TypeScript source into a field or a member of a class, the receiver it is called on when
    * that receiver is a value (a parameter or a variable, by the binder's scoping, ADR-0029), a field read through
    * `this` (`this.f.m`) or no name at all (a call result, `f().m`, empty), rather than a class, a function, an import or
    * `this` itself: the index matched such a call by
@@ -409,7 +413,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
    */
   async function valueReceivers(node: GraphSymbol, edges: readonly FollowedEdge[], verdicts: readonly EdgeTarget[]): Promise<ReadonlyMap<number, string>> {
     if (!isTypeScriptFile(node.file)) return new Map();
-    const kept = edges.flatMap(({ edge, target }, index) => (verdicts[index]!.kind === "keep" && edge.line !== null && edge.column !== null && navigation.ownersOf(target).some((owner) => CLASS_KINDS.includes(owner.kind)) ? [{ index, edge, target }] : []));
+    const kept = edges.flatMap(({ edge, target }, index) => (verdicts[index]!.kind === "keep" && edge.line !== null && edge.column !== null && ((FIELD_KINDS as readonly string[]).includes(target.kind) || navigation.ownersOf(target).some((owner) => CLASS_KINDS.includes(owner.kind))) ? [{ index, edge, target }] : []));
     if (kept.length === 0) return new Map();
     const syntax = (await syntaxIndexOf(node.file)).receiverBindings;
     /** The receiver the source's syntax binds at the call, whatever it holds: its rules decide, never the root alone. */
@@ -563,7 +567,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     }
     for (const reference of unsettledBy([...indexed, ...missing], called)) {
       const own = ownMemberOf(reference.name);
-      const members = own === undefined ? [] : uses.ownMembers(node, own, ["method"]);
+      const members = own === undefined || isJavaSource(reference.file) ? [] : uses.ownMembers(node, own, ["method"]);
       if (members.length === 1) children.push(childAt(members[0]!, reference.line, reference.column, reference.name, "own-member"));
       else if (members.length > 1) cuts.push(unresolvedAt(reference, members));
       else {
@@ -615,7 +619,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         const origin = root?.status === "complete" && root.pastRoot !== true ? root.value : undefined;
         if (origin?.kind === "external") await leafUnlessReplaced({ kind: "import", module: origin.module, name: reference.name }, { module: origin.module }, () => settleByName(reference, name, named, true));
         else if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, { path: reference.name.split("."), member: name }, () => settleByName(reference, name, named, true));
-        else await settleByName(reference, name, named);
+        else typed.push({ reference, name, named });
       }
     }
     /**

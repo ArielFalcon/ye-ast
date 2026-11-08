@@ -89,11 +89,11 @@ export interface ImportOrigins {
    * One entry per site, in the order received: the method a member call names by the type the sources declare its
    * receiver to hold (RFC-0013 R3, R5), the declaration a call on a value of that type is resolved to at compile time,
    * below which dispatch decides the body. The type is a repository type stated by the receiver's parameter, local or
-   * private field, or the declared return type of the repository method a receiver call names in the same way (`f().m()`).
-   * `unknown` when the language types structurally (TypeScript), when nothing states the type, when it is a type variable,
-   * when the type's hierarchy reaches a type outside the repository, when its members of the name are not one signature of
-   * the call's arity (an overload, a varargs, a private or an `Object` method), or when the declared hierarchy does not
-   * prove the bodies a value of the type may run for it (`dispatchTargets`).
+   * field, or the declared return type of the repository method a receiver call names in the same way (`f().m()`).
+   * `unproven` when a value or declared repository receiver has no settled member: an unread hierarchy, an unsettled
+   * signature of the call's arity, varargs, an inaccessible private or an `Object` method. Such an index target cannot
+   * prove a step. `unknown` when this reader does not establish a receiver obligation, including TypeScript sites.
+   * Runtime body selection remains the separate `dispatchTargets` obligation.
    */
   receiverMethods(sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ReceiverMethod[]>;
   /**
@@ -146,9 +146,8 @@ export interface ReceiverCallSite {
 
 /**
  * The method declaration a call names, by its file and the 1-based lines from its first token to its name; `unproven`
- * when the call's receiver is a value it reads (a parameter, a local, a field, a member of another value or what another
- * call returns) and the sources may make a value of any declared type run code they do not show, so no index edge from
- * the call proves what it runs either.
+ * when its value or declared repository receiver has no settled member, so no index edge proves a step; `unknown`
+ * when this reader establishes no receiver obligation.
  */
 export type ReceiverMethod = { kind: "method"; file: string; start: number; nameLine: number } | { kind: "unproven" } | { kind: "unknown" };
 

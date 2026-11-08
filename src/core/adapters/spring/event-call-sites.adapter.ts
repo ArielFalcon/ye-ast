@@ -6,7 +6,7 @@ import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { CallSite, CallSiteDiagnostic, EventTarget } from "../../domain/topology/call-site.ts";
 import type { Configuration } from "./application-config.ts";
 import { EVENT_CLIENT_NAME, PUBLISH_CLIENTS, PUBLISH_METHOD_NAME, type PublishClient } from "./event-vocabulary.ts";
-import { complete, placed, spanOf, unknown, withEvidence } from "./findings.ts";
+import { complete, fromBodies, placed, spanOf, unknown, withEvidence } from "./findings.ts";
 import { argumentsOf, typeNameOf } from "./java-members.ts";
 import { ancestorsOf, receiverOf, symbolOf, type Invocation } from "./java-invocations.ts";
 import { qualifiedTypeName, scopeOf, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
@@ -34,11 +34,11 @@ export class JavaEventReader {
     this.text = new JavaValueEvaluator(project, configuration);
   }
 
-  sites(repo: string): CallSite[] {
+  sites(repo: string, includeNested = false): CallSite[] {
     const found: CallSite[] = [];
     const flow = new JavaMethodFlow<Publish>(this.project, this.text, (call) => this.publishOf(call));
     for (const invocation of flow.invocations.filter((call) => this.owned.has(call.type.file))) {
-      if (flow.nested(invocation)) continue;
+      if (!includeNested && flow.nested(invocation)) continue;
       const scope = this.scopeOf(invocation, new Map());
       const direct = this.publishOf(invocation);
       if (direct !== undefined) {
@@ -53,13 +53,13 @@ export class JavaEventReader {
           const agreedTarget = agreed(alternatives, ({ target }) => target.status === "unknown" ? target.status : target.value);
           const target = agreedTarget?.target;
           if (target !== undefined && target.status !== "unknown") {
-            found.push(this.siteOf(repo, invocation, target));
+            found.push(fromBodies(this.siteOf(repo, invocation, target), group));
             continue;
           }
           const library = group.find(({ leaf }) => !this.owned.has(leaf.invocation.type.file))?.leaf.invocation.type.fqn;
           const span = spanOf(invocation.type.file.path, invocation.node);
           const causal = unknown(target?.status === "unknown" ? target.reason : "unresolved", [library === undefined ? span : { ...span, via: library }, ...alternatives.flatMap(({ target }) => target.evidence), ...group.map(({ leaf }) => spanOf(leaf.invocation.type.file.path, leaf.invocation.node))]);
-          found.push(this.siteOf(repo, invocation, causal, reachedDiagnostic(alternatives.map(({ diagnostic }) => diagnostic), agreedTarget !== undefined, library !== undefined)));
+          found.push(fromBodies(this.siteOf(repo, invocation, causal, reachedDiagnostic(alternatives.map(({ diagnostic }) => diagnostic), agreedTarget !== undefined, library !== undefined)), group));
         }
       } else {
         const library = this.libraryOf(invocation);

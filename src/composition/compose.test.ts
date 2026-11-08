@@ -912,9 +912,9 @@ test("a Java trace never settles a call by a root it reads past, whether the gra
   const field = ["public class Use {", "  public void entry() { java.util.Collections.EMPTY_LIST.size(); }", "}", "class Other { int size() { return 1; } }", ""].join("\n");
   const alias = ["public class Use {", "  public void entry() { var o = System.out; o.println(\"x\"); }", "  public static void main(String[] args) { System.setOut(new RepoStream()); new Use().entry(); }", "}", ...stream].join("\n");
 
-  assert.deepEqual(await traceOf("qualified", { "Use.java": qualified }), { status: "partial", cuts: [["unresolved-link", "Use.java:11 System.err.println", "Use.java::RepoStream.println"]], steps: [["entry", null], ["println", null]] });
-  assert.deepEqual(await traceOf("qualifiedfield", { "Use.java": field }), { status: "complete", cuts: [], steps: [["entry", null]] });
-  assert.deepEqual(await traceOf("varalias", { "Use.java": alias }), { status: "complete", cuts: [], steps: [["entry", null], ["println", null], ["println", null]] });
+  assert.deepEqual(await traceOf("qualified", { "Use.java": qualified }), { status: "partial", cuts: [["unresolved-link", "Use.java:3 println", "Use.java::RepoStream.println"]], steps: [["entry", null]] });
+  assert.deepEqual(await traceOf("qualifiedfield", { "Use.java": field }), { status: "partial", cuts: [["unresolved-link", "Use.java:2 size", "Use.java::Other.size"]], steps: [["entry", null]] });
+  assert.deepEqual(await traceOf("varalias", { "Use.java": alias }), { status: "partial", cuts: [["unresolved-link", "Use.java:2 println", "Use.java::RepoStream.println"]], steps: [["entry", null]] });
 });
 
 /** The status, cuts and steps (symbol, place, parent, via, the step it repeats and its leaves) of a trace of `Use.entry` over a fresh repository holding `files`. */
@@ -1003,16 +1003,25 @@ test("a Java method that names a parameter type like an inherited one's, from an
   assert.ok(!answer.steps.some(([place]) => place === "b/Sub.java:3 save"));
 });
 
-test("a Java call the index resolved on a non-private field or a var local stays a step under an aspect, since nothing falsifies the declared type", async () => {
+test("a Java declared field is proven while a var receiver retains a cut without a declared-type proof", async () => {
   const use = ["public class Use {", "  Plain field;", "  public void entry() {", "    field.save();", "    var local = new Plain();", "    local.save();", "  }", "}"];
   const plain = ["class Plain {", "  void save() {}", "}"];
-  const aspect = ["@org.aspectj.lang.annotation.Aspect", "class Logging {}"];
 
-  assert.deepEqual(await javaTrace("aspect", { "Use.java": use, "Plain.java": plain, "Logging.java": aspect }), {
-    status: "partial",
-    cuts: [["unresolved-link", "Use.java:5 Plain", "Plain.java::Plain"]],
-    steps: [["Use.java:3 entry", null, null, null, ["Plain.java:2 save"]]],
-  });
+  const result = await javaTrace("declared-field", { "Use.java": use, "Plain.java": plain });
+  assert.equal(result.status, "partial");
+  assert.deepEqual(result.cuts, [["unresolved-link", "Use.java:5 Plain", "Plain.java::Plain"], ["unresolved-link", "Use.java:6 save", "Plain.java::Plain.save"]]);
+  assert.ok(result.steps.some((step) => JSON.stringify(step).includes("Plain.java:2 save")));
+});
+
+test("a Java aspect veto retains cuts for declared fields and var receivers", async () => {
+  const use = ["public class Use {", "  Plain field;", "  public void entry() {", "    field.save();", "    var local = new Plain();", "    local.save();", "  }", "}"];
+  const plain = ["class Plain {", "  void save() {}", "}"];
+
+  const aspect = ["@org.aspectj.lang.annotation.Aspect", "class Logging {}"];
+  const result = await javaTrace("aspect", { "Use.java": use, "Plain.java": plain, "Logging.java": aspect });
+  assert.equal(result.status, "partial");
+  assert.deepEqual(result.cuts, [["unresolved-link", "Use.java:5 Plain", "Plain.java::Plain"], ["unresolved-link", "Use.java:6 save", "Plain.java::Plain.save"]]);
+  assert.ok(result.steps.some((step) => JSON.stringify(step).includes("Plain.java:2 save")));
 });
 
 test("a TypeScript trace settles a call by its package or global root only when the call reads one member below it", async () => {
@@ -1817,7 +1826,7 @@ test("a trace over a real index keeps a call to a Java record accessor a cut, an
 
   assert.ok(answer.ok && answer.value.status === "partial");
   assert.equal(answer.value.value.steps[0]?.external, undefined);
-  assert.deepEqual(answer.value.cuts.map((entry) => entry.at), [["src/Shapes.java:7 p.coordinate", "src/Point.java::coordinate"]]);
+  assert.deepEqual(answer.value.cuts.map((entry) => entry.at), [["src/Shapes.java:7 p.coordinate", "src/Point.java::coordinate"], ["src/Shapes.java:8 anonymousOnly", "src/Shapes.java::Shapes.task.<Runnable$anon@2>.anonymousOnly"]]);
 });
 
 test("trace accounts for every syntactic call even when the index omits its receiver shape", async () => {

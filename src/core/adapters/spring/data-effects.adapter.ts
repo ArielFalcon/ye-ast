@@ -28,7 +28,7 @@ export function createJavaDataEffects(parser: JavaParser): DataEffectReader {
         return [describeFile(path, parsed.value.root)];
       });
       const project = createJavaProject(files);
-      const bindings = new Map(files.map((file) => [file, new Map(javaReceiverBindings(file.root, true).map((binding) => [callKey(binding.line, binding.column, binding.member), binding]))]));
+      const bindings = new Map(files.map((file) => [file, new Map(javaReceiverBindings(file.root, { includeUnproven: true }).map((binding) => [callKey(binding.line, binding.column, binding.member), binding]))]));
       for (const type of project.types) for (const call of invocationsOf(type)) {
         const effect = effectAt(call, project, bindings.get(type.file)!);
         if (effect !== undefined) sites.push({ site: { file: type.file.path, line: call.node.startPosition.row + 1, effect: effect === false ? undefined : effect }, column: call.node.startPosition.column });
