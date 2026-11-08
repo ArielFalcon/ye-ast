@@ -1,6 +1,8 @@
 # ADR-0041: Every query family reads calls from one reconciliation of the index and the syntax
 
-- Status: Proposed, 2026-11-08
+- Status: Accepted, 2026-11-08. The owner accepted it after review, verbatim: "apruebo", including decision 8 (an unbound
+  recovered call on a receiver no proof types is counted in M5 and not emitted). The measurements stay gates of the units
+  that need them: M5 before U4 is accepted, M1 to M3 before open question 1.
 - Decision source: the owner, 2026-11-08, verbatim: "lanza un agente con esfuerzo xhigh que prepare el ADr de la
   reconciliacion general, para utilizar lo que es especifico para trace pero de forma general en la base del algoritmo,
   si trace tiene algo que se debe quedar especifico a su herramienta se deja como una extension del algoritmo base,
@@ -300,7 +302,7 @@ Every cost below is a measurement to obtain, not a guarantee.
 - **One-shot processes.** Derived facts live in the process (ADR-0035), so each CLI `callers` or `impact` run pays the
   cold pass; the MCP server and `serve` pay it once per input.
 
-Measurements before acceptance, on the corpus manifest of ADR-0039:
+Measurements on the corpus manifest of ADR-0039, each a gate of the unit or open question it names:
 
 | # | Measure | Why |
 |---|---|---|
