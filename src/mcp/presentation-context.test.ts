@@ -24,3 +24,9 @@ test("complete, partial and live headers retain uncertainty and snapshot identit
   assert.equal(renderFactHeader(live).at(-1), "snapshot: shop live @ h (state)");
   assert.equal(renderFactHeader({...base,status:"complete",value:null})[0], "status: complete");
 });
+test("a fact that read a declared build output says so in its header, and whether the snapshot's lockfile verified it", () => {
+  const read = (verified: boolean) => ({ ...base, inputs: { ...base.inputs, buildOutputs: [{ kind: "node-modules", at: "web", verified, digest: "d" }] }, status: "complete", value: null }) as Fact<null>;
+  assert.ok(renderFactHeader(read(false)).includes("build output: web/node_modules, unverified (no lockfile at the snapshot)"));
+  assert.ok(renderFactHeader(read(true)).includes("build output: web/node_modules, verified by the snapshot's lockfile"));
+  assert.equal(renderFactHeader({ ...base, status: "complete", value: null } as Fact<null>).some((line) => line.startsWith("build output")), false);
+});

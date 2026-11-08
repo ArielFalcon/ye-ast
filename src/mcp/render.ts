@@ -525,6 +525,7 @@ function symbolLine(symbol: ImpactedSymbol, file: string, includeVia = true): st
   const facts = [`depth ${symbol.depth}`];
   if (symbol.confidence < 1) facts.push(`confidence ${symbol.confidence}`);
   if (symbol.via?.derivation === "name-match") facts.push("name match");
+  if (symbol.via?.derivation === "typed") facts.push("typed");
   if (symbol.fanIn > 0) facts.push(`fan-in ${symbol.fanIn}`);
   if (includeVia && symbol.via !== undefined) facts.push(`via ${viaText(symbol.via, file)}`);
   return `    ${spanText(symbol.line, symbol.endLine)} ${symbol.symbol} [${symbol.kind}] (${facts.join(", ")})`;

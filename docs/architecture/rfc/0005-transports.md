@@ -103,8 +103,8 @@ integer of at most 2147483647 (the largest delay a timer honours); when it elaps
 | `trust.declare` | request | `mode` | `{"trust": "untrusted"}` |
 | `cancel` | notification, host to server | `id`, the request to abort | none; the request is answered `aborted` |
 | `entrypoints.map` | request | `repo`, `repoId`, `revision`, `scope?` | the entrypoints fact |
-| `impact.ofChange` | request | `repo`, `repoId`, `base`, `head`, `changed?`, `scope?`, `budget?` | the impact fact |
-| `impact.callers` | request | `repo`, `source?`, `repoId`, `revision`, `targets` (`{file, symbol}` or `{file, start, end}`), `scope?`, `budget?` | the impact fact |
+| `impact.ofChange` | request | `repo`, `repoId`, `base`, `head`, `changed?`, `scope?`, `budget?`, `buildOutputs?` | the impact fact |
+| `impact.callers` | request | `repo`, `source?`, `repoId`, `revision`, `targets` (`{file, symbol}` or `{file, start, end}`), `scope?`, `budget?`, `buildOutputs?` | the impact fact |
 | `impact.importers` | request | `repo`, `repoId`, `revision`, `files`, `scope?` | the impact fact |
 | `trace.walk` | request | `repo`, `repoId`, `revision`, `targets`, `scope?`, `budget?` | the trace fact |
 | `contractConsequences.ofHypotheses` | request | `repo`, `repos?`, `gateways?`, `hypotheses` (non-empty), `scope?` | the contract consequences fact ([RFC-0023](0023-consequences-surfaces.md)) |
@@ -114,7 +114,7 @@ integer of at most 2147483647 (the largest delay a timer honours); when it elaps
 `repo` remains the declared clone whose trust applies; omitting `source` reads that clone. MCP does not expose this
 internal workspace choice as a tool argument.
 
-`budget` is `{depth?, hubFanIn?, expansions?}`, positive integers. `scope` is `{include?, exclude?}`, lists of non-empty globs over repository-relative paths ([RFC-0002](0002-facts-contract.md) rule 4); the CLI takes them as the repeatable `--include <glob>` and `--exclude <glob>` of `map`, `impact`, `callers` and `importers`. `changed` is a list of non-empty globs over the changed paths ([RFC-0018](0018-change-selection.md)); the CLI takes it as the repeatable `--changed <glob>` of `impact`. A result is the fact, redacted at egress.
+`budget` is `{depth?, hubFanIn?, expansions?}`, positive integers. `scope` is `{include?, exclude?}`, lists of non-empty globs over repository-relative paths ([RFC-0002](0002-facts-contract.md) rule 4); the CLI takes them as the repeatable `--include <glob>` and `--exclude <glob>` of `map`, `impact`, `callers` and `importers`. `changed` is a list of non-empty globs over the changed paths ([RFC-0018](0018-change-selection.md)); the CLI takes it as the repeatable `--changed <glob>` of `impact`. `buildOutputs` is a list of `{kind: "node-modules", at?, path}`: an absolute host path of a `node_modules` directory and the repository directory it stands for, `""` by default ([ADR-0037](../adr/0037-host-declared-build-outputs.md)); the CLI takes it as the repeatable `--node-modules [<at>=]<path>` of `impact`, `callers`, `init` and `mcp`. A result is the fact, redacted at egress.
 
 `workspace.outwardNames` accepts optional `replay` and returns optional `workspaceReplay` beside its fact. The context
 is `{version: 1, declaration: "ws-r1:<64 lowercase hex>", snapshots}` with unique repository IDs sorted by repository.

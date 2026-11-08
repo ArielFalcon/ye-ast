@@ -93,6 +93,17 @@ export interface FactInputs {
   origin?: IndexOrigin;
   /** Version of each engine that produced the fact, by package name; only the engines that took part. */
   engines: Readonly<Record<string, string>>;
+  /** Each build output a host declared that the fact read (ADR-0037 decision 6); absent when it read none. */
+  buildOutputs?: readonly BuildOutputInput[];
+}
+
+/** A declared build output a fact read: whether the snapshot's lockfile verified it, and the digest of what was read from it. */
+export interface BuildOutputInput {
+  kind: "node-modules";
+  /** The repository directory the output stands for, `""` for the root. */
+  at: string;
+  verified: boolean;
+  digest: string;
 }
 
 export interface Evidence {
@@ -137,6 +148,7 @@ export interface Cut {
     | "caller-budget"
     | "node-cap"
     | "unresolved-link"
+    | "build-output"
     | "deadline"
     | "section"
     | "not-exported"
@@ -230,9 +242,10 @@ const CUT_RANK: Record<Cut["kind"], number> = {
   "node-cap": 3,
   deadline: 4,
   "unresolved-link": 5,
-  "no-extractor": 6,
-  "not-exported": 7,
-  section: 8,
+  "build-output": 6,
+  "no-extractor": 7,
+  "not-exported": 8,
+  section: 9,
 };
 
 /** Complete only when nothing cut the answer; otherwise partial with the cuts in kind order, each once. */

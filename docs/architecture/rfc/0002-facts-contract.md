@@ -31,7 +31,7 @@ type UnknownReason =
 
 interface Cut {
   kind:
-    | "depth" | "hub" | "caller-budget" | "node-cap" | "unresolved-link" | "deadline" | "section"
+    | "depth" | "hub" | "caller-budget" | "node-cap" | "unresolved-link" | "build-output" | "deadline" | "section"
     | "not-exported" | "no-extractor";
   at: string[];
   limit?: number;
@@ -49,6 +49,7 @@ interface FactInputs {
   content: string;
   config: string;
   engines: Record<string, string>;
+  buildOutputs?: DeclaredBuildOutputInput[];   // ADR-0037 (proposed): only when a host declared one
 }
 
 type SnapshotRef =
@@ -87,6 +88,11 @@ carries none. `SnapshotRef.repo` is a stable repository name the
 host chooses, by default the directory name of the main worktree of the repository a query is bound to, and the directory
 name of the path for a repository a workspace request names without an `id`; never a path, so identical inputs give
 identical bytes on every machine and every worktree of the repository a query is bound to keeps one name.
+`inputs.buildOutputs` lists each build output a host declared for the fact ([ADR-0037](../adr/0037-host-declared-build-outputs.md), proposed): its kind, the
+repository-relative directory it stands for, whether the snapshot's lockfile verified it, and the digest of what the
+fact read from it; a fact without a declaration carries no field, so its bytes do not change. A `build-output` cut names a
+declared output an answer did not read: each package the snapshot's lockfile states at another version, each link that
+led out of the declared directory, or the directory itself on a live tree.
 `index-unavailable` means the snapshot has no usable index yet: no store, a store codegraph does not report `complete`
 or that another codegraph version built, or a build still running ([RFC-0005](0005-transports.md#first-index)).
 `unresolved` means the source names a value that cannot be known statically: a non-constant expression, a `${...}`

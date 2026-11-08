@@ -158,6 +158,15 @@ root can override its default name. The host registration owns this catalog; ava
 workspace membership. Only the launch root is warmed. Local evidence paths are relative to the selected root;
 workspace evidence belongs to its recorded owner.
 
+A registration may also declare the launch repository's installed dependencies with repeatable
+`--node-modules [<at>=]<path>`: a `node_modules` directory your own install produced, standing for `<at>/node_modules`
+in the repository (the root's without `<at>=`). `ye-ast init --node-modules ...` prints a registration that carries it.
+ye-ast reads it as data, never runs it, checks it against the commit's lockfile, and uses it at a revision only, never on
+the live tree. `callers` and `impact` then settle TypeScript calls by the type checker (`via.derivation: "typed"`);
+each answer that used a declaration lists it in `inputs.buildOutputs` and says whether the lockfile verified it, and a
+declaration it could not use is a `build-output` cut. Without one every answer is unchanged
+([ADR-0037](docs/architecture/adr/0037-host-declared-build-outputs.md)).
+
 <details open>
 <summary><b>Claude Code</b></summary>
 
@@ -454,7 +463,7 @@ A CLI or query-protocol fact has this envelope; MCP text modes return a smaller 
 schema     contract version of the envelope (currently "0.21.0")
 snapshot   what was read: { repo, kind: "sha", sha } or { repo, kind: "live", head, stateId }
 producer   ye-ast name and version
-inputs     trust mode, declared scope, change selection, budget
+inputs     trust mode, declared scope, change selection, budget, declared build outputs read
 evidence   [{ path, line, endLine? }] that support the value
 status     complete | partial | unknown
 value      the fact itself (in MCP structured content when mode is "full" and status is known)
@@ -479,6 +488,7 @@ or the section name) and the following entries are places (`path:line`). The nin
 | `caller-budget` | The `budget.expansions` bound, or a budget a host set on the export, stopped the read (`limit` says which value) | Raise it, or accept the limit |
 | `node-cap` | A node cap ended the walk (declared in the contract) | Treat like any bound: report it |
 | `unresolved-link` | A reference or call target the code does not decide (dynamic URL, ambiguous target) | Needs source evidence or a declaration, not a larger budget |
+| `build-output` | A declared `node_modules` the answer did not read: a package the lockfile states at another version, a path that would not be read, a link out of it, or the live tree | Calls settle as without a declaration; reinstall from the lockfile or query a revision |
 | `deadline` | A wall-clock deadline cut the read; such a fact is never stored | Retry narrower (`scope`, `changed`) |
 | `section` | One section of a composite answer is itself incomplete | Read that section's own cuts |
 | `not-exported` | An in-scope path was left out of the git export (symlink, unsafe path, case collision, submodule) | Not recoverable by ye-AST; report it |

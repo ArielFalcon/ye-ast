@@ -2,11 +2,14 @@ import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { DeclaredScope } from "../../domain/shared/fact.ts";
 import { referenceKey, rootedName, uniqueReferenceKeys } from "../../domain/impact/impact-cuts.ts";
-import { readsPastRoot } from "../../domain/impact/edge-policy.ts";
-import type { CodeGraphReader, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
+import { CALL_EDGE_KINDS, readsPastRoot } from "../../domain/impact/edge-policy.ts";
+import type { CodeGraphReader, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
 import { unresolvedReferencesIn } from "../navigation/declaration-uses.ts";
+import type { FollowedEdge } from "../navigation/edge-targets.ts";
+import { provenKey, typedDeclaration } from "../navigation/proven-calls.ts";
+import type { TypeTarget } from "../../ports/type-bindings.port.ts";
 
 /** The head's sources the walk reads: written, in scope, and of a kind an extractor covers. */
 function sourceFilesOf(headTree: Pick<CommitExtraction, "export">): string[] {
@@ -65,3 +68,30 @@ export interface ReferenceProofs {
   thisMemberCalls: ReadonlySet<string>;
 }
 
+
+/**
+ * What the type checker binds the calls the index left unresolved to (ADR-0037 decision 10): a call bound outside the
+ * repository is settled, so its cut retires, and one bound to a repository declaration the graph holds is settled as an
+ * edge into it. A call bound to a declaration the graph does not hold keeps its cut.
+ */
+export function typedReferencesOf(store: CodeGraphReader, unresolved: readonly GraphUnresolvedReference[], typed: ReadonlyMap<string, TypeTarget>): { settled: ReadonlySet<string>; edges: readonly FollowedEdge[] } {
+  const settled = new Set<string>();
+  const into: { reference: GraphUnresolvedReference; target: GraphSymbol }[] = [];
+  for (const reference of unresolved) {
+    const key = referenceKey(reference);
+    const bound = CALL_EDGE_KINDS.includes(reference.kind) ? typed.get(provenKey(reference.file, reference.line, reference.column + 1, reference.name.slice(reference.name.lastIndexOf(".") + 1))) : undefined;
+    if (key === undefined || bound === undefined) continue;
+    const target = bound.kind === "repository" ? typedDeclaration(store, bound) : undefined;
+    if (bound.kind === "repository" && target === undefined) continue;
+    settled.add(key);
+    if (target !== undefined) into.push({ reference, target });
+  }
+  const sources = new Map(store.symbolsByIds([...new Set(into.map(({ reference }) => reference.from))]).map((symbol) => [symbol.id, symbol]));
+  const edges = into.flatMap(({ reference, target }): FollowedEdge[] => {
+    const source = sources.get(reference.from);
+    if (source === undefined) return [];
+    const edge = { source: source.id, target: target.id, kind: reference.kind, line: reference.line, column: reference.column, confidence: null, provenance: null, synthesizedBy: null, resolvedFrom: null };
+    return [{ edge, source, target }];
+  });
+  return { settled, edges };
+}

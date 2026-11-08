@@ -16,11 +16,12 @@ export type ImpactBudget = WalkBounds;
 export type DependenceBasis = "call" | "reference" | "contains" | "dispatch" | "relation" | "import";
 
 /**
- * Who established a dependence: ye-ast's own source proof (`proven`), the index, through a binding or a structure ye-ast
+ * Who established a dependence: ye-ast's own source proof (`proven`), the type checker over the declared build outputs
+ * (`typed`, ADR-0037), the index, through a binding or a structure ye-ast
  * accepts (`resolved`), or the index by a name alone (`name-match`): a heuristic edge, or a call on a value receiver no
  * source proof binds to the callee's class (ADR-0029 decision 11). A name match may be no dependence at all.
  */
-export type DependenceDerivation = "proven" | "resolved" | "name-match";
+export type DependenceDerivation = "proven" | "typed" | "resolved" | "name-match";
 
 export interface Seed {
   file: string;

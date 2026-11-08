@@ -1184,3 +1184,28 @@ test("contract-consequences without exactly one subject, or with a flag only the
     ["--hypothesis", hypothesis, "a", "b"],
   ]) await refuses(["contract-consequences", ...tail], setupConsequences);
 });
+
+test("--node-modules declares a build output for callers and impact, at the root or at <at>=, and a directory out of the repository is a usage error", async () => {
+  const callers = setupCallers();
+  assert.equal(await run(["callers", "--node-modules", "deps/node_modules", "--node-modules", "web=/host/web/node_modules", ".", "src/A.ts:load"], callers.io, callers.deps), EXIT_CODE.ok);
+  assert.deepEqual(callers.requests[0]?.buildOutputs, [{ kind: "node-modules", at: "", path: resolve("deps/node_modules") }, { kind: "node-modules", at: "web", path: "/host/web/node_modules" }]);
+  const impact = setupImpact();
+  assert.equal(await run(["impact", "--base", "main", "--node-modules", "/host/node_modules", "."], impact.io, impact.deps), EXIT_CODE.ok);
+  assert.deepEqual(impact.requests[0]?.buildOutputs, [{ kind: "node-modules", at: "", path: "/host/node_modules" }]);
+  for (const wrong of ["../up=/host/node_modules", "web=", "/abs=/host/node_modules"]) {
+    const refused = setupCallers();
+    assert.equal(await run(["callers", "--node-modules", wrong, ".", "src/A.ts:load"], refused.io, refused.deps), EXIT_CODE.usage, wrong);
+    assert.deepEqual(refused.requests, []);
+  }
+});
+
+test("init with --node-modules registers the MCP server with that declaration, resolved, and never hands it to the install", async () => {
+  const { io, deps, installs } = setupInstall();
+
+  assert.equal(await run(["init", "--trust", "untrusted", "--node-modules", "web=/host/web/node_modules", "/work/shop"], io, deps), EXIT_CODE.ok);
+
+  assert.ok(io.stdout.includes(`claude mcp add ye-ast -- npx --yes tsx ${MCP_ENTRYPOINT} mcp /work/shop --node-modules web=/host/web/node_modules`));
+  assert.equal(installs.some((request) => "nodeModules" in request || "buildOutputs" in request), false);
+  const refused = setupInstall();
+  assert.equal(await run(["init", "--trust", "untrusted", "--node-modules", "../up=/x", "/work/shop"], refused.io, refused.deps), EXIT_CODE.usage);
+});

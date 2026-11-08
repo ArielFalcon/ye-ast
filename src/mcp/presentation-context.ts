@@ -1,3 +1,4 @@
+import { mountOf } from "../core/domain/shared/build-outputs.ts";
 import type { Cut, Evidence, Fact, SnapshotRef } from "../core/domain/shared/fact.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { SourceSummary } from "./select-evidence.ts";
@@ -64,7 +65,12 @@ function changedLines(fact: Fact<unknown>): string[] {
 
 /** What every answer opens with: its completeness, what that completeness covers, and the snapshot it read. */
 export function renderFactHeader(fact: Fact<unknown>): string[] {
-  return [...renderFactStatus(fact), ...declaredScopeLines(fact), ...scopeLines(fact), ...changedLines(fact), snapshotLine(contextOf(fact).snapshot)];
+  return [...renderFactStatus(fact), ...declaredScopeLines(fact), ...scopeLines(fact), ...changedLines(fact), ...buildOutputLines(fact), snapshotLine(contextOf(fact).snapshot)];
+}
+
+/** Each build output the fact read (ADR-0037), and whether the snapshot's lockfile verified it. */
+function buildOutputLines(fact: Fact<unknown>): string[] {
+  return (fact.inputs.buildOutputs ?? []).map((output) => `build output: ${mountOf(output)}, ${output.verified ? "verified by the snapshot's lockfile" : "unverified (no lockfile at the snapshot)"}`);
 }
 
 export function renderSourceContext(source: SourceSummary): string[] {

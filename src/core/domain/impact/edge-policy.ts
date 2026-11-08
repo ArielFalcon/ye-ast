@@ -118,8 +118,11 @@ export function edgeConfidence({ confidence, provenance }: EdgeScore): number {
   return provenance === "heuristic" ? EDGE_POLICY.unscoredHeuristicConfidence : 1;
 }
 
-/** How a graph edge whose value receiver was settled is known (ADR-0036): bound by a source proof, or by its name alone. */
-export type ReceiverSettlement = "proven" | "name-match";
+/**
+ * How a graph edge whose target was settled is known: bound by a source proof or by its name alone (ADR-0036), or bound
+ * by the type checker to the edge's own target (ADR-0037).
+ */
+export type ReceiverSettlement = "proven" | "typed" | "name-match";
 
 /**
  * The score and the derivation of a graph edge the walk follows. An edge whose receiver a source proof binds to the
@@ -127,7 +130,7 @@ export type ReceiverSettlement = "proven" | "name-match";
  * binds counts as a heuristic edge without a score, whatever score the index gave it; a heuristic edge is a name match.
  */
 export function followedEdge(score: EdgeScore, settled?: ReceiverSettlement): { confidence: number; derivation: DependenceDerivation } {
-  if (settled === "proven") return { confidence: EDGE_POLICY.relations.confidence, derivation: "proven" };
+  if (settled === "proven" || settled === "typed") return { confidence: EDGE_POLICY.relations.confidence, derivation: settled };
   if (settled === "name-match") return { confidence: EDGE_POLICY.unscoredHeuristicConfidence, derivation: "name-match" };
   return { confidence: edgeConfidence(score), derivation: score.provenance === "heuristic" ? "name-match" : "resolved" };
 }

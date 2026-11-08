@@ -24,7 +24,7 @@ const recordedCollectionState = z.discriminatedUnion("state", [z.strictObject({ 
 
 export const unknownReason = z.enum(["no-extractor", "no-project", "out-of-scope", "index-unavailable", "source-unreadable", "unresolved", "revision-unavailable", "deadline"]);
 export const cut = z.strictObject({
-  kind: z.enum(["depth", "hub", "caller-budget", "node-cap", "unresolved-link", "deadline", "section", "not-exported", "no-extractor"]),
+  kind: z.enum(["depth", "hub", "caller-budget", "node-cap", "unresolved-link", "build-output", "deadline", "section", "not-exported", "no-extractor"]),
   at: strings,
   reason: unknownReason.exactOptional(),
   dependency: dependencyDiagnostic.exactOptional(),
@@ -60,6 +60,7 @@ export const factInputs = z.strictObject({
   }),
   origin: z.discriminatedUnion("kind", [z.strictObject({ kind: z.literal("full") }), z.strictObject({ kind: z.literal("sync"), base: z.string() })]).exactOptional(),
   engines: z.record(z.string(), z.string()),
+  buildOutputs: z.array(z.strictObject({ kind: z.literal("node-modules"), at: z.string(), verified: z.boolean(), digest: z.string() })).exactOptional(),
 });
 
 /** The strict schema refuses a key the fact may carry, so it names every key of `DeclaredConfig`, and only those. */

@@ -1,4 +1,7 @@
 import { createDeclarationEvidenceReader } from "../core/adapters/typescript/declaration-evidence.adapter.ts";
+import { createTypeBindings } from "../core/adapters/typescript/type-bindings.adapter.ts";
+import { createDeclaredTrees } from "../core/adapters/fs/declared-tree.adapter.ts";
+import type { DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
 import { createSnapshotDataCache } from "../core/application/snapshot/snapshot-data-cache.ts";
 import type { ImpactQueriesDeps } from "../core/application/impact/impact-queries.ts";
 import type { HeadReaderDeps } from "../core/application/snapshot/head-reading.ts";
@@ -122,6 +125,11 @@ export interface CompositionOptions {
   indexRetention?: IndexRetentionPolicy;
   /** How many live mirrors stay and for how long; the defaults of RFC-0010 "Retention" unless a host overrides them. */
   liveRetention?: LiveRetentionPolicy;
+  /**
+   * The build outputs the host's own install produced for the repository at a root a request names (ADR-0037), for a
+   * request that declares none itself; none by default.
+   */
+  buildOutputs?: (repo: string) => readonly DeclaredBuildOutput[] | undefined;
 }
 
 export interface ComposedQueries {
@@ -257,6 +265,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     declarationEvidence: createDeclarationEvidenceReader(),
     unmodelled,
     sourceSelection: isWritten,
+    typeBindings: createTypeBindings({ trees: createDeclaredTrees(), digest }),
+    ...(options.buildOutputs === undefined ? {} : { declaredOutputs: options.buildOutputs }),
   };
   const bareImpact = createImpactQueries(impactDeps);
   const warmLive = async (repo: string, signal?: AbortSignal): Promise<string | null> => {

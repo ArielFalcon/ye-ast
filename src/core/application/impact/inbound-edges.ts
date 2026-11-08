@@ -82,9 +82,9 @@ export interface InboundEdges {
 export interface EdgeCorrections {
   /** By `edgeKey`: none of them is a dependence of its graph target. */
   dropped: ReadonlySet<string>;
-  /** By the declaration an import proves the edge reaches, the edges the graph matched to another one. */
+  /** By the declaration an import proves, or the type checker binds, the edge reaches, the edges the graph matched to another one. */
   into: ReadonlyMap<GraphNodeId, readonly FollowedEdge[]>;
-  /** By `edgeKey`: how each kept edge whose receiver is a value is known (ADR-0029 decision 11). */
+  /** By `edgeKey`: how each kept edge whose receiver is a value is known (ADR-0029 decision 11), and each edge the type checker kept or moved (ADR-0037). */
   settled?: ReadonlyMap<string, ReceiverSettlement>;
 }
 
@@ -118,7 +118,7 @@ export function createInboundEdges(
   interface Into {
     edge: GraphEdge;
     source: GraphSymbol;
-    /** Set for an edge moved to the declaration an import proves it reaches. */
+    /** Set for an edge moved to the declaration an import proves, or the type checker binds, it reaches. */
     moved?: true;
   }
   const intoCache = new Map<GraphNodeId, Into[]>();
@@ -391,7 +391,7 @@ export function createInboundEdges(
     const into = throughMember ? followed.filter(({ edge }) => (EDGE_POLICY.ownerThroughMember.edges as readonly string[]).includes(edge.kind)) : followed;
     const direct: Gathered[] = into.map(({ edge, source, moved }) => ({
       from: source,
-      ...(moved === true ? { confidence: edgeConfidence(edge), derivation: "proven" as const } : followedEdge(edge, corrections.settled?.get(edgeKey(edge)))),
+      ...(moved === true && corrections.settled?.get(edgeKey(edge)) !== "typed" ? { confidence: edgeConfidence(edge), derivation: "proven" as const } : followedEdge(edge, corrections.settled?.get(edgeKey(edge)))),
       basis: CALL_EDGE_KINDS.includes(edge.kind) ? ("call" as const) : ("reference" as const),
       lines: edge.line === null ? [] : [edge.line],
       provenance: edge.provenance,

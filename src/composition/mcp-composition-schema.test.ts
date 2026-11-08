@@ -192,3 +192,14 @@ test("dependency selection reasons remain closed in runtime and advertised compo
   assert.equal(runtime(invalid), false);
   assert.equal(ajv(invalid).valid, false);
 });
+
+test("a read whose fact used a declared build output, and one that names an unread declaration, pass the schema", () => {
+  const plain = sourceFixture("callers-local").read.fact;
+  const declared = { ...plain, inputs: { ...plain.inputs, buildOutputs: [{ kind: "node-modules" as const, at: "", verified: false, digest: "d" }] } };
+  const unread = { ...plain, status: "partial" as const, cuts: [{ kind: "build-output" as const, at: ["node_modules"] }] } as typeof plain;
+  for (const fact of [declared, unread]) {
+    const value = composeFull(resultOf([sourceFixture("callers-local", { fact })]));
+    assert.equal(runtime(value), true, JSON.stringify(COMPOSE_OUTPUT.safeParse(value).error?.issues.slice(0, 3)));
+    assert.equal(ajv(json(value)).valid, true);
+  }
+});
