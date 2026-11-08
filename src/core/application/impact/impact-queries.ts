@@ -44,7 +44,7 @@ import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.po
 import { ABORTED, factBaseOf, trustOf, withScratch, type CommitExtraction, type PreparedCommit } from "../snapshot/read-snapshot.ts";
 import { createHeadReader, preparedLive, withLiveCapture, type FactSpec, type HeadIndex, type HeadReaderDeps, type HeadReading, type Revisioned } from "../snapshot/head-reading.ts";
 import { readImporters } from "./importers.ts";
-import { inboundEdgesOf } from "./inbound-origins.ts";
+import { inboundEdgesOf, originCallsOf } from "./inbound-origins.ts";
 import type { EdgeCorrections, InboundEdges } from "./inbound-edges.ts";
 import { retainedRelations } from "../relations/retained-relations.ts";
 import { referenceProofsOf, typedReferencesOf, unresolvedOf, type ReferenceProofs } from "./reference-origins.ts";
@@ -565,7 +565,8 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const build = (corrections: EdgeCorrections): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, corrections);
   const targets = input.origins === undefined ? undefined : createEdgeTargets({ origins: input.origins, store, modules: input.modules, syntaxOf: input.syntaxOf, proofs: async () => ({ fields, locals, memberUses, externalUses: input.externalUses }), typed: input.typed });
   const typedReferences = input.typed === undefined ? undefined : typedReferencesOf(store, unresolved, input.typed);
-  const { inbound, walk, attributed } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, reverseCallsOf(input, targets));
+  const originCalls = targets?.bindings === undefined ? [] : await originCallsOf(store, targets.bindings, { fields, locals }, input.signal);
+  const { inbound, walk, attributed } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, reverseCallsOf(input, targets), originCalls);
 
   const walked = walk.reached.map(({ symbol }) => symbol);
   const reachedIds = new Set(walked.map((symbol) => symbol.id));
@@ -632,12 +633,13 @@ function reverseCallsOf(input: WalkInput, targets: EdgeTargets | undefined): Rev
 
 /**
  * Walks from the seeds with the edges as `EdgeTargets` judges them: the edges each walk read, the edges an import
- * proves reach a symbol it reached, the `typed` edges the checker made of unresolved calls, and the written calls the
+ * proves reach a symbol it reached, the `typed` edges the checker made of unresolved calls, the member calls through a
+ * field's or an `inject()` local's origin the base binds (`originCalls`), and the written calls the
  * index does not record that the base binds into a symbol it reached (`ReverseCalls`). When a verdict changes what a
  * symbol depends on, the walk runs again, because a bound it frees, or an edge it moves, can read edges no earlier walk
  * read. `attributed` holds the unbound written calls attributed to a symbol it reached.
  */
-async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = [], reverse?: ReverseCalls): Promise<{ inbound: InboundEdges; walk: Walk; attributed: readonly AttributedCall[] }> {
+async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = [], reverse?: ReverseCalls, originCalls: readonly FollowedEdge[] = []): Promise<{ inbound: InboundEdges; walk: Walk; attributed: readonly AttributedCall[] }> {
   const attributed: AttributedCall[] = [];
   const dropped = new Set<string>();
   const settled = new Map<string, ReceiverSettlement>();
@@ -655,6 +657,7 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
     moveTo(followed.target, followed);
     settled.set(edgeKey(followed.edge), "typed");
   }
+  for (const followed of originCalls) moveTo(followed.target, followed);
   for (;;) {
     const inbound = build({ dropped, into: new Map([...into].map(([id, edges]) => [id, [...edges.values()]])), settled });
     const walk = walkImpact(seeds, inbound, budget);

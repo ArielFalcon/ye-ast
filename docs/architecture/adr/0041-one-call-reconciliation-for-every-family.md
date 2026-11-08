@@ -352,6 +352,7 @@ reaches `main` with the expectations stated (ADR-0039).
 | U4 | Name index with its complete candidate lookup, `into`, constructor chaining, the attribution rule of decision 8; `impact` and `callers` read it in the fixpoint; accepted only after the M5 report is inspected | `callers:+`, `impact:+`, `±` where an attributed cut appears |
 | U4 (delivered) | `CallBindings` (`navigation/call-binding.ts`) owns the base `bind()`: trace's bare, rooted, own-member and Java chaining branches moved there, and trace settles the declared-receiver ones in its one `receiverMethods` read per body. `ReverseCalls` (`navigation/reverse-calls.ts`) owns `into`, with the text pre-filter (open question 1); `walkInside` reads it after `redirectedInto`, and an attributed unbound call is one `unresolved-link` cut per declaration (`attributedCallCuts`). Java `receiverMethods` names the constructor `super(...)` and `this(...)` chain to by arity, a compact constructor counting the record's components; a superclass declaring no constructor is its implicit one, and a record's constructors, which the index holds outside any class, are found by name in the record's file. Alignment agrees a record the index names by an import's target with the call spelled by its local alias, so the call is matched once instead of contradicted and recovered. Member-proof spellings compare with whitespace removed, so a call broken across lines binds. Trace steps into a recovered `deferred` call the base binds. Fixtures 10 to 12 hold in the base's tests: codegraph records an unresolved reference for each of their calls in every shape tried | `callers:+` (realworld `callers-frontend-get-article`), trace `±` (shopizer `trace-backend`: two homonym cuts become the methods a fully qualified local type names); `impact` none on the corpus |
 | U3b | The reverse families read the base binding instead of the index's target where the base binds one: the residual divergences below close, each moved answer inspected before acceptance | `callers:±`, `impact:±` |
+| U3b (delivered) | `EdgeTargets` settles a kept call edge on a value receiver by `CallBindings.ofReceiver`, the base's receiver rule: `proven` at the declaration it binds, a redirect from a homonym or a method of a class above the nearest one, `proven` where the receiver's type declares several members of the name, a `name-match` otherwise; a Java call edge moves to the method `receiverMethods` names. A member proof places the one member, a method or a property holding a function, of the one class it names. The member calls through a field's or an `inject()` local's origin are bound by the base (`originCallsOf`, `impact/inbound-origins.ts`) and read by `impact`, `callers` and the contract reading; `inbound-edges.ts` no longer settles them. Trace keeps settling a redirected value receiver itself; the contract reading applies the receiver redirects | `callers:±`, `impact:±`: none on the 27 corpus answers, nor on trace, `outline` and `importers` (2026-11-08); `contract_consequences:+` where a consumer calls through an `inject()` field of a class that inherits the method (the corpus contract queries, which run trusted, were not compared) |
 | U5 | `outline` focus, `importers` and `contract_consequences` read the base | `outline:+`, `importers:±`, `contract_consequences:±` |
 | U6 | `contradicted` pruning in the reverse families | `callers:±`, `impact:±`; none expected (M4 first) |
 
@@ -435,17 +436,18 @@ first in the unit named:
 
 ### Residual divergences after U3
 
-Until U3b the reverse families narrow by accepting fewer links than trace. Three cases are not a narrowing: they keep a
-target the base does not bind, so one call still has two targets across families.
+U3b closed the three cases in which the reverse families kept a target the base does not bind:
 
-| # | Case | `callers` and `impact` | Base binding (trace) |
+| # | Case | Before U3b, `callers` and `impact` | Since U3b, every family |
 |---|---|---|---|
 | R1 | A Java call whose `receiverMethods` names a method other than the index's target | The index's target, `resolved` | The method `receiverMethods` names (ADR-0044 decision 1) |
 | R2 | `new Sub().m()` with `m` declared in `Sub` and in `Base`, the index's edge at `Base.m` | `Base.m`, `proven` ("declares or lies below") | `Sub.m`, the nearest class method |
-| R3 | A member proof whose member the index does not place as the one method of the one class it names (an arrow-function property, overload signatures) | The edge's target, `proven` when it joins the proof | Unbound: trace cuts the call |
+| R3 | A member proof whose member is an arrow-function property, or whose edge the index matched to a homonym | The edge's target, `proven` when it joins the proof, a `name-match` otherwise | The member the proof names; trace steps into it |
 
-A field origin that holds a class not declaring the member is excluded from `impact` by `inbound-edges.ts` (a cut at the
-call), not by the base: a second owner of that settlement, open for U4 or U6 and pending in the single-rule fitness test.
+The field origin that holds a class not declaring the member, which `inbound-edges.ts` settled by its own rule, is bound
+by the base: a class that inherits the member from a class above it reaches that member, and one with no such member
+reaches nothing. A call where the base binds nothing (an unproven arity, several overloads) keeps the index's target in
+the reverse families, as a dependence the call may have, and is a cut in trace: a narrowing, not a second target.
 
 ## Not decided here
 

@@ -1,13 +1,12 @@
 import type { DependenceBasis, DependenceDerivation } from "../../domain/impact/impact-fact.ts";
 import { topLevelOf, isSeedable } from "../../domain/change/seeds.ts";
 import { declarationAnchor, declarationUseKey, referenceKey, uniqueReferenceKeys, type MemberReferenceProofs } from "../../domain/impact/impact-cuts.ts";
-import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followedEdge, followsEdge, followsRelation, isIgnoredEdge, LOCAL_OWNER_KINDS, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
+import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followedEdge, followsEdge, followsRelation, isIgnoredEdge, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
 import type { MemberSubstitute, MemberUseOrigin } from "../../domain/relations/member-use.ts";
-import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import { createGraphNavigation, isInside, SUPERTYPE_EDGES, type HeldOrigin } from "../navigation/graph-navigation.ts";
+import { createGraphNavigation, isInside } from "../navigation/graph-navigation.ts";
 import { edgeKey, type FollowedEdge } from "../navigation/edge-targets.ts";
 
 /**
@@ -92,11 +91,6 @@ const NO_CORRECTIONS: EdgeCorrections = { dropped: new Set(), into: new Map() };
 
 const USAGE_EDGES = ["calls", "instantiates", "references"];
 
-/** Whether `origin` is the one origin the navigation found holding the receiver at a use. */
-function holdsAt<O>(held: HeldOrigin<O>, origin: O): boolean {
-  return typeof held === "object" && held.origin === origin;
-}
-
 function holdsReference(source: GraphSymbol, use: Pick<GraphUnresolvedReference, "file" | "line">): boolean {
   return source.file === use.file && source.startLine <= use.line && use.line <= source.endLine;
 }
@@ -105,15 +99,13 @@ export function createInboundEdges(
   reader: CodeGraphReader,
   isTestFile: (path: string) => boolean,
   relations: readonly Relation[],
-  fields: readonly FieldOrigin[] = [],
-  locals: readonly LocalOrigin[] = [],
   validOccurrences?: ReadonlySet<string>,
   memberUses?: readonly MemberUseOrigin[],
   thisMemberCalls: ReadonlySet<string> = new Set(),
   corrections: EdgeCorrections = NO_CORRECTIONS,
 ): InboundEdges & InboundOccurrences {
   const relationsByTargetFile = Map.groupBy(relations, (candidate) => candidate.to.path);
-  const { load, symbolOf, ownersOf, typesAround, methodsOf, symbolsInFile, declarationAt, referencesThrough, fieldOriginAt, localOriginAt } = createGraphNavigation(reader, isTestFile);
+  const { load, symbolOf, ownersOf, typesAround, methodsOf, symbolsInFile, declarationAt, referencesThrough } = createGraphNavigation(reader, isTestFile);
 
   interface Into {
     edge: GraphEdge;
@@ -231,78 +223,6 @@ export function createInboundEdges(
     const key = referenceKey(use);
     return key !== undefined && unique.has(key) && (validOccurrences === undefined || validOccurrences.has(key)) ? key : undefined;
   };
-  const derivedHolders = new Map<GraphNodeId, boolean>();
-  /**
-   * Field origins retain potential impact paths. Only readers without an exact member channel authorize legacy
-   * settlements here; a present channel, including an empty one, reserves settlement for its exact proofs.
-   */
-  function fieldUsesOf(node: GraphSymbol): InboundEdge[] {
-    const owners = ownersOf(node);
-    if (owners.length === 0) return [];
-    const anchor = declarationAnchor(node.file, node.name);
-    const related = owners.flatMap((owner) => [owner, ...typesAround(owner, "down").map(({ type }) => type)]);
-    const callers: InboundEdge[] = [];
-    for (const origin of fields) {
-      const holder = declarationAt(origin.owner);
-      if (holder === undefined || isTestFile(holder.file)) continue;
-      if (memberUses === undefined) {
-        let derived = derivedHolders.get(holder.id);
-        if (derived === undefined) {
-          derived = reader.incomingEdges([holder.id], SUPERTYPE_EDGES).length > 0;
-          derivedHolders.set(holder.id, derived);
-        }
-        if (derived) continue;
-      }
-      const uses = referencesThrough(holder.file, `this.${origin.field}`).filter((reference) => reference.name === `this.${origin.field}.${node.name}`);
-      if (uses.length === 0) continue;
-      const held = "class" in origin.holds ? origin.holds.class : undefined;
-      const holdsOwner = held !== undefined && owners.some((owner) => joinsFact(owner, { path: held.path, line: held.line, symbol: held.symbol }));
-      const holdsRelated = held !== undefined && related.some((type) => joinsFact(type, { path: held.path, line: held.line, symbol: held.symbol }));
-      if (!holdsOwner && holdsRelated) continue;
-      load(uses.map((use) => use.from));
-      for (const use of uses) {
-        const from = symbolOf(use.from);
-        if (from === undefined || !holdsReference(from, use) || !holdsAt(fieldOriginAt(from, origin.field, fields), origin)) continue;
-        const occurrence = uniqueUse(use);
-        if (occurrence === undefined) continue;
-        if (memberUses === undefined && uniqueAnchor(node)) settledUses.push({ key: declarationUseKey(anchor, occurrence), target: node.id, ...(holdsOwner ? { source: from.id } : {}) });
-        if (holdsOwner) callers.push({ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" ? "call" : "reference", derivation: "proven", lines: [use.line] });
-      }
-    }
-    return callers;
-  }
-
-  /**
-   * The calls made through a local a function takes from `inject()`: `const svc = inject(Svc); svc.member()`. The index
-   * types no local. Certified sites give potential reach only when the native member channel is present; older
-   * readers without that channel retain the legacy settlement behavior.
-   */
-  function localUsesOf(node: GraphSymbol): InboundEdge[] {
-    const owners = ownersOf(node);
-    if (owners.length === 0 || locals.length === 0) return [];
-    const anchor = declarationAnchor(node.file, node.name);
-    const callers: InboundEdge[] = [];
-    for (const origin of locals) {
-      const held = origin.holds.class;
-      if (!owners.some((owner) => joinsFact(owner, { path: held.path, line: held.line, symbol: held.symbol }))) continue;
-      const holder = declarationAt(origin.owner, LOCAL_OWNER_KINDS);
-      if (holder === undefined || isTestFile(holder.file)) continue;
-      const name = `${origin.local}.${node.name}`;
-      const uses = referencesThrough(holder.file, name).filter((reference) => reference.name === name);
-      load(uses.map((use) => use.from));
-      for (const use of uses) {
-        const from = symbolOf(use.from);
-        if (from === undefined || !holdsReference(from, use) || !holdsAt(localOriginAt(from, origin.local, locals), origin)) continue;
-        const occurrence = uniqueUse(use);
-        if (occurrence === undefined) continue;
-        if (memberUses !== undefined && !origin.calls?.some((site) => site.file === use.file && site.line === use.line && site.column === use.column + 1 && site.name === use.name && site.kind === use.kind)) continue;
-        if (memberUses === undefined && uniqueAnchor(node)) settledUses.push({ key: declarationUseKey(anchor, occurrence), target: node.id, source: from.id });
-        callers.push({ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" ? "call" : "reference", derivation: "proven", lines: [use.line] });
-      }
-    }
-    return callers;
-  }
-
   const memberNames = new Set((memberUses ?? []).map((proof) => proof.member.symbol));
   const memberTargets = new Map<string, string>();
   const memberExpanded = new Map<string, GraphNodeId>();
@@ -396,7 +316,7 @@ export function createInboundEdges(
       lines: edge.line === null ? [] : [edge.line],
       provenance: edge.provenance,
     }));
-    const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...fieldUsesOf(node), ...localUsesOf(node), ...provenMemberUsesOf(node), ...ownUsesOf(node)];
+    const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...provenMemberUsesOf(node), ...ownUsesOf(node)];
     const found = [...bridged, ...relatedTo(node, throughMember ? EDGE_POLICY.ownerThroughMember.relations : undefined)];
     /** Individual target lookups do not prove incoming-reference coverage. */
     const whole = throughMember ? found : [...found, ...importersOf(node, found.length === 0)];

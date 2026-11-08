@@ -11,7 +11,7 @@ const RULES: readonly { concept: string; pattern: RegExp; owner: string; pending
   { concept: "a symbol declared within another", pattern: /(\w+)\.file === (\w+)\.file && \2\.startLine <= \1\.startLine && \1\.endLine <= \2\.endLine/, owner: "core/application/navigation/graph-navigation.ts", pending: [] },
   { concept: "a source's receiver bindings by place", pattern: /\.has\(key\) \? "ambiguous"/, owner: "core/application/navigation/call-binder.ts", pending: [] },
   { concept: "what a receiver's binding at a place holds", pattern: /!== "ambiguous" && \w+\.receiver === receiver/, owner: "core/application/navigation/call-binder.ts", pending: [] },
-  { concept: "a receiver settled by a field's or an inject() local's origin", pattern: /\b(?:fieldOriginAt|localOriginAt)\(\w+,/, owner: "core/application/navigation/call-binder.ts", pending: ["core/application/impact/inbound-edges.ts"] },
+  { concept: "a receiver settled by a field's or an inject() local's origin", pattern: /\b(?:fieldOriginAt|localOriginAt)\(\w+,/, owner: "core/application/navigation/call-binder.ts", pending: [] },
   { concept: "the one member a member proof names", pattern: /\.includes\(symbol\.kind\) && joinsFact\(symbol, \w+\)/, owner: "core/application/navigation/call-binder.ts", pending: [] },
   { concept: "the repository type a receiver's annotation or construction names", pattern: /TYPE_KINDS\.includes\(imported\.kind\)/, owner: "core/application/navigation/call-binder.ts", pending: [] },
   { concept: "the member proofs by call place", pattern: /\.template !== true/, owner: "core/application/navigation/proven-calls.ts", pending: [] },

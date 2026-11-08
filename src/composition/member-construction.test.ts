@@ -64,7 +64,7 @@ test("an alternate constructor result cannot exclude the replacement method from
     const metadata = await createAngularMetadataReader().read(files, { memberProofs: { completeSource: true } });
     const origins = await createImportOrigins(files).origins(references.map((reference) => ({ file: reference.file, line: reference.line, column: reference.column + 1, name: rootedName(reference.name), fullName: reference.name, kind: reference.kind })));
     const valid = new Set(references.flatMap((reference, index) => origins[index]?.occurrence === true ? [referenceKey(reference)!] : []));
-    const inbound = createInboundEdges(opened.value, () => false, [], metadata.fields, metadata.locals, valid, metadata.memberUses);
+    const inbound = createInboundEdges(opened.value, () => false, [], valid, metadata.memberUses);
     const target = symbols.find((symbol) => symbol.file === "src/replacement.ts" && symbol.name === "hit");
     assert.ok(target);
     const walk = walkImpact([target], inbound, {});

@@ -25,6 +25,7 @@ const FILES: Record<string, string> = {
   "src/inherited.ts": "import { Child, Unrelated } from './base';\n\nexport function loadChild(): number {\n  const child = new Child();\n  return child.load();\n}\n\nexport function loadUnrelated(): number {\n  const value = new Unrelated();\n  return value.load();\n}\n",
   "src/counter.ts": "export class Counter {\n  tick(): void {\n    console.log('tick');\n  }\n}\n\nexport function count(): void {\n  const counter = new Counter();\n  counter.tick();\n}\n",
   "src/silent.ts": "class Silent {}\n\nexport function hush(): void {\n  const silent = new Silent();\n  silent.tick();\n}\n",
+  "src/field-inherited.ts": "import { Injectable, inject } from '@angular/core';\nimport { Child } from './base';\n\n@Injectable()\nexport class FieldInherited {\n  private child = inject(Child);\n\n  flush(): number {\n    return this.child.load();\n  }\n}\n",
   "src/annotated.ts": "import { Store } from './store';\nimport { Other } from './other';\n\nexport function keepStore(store: Store): void {\n  store.save('e');\n}\n\nexport function keepOther(other: Other): void {\n  other.save('f');\n}\n",
 };
 
@@ -110,6 +111,13 @@ test("a call on a parameter annotated with a class is proven when that class dec
 
   assert.deepEqual(settlement(value, "src/annotated.ts", "keepStore"), PROVEN);
   assert.deepEqual(settlement(value, "src/annotated.ts", "keepOther"), NAME_MATCH);
+});
+
+test("in a scoped read, with no member proof, a call on an injected field of a class that inherits the member is a proven caller of the member its class has", async () => {
+  const result = await composeQueries({ scratchRoot }).impact.callers({ repo, repoId: "receiver-settlement", revision: "HEAD", targets: [{ file: "src/base.ts", symbol: "Base.load" }], scope: { include: ["src/**"] } });
+  assert.ok(result.ok && result.value.status !== "unknown", JSON.stringify(result));
+
+  assert.deepEqual(settlement(result.value.value, "src/field-inherited.ts", "flush"), PROVEN);
 });
 
 test("impact of a change settles every receiver as callers of the changed declaration does", async () => {

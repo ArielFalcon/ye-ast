@@ -181,15 +181,20 @@ const API = {
   "src/main/java/shop/OrdersController.java": "package shop;\n\nimport org.springframework.web.bind.annotation.GetMapping;\nimport org.springframework.web.bind.annotation.PathVariable;\nimport org.springframework.web.bind.annotation.RestController;\n\n@RestController\nclass OrdersController {\n  @GetMapping(\"/api/orders/{id}\")\n  public String one(@PathVariable long id) { return \"\"; }\n}\n",
 };
 
-/** `OrderService.fetchOrder` returns the response; `OrderView` calls it on a field its annotation binds, `report` on an unannotated parameter the index matches by name. */
+/**
+ * `OrderService.fetchOrder` returns the response; `OrderView` calls it on a field its annotation binds, `OrderPage` on an
+ * `inject()` field of a subclass that inherits it, and `report` on an unannotated parameter the index matches by name.
+ */
 const WEB = {
   "package.json": JSON.stringify({ dependencies: { "@angular/core": "^21.0.0", "@angular/common": "^21.0.0" } }),
   "src/app/order.service.ts": "import { HttpClient } from '@angular/common/http';\nimport { Injectable, inject } from '@angular/core';\n\n@Injectable({ providedIn: 'root' })\nexport class OrderService {\n  private http = inject(HttpClient);\n\n  fetchOrder(id: number) {\n    return this.http.get<{ customer: { name: string } }>(`/api/orders/${id}`);\n  }\n}\n",
   "src/app/order-view.ts": "import { OrderService } from './order.service';\n\nexport class OrderView {\n  constructor(private orders: OrderService) {}\n\n  show(): void {\n    this.orders.fetchOrder(1).subscribe((order) => console.log(order.customer.name));\n  }\n}\n",
+  "src/app/special-orders.ts": "import { Injectable } from '@angular/core';\nimport { OrderService } from './order.service';\n\n@Injectable({ providedIn: 'root' })\nexport class SpecialOrders extends OrderService {}\n",
+  "src/app/order-page.ts": "import { Component, inject } from '@angular/core';\nimport { SpecialOrders } from './special-orders';\n\n@Component({ selector: 'app-order-page', template: '' })\nexport class OrderPage {\n  private orders = inject(SpecialOrders);\n\n  show(): void {\n    this.orders.fetchOrder(3).subscribe((order) => console.log(order.customer.name));\n  }\n}\n",
   "src/app/report.ts": "export function report(source: any): void {\n  source.fetchOrder(2).subscribe((order: any) => console.log(order.customer.name));\n}\n",
 };
 
-test("a caller the index matched by name alone is an ambiguous caller of a consumer, while a caller its annotation binds is followed", async () => {
+test("a caller the index matched by name alone is an ambiguous caller of a consumer, while a caller its annotation or an inject() field's class binds is followed", async () => {
   const roots = { api: join(root, "api"), web: join(root, "web") };
   for (const [name, files] of [["api", API], ["web", WEB]] as const) await commitFiles(roots[name], files);
 
@@ -203,6 +208,6 @@ test("a caller the index matched by name alone is an ambiguous caller of a consu
   const findings = result.value.value.answers.flatMap((answer) => answer.findings);
   assert.deepEqual(
     findings.map((finding) => (finding.status === "complete" ? `${finding.value.verdict.kind}@${finding.evidence.at(-1)?.path}` : `${finding.evidence.at(-1)?.via}@${finding.evidence.at(-1)?.path}`)).sort(),
-    ["ambiguous-caller@src/app/report.ts", "incompatible@src/app/order-view.ts"],
+    ["ambiguous-caller@src/app/report.ts", "incompatible@src/app/order-page.ts", "incompatible@src/app/order-view.ts"],
   );
 });

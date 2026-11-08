@@ -73,7 +73,7 @@ test("every call occurrence of one caller is kept, so a weaker one beside a cert
 function settledAsNameMatch(store: CodeGraphReader, source: string, target: string) {
   const [node] = store.symbolsByIds([target as never]);
   const settled = new Map(store.incomingEdges([node!.id]).filter((edge) => edge.source === source).map((edge) => [edgeKey(edge), "name-match" as const]));
-  return createInboundEdges(store, () => false, [], [], [], undefined, undefined, new Set(), { dropped: new Set(), into: new Map(), settled });
+  return createInboundEdges(store, () => false, [], undefined, undefined, new Set(), { dropped: new Set(), into: new Map(), settled });
 }
 
 test("a call settled as a name match is a caller that is not proven, at the heuristic confidence", () => {

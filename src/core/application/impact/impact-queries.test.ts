@@ -21,6 +21,7 @@ import { createImpactQueries, type ImpactQueriesDeps } from "./impact-queries.ts
 import type { ImportOrigins, ImportOriginsReader, ImportOriginSite, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import { NOTHING_DECLARED } from "../navigation/edge-targets.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
@@ -87,6 +88,8 @@ interface Options {
   typeBindings?: TypedOption;
   /** The source reader hands over only the files the export plan wrote, as the confined reader does. */
   readsPlanned?: true;
+  /** A syntax reader that states, in each source, the calls `unresolved` places there. */
+  syntax?: true;
 }
 
 function setup(options: Options = {}) {
@@ -180,6 +183,7 @@ function setup(options: Options = {}) {
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
     ...(options.typeBindings && { typeBindings: options.typeBindings.bindings, declaredOutputs: () => options.typeBindings!.outputs }),
+    ...(options.syntax && { memberNames: { memberNames: async (file: SourceFile) => ({ ...NOTHING_DECLARED, calls: (options.unresolved ?? []).filter((use) => use.file === file.path).map(({ line, column, name }) => ({ kind: "calls" as const, line, column: (column ?? 0) + 1, name, owners: [] })) }) } }),
     ...(options.unmodelled && { unmodelled: { extract: async (sources) => sources.map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };
@@ -630,7 +634,7 @@ test("a class that injects a changed class is reached, and a walk whose Angular 
   assert.deepEqual(answer.status === "complete" && answer.value.symbols.map((symbol) => [symbol.symbol, symbol.depth, symbol.confidence]), [["Svc", 0, 1], ["Cmp", 1, 1]]);
 });
 
-test("a reference through a field of known origin is a caller when the field holds the owner, and leaves a cut at the caller's file when it holds an unrelated type", async () => {
+test("a reference through a field of known origin is a caller when the field holds the owner or a class below it that inherits the member, and every such use of a walked name stays a cut at the caller's file", async () => {
   const SUB_FILE = "src/app/sub.ts";
   const nodes = [
     fakeNode("Svc", "class", SVC_FILE, 2, 9),
@@ -667,10 +671,11 @@ test("a reference through a field of known origin is a caller when the field hol
   const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change(SVC_FILE, { added: [{ start: 5, end: 5 }] })] };
   const exports = { [HEAD]: { files: [SVC_FILE, CMP_FILE, SUB_FILE].map((path, index) => ({ path, blob: `${index}`, written: true })), skipped: [] } };
 
-  const answer = fact(await setup({ changes, nodes, edges, unresolved, exports, fields, importOrigins: origins(() => undefined) }).ask());
+  const sources = [SVC_FILE, CMP_FILE, SUB_FILE].map((path) => ({ path, content: "" }));
+  const answer = fact(await setup({ changes, nodes, edges, unresolved, exports, sources, fields, importOrigins: origins(() => undefined), syntax: true }).ask());
   assert.ok(answer.status === "partial");
-  assert.deepEqual(answer.value.symbols.filter((symbol) => symbol.file === CMP_FILE).map((symbol) => symbol.symbol), ["Cmp", "viaSvc"]);
-  assert.deepEqual(answer.cuts.find((cut) => cut.kind === "unresolved-link"), { kind: "unresolved-link", at: [CMP_FILE, `${CMP_FILE}:18 this.sub.get`, `${CMP_FILE}:21 params.get`, `${CMP_FILE}:24 this.store.get`] });
+  assert.deepEqual(answer.value.symbols.filter((symbol) => symbol.file === CMP_FILE).map((symbol) => symbol.symbol), ["Cmp", "viaSvc", "viaSub"]);
+  assert.deepEqual(answer.cuts.find((cut) => cut.kind === "unresolved-link"), { kind: "unresolved-link", at: [CMP_FILE, ...[12, 15, 18, 21, 24, 6, 9].map((line) => `${CMP_FILE}:${line} ${unresolved.find((use) => use.line === line)!.name}`)] });
 });
 
 test("a relation the reader could not place cuts the answer only in a file the walk reached", async () => {
@@ -1418,7 +1423,7 @@ test("field settlement does not hide a same-line unverified use", async () => {
   const target = "src/svc.ts", source = "src/cmp.ts";
   const refs = [0, 12].map((column) => ({ from: "caller", file: source, line: 2, column, name: "this.svc.hit", kind: "calls" }));
   const validateFirst: ImportOriginsReader = () => ({ origins: async (sites) => sites.map((site) => ({ status: "unknown" as const, reason: "unresolved" as const, evidence: [], ...(site.column === 1 ? { occurrence: true as const } : {}) })), rootOrigins: NO_ROOTS, replacedRoots: async () => NOTHING_REPLACED, rootBindings: NO_BINDINGS, declaredTypes: NO_DECLARED_TYPES, dispatchTargets: NO_DISPATCH_TARGETS, receiverMethods: NO_RECEIVER_METHODS });
-  const answer = fact(await setup({ changes: { ok: true, value: [change(target, { added: [{ start: 3, end: 3 }] })] }, nodes: [fakeNode("Svc", "class", target, 1, 5), fakeNode("hit", "method", target, 3, 3), fakeNode("Cmp", "class", source, 1, 5), fakeNode("caller", "method", source, 2, 2)], edges: [{ from: "Svc", to: "hit", kind: "contains" }, { from: "Cmp", to: "caller", kind: "contains" }], unresolved: refs, fields: [{ owner: { path: source, symbol: "Cmp", line: 1 }, field: "svc", holds: { class: { path: target, symbol: "Svc", line: 1 } } }], exports: { [HEAD]: { files: [target, source].map((path) => ({ path, blob: path, written: true })), skipped: [] } }, importOrigins: validateFirst }).ask());
+  const answer = fact(await setup({ changes: { ok: true, value: [change(target, { added: [{ start: 3, end: 3 }] })] }, nodes: [fakeNode("Svc", "class", target, 1, 5), fakeNode("hit", "method", target, 3, 3), fakeNode("Cmp", "class", source, 1, 5), fakeNode("caller", "method", source, 2, 2)], edges: [{ from: "Svc", to: "hit", kind: "contains" }, { from: "Cmp", to: "caller", kind: "contains" }], unresolved: refs, fields: [{ owner: { path: source, symbol: "Cmp", line: 1 }, field: "svc", holds: { class: { path: target, symbol: "Svc", line: 1 } } }], exports: { [HEAD]: { files: [target, source].map((path) => ({ path, blob: path, written: true })), skipped: [] } }, sources: [target, source].map((path) => ({ path, content: "" })), importOrigins: validateFirst, syntax: true }).ask());
   assert.ok(answer.status === "partial");
   assert.ok(answer.value.symbols.some((symbol) => symbol.symbol === "caller"));
   assert.ok(answer.cuts.some((cut) => cut.at.includes("src/cmp.ts:2 this.svc.hit")));
