@@ -1,3 +1,4 @@
+import type { DerivedFacts } from "./derived-facts.port.ts";
 import type { SourceFile } from "./entrypoint-extractor.port.ts";
 import type { SourceSpan } from "../domain/trace/owning-body.ts";
 
@@ -99,8 +100,11 @@ export interface DeclaredCallable {
  * can be overridden decides its dispatch cut (R10), which the index does not record.
  */
 export interface DeclaredMemberNamesReader {
-  /** A source of a language the reader does not parse, or one the parser rejects, declares none. */
-  memberNames(file: SourceFile): Promise<DeclaredMemberNames>;
+  /**
+   * A source of a language the reader does not parse, or one the parser rejects, declares none. `facts` keeps what the
+   * reader derives from the file alone between requests (ADR-0035).
+   */
+  memberNames(file: SourceFile, facts?: DerivedFacts): Promise<DeclaredMemberNames>;
 }
 
 /** A written call and the enclosing declarations that can own its execution, outermost first. */

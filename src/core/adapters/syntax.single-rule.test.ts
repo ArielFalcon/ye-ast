@@ -77,10 +77,22 @@ const RULES: readonly Rule[] = [
   },
   {
     concept: "parsing Java sources into files of a project",
-    pattern: /(?<!JSON)\.parse\(\s*(?:source|file)\.content\s*\)/,
+    pattern: /(?<!JSON)\.parse\(\s*(?:source|file)\s*\)/,
     /* The tree-sitter readers parse one file at a time for a per-file answer and build no project. */
     owners: ["spring/java-project.ts", "tree-sitter/java-member-names.adapter.ts", "tree-sitter/java-records.adapter.ts", "tree-sitter/java-trivia.adapter.ts"],
-    pending: ["spring/spring-payload-shapes.adapter.ts"],
+    pending: [],
+  },
+  {
+    concept: "a parser of its own, whose trees no snapshot read holds (ADR-0040)",
+    pattern: /\bnew Parser\(/,
+    owners: ["tree-sitter/java-parser.adapter.ts"],
+    pending: [],
+  },
+  {
+    concept: "parsing a Java source written in place, which no snapshot read kept (ADR-0040)",
+    pattern: /(?<!JSON)\.parse\(\s*\{/,
+    owners: [],
+    pending: [],
   },
   {
     concept: "the Java type `this` and `super` denote, read from the type body around a node",

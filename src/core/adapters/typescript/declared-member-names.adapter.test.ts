@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { createTypeScriptMemberNames } from "./declared-member-names.adapter.ts";
 
 const read = (lines: readonly string[], path = "src/a.ts") => createTypeScriptMemberNames().memberNames({ path, content: lines.join("\n") });
@@ -571,4 +572,32 @@ test("arrows and function expressions are function values, each whole; a method 
     "function top() {}",
   ])).functionValues;
   assert.deepEqual(values.map(({ start, end }) => [start.line, start.column, end.line, end.column]), [[2, 20, 2, 30], [2, 37, 2, 63]]);
+});
+
+test("given derived facts, the receivers a file binds are derived once by its content across readers, and answer what they answer without facts", async () => {
+  const kept = new Map<string, string>();
+  const derived: string[] = [];
+  const facts: DerivedFacts = {
+    ofFile(slot, file, derive) {
+      const key = JSON.stringify([slot, file.path, file.content]);
+      if (!kept.has(key)) {
+        derived.push(`${slot} ${file.path}`);
+        kept.set(key, JSON.stringify(derive()));
+      }
+      return JSON.parse(kept.get(key)!);
+    },
+    ofInputs: (_slot, _inputs, derive) => derive(),
+    fingerprint: (inputs) => JSON.stringify(inputs),
+    drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
+  };
+  const file = { path: "src/a.ts", content: ["const fn = () => 1;", "export function run(list: Repo[]): void {", "  fn.call(undefined);", "  list.save();", "}"].join("\n") };
+  const alone = await createTypeScriptMemberNames().memberNames(file);
+
+  const first = await createTypeScriptMemberNames().memberNames(file, facts);
+  const again = await createTypeScriptMemberNames().memberNames({ ...file }, facts);
+
+  assert.ok(alone.functionValueCalls.length > 0 && alone.receiverBindings.length > 0);
+  assert.deepEqual(derived, ["ts-local-receivers src/a.ts"]);
+  assert.equal(JSON.stringify(first), JSON.stringify(alone));
+  assert.equal(JSON.stringify(again), JSON.stringify(alone));
 });

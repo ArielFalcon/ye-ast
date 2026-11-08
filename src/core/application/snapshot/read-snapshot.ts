@@ -9,6 +9,7 @@ import type { Digest } from "../../ports/digest.port.ts";
 import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { LiveFault } from "../../ports/live-queries.port.ts";
 import type { ScratchDirectory } from "../../ports/scratch-directory.port.ts";
+import type { ParseHolds } from "../../ports/parse-holds.port.ts";
 import type { SourceReader } from "../../ports/source-reader.port.ts";
 import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
 import type { CommitExport, ExportBudget, Vcs, VcsFault } from "../../ports/vcs.port.ts";
@@ -30,6 +31,8 @@ export interface SnapshotReaderDeps {
   budget?: ExportBudget;
   /** The user's declarations; without one every repository is read `untrusted`. */
   trust?: TrustRecordReader;
+  /** Where each snapshot read keeps the trees parsed from its sources until it ends; without it every parse is the reader's own. */
+  holds?: ParseHolds;
 }
 
 /** The mode the user declared for `repo`, `untrusted` when there is none or the record is unusable (ADR-0010 decision 6). */
@@ -102,20 +105,32 @@ export interface PreparedCommit {
 }
 
 export interface SnapshotPreparation {
-  obtain(key: string, deps: SnapshotReaderDeps, build: (root: string) => Promise<Result<PreparedCommit, VcsFault>>): Promise<Result<PreparedCommit, VcsFault>>;
+  obtain(key: string, deps: SnapshotReaderDeps, build: (root: string, keep: ReadScope["keep"]) => Promise<Result<PreparedCommit, VcsFault>>): Promise<Result<PreparedCommit, VcsFault>>;
 }
 
-/** Runs `use` with a way to make temporary directories, and removes every one of them afterwards, newest first. */
-export async function withScratch<T>(scratch: ScratchDirectory, use: (directory: () => Promise<string>) => Promise<T>): Promise<T> {
+/** What one snapshot read holds until it ends: the temporary directories it makes and the trees parsed from the sources it keeps. */
+export interface ReadScope {
+  directory(): Promise<string>;
+  /** The sources as the read's own, each parsed at most once until the read ends (ADR-0040). */
+  keep(sources: readonly SourceFile[]): SourceFile[];
+}
+
+/** Runs `use` in a read scope, then frees the trees it held and removes every directory it made, newest first, whether `use` answers or throws. */
+export async function withScratch<T>(deps: Pick<SnapshotReaderDeps, "scratch" | "holds">, use: (scope: ReadScope) => Promise<T>): Promise<T> {
   const directories: string[] = [];
+  const hold = deps.holds?.open();
   try {
-    return await use(async () => {
-      const created = await scratch.create();
-      directories.push(created);
-      return created;
+    return await use({
+      async directory() {
+        const created = await deps.scratch.create();
+        directories.push(created);
+        return created;
+      },
+      keep: (sources) => hold?.keep(sources) ?? [...sources],
     });
   } finally {
-    for (const created of directories.toReversed()) await scratch.remove(created);
+    hold?.release();
+    for (const created of directories.toReversed()) await deps.scratch.remove(created);
   }
 }
 

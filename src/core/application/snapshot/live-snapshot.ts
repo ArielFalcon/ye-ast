@@ -4,7 +4,8 @@ import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
 import { snapshotRetention } from "./prepared-snapshot.ts";
-import { ABORTED, extractSources, readSources, type CommitExtraction, type PreparedCommit, type SnapshotReaderDeps } from "./read-snapshot.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import { ABORTED, extractSources, readSources, type CommitExtraction, type PreparedCommit, type ReadScope, type SnapshotReaderDeps } from "./read-snapshot.ts";
 
 /** What a live capture is read from: its mirror root, its listing and the inputs besides the listing that the read depends on. */
 export interface LiveCapture {
@@ -27,24 +28,29 @@ export interface LiveSnapshotReaders {
  * capture's content, its listing of content hashes (RFC-0010 "The mirror"), the repository, scope and trust; never by
  * HEAD, so a capture whose files did not change reuses what an earlier one read, and an edit misses.
  */
-export function liveSnapshotReaders(deps: Pick<SnapshotReaderDeps, "reader" | "extractor" | "snapshotCache" | "digest">, capture: LiveCapture): LiveSnapshotReaders {
+export function liveSnapshotReaders(deps: Pick<SnapshotReaderDeps, "reader" | "extractor" | "snapshotCache" | "digest">, capture: LiveCapture, keep: ReadScope["keep"] = (sources) => [...sources]): LiveSnapshotReaders {
   const retention = snapshotRetention(deps, canonicalJson({ live: true, repo: capture.repo, scope: capture.scope, trust: capture.trust }), capture.export, capture.trust);
   let loaded: Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>> | undefined;
   let extracted: Promise<Result<CommitExtraction, VcsFault>> | undefined;
   let retainedFindings: readonly Finding<Entrypoint>[] | undefined;
-  const read = async (signal?: AbortSignal): Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>> => {
-    const kept = retention?.lookup();
-    if (kept !== undefined) {
-      retainedFindings = kept.findings;
-      return { ok: true, value: { export: capture.export, sources: kept.sources } };
+  /** The sources as read, the only ones retention stores; readers take the capture's own copies of them. */
+  let read: readonly SourceFile[] = [];
+  const load = async (signal?: AbortSignal): Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>> => {
+    const retained = retention?.lookup();
+    if (retained !== undefined) {
+      retainedFindings = retained.findings;
+      read = retained.sources;
+      return { ok: true, value: { export: capture.export, sources: keep(read) } };
     }
     const answer = await readSources(deps, capture.root, capture.export, signal);
-    if (answer.ok) retention?.keepSources(answer.value.sources);
-    return answer;
+    if (!answer.ok) return answer;
+    read = answer.value.sources;
+    retention?.keepSources(read);
+    return { ok: true, value: { export: capture.export, sources: keep(read) } };
   };
   const sources: LiveSnapshotReaders["sources"] = async (signal) => {
     if (signal?.aborted) return ABORTED;
-    const pending = loaded ??= read(signal);
+    const pending = loaded ??= load(signal);
     try {
       const result = await pending;
       if (!result.ok && loaded === pending) loaded = undefined;
@@ -64,7 +70,7 @@ export function liveSnapshotReaders(deps: Pick<SnapshotReaderDeps, "reader" | "e
         if (!result.ok) return result;
         if (retainedFindings !== undefined) return { ok: true as const, value: { ...result.value, findings: retainedFindings } };
         const answer = await extractSources(deps, result.value, signal);
-        if (answer.ok) retention?.keepFindings(answer.value.sources, answer.value.findings);
+        if (answer.ok) retention?.keepFindings(read, answer.value.findings);
         return answer;
       })();
       try {

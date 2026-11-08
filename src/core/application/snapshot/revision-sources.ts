@@ -27,7 +27,7 @@ export function createRevisionSources(deps: RevisionSourcesDeps): RevisionSource
       const scope = declaredScope(requested);
       const trust = await trustOf(deps, repo.path);
       const permitted = pathSelection({ include: [], exclude: scope.exclude }, deps.matcher.matches);
-      return withScratch(deps.scratch, async (directory) => {
+      return withScratch(deps, async (readScope) => {
         const files: SourceFile[] = [];
         const cuts: Cut[] = [];
         const asked = new Set<string>();
@@ -35,7 +35,7 @@ export function createRevisionSources(deps: RevisionSourcesDeps): RevisionSource
         let context = { scope, trust };
         let selection = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
         for (;;) {
-          const prepared = await prepareCommit(reading, repo.path, sha, directory, selection, context, signal);
+          const prepared = await prepareCommit(reading, repo.path, sha, readScope, selection, context, signal);
           if (!prepared.ok) return prepared;
           const loaded = await prepared.value.sources(signal);
           if (!loaded.ok) return loaded;

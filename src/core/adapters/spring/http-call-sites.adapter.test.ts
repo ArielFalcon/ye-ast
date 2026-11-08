@@ -346,7 +346,7 @@ test("a Java source the parser rejects is one unknown source-unreadable site at 
 
 test("a Java source whose parsing throws is an unknown source-unreadable site at its first line", async () => {
   const base = await createJavaParser();
-  const parser: JavaParser = { parse: (source) => { if (source.includes("Explodes")) throw new RangeError("Maximum call stack size exceeded"); return base.parse(source); } };
+  const parser: JavaParser = { parse: (source) => { if (source.content.includes("Explodes")) throw new RangeError("Maximum call stack size exceeded"); return base.parse(source); } };
   const explodes = java("Explodes", "class Explodes {}");
   const sites = await createJavaHttpCallSites(parser).of([explodes], "orders-svc");
   assert.deepEqual(sites.map((site) => site.target), [{ status: "unknown", reason: "source-unreadable", evidence: [{ path: explodes.path, line: 1 }] }]);

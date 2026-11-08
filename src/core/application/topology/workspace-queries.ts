@@ -64,10 +64,10 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
     const remotes = await vcs.remotes(declared, signal);
     if (!remotes.ok) return remotes;
     const sha = at.revision;
-    return withScratch(deps.scratch, async (directory) => {
+    return withScratch(deps, async (readScope) => {
       const declaredTrust = await declaredTrustOf(deps, declared);
       const trust = declaredTrust ?? "untrusted";
-      const prepared = await prepareCommit({ ...deps, preparation }, source, sha, directory, selection, { scope, trust }, signal);
+      const prepared = await prepareCommit({ ...deps, preparation }, source, sha, readScope, selection, { scope, trust }, signal);
       if (!prepared.ok) return prepared;
       const extracted = await prepared.value.extract(signal);
       if (!extracted.ok) return extracted;

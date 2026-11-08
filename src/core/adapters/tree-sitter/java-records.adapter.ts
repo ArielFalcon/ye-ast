@@ -10,7 +10,7 @@ export function createJavaRecordsReader(parser: JavaParser): UnmodelledConstruct
       const files: string[] = [];
       for (const source of sources) {
         if (!isJavaSource(source.path)) continue;
-        const parsed = parser.parse(source.content);
+        const parsed = parser.parse(source);
         if (!parsed.ok) continue;
         try {
           if (parsed.value.root.descendantsOfType("record_declaration").length > 0) files.push(source.path);

@@ -178,7 +178,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const unmodelled = await unmodelledIn(deps, headTree, [...changes.map(({ path }) => path), ...requested.map(({ file }) => file)]);
           if (signal?.aborted) return ABORTED;
-          const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources), signal });
+          const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources, head.prepared?.facts), signal });
           if (signal?.aborted) return ABORTED;
           return { ok: true, value: impactFact(head.base(content, true), read.value, [...fixed, ...read.cuts]) };
         } finally {
@@ -212,7 +212,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           const modules = deps.moduleDependencies === undefined ? undefined : await moduleDependenciesOf(deps.moduleDependencies, head.prepared, headTree, request.signal);
           if (request.signal?.aborted) return ABORTED;
           const origins = deps.importOrigins?.(headTree.sources, undefined, head.prepared?.facts);
-          const read = await readImporters(store, covered, references, modules, origins === undefined ? undefined : createEdgeTargets({ origins, store, modules, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources), proofs: async () => SYNTAX_ONLY }), request.signal);
+          const read = await readImporters(store, covered, references, modules, origins === undefined ? undefined : createEdgeTargets({ origins, store, modules, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources, head.prepared?.facts), proofs: async () => SYNTAX_ONLY }), request.signal);
           if (request.signal?.aborted) return ABORTED;
           const moduleOnly = new Set(modules?.files.filter((file) => file.moduleOnly).map((file) => file.file));
           const loadPlaces = await deps.dynamicLoads.extract(headTree.sources);
@@ -260,12 +260,12 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     if (signal?.aborted) return ABORTED;
     const radius = blastRadius(mergeBase, diff.value.filter((file) => selected(file.path)));
 
-    return withScratch(deps.scratch, async (directory): Promise<Answer> => {
-      const preparedHead = await prepareCommit(changeDeps, repo, head.value, directory, exported, { scope, trust }, signal);
+    return withScratch(deps, async (readScope): Promise<Answer> => {
+      const preparedHead = await prepareCommit(changeDeps, repo, head.value, readScope, exported, { scope, trust }, signal);
       if (!preparedHead.ok) return preparedHead;
       const headTree = await preparedHead.value.extract(signal);
       if (!headTree.ok) return headTree;
-      const preparedBase = mergeBase === head.value ? preparedHead : await prepareCommit(changeDeps, repo, mergeBase, directory, exported, { scope, trust }, signal);
+      const preparedBase = mergeBase === head.value ? preparedHead : await prepareCommit(changeDeps, repo, mergeBase, readScope, exported, { scope, trust }, signal);
       if (!preparedBase.ok) return preparedBase;
       const baseTree = mergeBase === head.value ? headTree : await preparedBase.value.extract(signal);
       if (!baseTree.ok) return baseTree;
@@ -274,7 +274,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         prepared: preparedHead.value,
         selected,
         base: (content, store = false) => (store ? changeReader.factBase(trust, snapshot, content, spec, scope, { kind: "full" }) : baseOfHead(content)),
-        open: () => changeReader.indexHead(preparedHead.value, directory, signal),
+        open: () => changeReader.indexHead(preparedHead.value, readScope.directory, signal),
       };
       return readChange({ request, radius, head: reading, baseTree: baseTree.value, basePrepared: preparedBase.value, sameTree: baseTree === headTree, unreadable: JSON.stringify([mergeBase, head.value]) });
     });
@@ -289,17 +289,17 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       const { tree, scope, head } = held;
       const selected = pathSelection(scope, deps.matcher.matches);
       const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
-      return withScratch(deps.scratch, async (directory): Promise<Answer> => {
+      return withScratch(deps, async (readScope): Promise<Answer> => {
         const liveTree = await held.extract(signal);
         if (!liveTree.ok) return liveTree;
-        const preparedBase = await prepareCommit(changeDeps, repo, mergeBase, directory, exported, { scope: declaredScope(request.scope), trust: "trusted" }, signal);
+        const preparedBase = await prepareCommit(changeDeps, repo, mergeBase, readScope, exported, { scope: declaredScope(request.scope), trust: "trusted" }, signal);
         if (!preparedBase.ok) return preparedBase;
         const baseTree = await preparedBase.value.extract(signal);
         if (!baseTree.ok) return baseTree;
         const reading = { ...headReader.liveReading(tree, liveTree.value, "trusted", scope, selected, head, repoId, spec), prepared: preparedLive(held) };
 
         const changed = changedPaths(baseTree.value.export.files, tree.export.files).filter((path) => !isEngineConfiguration(path));
-        const [before, after] = [await directory(), await directory()];
+        const [before, after] = [await readScope.directory(), await readScope.directory()];
         const wanted = new Set(changed);
         const exportedBase = await vcs.exportCommit(repo, mergeBase, before, { write: (path) => wanted.has(path) }, signal);
         if (!exportedBase.ok) return exportedBase;
@@ -419,7 +419,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       });
       const unmodelled = await unmodelledIn(deps, headTree, validatedChanges.filter((file) => !file.deleted).map(({ path }) => path));
       if (signal?.aborted) return ABORTED;
-      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources), signal });
+      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources, head.prepared?.facts), signal });
       if (signal?.aborted) return ABORTED;
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...unaccounted([...fixed, ...read.cuts]), ...moduleCuts]) };
     } finally {

@@ -139,7 +139,7 @@ export async function withWorkspaceSnapshots<T, F = never>(deps: WorkspaceSnapsh
     if (!captured.ok) return { ok: false, fault: { kind: "workspace-capture-unavailable", detail: "live capture unavailable", repo: captured.fault.repoId, cause: captured.fault.cause } };
     return captured.value;
   };
-  const result = await (deps.preparation === undefined ? withSnapshotPreparation(deps.scratch, invoke) : invoke(deps.preparation));
+  const result = await (deps.preparation === undefined ? withSnapshotPreparation(deps, invoke) : invoke(deps.preparation));
   if (request.signal?.aborted) return ABORTED;
   if (!result.ok) return result;
   const workspaceReplay = planned.value.declaration === undefined ? undefined : { version: 1 as const, declaration: planned.value.declaration, snapshots: result.value.snapshots };

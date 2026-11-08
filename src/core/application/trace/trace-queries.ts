@@ -1,3 +1,4 @@
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { callsByOwner } from "./syntax-calls.ts";
 import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
@@ -85,7 +86,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         try {
           const trivia = triviaOncePerFile(deps.sourceTrivia);
           const unresolvedIn = unresolvedOncePerFile(store);
-          const declaredIn = declarationsOncePerFile(deps.memberNames);
+          const declaredIn = declarationsOncePerFile(deps.memberNames, head.prepared?.facts);
           const sources = new Map(head.tree.sources.map((file) => [file.path, file]));
           let declared: Promise<ReadonlyMap<string, readonly string[]>> | undefined;
           const memberDeclarations = () => (declared ??= declaringFiles(head.tree.sources.filter((file) => head.selected(file.path)), declaredIn));
@@ -214,12 +215,12 @@ function unplacedHandlers(handlers: readonly HandlerPlace[], selection: Pick<Roo
 }
 
 /** Reads each source once for the life of one query, for its member names and its callables alike. */
-function declarationsOncePerFile(reader: DeclaredMemberNamesReader): (file: SourceFile) => Promise<DeclaredMemberNames> {
+function declarationsOncePerFile(reader: DeclaredMemberNamesReader, facts: DerivedFacts | undefined): (file: SourceFile) => Promise<DeclaredMemberNames> {
   const read = new Map<string, Promise<DeclaredMemberNames>>();
   return (file) => {
     let declared = read.get(file.path);
     if (declared === undefined) {
-      declared = reader.memberNames(file);
+      declared = reader.memberNames(file, facts);
       read.set(file.path, declared);
     }
     return declared;

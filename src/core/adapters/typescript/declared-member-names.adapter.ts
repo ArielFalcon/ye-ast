@@ -20,7 +20,7 @@ const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables
  */
 export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
   return {
-    memberNames: async (file) => {
+    memberNames: async (file, facts) => {
       if (!isTypeScriptSource(file.path)) return NONE;
       const tree = sourceTree(file, ts.ScriptTarget.Latest);
       const names = new Set<string>();
@@ -108,7 +108,8 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
         if (owns) owners.pop();
       };
       visit(tree);
-      return { names: [...names].sort(compareText), ...localReceivers(tree), callables, calls, functionValues };
+      const receivers = facts === undefined ? localReceivers(tree) : facts.ofFile("ts-local-receivers", file, () => localReceivers(tree));
+      return { names: [...names].sort(compareText), ...receivers, callables, calls, functionValues };
     },
   };
 }

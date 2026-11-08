@@ -872,7 +872,7 @@ test("a reader over content another reader derived from derives nothing again, a
 
   const second = await everyAnswer(MEMO_SOURCES.map((file) => ({ ...file })), facts);
 
-  for (const slot of ["ts-parameter-uses src/parameter.ts", "ts-dynamic-uses src/dynamic.ts", "ts-written-roots src/writer.ts", "ts-script-globals src/script.ts", "ts-module-resolution"]) assert.ok(derived.includes(slot), slot);
+  for (const slot of ["ts-binding-uses src/parameter.ts", "ts-binding-uses src/dynamic.ts", "ts-written-roots src/writer.ts", "ts-script-globals src/script.ts", "ts-module-resolution"]) assert.ok(derived.includes(slot), slot);
   assert.deepEqual(facts.derived, derived);
   assert.equal(second, first);
   assert.equal(first, await everyAnswer(MEMO_SOURCES));
