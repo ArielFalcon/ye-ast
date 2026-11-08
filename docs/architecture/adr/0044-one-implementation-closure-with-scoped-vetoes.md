@@ -1,6 +1,9 @@
 # ADR-0044: What a Java call names and what it may run have one owner per language, and its vetoes reach only what their cause may implement
 
-- Status: Proposed, 2026-11-08
+- Status: Accepted, 2026-11-09. The owner delegated closing and accepting it after an independent review, verbatim:
+  "Cierra los 3 ADR pendientes con lo que recomiendes para las preguntas pendientes. Que se revisen con sol high y se
+  queden aprobados y listos. Ten en cuenta los cambios que aplicará 0045 por si debe cambiar algo en estos". Reviewed
+  and rechecked by an independent reviewer; open questions closed into decisions; V1b keeps its stated precondition.
 - Decision source: the owner, 2026-11-08, verbatim: "lanza un agente con esfuerzo high por cada propuesta para que la
   analice conjuntamente con la evidencia, que investigue y proponga un ADR de cambio". Translated: launch a high-effort
   agent for each proposal, to analyse it together with the evidence, investigate and propose a change ADR. The proposal
@@ -309,8 +312,11 @@ would answer the single body that the probe with the veto disabled shows.
         veto holds. Overrides are therefore never ordered: disagreeing assignments discard the evidence instead of
         guessing which runs last.
       - A literal `java.toolchain.languageVersion` serves as evidence only when, over that same set of scripts, no
-        assignment to that task's `options.release` exists and no `sourceCompatibility` or `targetCompatibility` is
-        declared for the project, and the toolchain itself is settled by the same rule. That is sound because Gradle
+        assignment to that task's `options.release` exists, no `sourceCompatibility` or `targetCompatibility` is
+        declared for the project, no compiler argument or argument provider reaches the task (`options.compilerArgs`,
+        `options.compilerArgumentProviders`, which can pass `--release` themselves), and no `javaCompiler` override
+        reaches it (`JavaCompile.javaCompiler` can replace the toolchain's compiler), and the toolchain itself is settled
+        by the same rule; any of those present keeps the veto, since its effect is not proven. That is sound because Gradle
         then compiles with the toolchain's own `javac` and no `--release`, so the API is the toolchain JDK's own class
         library, the table of that release. With a release declared the toolchain is never read, since toolchain 17
         with release 11 compiles against the 11 API (Gradle's cross-compilation section,
@@ -334,8 +340,9 @@ would answer the single body that the probe with the veto disabled shows.
       - the effective release of each source is a cross-file answer keyed by the path and content of every build file
         the resolution consulted (the owning manifest, each parent, `.mvn/maven.config`, each Gradle script and
         convention plugin), plus the snapshot's set of build-file paths (`pom.xml`, `.mvn/maven.config`, `*.gradle`,
-        `*.gradle.kts`, `settings.gradle*`, `buildSrc/**`), which is the evidence of every parent or script found
-        absent, and the source's path, which decides its owning build;
+        `*.gradle.kts`, `settings.gradle*`, `buildSrc/**`), the presence or absence of every path the resolution looked
+        up, including an explicit `<relativePath>` that matches none of those patterns (`../parent-custom.xml`), which
+        together are the evidence of every parent or script found absent, and the source's path, which decides its owning build;
       - the function-value target reading is a cross-file Java fact of B5, keyed by every Java source's path and
         content, the snapshot's path universe and those effective releases (ADR-0045 decision 2's B5 key, plus the
         releases' keys).
@@ -549,7 +556,9 @@ vetoed (`dispatch not proven`) in every unit, whatever source of signatures is d
     (`options.release = providers.gradleProperty("rel").get().toInteger()`) and a literal toolchain 21: unsettled, the
     toolchain is not read. Two `options.release` literals that disagree (the root's `subprojects` and the project's
     own block): unsettled. Only a literal toolchain 21, no release and no compatibility declared: the release-21
-    table.
+    table; the same with `options.compilerArgs.addAll(["--release", "17"])` or a `javaCompiler` override on the task:
+    unsettled. A Maven parent named by `<relativePath>../parent-custom.xml</relativePath>` and absent, then added:
+    the resolution misses and re-reads.
 27. **Varargs needs `ACC_VARARGS` (V1b).** `Collector.of(() -> new ArrayList<Port>(), (a, t) -> a.add(t), (x, y) -> x)`
     selects `of(Supplier, BiConsumer, BinaryOperator, Characteristics...)` at arity 3 only by variable arity: settled
     with the flag; with a table entry that lacks it, the invocation stays unsettled.
