@@ -1,9 +1,10 @@
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import { isFullObjectId } from "../core/domain/shared/revision.ts";
-import type { DeclaredConfig, DeclaredScope, Fact, SnapshotRef } from "../core/domain/shared/fact.ts";
+import type { Fact } from "../core/domain/shared/fact.ts";
 import type { ScopeRequest } from "../core/domain/shared/scope.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
 import { isWorkspaceReplayContext, type WorkspaceReplayContext } from "../core/domain/topology/workspace-replay.ts";
+import { recoveryContext } from "../core/domain/composition/source-read.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
 import type { CallersTarget } from "../core/ports/impact-queries.port.ts";
@@ -14,23 +15,6 @@ export type Recovery =
   | { version: 1; status: "available"; resultIdentity: string; query: { name: "ye_ast_entrypoints"; arguments: Arguments } }
   | { version: 1; status: "available"; resultIdentity: string; query: { name: "ye_ast_callers" | "ye_ast_impact"; arguments: Record<string, unknown> } }
   | { version: 1; status: "unavailable"; reason: "deadline" | "unresolved-context" | "redacted-context" };
-
-/**
- * The normalized context an `mcp-r1` identity digests beside the public fact: the selected repository, the fact's
- * snapshot, declared scope and config, and for a workspace read its replay context and effective offline policy; impact
- * adds its merge base. Recovery and composition source identity share this one definition.
- */
-export type RecoveryContext = {
-  repo: string; snapshot: SnapshotRef; declaredScope: DeclaredScope; declaredConfig: DeclaredConfig;
-  replay?: WorkspaceReplayContext | undefined; offline?: boolean; mergeBase?: string;
-};
-export function recoveryContext(fact: Fact<unknown>, selected: string, crossing?: { replay: WorkspaceReplayContext | undefined; offline: boolean | undefined }, mergeBase?: string): RecoveryContext {
-  return {
-    repo: selected, snapshot: fact.snapshot, declaredScope: fact.inputs.declaredScope, declaredConfig: fact.inputs.declaredConfig,
-    ...(crossing === undefined ? {} : { replay: crossing.replay, offline: crossing.offline === true || fact.inputs.trust === "untrusted" }),
-    ...(mergeBase === undefined ? {} : { mergeBase }),
-  };
-}
 
 function hasDeadline(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(hasDeadline);

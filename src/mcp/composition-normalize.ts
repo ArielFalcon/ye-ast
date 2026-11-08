@@ -23,9 +23,8 @@ import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
-import { analysis } from "./select-evidence.ts";
 import type { ExecutedSource, PublicWorkspaceValue } from "./query-runner.ts";
-import { recoveryContext, type RecoveryContext } from "./recovery.ts";
+import { analysis, recoveryContext, type RecoveryContext } from "../core/domain/composition/source-read.ts";
 import type {
   AnchorId, AnchorRecord, ComparisonRef, ConsequenceHopData, ConsequenceLinkData, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceRecord,
   EvidenceSet, FileCategory, FileDependencyCategory, FileId, FileRecord, GuardData, HypothesisIdentity, LinkData, LinkReference, OriginReference, OutlineImportRecord, OutlineUseRecord, Part, PartId,

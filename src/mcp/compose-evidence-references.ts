@@ -8,7 +8,7 @@ import type { Result } from "../core/domain/shared/result.ts";
 import type {
   CompositionInvariantFault, CompositionIssue, EvidenceOrigin, MaterializedGraph, Part, RelationValue, Support,
 } from "./composition-contract.ts";
-import { isCompositionId, type IdKind } from "./composition-identity.ts";
+import { isCompositionId, type IdKind } from "../core/domain/composition/composition-ids.ts";
 
 /** One reference a record holds: the table it points into, the field that holds it, and the id. */
 export type Reference = { kind: IdKind; field: string; id: string };

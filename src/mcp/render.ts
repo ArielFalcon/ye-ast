@@ -1,6 +1,7 @@
 import { dependencyDiagnosticText, effectText, unresolvedLabel } from "./presentation.ts";
 import { canSelect, categoryRecovery, literalSelection, sharedLookup } from "./presentation-guidance.ts";
-import type { CutOwner, ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
+import type { ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
+import type { CutOwner } from "../core/domain/composition/source-read.ts";
 import { renderFactHeader as headerLines, renderFactStatus as statusLines, evidenceText, cutsByKind } from "./presentation-context.ts";
 import type { ResponseMode, RenderContext } from "./presentation.ts";
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";

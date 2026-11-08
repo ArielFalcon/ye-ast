@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { namespacedDigestPattern, type DigestNamespace } from "./composition-identity.ts";
+import { namespacedDigestPattern, type DigestNamespace } from "../core/domain/composition/composition-ids.ts";
 
 /** Runtime and advertised schemas use the same namespaced identity rule as canonical key validation. */
 export function compositionIdSchema<P extends DigestNamespace>(prefix: P) {

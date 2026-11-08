@@ -8,41 +8,19 @@ import { compareText } from "../core/domain/shared/code-node.ts";
 import { sortedUnique } from "../core/domain/impact/importers-fact.ts";
 import type { Evidence, Fact, SnapshotRef } from "../core/domain/shared/fact.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
-import type { RecoveryContext } from "./recovery.ts";
-import { escapePointer } from "./query-runner.ts";
+import type { RecoveryContext } from "../core/domain/composition/source-read.ts";
+import { escapePointer } from "../core/domain/shared/json-pointer.ts";
+import { COMPOSITION_KEY_VERSION, DIGEST_ID, ID_PREFIXES, type IdKind, type IdOf } from "../core/domain/composition/composition-ids.ts";
 import type {
   AnchorId, CompositionIdentity, EvidenceId, EvidenceOrigin, FileId, PartId, PartPayload, ReadId, ReadOwner,
   SnapshotId, SourceFamilyRef, SourceId, Support,
 } from "./composition-contract.ts";
-
-/** Changing what any key means changes this version, and with it every id. */
-export const COMPOSITION_KEY_VERSION = "mcp-composition-v1";
-
-/** The prefix of every wire id kind. */
-export const ID_PREFIXES = {
-  source: "s1", read: "r1", snapshot: "v1", file: "f1", anchor: "a1", evidence: "e1",
-  part: "p1", entity: "n1", relation: "l1", connection: "c1",
-} as const;
-export type IdKind = keyof typeof ID_PREFIXES;
-export type IdOf<K extends IdKind> = `${(typeof ID_PREFIXES)[K]}:${string}`;
-
-/** Digest identities always have a namespace; they are distinct from Git's bare SHA-1/SHA-256 object ids. */
-const DIGEST_ID = /^mcp-c1:[0-9a-f]{64}$/;
-export type DigestNamespace = (typeof ID_PREFIXES)[IdKind] | "mcp-c1" | "mcp-r1";
-export function namespacedDigestPattern(namespace: DigestNamespace): RegExp {
-  return new RegExp(DIGEST_ID.source.replace("mcp-c1", namespace));
-}
 
 /** The one id builder: the key is canonical JSON, so object member order never matters and array order always does. */
 export function compositionKey<K extends IdKind>(digest: Digest, kind: K, key: unknown): IdOf<K> {
   const value = digest.of(canonicalJson([COMPOSITION_KEY_VERSION, kind, key]));
   if (!DIGEST_ID.test(`mcp-c1:${value}`)) throw new Error("Composition digests must be 64 lowercase hex characters");
   return `${ID_PREFIXES[kind]}:${value}` as IdOf<K>;
-}
-
-/** Whether a string is a well-formed id of that kind. */
-export function isCompositionId<K extends IdKind>(kind: K, value: unknown): value is IdOf<K> {
-  return typeof value === "string" && namespacedDigestPattern(ID_PREFIXES[kind]).test(value);
 }
 
 /**

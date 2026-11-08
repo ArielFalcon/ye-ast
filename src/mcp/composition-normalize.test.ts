@@ -16,7 +16,8 @@ import type {
   AnchorId, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceSet, FileCategory, FileId, Part, PartId, PartKind, PartOf, ReadRecord,
   SnapshotId, SourceId,
 } from "./composition-contract.ts";
-import { isCompositionId, jsonPointer } from "./composition-identity.ts";
+import { jsonPointer } from "./composition-identity.ts";
+import { isCompositionId } from "../core/domain/composition/composition-ids.ts";
 import {
   MERGE_BASE, SHA_A, SHA_B, entrypointsValue, factOf, impactValue, inputsOf, shaRef, sourceFixture, unknownFactOf, workspaceImpactValue,
   type FixtureKind,

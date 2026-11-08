@@ -14,7 +14,7 @@ import { renderEntrypointMap, renderImpact, renderOutline } from "./render.ts";
 import { blockBytes } from "./presentation-sharing.ts";
 import type { ComposeFull, CompositionResult, CoverageSummary, RepeatRequest, ReadOwner } from "./composition-contract.ts";
 import type { ExecutedSource } from "./query-runner.ts";
-import type { CutOwner } from "./select-evidence.ts";
+import type { CutOwner } from "../core/domain/composition/source-read.ts";
 
 const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
 const ownerOf = (owner: ReadOwner): CutOwner => (owner.kind === "read" ? { kind: "read", repo: owner.repo, index: owner.index } : owner);

@@ -29,7 +29,7 @@ import type { FactRead, WorkspaceRefresh, WorkspaceValue } from "../core/ports/w
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { ResponseMode, ToolFamily } from "./presentation.ts";
-import type { Analysis, CutOwner } from "./select-evidence.ts";
+import type { Analysis, CutOwner } from "../core/domain/composition/source-read.ts";
 import type { ComposeQuery } from "./query-schema.ts";
 import type { QueryFault } from "./query-runner.ts";
 

@@ -11,7 +11,7 @@ import { COMPOSE_OUTPUT } from "./composition-schema.ts";
 import { composeFull, composeReceipt } from "./render-composition.ts";
 import type { CompositionResult, CoverageSummary, PartKind, ReadOwner } from "./composition-contract.ts";
 import type { ExecutedSource } from "./query-runner.ts";
-import type { CutOwner } from "./select-evidence.ts";
+import type { CutOwner } from "../core/domain/composition/source-read.ts";
 
 const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
 const ALL = [

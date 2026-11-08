@@ -17,7 +17,7 @@ import { normalizeSource } from "./composition-normalize.ts";
 import { materializeEvidence, mergeEvidence, validateCompositionReferences, validateCompositionIssues } from "./compose-evidence.ts";
 import { compositionIdentity } from "./composition-identity.ts";
 import { COMPOSE_INPUT, COMPOSE_LIMITS, COMPOSE_QUERY } from "./composition-input.ts";
-import type { CutOwner } from "./select-evidence.ts";
+import type { CutOwner } from "../core/domain/composition/source-read.ts";
 import type {
   ComposeFault, ComposeInput, CompositionCounts, CompositionIdentity, CompositionResult, CoverageSummary, EvidenceSet,
   MaterializedComposition, Part, QueryKey, ReadOwner, RepeatRequest, SourceDelivery, SourceDescriptor, SourceId,

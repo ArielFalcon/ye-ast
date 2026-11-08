@@ -2,6 +2,7 @@ import { compareText } from "../core/domain/shared/code-node.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import { WALK_BOUND_FIELDS, type Fact, type WalkBoundsField } from "../core/domain/shared/fact.ts";
 import type { Result } from "../core/domain/shared/result.ts";
+import { escapePointer } from "../core/domain/shared/json-pointer.ts";
 import type { ScopeRequest } from "../core/domain/shared/scope.ts";
 import type { ImpactBudget, ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
@@ -297,11 +298,6 @@ export function changedPointers(original: unknown, published: unknown): string[]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
-}
-
-/** One RFC 6901 reference token (`~` as `~0`, `/` as `~1`). */
-export function escapePointer(segment: string): string {
-  return segment.replaceAll("~", "~0").replaceAll("/", "~1");
 }
 
 function replayChanged(fault: ImpactFault | WorkspaceFault): QueryFault {

@@ -13,10 +13,11 @@ import type {
   MaterializedComposition, Part, PartId, PartOf, ReadId, ReadOwner, ReadRecord, RedactionRecord, RelationId,
   RelationRecord, RelationValue, SnapshotId, SourceId, Support,
 } from "./composition-contract.ts";
-import type { CutOwner } from "./select-evidence.ts";
+import type { CutOwner } from "../core/domain/composition/source-read.ts";
 import {
-  COMPOSITION_KEY_VERSION, compareSupport, compositionKey, fileId, isCompositionId, sameCanonical, sortById, unionSupports,
+  compareSupport, compositionKey, fileId, sameCanonical, sortById, unionSupports,
 } from "./composition-identity.ts";
+import { COMPOSITION_KEY_VERSION, isCompositionId } from "../core/domain/composition/composition-ids.ts";
 import { sortedUnique } from "../core/domain/impact/importers-fact.ts";
 import { partReferences } from "./compose-evidence-references.ts";
 

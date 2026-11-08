@@ -19,7 +19,7 @@ import type {
   EntityId, EntityRecord, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, FileId, OriginReference, Part, PartId,
   PartKind, PartOf, ReadId, ReadOwner, ReadRecord, RelationId, RelationRecord, SnapshotId, SourceDescriptor, SourceId,
 } from "./composition-contract.ts";
-import type { CutOwner } from "./select-evidence.ts";
+import type { CutOwner } from "../core/domain/composition/source-read.ts";
 
 /** The action receipt: verification and complete safe repeat queries; findings and coverage belong to text. */
 export function composeReceipt(result: CompositionResult, mode: "summary" | "details"): ComposeReceipt {
