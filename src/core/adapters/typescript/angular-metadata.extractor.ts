@@ -271,10 +271,7 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
     }
     if (ts.isCallExpression(node) && coreName(node.expression) === "inject" && node.arguments[0] !== undefined) {
       const owner = ownerOf(node, sf);
-      const declaration = referenceOf(node.arguments[0]) !== undefined && ts.isVariableDeclaration(node.parent) && ts.isIdentifier(node.parent.name) && ts.isVariableDeclarationList(node.parent.parent) && (node.parent.parent.flags & ts.NodeFlags.Const) !== 0 ? node.parent : undefined;
-      const local = declaration !== undefined && ts.isIdentifier(declaration.name) ? declaration.name.text : undefined;
-      const statement = declaration?.parent.parent;
-      const block = statement !== undefined && ts.isVariableStatement(statement) && ts.isBlock(statement.parent) ? statement.parent : undefined;
+      const bound = referenceOf(node.arguments[0]) === undefined ? undefined : injectedBinding(node);
       const access = node.parent;
       const outer = access.parent;
       const root = ts.isIdentifier(node.expression) ? node.expression.text : ts.isPropertyAccessExpression(node.expression) && ts.isIdentifier(node.expression.expression) ? `${node.expression.expression.text}.${node.expression.name.text}` : undefined;
@@ -289,8 +286,8 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
       const at = inline ? sf.getLineAndCharacterOfPosition(outer.getStart(sf)) : undefined;
       result.injections.push({
         ...(owner !== undefined ? { owner: { name: owner.name.text, line: line(owner.name) } } : {}),
-        ...(local !== undefined ? { local } : {}),
-        ...(declaration !== undefined && block !== undefined ? { localScope: { start: declaration.end, end: block.end } } : {}),
+        ...(bound !== undefined ? { local: bound.local } : {}),
+        ...(bound?.scope !== undefined ? { localScope: bound.scope } : {}),
         ...(inline && at !== undefined ? { inlineMember: { name: access.name.text, line: at.line + 1, column: at.character + 1, referenceName: `${root}().${access.name.text}` } } : {}),
         target: injectionTargetOf(node.arguments[0]),
         line: line(node),
@@ -344,6 +341,24 @@ function typeReference(type: ts.TypeNode): RawReference | undefined {
 }
 
 /** The top-level class, function or variable an expression sits in: the nearest one, the declaration an `inject()` call is made for. */
+/**
+ * The name an `inject()` call initializes and the source span where that name holds it: a `const` local of a block from its
+ * declaration to the block's end, or an unannotated parameter default from the parameter to its function's end, whose
+ * inferred type is the injected class. A `const` outside a block holds a name but no span.
+ */
+function injectedBinding(call: ts.CallExpression): { local: string; scope?: { start: number; end: number } } | undefined {
+  const declaration = call.parent;
+  if (ts.isVariableDeclaration(declaration) && ts.isIdentifier(declaration.name) && ts.isVariableDeclarationList(declaration.parent) && (declaration.parent.flags & ts.NodeFlags.Const) !== 0) {
+    const statement = declaration.parent.parent;
+    const block = ts.isVariableStatement(statement) && ts.isBlock(statement.parent) ? statement.parent : undefined;
+    return { local: declaration.name.text, ...(block !== undefined ? { scope: { start: declaration.end, end: block.end } } : {}) };
+  }
+  if (ts.isParameter(declaration) && declaration.initializer === call && ts.isIdentifier(declaration.name) && declaration.dotDotDotToken === undefined && declaration.type === undefined && ts.isFunctionLike(declaration.parent)) {
+    return { local: declaration.name.text, scope: { start: declaration.end, end: declaration.parent.end } };
+  }
+  return undefined;
+}
+
 function ownerOf(node: ts.Node, sf: ts.SourceFile): { name: ts.Identifier } | undefined {
   for (let current = node.parent; current !== undefined && current !== sf; current = current.parent) {
     if (ts.isClassDeclaration(current) && current.name !== undefined) return { name: current.name };

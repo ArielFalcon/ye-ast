@@ -28,6 +28,8 @@ const FILES: Record<string, string> = {
   "src/deep.ts": "import { Injectable } from '@angular/core';\nimport { Store } from './store';\n\n@Injectable()\nexport class Deep {\n  constructor(private store: Store) {}\n\n  run(): void {\n    this.store.log.save('x');\n  }\n}\n",
   "src/typed.ts": "import { Store } from './store';\n\nexport class Typed {\n  constructor(private store: Store) {}\n\n  read(): string {\n    return this.store.get('a');\n  }\n}\n",
   "src/injected.ts": "import { inject } from '@angular/core';\nimport { Store } from './store';\n\nexport function useStore(): void {\n  const store = inject(Store);\n  store.save('b');\n}\n",
+  "src/store-methods.ts": "import { inject } from '@angular/core';\nimport { Store } from './store';\n\nexport const storeMethods = (marker: string, store = inject(Store)) => ({\n  keep: () => store.save(marker),\n});\n",
+  "src/store-annotated.ts": "import { inject } from '@angular/core';\nimport { Store } from './store';\n\nexport const annotatedMethods = (store: any = inject(Store)) => ({\n  keep: () => store.save('c'),\n});\n",
   "src/escaping.ts": "import { Injectable } from '@angular/core';\nimport { Store } from './store';\n\n@Injectable()\nexport class Escaping {\n  constructor(private store: Store) {\n    register(this);\n  }\n\n  flush(): void {\n    this.store.save('d');\n  }\n}\n\nfunction register(owner: unknown): void {\n  console.log(owner);\n}\n",
   "src/parser.ts": "export interface Parser {\n  parse(input: string): number;\n}\n",
   "src/use-parser.ts": "import { schema } from 'zod';\n\nconst parser = schema();\n\nexport function parseAll(): number {\n  return parser.parse('1');\n}\n",
@@ -110,6 +112,13 @@ test("a call on a local an inject() call initializes with the method's class is 
   assert.deepEqual(pick(reached(value, "src/injected.ts", "useStore")), { confidence: 1, derivation: "proven" });
 });
 
+test("a call on a parameter an inject() default initializes with the method's class is proven", async () => {
+  const value = await callersOf("src/store.ts", "save");
+
+  assert.deepEqual(pick(reached(value, "src/store-methods.ts", "storeMethods")), { confidence: 1, derivation: "proven" });
+  assert.notEqual(reached(value, "src/store-annotated.ts", "annotatedMethods")?.via?.derivation, "proven");
+});
+
 test("a call on an injected field of the method's class is proven where the class lets `this` escape", async () => {
   const value = await callersOf("src/store.ts", "save");
 
@@ -143,7 +152,7 @@ test("a file whose only use of another is a name match is a namer of it, not a u
   assert.ok(result.ok && result.value.status !== "unknown");
   assert.deepEqual(result.value.value.files.map(({ file, users, unresolvedNamers }) => ({ file, users, unresolvedNamers })), [
     { file: "src/helpers.ts", users: ["src/plain.ts"], unresolvedNamers: [] },
-    { file: "src/store.ts", users: ["src/deep.ts", "src/escaping.ts", "src/injected.ts", "src/typed.ts"], unresolvedNamers: ["src/injected.ts", "src/route-reader.ts", "src/saver.ts"] },
+    { file: "src/store.ts", users: ["src/deep.ts", "src/escaping.ts", "src/injected.ts", "src/store-annotated.ts", "src/store-methods.ts", "src/typed.ts"], unresolvedNamers: ["src/injected.ts", "src/route-reader.ts", "src/saver.ts"] },
   ]);
 });
 
