@@ -1,6 +1,9 @@
 # ADR-0042: A fact's completeness is relative to what its answer asserts, and every cut states why it exists
 
-- Status: Proposed, 2026-11-08; open questions closed 2026-11-09
+- Status: Accepted, 2026-11-09. The owner delegated closing and accepting it after an independent review, verbatim:
+  "Cierra los 3 ADR pendientes con lo que recomiendes para las preguntas pendientes. Que se revisen con sol high y se
+  queden aprobados y listos. Ten en cuenta los cambios que aplicará 0045 por si debe cambiar algo en estos". Reviewed
+  and rechecked by an independent reviewer; open questions closed into decisions.
 - Decision source: the owner, 2026-11-08, verbatim: "lanza un agente con esfuerzo high por cada propuesta para que la
   analice conjuntamente con la evidencia, que investigue y proponga un ADR de cambio". Translated: launch one
   high-effort agent per proposal to analyse it together with the evidence, investigate, and propose an ADR of change.
