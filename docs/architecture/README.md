@@ -47,7 +47,11 @@ marked **Proposed** awaits the owner's acceptance.
 | [0039](adr/0039-behavior-changes-pass-a-corpus-gate.md) | Every change of behavior under `src/core/` passes a corpus gate before reaching `main`: base and candidate runs over a frozen out-of-repository manifest, differences explained by declared families and directions; extends 0013 rule 4 | Accepted |
 | [0040](adr/0040-a-snapshot-read-parses-each-java-source-once.md) | A snapshot read parses each Java source once into trees its hold keeps, and frees them when the read ends, whether it answers or throws; concurrent reads never share trees | Accepted |
 | [0041](adr/0041-one-call-reconciliation-for-every-family.md) | One core owner aligns codegraph's records with the written calls per file and binds every call with one chain; families extend it by composition, narrowing and never re-binding; reverse queries read a name index of per-file deltas retained by content | Accepted |
+<<<<<<< HEAD
 | [0042](adr/0042-completeness-is-relative-to-the-question.md) | Every cut carries a required reason from a closed set and a typed reach; each family declares what its answer asserts, and a cut makes it `partial` only when its reach can hold an asserted item, by positive proof that fails closed; a place is an item or a cut, never both; undecided items are stated; amends RFC-0002 rules 1 and 2 | Proposed |
+=======
+| [0043](adr/0043-a-change-seeds-only-where-its-tokens-differ.md) | A changed hunk whose base and head tokens are equal (comments, whitespace, Java import order) seeds nothing and is reported as `settled`, never dropped; a line no token touches selects nothing; when unsure, it is a token | Proposed |
+>>>>>>> 0ed20dce (docs(adr): propose that a change seeds impact only where its tokens differ)
 
 ## Designs (RFC)
 
