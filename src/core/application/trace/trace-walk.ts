@@ -359,12 +359,17 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   const indexedBodiesIn = memoizedBy((file: string) => file, async (file) =>
     positionedBodies(store.symbolsInFiles([file]), (await syntaxOf(file)).calls ?? []).map((body) => ({ ...body, ...declarationSpan(body) })));
 
-  const membersOf = async (node: GraphSymbol): Promise<Child[]> => {
+  const membersOf = async (node: GraphSymbol, construction = false): Promise<Child[]> => {
     if (!isClassKind(node.kind)) return [];
     const syntax = await syntaxCallsIn(node.file);
+    const initializers = (await syntaxOf(node.file)).initializedFields ?? [];
     return navigation
       .membersOf(node)
-      .filter((member) => member.kind === "method" || ((FIELD_KINDS as readonly string[]).includes(member.kind) && (syntax.get(member.id)?.some((call) => !call.deferred) || callEdgesOf(store, member).length > 0 || callsFrom(member).length > 0)))
+      .filter((member) => {
+        const field = (FIELD_KINDS as readonly string[]).includes(member.kind);
+        if (construction) return field && initializers.some(initializer => initializer.name === member.name && initializer.start <= member.startLine && member.startLine <= initializer.nameLine);
+        return member.kind === "method" || (field && (syntax.get(member.id)?.some((call) => !call.deferred) || callEdgesOf(store, member).length > 0 || callsFrom(member).length > 0));
+      })
       .map((member) => childAt(member, member.startLine, null, member.name, "member"));
   };
 
@@ -415,7 +420,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const construction = syntax.callables.some(callable => callable.construction && callable.start <= node.startLine && node.startLine <= callable.nameLine && callable.name === node.name);
     if (construction) {
       for (const owner of navigation.ownersOf(node)) {
-        children.push(...(await membersOf(owner)).filter(child => (FIELD_KINDS as readonly string[]).includes(child.symbol.kind)));
+        children.push(...await membersOf(owner, true));
       }
     }
     const cuts: Cut[] = unplaced.map((reference) => unresolvedAt(reference, []));

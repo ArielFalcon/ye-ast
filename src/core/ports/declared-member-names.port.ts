@@ -6,6 +6,7 @@ import type { SourceSpan } from "../domain/trace/owning-body.ts";
 export interface DeclaredMemberNames {
   /** Every syntactic call or construction, at its callee start (1-based UTF-16). */
   calls?: readonly SyntaxCall[];
+  initializedFields?: readonly Pick<DeclaredCallable, "name" | "start" | "nameLine">[];
   /** Sorted, once each. */
   names: readonly string[];
   /** In source order. */

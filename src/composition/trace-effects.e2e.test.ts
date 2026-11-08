@@ -383,6 +383,38 @@ class Entry {
   }
 });
 
+test("construction skips uninitialized fields and definition-time decorators", async () => {
+  commit({
+    "src/entry.ts": `import { Input } from '@angular/core';
+class Holder {
+  @Input() brand: unknown;
+  @Input() initialized = Math.random();
+  constructor() {}
+}
+export function run() { return new Holder(); }
+`,
+    "src/Entry.java": `class Holder {
+  Object brand;
+  double initialized = Math.random();
+  Holder() {}
+}
+class Entry {
+  static Holder run() { return new Holder(); }
+}
+`,
+  });
+  const queries = composeQueries({ scratchRoot: join(workspace, "scratch"), indexCache: join(workspace, "cache") });
+  for (const [file, symbol] of [["src/entry.ts", "run"], ["src/Entry.java", "Entry.run"]]) {
+    const result = await queries.trace.walk({ repo, repoId: "fixture", revision: "HEAD", targets: [{ file: file!, symbol: symbol! }] });
+    assert.ok(result.ok);
+    assert.notEqual(result.value.status, "unknown");
+    if (result.value.status === "unknown") continue;
+    const members = result.value.value.steps.filter(step => step.via === "member").map(step => step.symbol);
+    assert.deepEqual(members, ["initialized"], file);
+    assert.ok(!JSON.stringify(result.value.value.steps).includes('"Input"'), file);
+  }
+});
+
 test("unproven signal reads never step into interface or unrelated model fields", async () => {
   commit({
     "src/article.ts": `export interface Article { title: string; body: string; }`,

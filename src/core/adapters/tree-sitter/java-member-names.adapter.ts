@@ -32,6 +32,7 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
       const names = new Set<string>();
       const callables: DeclaredCallable[] = [];
       const calls: SyntaxCall[] = [];
+      const initializedFields: NonNullable<DeclaredMemberNames["initializedFields"]>[number][] = [];
       const owners: SyntaxCall["owners"][number][] = [];
       const nameOf = (node: Node): void => {
         const name = node.childForFieldName("name");
@@ -58,6 +59,7 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
           if (named !== null) anchors.push({ line: named.startPosition.row + 1, column: named.startPosition.column + 1 });
           calls.push({ anchors, kind: node.type === "object_creation_expression" ? "instantiates" : "calls", ...(callee === undefined ? {} : { callee }), line: node.startPosition.row + 1, column: node.startPosition.column + 1, name: node.type === "object_creation_expression" ? (type?.type === "generic_type" ? type.namedChildren[0]?.text : type?.text) ?? "new" : file.content.slice(node.startIndex, argumentsNode?.startIndex ?? node.endIndex).trim(), owners: [...owners] });
         }
+        if (node.type === "variable_declarator" && MEMBER_FIELDS.includes(node.parent?.type ?? "") && node.childForFieldName("value") !== null && ownerName !== null) initializedFields.push({ name: ownerName.text, start: node.parent!.startPosition.row + 1, nameLine: ownerName.startPosition.row + 1 });
         if (node.type === "variable_declarator" ? MEMBER_FIELDS.includes(node.parent?.type ?? "") : NAMED.includes(node.type)) nameOf(node);
         if (node.type === "method_declaration" || node.type === "constructor_declaration" || node.type === "compact_constructor_declaration") {
           const name = node.childForFieldName("name");
@@ -77,7 +79,7 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
       } finally {
         parsed.value.dispose();
       }
-      return { names: [...names].sort(compareText), functionValueCalls, callables, receiverBindings, calls, functionValues };
+      return { names: [...names].sort(compareText), functionValueCalls, callables, receiverBindings, calls, functionValues, initializedFields };
     },
   };
 }
