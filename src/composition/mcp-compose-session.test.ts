@@ -10,8 +10,8 @@ import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-que
 import type { ImpactFault } from "../core/ports/impact-queries.port.ts";
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
 import type { McpDeps } from "../mcp/server.ts";
-import { createMcpServer, FAULT_META, RESULT_JSON_LABEL } from "../mcp/server.ts";
-import { openSession, resultFields, type Session } from "../mcp/test-session.testing.ts";
+import { createMcpServer, FAULT_META } from "../mcp/server.ts";
+import { openSession, resultFields, textOf, type Session } from "../mcp/test-session.testing.ts";
 
 const redaction: McpDeps["redaction"] = {
   redact: (text) => text,
@@ -34,13 +34,6 @@ async function setup(outline: OutlineQueries["outline"] = async () => ({ ok: tru
   });
   return { session: await openSession(server), maps };
 }
-
-/** The presentation text a reader sees: content without its closing result JSON line. */
-const textOf = (result: { content: { text: string }[] }): string => {
-  const whole = result.content.map((block) => block.text).join("\n");
-  const at = whole.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
-  return at === -1 ? whole : whole.slice(0, at);
-};
 
 const focusFact = (value: OutlineValue, cuts?: [Cut]): Fact<OutlineValue> =>
   factOf(value, { inputs: inputsOf({ declaredConfig: { focus: ["src/Api.ts:get"] } }), ...(cuts === undefined ? {} : { cuts }) });

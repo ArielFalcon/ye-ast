@@ -35,7 +35,7 @@ function resultFields(result: any): any {
   assert.notEqual(at, -1);
   return { text: text.slice(0, at), ...JSON.parse(text.slice(at + 1 + RESULT_JSON_LABEL.length)) };
 }
-import { openSession, type Session, type ToolResult } from "./test-session.testing.ts";
+import { openSession, textOf, type Session, type ToolResult } from "./test-session.testing.ts";
 import { CONSUMER_ROUTES } from "./test-consumer-routes.testing.ts";
 import { createHash } from "node:crypto";
 import { encodeCursor, selectionDigest } from "./evidence-cursor.ts";
@@ -321,12 +321,6 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh,
   return { session: await openSession(server), calls };
 }
 
-/** The presentation text a reader sees: content without its closing result JSON line. */
-const textOf = (result: { content: { text: string }[] }): string => {
-  const whole = result.content.map((block) => block.text).join("\n");
-  const at = whole.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
-  return at === -1 ? whole : whole.slice(0, at);
-};
 
 /** The next step a fault's text gives, or the empty string. */
 const stepOf = (result: { content: { text: string }[] }): string => /^Next step: .*$/m.exec(textOf(result))?.[0] ?? "";

@@ -11,7 +11,7 @@ import { COMPOSE_QUERY } from "./composition-input.ts";
 import type { ComposeFull, ComposeReceipt, CoverageSummary } from "./composition-contract.ts";
 import type { CompositionGraph, EvidenceComposition, RelationValue } from "../core/ports/evidence-composition.port.ts";
 import {
-  callLocation, candidateBasis, comparisonRef, cut, cutOwner, dependenceBasis, entrypointKind, evidenceOrigin, evidenceValue,
+  callLocation, candidateBasis, cut, cutOwner, dependenceBasis, evidenceOrigin, evidenceValue,
   factInputs, ids, linkBasis, linkEndpoints, moduleVia, partSchema, producer, readOwner, schemaVersion, snapshotRef,
   snapshotVectorEntry, supports, symbolNameRef, unknownReason, type Accepts,
 } from "./composition-schema-parts.ts";
