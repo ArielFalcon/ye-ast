@@ -1,5 +1,5 @@
 import { calleeOf, countedAlike, normalizedSpelling, receiverRootOf } from "../../domain/shared/call-place.ts";
-import { CALL_EDGE_KINDS, holdsValue, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
+import { CALL_EDGE_KINDS, holdsValue, isClassKind, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import { comparePositions, containsPosition, declarationSpan, executesInBody, owningBody, type SourceSpan } from "../../domain/shared/owning-body.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { DeclaredMemberNames, SyntaxCall } from "../../ports/declared-member-names.port.ts";
@@ -70,8 +70,8 @@ interface CallRecord {
   synthesized: boolean;
 }
 
-/** What alignment decided for a record: at a written call, as the index has it, or contradicted by its source. */
-type Alignment = { kind: "matched"; call: SyntaxCall; deferred: boolean } | { kind: "kept" } | { kind: "contradicted" };
+/** What alignment decided for a record: at a written call, in `body`, as the index has it, or contradicted by its source. */
+type Alignment = { kind: "matched"; call: SyntaxCall; deferred: boolean; body: GraphSymbol } | { kind: "kept" } | { kind: "contradicted" };
 
 const callKey = (call: SyntaxCall): string => `${call.kind}:${call.line}:${call.column}:${call.name}`;
 
@@ -151,23 +151,25 @@ export function createReconciledCalls({ store, uses, syntaxOf, lineOf }: Reconci
       ...edges.map(({ edge, target }) => ({ node, line: edge.line, column: edge.column, name: target.name, synthesized: edge.synthesizedBy !== null })),
       ...references.map(({ line, column, name }) => ({ node, line, column, name, synthesized: false })),
     ]);
-    const { alignments, accounted } = alignRecords(records, syntax, owned, (line) => lineOf(file, line));
+    const { alignments, accounted } = alignRecords(records, syntax, owned, store.symbolsInFiles([file]), (line) => lineOf(file, line));
+    const placed = new Map(bodies.map(({ node }) => [node.id, { edges: [] as FollowedEdge[], references: [] as GraphUnresolvedReference[], contradicted: [] as BodyCalls["contradicted"][number][] }]));
     let next = 0;
-    return new Map(bodies.map(({ node, edges, references }) => {
-      const contradicted: BodyCalls["contradicted"][number][] = [];
-      const placedEdges = edges.flatMap((followed) => {
+    for (const { node, edges, references } of bodies) {
+      for (const followed of edges) {
         const alignment = alignments[next++]!;
         const { edge, target } = followed;
-        if (alignment.kind === "contradicted") contradicted.push({ record: { from: node.id, file: node.file, line: edge.line!, column: edge.column!, name: target.name, kind: edge.kind, candidates: [] }, target });
-        else return [alignment.kind === "matched" && !alignment.deferred ? { ...followed, edge: { ...edge, line: alignment.call.line, column: alignment.call.column - 1 } } : followed];
-        return [];
-      });
-      const placedReferences = references.flatMap((reference) => {
+        if (alignment.kind === "contradicted") placed.get(node.id)!.contradicted.push({ record: { from: node.id, file: node.file, line: edge.line!, column: edge.column!, name: target.name, kind: edge.kind, candidates: [] }, target });
+        else if (alignment.kind === "kept") placed.get(node.id)!.edges.push(followed);
+        else placed.get(alignment.body.id)!.edges.push(alignment.deferred ? followed : { ...followed, source: alignment.body, edge: { ...edge, source: alignment.body.id, line: alignment.call.line, column: alignment.call.column - 1 } });
+      }
+      for (const reference of references) {
         const alignment = alignments[next++]!;
-        if (alignment.kind === "contradicted") contradicted.push({ record: reference });
-        else return [alignment.kind === "matched" && !alignment.deferred ? { ...reference, line: alignment.call.line, column: alignment.call.column - 1 } : reference];
-        return [];
-      });
+        if (alignment.kind === "contradicted") placed.get(node.id)!.contradicted.push({ record: reference });
+        else if (alignment.kind === "kept") placed.get(node.id)!.references.push(reference);
+        else placed.get(alignment.body.id)!.references.push(alignment.deferred ? reference : { ...reference, from: alignment.body.id, line: alignment.call.line, column: alignment.call.column - 1 });
+      }
+    }
+    return new Map(bodies.map(({ node }) => {
       const writtenOnly: GraphUnresolvedReference[] = [];
       const ambiguous: GraphUnresolvedReference[] = [];
       for (const call of owned.get(node.id) ?? []) {
@@ -175,7 +177,7 @@ export function createReconciledCalls({ store, uses, syntaxOf, lineOf }: Reconci
         const reference = { from: node.id, file: node.file, line: call.line, column: call.column - 1, name: call.name, kind: call.kind, candidates: [] };
         (call.ambiguous ? ambiguous : writtenOnly).push(reference);
       }
-      return [node.id, { edges: placedEdges, references: placedReferences, contradicted, writtenOnly, ambiguous }];
+      return [node.id, { ...placed.get(node.id)!, writtenOnly, ambiguous }];
     }));
   });
   return {
@@ -187,11 +189,15 @@ export function createReconciledCalls({ store, uses, syntaxOf, lineOf }: Reconci
 }
 
 /**
- * Aligns a file's records with its written calls, in the records' order; a record stays in the body the index gives it
- * whichever body owns its call. A written call is accounted when a record matches it or is undecided between it and others.
+ * Aligns a file's records with its written calls, in the records' order. A record stays in the body the index gives it
+ * whichever body owns its call, except a record of the file's top level whose call a class owns: a decorator and its
+ * arguments, which the class's declaration runs. A written call is accounted when a record matches it or is undecided
+ * between it and others.
  */
-function alignRecords(records: readonly CallRecord[], syntax: DeclaredMemberNames, owned: ReadonlyMap<GraphNodeId, readonly OwnedCall[]>, lineOf: (line: number) => string | undefined): { alignments: readonly Alignment[]; accounted: ReadonlySet<string> } {
+function alignRecords(records: readonly CallRecord[], syntax: DeclaredMemberNames, owned: ReadonlyMap<GraphNodeId, readonly OwnedCall[]>, declarations: readonly GraphSymbol[], lineOf: (line: number) => string | undefined): { alignments: readonly Alignment[]; accounted: ReadonlySet<string> } {
   const accounted = new Set<string>();
+  const classes = new Map(declarations.filter((symbol) => isClassKind(symbol.kind)).map((symbol) => [symbol.id, symbol]));
+  const classOwning = new Map([...owned].flatMap(([id, calls]) => (classes.has(id) ? calls.filter((call) => !call.ambiguous).map((call) => [callKey(call), classes.get(id)!] as const) : [])));
   const { calls } = syntax;
   const alignments = records.map((record): Alignment => {
     if (calls === undefined || record.synthesized) return { kind: "kept" };
@@ -200,8 +206,9 @@ function alignRecords(records: readonly CallRecord[], syntax: DeclaredMemberName
     for (const call of agreeing) accounted.add(callKey(call));
     const [call] = agreeing;
     if (call !== undefined && agreeing.length === 1) {
-      const own = owned.get(record.node.id)?.find((candidate) => callKey(candidate) === callKey(call));
-      return { kind: "matched", call, deferred: own !== undefined ? own.deferred === true : !executesInBody(declarationSpan(record.node), syntax.functionValues, { line: call.line, column: call.column - 1 }) };
+      const body = (record.node.kind === "file" ? classOwning.get(callKey(call)) : undefined) ?? record.node;
+      const own = owned.get(body.id)?.find((candidate) => callKey(candidate) === callKey(call));
+      return { kind: "matched", call, body, deferred: own !== undefined ? own.deferred === true : !executesInBody(declarationSpan(body), syntax.functionValues, { line: call.line, column: call.column - 1 }) };
     }
     const receiver = at.some((written) => receiverRootOf(written.name) === record.name);
     return agreeing.length > 1 || receiver || record.column === null ? { kind: "kept" } : { kind: "contradicted" };

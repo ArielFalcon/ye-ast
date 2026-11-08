@@ -183,7 +183,7 @@ refuse a binding or add facts the base does not model, so one call never has two
    | `recovered` | A written call no record matches | Added, bound by decision 4 |
    | `synthesized` | A record whose synthesizer is set, or without a column | Kept as the index has it, never cut for want of a written call |
    | `unread` | A record of a source no reader parsed | Kept as the index has it |
-   | `misowned` | A record whose written call another body owns | Stays in the index's body, which lexically contains it, at the written position; the call is accounted, so no body recovers it |
+   | `misowned` | A record whose written call another body owns | Stays in the index's body, which lexically contains it, at the written position; the call is accounted, so no body recovers it. Exception: a record of the file's top level whose call a class owns (a decorator and its arguments, inside the class's span) moves to that class, which its declaration runs |
    | `contradicted` | A record with line and column, not synthesized, in a read source, that no written call of its file at its place agrees with, outside both exceptions | Pruned, with one `unresolved-link` cut at its place naming its target |
    | `unowned` | A written call no single index body owns and no record matches | A cut at its place wherever a family reaches its name |
 
@@ -383,8 +383,9 @@ first in the unit named:
    `static final Logger LOG = LoggerFactory.getLogger(App.class);`: the records of the file and of the constant match,
    nothing is contradicted or recovered; a top-level call inside a function value the top level does not run is
    `deferred`.
-6f. **Misowned decorator (U2).** `@Injectable(...)` recorded from the file and owned by the class in the syntax: the record
-   stays in the file at the written position and the class recovers nothing.
+6f. **Misowned record and decorator (U2).** `alpha()` inside `new Base() {{ ... }}`, recorded from the enclosing method:
+   the record stays in the method and the anonymous class recovers nothing. `@Injectable({ useFactory: make() })` recorded
+   from the file and owned by the class in the syntax: both records move to the class, the file keeps neither.
 7. **Constructor chaining (U4, Java).** `class B extends A { B() { super(1); } B(String s) { this(); } }` with `A(int)`
    and `A(int, int)`: `callers` of `A(int)` lists `B()`, `callers` of `B()` lists `B(String)`, trace from `B(String)`
    steps to `B()` and then `A(int)`. With `A(String)` added, the signatures at the call's arity differ and the reading
@@ -441,10 +442,12 @@ Open questions, each with the recommended answer:
    complete inputs (declarations with kind, name and span; call-bearing records with kind, place, name, synthesizer and
    retyping), for example a fitness test that indexes one file within two snapshots of different neighbours and compares
    them. Until then the digest stays in the key; decided before U4 relies on retention across snapshots.
-3. **Move or cut a `misowned` record?** Answered by M4 (2026-11-08): neither. Every `misowned` record lies inside the
-   index's body, and the index was right in the measured cases (anonymous-class constructions, field initializers beside
-   generated accessors) or defensible (decorators, which the file's top level runs); the record stays in the index's
-   body and its written call is accounted.
+3. **Move or cut a `misowned` record?** Answered by M4 (2026-11-08): never cut, and moved only from the file's top level
+   to a class. Every `misowned` record lies inside the index's body, and the index was right in the measured cases
+   inside a declaration (anonymous-class constructions, field initializers beside generated accessors), so such a record
+   stays in the index's body with its written call accounted. About 800 records are decorators the index gives the file:
+   kept there, a trace of the class, or of the decorator's own lines, answered `complete` without them, a silent loss, so
+   a record of the file whose call a class owns moves to that class.
 4. **Deferred calls in reverse families.** Recommended: a dependence, as index edges inside function values count today;
    only trace reads `deferred` (R8).
 5. **An `unowned` written call.** Recommended: a cut where a family reaches its name, never attributed to the file's

@@ -179,16 +179,31 @@ test("a record two written calls at its place agree with is undecidable: kept as
 });
 
 test("a record whose written call another body owns stays in the index's body, which then recovers nothing of it", async () => {
-  // @Injectable({ providedIn: "root" })           (1)  the index records the decorator call from the file
+  // run() {                                       (2)
+  //   return new Base() {                         (3)
+  //     { alpha(); }                              (4)  the index records it from run, the syntax owns it by the class
+  //   };                                          (5)
+  // }                                             (6)
+  const outer = scope("run", 2, 0, 6, 1);
+  const inner = scope("", 3, 22, 5, 3);
+  const nodes = [{ ...fakeNode("run", "method", FILE, 2, 6), startColumn: 0, endColumn: 1 }, { ...fakeNode("inner", "class", FILE, 3, 5), startColumn: 9, endColumn: 3 }, ...LIB];
+  const calls = [ownedBy([outer, inner], written(4, 5, "alpha", "alpha"))];
+  const edges: FakeEdge[] = [{ from: "run", to: "alpha", kind: "calls", line: 4, column: 4 }];
+  assert.deepEqual(placed(await callsOf("run", nodes, edges, calls)).edges, ["alpha@4:4"]);
+  assert.deepEqual(placed(await callsOf("inner", nodes, edges, calls)).writtenOnly, []);
+});
+
+test("a decorator and its argument calls the index records from the file move to the class the syntax says runs them", async () => {
+  // @Injectable({ useFactory: make() })          (1)
   // export class Service {                        (2)
   //   run() {}                                    (3)
   // }                                             (4)
-  const service = scope("Service", 1, 0, 4, 1);
-  const nodes = [fakeNode("file", "file", FILE, 1, 5), { ...fakeNode("Service", "class", FILE, 1, 4), startColumn: 0, endColumn: 1 }];
-  const calls = [ownedBy([service], written(1, 2, "Injectable", "Injectable"))];
-  const unresolved: FakeUnresolved[] = [{ from: "file", name: "Injectable", kind: "calls", file: FILE, line: 1, column: 1 }];
-  assert.deepEqual(placed(await callsOf("file", nodes, [], calls, unresolved)).references, ["Injectable@1:1"]);
-  assert.deepEqual(placed(await callsOf("Service", nodes, [], calls, unresolved)).writtenOnly, []);
+  const service = { ...scope("Service", 1, 0, 4, 1), nameLine: 2, nameColumn: 13 };
+  const nodes = [fakeNode("file", "file", FILE, 1, 5), { ...fakeNode("Service", "class", FILE, 2, 4), startColumn: 0, endColumn: 1 }];
+  const calls = [ownedBy([service], written(1, 2, "Injectable", "Injectable")), ownedBy([service], written(1, 27, "make", "make"))];
+  const unresolved: FakeUnresolved[] = [{ from: "file", name: "Injectable", kind: "calls", file: FILE, line: 1, column: 1 }, { from: "file", name: "make", kind: "calls", file: FILE, line: 1, column: 26 }];
+  const [file, owner] = await Promise.all(["file", "Service"].map(async (body) => placed(await callsOf(body, nodes, [], calls, unresolved))));
+  assert.deepEqual([file!.references, owner!.references, owner!.writtenOnly], [[], ["Injectable@1:1", "make@1:26"], []]);
 });
 
 test("past a line's first character outside ASCII a record is compared on its line, so a column counted in bytes still matches", async () => {

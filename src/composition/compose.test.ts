@@ -1957,7 +1957,7 @@ test("missing syntax calls use the same import, ambient, receiver and repository
   const { trace } = composeQueries({ scratchRoot });
   const settled = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/settlement.ts", symbol: "Settled" }] });
   assert.ok(settled.ok && settled.value.status === "complete", JSON.stringify(settled));
-  assert.deepEqual(settled.value.value.steps.flatMap((step) => step.external ?? []).filter((leaf) => leaf.kind === "import" && leaf.module === "@angular/core").flatMap((leaf) => leaf.names).sort(), ["computed"]);
+  assert.deepEqual(settled.value.value.steps.flatMap((step) => step.external ?? []).filter((leaf) => leaf.kind === "import" && leaf.module === "@angular/core").flatMap((leaf) => leaf.names).sort(), ["Injectable", "computed"]);
   assert.ok(settled.value.value.steps.flatMap((step) => step.external ?? []).some((leaf) => leaf.kind === "global" && leaf.names.includes("[1].map")));
   const unknown = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/settlement.ts", symbol: "unknown" }] });
   assert.ok(unknown.ok && unknown.value.status === "partial");
