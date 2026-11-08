@@ -1,4 +1,5 @@
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
+import { calleeOf } from "../../domain/shared/call-place.ts";
 import { EDGE_POLICY, FOLLOWED_EDGE_KINDS, LOCAL_OWNER_KINDS, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
@@ -62,6 +63,33 @@ export async function receiverCorrectionsOf(store: CodeGraphReader, targets: Edg
  * at a site the extractor certifies.
  */
 export async function originCallsOf(store: CodeGraphReader, bindings: CallBindings, origins: Pick<RelationOrigins, "fields" | "locals">, signal?: AbortSignal): Promise<readonly FollowedEdge[]> {
+  return boundThroughOrigins(bindings, callsThroughOrigins(store, origins), signal);
+}
+
+/** The calls through origins that `originCallsOf` binds, each bound the first time a declaration of the name it calls is reached. */
+export interface OriginCalls {
+  into(nodes: readonly GraphSymbol[], signal?: AbortSignal): Promise<readonly FollowedEdge[]>;
+}
+
+export function createOriginCalls(store: CodeGraphReader, bindings: CallBindings, origins: Pick<RelationOrigins, "fields" | "locals">): OriginCalls {
+  let pending: readonly UnboundCall[] | undefined;
+  return {
+    async into(nodes, signal) {
+      const names = new Set(nodes.map(({ name }) => name));
+      const calls = (pending ??= callsThroughOrigins(store, origins));
+      const named = (call: UnboundCall): boolean => {
+        const callee = calleeOf(call.reference.name);
+        return callee.form === "computed" || names.has(callee.name);
+      };
+      const asked = calls.filter(named);
+      if (asked.length === 0) return [];
+      pending = calls.filter((call) => !named(call));
+      return boundThroughOrigins(bindings, asked, signal);
+    },
+  };
+}
+
+function callsThroughOrigins(store: CodeGraphReader, origins: Pick<RelationOrigins, "fields" | "locals">): readonly UnboundCall[] {
   const isTest = (path: string): boolean => kindOfChangedFile(path) === "test";
   const navigation = createGraphNavigation(store, isTest);
   const calls = new Map<string, UnboundCall>();
@@ -84,7 +112,10 @@ export async function originCallsOf(store: CodeGraphReader, bindings: CallBindin
   };
   for (const origin of origins.fields) collect(navigation.declarationAt(origin.owner), `this.${origin.field}.`);
   for (const origin of origins.locals) collect(navigation.declarationAt(origin.owner, LOCAL_OWNER_KINDS), `${origin.local}.`, (use) => origin.calls?.some((site) => site.file === use.file && site.line === use.line && site.column === use.column + 1 && site.name === use.name && site.kind === use.kind) === true);
-  const asked = [...calls.values()];
+  return [...calls.values()];
+}
+
+async function boundThroughOrigins(bindings: CallBindings, asked: readonly UnboundCall[], signal?: AbortSignal): Promise<readonly FollowedEdge[]> {
   const bound = await bindings.boundCalls(asked, signal);
   return asked.flatMap(({ body, reference }, index) => {
     const binding = bound[index]!;
