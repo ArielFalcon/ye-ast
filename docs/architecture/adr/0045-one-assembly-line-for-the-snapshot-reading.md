@@ -288,10 +288,13 @@ ADR-0041's units U0 to U4c stay as delivered; the line takes them over by moving
 | L3 | Trace reads typed bindings and the Java module readers, narrowed by decision 5 | `trace:±` with a declared build output; `trace:+` on Java import redirects |
 | L4 | B3 and B4 split into per-file facts and a join | `none`; M2 and M4 |
 | L5 | Prebuilding (decision 6) in the stdio MCP server and incremental re-prebuild on live sync | `none` in answers; M1 first-call and M3 |
-| L6 | ADR-0041 U6 (`contradicted` pruning in the reverse families) lands as a stage policy of the line | As ADR-0041 states |
+| L6 | ADR-0041 U6 (`contradicted` pruning in the reverse families, merged into U5 by the owner) lands as a stage policy of the line | As ADR-0041 states |
 
-The remaining ADR-0041 work tracked outside the repository as T5b and T8 maps onto L2 and L6 when it is the U5 and U6
-scope; its exact content is not recorded in the repository (hypothesis to confirm with the lead).
+The remaining ADR-0041 work maps onto the line as follows. U5 and the typed bindings for every family are L2 and L3.
+The one-owner audit follow-ups map onto L1 and L2: trace effects and seeds re-deriving call lines and body ownership
+from raw index spans (`trace-effects.ts`, `seeds.ts`, `link-graph.ts`) read B-stage ownership instead; the candidate
+rule divergence between `impact-cuts.ts` and `trace-walk.ts` becomes one stage rule; and the split-on-dot callee names
+move to the base's `nameTail`. U6 is L6.
 
 ## Alternatives
 
