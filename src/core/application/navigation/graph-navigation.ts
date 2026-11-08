@@ -38,6 +38,12 @@ export function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
   return inner.file === outer.file && outer.startLine <= inner.startLine && inner.endLine <= outer.endLine;
 }
 
+/** The members named `member` of the declarations that own `node`, of `kinds`, once each. */
+export function ownMembersOf(navigation: GraphNavigation, node: GraphSymbol, member: string, kinds: readonly string[]): GraphSymbol[] {
+  const members = navigation.ownersOf(node).flatMap((owner) => navigation.membersOf(owner)).filter((symbol) => symbol.name === member && kinds.includes(symbol.kind));
+  return [...new Map(members.map((symbol) => [symbol.id, symbol])).values()];
+}
+
 export function createGraphNavigation(reader: CodeGraphReader, isTestFile: (path: string) => boolean): GraphNavigation {
   const known = new Map<GraphNodeId, GraphSymbol | undefined>();
   const load = (ids: readonly GraphNodeId[]): void => {

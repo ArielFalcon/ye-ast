@@ -24,11 +24,12 @@ function ownedBy(owners: readonly Scope[], call: SyntaxCall): SyntaxCall {
   return { ...call, owners };
 }
 
-async function callsOf(body: string, nodes: readonly FakeNode[], edges: readonly FakeEdge[], calls: readonly SyntaxCall[], unresolved: readonly FakeUnresolved[] = [], functionValues: DeclaredMemberNames["functionValues"] = [], text: Readonly<Record<number, string>> = {}): Promise<BodyCalls> {
+async function callsOf(body: string, nodes: readonly FakeNode[], edges: readonly FakeEdge[], calls: readonly SyntaxCall[], unresolved: readonly FakeUnresolved[] = [], functionValues: DeclaredMemberNames["functionValues"] = [], text: Readonly<Record<number, string>> = {}, imports: Readonly<Record<string, string>> = {}): Promise<BodyCalls> {
   const store = fakeCodeGraph(nodes, edges, unresolved);
   const uses = createDeclarationUses(store, createGraphNavigation(store, () => false));
   const syntax: DeclaredMemberNames = { ...NOTHING_DECLARED, calls, functionValues };
-  const reconciled = createReconciledCalls({ store, uses, syntaxOf: async (file) => (file === FILE ? syntax : NOTHING_DECLARED), lineOf: (file, line) => (file === FILE ? text[line] : undefined) });
+  const imported = new Map(Object.entries(imports).map(([local, id]) => [local, store.symbolsByIds([id as GraphNodeId])[0]!]));
+  const reconciled = createReconciledCalls({ store, uses, syntaxOf: async (file) => (file === FILE ? syntax : NOTHING_DECLARED), lineOf: (file, line) => (file === FILE ? text[line] : undefined), importedDeclarations: async (file) => (file === FILE ? imported : new Map()) });
   const [node] = store.symbolsByIds([body as GraphNodeId]);
   return reconciled.callsOf(node!);
 }
@@ -138,6 +139,15 @@ test("a record whose name no written call at its place agrees with is contradict
   // }
   const found = placed(await callsOf("run", [RUN, ...LIB], [{ from: "run", to: "beta", kind: "calls", line: 3, column: 2 }], [written(3, 3, "alpha", "alpha")]));
   assert.deepEqual(found, { edges: [], references: [], contradicted: ["beta@3:2->beta"], writtenOnly: ["alpha"], ambiguous: [] });
+});
+
+test("a record of the declaration an import binds under another local name agrees with the call spelled by that name", async () => {
+  // import { beta as alpha } from "./lib";
+  // run() {                                       (2)
+  //   alpha();                                    (3)  the index records beta here
+  // }
+  const found = placed(await callsOf("run", [RUN, ...LIB], [{ from: "run", to: "beta", kind: "calls", line: 3, column: 2 }], [written(3, 3, "alpha", "alpha")], [], [], {}, { alpha: "beta" }));
+  assert.deepEqual(found, { edges: ["beta@3:2"], references: [], contradicted: [], writtenOnly: [], ambiguous: [] });
 });
 
 test("a record placed where the file writes no call is contradicted once", async () => {

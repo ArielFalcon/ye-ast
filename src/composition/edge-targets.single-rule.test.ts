@@ -18,6 +18,7 @@ const RULES: readonly { concept: string; pattern: RegExp; owner: string; pending
   { concept: "the declarations that can own an inject() local", pattern: /\[\.\.\.EDGE_POLICY\.relations\.from, "function"\]/, owner: "core/domain/impact/edge-policy.ts", pending: [] },
   { concept: "the field or inject() local origin that holds a receiver at a use", pattern: /\b(?:fields|locals)\.(?:filter|find)\(\(\w+\) => \w+\.(?:field|local) === /, owner: "core/application/navigation/graph-navigation.ts", pending: [] },
   { concept: "the declarations that hold a value", pattern: /= \["constant", "variable"\]/, owner: "core/domain/impact/edge-policy.ts", pending: [] },
+  { concept: "the repository declarations a call's name can bind", pattern: /declarationsNamed\(\[\w+\]\)\.filter\(\(symbol\) => inScope\(/, owner: "core/application/navigation/call-binding.ts", pending: [] },
   { concept: "the declarations that are classes", pattern: /= \["class", "component"\]/, owner: "core/domain/impact/edge-policy.ts", pending: [] },
 ];
 

@@ -8,7 +8,7 @@ import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-ori
 import { containmentTree } from "./containment-tree.ts";
 import { branchesOf, declarationPath, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
 import type { EdgeTargets, FollowedEdge } from "./edge-targets.ts";
-import type { GraphNavigation } from "./graph-navigation.ts";
+import { ownMembersOf, type GraphNavigation } from "./graph-navigation.ts";
 
 /**
  * What one declaration's own body names, as the index records it: the edges it resolved and the references it left
@@ -73,10 +73,7 @@ export function createDeclarationUses(store: CodeGraphReader, navigation: GraphN
       const found = (byNode.get(node.id) ?? []).filter((reference) => kinds.includes(reference.kind));
       return [...new Map(found.map((reference) => [referenceKey(reference) ?? reference, reference])).values()];
     },
-    ownMembers(node, member, kinds) {
-      const members = navigation.ownersOf(node).flatMap((owner) => navigation.membersOf(owner)).filter((symbol) => symbol.name === member && kinds.includes(symbol.kind));
-      return [...new Map(members.map((symbol) => [symbol.id, symbol])).values()];
-    },
+    ownMembers: (node, member, kinds) => ownMembersOf(navigation, node, member, kinds),
   };
 }
 

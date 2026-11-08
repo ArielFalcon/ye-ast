@@ -2,7 +2,7 @@ import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { WorkspaceReadOperation } from "../topology/workspace-operation.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
-import { callsByOwner } from "../navigation/reconciled-calls.ts";
+import { callsByOwner, linesOncePerFile } from "../navigation/reconciled-calls.ts";
 import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
@@ -156,7 +156,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const origins = deps.importOrigins(head.tree.sources, head.tree.export.files.map(({ path }) => path).filter(head.selected), head.prepared?.facts);
           let proven: ReturnType<typeof retainedRelations> | undefined;
           const memberProofs = () => (proven ??= retainedRelations(deps.relations, head.prepared, head.tree, request));
-          const edgeTargets = createEdgeTargets({ origins, store, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: head.tree.sources }, syntaxOf, proofs: memberProofs });
+          const edgeTargets = createEdgeTargets({ origins, store, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: head.tree.sources }, syntaxOf, proofs: memberProofs, inScope: head.selected });
           const pageRoots = new Set(selections.flatMap(({ target, selection }) => (isEntrypointTarget(target) ? selection.seeds.map(({ symbol }) => symbol.id) : [])));
           const pages = pageRoots.size === 0 ? {} : { pages: { roots: pageRoots, of: pagePlans(store, memberProofs) } };
           const lineOf = linesOncePerFile(sources);
@@ -284,17 +284,4 @@ async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file:
 async function rangeRoots(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], trivia: SourceTrivia, isRoot: (symbol: GraphSymbol) => boolean): Promise<RootSelection> {
   const ranges = await requestedRanges(store, changes, sources, trivia);
   return selectRoots(store, ranges.changes, [], NO_COMPONENTS, ranges.uncovered, isRoot);
-}
-
-/** A line of a source, splitting each source once for the life of one query. */
-function linesOncePerFile(sources: ReadonlyMap<string, SourceFile>): (file: string, line: number) => string | undefined {
-  const split = new Map<string, readonly string[]>();
-  return (file, line) => {
-    let lines = split.get(file);
-    if (lines === undefined) {
-      lines = sources.get(file)?.content.split("\n") ?? [];
-      split.set(file, lines);
-    }
-    return lines[line - 1];
-  };
 }

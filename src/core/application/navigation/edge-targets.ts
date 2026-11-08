@@ -14,6 +14,7 @@ import type { TypeTarget } from "../../ports/type-bindings.port.ts";
 import { createGraphNavigation, isInside } from "./graph-navigation.ts";
 import { declarationAt, importBindings } from "./import-bindings.ts";
 import { provenKey, typedDeclaration } from "./proven-calls.ts";
+import { createCallBindings, type CallBindings } from "./call-binding.ts";
 import { bindingKey, createCallBinder, receiverBindingsByPlace, type CallBinder, type ReceiverProofs, type ReceiverSyntax } from "./call-binder.ts";
 
 export { SYNTAX_ONLY, type ReceiverProofs } from "./call-binder.ts";
@@ -40,6 +41,8 @@ export interface EdgeTargets {
   importedDeclarations(file: string): Promise<ReadonlyMap<string, GraphSymbol>>;
   /** The binder of member calls' receivers this read's proofs settle; absent without syntax or proofs. */
   binder: CallBinder | undefined;
+  /** What the calls the index left without a target bind to, through `binder`; absent without it. */
+  bindings: CallBindings | undefined;
 }
 
 export interface EdgeTargetsDeps {
@@ -62,6 +65,8 @@ export interface EdgeTargetsDeps {
    * proof (ADR-0037 decision 10); without it every edge is settled as ADR-0036 settles it.
    */
   typed?: ReadonlyMap<string, TypeTarget> | undefined;
+  /** Whether a declaration's file is in the read's scope, for the candidates of an unbound call; every file by default. */
+  inScope?: ((path: string) => boolean) | undefined;
 }
 
 /** The syntax of a source no reader parses: it states nothing. */
@@ -108,7 +113,7 @@ const IMPORT = "imports";
 /** The types whose members a value receiver may stand for. */
 const TYPE_KINDS: readonly string[] = EDGE_POLICY.ownerKinds;
 
-export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, typed }: EdgeTargetsDeps): EdgeTargets {
+export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, typed, inScope }: EdgeTargetsDeps): EdgeTargets {
   const verdicts = new Map<string, EdgeTarget>();
   const navigation = createGraphNavigation(store, () => false);
   const syntaxIndexes = new Map<string, Promise<ReceiverSyntax>>();
@@ -124,6 +129,7 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
     return held;
   };
   const binder = syntaxOf === undefined || proofs === undefined ? undefined : createCallBinder({ store, navigation, syntaxIn: (file) => syntaxIn(syntaxOf, file), proofs, importedDeclarations: (file) => bindingsOf(file) });
+  const bindings = binder === undefined ? undefined : createCallBindings({ store, navigation, origins, binder, importedDeclarations: (file) => bindingsOf(file), ...(inScope === undefined ? {} : { inScope }) });
   /** Per file, the declaration each local name its imports bind reaches, when the join proves exactly one. */
   const bound = new Map<string, ReadonlyMap<string, GraphSymbol>>();
   let extracted: ReadonlyMap<string, readonly ModuleDependency[]> | undefined;
@@ -234,6 +240,7 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
     verdictsOf,
     importedDeclarations: bindingsOf,
     binder,
+    bindings,
     async redirectedInto(nodes, signal) {
       const candidatesOf: { node: GraphSymbol; found: readonly FollowedEdge[] }[] = [];
       for (const node of nodes) candidatesOf.push({ node, found: await candidatesInto(node) });

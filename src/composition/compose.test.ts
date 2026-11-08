@@ -1912,8 +1912,9 @@ class Inventory${index} { void run(Port p) { ${shape}; } }`);
     assert.equal(answer.value.status, "partial", javaShapes[index]);
   }
   const constructor = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/InventoryConstructor.java", symbol: "InventoryConstructor" }] });
-  assert.ok(constructor.ok && constructor.value.status === "partial");
-  assert.ok(constructor.value.cuts.some((cut) => cut.at[0] === "src/InventoryConstructor.java:3 this"));
+  assert.ok(constructor.ok && constructor.value.status === "complete", JSON.stringify(constructor));
+  const chained = constructor.value.value.steps.find((step) => step.kind === "method" && step.line === 2 && step.seen === undefined);
+  assert.deepEqual(chained?.leaves?.map(({ start }) => start), [5]);
 });
 
 test("a page orders render calls before event handlers and cuts every unbound template call", async () => {

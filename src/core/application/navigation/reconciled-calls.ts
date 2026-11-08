@@ -5,6 +5,7 @@ import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresol
 import type { DeclaredMemberNames, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import type { DeclarationUses } from "./declaration-uses.ts";
 import type { FollowedEdge } from "./edge-targets.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 
 type SyntaxScope = SyntaxCall["owners"][number];
 type PositionedBody = GraphSymbol & SourceSpan & { scope?: SyntaxScope };
@@ -68,6 +69,8 @@ interface CallRecord {
   column: number | null;
   name: string;
   synthesized: boolean;
+  /** The local names the file's imports bind to the edge's target, which a call may spell instead of its name. */
+  aliases: readonly string[];
 }
 
 /** What alignment decided for a record: at a written call, in `body`, as the index has it, or contradicted by its source. */
@@ -89,12 +92,13 @@ function callsAtPlace(calls: readonly SyntaxCall[], { line, column }: CallRecord
  * The written calls at a record's place that agree with its name: those spelled as the record, before or after
  * normalization, or else those whose callee is the record's last name. More than one is undecidable.
  */
-function agreeingCalls(at: readonly SyntaxCall[], name: string): readonly SyntaxCall[] {
+function agreeingCalls(at: readonly SyntaxCall[], { name, aliases }: CallRecord): readonly SyntaxCall[] {
   const normalized = normalizedSpelling(name);
   const spelled = at.filter((call) => call.name === name || normalizedSpelling(call.name) === normalized);
   if (spelled.length > 0) return spelled;
   const callee = calleeOf(name);
-  return callee.form === "computed" ? [] : at.filter((call) => call.callee === callee.name);
+  const named = callee.form === "computed" ? [] : at.filter((call) => call.callee === callee.name);
+  return named.length > 0 ? named : at.filter((call) => call.callee !== undefined && aliases.includes(call.callee));
 }
 
 /**
@@ -114,6 +118,8 @@ export interface BodyCalls {
   writtenOnly: readonly GraphUnresolvedReference[];
   /** Calls written where no single index body owns them and no record matches, in written order. */
   ambiguous: readonly GraphUnresolvedReference[];
+  /** Calls the body writes inside a function value it does not run that no record matches, in written order. */
+  deferredOnly: readonly GraphUnresolvedReference[];
 }
 
 /** The one owner of what a body calls: the index's call-bearing records aligned with the written calls, per snapshot read. */
@@ -129,6 +135,8 @@ export interface ReconciledCallsInput {
   syntaxOf: (file: string) => Promise<DeclaredMemberNames>;
   /** A line of a source, to tell where two parsers stop counting columns alike. */
   lineOf: (file: string, line: number) => string | undefined;
+  /** Per local name a file's imports bind, the declaration the join proves it reaches; none without it. */
+  importedDeclarations?: ((file: string) => Promise<ReadonlyMap<string, GraphSymbol>>) | undefined;
 }
 
 /** The call edges of `symbol` no policy ignores. */
@@ -136,9 +144,9 @@ export function callEdgesOf(store: CodeGraphReader, symbol: GraphSymbol): GraphE
   return store.outgoingEdges([symbol.id], CALL_EDGE_KINDS).filter((edge) => !isIgnoredEdge(edge));
 }
 
-const NO_CALLS: BodyCalls = { edges: [], references: [], contradicted: [], writtenOnly: [], ambiguous: [] };
+const NO_CALLS: BodyCalls = { edges: [], references: [], contradicted: [], writtenOnly: [], ambiguous: [], deferredOnly: [] };
 
-export function createReconciledCalls({ store, uses, syntaxOf, lineOf }: ReconciledCallsInput): ReconciledCalls {
+export function createReconciledCalls({ store, uses, syntaxOf, lineOf, importedDeclarations }: ReconciledCallsInput): ReconciledCalls {
   const ownedIn = oncePerFile(async (file) => {
     const syntax = await syntaxOf(file);
     return callsByOwner(syntax.calls ?? [], store.symbolsInFiles([file]), syntax.functionValues);
@@ -147,9 +155,11 @@ export function createReconciledCalls({ store, uses, syntaxOf, lineOf }: Reconci
     const syntax = await syntaxOf(file);
     const owned = await ownedIn(file);
     const bodies = store.symbolsInFiles([file]).map((node) => ({ node, edges: uses.followed(node, callEdgesOf(store, node)), references: uses.referencesFrom(node, CALL_EDGE_KINDS) }));
+    const imported = importedDeclarations === undefined ? new Map<string, GraphSymbol>() : await importedDeclarations(file);
+    const aliasesOf = (target: GraphSymbol): string[] => [...imported].flatMap(([local, declaration]) => (declaration.id === target.id && local !== target.name ? [local] : []));
     const records = bodies.flatMap(({ node, edges, references }): CallRecord[] => [
-      ...edges.map(({ edge, target }) => ({ node, line: edge.line, column: edge.column, name: target.name, synthesized: edge.synthesizedBy !== null })),
-      ...references.map(({ line, column, name }) => ({ node, line, column, name, synthesized: false })),
+      ...edges.map(({ edge, target }) => ({ node, line: edge.line, column: edge.column, name: target.name, synthesized: edge.synthesizedBy !== null, aliases: aliasesOf(target) })),
+      ...references.map(({ line, column, name }) => ({ node, line, column, name, synthesized: false, aliases: [] })),
     ]);
     const { alignments, accounted } = alignRecords(records, syntax, owned, store.symbolsInFiles([file]), (line) => lineOf(file, line));
     const placed = new Map(bodies.map(({ node }) => [node.id, { edges: [] as FollowedEdge[], references: [] as GraphUnresolvedReference[], contradicted: [] as BodyCalls["contradicted"][number][] }]));
@@ -172,12 +182,13 @@ export function createReconciledCalls({ store, uses, syntaxOf, lineOf }: Reconci
     return new Map(bodies.map(({ node }) => {
       const writtenOnly: GraphUnresolvedReference[] = [];
       const ambiguous: GraphUnresolvedReference[] = [];
+      const deferredOnly: GraphUnresolvedReference[] = [];
       for (const call of owned.get(node.id) ?? []) {
-        if (accounted.has(callKey(call)) || call.deferred) continue;
+        if (accounted.has(callKey(call))) continue;
         const reference = { from: node.id, file: node.file, line: call.line, column: call.column - 1, name: call.name, kind: call.kind, candidates: [] };
-        (call.ambiguous ? ambiguous : writtenOnly).push(reference);
+        (call.deferred ? deferredOnly : call.ambiguous ? ambiguous : writtenOnly).push(reference);
       }
-      return [node.id, { ...placed.get(node.id)!, writtenOnly, ambiguous }];
+      return [node.id, { ...placed.get(node.id)!, writtenOnly, ambiguous, deferredOnly }];
     }));
   });
   return {
@@ -202,7 +213,7 @@ function alignRecords(records: readonly CallRecord[], syntax: DeclaredMemberName
   const alignments = records.map((record): Alignment => {
     if (calls === undefined || record.synthesized) return { kind: "kept" };
     const at = callsAtPlace(calls, record, record.line === null ? undefined : lineOf(record.line));
-    const agreeing = agreeingCalls(at, record.name);
+    const agreeing = agreeingCalls(at, record);
     for (const call of agreeing) accounted.add(callKey(call));
     const [call] = agreeing;
     if (call !== undefined && agreeing.length === 1) {
@@ -225,5 +236,18 @@ function oncePerFile<V>(derive: (file: string) => Promise<V>): (file: string) =>
       known.set(file, found);
     }
     return found;
+  };
+}
+
+/** A line of a source, splitting each source once for the life of one query. */
+export function linesOncePerFile(sources: ReadonlyMap<string, SourceFile>): (file: string, line: number) => string | undefined {
+  const split = new Map<string, readonly string[]>();
+  return (file, line) => {
+    let lines = split.get(file);
+    if (lines === undefined) {
+      lines = sources.get(file)?.content.split("\n") ?? [];
+      split.set(file, lines);
+    }
+    return lines[line - 1];
   };
 }
