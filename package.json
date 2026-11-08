@@ -46,7 +46,7 @@
     "cli": "node --import tsx src/composition/main.ts",
     "typecheck": "tsc --noEmit",
     "arch:check": "depcruise src --config .dependency-cruiser.cjs",
-    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test": "node --import tsx --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
     "check": "npm run typecheck && npm run arch:check && npm test"
   },
   "devDependencies": {
