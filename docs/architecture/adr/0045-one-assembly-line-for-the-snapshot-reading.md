@@ -283,10 +283,13 @@ retention silently becomes a per-call cost.
      never frees the job's resources nor aborts it;
    - **shutdown** aborts every job; an aborted job keeps nothing (ADR-0035 decision 4);
    - **identity of a live capture**: a job is keyed by the content of the capture it read (its export fingerprint),
-     never by "the mirror now"; it holds its capture until it ends, so the mirror may advance under it. A job whose
-     capture a newer sync superseded is aborted when no waiter remains, and otherwise finishes on its capture; its
-     per-file results stay valid for the next capture wherever content is unchanged. Whether holding a capture lease
-     delays the next sync is measured (M3); if it does, the job copies the plain inputs it needs and releases the lease;
+     never by "the mirror now". A live tree is valid only while `openLive` holds its exclusive lock
+     (`live-tree.ts:103-119`), so a job never re-opens a capture nor keeps the reader's lock: the job born inside a
+     live read copies the plain inputs it needs (paths, contents, its export fingerprint) under that read's capture
+     before it detaches, and runs on the copy. A reader that waits on the job therefore never holds a lock the job
+     needs, and a later sync cannot change the job's bytes. A job whose capture a newer sync superseded is aborted when
+     no waiter remains, and otherwise finishes on its copy; its per-file results stay valid for the next capture
+     wherever content is unchanged. The memory of the copies is measured (M3);
    - a snapshot nobody prebuilt (impact's base revision, another `--revision`, a workspace's other repositories) is read
      lazily by decision 3.
 7. **Incremental after a change.** Per-file stages are keyed by file content, so a change re-derives only the changed
@@ -463,7 +466,7 @@ query worse than max(+30%, +100 ms)).
 | L1c (optional) | File rules from the profiles: the remaining checks of the frozen list (`impact-queries.ts`, `module-impact.ts`, `entrypoint-map.ts`, `changed-file.ts`, `importers.ts`, `live-export.ts`) read the profile list of `domain/languages`; the list ends empty or with each survivor justified in the test | `none`, answers byte-identical |
 | L2 | One proof set (decision 4): `importers`, `outline` focus and contract consequences read the line, which is ADR-0041 U5; contracts stops re-extracting relations | Without a build output: `importers:±` (relations and field-origin namers, ADR-0036; Java module readers), `outline:+` (ADR-0041 U5, ADR-0041 Migration), `contract-consequences:±` (relations retained, reconciled calls). With one: the same plus the checker's moves. The gate runs both ways and the report separates the moves of relations and reconciliation (without outputs) from the checker's (the difference between the two runs) |
 | L3 | Bindings carry the receiver classification and proofs independently of the derivation (decision 5); trace reads typed bindings and the Java module readers and expands a target only on positive execution evidence; the structural-parameter and replaceable-provider fixtures first | Without a build output: `trace:+` on Java import redirects only. With one: `trace:±`, every move inspected; the two fixtures green; `callers`/`impact` `none` (the receiver field is added, not read by them) |
-| L5a | Shared derivations own their lifetime (decision 6): own read scope, hold, capture lease and signal; the typed pass stops capturing the first requester's signal; shutdown and superseded captures | `none`; a test aborts the first waiter and asserts the second gets the answer; a test superseding a capture with and without waiters |
+| L5a | Shared derivations own their lifetime (decision 6): own read scope, hold, capture lease and signal; the typed pass stops capturing the first requester's signal; shutdown and superseded captures | `none`; a test aborts the first waiter and asserts the second gets the answer; a test superseding a capture with and without waiters; a test where a job born inside a live read is waited on by that reader (no deadlock) and a later sync leaves its inputs unchanged |
 | L4 | B3 and B4 split into per-file facts and a join | `none`; M2 and M4 |
 | L5 | Prebuilding (decision 6) in the stdio MCP server and incremental re-prebuild on live sync | `none` in answers; M1 first-call and M3 |
 | L6 | ADR-0041 U6 (`contradicted` pruning in the reverse families, merged into U5 by the owner) lands as a stage policy of the line | As ADR-0041 states |
