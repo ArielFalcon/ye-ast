@@ -37,16 +37,21 @@ own numbers, and nothing failed when an unexplained difference went unnoticed.
 
 1. **The gate.** `scripts/corpus-gate.ts` runs the queries of a corpus manifest through the CLI of a base and a
    candidate engine revision. Each revision runs from its own clean worktree, over fresh clones of the corpus at pinned
-   commits, with its own cache, configuration and temporary directories. The runs are serial and take a lock, so only
-   one run is heavy at a time.
+   commits, with its own cache, configuration and temporary directories. The two revisions run one after the other in
+   the same fixed directory, so both engines see the same paths: the engine redacts a path segment shaped like an
+   encoded secret, and a random scratch segment was redacted on one side only. The runs take a lock, so only one run is
+   heavy at a time.
 2. **The manifest lives outside the repository.** It names the corpus repositories by path and pinned commit, groups
    them, declares the workspace a group installs, and lists the queries as CLI arguments with a family label. The gate
    has no default manifest. A repository is in the corpus only if the manifest lists it. No application name enters
    this repository.
 3. **Frozen inputs.** Queries are declared, never derived from an engine's answers, so a change to the engine cannot
-   change what is asked. They are chosen once with a rule from git alone: for impact, the most recent change to source
-   code before the pinned commit; for callers, importers and outline, the files and declarations of that change; for
-   trace, one entrypoint of each kind.
+   change what is asked. They are chosen once per repository with a rule from git alone:
+   - impact: the most recent first-parent commit at or before the pinned one that changes a source file outside tests;
+   - importers and outline: the first such file of that commit;
+   - callers and trace: that file's first changed line range;
+   - contract consequences: the most recent change to an OpenAPI document of a workspace repository;
+   - entrypoints for every repository, and the workspace and its decisions for every group that declares one.
 4. **Untrusted by default, never networked.**
    - Queries run on clones for which no trust was ever declared.
    - Only queries marked `trusted` run on the clones a group's `init --trust trusted --workspace` installed. They read a
@@ -57,7 +62,7 @@ own numbers, and nothing failed when an unexplained difference went unnoticed.
      path, and arrays as multisets, where a modified element is one removal and one addition and a reordering is a
      change. It also gets the length of every array it holds.
    - The result is a machine-readable report and a short readable one, kept outside the repository.
-   - The answers of an engine commit are reused for the same manifest and Node version.
+   - The answers of an engine commit are reused for the same manifest, Node version and gate runner.
 6. **Explained differences.** The change declares `--expect <family>:+|-|±`, or `--expect none` (the default).
    - The gate fails on a difference in an undeclared family, or in a direction the family did not declare. Under `+`
      the answer may only gain elements, under `-` only lose them, and a changed value or a reordering needs `±`.

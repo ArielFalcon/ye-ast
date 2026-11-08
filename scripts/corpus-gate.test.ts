@@ -9,7 +9,11 @@ import { EXIT, passMarkerPath, runGate } from "./corpus-gate.ts";
 
 const GIT_IDENTITY = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" };
 
-/** A stand-in engine CLI: lists the repository's files, says whether `init` declared it trusted, and echoes the git protocol policy. */
+/**
+ * A stand-in engine CLI: lists the repository's files, says whether `init` declared it trusted, echoes the git protocol
+ * policy, refuses a workspace without repositories as the engine does, and prints its repository path reversed, a form
+ * no normalization recognizes, as an engine that rewrites a path would.
+ */
 function engineSource(extra: string): string {
   return `import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -18,13 +22,15 @@ const [command, ...args] = process.argv.slice(2);
 const trustFile = join(process.env.XDG_CONFIG_HOME ?? "", "trusted");
 const repo = args.at(-1) ?? "";
 if (command === "init") {
+  const workspace = args.indexOf("--workspace");
+  if (workspace !== -1 && JSON.parse(readFileSync(args[workspace + 1], "utf8")).repos.length === 0) process.exit(1);
   mkdirSync(process.env.XDG_CONFIG_HOME ?? "", { recursive: true });
   appendFileSync(trustFile, repo + "\\n");
   console.log("declared " + repo);
 } else {
   const files = execFileSync("git", ["ls-files"], { cwd: repo, encoding: "utf8" }).split("\\n").filter(Boolean);
   const trusted = existsSync(trustFile) && readFileSync(trustFile, "utf8").split("\\n").includes(repo);
-  console.log(JSON.stringify({ status: "complete", repo, trusted, protocols: process.env.GIT_ALLOW_PROTOCOL, files: [...files, ${extra}] }));
+  console.log(JSON.stringify({ status: "complete", repo, reversed: [...repo].reverse().join(""), trusted, protocols: process.env.GIT_ALLOW_PROTOCOL, files: [...files, ${extra}] }));
 }
 `;
 }
@@ -95,7 +101,7 @@ describe("corpus gate", () => {
 
   const tree = (rev: string) => git(engine, "rev-parse", `${rev}^{tree}`);
 
-  it("passes engines that answer alike from different paths, records the pass, and leaves the corpus untouched", () => {
+  it("passes engines that answer alike, shows both the same paths, records the pass, and leaves the corpus untouched", () => {
     const corpusBefore = [git(corpus, "status", "--porcelain", "--ignored"), git(corpus, "for-each-ref"), git(corpus, "worktree", "list")];
     const { code, report, out } = gate("--base", commits.base, "--candidate", commits.same);
     assert.equal(code, EXIT.pass);
@@ -104,6 +110,7 @@ describe("corpus gate", () => {
     assert.ok(out.some((line) => line.startsWith("Corpus-Gate: pass ")));
     assert.deepEqual([git(corpus, "status", "--porcelain", "--ignored"), git(corpus, "for-each-ref"), git(corpus, "worktree", "list")], corpusBefore);
     const answers = JSON.parse(readFileSync(join(report.candidate.answers, "answers.json"), "utf8")) as Answer[];
+    assert.deepEqual(answers.filter((answer) => answer.exit !== 0).map((answer) => answer.id), []);
     const byId = new Map(answers.map((answer) => [answer.id, answer.stdout as { trusted: boolean; protocols: string; repo: string }]));
     assert.equal(byId.get("g/list")?.trusted, false);
     assert.equal(byId.get("g/list-trusted")?.trusted, true);

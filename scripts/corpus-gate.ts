@@ -9,7 +9,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -20,6 +20,7 @@ export const EXIT = { pass: 0, fail: 1, usage: 2, fault: 3 } as const;
 
 const USAGE = "usage: node --import tsx scripts/corpus-gate.ts --corpus <manifest> [--base <rev>] [--candidate <rev>] [--expect none | --expect <family>:<+|-|±>]... [--engine <repo>] [--out <dir>]";
 const REPO_PLACEHOLDER = /\{repo:([^}]+)\}/gu;
+const RUNNER_DIGEST = createHash("sha256").update(readFileSync(import.meta.filename)).digest("hex");
 
 export type GateFaultCode = "invalid-manifest" | "missing-revision" | "dependencies-differ" | "no-dependencies" | "no-cli-script" | "busy" | "git-failed";
 
@@ -38,7 +39,7 @@ const ManifestSchema = z.strictObject({
       z.strictObject({
         id: Id,
         repos: z.array(z.strictObject({ id: Id, path: z.string().min(1), sha: z.string().regex(/^[0-9a-f]{40}$/u) })).min(1),
-        /** The repositories `init --trust trusted --workspace` declares on clones of their own; `launch` is where it runs. */
+        /** What `init --trust trusted` installs on clones of their own: at `launch`, with `--workspace` naming the members when there are any. */
         workspace: z.strictObject({ launch: Id, members: z.array(Id), gateways: z.array(z.unknown()).optional() }).optional(),
         /** `trusted` queries run on the workspace's clones, every other one on clones no trust was ever declared for. */
         queries: z.array(z.strictObject({ id: Id, family: Id, trusted: z.boolean().optional(), argv: z.array(z.string()).min(1) })).min(1),
@@ -81,6 +82,14 @@ interface Context {
 /** Where a pass for the change from `baseTree` to `candidateTree` is recorded; the reference hook reads the same path. */
 export function passMarkerPath(gitCommonDirectory: string, baseTree: string, candidateTree: string): string {
   return join(gitCommonDirectory, "corpus-gate", "passed", `${baseTree}-${candidateTree}`);
+}
+
+/**
+ * The scratch root of a store's runs: a fixed path, so answers kept from an earlier run were produced under the same
+ * paths as a new run's, whatever the engine prints or redacts of them. The lock makes the path exclusive.
+ */
+export function scratchDirectory(store: string): string {
+  return join(tmpdir(), `ye-ast-corpus-gate-${sha256(store).slice(0, 16)}`);
 }
 
 export function runGate(args: readonly string[], io: Io): number {
@@ -129,7 +138,9 @@ function gate(options: ReturnType<typeof parseOptions>, io: Io): number {
 
   const release = acquireLock(store);
   try {
-    const scratch = mkdtempSync(join(tmpdir(), "ye-ast-corpus-gate-"));
+    const scratch = scratchDirectory(store);
+    rmSync(scratch, { recursive: true, force: true });
+    mkdirSync(scratch, { recursive: true });
     const context: Context = { engineRoot, store, scratch, manifest, manifestDirectory: dirname(options.corpus), manifestDigest: digest, io };
     try {
       const baseResult = runSide(context, base);
@@ -222,15 +233,18 @@ function acquireLock(store: string): () => void {
   return () => unlinkSync(path);
 }
 
-/** The answers of one engine revision: from the store when this revision already answered this manifest on this Node. */
+/**
+ * The answers of one engine revision: from the store when this revision already answered this manifest on this Node
+ * with this runner. Every side runs in the same directory, so both engines see the same paths.
+ */
 function runSide(context: Context, side: Revision): SideResult {
-  const key = sha256(JSON.stringify({ engine: side.commit, manifest: context.manifestDigest, node: process.version })).slice(0, 32);
+  const key = sha256(JSON.stringify({ engine: side.commit, manifest: context.manifestDigest, node: process.version, runner: RUNNER_DIGEST })).slice(0, 32);
   const directory = join(context.store, "answers", key);
   if (existsSync(join(directory, "answers.json"))) {
     context.io.err(`${side.label} ${side.commit.slice(0, 12)}: answers reused from ${directory}`);
     return { answers: JSON.parse(readFileSync(join(directory, "answers.json"), "utf8")) as Answer[], directory, cached: true, wallMs: null };
   }
-  const sideDirectory = join(context.scratch, side.label);
+  const sideDirectory = join(context.scratch, "side");
   const engine = join(sideDirectory, "engine");
   git(context.engineRoot, ["worktree", "add", "--quiet", "--detach", engine, side.commit]);
   try {
@@ -246,6 +260,7 @@ function runSide(context: Context, side: Revision): SideResult {
     return { answers, directory, cached: false, wallMs };
   } finally {
     git(context.engineRoot, ["worktree", "remove", "--force", engine]);
+    rmSync(sideDirectory, { recursive: true, force: true });
   }
 }
 
@@ -284,12 +299,17 @@ function runQueries(context: Context, side: Revision, sideDirectory: string, eng
     const untrusted = cloneGroup(context, group, join(sideDirectory, "untrusted", group.id), environment);
     const trusted = group.workspace === undefined ? null : cloneGroup(context, group, join(sideDirectory, "trusted", group.id), environment);
     if (group.workspace !== undefined && trusted !== null) {
-      const workspaceFile = join(sideDirectory, "work", `${group.id}.workspace.json`);
-      mkdirSync(dirname(workspaceFile), { recursive: true });
-      const members = group.workspace.members.map((id) => ({ path: `../${id}`, id }));
-      writeFileSync(workspaceFile, `${JSON.stringify({ repos: members, gateways: group.workspace.gateways ?? [] }, null, 2)}\n`);
-      const declared = ["init", "--trust", "trusted", "--workspace", "{workspace}", `{repo:${group.workspace.launch}}`];
-      execute(`${group.id}/init`, "init", declared, ["init", "--trust", "trusted", "--workspace", workspaceFile, trusted.get(group.workspace.launch) as string]);
+      const declared = ["init", "--trust", "trusted"];
+      const argv = [...declared];
+      if (group.workspace.members.length > 0) {
+        const workspaceFile = join(sideDirectory, "work", `${group.id}.workspace.json`);
+        mkdirSync(dirname(workspaceFile), { recursive: true });
+        const members = group.workspace.members.map((id) => ({ path: `../${id}`, id }));
+        writeFileSync(workspaceFile, `${JSON.stringify({ repos: members, gateways: group.workspace.gateways ?? [] }, null, 2)}\n`);
+        declared.push("--workspace", "{workspace}");
+        argv.push("--workspace", workspaceFile);
+      }
+      execute(`${group.id}/init`, "init", [...declared, `{repo:${group.workspace.launch}}`], [...argv, trusted.get(group.workspace.launch) as string]);
     }
     for (const query of group.queries) {
       const clones = query.trusted === true ? (trusted as Map<string, string>) : untrusted;
