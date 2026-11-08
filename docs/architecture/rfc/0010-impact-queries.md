@@ -85,7 +85,7 @@ rule above, not a fabricated head seed. Every former owner must be accounted for
 does not establish identity, and an orphan resource or an owner excluded by `changed` keeps the template's `no-extractor`
 cut. The base metadata is read only when the selected change deletes a non-source file.
 
-Removed-declaration cuts list unresolved **candidates**, not proven broken dependencies. They reuse the same exact
+Removed-declaration cuts list unresolved **candidates**, not proven broken dependencies, and only references of a runtime that may reach the removed declaration's file. They reuse the same exact
 external, ambient and reached-settlement proofs as the ordinary walk. A bare import proven to bind another repository
 file cannot be attributed to the removed homonym. An unknown binding remains a candidate; a proof for one rooted name or
 settled reference never suppresses another reference on the same line. Proofs identify the full graph occurrence
@@ -313,7 +313,7 @@ per cause:
 | Cause | Cut |
 |---|---|
 | a budget stopped the walk | `depth`, `hub` or `caller-budget` |
-| a non-test unresolved reference whose name tail and kind match a walked symbol, or a file that loads modules by a computed name | `unresolved-link`, at those references (a loader: its file, then the call); the count per symbol is kept. A load whose specifier a TypeScript reader read as a string literal names its module like a static import and raises no cut; a place the reader saw some load compute keeps it, and a language with no reader keeps it as before |
+| a non-test unresolved reference whose name tail and kind match a walked symbol of a file its own runtime may reach (a Java reference never names a TypeScript declaration nor the reverse; a file no language predicate classifies, a configuration file among them, stays reachable), or a file that loads modules by a computed name | `unresolved-link`, at those references (a loader: its file, then the call); the count per symbol is kept. A load whose specifier a TypeScript reader read as a string literal names its module like a static import and raises no cut; a place the reader saw some load compute keeps it, and a language with no reader keeps it as before |
 | an Angular injection or template use the relation reader named but could not place (`unknown`), in a file the walk reached or in a template a reached component names | `unresolved-link`, at that file, led by it and followed by each `file:line reason` |
 | a changed file with no symbol; a staged file the index did not hold or could not parse (`IndexSummary.filesNotIndexed`, limited to the paths the head export wrote) | `no-extractor` |
 | a changed `.html`/`.htm` that no component names through `templateUrl` | `no-extractor`, at that file |

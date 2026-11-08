@@ -10,12 +10,16 @@ function runtimeOf(path: string): Runtime | undefined {
 }
 
 /**
- * Whether a call written in `caller` may run a declaration of `declaration`: a configuration file declares nothing a
- * call runs, and a Java call never runs a TypeScript declaration nor the reverse. A file no predicate classifies may.
+ * Whether code in `from` may name, read or run a declaration of `to`: Java code never reaches a TypeScript declaration
+ * nor the reverse. A file no predicate classifies, a configuration file among them, may be reached from either.
  */
+export function sharesRuntime(from: string, to: string): boolean {
+  const caller = runtimeOf(from);
+  const declaration = runtimeOf(to);
+  return caller === undefined || declaration === undefined || caller === declaration;
+}
+
+/** Whether a call written in `caller` may run a declaration of `declaration`: a configuration file declares nothing a call runs. */
 export function mayRunDeclarationOf(caller: string, declaration: string): boolean {
-  if (isExtractorConfiguration(declaration)) return false;
-  const from = runtimeOf(caller);
-  const to = runtimeOf(declaration);
-  return from === undefined || to === undefined || from === to;
+  return !isExtractorConfiguration(declaration) && sharesRuntime(caller, declaration);
 }

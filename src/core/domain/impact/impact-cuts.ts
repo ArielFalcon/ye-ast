@@ -1,4 +1,5 @@
 import type { RemovedDeclaration } from "../change/seeds.ts";
+import { sharesRuntime } from "../languages/call-targets.ts";
 import { compareText } from "../shared/code-node.ts";
 import type { Cut, UnknownReason } from "../shared/fact.ts";
 
@@ -165,6 +166,7 @@ export function unresolvedLinkCuts(
       pointing = (byName.get(tail) ?? []).filter((declaration) => (REFERENCED_BY[reference.kind] ?? []).includes(declaration.kind));
       pointingCache.set(pointingKey, pointing);
     }
+    pointing = pointing.filter((declaration) => sharesRuntime(reference.file, declaration.file));
     const attributing = !isBareName(reference.name) && (reference.candidates?.length ?? 0) === 0 ? [] : pointing.filter((declaration) => namesDeclaration(reference, declaration, bound, proofKey));
     const actual = proofKey === undefined ? undefined : members?.targets.get(proofKey);
     const settledAt = (declaration: WalkedDeclaration): boolean => {
@@ -207,6 +209,7 @@ export function removedDeclarationCuts(
     const proofKey = key !== undefined && unique.has(key) ? key : undefined;
     const imported = isBareName(reference.name) && proofKey !== undefined ? bound.get(proofKey) : undefined;
     for (const declaration of byName.get(nameTail(reference.name)) ?? []) {
+      if (!sharesRuntime(reference.file, declaration.file)) continue;
       if (imported !== undefined && imported !== declaration.file) continue;
       if (proofKey !== undefined && localParameters.has(proofKey) && reference.kind === "calls" && isBareName(reference.name) && reference.file !== declaration.file) continue;
       const key = declarationAnchor(declaration.file, declaration.name);

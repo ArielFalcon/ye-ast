@@ -27,6 +27,21 @@ test("a bare call in another file is never attributed to a homonym it did not im
   assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Use.java", "src/Use.java:5 save"] }]);
 });
 
+test("an unresolved call never points at a walked homonym of the other runtime, only at one of its own", () => {
+  const typescript: WalkedDeclaration = { file: "src/app/repo.ts", name: "save", kind: "method", qualifiedName: "Repo::save" };
+  const calls = [use("repo.save", "calls", "src/Use.java", 5)];
+
+  assert.deepEqual(unresolvedLinkCuts(calls, [typescript], []), []);
+  assert.deepEqual(unresolvedLinkCuts(calls, [SAVE], []), [{ kind: "unresolved-link", at: ["src/Use.java", "src/Use.java:5 repo.save"] }]);
+});
+
+test("a reference that reads a key of a configuration file still points at it", () => {
+  const version: WalkedDeclaration = { file: "package.json", name: "version", kind: "property", qualifiedName: "version" };
+  const cuts = unresolvedLinkCuts([use("pkg.version", "references", "src/app/about.ts", 4)], [version], []);
+
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/app/about.ts", "src/app/about.ts:4 pkg.version"] }]);
+});
+
 test("a bare call a binding proves is a cut at the declaration that binding names", () => {
   const bound = new Map([[referenceKey(use("save", "calls", "src/Use.java", 5))!, "src/Repo.java"]]);
   const cuts = unresolvedLinkCuts([use("save", "calls", "src/Use.java", 5)], [SAVE], [], new Set(), new Set(), bound);
@@ -123,6 +138,19 @@ test("a reference at head that never resolved and names a removed declaration is
   const removed = [{ file: "src/Repo.java", name: "save" }];
   const cuts = removedDeclarationCuts([use("repo.save", "calls", "src/B.java", 9), use("save", "references", "src/A.java", 4), use("repo.find", "calls")], removed);
   assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/A.java:4", "src/B.java:9"] }]);
+});
+
+test("a removed name never captures a reference of the other runtime, only one of its own", () => {
+  const reference = use("repo.save", "calls", "src/Use.java", 5);
+
+  assert.deepEqual(removedDeclarationCuts([reference], [{ file: "src/app/repo.ts", name: "save" }]), []);
+  assert.deepEqual(removedDeclarationCuts([reference], [{ file: "src/Repo.java", name: "save" }]), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:5"] }]);
+});
+
+test("a removed key of a configuration file still captures a reference that reads it", () => {
+  assert.deepEqual(removedDeclarationCuts([use("pkg.version", "references", "src/app/about.ts", 4)], [{ file: "package.json", name: "version" }]), [
+    { kind: "unresolved-link", at: ["package.json::version", "src/app/about.ts:4"] },
+  ]);
 });
 
 test("a removed declaration nothing at head names is no cut", () => {
