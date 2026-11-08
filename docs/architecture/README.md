@@ -46,6 +46,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0038](adr/0038-evidence-composition-is-derived-in-the-core.md) | Evidence composition (normalize, identity, materialize, reference and issue checks) is derived in the core behind a driving port; the MCP executes queries, orchestrates compose requests and renders | Accepted |
 | [0039](adr/0039-behavior-changes-pass-a-corpus-gate.md) | Every change of behavior under `src/core/` passes a corpus gate before reaching `main`: base and candidate runs over a frozen out-of-repository manifest, differences explained by declared families and directions; extends 0013 rule 4 | Accepted |
 | [0040](adr/0040-a-snapshot-read-parses-each-java-source-once.md) | A snapshot read parses each Java source once into trees its hold keeps, and frees them when the read ends, whether it answers or throws; concurrent reads never share trees | Accepted |
+| [0041](adr/0041-one-call-reconciliation-for-every-family.md) | One core owner aligns codegraph's records with the written calls per file and binds every call with one chain; families extend it by composition, narrowing and never re-binding; reverse queries read a name index of per-file deltas retained by content | Proposed |
 
 ## Designs (RFC)
 
