@@ -322,6 +322,24 @@ test("a member call some declaration is named after is a cut at the place listin
   assert.equal(valueOf(fact).steps[0]?.external, undefined);
 });
 
+test("a Java member call never lists a TypeScript or configuration declaration, so a name only they declare leaves the repository", async () => {
+  const JAVA = "src/main/java/shop/Svc.java";
+  const options = {
+    nodes: [fakeNode("Svc", "class", JAVA, 1, 40), fakeNode("run", "method", JAVA, 5, 20), fakeNode("Form.save", "method", B, 3, 5, "save"), fakeNode("save", "property", "src/main/resources/application.yml", 2, 2)],
+    unresolved: [{ from: "run", name: "repo.save", kind: "calls", file: JAVA, line: 9, column: 4 }],
+    memberNames: { [B]: ["save"] },
+    sources: [{ path: B, content: "" }],
+  };
+  const targets = [{ file: JAVA, symbol: "run" }];
+  const leaving = await factOf({ ...options, edges: [{ from: "Svc", to: "run", kind: "contains" }] }, targets);
+  assert.equal(leaving.status, "complete");
+  assert.deepEqual(valueOf(leaving).steps[0]?.external, [{ kind: "unnamed", names: ["repo.save"] }]);
+
+  const repo = fakeNode("Repo.save", "method", "src/main/java/shop/Repo.java", 3, 5, "save");
+  const cut = await factOf({ ...options, nodes: [...options.nodes, repo], edges: [{ from: "Svc", to: "run", kind: "contains" }] }, targets);
+  assert.deepEqual(cutsOf(cut), [["unresolved-link", [`${JAVA}:9 repo.save`, "src/main/java/shop/Repo.java::save"]]]);
+});
+
 test("a member call whose name only types have leaves the repository, unnamed, and cuts nothing", async () => {
   const fact = await factOf({ nodes: [SVC, RUN, fakeNode("map", "interface", B, 3, 5), fakeNode("Map", "type_alias", B, 7, 7, "map")], edges: CONTAINS, unresolved: [{ from: "run", name: "items.map", kind: "calls", file: A, line: 9, column: 4 }] });
   assert.equal(fact.status, "complete");

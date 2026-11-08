@@ -1,6 +1,7 @@
 import { declarationSpan, executesInBody, owningBody } from "../../domain/trace/owning-body.ts";
 import { callsByOwner, matchOwnedCall, positionedBodies, type OwnedCall } from "./syntax-calls.ts";
 import { isSeedable } from "../../domain/change/seeds.ts";
+import { mayRunDeclarationOf } from "../../domain/languages/call-targets.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
 import { CALL_EDGE_KINDS, EDGE_POLICY, FIELD_KINDS, isClassKind, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor, placeAt } from "../../domain/impact/impact-cuts.ts";
@@ -160,17 +161,18 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   const callsFrom = (node: GraphSymbol): readonly GraphUnresolvedReference[] => uses.referencesFrom(node, CALL_EDGE_KINDS);
 
   const namedCache = new Map<string, readonly GraphSymbol[]>();
-  const declarationsNamed = (name: string): readonly GraphSymbol[] => {
+  /** The declarations of a name a call written in `from` may run. */
+  const declarationsNamed = (name: string, from: string): readonly GraphSymbol[] => {
     let named = namedCache.get(name);
     if (named === undefined) {
       named = store.declarationsNamed([name]).filter((symbol) => inScope(symbol.file) && !NOT_DECLARED_KINDS.includes(symbol.kind));
       namedCache.set(name, named);
     }
-    return named;
+    return named.filter((symbol) => mayRunDeclarationOf(from, symbol.file));
   };
 
-  /** What `x.<name>` can run: any declaration of that name a value can be, so only type-only kinds leave it out. */
-  const membersNamed = (name: string): readonly GraphSymbol[] => declarationsNamed(name).filter((symbol) => !TYPE_ONLY_KINDS.includes(symbol.kind));
+  /** What `x.<name>` written in `from` can run: any declaration of that name a value can be, so only type-only kinds leave it out. */
+  const membersNamed = (name: string, from: string): readonly GraphSymbol[] => declarationsNamed(name, from).filter((symbol) => !TYPE_ONLY_KINDS.includes(symbol.kind));
 
   const anchorOf = (symbol: GraphSymbol): string => declarationAnchor(symbol.file, symbol.name);
 
@@ -443,7 +445,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       if (named.length > 0) return void cuts.push(unresolvedAt(reference, named));
       const receiver = receiverOf(reference.name);
       const declared = [
-        ...((await memberDeclarations()).get(name) ?? []).map((file) => declarationAnchor(file, name)),
+        ...((await memberDeclarations()).get(name) ?? []).filter((file) => mayRunDeclarationOf(reference.file, file)).map((file) => declarationAnchor(file, name)),
         ...(receiver !== undefined && (await holdsFunctionValue(reference, receiver, name)) ? [declarationAnchor(reference.file, receiver)] : []),
       ];
       const cut = () => cuts.push({ kind: "unresolved-link", at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declared])] });
@@ -487,7 +489,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
      */
     for (const { edge, target, receiver } of unproven) {
       const reference: GraphUnresolvedReference = { from: node.id, file: node.file, line: edge.line!, column: edge.column!, kind: edge.kind, name: target.name, candidates: [] };
-      const named = membersNamed(target.name).length > 0 ? membersNamed(target.name) : [target];
+      const members = membersNamed(target.name, node.file);
+      const named = members.length > 0 ? members : [target];
       const proven = await provenAtEdge(node.file, edge, target.name);
       const member = proven?.kind === "member" ? provenMember(proven) : undefined;
       const bound = await boundAt(reference, target.name, receiver);
@@ -520,7 +523,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
           const proven = await provenAt(reference);
           let bound: ReceiverBinding["holds"] | undefined;
           const member = proven?.kind === "member" ? provenMember(proven) : undefined;
-          const named = membersNamed(callee.name);
+          const named = membersNamed(callee.name, reference.file);
           if (member !== undefined) children.push(childAt(member, reference.line, reference.column, reference.name, "call"));
           else if (proven?.kind === "external") await leafUnlessReplaced(externalOf(proven.holds, reference.name), rootOfHolds(proven.holds, callee.name), () => settleByName(reference, callee.name, named, true));
           else if ((bound = await boundAt(reference, callee.name)) !== undefined) await settleBound(reference, callee.name, named, bound);
@@ -594,13 +597,13 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
           }
           reached = constructors[0]!;
         }
-        if (receiver !== undefined && receiver.kind !== "unknown" && proven === undefined) cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique([candidateOf(target), ...declarationsNamed(target.name).map(candidateOf)])] });
+        if (receiver !== undefined && receiver.kind !== "unknown" && proven === undefined) cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique([candidateOf(target), ...declarationsNamed(target.name, node.file).map(candidateOf)])] });
         else children.push(value ? childAt(reached, edge.line, edge.column, target.name, "reference", true) : childAt(reached, edge.line, edge.column, target.name, "call"));
       } else if (verdict.root.kind === "local-parameter") {
-        cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name).map(candidateOf))] });
+        cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name, node.file).map(candidateOf))] });
       } else {
         const dropped = verdict.root;
-        const place: Cut = { kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name).map(candidateOf))] };
+        const place: Cut = { kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name, node.file).map(candidateOf))] };
         await leafUnlessReplaced(dropped.kind === "external" ? { kind: "import", module: dropped.module, name: target.name } : { kind: "global", name: target.name }, dropped.kind === "external" ? { module: dropped.module } : { path: ["name" in dropped ? dropped.name : target.name], member: target.name, open: true }, () => cuts.push(place));
       }
     }
@@ -621,7 +624,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         const origin = reference.kind === "instantiates"
           ? root?.status === "complete" && root.pastRoot !== true ? root.value : undefined
           : finding?.status === "complete" && finding.occurrence === true ? finding.value : undefined;
-        const cut = () => cuts.push(unresolvedAt(reference, declarationsNamed(name)));
+        const cut = () => cuts.push(unresolvedAt(reference, declarationsNamed(name, reference.file)));
         if (origin?.kind === "external") await leafUnlessReplaced({ kind: "import", module: origin.module, name: reference.name }, { module: origin.module }, cut);
         else if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, { path: [origin.name], member: name, open: true }, cut);
         else cut();
