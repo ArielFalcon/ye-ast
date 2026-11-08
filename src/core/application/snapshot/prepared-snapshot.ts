@@ -3,25 +3,24 @@ import type { DeclaredScope, Finding, TrustMode } from "../../domain/shared/fact
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { PathSelection } from "../../domain/shared/scope.ts";
-import type { ScratchDirectory } from "../../ports/scratch-directory.port.ts";
 import { isInMapScope } from "../../domain/map/entrypoint-map.ts";
 import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { createDerivedFacts } from "./derived-facts.ts";
-import { ABORTED, extractSources, listExport, readSources, withScratch, type CommitExtraction, type SnapshotData, type SnapshotReaderDeps, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
+import { ABORTED, extractSources, listExport, readSources, withScratch, type CommitExtraction, type ReadScope, type SnapshotData, type SnapshotReaderDeps, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
 
 type Sources = Pick<CommitExtraction, "export" | "sources">;
 
-/** Retains only successful preparations until every consumer of the operation has finished. */
-export function withSnapshotPreparation<T>(scratch: ScratchDirectory, use: (preparation: SnapshotPreparation) => Promise<T>): Promise<T> {
-  return withScratch(scratch, async (directory) => {
+/** Retains only successful preparations, and the trees parsed from their sources, until every consumer of the operation has finished. */
+export function withSnapshotPreparation<T>(deps: Pick<SnapshotReaderDeps, "scratch" | "holds">, use: (preparation: SnapshotPreparation) => Promise<T>): Promise<T> {
+  return withScratch(deps, async ({ directory, keep }) => {
     const held = new Map<string, { deps: SnapshotReaderDeps; value: PreparedCommit }>();
     return use({
       async obtain(key, deps, build) {
         const previous = held.get(key);
         if (previous && previous.deps.vcs === deps.vcs && previous.deps.reader === deps.reader && previous.deps.extractor === deps.extractor && (previous.deps.sourceSelection ?? isInMapScope) === (deps.sourceSelection ?? isInMapScope)) return { ok: true, value: previous.value };
-        const answer = await build(await directory());
+        const answer = await build(await directory(), keep);
         if (answer.ok) held.set(key, { deps, value: answer.value });
         return answer;
       },
@@ -82,7 +81,7 @@ export async function prepareCommit(
   deps: SnapshotReaderDeps,
   repo: string,
   sha: string,
-  directory: () => Promise<string>,
+  scope: ReadScope,
   selected: PathSelection,
   context: { scope: DeclaredScope; trust: TrustMode },
   signal?: AbortSignal,
@@ -90,7 +89,7 @@ export async function prepareCommit(
   if (signal?.aborted) return ABORTED;
   const key = canonicalJson({ repo, sha, ...context, budget: deps.budget ?? null });
   const identity = canonicalJson({ ...context, budget: deps.budget ?? null });
-  const build = async (root: string): Promise<Result<PreparedCommit, VcsFault>> => {
+  const build = async (root: string, keep: ReadScope["keep"]): Promise<Result<PreparedCommit, VcsFault>> => {
     const listed = await listExport(deps, repo, sha, root, selected, signal);
     if (!listed.ok) return listed;
     const exported = { ok: true as const, value: listed.value.export };
@@ -101,25 +100,29 @@ export async function prepareCommit(
       return signal?.aborted ? ABORTED : answer;
     };
     const retention = snapshotRetention(deps, identity, writtenListing(exported.value), context.trust);
-    let loaded: Sources | undefined;
+    /** The sources as read, the only ones retention stores, and the read scope's own copies of them, the ones readers take. */
+    let loaded: { read: readonly SourceFile[]; kept: Sources } | undefined;
     let extracted: CommitExtraction | undefined;
-    const sources = async (signal?: AbortSignal): Promise<Result<Sources, VcsFault>> => {
+    const load = async (signal?: AbortSignal): Promise<Result<NonNullable<typeof loaded>, VcsFault>> => {
       if (signal?.aborted) return ABORTED;
       if (loaded !== undefined) return { ok: true, value: loaded };
       const retained = retention?.lookup();
       if (retained !== undefined) {
-        loaded = { export: exported.value, sources: retained.sources };
-        if (retained.findings !== undefined) extracted = { ...loaded, findings: retained.findings };
+        loaded = { read: retained.sources, kept: { export: exported.value, sources: keep(retained.sources) } };
+        if (retained.findings !== undefined) extracted = { ...loaded.kept, findings: retained.findings };
         return { ok: true, value: loaded };
       }
       const ready = await materialize(signal);
       if (!ready.ok) return ready;
       const answer = await readSources(deps, root, exported.value, signal);
-      if (answer.ok) {
-        loaded = answer.value;
-        retention?.keepSources(loaded.sources);
-      }
-      return answer;
+      if (!answer.ok) return answer;
+      loaded = { read: answer.value.sources, kept: { export: exported.value, sources: keep(answer.value.sources) } };
+      retention?.keepSources(loaded.read);
+      return { ok: true, value: loaded };
+    };
+    const sources = async (signal?: AbortSignal): Promise<Result<Sources, VcsFault>> => {
+      const answer = await load(signal);
+      return answer.ok ? { ok: true, value: answer.value.kept } : answer;
     };
     return {
       ok: true,
@@ -131,14 +134,14 @@ export async function prepareCommit(
         async extract(signal?: AbortSignal) {
           if (signal?.aborted) return ABORTED;
           if (extracted !== undefined) return { ok: true, value: extracted };
-          const read = await sources(signal);
+          const read = await load(signal);
           if (!read.ok) return read;
           if (signal?.aborted) return ABORTED;
           if (extracted !== undefined) return { ok: true, value: extracted };
-          const answer = await extractSources(deps, read.value, signal);
+          const answer = await extractSources(deps, read.value.kept, signal);
           if (answer.ok) {
             extracted = answer.value;
-            retention?.keepFindings(extracted.sources, extracted.findings);
+            retention?.keepFindings(read.value.read, extracted.findings);
           }
           return answer;
         },
@@ -146,6 +149,6 @@ export async function prepareCommit(
       },
     };
   };
-  const answer = await (deps.preparation === undefined ? build(await directory()) : deps.preparation.obtain(key, deps, build));
+  const answer = await (deps.preparation === undefined ? build(await scope.directory(), scope.keep) : deps.preparation.obtain(key, deps, build));
   return signal?.aborted ? ABORTED : answer;
 }

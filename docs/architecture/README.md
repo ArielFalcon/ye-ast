@@ -42,6 +42,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0034](adr/0034-name-contract-consequences-explicitly.md) | Name the family `contractConsequences`, MCP and compose `ye_ast_contract_consequences`, and CLI `contract-consequences`; supersedes the naming in 0033 | Accepted |
 | [0035](adr/0035-derived-facts-are-retained-by-content.md) | The snapshot data cache may retain plain facts derived from one file or from named inputs, keyed by content; amends 0020 and 0026 | Accepted |
 | [0036](adr/0036-dependence-is-the-compile-time-binding.md) | A graph edge on a value receiver is a name match (confidence 0.3) until a source proof binds the receiver to the member's class; every followed dependence carries its derivation | Accepted |
+| [0040](adr/0040-a-snapshot-read-parses-each-java-source-once.md) | A snapshot read parses each Java source once into trees its hold keeps, and frees them when the read ends, whether it answers or throws; concurrent reads never share trees | Accepted |
 
 ## Designs (RFC)
 

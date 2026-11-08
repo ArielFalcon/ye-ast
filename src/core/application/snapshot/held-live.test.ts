@@ -21,6 +21,7 @@ import { createImpactQueries, type ImpactQueriesDeps } from "../impact/impact-qu
 import type { ImportOriginsReader, ImportOriginSite } from "../../ports/import-origins.port.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { ParseHolds } from "../../ports/parse-holds.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { SnapshotDataCache } from "./read-snapshot.ts";
 import { createSnapshotDataCache } from "./snapshot-data-cache.ts";
@@ -470,4 +471,55 @@ test("cancellation during an outer postlude suppresses already queued inner noti
   assert.equal(result.fault.repoId, "/b");
   assert.equal(result.fault.cause.kind, "aborted");
   assert.deepEqual(live.held, { locks: 3, released: 3 });
+});
+
+/** Holds that hand out copies and count each hold opened and released; releasing one twice fails. */
+function countingHolds(): { holds: ParseHolds; log: { opened: number; released: number; kept: SourceFile[] } } {
+  const log = { opened: 0, released: 0, kept: [] as SourceFile[] };
+  return {
+    log,
+    holds: {
+      open() {
+        log.opened++;
+        let open = true;
+        return {
+          keep: (sources) => {
+            const own = sources.map((source) => ({ ...source }));
+            log.kept.push(...own);
+            return own;
+          },
+          release: () => {
+            assert.ok(open, "a hold is released once");
+            open = false;
+            log.released++;
+          },
+        };
+      },
+    },
+  };
+}
+
+test("a read at a revision and a live read hand their readers the sources their hold kept, and release it once when they answer or a reader throws", async () => {
+  const source = { path: "src/A.java", content: "class A {}" };
+  for (const live of [undefined, fakeLive({ "src/A.java": "class A {}" })]) {
+    for (const fails of [false, true]) {
+      const { holds, log } = countingHolds();
+      const { deps, queries, callers } = setup({ sources: [source], nodes: LIVE_NODES, ...(live && { live, trust: TRUSTED }) });
+      deps.holds = holds;
+      if (live) deps.reader.read = async () => [source];
+      const read: SourceFile[] = [];
+      deps.extractor.extract = async (files) => {
+        read.push(...files);
+        if (fails) throw new Error("reader failed");
+        return [];
+      };
+      const targets = [{ file: "src/A.java", symbol: "f" }];
+      const asked = live ? queries.callers({ ...LIVE_BASE, targets, live: true }) : callers({ targets });
+
+      if (fails) await assert.rejects(asked, /reader failed/);
+      else assert.ok((await asked).ok);
+      assert.deepEqual({ opened: log.opened, released: log.released }, { opened: 1, released: 1 }, `live ${live !== undefined}, fails ${fails}`);
+      assert.ok(read.length > 0 && read.every((file) => log.kept.includes(file)));
+    }
+  }
 });

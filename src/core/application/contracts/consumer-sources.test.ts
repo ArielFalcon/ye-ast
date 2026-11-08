@@ -7,6 +7,7 @@ import type { CallSite } from "../../domain/topology/call-site.ts";
 import type { Carrier } from "../../domain/contracts/consumer-flow.ts";
 import type { ConsumerSession, ServingWorkspace } from "../../ports/consumer-sources.port.ts";
 import type { WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
+import type { ReadScope } from "../snapshot/read-snapshot.ts";
 import { createConsumerSources, isCallOf } from "./consumer-sources.ts";
 
 const sha = "a".repeat(40);
@@ -68,7 +69,7 @@ function workbench(layout: { routes: Record<string, Entrypoint[]>; calls: Record
     plans: repos.map((repo) => ({ kind: "read", at: { source: `/${repo}`, declared: `/${repo}`, repoId: repo, revision: "HEAD" } })),
     scope: { include: [], exclude: [] },
     selection: () => true,
-    preparation: { obtain: (_key: string, _deps: unknown, build: (root: string) => Promise<unknown>) => build("/root") },
+    preparation: { obtain: (_key: string, _deps: unknown, build: (root: string, keep: ReadScope["keep"]) => Promise<unknown>) => build("/root", (sources) => [...sources]) },
     signal: undefined,
   };
   const sources = createConsumerSources({

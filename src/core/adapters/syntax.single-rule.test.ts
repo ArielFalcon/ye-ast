@@ -83,6 +83,18 @@ const RULES: readonly Rule[] = [
     pending: [],
   },
   {
+    concept: "a parser of its own, whose trees no snapshot read holds (ADR-0040)",
+    pattern: /\bnew Parser\(/,
+    owners: ["tree-sitter/java-parser.adapter.ts"],
+    pending: [],
+  },
+  {
+    concept: "parsing a Java source written in place, which no snapshot read kept (ADR-0040)",
+    pattern: /(?<!JSON)\.parse\(\s*\{/,
+    owners: [],
+    pending: [],
+  },
+  {
     concept: "the Java type `this` and `super` denote, read from the type body around a node",
     pattern: /enclosingBody\([^)]*\)\??\.parent/,
     owners: ["spring/java-project.ts"],

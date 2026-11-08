@@ -81,7 +81,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
         const { fact } = read;
         if (fact.status === "unknown") return { ok: false as const, fault: { kind: "git-failed" as const, detail: "the workspace read answered nothing" } };
 
-        return withScratch(deps.heads.scratch, async (directory) => {
+        return withScratch(deps.heads, async (readScope) => {
           const readings = new Map<string, Promise<Result<Reading, WorkspaceFault>>>();
           const stores: CodeGraphReader[] = [];
           let workspaceJoin: WorkspaceHttpJoin | undefined;
@@ -90,12 +90,12 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
 
           const readRepository = async (plan: ReadPlan): Promise<Result<Reading, WorkspaceFault>> => {
             const trust = (await declaredTrustOf(deps.heads, plan.at.declared)) ?? "untrusted";
-            const prepared = await prepareCommit({ ...deps.heads, preparation: context.preparation }, plan.at.source, plan.at.revision, directory, context.selection, { scope: context.scope, trust }, context.signal);
+            const prepared = await prepareCommit({ ...deps.heads, preparation: context.preparation }, plan.at.source, plan.at.revision, readScope, context.selection, { scope: context.scope, trust }, context.signal);
             if (!prepared.ok) return prepared;
             const loaded = await prepared.value.sources(context.signal);
             if (!loaded.ok) return loaded;
             const { sources } = loaded.value;
-            const indexed = await heads.indexHead(prepared.value, directory, context.signal);
+            const indexed = await heads.indexHead(prepared.value, readScope.directory, context.signal);
             if (indexed === "aborted") return ABORTED;
             if (indexed !== "unavailable" && "fault" in indexed) return { ok: false, fault: indexed.fault };
             if (indexed !== "unavailable") stores.push(indexed.store);
