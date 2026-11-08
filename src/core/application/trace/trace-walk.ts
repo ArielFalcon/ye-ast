@@ -37,7 +37,7 @@ export function isTraceRoot(store: CodeGraphReader, unresolvedIn: UnresolvedIn, 
   return (symbol) =>
     isSeedable(symbol) ||
     ((FIELD_KINDS as readonly string[]).includes(symbol.kind) &&
-      (syntaxCalls.has(symbol.id) || callEdgesOf(store, [symbol]).length > 0 || unresolvedIn(symbol.file).some((reference) => reference.from === symbol.id && CALL_EDGE_KINDS.includes(reference.kind))));
+      (syntaxCalls.has(symbol.id) || callEdgesOf(store, symbol).length > 0 || unresolvedIn(symbol.file).some((reference) => reference.from === symbol.id && CALL_EDGE_KINDS.includes(reference.kind))));
 }
 
 export interface TraceWalkInput {
@@ -335,7 +335,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       .filter((member) => {
         const field = (FIELD_KINDS as readonly string[]).includes(member.kind);
         if (construction) return field && initializers.some(initializer => initializer.name === member.name && initializer.start <= member.startLine && member.startLine <= initializer.nameLine);
-        return member.kind === "method" || (field && (syntax.get(member.id)?.some((call) => !call.deferred) || callEdgesOf(store, [member]).length > 0 || callsFrom(member).length > 0));
+        return member.kind === "method" || (field && (syntax.get(member.id)?.some((call) => !call.deferred) || callEdgesOf(store, member).length > 0 || callsFrom(member).length > 0));
       })
       .map((member) => childAt(member, member.startLine, null, member.name, "member"));
   };

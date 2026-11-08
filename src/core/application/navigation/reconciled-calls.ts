@@ -139,9 +139,9 @@ export interface ReconciledCallsInput {
   importedDeclarations?: ((file: string) => Promise<ReadonlyMap<string, GraphSymbol>>) | undefined;
 }
 
-/** The call edges out of `symbols` no policy ignores, in one read. */
-export function callEdgesOf(store: CodeGraphReader, symbols: readonly GraphSymbol[]): GraphEdge[] {
-  return store.outgoingEdges(symbols.map(({ id }) => id), CALL_EDGE_KINDS).filter((edge) => !isIgnoredEdge(edge));
+/** The call edges of `symbol` no policy ignores. */
+export function callEdgesOf(store: CodeGraphReader, symbol: GraphSymbol): GraphEdge[] {
+  return store.outgoingEdges([symbol.id], CALL_EDGE_KINDS).filter((edge) => !isIgnoredEdge(edge));
 }
 
 const NO_CALLS: BodyCalls = { edges: [], references: [], contradicted: [], writtenOnly: [], ambiguous: [], deferredOnly: [] };
@@ -154,9 +154,7 @@ export function createReconciledCalls({ store, uses, syntaxOf, lineOf, importedD
   const alignedIn = oncePerFile(async (file): Promise<ReadonlyMap<GraphNodeId, BodyCalls>> => {
     const syntax = await syntaxOf(file);
     const owned = await ownedIn(file);
-    const declarations = store.symbolsInFiles([file]);
-    const callEdges = Map.groupBy(callEdgesOf(store, declarations), (edge) => edge.source);
-    const bodies = declarations.map((node) => ({ node, edges: uses.followed(node, callEdges.get(node.id) ?? []), references: uses.referencesFrom(node, CALL_EDGE_KINDS) }));
+    const bodies = store.symbolsInFiles([file]).map((node) => ({ node, edges: uses.followed(node, callEdgesOf(store, node)), references: uses.referencesFrom(node, CALL_EDGE_KINDS) }));
     let imported: ReadonlyMap<string, GraphSymbol> | undefined;
     let consulted = false;
     const aliasesOf = (target: GraphSymbol) => (): string[] => {
@@ -167,7 +165,7 @@ export function createReconciledCalls({ store, uses, syntaxOf, lineOf, importedD
       ...edges.map(({ edge, target }) => ({ node, line: edge.line, column: edge.column, name: target.name, synthesized: edge.synthesizedBy !== null, aliases: aliasesOf(target) })),
       ...references.map(({ line, column, name }) => ({ node, line, column, name, synthesized: false, aliases: () => [] })),
     ]);
-    const align = () => alignRecords(records, syntax, owned, declarations, (line) => lineOf(file, line));
+    const align = () => alignRecords(records, syntax, owned, store.symbolsInFiles([file]), (line) => lineOf(file, line));
     let aligned = align();
     if (consulted && importedDeclarations !== undefined) {
       imported = await importedDeclarations(file);

@@ -11,8 +11,6 @@ import { createReconciledCalls, type BodyCalls } from "./reconciled-calls.ts";
 const FILE = "src/c.ts";
 /** The files whose import bindings the last `callsOf` read. */
 let importsRead: string[] = [];
-/** The sources of each `outgoingEdges` read of some kinds by the last `callsOf`. */
-let edgeReads: string[][] = [];
 
 function written(line: number, column: number, name: string, callee: string): SyntaxCall {
   return { kind: "calls", line, column, name, callee, owners: [] };
@@ -29,9 +27,7 @@ function ownedBy(owners: readonly Scope[], call: SyntaxCall): SyntaxCall {
 }
 
 async function callsOf(body: string, nodes: readonly FakeNode[], edges: readonly FakeEdge[], calls: readonly SyntaxCall[], unresolved: readonly FakeUnresolved[] = [], functionValues: DeclaredMemberNames["functionValues"] = [], text: Readonly<Record<number, string>> = {}, imports: Readonly<Record<string, string>> = {}): Promise<BodyCalls> {
-  const graph = fakeCodeGraph(nodes, edges, unresolved);
-  const store: typeof graph = { ...graph, outgoingEdges: (sources, kinds) => (kinds === undefined || edgeReads.push([...sources]), graph.outgoingEdges(sources, kinds)) };
-  edgeReads = [];
+  const store = fakeCodeGraph(nodes, edges, unresolved);
   const uses = createDeclarationUses(store, createGraphNavigation(store, () => false));
   const syntax: DeclaredMemberNames = { ...NOTHING_DECLARED, calls, functionValues };
   const imported = new Map(Object.entries(imports).map(([local, id]) => [local, store.symbolsByIds([id as GraphNodeId])[0]!]));
@@ -253,13 +249,4 @@ test("a file reads its import bindings only when a record agrees with no call at
   assert.deepEqual(importsRead, []);
   assert.deepEqual(placed(await callsOf("run", [RUN, ...LIB], record, [written(3, 3, "alpha", "alpha")], [], [], {}, { alpha: "beta" })).edges, ["beta@3:2"]);
   assert.deepEqual(importsRead, [FILE]);
-});
-
-test("a file's call edges are read once for all its declarations", async () => {
-  // run() {                                       (2)
-  //   beta();                                     (3)
-  // }
-  const helper = fakeNode("helper", "function", FILE, 11, 13);
-  placed(await callsOf("run", [RUN, helper, ...LIB], [{ from: "run", to: "beta", kind: "calls", line: 3, column: 2 }], [written(3, 3, "beta", "beta")]));
-  assert.deepEqual(edgeReads, [["run", "helper"]]);
 });
