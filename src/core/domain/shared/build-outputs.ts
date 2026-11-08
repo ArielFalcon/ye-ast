@@ -31,6 +31,17 @@ export function unreadOutputCuts(outputs: readonly Pick<DeclaredBuildOutput, "at
   });
 }
 
+/**
+ * A `node_modules` declaration as a user writes it, `[<at>=]<path>`: the directory `<path>` stands for `<at>/node_modules`,
+ * the root's without `<at>=`. A path holding `=` is written with an empty `<at>`: `=<path>`. Anything else is no declaration.
+ */
+export function nodeModulesDeclared(spec: string): DeclaredBuildOutput | undefined {
+  const split = spec.indexOf("=");
+  const at = split === -1 ? "" : spec.slice(0, split);
+  const path = split === -1 ? spec : spec.slice(split + 1);
+  return path === "" || !isRepositoryDirectory(at) ? undefined : { kind: "node-modules", at, path };
+}
+
 /** Whether `at` names a repository directory: relative, normalized, with no `.` or `..` segment; `""` is the root. */
 export function isRepositoryDirectory(at: string): boolean {
   if (at === "") return true;

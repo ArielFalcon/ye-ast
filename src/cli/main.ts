@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import type { Result } from "../core/domain/shared/result.ts";
 import { isValidGlob, type ScopeRequest } from "../core/domain/shared/scope.ts";
+import { nodeModulesDeclared, type DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
 import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactBudget } from "../core/domain/impact/impact-fact.ts";
 import { isPositiveCount } from "../core/domain/shared/count.ts";
@@ -63,8 +64,8 @@ const MEASURE_FLAG = "--measure";
 const USAGE = [
   "usage: ye-ast --version | --help",
   "       ye-ast map [--revision <rev> | --live] [--repo-id <id>] [scope] <repo>",
-  "       ye-ast impact --base <rev> [--head <rev> | --live] [--repo-id <id>] [scope] [changed] [budget] <repo>",
-  "       ye-ast callers [--revision <rev> | --live] [--repo-id <id>] [scope] [budget] <repo> <file>:<symbol> | <file>:<start>-<end> ...",
+  "       ye-ast impact --base <rev> [--head <rev> | --live] [--repo-id <id>] [scope] [changed] [budget] [outputs] <repo>",
+  "       ye-ast callers [--revision <rev> | --live] [--repo-id <id>] [scope] [budget] [outputs] <repo> <file>:<symbol> | <file>:<start>-<end> ...",
   "       ye-ast importers [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
   "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
   "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] --focus <file>:<symbol> | --focus <file>:<line> ... <repo>",
@@ -73,10 +74,10 @@ const USAGE = [
   "       ye-ast decisions [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast contract-consequences --hypothesis <json> [--hypothesis <json>]... [--revision <rev>] [--repo-id <id>] [scope] <repo>",
   "       ye-ast contract-consequences --base <rev> [--head <rev>] [--repo-id <id>] [scope] <repo>",
-  "       ye-ast init --trust trusted|untrusted [--workspace <file>] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration)",
+  "       ye-ast init --trust trusted|untrusted [--workspace <file>] [outputs] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration, which carries the outputs)",
   "       ye-ast init --trust trusted|untrusted [--workspace <file>] --repo <id> <path> [--repo <id> <path>]... <launch-repo>",
   "       ye-ast serve   (the query protocol, JSON-RPC 2.0, one message per line on stdin/stdout)",
-  "       ye-ast mcp [<launch-root>] [--repo <id> <root>]...   (read-only stdio MCP server)",
+  "       ye-ast mcp [<launch-root>] [--repo <id> <root>]... [outputs]   (read-only stdio MCP server; the outputs are the launch repository's)",
   "--repo-id: the name every fact carries; the directory name of the repository's main worktree when omitted, so every worktree of one repository answers the same name",
   "--live: reads the working tree of a repository declared trusted (ye-ast init --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr and as a live sibling of the fact in the JSON",
   "--focus: outline only, repeatable, instead of files: <file>:<symbol> selects the declarations whose dotted containment path ends with it at whole names (Class.member, or a bare name at any depth); <file>:<line> the innermost declaration holding that line. Each match comes with its containers, how many of the file's declarations were left out, and what its own body uses outside itself (a declaration, a package or a global, with the lines of each use; an unproved use is a cut), without imports",
@@ -86,6 +87,7 @@ const USAGE = [
   "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers, importers, outline, trace, workspace, decisions and contract-consequences; without --include every path is included; --exclude wins)",
   "changed: [--changed <glob>]...   (impact only: globs over the changed paths; only the change's paths they select seed the walk, while the repository is read whole, so callers outside them are known; a glob that selects no changed path is an error)",
   "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default; trace takes no --hub-fan-in, which counts callers)",
+  "outputs: [--node-modules [<at>=]<path>]...   (a node_modules directory your own install produced, standing for <at>/node_modules in the repository, the root's without <at>=; read as data, never run, checked against the commit's lockfile, and used at a revision only, never with --live; each answer that used one lists it in inputs.buildOutputs, and one it could not use is a build-output cut. Write =<path> for a path that holds =)",
   "workspace: --workspace <file>   (the workspace init persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\", \"remote\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository, and a remote is the source of truth a trusted repository's queries refresh into ye-ast's own mirror)",
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
 ].join("\n");
@@ -158,7 +160,7 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promi
       io.err(USAGE);
       return EXIT_CODE.usage;
     }
-    const { workspaceFile, ...request } = parsed;
+    const { workspaceFile, buildOutputs, ...request } = parsed;
     const workspace = workspaceFile === undefined ? undefined : await readWorkspaceFile(workspaceFile);
     if (workspace !== undefined && !workspace.ok) {
       io.err(deps.redaction.redact(`ye-ast: ${workspace.fault.kind}: ${workspace.fault.detail}`));
@@ -170,7 +172,7 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promi
       io.err(`ye-ast: ${result.fault.kind}: ${deps.redaction.redact(result.fault.detail.trim())}`);
       return result.fault.kind === "aborted" ? EXIT_CODE.interrupted : EXIT_CODE.queryFailed;
     }
-    for (const line of initReport(result.value, request.repo, deps.mcpCommand)) io.out(line);
+    for (const line of initReport(result.value, request.repo, deps.mcpCommand, buildOutputs ?? [])) io.out(line);
     return EXIT_CODE.ok;
   } catch (error) {
     io.err(`ye-ast: internal fault: ${deps.redaction.redact(firstLine(error))}`);
@@ -284,7 +286,8 @@ async function readWorkspaceFile(path: string): Promise<Result<{ path: string; t
   }
 }
 
-function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo: string, mcpCommand: readonly string[]): string[] {
+function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo: string, mcpCommand: readonly string[], outputs: readonly DeclaredBuildOutput[]): string[] {
+  const declared = outputs.flatMap(({ at, path }) => ["--node-modules", shellWord(at === "" && !path.includes("=") ? path : `${at}=${path}`)]);
   const layerLines =
     layer.outcome === "not-written"
       ? [`fixed layer: not written (${layer.reason})`]
@@ -295,7 +298,7 @@ function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo:
     ...layerLines,
     ...(workspace === undefined ? [] : [`${FIXED_LAYER_DIRECTORY}/${WORKSPACE_MANIFEST_FILE}: ${workspace.outcome}`]),
     "register the MCP server with Claude Code:",
-    `claude mcp add ye-ast -- ${mcpCommand.map(shellWord).join(" ")} mcp ${shellWord(repo)}`,
+    `claude mcp add ye-ast -- ${[...mcpCommand.map(shellWord), "mcp", shellWord(repo), ...declared].join(" ")}`,
   ];
 }
 
@@ -391,14 +394,17 @@ async function parseMapRequest(args: readonly string[], deps: RepositoryNaming):
 interface ParsedInit extends Omit<InstallRequest, "signal" | "workspace"> {
   /** The path of the manifest to persist, resolved against the working directory. */
   workspaceFile?: string;
+  /** The build outputs the printed MCP registration declares (ADR-0037); `init` itself reads none. */
+  buildOutputs?: readonly DeclaredBuildOutput[];
 }
 
 async function parseInitRequest(args: readonly string[], deps: RepositoryNaming): Promise<ParsedInit | undefined> {
   try {
-    const { values, positionals } = parseArgs({ args: [...args], options: { trust: { type: "string" }, workspace: { type: "string" } }, allowPositionals: true });
+    const { values, positionals } = parseArgs({ args: [...args], options: { trust: { type: "string" }, workspace: { type: "string" }, ...NODE_MODULES_OPTION }, allowPositionals: true });
     const [path = ".", ...extra] = positionals;
-    if (!isTrustMode(values.trust) || extra.length > 0 || values.workspace === "") return undefined;
-    return { ...(await repositoryOf(deps, path, undefined)), trust: values.trust, ...(values.workspace === undefined ? {} : { workspaceFile: resolve(values.workspace) }) };
+    const outputs = parseBuildOutputs(values);
+    if (!isTrustMode(values.trust) || extra.length > 0 || values.workspace === "" || outputs === undefined) return undefined;
+    return { ...(await repositoryOf(deps, path, undefined)), trust: values.trust, ...(values.workspace === undefined ? {} : { workspaceFile: resolve(values.workspace) }), ...outputs };
   } catch {
     return undefined;
   }
@@ -413,6 +419,16 @@ function atRevision(values: { revision?: string | undefined; live?: boolean | un
 const SCOPE_OPTIONS = { include: { type: "string", multiple: true }, exclude: { type: "string", multiple: true } } as const;
 
 const CHANGED_OPTION = { changed: { type: "string", multiple: true } } as const;
+const NODE_MODULES_OPTION = { "node-modules": { type: "string", multiple: true } } as const;
+
+/** The `--node-modules [<at>=]<path>` declarations (ADR-0037), each path resolved; `undefined` for one that declares nothing. */
+function parseBuildOutputs(values: { "node-modules"?: string[] | undefined }): { buildOutputs?: readonly DeclaredBuildOutput[] } | undefined {
+  const specs = values["node-modules"];
+  if (specs === undefined) return {};
+  const outputs = specs.map(nodeModulesDeclared);
+  if (outputs.some((output) => output === undefined)) return undefined;
+  return { buildOutputs: outputs.map((output) => ({ ...output!, path: resolve(output!.path) })) };
+}
 
 type ChangedValues = { [Name in keyof typeof CHANGED_OPTION]?: string[] | undefined };
 
@@ -466,16 +482,17 @@ async function parseImpactRequest(args: readonly string[], deps: RepositoryNamin
   try {
     const { values, positionals } = parseArgs({
       args: [...args],
-      options: { base: { type: "string" }, head: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS, ...CHANGED_OPTION, ...BUDGET_OPTIONS },
+      options: { base: { type: "string" }, head: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS, ...CHANGED_OPTION, ...BUDGET_OPTIONS, ...NODE_MODULES_OPTION },
       allowPositionals: true,
     });
     const [path, ...extra] = positionals;
     const budget = parseBudget(values);
     const scope = parseScope(values);
     const changed = parseChanged(values);
+    const outputs = parseBuildOutputs(values);
     const at = atRevision({ revision: values.head, live: values.live });
-    if (path === undefined || extra.length > 0 || values.base === undefined || budget === undefined || scope === undefined || changed === undefined || at === undefined) return undefined;
-    return { ...(await repositoryOf(deps, path, values["repo-id"])), base: values.base, ...(at.live ? { live: true as const } : { head: at.revision }), ...scope, ...changed, ...withBudget(budget) };
+    if (path === undefined || extra.length > 0 || values.base === undefined || budget === undefined || scope === undefined || changed === undefined || outputs === undefined || at === undefined) return undefined;
+    return { ...(await repositoryOf(deps, path, values["repo-id"])), base: values.base, ...(at.live ? { live: true as const } : { head: at.revision }), ...scope, ...changed, ...withBudget(budget), ...outputs };
   } catch {
     return undefined;
   }
@@ -485,16 +502,17 @@ async function parseCallersRequest(args: readonly string[], deps: RepositoryNami
   try {
     const { values, positionals } = parseArgs({
       args: [...args],
-      options: { revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS, ...budgetOptions },
+      options: { revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS, ...budgetOptions, ...NODE_MODULES_OPTION },
       allowPositionals: true,
-    }) as { values: { revision?: string; live?: boolean; "repo-id"?: string } & ScopeValues & BudgetValues; positionals: string[] };
+    }) as { values: { revision?: string; live?: boolean; "repo-id"?: string; "node-modules"?: string[] } & ScopeValues & BudgetValues; positionals: string[] };
     const [path, ...specs] = positionals;
     const budget = parseBudget(values);
     const targets = specs.map(parseTarget);
     const scope = parseScope(values);
+    const outputs = parseBuildOutputs(values);
     const at = atRevision(values);
-    if (path === undefined || targets.length === 0 || budget === undefined || scope === undefined || at === undefined || targets.some((target) => target === undefined)) return undefined;
-    return { ...(await repositoryOf(deps, path, values["repo-id"])), ...at, targets: targets as CallersTarget[], ...scope, ...withBudget(budget) };
+    if (path === undefined || targets.length === 0 || budget === undefined || scope === undefined || outputs === undefined || at === undefined || targets.some((target) => target === undefined)) return undefined;
+    return { ...(await repositoryOf(deps, path, values["repo-id"])), ...at, targets: targets as CallersTarget[], ...scope, ...withBudget(budget), ...outputs };
   } catch {
     return undefined;
   }

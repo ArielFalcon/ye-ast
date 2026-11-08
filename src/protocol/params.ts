@@ -1,3 +1,5 @@
+import { isAbsolute } from "node:path";
+import { isRepositoryDirectory, type DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
 import { isWorkspaceReplayContext } from "../core/domain/topology/workspace-replay.ts";
 import { isValidGlob, type ScopeRequest } from "../core/domain/shared/scope.ts";
 import { isPositiveCount } from "../core/domain/shared/count.ts";
@@ -80,6 +82,22 @@ function scopeOf(params: Params): { scope?: ScopeRequest } {
   return { scope };
 }
 
+/** Build outputs a host declares (ADR-0037): `node-modules` directories, each an absolute host path and the repository directory it stands for. */
+function buildOutputsOf(params: Params): { buildOutputs?: readonly DeclaredBuildOutput[] } {
+  if (params.buildOutputs === undefined) return {};
+  return {
+    buildOutputs: list(params, "buildOutputs", (value): DeclaredBuildOutput => {
+      const output = only(value, ["kind", "at", "path"]);
+      if (output.kind !== "node-modules") throw new InvalidParamsError("buildOutputs.kind must be node-modules");
+      const at = output.at ?? "";
+      if (typeof at !== "string" || !isRepositoryDirectory(at)) throw new InvalidParamsError("buildOutputs.at must be a relative, normalized repository directory");
+      const path = text(output, "path");
+      if (!isAbsolute(path)) throw new InvalidParamsError("buildOutputs.path must be an absolute path");
+      return { kind: "node-modules", at, path };
+    }),
+  };
+}
+
 function globOf(value: unknown): string {
   if (typeof value !== "string" || !isValidGlob(value)) throw new InvalidParamsError("globs must be relative, normalized, slash-separated patterns");
   return value;
@@ -153,7 +171,7 @@ export function readMap(params: unknown): Omit<AtRevision<MapRequest>, "signal">
 }
 
 export function readOfChange(params: unknown): Omit<AtRevision<ImpactOfChangeRequest>, "signal"> {
-  const p = only(params, ["repo", "repoId", "base", "head", "changed", "scope", "budget"]);
+  const p = only(params, ["repo", "repoId", "base", "head", "changed", "scope", "budget", "buildOutputs"]);
   return {
     repo: text(p, "repo"),
     repoId: text(p, "repoId"),
@@ -162,12 +180,13 @@ export function readOfChange(params: unknown): Omit<AtRevision<ImpactOfChangeReq
     ...(p.changed === undefined ? {} : { changed: list(p, "changed", globOf) }),
     ...scopeOf(p),
     ...budgetOf(p),
+    ...buildOutputsOf(p),
   };
 }
 
 export function readCallers(params: unknown): Omit<AtRevision<ImpactCallersRequest>, "signal"> {
-  const p = only(params, ["repo", "source", "repoId", "revision", "targets", "scope", "budget"]);
-  return { repo: text(p, "repo"), ...(p.source === undefined ? {} : { source: text(p, "source") }), repoId: text(p, "repoId"), revision: text(p, "revision"), targets: list(p, "targets", targetOf), ...scopeOf(p), ...budgetOf(p) };
+  const p = only(params, ["repo", "source", "repoId", "revision", "targets", "scope", "budget", "buildOutputs"]);
+  return { repo: text(p, "repo"), ...(p.source === undefined ? {} : { source: text(p, "source") }), repoId: text(p, "repoId"), revision: text(p, "revision"), targets: list(p, "targets", targetOf), ...scopeOf(p), ...budgetOf(p), ...buildOutputsOf(p) };
 }
 
 export function readImporters(params: unknown): Omit<AtRevision<ImpactImportersRequest>, "signal"> {

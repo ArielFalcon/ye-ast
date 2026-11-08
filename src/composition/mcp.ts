@@ -5,19 +5,31 @@ import { repositoryCatalog, type RepositoryBinding } from "../mcp/repository-tar
 import { createMcpServer } from "../mcp/server.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import type { ProcessHost } from "./process-host.ts";
+import { nodeModulesDeclared, type DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
 
-const USAGE = "usage: ye-ast mcp [<launch-root>] [--repo <id> <root>]...";
+const USAGE = "usage: ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]...";
 
 /**
- * `ye-ast mcp [<launch-root>] [--repo <id> <root>]...`: serves declared repositories over stdio.
- * Only the launch repository is warmed; each request retains its own trust check.
+ * `ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]...`: serves declared repositories
+ * over stdio. Only the launch repository is warmed; each request retains its own trust check. A `--node-modules`
+ * declares a build output of the launch repository (ADR-0037).
  */
 export async function runMcp(args: readonly string[], host: ProcessHost): Promise<number> {
   let index = 0;
   const launchPath = args[0] !== undefined && !args[0].startsWith("-") ? args[index++] : ".";
   const declarations: { repoId: string; path: string }[] = [];
+  const outputs: DeclaredBuildOutput[] = [];
   while (index < args.length) {
     const flag = args[index++];
+    if (flag === "--node-modules") {
+      const declared = nodeModulesDeclared(args[index++] ?? "");
+      if (declared === undefined) {
+        host.err(USAGE);
+        return EXIT_CODE.usage;
+      }
+      outputs.push({ ...declared, path: resolve(host.cwd, declared.path) });
+      continue;
+    }
     const repoId = args[index++];
     const path = args[index++];
     if (flag !== "--repo" || !repoId || !path || repoId.startsWith("-") || path.startsWith("-")) {
@@ -30,7 +42,8 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
     host.err(USAGE);
     return EXIT_CODE.usage;
   }
-  const queries = host.queries({ trustRecord: true });
+  let launchRoot: string | undefined;
+  const queries = host.queries({ trustRecord: true, ...(outputs.length > 0 && { buildOutputs: (repo: string) => (repo === launchRoot ? outputs : undefined) }) });
   const canonical = async (path: string) => queries.canonicalRepositoryRoot(resolve(host.cwd, path), host.signal);
   const root = await canonical(launchPath);
   if (host.signal.aborted) return EXIT_CODE.interrupted;
@@ -58,6 +71,7 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
     return EXIT_CODE.usage;
   }
   const repo = root.value;
+  launchRoot = repo;
   const wire = new StdioServerTransport(host.stdin, host.stdout);
   const closed = new Promise<void>((done) => {
     const close = wire.close.bind(wire);

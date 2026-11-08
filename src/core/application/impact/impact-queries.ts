@@ -63,6 +63,7 @@ import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 import { unreadOutputCuts, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
 import type { BuildOutputInput } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { TypeBindings, TypeTarget } from "../../ports/type-bindings.port.ts";
 import { typedCallsOf } from "../navigation/proven-calls.ts";
 import { createRevisionSources } from "../snapshot/revision-sources.ts";
@@ -104,7 +105,9 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
    * The type checker over the build outputs a host declared (ADR-0037); without it, or with none declared, every answer
    * is the one ye-ast gave before.
    */
-  typeBindings?: { bindings: TypeBindings; outputs: readonly DeclaredBuildOutput[] };
+  typeBindings?: TypeBindings;
+  /** The build outputs a host declared for the repository at a root, for a request that declares none itself. */
+  declaredOutputs?: (repo: string) => readonly DeclaredBuildOutput[] | undefined;
 }
 
 /** What the type checker contributes to one answer: its bindings by call place, the declarations it read, and its cuts. */
@@ -157,23 +160,24 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
    * contradicts, one that would not be read, or a failing checker withholds them all; then every declaration is named
    * in a `build-output` cut, at what withheld it where that is known.
    */
-  async function typedReading(request: { repo: string; scope?: ScopeRequest; signal?: AbortSignal | undefined }, snapshot: SnapshotRef, sources: readonly SourceFile[]): Promise<TypedReading | "aborted"> {
-    const declared = deps.typeBindings;
-    if (declared === undefined || checkerInputs === undefined || declared.outputs.length === 0) return NOT_TYPED;
+  async function typedReading(request: { repo: string; scope?: ScopeRequest; signal?: AbortSignal | undefined; buildOutputs?: readonly DeclaredBuildOutput[] }, snapshot: SnapshotRef, sources: readonly SourceFile[], facts: DerivedFacts | undefined): Promise<TypedReading | "aborted"> {
+    const bindings = deps.typeBindings;
+    const outputs = request.buildOutputs ?? deps.declaredOutputs?.(request.repo) ?? [];
+    if (bindings === undefined || checkerInputs === undefined || outputs.length === 0) return NOT_TYPED;
     const { signal } = request;
-    const unread: TypedReading = { cuts: unreadOutputCuts(declared.outputs) };
+    const unread: TypedReading = { cuts: unreadOutputCuts(outputs) };
     if (snapshot.kind === "live") return unread;
     const read = await checkerInputs.filesAt({ repo: { path: request.repo }, scope: { exclude: request.scope?.exclude ?? [] }, ...(signal === undefined ? {} : { signal }) }, snapshot.sha);
     if (!read.ok) return read.fault.kind === "aborted" ? "aborted" : unread;
     let answer;
     try {
-      answer = await declared.bindings.of([...sources, ...read.value.files], declared.outputs, signal);
+      answer = await bindings.of([...sources, ...read.value.files], outputs, signal, facts);
     } catch (error) {
       if (signal?.aborted) return "aborted";
       throw error;
     }
-    if (answer.status === "unused") return { cuts: [...read.value.cuts, ...unreadOutputCuts(declared.outputs, new Map(answer.outputs.map(({ at, stale }) => [at, stale.map(({ path }) => path)])))] };
-    if (answer.status === "fault") return { cuts: [...read.value.cuts, ...unreadOutputCuts(declared.outputs, new Map(answer.fault.kind === "unreadable" ? answer.fault.outputs.map(({ at, paths }) => [at, paths]) : []))] };
+    if (answer.status === "unused") return { cuts: [...read.value.cuts, ...unreadOutputCuts(outputs, new Map(answer.outputs.map(({ at, stale }) => [at, stale.map(({ path }) => path)])))] };
+    if (answer.status === "fault") return { cuts: [...read.value.cuts, ...unreadOutputCuts(outputs, new Map(answer.fault.kind === "unreadable" ? answer.fault.outputs.map(({ at, paths }) => [at, paths]) : []))] };
     return { typed: typedCallsOf(answer.bindings), outputs: answer.outputs, cuts: [...read.value.cuts, ...(answer.refused.length === 0 ? [] : [{ kind: "build-output" as const, at: answer.refused }])] };
   }
 
@@ -231,7 +235,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const unmodelled = await unmodelledIn(deps, headTree, [...changes.map(({ path }) => path), ...requested.map(({ file }) => file)]);
           if (signal?.aborted) return ABORTED;
-          const typed = await typedReading(request, head.base(content).snapshot, headTree.sources);
+          const typed = await typedReading(request, head.base(content).snapshot, headTree.sources, head.prepared?.facts);
           if (typed === "aborted") return ABORTED;
           const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources), typed: typed.typed, signal });
           if (signal?.aborted) return ABORTED;
@@ -474,7 +478,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       });
       const unmodelled = await unmodelledIn(deps, headTree, validatedChanges.filter((file) => !file.deleted).map(({ path }) => path));
       if (signal?.aborted) return ABORTED;
-      const typed = await typedReading(request, head.base(content).snapshot, headTree.sources);
+      const typed = await typedReading(request, head.base(content).snapshot, headTree.sources, head.prepared?.facts);
       if (typed === "aborted") return ABORTED;
       const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources), typed: typed.typed, signal });
       if (signal?.aborted) return ABORTED;

@@ -94,8 +94,10 @@ same checker binds 86.7% of its calls, not 100%.
 1. **A build output is declared by a host, outside the repository.** It is a typed value composition passes to the
    core: a closed union of kinds, each with the host path and the repository-relative directory it stands for
    (`{ kind: "node-modules", at: "", path }`: `path` is a `node_modules` directory, standing for `<at>/node_modules`
-   in the snapshot). A host declares it through the library, a query-protocol parameter, a
-   command-line flag or the user-level record `ye-ast init` writes. ye-ast never discovers one and never reads one from
+   in the snapshot). A host declares it per request through the library or the query-protocol parameter
+   `buildOutputs`, or for a repository root through the composition; a user through the repeatable
+   `--node-modules [<at>=]<path>` of `callers`, `impact` and `mcp`, which `ye-ast init` carries into the MCP registration
+   it prints. No record is persisted for it. ye-ast never discovers one and never reads one from
    repository content, configuration or environment. One kind enters now, `node-modules`; Java class paths, generated
    sources and external indexes enter each with its own measured evidence (ADR-0013 decision 4).
 2. **Read as data, never as code.** ye-ast reads declaration files (`.d.ts`, `.d.mts`, `.d.cts`) and `package.json`

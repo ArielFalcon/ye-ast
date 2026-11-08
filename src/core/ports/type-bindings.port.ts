@@ -1,5 +1,6 @@
 import type { DeclaredBuildOutput, StaleInstall } from "../domain/shared/build-outputs.ts";
 import type { BuildOutputInput } from "../domain/shared/fact.ts";
+import type { DerivedFacts } from "./derived-facts.port.ts";
 import type { SourceFile } from "./entrypoint-extractor.port.ts";
 
 /** The declaration a call's callee binds by type: one of the repository's (`line` is where its name stands), a package's, or the language's own libraries'. */
@@ -57,5 +58,6 @@ export type TypeBindingsAnswer =
   | { status: "fault"; fault: TypeBindingsFault };
 
 export interface TypeBindings {
-  of(sources: readonly SourceFile[], outputs: readonly DeclaredBuildOutput[], signal?: AbortSignal): Promise<TypeBindingsAnswer>;
+  /** With `facts`, the snapshot's derived facts (ADR-0035), the answer is kept between requests and shared by concurrent ones. */
+  of(sources: readonly SourceFile[], outputs: readonly DeclaredBuildOutput[], signal?: AbortSignal, facts?: DerivedFacts): Promise<TypeBindingsAnswer>;
 }

@@ -8,7 +8,7 @@ import type { DeclaredEntry, DeclaredTrees } from "../../ports/declared-tree.por
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { TypeBindingsAnswer } from "../../ports/type-bindings.port.ts";
+import type { TypeBindings, TypeBindingsAnswer } from "../../ports/type-bindings.port.ts";
 import { REPOSITORY_ROOT, createConfinedHost } from "./confined-compiler-host.ts";
 import { createTypeBindings } from "./type-bindings.adapter.ts";
 
@@ -66,6 +66,11 @@ function memo(): DerivedFacts & { derivations: number } {
     drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
   };
   return facts;
+}
+
+/** Bindings asked with `facts` on every call, as a query hands over its snapshot's derived facts. */
+function withFacts(bindings: TypeBindings, facts: DerivedFacts): TypeBindings {
+  return { of: (snapshot, outputs, signal) => bindings.of(snapshot, outputs, signal, facts) };
 }
 
 function sources(files: Record<string, string>): SourceFile[] {
@@ -170,7 +175,7 @@ test("a declaration whose package the lockfile states at another version is unus
 test("a kept answer is used only while every declared path it read answers the same", async () => {
   const files: Record<string, string> = { ...KIT };
   const facts = memo();
-  const bindings = createTypeBindings({ digest: DIGEST, trees: declared(files), facts });
+  const bindings = withFacts(createTypeBindings({ digest: DIGEST, trees: declared(files) }), facts);
   const snapshot = sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") });
   const made = async () => bound(await bindings.of(snapshot, [OUTPUT])).bindings.filter(({ name }) => name === "make").length;
   assert.equal(await made(), 1);
@@ -181,7 +186,7 @@ test("a kept answer is used only while every declared path it read answers the s
 
 test("requests for one key share one derivation", async () => {
   const facts = memo();
-  const bindings = createTypeBindings({ digest: DIGEST, trees: declared(KIT), facts });
+  const bindings = withFacts(createTypeBindings({ digest: DIGEST, trees: declared(KIT) }), facts);
   const snapshot = sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") });
   await Promise.all([bindings.of(snapshot, [OUTPUT]), bindings.of(snapshot, [OUTPUT])]);
   assert.equal(facts.derivations, 1);
@@ -189,7 +194,7 @@ test("requests for one key share one derivation", async () => {
 
 test("a derivation whose deadline passed rejects instead of answering what it had bound", async () => {
   const signal = AbortSignal.abort();
-  await assert.rejects(createTypeBindings({ digest: DIGEST, trees: declared(KIT), facts: memo() }).of(sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") }), [OUTPUT], signal), { name: "AbortError" });
+  await assert.rejects(withFacts(createTypeBindings({ digest: DIGEST, trees: declared(KIT) }), memo()).of(sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") }), [OUTPUT], signal), { name: "AbortError" });
 });
 
 test("a snapshot without a lockfile uses the declaration and states it unverified", async () => {
@@ -200,7 +205,7 @@ test("a snapshot without a lockfile uses the declaration and states it unverifie
 
 test("a kept answer is not used once the snapshot's lockfile changed", async () => {
   const facts = memo();
-  const bindings = createTypeBindings({ digest: DIGEST, trees: declared(KIT), facts });
+  const bindings = withFacts(createTypeBindings({ digest: DIGEST, trees: declared(KIT) }), facts);
   assert.equal((await bindings.of(sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") }), [OUTPUT])).status, "bound");
   assert.equal((await bindings.of(sources({ ...USE_KIT, "package-lock.json": lock("1.0.0") }), [OUTPUT])).status, "unused");
   assert.equal(facts.derivations, 2);
@@ -209,7 +214,7 @@ test("a kept answer is not used once the snapshot's lockfile changed", async () 
 test("a declared directory that will not be read is a fault naming each path, never kept, and binds nothing from it", async () => {
   const unreadable: DeclaredTrees = { open: () => ({ entry: (path) => (path === "" ? declared(KIT).open(OUTPUT).entry(path) : { kind: "unreadable", path: "kit" }) }) };
   const facts = memo();
-  const bindings = createTypeBindings({ digest: DIGEST, trees: unreadable, facts });
+  const bindings = withFacts(createTypeBindings({ digest: DIGEST, trees: unreadable }), facts);
   const snapshot = sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") });
   for (let ask = 0; ask < 2; ask += 1) assert.deepEqual(await bindings.of(snapshot, [OUTPUT]), { status: "fault", fault: { kind: "unreadable", outputs: [{ kind: "node-modules", at: "", paths: ["kit"] }] } });
   assert.equal(facts.derivations, 2);
@@ -219,6 +224,6 @@ test("a declared directory that will not be read is a fault naming each path, ne
 
 test("the compiler failing while it binds is a fault, not an exception out of the query", async () => {
   const crashing: DeclaredTrees = { open: () => ({ entry: (path) => (path.startsWith("kit") ? (() => { throw new Error("Debug Failure. False expression."); })() : declared(KIT).open(OUTPUT).entry(path)) }) };
-  const answer = await createTypeBindings({ digest: DIGEST, trees: crashing, facts: memo() }).of(sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") }), [OUTPUT]);
+  const answer = await withFacts(createTypeBindings({ digest: DIGEST, trees: crashing }), memo()).of(sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") }), [OUTPUT]);
   assert.equal(answer.status === "fault" && answer.fault.kind, "checker-failed");
 });

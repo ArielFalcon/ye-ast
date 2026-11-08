@@ -1,5 +1,5 @@
 import type { Readable, Writable } from "node:stream";
-import { composeQueries, type ComposedQueries } from "./compose.ts";
+import { composeQueries, type ComposedQueries, type CompositionOptions } from "./compose.ts";
 
 export interface ProcessHost {
   /** What a relative or omitted repository path is resolved against. */
@@ -15,7 +15,7 @@ export interface ProcessHost {
    * Built only once the command line is valid. With `trustRecord` the queries read the user's trust declaration of
    * each repository; without it every repository is read `untrusted`, since a host declares the mode itself.
    */
-  queries(options?: { trustRecord?: boolean }): ComposedQueries;
+  queries(options?: { trustRecord?: boolean; buildOutputs?: CompositionOptions["buildOutputs"] }): ComposedQueries;
 }
 
 /** The host of the real process; `indexCache` is the directory that keeps full indexes between calls, `trustDirectory` the one that holds the trust record. */
@@ -29,9 +29,10 @@ export function processHost(options: { signal: AbortSignal; indexCache?: string;
     stdin: process.stdin,
     stdout: process.stdout,
     err,
-    queries: ({ trustRecord = false } = {}) =>
+    queries: ({ trustRecord = false, buildOutputs } = {}) =>
       composeQueries({
         measure: err,
+        ...(buildOutputs !== undefined && { buildOutputs }),
         ...(options.indexCache !== undefined && { indexCache: options.indexCache }),
         ...(trustRecord && options.trustDirectory !== undefined && { trustDirectory: options.trustDirectory, reportTrustFault: err }),
       }),

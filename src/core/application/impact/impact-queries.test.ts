@@ -26,6 +26,13 @@ import type { ModuleDependency } from "../../domain/impact/module-dependency.ts"
 import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
 import type { SnapshotDataCache } from "../snapshot/read-snapshot.ts";
 import type { TypeBindings, TypeBindingsAnswer, TypeTarget } from "../../ports/type-bindings.port.ts";
+import type { DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
+
+/** The checker and the build outputs the host declared for every repository. */
+interface TypedOption {
+  bindings: TypeBindings;
+  outputs: readonly DeclaredBuildOutput[];
+}
 
 const NOTHING_REPLACED = { paths: [], globalObjects: new Set<string>(), packages: new Set<string>() };
 
@@ -77,7 +84,7 @@ interface Options {
   snapshotSources?: Partial<Record<string, SourceFile[]>>;
   /** The files the unmodelled-constructs reader marks among the sources it receives. */
   unmodelled?: readonly string[];
-  typeBindings?: ImpactQueriesDeps["typeBindings"];
+  typeBindings?: TypedOption;
   /** The source reader hands over only the files the export plan wrote, as the confined reader does. */
   readsPlanned?: true;
 }
@@ -172,7 +179,7 @@ function setup(options: Options = {}) {
     ...(options.trivia && { sourceTrivia: { triviaLines: async (file: SourceFile) => new Set(options.trivia?.[file.path] ?? []) } }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
-    ...(options.typeBindings && { typeBindings: options.typeBindings }),
+    ...(options.typeBindings && { typeBindings: options.typeBindings.bindings, declaredOutputs: () => options.typeBindings!.outputs }),
     ...(options.unmodelled && { unmodelled: { extract: async (sources) => sources.map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };
@@ -181,6 +188,7 @@ function setup(options: Options = {}) {
   const importersRequest: AtRevision<ImpactImportersRequest> = { repo: "/repo", repoId: "repo", revision: "head", files: [], ...(options.signal && { signal: options.signal }) };
   return {
     log,
+    deps,
     queries,
     ask: (overrides: Partial<AtRevision<ImpactOfChangeRequest>> = {}) => queries.ofChange({ ...request, ...overrides }),
     callers: (overrides: Partial<AtRevision<ImpactCallersRequest>>) => queries.callers({ ...callersRequest, ...overrides }),
@@ -2061,12 +2069,12 @@ const USED = [{ kind: "node-modules" as const, at: "", verified: false, digest: 
 const boundTo = (target: TypeTarget): Extract<TypeBindingsAnswer, { status: "bound" }> => ({ status: "bound", bindings: [{ file: "src/reader.ts", line: 8, column: 5, name: "get", target }], unowned: [], refused: [], outputs: USED });
 const STORE_GET: TypeTarget = { kind: "repository", file: "src/store.ts", line: 4, name: "get" };
 
-function checker(answer: TypeBindingsAnswer, seen: (readonly SourceFile[])[] = []): NonNullable<ImpactQueriesDeps["typeBindings"]> {
+function checker(answer: TypeBindingsAnswer, seen: (readonly SourceFile[])[] = []): TypedOption {
   const bindings: TypeBindings = { of: async (sources) => (seen.push(sources), answer) };
   return { bindings, outputs: DECLARED };
 }
 
-async function typedCallers(symbol: { file: string; symbol: string }, typeBindings?: ImpactQueriesDeps["typeBindings"]): Promise<Fact<ImpactValue>> {
+async function typedCallers(symbol: { file: string; symbol: string }, typeBindings?: TypedOption): Promise<Fact<ImpactValue>> {
   return callersFact(await setup({ nodes: TYPED_NODES, edges: TYPED_EDGES, importOrigins: origins(() => undefined), ...(typeBindings && { typeBindings }) }).callers({ targets: [symbol] }));
 }
 
@@ -2100,7 +2108,7 @@ test("the checker reads the commit's lockfiles and declaration files apart from 
   const files = ["src/store.ts", "src/reader.ts", "package.json", "package-lock.json", "src/env.d.ts", "node_modules/kit/index.d.ts"];
   const exports: Options["exports"] = { [HEAD]: { files: files.map((path) => ({ path, blob: path, written: true })), skipped: [] } };
   const sources = files.map((path) => ({ path, content: path }));
-  const run = (typeBindings?: ImpactQueriesDeps["typeBindings"]) => setup({ nodes: TYPED_NODES, edges: TYPED_EDGES, importOrigins: origins(() => undefined), exports, sources, readsPlanned: true, ...(typeBindings && { typeBindings }) });
+  const run = (typeBindings?: TypedOption) => setup({ nodes: TYPED_NODES, edges: TYPED_EDGES, importOrigins: origins(() => undefined), exports, sources, readsPlanned: true, ...(typeBindings && { typeBindings }) });
   const seen: (readonly SourceFile[])[] = [];
   const plain = run();
   const typed = run(checker(boundTo(STORE_GET), seen));
@@ -2133,7 +2141,7 @@ test("a live tree is not typed: the call keeps its derivation and a build-output
 /** `Reader.id` calls `this.store.get` at line 8, column 5, a reference the index left unresolved. */
 const UNSETTLED: FakeUnresolved[] = [{ from: "id", name: "this.store.get", kind: "calls", file: "src/reader.ts", line: 8, column: 4 }];
 
-async function unsettledCallers(typeBindings?: ImpactQueriesDeps["typeBindings"]): Promise<Fact<ImpactValue>> {
+async function unsettledCallers(typeBindings?: TypedOption): Promise<Fact<ImpactValue>> {
   const exports: Options["exports"] = { [HEAD]: { files: ["src/store.ts", "src/other.ts", "src/reader.ts"].map((path) => ({ path, blob: path, written: true })), skipped: [] } };
   return callersFact(await setup({ nodes: TYPED_NODES, unresolved: UNSETTLED, exports, importOrigins: origins(() => undefined), ...(typeBindings && { typeBindings }) }).callers({ targets: [{ file: "src/store.ts", symbol: "get" }] }));
 }
@@ -2186,4 +2194,14 @@ test("an unresolved call the checker binds to a declaration the graph does not h
 
   assert.equal(viaOf(answer, "id"), undefined);
   assert.deepEqual(answer.status === "partial" && answer.cuts.map(({ kind }) => kind), ["unresolved-link"]);
+});
+
+test("a request's own declared build outputs reach the checker without a host-wide declaration", async () => {
+  const seen: (readonly SourceFile[])[] = [];
+  const { bindings } = checker(boundTo(STORE_GET), seen);
+  const { deps } = setup({ nodes: TYPED_NODES, edges: TYPED_EDGES, importOrigins: origins(() => undefined) });
+  const answer = callersFact(await createImpactQueries({ ...deps, typeBindings: bindings }).callers({ repo: "/repo", repoId: "repo", revision: "head", targets: [{ file: "src/store.ts", symbol: "get" }], buildOutputs: DECLARED }));
+
+  assert.equal(viaOf(answer, "id")?.derivation, "typed");
+  assert.deepEqual(answer.inputs.buildOutputs, USED);
 });

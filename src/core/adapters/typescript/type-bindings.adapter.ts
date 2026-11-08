@@ -64,10 +64,10 @@ class DerivationFault extends Error {
  * their calls (`kindOfChangedFile`), in one pass over programs that live only for
  * that pass (ADR-0037 decisions 5, 7 and 8). A source's options come from the nearest `tsconfig.json` that includes it,
  * or from the one of its references, transitively, that does; sources whose owners state equal options share a program.
- * With `facts`, the answer is kept by the snapshot's content, the declarations and their install records, and a kept
+ * With a query's `facts`, the answer is kept by the snapshot's content, the declarations and their install records, and a kept
  * answer is used only while every declared path it asked about answers the same; requests for one key share one pass.
  */
-export function createTypeBindings({ trees, digest, facts }: { trees: DeclaredTrees; digest: Digest; facts?: DerivedFacts | undefined }): TypeBindings {
+export function createTypeBindings({ trees, digest }: { trees: DeclaredTrees; digest: Digest }): TypeBindings {
   const running = new Map<string, Promise<Derivation>>();
   const tagOf = (entry: DeclaredEntry): string => {
     if (entry.kind === "file") return `file:${entry.path}:${digest.of(entry.content)}`;
@@ -115,9 +115,9 @@ export function createTypeBindings({ trees, digest, facts }: { trees: DeclaredTr
     return asked.every(({ output, path, found }) => opened[output] !== undefined && tagOf(opened[output].entry(path)) === found);
   };
   return {
-    async of(sources, outputs, signal) {
+    async of(sources, outputs, signal, facts) {
       try {
-        return await answerOf(sources, outputs, signal);
+        return await answerOf(sources, outputs, signal, facts);
       } catch (error) {
         if (error instanceof DerivationFault) return { status: "fault", fault: error.fault };
         throw error;
@@ -125,7 +125,7 @@ export function createTypeBindings({ trees, digest, facts }: { trees: DeclaredTr
     },
   };
 
-  async function answerOf(sources: readonly SourceFile[], outputs: readonly DeclaredBuildOutput[], signal?: AbortSignal): Promise<TypeBindingsAnswer> {
+  async function answerOf(sources: readonly SourceFile[], outputs: readonly DeclaredBuildOutput[], signal: AbortSignal | undefined, facts: DerivedFacts | undefined): Promise<TypeBindingsAnswer> {
     if (facts === undefined) return derive(sources, outputs, signal).answer;
     const inputs = {
       layout: facts.fingerprint(sources.map(({ path, content }) => [path, content]).toSorted(([a], [b]) => compareText(a!, b!))),
