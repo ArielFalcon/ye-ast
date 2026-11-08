@@ -357,10 +357,14 @@ implement as absent capabilities. Four of its effects reach this ADR:
       - T' and C': the answers that would meet the same condition if the listed candidates (trace) or the name-tail
         anchors (callers) were taken as exhaustive. They decide nothing: the report lists them as cases for resolution
         work (ADR-0041, ADR-0044, ADR-0045 L3), never as evidence for a status.
-      Where ADR-0044's closure is not on `main` at the trigger (it is Proposed), no trace cut can be closed, so T is 0 by
-      construction, and the outcome below applies to trace as it reads.
-    - **T = 0 and C = 0:** one status per fact is final and option E is closed; the lead records the four numbers in
-      this ADR's Revisions, and reopening needs a new ADR that brings a closure proof this decision does not count.
+      A count is evaluated per capability, never inferred from which ADR has landed: T is evaluated only over cuts whose
+      receiver the closure reading can answer at all (today some Java sites already return `bodies` after their vetoes,
+      `import-origins.port.ts:82-88`, `java-dispatch-targets.ts:81-101`), and a family whose proof cannot be produced
+      for any of its cuts reports `not evaluated`, never 0. A zero is a measured zero.
+    - **T = 0 and C = 0, both evaluated:** one status per fact is final and option E is closed for those families; the
+      lead records the four numbers in this ADR's Revisions, and reopening needs a new ADR that brings a closure proof
+      this decision does not count. A family reported `not evaluated` keeps its decision pending and is measured again on
+      the first gate run after the proof it lacks lands (for trace, ADR-0044 V0a, which answers candidates and closure apart, and the V1 units that release its vetoes); the other family is decided on its own.
     - **T > 0 or C > 0:** each counted answer has a claim proved complete, by an exhaustive proof, while its answer is
       `partial`, a verdict the agent cannot read today. A new ADR proposes a status per claim for that family only
       (trace: steps and effects; callers: direct and transitive), with the counted answers as its conformance fixtures
