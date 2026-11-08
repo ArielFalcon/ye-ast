@@ -18,11 +18,8 @@ import { materializeEvidence, mergeEvidence, validateCompositionReferences, vali
 import { compositionIdentity } from "./composition-identity.ts";
 import { COMPOSE_INPUT, COMPOSE_LIMITS, COMPOSE_QUERY } from "./composition-input.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
-import type {
-  ComposeFault, ComposeInput, CompositionCounts, CompositionIdentity, CompositionResult, CoverageSummary, EvidenceSet,
-  MaterializedComposition, Part, QueryKey, ReadOwner, RepeatRequest, SourceDelivery, SourceDescriptor, SourceId,
-  UnavailableReason, Verification,
-} from "./composition-contract.ts";
+import type { ComposeFault, ComposeInput, CompositionCounts, CompositionResult, CoverageSummary, QueryKey, RepeatRequest, SourceDelivery, UnavailableReason, Verification } from "./composition-contract.ts";
+import type { CompositionIdentity, EvidenceSet, MaterializedComposition, Part, ReadOwner, SourceDescriptor, SourceId } from "../core/ports/evidence-composition.port.ts";
 
 export { COMPOSE_LIMITS };
 

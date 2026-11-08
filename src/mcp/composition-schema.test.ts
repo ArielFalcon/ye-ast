@@ -9,7 +9,8 @@ import { mergeEvidence, materializeEvidence } from "./compose-evidence.ts";
 import { compositionIdentity } from "./composition-identity.ts";
 import { COMPOSE_OUTPUT } from "./composition-schema.ts";
 import { composeFull, composeReceipt } from "./render-composition.ts";
-import type { CompositionResult, CoverageSummary, PartKind, ReadOwner } from "./composition-contract.ts";
+import type { CompositionResult, CoverageSummary } from "./composition-contract.ts";
+import type { PartKind, ReadOwner } from "../core/ports/evidence-composition.port.ts";
 import type { ExecutedSource } from "./query-runner.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
 

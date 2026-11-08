@@ -4,11 +4,7 @@
  */
 import { createHash } from "node:crypto";
 import { SCHEMA, type Evidence, type FactInputs, type Producer, type SchemaVersion, type SnapshotRef } from "../core/domain/shared/fact.ts";
-import type {
-  AnchorId, EvidenceId, EvidenceOrigin, EvidenceRecord, EvidenceSet, FileId, FileRecord, AnchorRecord, Part, PartId,
-  PartPayload, ReadId, ReadOwner, ReadRecord, RedactionRecord, SnapshotId, SnapshotRecord, SourceFamilyRef, SourceId,
-  SourceRecord, Support,
-} from "./composition-contract.ts";
+import type { AnchorId, EvidenceId, EvidenceOrigin, EvidenceRecord, EvidenceSet, FileId, FileRecord, AnchorRecord, Part, PartId, PartPayload, ReadId, ReadOwner, ReadRecord, RedactionRecord, SnapshotId, SnapshotRecord, SourceFamilyRef, SourceId, SourceRecord, Support } from "../core/ports/evidence-composition.port.ts";
 import { anchorId, compareSupport, compositionKey, evidenceId, fileId, partId, readId, snapshotId, sortById, unionSupports, type Occurrence } from "./composition-identity.ts";
 
 export const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };

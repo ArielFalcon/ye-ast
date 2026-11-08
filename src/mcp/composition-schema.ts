@@ -9,7 +9,8 @@ import { z } from "zod";
 import { HTTP_METHODS } from "../core/domain/entrypoints/http-route.ts";
 import { validateCompositionReferences, validateCompositionIssues } from "./compose-evidence.ts";
 import { COMPOSE_QUERY } from "./composition-input.ts";
-import type { ComposeFull, ComposeReceipt, CompositionGraph, CoverageSummary, RelationValue } from "./composition-contract.ts";
+import type { ComposeFull, ComposeReceipt, CoverageSummary } from "./composition-contract.ts";
+import type { CompositionGraph, RelationValue } from "../core/ports/evidence-composition.port.ts";
 import {
   callLocation, candidateBasis, comparisonRef, cut, cutOwner, dependenceBasis, entrypointKind, evidenceOrigin, evidenceValue,
   factInputs, ids, linkBasis, linkEndpoints, moduleVia, partSchema, producer, readOwner, schemaVersion, snapshotRef,

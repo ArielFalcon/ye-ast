@@ -8,7 +8,7 @@ import { z } from "zod";
 import { HTTP_METHODS } from "../core/domain/entrypoints/http-route.ts";
 import { CALL_SITE_CAUSES } from "../core/domain/topology/call-site.ts";
 import { TRUST_MODES, type DeclaredConfig } from "../core/domain/shared/fact.ts";
-import type { Part } from "./composition-contract.ts";
+import type { Part } from "../core/ports/evidence-composition.port.ts";
 import { compositionIdSchema as idOf } from "./composition-id-schema.ts";
 
 export const ids = {

@@ -5,9 +5,7 @@
  * unavailable) are values, not references, and pass.
  */
 import type { Result } from "../core/domain/shared/result.ts";
-import type {
-  CompositionInvariantFault, CompositionIssue, EvidenceOrigin, MaterializedGraph, Part, RelationValue, Support,
-} from "./composition-contract.ts";
+import type { CompositionInvariantFault, CompositionIssue, EvidenceOrigin, MaterializedGraph, Part, RelationValue, Support } from "../core/ports/evidence-composition.port.ts";
 import { isCompositionId, type IdKind } from "../core/domain/composition/composition-ids.ts";
 
 /** One reference a record holds: the table it points into, the field that holds it, and the id. */

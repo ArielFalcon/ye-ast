@@ -7,12 +7,7 @@
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import { compareText, joinsFact } from "../core/domain/shared/code-node.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
-import type {
-  AnchorId, AnchorRecord, Attestation, BindingRecord, BoundAnchor, CallLocation, CompositionIssue, Connection,
-  ConnectionRule, EntityId, EntityRecord, EntryIdentity, EvidenceId, EvidenceSet, FileId, FileRecord, IssueDetail,
-  MaterializedComposition, Part, PartId, PartOf, ReadId, ReadOwner, ReadRecord, RedactionRecord, RelationId,
-  RelationRecord, RelationValue, SnapshotId, SourceId, Support,
-} from "./composition-contract.ts";
+import type { AnchorId, AnchorRecord, Attestation, BindingRecord, BoundAnchor, CallLocation, CompositionIssue, Connection, ConnectionRule, EntityId, EntityRecord, EntryIdentity, EvidenceId, EvidenceSet, FileId, FileRecord, IssueDetail, MaterializedComposition, Part, PartId, PartOf, ReadId, ReadOwner, ReadRecord, RedactionRecord, RelationId, RelationRecord, RelationValue, SnapshotId, SourceId, Support } from "../core/ports/evidence-composition.port.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
 import {
   compareSupport, compositionKey, fileId, sameCanonical, sortById, unionSupports,

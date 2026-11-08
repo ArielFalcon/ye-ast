@@ -14,11 +14,8 @@ import type { BasePath, BasePathKeys } from "../core/domain/entrypoints/http-rou
 import type { ResponseMode } from "./presentation.ts";
 import { shareExactContext } from "./presentation-sharing.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
-import type {
-  AnchorId, Attestation, ComparisonRef, ComposeFull, ComposeReceipt, CompositionIssue, CompositionResult, Connection,
-  EntityId, EntityRecord, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, FileId, OriginReference, Part, PartId,
-  PartKind, PartOf, ReadId, ReadOwner, ReadRecord, RelationId, RelationRecord, SnapshotId, SourceDescriptor, SourceId,
-} from "./composition-contract.ts";
+import type { ComposeFull, ComposeReceipt, CompositionResult } from "./composition-contract.ts";
+import type { AnchorId, Attestation, ComparisonRef, CompositionIssue, Connection, EntityId, EntityRecord, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, FileId, OriginReference, Part, PartId, PartKind, PartOf, ReadId, ReadOwner, ReadRecord, RelationId, RelationRecord, SnapshotId, SourceDescriptor, SourceId } from "../core/ports/evidence-composition.port.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
 
 /** The action receipt: verification and complete safe repeat queries; findings and coverage belong to text. */

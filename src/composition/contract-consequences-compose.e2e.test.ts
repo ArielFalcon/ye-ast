@@ -15,7 +15,8 @@ import { createMcpServer, type McpDeps } from "../mcp/server.ts";
 import { openSession, resultFields, type Session, type ToolResult } from "../mcp/test-session.testing.ts";
 import { COMPOSE_OUTPUT } from "../mcp/composition-schema.ts";
 import type { ComposeQuery } from "../mcp/query-schema.ts";
-import type { AnchorId, ComposeFull, CompositionGraph, EntityId, PartKind, PartOf } from "../mcp/composition-contract.ts";
+import type { ComposeFull } from "../mcp/composition-contract.ts";
+import type { AnchorId, CompositionGraph, EntityId, PartKind, PartOf } from "../core/ports/evidence-composition.port.ts";
 
 const GIT_ENV = {
   ...process.env,

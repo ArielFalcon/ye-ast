@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Cut, Fact } from "../core/domain/shared/fact.ts";
 import type { TraceEffect } from "../core/domain/trace/trace-fact.ts";
 import type { Recovery } from "./recovery.ts";
+import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
 
 export const responseModeSchema = z
   .enum(["summary", "details", "full"])
@@ -10,8 +11,7 @@ export const responseModeSchema = z
   .describe("Presentation only; coverage/traversal unchanged. summary=findings; details=evidence/locations; full=complete result JSON + navigation text.");
 
 export type ResponseMode = z.infer<typeof responseModeSchema>;
-export type ToolFamily = "entrypoints" | "callers" | "impact" | "importers" | "outline" | "trace" | "workspace" | "decisions" | "contract_consequences";
-export type RenderContext = { tool: ToolFamily; recovery?: Recovery };
+export type RenderContext = { tool: QueryFamily; recovery?: Recovery };
 export type ResponseRenderer<T> = (fact: Fact<T>, mode: ResponseMode, context?: RenderContext) => string;
 
 export function unresolvedLabel(site: UnresolvedCallSite): string {

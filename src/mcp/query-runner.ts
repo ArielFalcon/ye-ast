@@ -4,12 +4,7 @@ import { WALK_BOUND_FIELDS, type Fact, type WalkBoundsField } from "../core/doma
 import type { Result } from "../core/domain/shared/result.ts";
 import { escapePointer } from "../core/domain/shared/json-pointer.ts";
 import type { ScopeRequest } from "../core/domain/shared/scope.ts";
-import type { ImpactBudget, ImpactValue } from "../core/domain/impact/impact-fact.ts";
-import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
-import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
-import type { ConsequencesValue } from "../core/domain/contracts/consequence-fact.ts";
-import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
-import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
+import type { ImpactBudget } from "../core/domain/impact/impact-fact.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { CallersTarget, ImpactFault, ImpactQueries } from "../core/ports/impact-queries.port.ts";
@@ -20,13 +15,13 @@ import type { Redaction } from "../core/ports/redaction.port.ts";
 import { DEFAULT_REVISION, type VcsFault } from "../core/ports/vcs.port.ts";
 import type { WorkspaceFault, WorkspaceRepositoryRequest } from "../core/ports/workspace-repos.port.ts";
 import type { FactRead, WorkspaceQueries, WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
-import type { WorkspaceImpactQueries, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
+import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
 import type { ConsequencesFault, ContractConsequencesQueries } from "../core/ports/contract-consequences-queries.port.ts";
-import type { DecisionQueries, DecisionValue } from "../core/ports/decision-queries.port.ts";
+import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { repositoryCatalog, RepositoryBinding, RepositoryTargetFault } from "./repository-targeting.ts";
 import { callersRecovery, entrypointRecovery, impactRecovery, type Recovery } from "./recovery.ts";
 import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type SemanticArguments, type SemanticQuery, type SemanticQueryOf } from "./query-schema.ts";
-import type { ToolFamily } from "./presentation.ts";
+import type { PublicRead, PublicWorkspaceValue, QueryFamily, SourcePayload } from "../core/ports/evidence-composition.port.ts";
 
 /** The read ports and the public-boundary services a query needs; `McpDeps` extends it with version and bindings. */
 export interface QueryExecutionDeps {
@@ -49,22 +44,6 @@ export type QueryExecutionContext = {
   signal?: AbortSignal;
 };
 
-/** A workspace read without its internal repositories, which hold absolute paths and every entrypoint. */
-export type PublicWorkspaceValue = Omit<WorkspaceValue, "repositories">;
-/** A read after the public boundary: its fact and sidecars redacted, and its private repository sources removed. */
-export type PublicRead<T> = Omit<FactRead<T>, "repositorySources">;
-
-export type SourcePayload =
-  | { family: "entrypoints"; read: PublicRead<EntrypointMap> }
-  | { family: "impact" | "callers"; branch: "local"; read: PublicRead<ImpactValue> }
-  | { family: "impact" | "callers"; branch: "workspace"; read: PublicRead<WorkspaceImpactValue> }
-  | { family: "importers"; read: PublicRead<ImportersValue> }
-  | { family: "outline"; read: PublicRead<OutlineValue> }
-  | { family: "trace"; read: PublicRead<TraceValue> }
-  | { family: "workspace"; read: PublicRead<PublicWorkspaceValue> }
-  | { family: "decisions"; read: PublicRead<DecisionValue> }
-  | { family: "contract_consequences"; read: PublicRead<ConsequencesValue> };
-
 /**
  * What redaction changed, by public position only, compared inside the runner before the original is discarded.
  * `changedIdentityPointers` are RFC 6901 pointers into the public fact (`read.fact`) of every value redaction altered; when
@@ -78,7 +57,7 @@ export type RedactionIdentityGuard = {
   changedSnapshot: boolean;
 };
 
-type WithQuery<P> = P extends { family: infer F extends ToolFamily } ? P & { query: SemanticQueryOf<F> } : never;
+type WithQuery<P> = P extends { family: infer F extends QueryFamily } ? P & { query: SemanticQueryOf<F> } : never;
 
 /**
  * One executed query after the public boundary. `query` is the validated semantic query as received: it is internal and

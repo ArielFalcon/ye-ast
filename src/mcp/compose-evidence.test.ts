@@ -1,10 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { SnapshotRef } from "../core/domain/shared/fact.ts";
-import type {
-  AnchorId, CompositionIssue, Connection, EntryData, EvidenceSet, FileId, MaterializedComposition, MaterializedGraph,
-  PartId, ReadId, RelationKind, RelationRecord, SourceFamilyRef,
-} from "./composition-contract.ts";
+import type { AnchorId, CompositionIssue, Connection, EntryData, EvidenceSet, FileId, MaterializedComposition, MaterializedGraph, PartId, ReadId, RelationKind, RelationRecord, SourceFamilyRef } from "../core/ports/evidence-composition.port.ts";
 import { materializeEvidence, mergeEvidence, validateCompositionReferences } from "./compose-evidence.ts";
 import { digest, SetBuilder, sha, SHA_A, SHA_B, type ReadContext } from "./compose-evidence-test-sets.testing.ts";
 

@@ -11,10 +11,7 @@ import type { Digest } from "../core/ports/digest.port.ts";
 import type { RecoveryContext } from "../core/domain/composition/source-read.ts";
 import { escapePointer } from "../core/domain/shared/json-pointer.ts";
 import { COMPOSITION_KEY_VERSION, DIGEST_ID, ID_PREFIXES, type IdKind, type IdOf } from "../core/domain/composition/composition-ids.ts";
-import type {
-  AnchorId, CompositionIdentity, EvidenceId, EvidenceOrigin, FileId, PartId, PartPayload, ReadId, ReadOwner,
-  SnapshotId, SourceFamilyRef, SourceId, Support,
-} from "./composition-contract.ts";
+import type { AnchorId, CompositionIdentity, EvidenceId, EvidenceOrigin, FileId, PartId, PartPayload, ReadId, ReadOwner, SnapshotId, SourceFamilyRef, SourceId, Support } from "../core/ports/evidence-composition.port.ts";
 
 /** The one id builder: the key is canonical JSON, so object member order never matters and array order always does. */
 export function compositionKey<K extends IdKind>(digest: Digest, kind: K, key: unknown): IdOf<K> {

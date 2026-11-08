@@ -12,7 +12,8 @@ import { COMPOSE_OUTPUT } from "./composition-schema.ts";
 import { RESULT_JSON_LABEL } from "./server.ts";
 import { renderEntrypointMap, renderImpact, renderOutline } from "./render.ts";
 import { blockBytes } from "./presentation-sharing.ts";
-import type { ComposeFull, CompositionResult, CoverageSummary, RepeatRequest, ReadOwner } from "./composition-contract.ts";
+import type { ComposeFull, CompositionResult, CoverageSummary, RepeatRequest } from "./composition-contract.ts";
+import type { ReadOwner } from "../core/ports/evidence-composition.port.ts";
 import type { ExecutedSource } from "./query-runner.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
 

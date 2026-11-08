@@ -14,7 +14,8 @@ import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { CallSite } from "../core/domain/topology/call-site.ts";
 import type { WorkspaceImpactValue, RepoImpact } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
-import type { ExecutedSource, PublicRead, PublicWorkspaceValue, RedactionIdentityGuard } from "./query-runner.ts";
+import type { ExecutedSource, RedactionIdentityGuard } from "./query-runner.ts";
+import type { PublicRead, PublicWorkspaceValue } from "../core/ports/evidence-composition.port.ts";
 import type { SemanticArguments, SemanticQueryOf } from "./query-schema.ts";
 
 export const SHA_A = "a".repeat(40);

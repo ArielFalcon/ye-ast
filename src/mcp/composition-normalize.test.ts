@@ -12,10 +12,7 @@ import type { OutlineDeclaration } from "../core/domain/outline/outline-fact.ts"
 import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { CallSite } from "../core/domain/topology/call-site.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
-import type {
-  AnchorId, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceSet, FileCategory, FileId, Part, PartId, PartKind, PartOf, ReadRecord,
-  SnapshotId, SourceId,
-} from "./composition-contract.ts";
+import type { AnchorId, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceSet, FileCategory, FileId, Part, PartId, PartKind, PartOf, ReadRecord, SnapshotId, SourceId } from "../core/ports/evidence-composition.port.ts";
 import { jsonPointer } from "./composition-identity.ts";
 import { isCompositionId } from "../core/domain/composition/composition-ids.ts";
 import {

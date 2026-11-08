@@ -1,5 +1,5 @@
 import { unknownTargetKey } from "../core/ports/impact-queries.port.ts";
-import type { ToolFamily } from "./presentation.ts";
+import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
 import type { QueryFault } from "./query-runner.ts";
 import { familyOf, type SemanticQuery } from "./query-schema.ts";
 import type { ComposeFault, SourceIdentityCause, UnavailableReason } from "./composition-contract.ts";
@@ -19,7 +19,7 @@ type RenderedFault = PublicFault | SourceIdentityCause;
  * so no clone path, revision or selector the request supplied reaches the text through it.
  */
 export type FaultQueryContext = {
-  family: ToolFamily;
+  family: QueryFamily;
   live: boolean;
   /** Outline's subject form. */
   subject?: "files" | "focus";

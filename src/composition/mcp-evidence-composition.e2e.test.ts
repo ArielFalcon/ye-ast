@@ -11,7 +11,8 @@ import { createMcpServer, type McpDeps } from "../mcp/server.ts";
 import { openSession, resultFields, type Session, type ToolResult } from "../mcp/test-session.testing.ts";
 import { COMPOSE_OUTPUT } from "../mcp/composition-schema.ts";
 import type { ComposeQuery } from "../mcp/query-schema.ts";
-import type { AnchorId, ComposeFull, ComposeReceipt, CompositionGraph, EntityId, FileId, Part, PartKind, PartOf, RepeatRequest, SnapshotId } from "../mcp/composition-contract.ts";
+import type { ComposeFull, ComposeReceipt, RepeatRequest } from "../mcp/composition-contract.ts";
+import type { AnchorId, CompositionGraph, EntityId, FileId, PartKind, PartOf } from "../core/ports/evidence-composition.port.ts";
 
 const everyDeclaration = (declarations: readonly any[]): any[] => declarations.flatMap((item) => [item, ...everyDeclaration(item.children ?? [])]);
 

@@ -8,7 +8,8 @@ import type { ConsequencesValue, ConsequenceFinding, HypothesisAnswer, ProducerC
 import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
 import { OLD_ACCEPTANCE, OLD_GUARANTEE } from "../core/domain/contracts/consequence-fact.ts";
 import { factOf, inputsOf, shaRef, SHA_A, SHA_B, SHA_C } from "./composition-fixtures.testing.ts";
-import type { ExecutedSource, PublicRead } from "./query-runner.ts";
+import type { ExecutedSource } from "./query-runner.ts";
+import type { PublicRead } from "../core/ports/evidence-composition.port.ts";
 
 export const API = "api";
 export const WEB = "web";

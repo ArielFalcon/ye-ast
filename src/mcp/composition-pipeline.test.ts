@@ -5,7 +5,7 @@ import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import { sourceFixture } from "./composition-fixtures.testing.ts";
 import { normalizeSource } from "./composition-normalize.ts";
 import { mergeEvidence, materializeEvidence, validateCompositionReferences } from "./compose-evidence.ts";
-import type { EvidenceSet } from "./composition-contract.ts";
+import type { EvidenceSet } from "../core/ports/evidence-composition.port.ts";
 
 const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
 const sources = [

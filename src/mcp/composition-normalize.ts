@@ -23,14 +23,10 @@ import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
-import type { ExecutedSource, PublicWorkspaceValue } from "./query-runner.ts";
+import type { ExecutedSource } from "./query-runner.ts";
+import type { PublicWorkspaceValue } from "../core/ports/evidence-composition.port.ts";
 import { analysis, recoveryContext, type RecoveryContext } from "../core/domain/composition/source-read.ts";
-import type {
-  AnchorId, AnchorRecord, ComparisonRef, ConsequenceHopData, ConsequenceLinkData, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceRecord,
-  EvidenceSet, FileCategory, FileDependencyCategory, FileId, FileRecord, GuardData, HypothesisIdentity, LinkData, LinkReference, OriginReference, OutlineImportRecord, OutlineUseRecord, Part, PartId,
-  PartPayload, ReadAnalysis, ReadId, ReadOwner, ReadRecord, RedactionRecord, RecordedCollectionState, SnapshotId, SnapshotRecord,
-  SnapshotVectorEntry, SourceFamilyRef, SourceId, Support,
-} from "./composition-contract.ts";
+import type { AnchorId, AnchorRecord, ComparisonRef, ConsequenceHopData, ConsequenceLinkData, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceRecord, EvidenceSet, FileCategory, FileDependencyCategory, FileId, FileRecord, GuardData, HypothesisIdentity, LinkData, LinkReference, OriginReference, OutlineImportRecord, OutlineUseRecord, Part, PartId, PartPayload, ReadAnalysis, ReadId, ReadOwner, ReadRecord, RedactionRecord, RecordedCollectionState, SnapshotId, SnapshotRecord, SnapshotVectorEntry, SourceFamilyRef, SourceId, Support } from "../core/ports/evidence-composition.port.ts";
 import {
   anchorId, evidenceId, fileId, jsonPointer, partId, readId, snapshotId, sortById, sourceId, unionSupports,
   type Occurrence, type SourceContext,

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { SCHEMA, type Fact } from "../core/domain/shared/fact.ts";
-import type { PartPayload, SourceId, Support } from "./composition-contract.ts";
+import type { PartPayload, SourceId, Support } from "../core/ports/evidence-composition.port.ts";
 import {
   anchorId, compositionIdentity, compositionKey, evidenceId, fileId, jsonPointer, partId, readId,
   snapshotId, sortById, sourceId, unionSupports, type SourceIdentityInput,
