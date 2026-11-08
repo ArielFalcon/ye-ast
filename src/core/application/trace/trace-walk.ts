@@ -471,6 +471,12 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const valueRoots = await valueReceivers(node, [...called, ...passed], verdicts);
     const external: ExternalCall[] = [];
     const children: Child[] = root ? await membersOf(node) : [];
+    const construction = syntax.callables.some(callable => callable.construction && callable.start <= node.startLine && node.startLine <= callable.nameLine && callable.name === node.name);
+    if (construction) {
+      for (const owner of navigation.ownersOf(node)) {
+        children.push(...(await membersOf(owner)).filter(child => (FIELD_KINDS as readonly string[]).includes(child.symbol.kind)));
+      }
+    }
     const cuts: Cut[] = unplaced.map((reference) => unresolvedAt(reference, []));
     /** An external call is a leaf only while the repository writes nothing over what it names; otherwise `replaced` decides. */
     const leafUnlessReplaced = async (call: ExternalCall, root: LeafRoot, replaced: () => unknown): Promise<void> => {
