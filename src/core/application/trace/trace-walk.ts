@@ -7,7 +7,7 @@ import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-
 import { branchesOf, declarationPath } from "../../domain/shared/declaration-tree.ts";
 import { joinsFact } from "../../domain/shared/code-node.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
-import { calleeOf, compareOccurrence, ownMemberOf, receiverOf, type OrderedPlace } from "../../domain/shared/call-place.ts";
+import { calleeOf, compactSpelling, compareOccurrence, ownMemberOf, receiverOf, type OrderedPlace } from "../../domain/shared/call-place.ts";
 import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
@@ -463,7 +463,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         else if (callee.form === "bare") bare.push({ reference, name: callee.name });
         else {
           const named = membersNamed(callee.name, reference.file);
-          const proof = await receiverAt(node, reference, callee.name, receiverOf(reference.name) ?? "", reference.name);
+          const proof = await receiverAt(node, reference, callee.name, receiverOf(compactSpelling(reference.name)) ?? "", reference.name);
           await settleReceiver(reference, callee.name, named, proof, false, () => {
             if (PLAIN_CHAIN.test(reference.name) && !reference.name.startsWith("this.")) rooted.push({ reference, name: callee.name, named });
             else typed.push({ reference, name: callee.name, named });

@@ -6,7 +6,7 @@ import { joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { GraphNavigation } from "./graph-navigation.ts";
-import { provenCallsOf, provenKey, type ProvenCalls } from "./proven-calls.ts";
+import { provenCallsOf, provenKey, spelledKey, type ProvenCalls } from "./proven-calls.ts";
 
 /** What the relations prove a receiver holds: a field's or an `inject()` local's origin, and the member calls they prove. */
 export interface ReceiverProofs {
@@ -54,7 +54,7 @@ export interface MemberCallSite {
   column: number;
   member: string;
   receiver: string;
-  /** The call's whole spelling, for a call the index left unresolved; its member proof is then read by spelling. */
+  /** The call's whole spelling, for a call the index left unresolved; its member proof is then read by it, whitespace aside. */
   spelling?: string;
 }
 
@@ -126,7 +126,7 @@ export function createCallBinder({ store, navigation, syntaxIn, proofs, imported
    */
   async function receiverOf({ body, line, column, member, receiver, spelling }: MemberCallSite): Promise<ReceiverProof> {
     const { held, calls } = await proven();
-    const proof = spelling === undefined ? calls.byMember.get(provenKey(body.file, line, column, member)) : calls.bySpelling.get(provenKey(body.file, line, column, spelling));
+    const proof = spelling === undefined ? calls.byMember.get(provenKey(body.file, line, column, member)) : calls.bySpelling.get(spelledKey(body.file, line, column, spelling));
     if (proof?.kind === "member") {
       const method = placedMember(proof.member, proof.receiver);
       return { link: "member", proof: { receiver: proof.receiver, member: proof.member }, ...(method === undefined ? {} : { method }) };

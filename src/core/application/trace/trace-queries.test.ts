@@ -760,6 +760,14 @@ test("a member call on a local the source binds to a class it declares, or to on
   assert.deepEqual([valueOf(declared).steps[1]?.file, valueOf(constructed).steps[1]?.file], [A, B]);
 });
 
+test("a member call whose spelling breaks across lines reads its receiver as the call written on one line does", async () => {
+  const options = boundCall({ kind: "constructed", name: "Repo", line: 8, column: 17 });
+  const fact = await factOf({ ...options, unresolved: [{ from: "run", name: "store\n      .save", kind: "calls", file: A, line: 9, column: 4 }, OUTWARD_CALL("Repo.save", B, 4)], imports: { [A]: [{ local: "Repo", from: B }] } });
+
+  assert.equal(fact.status, "complete");
+  assert.deepEqual(valueOf(fact).steps.slice(1).map(({ symbol, file }) => [symbol, file]), [["save", B]]);
+});
+
 test("a member call on a local bound to a literal, or constructed from a name only the libraries declare, is a global leaf", async () => {
   const literal = await factOf(boundCall({ kind: "literal", type: "Array" }));
   const library = await factOf({ ...boundCall({ kind: "constructed", name: "Map", line: 8, column: 17 }), roots: { Map: { kind: "ambient", name: "Map", bare: true } } });

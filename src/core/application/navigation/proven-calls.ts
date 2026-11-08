@@ -2,18 +2,22 @@ import type { SymbolRef } from "../../domain/relations/relation.ts";
 import type { ExternalMemberUseOrigin, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { TypeBinding, TypeTarget } from "../../ports/type-bindings.port.ts";
+import { compactSpelling } from "../../domain/shared/call-place.ts";
 
 /** What the relations prove a member call runs. */
 export type ProvenCall = { kind: "member"; receiver: SymbolRef; member: SymbolRef } | { kind: "external"; holds: string } | { kind: "replaceable" };
 
 export interface ProvenCalls {
-  /** By `provenKey` of the place a call starts and the name it spells. */
+  /** By `spelledKey` of the place a call starts and the name it spells. */
   bySpelling: ReadonlyMap<string, ProvenCall>;
   /** By `provenKey` of the place a call starts and the member it reaches. */
   byMember: ReadonlyMap<string, ProvenCall>;
 }
 
 export const provenKey = (file: string, line: number, column: number, name: string): string => JSON.stringify([file, line, column, name]);
+
+/** `provenKey` of a call's whole spelling, without the whitespace a source may break it with. */
+export const spelledKey = (file: string, line: number, column: number, spelling: string): string => provenKey(file, line, column, compactSpelling(spelling));
 
 /**
  * What the relations prove each member call runs, by its place: a repository member of the class a field or local holds
@@ -24,7 +28,7 @@ export function provenCallsOf(memberUses: readonly MemberUseOrigin[] | undefined
   const bySpelling = new Map<string, ProvenCall[]>();
   const byMember = new Map<string, ProvenCall[]>();
   const add = (site: { file: string; line: number; column: number; name: string }, call: ProvenCall): void => {
-    for (const [byPlace, key] of [[bySpelling, provenKey(site.file, site.line, site.column, site.name)], [byMember, provenKey(site.file, site.line, site.column, site.name.slice(site.name.lastIndexOf(".") + 1))]] as const) byPlace.set(key, [...(byPlace.get(key) ?? []), call]);
+    for (const [byPlace, key] of [[bySpelling, spelledKey(site.file, site.line, site.column, site.name)], [byMember, provenKey(site.file, site.line, site.column, site.name.slice(site.name.lastIndexOf(".") + 1))]] as const) byPlace.set(key, [...(byPlace.get(key) ?? []), call]);
   };
   for (const use of memberUses ?? []) if (use.template !== true) add(use.reference, use.substitutes === undefined ? { kind: "member", receiver: use.receiver, member: use.member } : { kind: "replaceable" });
   for (const use of externalUses ?? []) add(use.reference, { kind: "external", holds: use.holds });

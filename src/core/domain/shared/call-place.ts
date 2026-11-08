@@ -12,6 +12,11 @@ export function nameTail(name: string): string {
   return name.slice(Math.max(name.lastIndexOf("."), name.lastIndexOf(":"), name.lastIndexOf("#")) + 1);
 }
 
+/** A call's spelling without whitespace, as a source writes it across lines: `a\n  .b(x)` is `a.b(x)`. */
+export function compactSpelling(spelling: string): string {
+  return spelling.replace(/\s+/g, "");
+}
+
 /**
  * A call's spelling without whitespace, comments, argument lists or the type arguments of a member (`.<T>m`), so two
  * readers that spell one link of a chain with and without its arguments agree: `a.b(x)\n  .c` and `a.b().c`.

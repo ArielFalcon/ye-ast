@@ -2,6 +2,7 @@ import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { CALL_EDGE_KINDS, FIELD_KINDS, EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, holdsValue, type EdgeVerdict, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { joinsFact } from "../../domain/shared/code-node.ts";
+import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -116,7 +117,7 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
     if (held === undefined) {
       held = read(file).then(({ receiverBindings, calls }) => {
         const callees = Map.groupBy(calls ?? [], (call) => `${call.line}:${call.column}`);
-        return { receiverBindings: receiverBindingsByPlace(receiverBindings), callees: new Map([...callees].map(([place, at]) => [place, at.map((call) => call.name.replace(/\s+/g, ""))])) };
+        return { receiverBindings: receiverBindingsByPlace(receiverBindings), callees: new Map([...callees].map(([place, at]) => [place, at.map((call) => compactSpelling(call.name))])) };
       });
       syntaxIndexes.set(file, held);
     }
