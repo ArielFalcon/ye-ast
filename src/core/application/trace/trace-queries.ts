@@ -2,7 +2,7 @@ import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { WorkspaceReadOperation } from "../topology/workspace-operation.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
-import { callsByOwner } from "./syntax-calls.ts";
+import { callsByOwner } from "../navigation/reconciled-calls.ts";
 import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";

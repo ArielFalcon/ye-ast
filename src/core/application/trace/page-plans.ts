@@ -2,7 +2,7 @@ import { ANGULAR_LIFECYCLE_HOOKS } from "../../domain/relations/angular-class.ts
 import { placeAt } from "../../domain/impact/impact-cuts.ts";
 import { joinsFact } from "../../domain/shared/code-node.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
-import { comparePositions } from "../../domain/trace/owning-body.ts";
+import { comparePositions } from "../../domain/shared/owning-body.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { RelationExtraction } from "../relations/relation-extractor.ts";
 import type { TemplateEventCall } from "../../ports/template-usage.port.ts";

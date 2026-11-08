@@ -4,7 +4,7 @@ import type { Cut } from "../../domain/shared/fact.ts";
 import type { PlacedDataEffect } from "../../domain/trace/data-effect-site.ts";
 import type { PlacedCallSite } from "../../domain/topology/call-site.ts";
 import { effectOf, unplacedEffect } from "../../domain/trace/trace-effects.ts";
-import { declarationSpan, executesInBody, owningBody, type SourceSpan } from "../../domain/trace/owning-body.ts";
+import { declarationSpan, executesInBody, owningBody, type SourceSpan } from "../../domain/shared/owning-body.ts";
 import type { WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { CodeGraphReader, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { UnresolvedIn } from "../navigation/declaration-uses.ts";

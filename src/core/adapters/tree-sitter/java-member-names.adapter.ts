@@ -3,7 +3,7 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
 import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, FunctionValueCall, ReceiverBinding, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import { isFunctionValueNode, javaFunctionValueCalls } from "./java-function-value-calls.ts";
-import type { SourceSpan } from "../../domain/trace/owning-body.ts";
+import type { SourceSpan } from "../../domain/shared/owning-body.ts";
 import { javaReceiverBindings } from "./java-receiver-bindings.ts";
 import type { JavaParser } from "./java-parser.adapter.ts";
 

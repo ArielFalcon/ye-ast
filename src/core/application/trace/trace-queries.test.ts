@@ -7,7 +7,7 @@ import type { DeclaredType, DispatchSite, DispatchTargets, ImportOriginSite, Rec
 import type { TraceBudget, TraceRequest, TraceTarget } from "../../ports/trace-queries.port.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import type { CallSite, PlacedCallSite } from "../../domain/topology/call-site.ts";
-import type { SourceSpan } from "../../domain/trace/owning-body.ts";
+import type { SourceSpan } from "../../domain/shared/owning-body.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
 import type { DeclaredCallable, ReceiverBinding, SyntaxCall } from "../../ports/declared-member-names.port.ts";

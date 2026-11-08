@@ -3,7 +3,7 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import { annotated, isFunctionValueNode, localReceivers } from "./function-value-calls.ts";
-import type { SourcePosition, SourceSpan } from "../../domain/trace/owning-body.ts";
+import type { SourcePosition, SourceSpan } from "../../domain/shared/owning-body.ts";
 import { hasModifier, isStatic, lineOf, unwrapped } from "./syntax.ts";
 import { sourceTree } from "./source-tree.ts";
 import { defaultExportOf } from "./import-bindings.ts";

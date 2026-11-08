@@ -1,5 +1,5 @@
 import { nameTail } from "../impact/impact-cuts.ts";
-import { compareText } from "../shared/code-node.ts";
+import { compareText } from "./code-node.ts";
 
 /** What a call's spelling says about its callee. */
 export type Callee = { form: "bare"; name: string } | { form: "member"; name: string } | { form: "computed" };

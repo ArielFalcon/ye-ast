@@ -2,7 +2,7 @@ import { CALL_EDGE_KINDS, EDGE_POLICY, isIgnoredEdge } from "../../domain/impact
 import { referenceKey } from "../../domain/impact/impact-cuts.ts";
 import type { OutlinePlace, OutlineUseTarget } from "../../domain/outline/outline-fact.ts";
 import type { FoundUse, UnprovedUse } from "../../domain/outline/outline-uses.ts";
-import { sameOccurrence, type EdgeOccurrence } from "../../domain/trace/call-place.ts";
+import { sameOccurrence, type EdgeOccurrence } from "../../domain/shared/call-place.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { containmentTree } from "./containment-tree.ts";

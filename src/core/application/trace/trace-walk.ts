@@ -1,15 +1,13 @@
-import { declarationSpan, executesInBody, owningBody } from "../../domain/trace/owning-body.ts";
-import { callsByOwner, matchOwnedCall, positionedBodies, type OwnedCall } from "./syntax-calls.ts";
 import { isSeedable } from "../../domain/change/seeds.ts";
 import { mayRunDeclarationOf } from "../../domain/languages/call-targets.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
-import { CALL_EDGE_KINDS, EDGE_POLICY, FIELD_KINDS, isClassKind, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
+import { CALL_EDGE_KINDS, EDGE_POLICY, FIELD_KINDS, isClassKind } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor, placeAt } from "../../domain/impact/impact-cuts.ts";
 import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-fact.ts";
 import { branchesOf, declarationPath } from "../../domain/shared/declaration-tree.ts";
 import { joinsFact } from "../../domain/shared/code-node.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
-import { calleeOf, compareOccurrence, ownMemberOf, receiverOf, type OrderedPlace } from "../../domain/trace/call-place.ts";
+import { calleeOf, compareOccurrence, ownMemberOf, receiverOf, type OrderedPlace } from "../../domain/shared/call-place.ts";
 import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
@@ -22,6 +20,7 @@ import type { RelationExtraction } from "../relations/relation-extractor.ts";
 import { holdsAt, receiverBindingsByPlace, type EdgeTargets, type FollowedEdge } from "../navigation/edge-targets.ts";
 import { provenCallsOf, provenKey, type ProvenCall, type ProvenCalls } from "../navigation/proven-calls.ts";
 import { createDeclarationUses, unsettledBy, type UnresolvedIn } from "../navigation/declaration-uses.ts";
+import { callEdgesOf, createReconciledCalls } from "../navigation/reconciled-calls.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
 const DEFERRED_KINDS: readonly string[] = ["function", "method"];
@@ -42,10 +41,6 @@ export function isTraceRoot(store: CodeGraphReader, unresolvedIn: UnresolvedIn, 
     isSeedable(symbol) ||
     ((FIELD_KINDS as readonly string[]).includes(symbol.kind) &&
       (syntaxCalls.has(symbol.id) || callEdgesOf(store, symbol).length > 0 || unresolvedIn(symbol.file).some((reference) => reference.from === symbol.id && CALL_EDGE_KINDS.includes(reference.kind))));
-}
-
-function callEdgesOf(store: CodeGraphReader, symbol: GraphSymbol) {
-  return store.outgoingEdges([symbol.id], CALL_EDGE_KINDS).filter((edge) => !isIgnoredEdge(edge));
 }
 
 export interface TraceWalkInput {
@@ -159,6 +154,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   const navigation = createGraphNavigation(store, () => false);
   const uses = createDeclarationUses(store, navigation, unresolvedIn);
   const callsFrom = (node: GraphSymbol): readonly GraphUnresolvedReference[] => uses.referencesFrom(node, CALL_EDGE_KINDS);
+  const reconciled = createReconciledCalls({ store, uses, syntaxOf });
 
   const namedCache = new Map<string, readonly GraphSymbol[]>();
   /** The declarations of a name a call written in `from` may run. */
@@ -353,17 +349,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   });
 
   /** The members of a class root that run code, by their declaration: methods, and properties or fields whose initializer makes calls. */
-  const syntaxCallsIn = memoizedBy((file: string) => file, async (file) => {
-    const syntax = await syntaxOf(file);
-    return callsByOwner(syntax.calls ?? [], store.symbolsInFiles([file]), syntax.functionValues);
-  });
-
-  const indexedBodiesIn = memoizedBy((file: string) => file, async (file) =>
-    positionedBodies(store.symbolsInFiles([file]), (await syntaxOf(file)).calls ?? []).map((body) => ({ ...body, ...declarationSpan(body) })));
-
   const membersOf = async (node: GraphSymbol, construction = false): Promise<Child[]> => {
     if (!isClassKind(node.kind)) return [];
-    const syntax = await syntaxCallsIn(node.file);
+    const syntax = await reconciled.ownedIn(node.file);
     const initializers = (await syntaxOf(node.file)).initializedFields ?? [];
     return navigation
       .membersOf(node)
@@ -376,39 +364,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   };
 
   async function bodyOf(node: GraphSymbol, root: boolean): Promise<Body> {
-    const calls = callEdgesOf(store, node);
     const values = store.outgoingEdges([node.id], ["references"]);
     const syntax = await syntaxOf(node.file);
-    const owned = (await syntaxCallsIn(node.file)).get(node.id) ?? [];
-    const accounted = new Set<OwnedCall>();
-    const unplaced: GraphUnresolvedReference[] = [];
-    const indexedBodies = await indexedBodiesIn(node.file);
-    const reconciled = (line: number | null, column: number | null, name: string): boolean => {
-      if (syntax.calls === undefined) return false;
-      const site = matchOwnedCall(owned, line, column, name);
-      return site !== undefined ? site.deferred !== true : line === null || column === null || executesInBody(declarationSpan(node), syntax.functionValues, { line, column });
-    };
-    const accountedSite = (line: number | null, column: number | null, name: string): OwnedCall | undefined => {
-      const owner = line === null || column === null || !Number.isFinite(column) ? undefined : owningBody(indexedBodies, { line, column });
-      const site = owner !== undefined && owner.id !== node.id ? undefined : matchOwnedCall(owned, line, column, name);
-      if (site !== undefined) accounted.add(site);
-      return site;
-    };
-    const called = uses.followed(node, calls).flatMap((followed) => {
-      if (!reconciled(followed.edge.line, followed.edge.column, followed.target.name)) return [followed];
-      const site = accountedSite(followed.edge.line, followed.edge.column, followed.target.name);
-      if (site === undefined) {
-        unplaced.push({ from: node.id, file: node.file, line: followed.edge.line ?? node.startLine, column: followed.edge.column ?? 0, name: followed.target.name, kind: followed.edge.kind, candidates: [] });
-        return [];
-      }
-      return [{ ...followed, edge: { ...followed.edge, line: site.line, column: site.column - 1 } }];
-    });
-    const indexed = callsFrom(node).flatMap((reference) => {
-      if (!reconciled(reference.line, reference.column, reference.name)) return [reference];
-      const site = accountedSite(reference.line, reference.column, reference.name);
-      if (site === undefined) { unplaced.push(reference); return []; }
-      return [{ ...reference, line: site.line, column: site.column - 1 }];
-    });
+    const { edges: called, references: indexed, indexOnly, writtenOnly: missing, ambiguous } = await reconciled.callsOf(node);
     const passed = uses.followed(node, values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));
     const verdicts = await targets.verdictsOf([...called, ...passed], signal);
     const valueRoots = new Map(
@@ -425,7 +383,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         children.push(...await membersOf(owner, true));
       }
     }
-    const cuts: Cut[] = unplaced.map((reference) => unresolvedAt(reference, []));
+    const cuts: Cut[] = indexOnly.map((reference) => unresolvedAt(reference, []));
     /** An external call is a leaf only while the repository writes nothing over what it names; otherwise `replaced` decides. */
     const leafUnlessReplaced = async (call: ExternalCall, root: LeafRoot, replaced: () => unknown): Promise<void> => {
       if (await isReplaced(root)) await replaced();
@@ -503,13 +461,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       } else if (bound !== undefined) await settleBound(reference, target.name, named, bound);
       else cuts.push(unresolvedAt(reference, named));
     }
-    const missing: GraphUnresolvedReference[] = [];
-    for (const call of owned) {
-      if (accounted.has(call) || call.deferred) continue;
-      const reference = { from: node.id, file: node.file, line: call.line, column: call.column - 1, name: call.name, kind: call.kind, candidates: [] };
-      if (call.ambiguous) cuts.push(unresolvedAt(reference, []));
-      else missing.push(reference);
-    }
+    for (const reference of ambiguous) cuts.push(unresolvedAt(reference, []));
     for (const reference of unsettledBy([...indexed, ...missing], called)) {
       const own = ownMemberOf(reference.name);
       const members = own === undefined || isJavaSource(reference.file) ? [] : uses.ownMembers(node, own, ["method"]);
