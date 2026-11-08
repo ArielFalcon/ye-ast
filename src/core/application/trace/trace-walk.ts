@@ -349,7 +349,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const valueRoots = new Map(
       [...called, ...passed].flatMap(({ target }, index) => {
         const verdict = verdicts[index]!;
-        return verdict.kind === "keep" && verdict.receiver !== undefined && ((FIELD_KINDS as readonly string[]).includes(target.kind) || navigation.ownersOf(target).some((owner) => isClassKind(owner.kind))) ? [[index, verdict.receiver] as const] : [];
+        return (verdict.kind === "keep" || verdict.kind === "redirect") && verdict.receiver !== undefined && ((FIELD_KINDS as readonly string[]).includes(target.kind) || navigation.ownersOf(target).some((owner) => isClassKind(owner.kind))) ? [[index, verdict.receiver] as const] : [];
       }),
     );
     const external: ExternalCall[] = [];

@@ -36,3 +36,15 @@ test("a member proof binds a call whose spelling breaks across lines, as it bind
     assert.equal(proof.link === "member" ? proof.method?.name : proof.link, "remove", JSON.stringify(spelling));
   }
 });
+
+test("a member proof binds a call to the one member it names, a method or a property holding a function (R3)", async () => {
+  for (const kind of ["method", "property"]) {
+    const store = fakeCodeGraph([fakeNode("drop", "function", STORE, 2, 5), fakeNode("Api", "class", API, 1, 6), fakeNode("remove", kind, API, 2, 4)], [{ from: "Api", to: "remove", kind: "contains" }]);
+    const memberUses: MemberUseOrigin[] = [{ owner: { path: STORE, symbol: "drop", line: 2 }, receiver: { path: API, symbol: "Api", line: 1 }, member: { path: API, symbol: "Api.remove", line: 2 }, reference: { file: STORE, line: 3, column: 5, name: "api.remove", kind: "calls" } }];
+    const settle = createCallBinder({ store, navigation: createGraphNavigation(store, () => false), syntaxIn: async () => ({ receiverBindings: new Map(), callees: new Map() }), proofs: async () => ({ fields: [], locals: [], memberUses }), importedDeclarations: async () => new Map() });
+    const [drop] = store.symbolsByIds(["drop" as GraphNodeId]);
+    const proof = await settle.receiverOf({ body: drop!, line: 3, column: 5, member: "remove", receiver: "api" });
+
+    assert.equal(proof.link === "member" ? proof.method?.id : proof.link, "remove", kind);
+  }
+});

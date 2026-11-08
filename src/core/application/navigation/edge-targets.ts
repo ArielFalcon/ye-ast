@@ -1,7 +1,7 @@
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { CALL_EDGE_KINDS, FIELD_KINDS, EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, holdsValue, type EdgeVerdict, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
+import { isJavaSource } from "../../domain/languages/java.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
-import { joinsFact } from "../../domain/shared/code-node.ts";
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
@@ -104,7 +104,7 @@ export function edgeKey({ source, target, kind, line, column }: GraphEdge): stri
 export type EdgeTarget =
   | Exclude<EdgeVerdict<GraphSymbol>, { kind: "keep" | "drop" | "redirect" }>
   | { kind: "keep"; receiver?: string; derivation?: ReceiverSettlement }
-  | { kind: "redirect"; to: GraphSymbol; derivation?: "typed" }
+  | { kind: "redirect"; to: GraphSymbol; derivation?: "typed"; receiver?: string }
   | { kind: "drop"; root: ImportOrigin };
 
 const KEEP: EdgeTarget = { kind: "keep" };
@@ -169,11 +169,14 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
         else kept.push(followed);
       }
       const receivers = await receiversOf(kept, signal);
+      const declared = await declaredMethodsOf(kept.filter((followed, index) => receivers[index] === undefined), signal);
       for (const [index, followed] of kept.entries()) {
         const receiver = receivers[index];
-        if (receiver === undefined) verdicts.set(edgeKey(followed.edge), KEEP);
-        else if (binder === undefined) verdicts.set(edgeKey(followed.edge), { kind: "keep", receiver });
-        else verdicts.set(edgeKey(followed.edge), { kind: "keep", receiver, derivation: (await bindsClass(followed, receiver, binder)) ? "proven" : "name-match" });
+        const method = declared.get(followed);
+        if (method !== undefined && method.id !== followed.target.id) verdicts.set(edgeKey(followed.edge), { kind: "redirect", to: method });
+        else if (receiver === undefined) verdicts.set(edgeKey(followed.edge), KEEP);
+        else if (binder === undefined || bindings === undefined) verdicts.set(edgeKey(followed.edge), { kind: "keep", receiver });
+        else verdicts.set(edgeKey(followed.edge), await receiverVerdict(followed, receiver, binder, bindings));
       }
     }
     return edges.map(({ edge }) => verdicts.get(edgeKey(edge)) ?? KEEP);
@@ -222,18 +225,29 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
   }
 
   /**
-   * Whether the binder proves an edge's value receiver holds the class that declares the member it reaches, or a class
-   * below it: a member proof of the call itself, the class a field's or an `inject()` local's origin holds, or the class
-   * the receiver's one store or declared annotation names. Dependence is the binding the language makes at compile time,
-   * so a declared type proves it even where what runs is unproven. The links a returned value, a literal or a type from
-   * outside the repository prove are not dependences of the edge's target, and a member proof keeps its own target.
+   * What the base binds an edge on a value receiver to (ADR-0041 decision 4): `proven` at the declaration it binds, a
+   * redirect from a homonym or a method above it, `proven` where its receiver's type is attributed the target among
+   * several, and a `name-match` otherwise. Dependence is the binding the language makes at compile time, so a declared
+   * type proves it even where what runs is unproven.
    */
-  async function bindsClass({ edge, source, target }: FollowedEdge, receiver: string, settle: CallBinder): Promise<boolean> {
+  async function receiverVerdict({ edge, source, target }: FollowedEdge, receiver: string, settle: CallBinder, bind: CallBindings): Promise<EdgeTarget> {
     const proof = await settle.receiverOf({ body: source, line: edge.line!, column: edge.column! + 1, member: target.name, receiver });
-    if (proof.link === "member") return joinsFact(target, proof.proof.member) && navigation.ownersOf(target).some((owner) => joinsFact(owner, proof.proof.receiver));
-    if (proof.link === "field" || proof.link === "local") return "class" in proof.holds && settle.declares(proof.type, target);
-    if (proof.link === "syntax") return proof.unspelled !== true && ["declared", "annotated", "constructed"].includes(proof.holds.kind) && settle.declares(proof.type, target);
-    return false;
+    const binding = bind.ofReceiver(proof, target.name, [target]);
+    if (binding.target !== undefined && binding.target.id !== target.id) return { kind: "redirect", to: binding.target, receiver };
+    return { kind: "keep", receiver, derivation: binding.target !== undefined || binding.attributed.length > 0 ? "proven" : "name-match" };
+  }
+
+  /** Per Java call edge, the method the receiver reading names at its place (ADR-0044 decision 1); none where it settles nothing. */
+  async function declaredMethodsOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<ReadonlyMap<FollowedEdge, GraphSymbol>> {
+    const asked = bindings === undefined ? [] : edges.filter(({ edge, source }) => edge.kind === "calls" && isJavaSource(source.file));
+    if (bindings === undefined || asked.length === 0) return new Map();
+    const found = await origins.receiverMethods(asked.map(({ edge, source, target }) => ({ file: source.file, line: edge.line!, column: edge.column! + 1, member: target.name })), signal);
+    return new Map(asked.flatMap((followed, index) => {
+      const { edge, source, target } = followed;
+      const call = { body: source, reference: { from: source.id, file: source.file, line: edge.line!, column: edge.column!, name: target.name, kind: edge.kind, candidates: [] } };
+      const settled = bindings.settleDeclared({ kind: "declared", member: target.name, form: "member", call }, found[index]);
+      return settled.kind === "declaration" ? [[followed, settled.target] as const] : [];
+    }));
   }
 
   return {

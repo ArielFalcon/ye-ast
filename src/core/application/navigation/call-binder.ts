@@ -98,11 +98,11 @@ export function createCallBinder({ store, navigation, syntaxIn, proofs, imported
   let read: Promise<{ held: ReceiverProofs; calls: ProvenCalls }> | undefined;
   const proven = () => (read ??= proofs().then((held) => ({ held, calls: provenCallsOf(held.memberUses, held.externalUses) })));
 
-  /** The one method a member proof names, declared by the one class it names; none when the index does not place it so. */
+  /** The one member a member proof names, declared by the one class it names; none when the index does not place it so. */
   const placedMember = (member: SymbolRef, receiver: SymbolRef): GraphSymbol | undefined => {
-    const members = store.symbolsInFiles([member.path]).filter((symbol) => symbol.kind === "method" && joinsFact(symbol, member));
+    const members = store.symbolsInFiles([member.path]).filter((symbol) => (EDGE_POLICY.memberKinds as readonly string[]).includes(symbol.kind) && joinsFact(symbol, member));
     const owners = members.length === 1 ? navigation.ownersOf(members[0]!) : [];
-    return owners.length === 1 && owners[0]!.kind === "class" && joinsFact(owners[0]!, receiver) ? members[0] : undefined;
+    return owners.length === 1 && isClassKind(owners[0]!.kind) && joinsFact(owners[0]!, receiver) ? members[0] : undefined;
   };
 
   /** The one type `name` names in `file`: the declaration an import of it binds, or the one the file declares. */

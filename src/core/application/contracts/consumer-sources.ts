@@ -19,7 +19,7 @@ import type { WorkspaceFault, WorkspaceRepository } from "../../ports/workspace-
 import type { Digest } from "../../ports/digest.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
-import { inboundEdgesOf, receiverSettlementsOf } from "../impact/inbound-origins.ts";
+import { inboundEdgesOf, receiverCorrectionsOf } from "../impact/inbound-origins.ts";
 import { createEdgeTargets, syntaxOfSources } from "../navigation/edge-targets.ts";
 import { referenceProofsOf } from "../impact/reference-origins.ts";
 import { memberProofContextOf } from "../relations/retained-relations.ts";
@@ -102,9 +102,9 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             const origins = indexed === "unavailable" ? undefined : await deps.relations.extract(sources, { memberProofs: memberProofContextOf(loaded.value, context.scope) });
             const importOrigins = deps.importOrigins?.(sources, undefined, prepared.value.facts);
             const proofs = indexed === "unavailable" ? undefined : await referenceProofsOf(importOrigins, indexed.store, loaded.value, context.signal);
-            const settled = indexed === "unavailable" || origins === undefined || importOrigins === undefined
+            const corrections = indexed === "unavailable" || origins === undefined || importOrigins === undefined
               ? undefined
-              : await receiverSettlementsOf(indexed.store, createEdgeTargets({ origins: importOrigins, store: indexed.store, modules: deps.modules === undefined ? undefined : { reader: deps.modules, sources }, syntaxOf: syntaxOfSources(deps.memberNames, sources, prepared.value.facts), proofs: async () => origins }), sources.map((file) => file.path), context.signal);
+              : await receiverCorrectionsOf(indexed.store, createEdgeTargets({ origins: importOrigins, store: indexed.store, modules: deps.modules === undefined ? undefined : { reader: deps.modules, sources }, syntaxOf: syntaxOfSources(deps.memberNames, sources, prepared.value.facts), proofs: async () => origins }), sources.map((file) => file.path), context.signal);
             if (context.signal?.aborted) return ABORTED;
             return {
               ok: true,
@@ -113,7 +113,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
                 origins: deps.origins(sources),
                 templates: await createConsumerTemplateReader({ metadata: deps.metadata, flow: deps.templateFlow }, sources),
                 graph: indexed === "unavailable" ? undefined : indexed.store,
-                inbound: indexed === "unavailable" || origins === undefined ? undefined : inboundEdgesOf(indexed.store, origins, proofs, settled === undefined ? undefined : { dropped: new Set(), into: new Map(), settled }),
+                inbound: indexed === "unavailable" || origins === undefined ? undefined : inboundEdgesOf(indexed.store, origins, proofs, corrections),
               },
             };
           };

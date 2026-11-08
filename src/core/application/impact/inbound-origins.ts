@@ -30,9 +30,10 @@ export function inboundEdgesOf(store: CodeGraphReader, origins: RelationOrigins,
 
 /**
  * How each graph edge out of the TypeScript sources among `files` whose receiver is a value is known, settled at once for
- * a reading whose callers are asked without waiting (ADR-0036).
+ * a reading whose callers are asked without waiting (ADR-0036): kept with its settlement, or moved to the declaration the
+ * base binds it to (ADR-0041 decision 4).
  */
-export async function receiverSettlementsOf(store: CodeGraphReader, targets: EdgeTargets, files: readonly string[], signal?: AbortSignal): Promise<ReadonlyMap<string, ReceiverSettlement>> {
+export async function receiverCorrectionsOf(store: CodeGraphReader, targets: EdgeTargets, files: readonly string[], signal?: AbortSignal): Promise<EdgeCorrections> {
   const sources = new Map(store.symbolsInFiles(files.filter((file) => isTypeScriptFile(file) && kindOfChangedFile(file) !== "test")).map((symbol) => [symbol.id, symbol]));
   const edges = store.outgoingEdges([...sources.keys()], FOLLOWED_EDGE_KINDS);
   const reached = new Map(store.symbolsByIds([...new Set(edges.map((edge) => edge.target))]).map((symbol) => [symbol.id, symbol]));
@@ -42,8 +43,11 @@ export async function receiverSettlementsOf(store: CodeGraphReader, targets: Edg
     return source === undefined || target === undefined ? [] : [{ edge, source, target }];
   });
   const verdicts = await targets.verdictsOf(followed, signal);
-  return new Map(followed.flatMap(({ edge }, index) => {
+  const settled = new Map<string, ReceiverSettlement>();
+  const moved = followed.flatMap((edge, index) => {
     const verdict = verdicts[index]!;
-    return verdict.kind === "keep" && verdict.derivation !== undefined ? [[edgeKey(edge), verdict.derivation] as const] : [];
-  }));
+    if (verdict.kind === "keep" && verdict.derivation !== undefined) settled.set(edgeKey(edge.edge), verdict.derivation);
+    return verdict.kind === "redirect" && verdict.receiver !== undefined ? [{ ...edge, target: verdict.to }] : [];
+  });
+  return { dropped: new Set(moved.map(({ edge }) => edgeKey(edge))), into: Map.groupBy(moved, ({ target }) => target.id), settled };
 }

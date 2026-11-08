@@ -66,6 +66,8 @@ export interface CallBindings {
   boundCalls(calls: readonly UnboundCall[], signal?: AbortSignal): Promise<readonly SettledBinding[]>;
   /** The declarations of `name` a call written in `from` may run, in scope; `values` leaves out the kinds only types have. */
   namedDeclarations(name: string, from: string, values?: boolean): readonly GraphSymbol[];
+  /** What a member call of `member` binds to by what its receiver's proof decides, attributed among `candidates`. */
+  ofReceiver(proof: ReceiverProof, member: string, candidates: readonly GraphSymbol[]): Extract<CallBinding, { kind: "receiver" }>;
 }
 
 export interface CallBindingsDeps {
@@ -126,7 +128,7 @@ export function createCallBindings({ store, navigation, origins, binder, importe
   }
 
   /** What a member call's receiver proof binds it to: the method the proof places, or the member the proven type has. */
-  function proven(proof: ReceiverProof, name: string, candidates: readonly GraphSymbol[]): CallBinding {
+  function proven(proof: ReceiverProof, name: string, candidates: readonly GraphSymbol[]): Extract<CallBinding, { kind: "receiver" }> {
     const typed = (type: GraphSymbol | undefined) => {
       const target = type === undefined ? undefined : binder.memberOf(type, name);
       return { ...(target === undefined ? {} : { target }), attributed: target !== undefined || type === undefined ? [] : candidates.filter((candidate) => binder.declares(type, candidate)) };
@@ -237,6 +239,7 @@ export function createCallBindings({ store, navigation, origins, binder, importe
     bindCalls,
     settleDeclared,
     namedDeclarations,
+    ofReceiver: proven,
     async boundCalls(calls, signal) {
       const bound = await bindCalls(calls, signal);
       const pending = bound.flatMap((binding) => (binding.kind === "declared" ? [binding] : []));
