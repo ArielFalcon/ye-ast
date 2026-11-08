@@ -1,3 +1,4 @@
+import type { DependenceDerivation } from "./impact-fact.ts";
 import type { ImportOrigin } from "../relations/resolved-reference.ts";
 import type { Finding } from "../shared/fact.ts";
 
@@ -12,7 +13,10 @@ const REFERENCED_KINDS = ["function", "method", "constant", "variable", "class",
 /** Class fields: their initializer is code that runs, so it calls and instantiates; what a field references is its type. */
 export const FIELD_KINDS = ["property", "field"] as const;
 const TYPE_KINDS = ["class", "component", "interface"] as const;
-const ANGULAR_CLASS_KINDS = ["class", "component"] as const;
+/** Declarations that are classes: a class, or a component an Angular decorator declares. */
+const CLASS_KINDS = ["class", "component"] as const;
+/** Declarations that hold a value, which a call may find any object in. */
+const VALUE_KINDS = ["constant", "variable"] as const;
 
 export const EDGE_POLICY = {
   rules: [
@@ -25,7 +29,7 @@ export const EDGE_POLICY = {
    * template or as a host directive. The source depends on the target, as with a reference. They are read, not guessed,
    * so each is as certain as a resolved edge.
    */
-  relations: { kinds: ["injects", "uses-component", "uses-directive", "uses-pipe"], from: ANGULAR_CLASS_KINDS, to: ANGULAR_CLASS_KINDS, confidence: 1 },
+  relations: { kinds: ["injects", "uses-component", "uses-directive", "uses-pipe"], from: CLASS_KINDS, to: CLASS_KINDS, confidence: 1 },
   /** A member stands for the type that declares it, at the same depth. */
   ownerKinds: TYPE_KINDS,
   /**
@@ -84,6 +88,17 @@ export function followsRelation({ kind, sourceKind, targetKind }: PolicyEdge): b
  */
 export const CALL_EDGE_KINDS: readonly string[] = ["calls", "instantiates"];
 
+/** The declarations a relation ends at, and the only ones that can own a local an `inject()` call initializes. */
+export const LOCAL_OWNER_KINDS: readonly string[] = [...EDGE_POLICY.relations.from, "function"];
+
+export function isClassKind(kind: string): boolean {
+  return (CLASS_KINDS as readonly string[]).includes(kind);
+}
+
+export function holdsValue(kind: string): boolean {
+  return (VALUE_KINDS as readonly string[]).includes(kind);
+}
+
 /** The followed edges' kinds, for asking a store only for them. */
 export const FOLLOWED_EDGE_KINDS: readonly string[] = EDGE_POLICY.rules.flatMap((rule) => rule.edges);
 
@@ -101,6 +116,23 @@ export function isIgnoredEdge({ synthesizedBy }: EdgeScore): boolean {
 export function edgeConfidence({ confidence, provenance }: EdgeScore): number {
   if (confidence !== null) return confidence;
   return provenance === "heuristic" ? EDGE_POLICY.unscoredHeuristicConfidence : 1;
+}
+
+/**
+ * How a graph edge whose target was settled is known: bound by a source proof or by its name alone (ADR-0036), or bound
+ * by the type checker to the edge's own target (ADR-0037).
+ */
+export type ReceiverSettlement = "proven" | "typed" | "name-match";
+
+/**
+ * The score and the derivation of a graph edge the walk follows. An edge whose receiver a source proof binds to the
+ * callee's class counts as certain as ye-ast's own proofs; one the index matched by name on a value receiver no proof
+ * binds counts as a heuristic edge without a score, whatever score the index gave it; a heuristic edge is a name match.
+ */
+export function followedEdge(score: EdgeScore, settled?: ReceiverSettlement): { confidence: number; derivation: DependenceDerivation } {
+  if (settled === "proven" || settled === "typed") return { confidence: EDGE_POLICY.relations.confidence, derivation: settled };
+  if (settled === "name-match") return { confidence: EDGE_POLICY.unscoredHeuristicConfidence, derivation: "name-match" };
+  return { confidence: edgeConfidence(score), derivation: score.provenance === "heuristic" ? "name-match" : "resolved" };
 }
 
 /**

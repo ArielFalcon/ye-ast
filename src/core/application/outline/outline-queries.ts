@@ -15,6 +15,8 @@ import type { ModuleDependenciesReader } from "../../ports/module-dependencies.p
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
 import { focusWithUses, readFocus, readOutline } from "./outline.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
+import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
+import { syntaxOfSources } from "../navigation/edge-targets.ts";
 import { combinedModuleReader } from "../navigation/module-readers.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 
@@ -27,6 +29,8 @@ export interface OutlineQueriesDeps extends HeadReaderDeps {
   unmodelled?: UnmodelledConstructsReader;
   /** Reads what binds the names a focused declaration uses, from the head's sources. */
   importOrigins: ImportOriginsReader;
+  /** What a source's syntax states; without it a focused body's call on a value receiver is listed as the graph resolved it. */
+  memberNames?: DeclaredMemberNamesReader;
 }
 
 export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
@@ -65,7 +69,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
           const modules = await combinedModuleReader(deps.moduleReaders).extract(sources, { files: covered });
           if (request.signal?.aborted) return ABORTED;
           const listed = focused === undefined ? readOutline(store, covered, modules) : undefined;
-          const used = focused === undefined ? undefined : await focusWithUses(store, focused, deps.importOrigins(sources), modules, request.signal);
+          const used = focused === undefined ? undefined : await focusWithUses(store, focused, deps.importOrigins(sources, undefined, head.prepared?.facts), modules, syntaxOfSources(deps.memberNames, sources, head.prepared?.facts), request.signal);
           if (used === "aborted" || request.signal?.aborted) return ABORTED;
           const read = focused === undefined ? listed!.value : { ...focused.value, focus: used!.focus };
           const cuts = [

@@ -1,7 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import type { Job, Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
-import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
+import { distinctEvidence, spanCovers, type Evidence, type Finding, type UnknownReason } from "../../domain/shared/fact.ts";
 import type { Gap, MethodDecl } from "./java-symbols.ts";
 import type { CallSite, PlacedCallSite } from "../../domain/topology/call-site.ts";
 
@@ -17,7 +17,7 @@ export function spanOf(path: string, node: { startPosition: { row: number }; end
 
 /** An unknown item. Its evidence never repeats a line: a span that starts where an earlier one starts and ends no later adds nothing. */
 export function unknown(reason: UnknownReason, evidence: readonly Evidence[]): Finding<never> {
-  return { status: "unknown", reason, evidence: evidence.filter((span, index) => !evidence.slice(0, index).some((earlier) => covers(earlier, span))) };
+  return { status: "unknown", reason, evidence: distinctEvidence(evidence) };
 }
 
 /** An unknown item at the method and at the constructs that left it undecided. */
@@ -39,13 +39,9 @@ export function complete<T>(value: T): Finding<T> {
 export function withEvidence<T>(target: Finding<T>, span: Evidence): Finding<T> {
   if (target.status === "unknown") {
     const via = target.evidence[0]?.via;
-    return { ...target, evidence: [via === undefined ? span : { ...span, via }, ...target.evidence.filter((cause) => !covers(span, cause))] };
+    return { ...target, evidence: [via === undefined ? span : { ...span, via }, ...target.evidence.filter((cause) => !spanCovers(span, cause))] };
   }
   return { ...target, evidence: [{ path: span.path, line: span.line }] };
-}
-
-function covers(earlier: Evidence, span: Evidence): boolean {
-  return earlier.path === span.path && earlier.line === span.line && (earlier.endLine ?? earlier.line) >= (span.endLine ?? span.line);
 }
 
 /** Where each site a Java reader builds starts, kept beside the site so the facts that report call sites never carry it. */

@@ -24,6 +24,7 @@ import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../core/p
 import type { ConsequencesValue } from "../core/domain/contracts/consequence-fact.ts";
 import type { ChangeRequest, ConsequencesFault, ContractConsequencesQueries, HypothesesRequest } from "../core/ports/contract-consequences-queries.port.ts";
 import type { OutwardName } from "../core/domain/topology/outward-name.ts";
+import type { EvidenceComposition } from "../core/ports/evidence-composition.port.ts";
 import type { FactRead, WorkspaceRefresh } from "../core/ports/workspace-queries.port.ts";
 import { createMcpServer, FAULT_META, RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, TRACE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT, CONTRACT_CONSEQUENCES_OUTPUT } from "./server.ts";
 
@@ -34,7 +35,7 @@ function resultFields(result: any): any {
   assert.notEqual(at, -1);
   return { text: text.slice(0, at), ...JSON.parse(text.slice(at + 1 + RESULT_JSON_LABEL.length)) };
 }
-import { openSession, type Session, type ToolResult } from "./test-session.testing.ts";
+import { openSession, textOf, type Session, type ToolResult } from "./test-session.testing.ts";
 import { CONSUMER_ROUTES } from "./test-consumer-routes.testing.ts";
 import { createHash } from "node:crypto";
 import { encodeCursor, selectionDigest } from "./evidence-cursor.ts";
@@ -316,16 +317,10 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh,
     ofHypotheses: (request) => (calls.hypotheses.push(request), consequences(forRepo({ ...base(), status: "complete", value: { repositorySnapshots: [], answers: [] } }, request.repo.id!))(request)),
     ofChange: (request) => (calls.changes.push(request), consequences(forRepo({ ...base(), status: "complete", value: { repositorySnapshots: [], answers: [] } }, request.repo.id!))(request)),
   };
-  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, outline, trace, workspace, workspaceImpact, decisions, contractConsequences, digest: { of: (value) => createHash("sha256").update(value).digest("hex") }, redaction, repository, ...(repositories === undefined ? {} : { repositories }) });
+  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, outline, trace, workspace, workspaceImpact, decisions, contractConsequences, digest: { of: (value) => createHash("sha256").update(value).digest("hex") }, evidenceComposition: {} as EvidenceComposition, redaction, repository, ...(repositories === undefined ? {} : { repositories }) });
   return { session: await openSession(server), calls };
 }
 
-/** The presentation text a reader sees: content without its closing result JSON line. */
-const textOf = (result: { content: { text: string }[] }): string => {
-  const whole = result.content.map((block) => block.text).join("\n");
-  const at = whole.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
-  return at === -1 ? whole : whole.slice(0, at);
-};
 
 /** The next step a fault's text gives, or the empty string. */
 const stepOf = (result: { content: { text: string }[] }): string => /^Next step: .*$/m.exec(textOf(result))?.[0] ?? "";
@@ -856,35 +851,6 @@ test("an outline focus lists each use under its declaration, a declaration by fi
   assert.match(text, /\n {4}uses:\n {6}helper → src\/lib\.ts:1 \(calls, references; at 11, 15\)\n {6}zod \(package\) \(calls; at 12\)\n {6}Map \(global\) \(instantiates\)\n/);
   assert.match(text, /\n {4}uses nothing outside its body\n/);
   await session.close();
-});
-
-test("compose records an outline focus read whole, as the outline tool answers it", async () => {
-  const value: OutlineValue = {
-    focus: [{ file: "src/Api.ts", selector: "get", path: "get", ancestors: [], declaration: { kind: "function", name: "get", line: 10, endLine: 20 }, omitted: 0, uses: [{ global: "Map", relations: ["instantiates"], at: [{ line: 11, column: 3 }] }] }],
-    unheld: [],
-  };
-  const fact = { ...base(), inputs: { ...base().inputs, declaredConfig: { focus: ["src/Api.ts:get"] } }, status: "complete", value } as Fact<OutlineValue>;
-  const { session } = await setup({ outline: async () => ({ ok: true, value: fact }) });
-  try {
-    const result = await session.callTool("ye_ast_compose", { queries: [{ name: "ye_ast_outline", arguments: { focus: [{ file: "src/Api.ts", symbol: "get" }] } }], mode: "full" });
-    assert.notEqual(result.isError, true, textOf(result));
-    assert.match(textOf(result), /1 recorded reads \(1 complete, .*graph\.parts \(1\)/s);
-  } finally { await session.close(); }
-});
-
-test("a focused declaration with no proven use but an unproved one never reads as using nothing, alone or composed", async () => {
-  const value: OutlineValue = { focus: [{ file: "src/Api.ts", selector: "get", path: "get", ancestors: [], declaration: { kind: "function", name: "get", line: 10, endLine: 20 }, omitted: 0, uses: [] }], unheld: [] };
-  const cuts: [Cut] = [{ kind: "unresolved-link", at: ["src/Api.ts::get", "src/Api.ts:11 Buffer.byteLength"], reason: "unresolved" }];
-  const fact = { ...base(), inputs: { ...base().inputs, declaredConfig: { focus: ["src/Api.ts:get"] } }, status: "partial", value, cuts } as Fact<OutlineValue>;
-  const { session } = await setup({ outline: async () => ({ ok: true, value: fact }) });
-  try {
-    const focus = [{ file: "src/Api.ts", symbol: "get" }];
-    const alone = textOf(await session.callTool("ye_ast_outline", { focus, mode: "summary" }));
-    const composed = textOf(await session.callTool("ye_ast_compose", { queries: [{ name: "ye_ast_outline", arguments: { focus } }], mode: "details" }));
-    assert.match(alone, /10-20 get \[function\]/);
-    assert.match(composed, /outline declaration .*get/);
-    for (const text of [alone, composed]) assert.doesNotMatch(text, /nothing outside its body/);
-  } finally { await session.close(); }
 });
 
 test("an outline call with both files and focus, or with neither, is refused before any query", async () => {
@@ -2204,22 +2170,6 @@ test("mixed live workspace trust failures retain both possible selector owners",
       assert.match(stepOf(result), /member live selectors/);
       assert.doesNotMatch(stepOf(result), /Otherwise omit live and pass/);
     }
-  } finally { await session.close(); }
-});
-
-test("compose names the failed queries once and corrects only at the cause, for the cause's tool", async () => {
-  const fault: ImpactFault = { kind: "unknown-symbol", detail: "no such symbol", entries: [{ file: "src/a.ts", symbol: "gone", candidates: ["a"] }] };
-  const { session } = await setup({ outline: async () => ({ ok: false, fault }) });
-  try {
-    const outline = { name: "ye_ast_outline", arguments: { focus: [{ file: "src/a.ts", symbol: "gone" }] } };
-    const result = await session.callTool("ye_ast_compose", { queries: [{ name: "ye_ast_entrypoints", arguments: {} }, outline, outline] });
-    assert.equal(result.isError, true);
-    const published = result._meta?.[FAULT_META] as { kind: string; family: string; requestIndices: number[]; cause: { kind: string } };
-    assert.deepEqual([published.kind, published.family, published.requestIndices, published.cause.kind], ["composition-source-fault", "outline", [1, 2], "unknown-symbol"]);
-    const text = textOf(result);
-    assert.equal(text.match(/^Next step:/gm)?.length, 1);
-    assert.ok(text.indexOf("Next step:") > text.indexOf("fault: unknown-symbol"));
-    assert.doesNotMatch(text, /\btargets\b/);
   } finally { await session.close(); }
 });
 
@@ -4331,38 +4281,6 @@ test("recovery recipes appear once in content across ordinary and selected respo
         }
       }
     }
-  } finally { await session.close(); }
-});
-
-test("compose combines public queries in every mode and verifies repeated evidence", async () => {
-  const { session, calls } = await setup();
-  try {
-    const queries = [
-      { name: "ye_ast_entrypoints", arguments: {} },
-      { name: "ye_ast_outline", arguments: { files: ["src/a.ts"] } },
-    ];
-    const response = await session.callTool("ye_ast_compose", { queries, mode: "full" });
-    assert.notEqual(response.isError, true, JSON.stringify(response));
-    const data = resultFields(response) as { kind: string; graph: { sources: unknown[] }; verification: { identity: string } };
-    assert.equal(data.kind, "composition");
-    assert.equal(data.graph.sources.length, 2);
-    const reverse = await session.callTool("ye_ast_compose", { queries: queries.toReversed(), mode: "full", expect: data.verification.identity });
-    assert.deepEqual(resultFields(reverse), data);
-    for (const mode of ["summary", "details"]) {
-      const result = await session.callTool("ye_ast_compose", { queries, mode });
-      assert.notEqual(result.isError, true, JSON.stringify(result));
-      const receipt = resultFields(result) as { kind: string; text: string };
-      assert.equal(receipt.kind, "composition-receipt");
-      assert.ok(receipt.text.length > 0);
-    }
-    const previous = calls.map.length;
-    const invalid = await session.callTool("ye_ast_compose", { queries: [{ name: "ye_ast_entrypoints", arguments: { mode: "full" } }] });
-    assert.equal(invalid.isError, true);
-    assert.equal(calls.map.length, previous);
-    const missing = await session.callTool("ye_ast_compose", { queries: [{ name: "ye_ast_entrypoints", arguments: {repo:"missing"} }] });
-    assert.equal(missing.isError, true);
-    assert.equal(missing.structuredContent, undefined);
-    assert.match(textOf(missing), /unknown-repository/);
   } finally { await session.close(); }
 });
 

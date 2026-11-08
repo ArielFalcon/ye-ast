@@ -100,12 +100,12 @@ test("a workspace summary counts its links per caller, callee and transport when
 
 test("a workspace summary keeps the link list when it is shorter than the counts, and lists the call sites the join reached without a link", () => {
   const short = { ...linkOf(7), from: { repo: "a", file: "x.ts", line: 7, symbol: "f" }, to: { repo: "b", kind: "http-route", name: "GET /", handler: { path: "y.java", symbol: "g", line: 1 } } };
-  const value = mapValue([short], [{ from: { repo: "a", file: "x.ts", line: 9, symbol: "h" }, transport: "http", outcome: "ambiguous", name: "shared", repos: ["b", "c"] }]);
+  const value = mapValue([short], [{ from: { repo: "a", file: "x.ts", line: 9, symbol: "h" }, transport: "http", outcome: "ambiguous", name: "shared", repos: ["b", "c"], routes: ["GET /shared"] }]);
 
   const summary = renderWorkspace({ ...base, status: "complete", value } as never, "summary");
 
   assert.match(summary, /links between the repositories read \(1\):\n  - 1\. a:x\.ts:7 f -> b GET \/ -> y\.java:1 g \(exact\)\n/);
-  assert.match(summary, /call sites the join reached without a link \(1\):\n  - a:x\.ts:9 h http shared: ambiguous \(b, c\)/);
+  assert.match(summary, /call sites the join reached without a link \(1\):\n  - a:x\.ts:9 h http shared: ambiguous \(b, c\) routes GET \/shared$/m);
 });
 
 test("unresolved diagnostics stay compact in summaries and retain causal evidence in details", () => {

@@ -1,32 +1,23 @@
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
 import { comparePlacement, type DataEffectReader, type PlacedDataEffect } from "../../domain/trace/data-effect-site.ts";
 import type { DataEffect } from "../../domain/trace/trace-fact.ts";
-import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
+import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import type { Node } from "web-tree-sitter";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, resolve } from "./java-declared-types.ts";
-import { enclosingType } from "./java-root-bindings.ts";
+import { enclosingType, withJavaSources } from "./java-project.ts";
 import { argumentsOf, typeNameOf } from "./java-members.ts";
 import { invocationsOf, type Invocation } from "./java-invocations.ts";
 import { callKey, hasVarargs } from "./java-receiver-methods.ts";
-import { createJavaProject, describeFile, readArgumentSignature, readSignature, sameSignature, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, readArgumentSignature, readSignature, sameSignature, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 import { DATA_CLIENTS, ENTITY_OPERATIONS, QUERY_CONFIGURATION, QUERY_FACTORIES, QUERY_OPERATIONS, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
 
 export function createJavaDataEffects(parser: JavaParser): DataEffectReader {
   return { placed: async (sources) => {
-    const trees: JavaSyntaxTree[] = [];
-    const sites: PlacedDataEffect[] = [];
-    try {
-      const files = sources.filter(({ path }) => isJavaSource(path) && !isJvmTestFile(path)).flatMap(({ path, content }) => {
-        const parsed = parser.parse(content);
-        if (!parsed.ok) {
-          sites.push({ site: { file: path, line: parsed.fault.line, effect: undefined } });
-          return [];
-        }
-        trees.push(parsed.value);
-        return [describeFile(path, parsed.value.root)];
-      });
+    return withJavaSources(parser, (parse) => {
+      const { files, unparsed } = parse(sources.filter(({ path }) => isJavaSource(path) && !isJvmTestFile(path)));
+      const sites: PlacedDataEffect[] = unparsed.map(({ path, line }) => ({ site: { file: path, line, effect: undefined } }));
       const project = createJavaProject(files);
       const bindings = new Map(files.map((file) => [file, new Map(javaReceiverBindings(file.root, { includeUnproven: true }).map((binding) => [callKey(binding.line, binding.column, binding.member), binding]))]));
       for (const type of project.types) for (const call of invocationsOf(type)) {
@@ -34,9 +25,7 @@ export function createJavaDataEffects(parser: JavaParser): DataEffectReader {
         if (effect !== undefined) sites.push({ site: { file: type.file.path, line: call.node.startPosition.row + 1, effect: effect === false ? undefined : effect }, column: call.node.startPosition.column });
       }
       return sites.sort(comparePlacement);
-    } finally {
-      for (const tree of trees) tree.dispose();
-    }
+    });
   } };
 }
 

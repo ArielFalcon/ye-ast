@@ -8,9 +8,9 @@ import type { Result } from "../core/domain/shared/result.ts";
 import type { ImpactedLink, Link } from "../core/domain/topology/link.ts";
 import { isFullObjectId } from "../core/domain/shared/revision.ts";
 import type { WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
+import { analysis, type Analysis, type CutOwner } from "../core/domain/composition/source-read.ts";
 
 export type ImpactOwner = { kind: "local" } | { kind: "section"; repo: string };
-export type CutOwner = { kind: "fact" } | { kind: "entrypoints" } | { kind: "section"; repo: string } | { kind: "read"; repo: string; index: number };
 export type EvidenceSelection =
   | { kind: "handler-origins"; owner: ImpactOwner; handler: Pick<Handler, "path" | "symbol" | "line"> }
   | { kind: "module-origins"; owner: ImpactOwner; module: { file: string; snapshot: "base" | "head" } }
@@ -18,7 +18,6 @@ export type EvidenceSelection =
   | { kind: "cut-places"; owner: CutOwner; cutIndex: number }
   | { kind: "workspace-link-evidence"; linkId: string };
 export type EvidenceSource = { kind: "entrypoints"; fact: Fact<EntrypointMap> } | { kind: "local"; fact: Fact<ImpactValue> } | { kind: "workspace"; fact: Fact<WorkspaceImpactValue> };
-export type Analysis = { status: "complete" } | { status: "partial" } | { status: "unknown"; reason: UnknownReason };
 export type SourceRead = { owner: CutOwner; schema: SchemaVersion; snapshot: SnapshotRef; producer: Producer; inputs: FactInputs; analysis: Analysis };
 export type SourceSummary = Omit<SourceRead, "owner"> & { reads: readonly SourceRead[]; limits: readonly { owner: CutOwner; kind: Cut["kind"]; cuts: number; places: number; limit?: number }[] };
 export type EntrypointEvidenceIdentity = Pick<Extract<Entrypoint, { kind: "http-route" }>, "kind" | "name" | "method" | "path" | "version" | "handler"> | Pick<Extract<Entrypoint, { kind: "ui-route" }>, "kind" | "name" | "path" | "outlet" | "component"> | Pick<Extract<Entrypoint, { kind: "listener" }>, "kind" | "name" | "protocol" | "destination" | "handler"> | Pick<Extract<Entrypoint, { kind: "job" }>, "kind" | "name" | "trigger" | "handler">;
@@ -42,9 +41,6 @@ type Available = { availability: "available" } & (
 export type EvidenceSelectionResult = { source: SourceSummary } & (Available | { availability: "unavailable"; reason: UnknownReason; evidence: readonly Evidence[] });
 export type SelectionFault = { code: "selection-not-found" | "ambiguous-selection" };
 
-export function analysis(fact: FactProvenance): Analysis {
-  return fact.status === "unknown" ? { status: "unknown", reason: fact.reason } : { status: fact.status };
-}
 function own<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {
   return Object.hasOwn(record, key) ? record[key] : undefined;
 }

@@ -3,14 +3,15 @@ import { posix } from "node:path";
 import { isMap, isScalar, LineCounter, parseDocument, type Document } from "yaml";
 import type { ContractData, UnresolvedReference } from "../../domain/contracts/contract-operation.ts";
 import { isContractDocument } from "../../domain/languages/openapi.ts";
-import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
+import { REQUEST_METHODS, type HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
+import { afterOrigin } from "../../domain/topology/path-template.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { ContractOperation, ContractRoutes } from "../../ports/contract-routes.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 
-const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "trace"]);
+const VERBS: ReadonlySet<string> = new Set(REQUEST_METHODS.map((method) => method.toLowerCase()));
 const OPENAPI = /^3\./;
 const SWAGGER = "2.0";
 export const DOCUMENTATION: ReadonlySet<string> = new Set(["description", "summary", "example", "examples", "externalDocs"]);
@@ -30,11 +31,10 @@ function operationsOf(file: SourceFile, referenced: ReferencedDocuments): readon
   const contract = parseContract(file);
   if (contract === undefined) return [];
   if ("status" in contract) return [contract];
-  return declaredOperations(contract).flatMap(({ path, verb, operation, shared, operationId, line }) => {
-    const { parameters, requestBody, responses, consumes, produces } = operation;
-    const request = { parameters: [...asList(shared), ...asList(parameters)], requestBody, consumes: consumes ?? contract.content.consumes };
-    const response = { responses, produces: produces ?? contract.content.produces };
-    const data = dataOf(file.path, { request, response }, referenced);
+  return declaredOperations(contract).flatMap((declared) => {
+    const { path, verb, operation, operationId, line } = declared;
+    const response = { responses: operation.responses, produces: producesOf(contract, declared) };
+    const data = dataOf(file.path, { request: requestOf(contract, declared), response }, referenced);
     return [{ status: "complete", value: { operationId, method: verb.toUpperCase() as HttpMethod, path, basePath: contract.basePath, document: file.path, line, data }, evidence: [{ path: file.path, line }] }];
   });
 }
@@ -79,7 +79,7 @@ export function parseContract(file: SourceFile): ParsedContract | Finding<never>
 function basePathOf(content: ContractContent): string | undefined {
   if (content.swagger !== undefined) return typeof content.basePath === "string" ? normalized(content.basePath) : "";
   const urls = Array.isArray(content.servers) ? content.servers.flatMap((server: { url?: unknown } | null) => (typeof server?.url === "string" ? [server.url] : [])) : [];
-  const paths = new Set(urls.map((url) => normalized(url.replace(/^([a-z][a-z0-9+.-]*:)?\/\/[^/?#]*/i, ""))));
+  const paths = new Set(urls.map((url) => normalized(afterOrigin(url))));
   return paths.size > 1 ? undefined : (paths.values().next().value ?? "");
 }
 
@@ -124,6 +124,16 @@ function asList(value: unknown): readonly unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+/** What an operation's request is made of: the parameters of its path and its own, its body, and the media it consumes. */
+export function requestOf(contract: ParsedContract, { operation, shared }: DeclaredOperation): { parameters: unknown[]; requestBody: unknown; consumes: unknown } {
+  return { parameters: [...asList(shared), ...asList(operation.parameters)], requestBody: operation.requestBody, consumes: operation.consumes ?? contract.content.consumes };
+}
+
+/** The media an operation's responses are produced in, as Swagger 2.0 states them; `undefined` in OpenAPI 3.x, whose responses name their own. */
+export function producesOf(contract: ParsedContract, { operation }: DeclaredOperation): unknown {
+  return operation.produces ?? contract.content.produces;
+}
+
 /** The parsed content of every source a reference may name, read once per call; `undefined` for one that does not parse. */
 export interface ReferencedDocuments {
   get(path: string): { content: unknown } | undefined;
@@ -150,14 +160,31 @@ function parsedContent(text: string | undefined): { content: unknown } | undefin
   }
 }
 
-/**
- * The digests of an operation's request and response data. Each covers the data with its documentation left out, and
- * every place its references reach, each place once whatever cycle leads back to it.
- */
+/** The digests of an operation's request and response data. */
 function dataOf(document: string, sides: { request: unknown; response: unknown }, referenced: ReferencedDocuments): ContractData {
+  const digester = createDigester(document, referenced);
+  const request = digester.digest(sides.request);
+  const response = digester.digest(sides.response);
+  return { request, response, files: digester.files(), unresolved: digester.unresolved() };
+}
+
+export interface Digester {
+  /** A digest of the data at `root`, read from `from` (the document by default), that differs exactly when the data differs. */
+  digest(root: unknown, from?: string): string;
+  /** The files other than the document that the digested data's references reach, sorted. */
+  files(): string[];
+  /** The references the digested data holds that could not be followed, sorted. */
+  unresolved(): UnresolvedReference[];
+}
+
+/**
+ * Digests data of one contract document. Each digest covers the data with its documentation left out, and every place its
+ * references reach, each place once whatever cycle leads back to it.
+ */
+export function createDigester(document: string, referenced: ReferencedDocuments): Digester {
   const files = new Set<string>();
   const unresolved = new Map<string, UnresolvedReference>();
-  const digest = (root: unknown): string => {
+  const digest = (root: unknown, from: string = document): string => {
     const places = new Map<string, unknown>();
     const pending: { key: string; file: string; node: unknown }[] = [];
     const kept = (file: string, node: unknown): unknown =>
@@ -173,17 +200,14 @@ function dataOf(document: string, sides: { request: unknown; response: unknown }
         places.set(key, undefined);
         pending.push({ key, file: target.file, node: target.node });
       });
-    const own = kept(document, root);
+    const own = kept(from, root);
     for (let next = pending.pop(); next !== undefined; next = pending.pop()) places.set(next.key, kept(next.file, next.node));
     return createHash("sha256").update(canonicalJson([own, [...places].sort(([a], [b]) => compareText(a, b))])).digest("hex");
   };
-  const request = digest(sides.request);
-  const response = digest(sides.response);
   return {
-    request,
-    response,
-    files: [...files].sort(compareText),
-    unresolved: [...unresolved.values()].sort((a, b) => compareText(a.ref, b.ref) || compareText(a.file ?? "", b.file ?? "")),
+    digest,
+    files: () => [...files].sort(compareText),
+    unresolved: () => [...unresolved.values()].sort((a, b) => compareText(a.ref, b.ref) || compareText(a.file ?? "", b.file ?? "")),
   };
 }
 

@@ -1,4 +1,6 @@
 import ts from "typescript";
+import { programTree } from "./source-tree.ts";
+import { unwrapped } from "./syntax.ts";
 
 /** What a name binds at one place: the symbol and its declarations, nothing the file declares, or a scope decided at run time (a `with` body, or one a sloppy direct `eval` can extend). */
 export type LexicalBinding = { kind: "declared"; symbol: ts.Symbol; declarations: readonly ts.Declaration[] } | { kind: "none" } | { kind: "dynamic" };
@@ -25,7 +27,7 @@ const DYNAMIC: LexicalBinding = { kind: "dynamic" };
  */
 export function bindFile(path: string, content: string): BoundFile {
   const fileName = `/${path}`;
-  const tree = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+  const tree = programTree(fileName, content, ts.ScriptTarget.Latest);
   const host: ts.CompilerHost = {
     getSourceFile: (name) => (name === fileName ? tree : undefined),
     getDefaultLibFileName: () => "lib.d.ts",
@@ -121,12 +123,6 @@ export function isDirectEval(call: ts.CallExpression): boolean {
   return ts.isIdentifier(callee) && callee.text === "eval";
 }
 
-/** The expression inside parentheses, type assertions and non-null, which leave its value unchanged. */
-export function unwrapped(expression: ts.Expression): ts.Expression {
-  let inner = expression;
-  while (ts.isParenthesizedExpression(inner) || ts.isAsExpression(inner) || ts.isSatisfiesExpression(inner) || ts.isTypeAssertionExpression(inner) || ts.isNonNullExpression(inner)) inner = inner.expression;
-  return inner;
-}
 
 function declaresStrict(statements: readonly ts.Statement[]): boolean {
   for (const statement of statements) {

@@ -52,11 +52,11 @@ export function createEntrypointQueries(deps: EntrypointQueriesDeps): Entrypoint
       if (!resolved.ok) return resolved;
       const sha = resolved.value;
 
-      return withScratch(deps.scratch, async (directory) => {
+      return withScratch(deps, async (readScope) => {
         const scope = declaredScope(requested);
         const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
         const trust = await trustOf(deps, repo);
-        const prepared = await prepareCommit(deps, repo, sha, directory, exported, { scope, trust }, signal);
+        const prepared = await prepareCommit(deps, repo, sha, readScope, exported, { scope, trust }, signal);
         if (!prepared.ok) return prepared;
         const extracted = await prepared.value.extract(signal);
         if (!extracted.ok) return extracted;

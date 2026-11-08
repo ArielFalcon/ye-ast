@@ -15,6 +15,7 @@ import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import type { WorkspaceCallersRequest, WorkspaceImpactValue, WorkspaceOfChangeRequest } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionsRequest, DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { ContractConsequencesQueries } from "../core/ports/contract-consequences-queries.port.ts";
+import type { EvidenceComposition } from "../core/ports/evidence-composition.port.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import { repositoryCatalog, type RepositoryBinding } from "./repository-targeting.ts";
 import { executeQuery, type ExecutedSource, type QueryExecutionDeps, type QueryFault } from "./query-runner.ts";
@@ -90,6 +91,7 @@ function spies(overrides: Overrides = {}): { deps: QueryExecutionDeps; calls: Ca
     contractConsequences: { ofHypotheses: async () => assert.fail("consequences not expected"), ofChange: async () => assert.fail("consequences not expected") },
     redaction,
     digest,
+    evidenceComposition: {} as EvidenceComposition,
   };
   return { deps, calls };
 }

@@ -16,9 +16,10 @@ import type { ConsumerSession, ConsumerSources, PreparedWorkspace } from "../../
 import type { RequestOriginReader } from "../../ports/request-origins.port.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { isCallOf } from "./consumer-sources.ts";
+import { httpRouteName } from "../../domain/entrypoints/http-route.ts";
 
 /** The bases that say the call reaches this operation; the others say it may, and are reported where they stop. */
-const QUALIFIED_BASES: ReadonlySet<LinkBasis> = new Set(["exact", "base-path", "operation-id"]);
+const QUALIFIED_BASES: ReadonlySet<LinkBasis> = new Set(["exact", "base-path"]);
 
 export interface ContractConsequencesQueriesDeps {
   sources: ConsumerSources;
@@ -95,7 +96,7 @@ const assumedOf = (hypothesis: Hypothesis): Pick<AnswerBody, "hypothesis" | "old
         },
         oldContract: hypothesis.change.oldGuarantee ?? OLD_GUARANTEE,
       }
-    : { hypothesis: { method: hypothesis.method, path: hypothesis.path, target: hypothesis.target, property: formatAccessPath(hypothesis.property), change: writtenRequestChange(hypothesis.change) }, oldContract: OLD_ACCEPTANCE };
+    : { hypothesis: { method: hypothesis.method, path: hypothesis.path, target: hypothesis.target, property: formatAccessPath(hypothesis.property), change: writtenRequestChange(hypothesis.change) }, oldContract: hypothesis.change.oldAcceptance ?? OLD_ACCEPTANCE };
 
 /** The consequences of one hypothesis on a workspace already prepared, so a caller with several hypotheses prepares once. */
 export async function answerOn(workspace: PreparedWorkspace, base: FactBase, hypothesis: Hypothesis, derivedFrom?: AnswerBody["derivedFrom"]): Promise<Answered> {
@@ -103,7 +104,7 @@ export async function answerOn(workspace: PreparedWorkspace, base: FactBase, hyp
   const unknown = (reason: UnknownReason, detail: string): Answered => ({ answer: { ...stated, findings: [], status: "unknown", reason, detail }, sites: [] });
   const session = await workspace.session(hypothesis);
   if (!session.ok) return unknown("source-unreadable", session.fault.detail);
-  const operation = `${hypothesis.method} ${hypothesis.path}`;
+  const operation = httpRouteName({ method: hypothesis.method, path: hypothesis.path });
   const selected = selectCalls(session.value, operation);
   if (!selected.ok) return unknown("unresolved", selected.fault);
   const followed = hypothesis.target === "response" ? consequencesOf(session.value, selected.value, hypothesis) : await producersOf(session.value, selected.value, hypothesis);

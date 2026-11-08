@@ -4,7 +4,7 @@ import type { RouteGuard, UiRoute } from "../../domain/entrypoints/ui-route.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
 import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import { angularProjects, pathsByProject } from "./angular-projects.ts";
+import { pathsByProject } from "./angular-projects.ts";
 import type { ManifestPackages } from "./module-resolver.ts";
 import { sourceTree } from "./source-tree.ts";
 import ts from "typescript";

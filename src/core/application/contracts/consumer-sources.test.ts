@@ -7,6 +7,7 @@ import type { CallSite } from "../../domain/topology/call-site.ts";
 import type { Carrier } from "../../domain/contracts/consumer-flow.ts";
 import type { ConsumerSession, ServingWorkspace } from "../../ports/consumer-sources.port.ts";
 import type { WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
+import type { ReadScope } from "../snapshot/read-snapshot.ts";
 import { createConsumerSources, isCallOf } from "./consumer-sources.ts";
 
 const sha = "a".repeat(40);
@@ -68,7 +69,7 @@ function workbench(layout: { routes: Record<string, Entrypoint[]>; calls: Record
     plans: repos.map((repo) => ({ kind: "read", at: { source: `/${repo}`, declared: `/${repo}`, repoId: repo, revision: "HEAD" } })),
     scope: { include: [], exclude: [] },
     selection: () => true,
-    preparation: { obtain: (_key: string, _deps: unknown, build: (root: string) => Promise<unknown>) => build("/root") },
+    preparation: { obtain: (_key: string, _deps: unknown, build: (root: string, keep: ReadScope["keep"]) => Promise<unknown>) => build("/root", (sources) => [...sources]) },
     signal: undefined,
   };
   const sources = createConsumerSources({
@@ -158,6 +159,21 @@ test("a call site two repositories serve equally is ambiguous only for the opera
     return { orders: orders.ambiguousCalls.map(({ from }) => from.line), items: items.ambiguousCalls.map(({ from }) => from.line), itemLinks: items.links.filter((link) => isCallOf(link, "GET /items")).length };
   });
   assert.deepEqual(answers, { orders: [3], items: [], itemLinks: 1 });
+});
+
+test("a call site its own repository serves consumes the operation", async () => {
+  const bench = workbench({ routes: { web: [route("GET /orders", "/orders")] }, calls: { web: [call("web", "/orders", 3)] } });
+  const links = await bench.withWorkspace(async (workspace) => (await settled(workspace.session(hypothesis("/orders")))).links.filter((link) => isCallOf(link, "GET /orders")).length);
+  assert.equal(links, 1);
+});
+
+test("a call site two routes of one repository take equally is ambiguous for the operation either serves, and links to neither", async () => {
+  const bench = workbench({ routes: { api: [route("GET /orders/{id}", "/orders/{id}"), route("GET /orders/{key}", "/orders/{key}")] }, calls: { web: [call("web", "/orders/{}", 3)] } });
+  const answer = await bench.withWorkspace(async (workspace) => {
+    const session = await settled(workspace.session(hypothesis("/orders/{id}")));
+    return { ambiguous: session.ambiguousCalls.map(({ from, repos }) => `${from.line} ${repos.join(",")}`), links: session.links.length };
+  });
+  assert.deepEqual(answer, { ambiguous: ["3 api"], links: 0 });
 });
 
 test("an operation a contract declares is served by the route the join links calls to: by path or by the context path, and no route or two repositories are answers of their own", async () => {

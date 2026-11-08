@@ -13,7 +13,6 @@ import {
   declaredScope,
   discardsValue,
   isUndeclaredName,
-  enclosingClass,
   enclosingFunction,
   enclosingLoop,
   exits,
@@ -33,16 +32,17 @@ import {
   referencesOf,
   replacementOf,
   searchRoot,
-  unwrap,
   writesWithin,
   type Binding,
   type FunctionNode,
   type NamedFunction,
 } from "./consumer-flow.syntax.ts";
-import { lineOf, propertyOf, symbolOf, typeName, VERBS } from "./http-call-sites.adapter.ts";
+import { symbolOf, VERBS } from "./http-call-sites.adapter.ts";
 import { FUNCTIONS, isModule, METHODS, type MethodResult, type MethodRow } from "./consumer-flow.callees.ts";
 import { resolveFunction, type Resolved } from "./consumer-flow.resolution.ts";
-import { baseOf, injectedClass, injectedInstance, lineage, memberDeclaration, thisClass, type ClassRef } from "./consumer-flow.classes.ts";
+import { injectedClass } from "./angular-injection.ts";
+import { baseOf, injectedInstance, lineage, memberDeclaration, type ClassRef } from "./consumer-flow.classes.ts";
+import { lineOf, propertyOf, thisClass, typeName, unwrapped } from "./syntax.ts";
 
 /** A value being followed: where the changed property sits in it, the steps taken, and the guards that hold on it. */
 interface Trail {
@@ -183,7 +183,7 @@ export class Walker {
 
   /** `skip`: the read is the member carrier's own, or the member of a class that is provably not the owner; `lost`: the receiver cannot be told, and a frontier says so. */
   private denotesOwner(access: ts.PropertyAccessExpression, owner: string, member: string): "read" | "skip" | "lost" {
-    const receiver = unwrap(access.expression);
+    const receiver = unwrapped(access.expression);
     const self = receiver.kind === ts.SyntaxKind.ThisKeyword;
     const cls = self ? thisClass(access) : undefined;
     const declared = cls?.name === undefined ? undefined : this.unit.classes.get(cls.name.text);
@@ -442,7 +442,7 @@ export class Walker {
       for (const { index, holds } of row.callback.parameters) {
         const held = this.hopped(holds === "element" ? element : attached, "argument", call);
         if (isFunctionNode(callback)) this.bindLambda(callback, index, held);
-        else this.passToCallback(unwrap(callback), index, call, held);
+        else this.passToCallback(unwrapped(callback), index, call, held);
       }
     }
     if (row.result === "same") this.read(call, this.hopped(attached, "pipe", call));
@@ -468,7 +468,7 @@ export class Walker {
     if (ts.isSpreadElement(parent)) return this.spread(parent, t);
     if (ts.isSpreadAssignment(parent)) return this.copied(parent, parent.parent, parent.parent.properties.slice(parent.parent.properties.indexOf(parent) + 1), t);
     if (ts.isForOfStatement(parent) && parent.expression === top) return this.iterate(parent, t);
-    if (ts.isPropertyDeclaration(parent) && parent.initializer === top && ts.isIdentifier(parent.name)) return this.assignedToMember(parent.name.text, enclosingClass(parent), parent, this.hopped(t, "assign", parent));
+    if (ts.isPropertyDeclaration(parent) && parent.initializer === top && ts.isIdentifier(parent.name)) return this.assignedToMember(parent.name.text, parent.parent, parent, this.hopped(t, "assign", parent));
     const end = exact ? this.operatorEnd(top) : undefined;
     if (end !== undefined) return this.use(parent, t, [], { steps: [], end }, t.guards);
     if (ts.isTemplateSpan(parent)) return;
@@ -515,9 +515,9 @@ export class Walker {
   }
 
   private assignTo(assignment: ts.BinaryExpression, t: Trail): void {
-    const left = unwrap(assignment.left);
+    const left = unwrapped(assignment.left);
     const held = this.hopped(t, "assign", assignment);
-    if (ts.isPropertyAccessExpression(left) && left.expression.kind === ts.SyntaxKind.ThisKeyword) return this.assignedToMember(left.name.text, enclosingClass(assignment), assignment, held);
+    if (ts.isPropertyAccessExpression(left) && left.expression.kind === ts.SyntaxKind.ThisKeyword) return this.assignedToMember(left.name.text, thisClass(assignment), assignment, held);
     const binding = ts.isIdentifier(left) ? assignedBinding(left) : undefined;
     if (binding !== undefined) return this.track(binding, held, assignment);
     this.frontier(assignment, "unmodelled-flow", "assignment target", t);
@@ -564,7 +564,7 @@ export class Walker {
   /** The value is a source of `Object.assign` at `index`: its properties land on a fresh object literal, which is also the call's result. */
   private assignedFrom(call: ts.CallExpression, index: number, t: Trail): void {
     const target = call.arguments[0];
-    if (target === undefined || !ts.isObjectLiteralExpression(unwrap(target))) return this.frontier(call, "unmodelled-flow", "Object.assign target", t);
+    if (target === undefined || !ts.isObjectLiteralExpression(unwrapped(target))) return this.frontier(call, "unmodelled-flow", "Object.assign target", t);
     this.copied(call, call, call.arguments.slice(index + 1), t);
   }
 
@@ -652,7 +652,7 @@ export class Walker {
       if (CALLBACK_OPERATORS.has(name) && ts.isCallExpression(operator)) {
         const [callback] = operator.arguments;
         if (callback !== undefined && isFunctionNode(callback)) this.bindLambda(callback, 0, t);
-        else if (callback !== undefined) this.passTo(unwrap(callback), 0, operator, this.hopped(t, "argument", operator));
+        else if (callback !== undefined) this.passTo(unwrapped(callback), 0, operator, this.hopped(t, "argument", operator));
       }
     }
     this.read(pipe, t);
@@ -697,13 +697,13 @@ export class Walker {
     if (index < 0) return this.frontier(call, "unmodelled-flow", "call position", t);
     if (index === 0 && mutatedTarget(call) === top) return this.frontier(call, "unmodelled-flow", WRITE_TO_MEMBER, t);
     if (index >= 1 && staticObjectMethod(call) === "assign") return this.assignedFrom(call, index, t);
-    const callee = unwrap(call.expression);
+    const callee = unwrapped(call.expression);
     const imported = index === 0 && ts.isIdentifier(callee) ? this.unit.imports.get(callee.text) : undefined;
     const handsOn = imported === undefined ? undefined : FUNCTIONS.find((row) => row.name === imported.imported && isModule(imported.module, row.module));
     if (handsOn !== undefined) return this.read(call, handsOn.step === undefined ? t : this.hopped(t, handsOn.step, call));
     if (ts.isPropertyAccessExpression(callee) && STREAM_WRITES.has(callee.name.text)) {
-      const receiver = unwrap(callee.expression);
-      if (ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword) return this.assignedToMember(receiver.name.text, enclosingClass(call), call, this.hopped(t, "assign", call));
+      const receiver = unwrapped(callee.expression);
+      if (ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword) return this.assignedToMember(receiver.name.text, thisClass(call), call, this.hopped(t, "assign", call));
     }
     this.passTo(callee, index, call, this.hopped(t, "argument", call));
   }
@@ -893,7 +893,7 @@ export class Walker {
 
   /** The guards that hold on `binding` where `expression` evaluates to `holds`. */
   private conditionGuards(expression: ts.Expression, holds: boolean, binding: Binding): Guard[] {
-    const bare = unwrap(expression);
+    const bare = unwrapped(expression);
     if (ts.isPrefixUnaryExpression(bare) && bare.operator === ts.SyntaxKind.ExclamationToken) return this.conditionGuards(bare.operand, !holds, binding);
     if (ts.isBinaryExpression(bare)) {
       const operator = bare.operatorToken.kind;
@@ -921,8 +921,8 @@ export class Walker {
     const operator = EQUALITY.get(comparison.operatorToken.kind);
     if (operator === undefined) return [];
     for (const [tested, other] of [[comparison.left, comparison.right], [comparison.right, comparison.left]] as const) {
-      const operand = unwrap(tested);
-      const value = unwrap(other);
+      const operand = unwrapped(tested);
+      const value = unwrapped(other);
       if (ts.isTypeOfExpression(operand)) {
         const covers = chainPath(operand.expression, binding);
         const type = literalOf(value);
@@ -940,9 +940,9 @@ export class Walker {
 
   /** `Array.isArray(...)` where `Array` is the global, not a name the code declares or imports. */
   private isArrayCheck(call: ts.CallExpression): boolean {
-    const callee = unwrap(call.expression);
+    const callee = unwrapped(call.expression);
     if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== "isArray" || call.arguments.length !== 1) return false;
-    const receiver = unwrap(callee.expression);
+    const receiver = unwrapped(callee.expression);
     return ts.isIdentifier(receiver) && receiver.text === "Array" && isUndeclaredName(receiver) && !this.unit.imports.has("Array");
   }
 
@@ -953,7 +953,7 @@ export class Walker {
   private routeHolders(cls: ts.ClassLikeDeclaration): ReadonlySet<string> {
     const names = new Set<string>();
     const holdsRoute = (type: ts.TypeNode | undefined, initializer: ts.Expression | undefined): boolean =>
-      (type !== undefined && typeName(type) === ROUTE_HOLDER) || (initializer !== undefined && injectedClass(initializer) === ROUTE_HOLDER);
+      (type !== undefined && typeName(type) === ROUTE_HOLDER) || (initializer !== undefined && injectedClass(initializer, this.unit) === ROUTE_HOLDER);
     for (const member of cls.members) {
       if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name) && holdsRoute(member.type, member.initializer)) names.add(member.name.text);
       if (ts.isConstructorDeclaration(member)) for (const parameter of member.parameters) if (ts.isIdentifier(parameter.name) && holdsRoute(parameter.type, undefined)) names.add(parameter.name.text);
@@ -963,8 +963,8 @@ export class Walker {
 
   /** `this.route.data` or `this.route.snapshot.data`, for a field that holds the `ActivatedRoute`. */
   private isRouteData(node: ts.PropertyAccessExpression, holders: ReadonlySet<string>): boolean {
-    const owner = unwrap(node.expression);
-    const route = ts.isPropertyAccessExpression(owner) && owner.name.text === "snapshot" ? unwrap(owner.expression) : owner;
+    const owner = unwrapped(node.expression);
+    const route = ts.isPropertyAccessExpression(owner) && owner.name.text === "snapshot" ? unwrapped(owner.expression) : owner;
     return ts.isPropertyAccessExpression(route) && route.expression.kind === ts.SyntaxKind.ThisKeyword && holders.has(route.name.text);
   }
 
@@ -1056,7 +1056,7 @@ type ClauseTest = { test: Predicate; holds: boolean } | "none" | "opaque";
  */
 function reachedBy(clauses: readonly ts.CaseOrDefaultClause[], group: readonly ts.CaseOrDefaultClause[]): ClauseTest {
   const withDefault = group.some(ts.isDefaultClause);
-  const labelled = (withDefault ? clauses.filter((candidate) => !group.includes(candidate)) : group).filter(ts.isCaseClause).map((label) => unwrap(label.expression));
+  const labelled = (withDefault ? clauses.filter((candidate) => !group.includes(candidate)) : group).filter(ts.isCaseClause).map((label) => unwrapped(label.expression));
   const literals: Literal[] = [];
   const absences: Absence[] = [];
   for (const label of labelled) {
@@ -1085,7 +1085,7 @@ type Survival = "kept" | "replaced" | { node: ts.Node; detail: string };
 
 function survivesLater(later: readonly (ts.ObjectLiteralElementLike | ts.Expression)[], key: string): Survival {
   for (const item of later) {
-    const bare = ts.isSpreadAssignment(item) ? unwrap(item.expression) : ts.isObjectLiteralExpression(item) ? item : undefined;
+    const bare = ts.isSpreadAssignment(item) ? unwrapped(item.expression) : ts.isObjectLiteralExpression(item) ? item : undefined;
     if (bare !== undefined && ts.isObjectLiteralExpression(bare)) {
       const inner = survivesLater(bare.properties, key);
       if (inner !== "kept") return inner;
@@ -1152,7 +1152,7 @@ function inputName(unit: Unit, member: ts.ClassElement): string | undefined {
     const callee = ts.isCallExpression(call) ? call.expression : call;
     if (ts.isIdentifier(callee) && unit.imports.get(callee.text)?.imported === "Input") return aliasIn(ts.isCallExpression(call) ? call.arguments : [], own, true);
   }
-  const initializer = ts.isPropertyDeclaration(member) && member.initializer !== undefined ? unwrap(member.initializer) : undefined;
+  const initializer = ts.isPropertyDeclaration(member) && member.initializer !== undefined ? unwrapped(member.initializer) : undefined;
   if (initializer === undefined || !ts.isCallExpression(initializer)) return undefined;
   const callee = ts.isPropertyAccessExpression(initializer.expression) && initializer.expression.name.text === "required" ? initializer.expression.expression : initializer.expression;
   const imported = ts.isIdentifier(callee) ? unit.imports.get(callee.text)?.imported : undefined;

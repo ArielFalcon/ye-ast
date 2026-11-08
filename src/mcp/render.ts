@@ -1,7 +1,8 @@
 import { dependencyDiagnosticText, effectText, unresolvedLabel } from "./presentation.ts";
 import { canSelect, categoryRecovery, literalSelection, sharedLookup } from "./presentation-guidance.ts";
-import type { CutOwner, ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
-import { renderFactHeader as headerLines, renderFactStatus as statusLines, snapshotLine, evidenceText, cutsByKind } from "./presentation-context.ts";
+import type { ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
+import type { CutOwner } from "../core/domain/composition/source-read.ts";
+import { renderFactHeader as headerLines, renderFactStatus as statusLines, evidenceText, cutsByKind } from "./presentation-context.ts";
 import type { ResponseMode, RenderContext } from "./presentation.ts";
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
@@ -9,22 +10,21 @@ import type { ChangedContract } from "../core/domain/impact/changed-contracts.ts
 import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoints.ts";
 import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../core/domain/impact/impact-fact.ts";
 import type { ModuleImpactValue } from "../core/domain/impact/module-dependency.ts";
-import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineBinding, OutlineDeclaration, OutlineImport, OutlineUse, OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import { hasUnprovedUses } from "../core/domain/outline/outline-uses.ts";
 import type { ExternalCalls, TraceStep, TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
-import type { ChangeFrontier, ConsequenceFinding, ConsequencesValue, HypothesisAnswer, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
+import type { ChangeFrontier, ClassifiedDifference, ConsequenceFinding, ConsequencesValue, HypothesisAnswer, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
-import type { Cut, Evidence, Fact, Finding, SnapshotRef, WalkBounds } from "../core/domain/shared/fact.ts";
+import type { Cut, Fact, Finding, SnapshotRef, WalkBounds } from "../core/domain/shared/fact.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { NameCandidate, OutwardKind, OutwardName, RepositoryOutwardName } from "../core/domain/topology/outward-name.ts";
 import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
 import type { WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
-import type { CallSite, UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
+import { compareUnresolvedCallSites, type CallSite, type UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
 import type { ImpactedLink, Link, UnlinkedCallSite } from "../core/domain/topology/link.ts";
 import type { RepositoryResolution } from "../core/domain/topology/remote-snapshot.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
@@ -38,7 +38,6 @@ const NONE = "  (none)";
 const DECISIONS_HINT = "ye_ast_decisions lists the declarations that would resolve these gaps, with evidence-backed options.";
 const CUTS = "cuts:";
 const NO_PROVEN_USE = "uses nothing proven outside its body; its unresolved-link cuts list the uses not proven";
-const MODULE_LISTED_DEPTH = 1;
 
 /** What each source of the repositories in force is called in the text; `none` says what the answer then covers. */
 const SOURCE_TEXT: Readonly<Record<WorkspaceSource, string>> = {
@@ -525,6 +524,8 @@ function seedKeys(value: ImpactValue): Set<string> {
 function symbolLine(symbol: ImpactedSymbol, file: string, includeVia = true): string {
   const facts = [`depth ${symbol.depth}`];
   if (symbol.confidence < 1) facts.push(`confidence ${symbol.confidence}`);
+  if (symbol.via?.derivation === "name-match") facts.push("name match");
+  if (symbol.via?.derivation === "typed") facts.push("typed");
   if (symbol.fanIn > 0) facts.push(`fan-in ${symbol.fanIn}`);
   if (includeVia && symbol.via !== undefined) facts.push(`via ${viaText(symbol.via, file)}`);
   return `    ${spanText(symbol.line, symbol.endLine)} ${symbol.symbol} [${symbol.kind}] (${facts.join(", ")})`;
@@ -895,7 +896,7 @@ function impactCutLayout(cuts: readonly Cut[], detail: ResponseMode, owner: CutO
 function impactLookups(value: ImpactValue, path: string, context?: RenderContext): string[] {
   const lines: string[] = [];
   if (value.entrypoints.length > 0) lines.push(`  To inspect a reached entrypoint, select ${path}.entrypoints by kind/name and handler.path, handler.symbol, handler.line. Its seeds are zero-based indexes into ${path}.seeds; resolve those indexes to recover all associated origins, not a complete call chain.`);
-  if (value.symbols.length > 0) lines.push(`  To inspect a dependency omitted from text, filter ${path}.symbols by file, symbol and line. Read via.file/symbol for its recorded dependency; via.lines are locations in that symbol's own file, or in via.resource when present, not in via.file. Preserve via.basis and confidence when interpreting it.`);
+  if (value.symbols.length > 0) lines.push(`  To inspect a dependency omitted from text, filter ${path}.symbols by file, symbol and line. Read via.file/symbol for its recorded dependency; via.lines are locations in that symbol's own file, or in via.resource when present, not in via.file. Preserve via.basis, via.derivation and confidence when interpreting it; a name-match derivation may be no dependence.`);
   if (value.seeds.length > 0 && value.entrypoints.length === 0) lines.push(`  To identify the walk origins, match ${path}.seeds by file, symbol and line; basis distinguishes requested targets from change-derived origins.`);
   if (value.modules !== undefined && (value.modules.origins.length > 0 || value.modules.modules.length > 0)) lines.push(`  Inspect ${path}.modules.origins and ${path}.modules.modules; each module origin index joins that origins array. Module dependencies are distinct from symbol impact.`);
   if ((value.changedEntrypoints?.length ?? 0) > 0) lines.push(`  To inspect entrypoints added, removed or altered by the diff, filter ${path}.changedEntrypoints by change, kind/name and handler identity; these are distinct from reached entrypoints.`);
@@ -979,7 +980,7 @@ function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "comp
     ...(trigger?.status !== "unknown" && trigger?.value.impact !== undefined ? [`  The originating repository's walk is at ${originPath}.`, ...impactLookups(trigger.value.impact, originPath, context)] : []),
     ...(otherImpacts.length === 0 ? [] : ["  Other repository walks are at value.sections[repo].value.impact only when that field exists. In each walk, entrypoints[].seeds indexes that same walk's seeds array; never join origins across repositories."]),
     ...(value.links.length === 0 ? [] : ["  To follow a cross-repository consequence, filter value.links by link.from (repo/file/symbol/line) or link.to (repo/name/handler). Each reach contains link IDs in recorded order: resolve them against value.links[].link.id, not the text's display numbers. Retain direction, basis and confidence; reach does not establish an unrecorded path inside a repository."]),
-    ...(value.workspace.unserved.length === 0 ? [] : ["  For missing service coverage, inspect value.workspace.unserved and section.value.external when present. Use ye_ast_workspace to investigate outward-name evidence and candidate local repositories; adding workspace.repos changes the query's coverage rather than filtering this fact."]),
+    ...(value.workspace.unserved.length === 0 ? [] : ["  For missing service coverage, inspect value.workspace.unserved, section.value.unmatched and section.value.external when present. Use ye_ast_workspace to investigate outward-name evidence and candidate local repositories; adding workspace.repos changes the query's coverage rather than filtering this fact."]),
     ...impactCutLookup(cutsOf(fact), "cuts", context, fact.inputs.declaredConfig.walk),
     ...(Object.values(value.sections).some((section) => section.status === "partial") ? ["  Repository-local limits remain in value.sections[repo].cuts; inspect contributing section.value.reads[].fact too. Do not treat a complete independent read as resolving an unknown contributing read."] : []),
     ...(crossRepository(value) ? [workspaceOwnerGuide("full")] : []),
@@ -1271,11 +1272,6 @@ export function renderTrace(fact: Fact<TraceValue>, detail: ResponseMode = "summ
   return lines.join("\n");
 }
 
-/** What a fault entry can be told to the caller: the declarations of the file that could have been asked instead. */
-function declarationText(entry: { file: string; candidates: readonly string[] }): string {
-  return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
-}
-
 /** One link as every answer lists it: its number, both ends, the basis and what the answer adds about how it was reached. */
 function linkLine(link: Link, number: number | undefined, reached = ""): string {
   const confidence = link.confidence < 1 ? `, confidence ${link.confidence}` : "";
@@ -1300,7 +1296,7 @@ function linkMapLines(links: readonly Link[], unlinked: readonly UnlinkedCallSit
   const listed = detail === "details" || links.length === 0 || size(literal) < size(counted) ? literal : counted;
   return [
     `links between the repositories read (${links.length}):`, ...listed,
-    ...(unlinked.length === 0 ? [] : [`call sites the join reached without a link (${unlinked.length}):`, ...unlinked.map(({ from, transport, outcome, name, repos }) => `  - ${from.repo}:${placeText(from.file, from.line)} ${from.symbol} ${transport} ${name}: ${outcome}${repos === undefined ? "" : ` (${repos.join(", ")})`}`)]),
+    ...(unlinked.length === 0 ? [] : [`call sites the join reached without a link (${unlinked.length}):`, ...unlinked.map(({ from, transport, outcome, name, repos, routes }) => `  - ${from.repo}:${placeText(from.file, from.line)} ${from.symbol} ${transport} ${name}: ${outcome}${repos === undefined ? "" : ` (${repos.join(", ")})`}${routes === undefined ? "" : ` routes ${routes.join(", ")}`}`)]),
   ];
 }
 
@@ -1456,7 +1452,7 @@ function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: Respo
 
 /** The unresolved call sites under the file that holds them, sorted, each with the request it writes when the code states it. */
 function unresolvedListing(sites: readonly UnresolvedCallSite[], detail: ResponseMode): string[] {
-  const sorted = [...sites].toSorted((a, b) => compareText(a.path, b.path) || a.line - b.line || compareText(a.symbol, b.symbol));
+  const sorted = [...sites].toSorted(compareUnresolvedCallSites);
   return [...Map.groupBy(sorted, (site) => site.path)].flatMap(([path, inFile]) => [
     `    ${path}`,
     ...[...Map.groupBy(inFile, (site) => `${site.reason}${site.diagnostic === undefined ? "" : `/${site.diagnostic.cause}`}${site.diagnostic?.source === undefined ? "" : ` source=${site.diagnostic.source}`}`)].flatMap(([reason, group]) => [
@@ -1650,7 +1646,7 @@ export function renderDecisions(fact: Fact<DecisionValue>, detail: ResponseMode 
 }
 
 
-const CONSEQUENCES_FULL_GUIDE = "Match value.answers by index (the order asked, or sorted by operation and property for a change) and check each answer's status, reason and cuts; findings[].value.chain and verdict.witness hold the chains and witnesses, and an unknown finding carries its reason and places. A change's value.change.derivation holds the gained guarantees, the operations added and removed, and the derivation frontiers; value.repositorySnapshots names the snapshot of every repository read.";
+const CONSEQUENCES_FULL_GUIDE = "Match value.answers by index (the order asked, or sorted by operation and property for a change) and check each answer's status, reason and cuts; findings[].value.chain and verdict.witness hold the chains and witnesses, and an unknown finding carries its reason and places. A change's value.change.derivation holds every classified difference (rule, level, operation, property, places) and the derivation frontiers; answers[].derivedFrom.rules names the rules a derived answer follows; value.repositorySnapshots names the snapshot of every repository read.";
 
 /** The counted text when it is no longer than listing what it counts, the listing otherwise; a tie keeps the count (RFC-0017 section 1). Details always lists. */
 function elided(counts: readonly string[], listing: readonly string[], detail: ResponseMode): string[] {
@@ -1694,18 +1690,23 @@ function answerLines(answer: HypothesisAnswer, index: number, detail: ResponseMo
 }
 
 function frontierLine(frontier: ChangeFrontier): string {
-  const subject = [frontier.operation, frontier.property, frontier.side === undefined ? undefined : `at ${frontier.side}`].filter((part) => part !== undefined).join(" ");
+  const subject = [frontier.operation, frontier.target, frontier.property, frontier.side === undefined ? undefined : `at ${frontier.side}`].filter((part) => part !== undefined && part !== "").join(" ");
   return `    - ${frontier.kind} (${frontier.reason})${subject === "" ? "" : ` ${subject}`}${frontier.detail === undefined ? "" : `: ${frontier.detail}`}${frontier.evidence.length === 0 ? "" : ` at ${frontier.evidence.map(repositoryEvidenceText).join(", ")}`}`;
+}
+
+function differenceLine({ level, rule, operation, property, subject, base, head, places }: ClassifiedDifference): string {
+  const value = (written: unknown) => (written === undefined ? "absent" : JSON.stringify(written));
+  const about = subject === undefined ? "" : base === undefined && head === undefined ? ` (${subject})` : ` (${subject}: ${value(base)} -> ${value(head)})`;
+  return `    - ${level} ${rule} ${operation}${property ? ` ${property}` : ""}${about} at ${repositoryEvidenceText((places.head ?? places.base)!)}`;
 }
 
 function derivationLines(value: NonNullable<ConsequencesValue["change"]>, detail: ResponseMode): string[] {
   const { derivation } = value;
   const lines = [`change: ${value.base} -> ${value.head} (commits ${value.snapshots.base} -> ${value.snapshots.head})`, "derivation:", ...statusLines(derivation, "  ")];
   if (derivation.status === "unknown") return lines;
-  const { gained, operations, frontiers } = derivation.value;
-  const gainedListing = [`  gained guarantees (${gained.length}):`, ...gained.map((item) => `    - ${item.operation} ${item.property} (${item.retired}) at ${repositoryEvidenceText(item.places.head)}`)];
-  lines.push(...(gained.length === 0 ? [`  gained guarantees (0):`] : elided([`  gained guarantees (${gained.length}): ${categoryRecovery({ details: "lists them" })}`], gainedListing, detail)));
-  lines.push(`  operations added (${operations.added.length}): ${operations.added.join(", ")}`.trimEnd(), `  operations removed (${operations.removed.length}): ${operations.removed.join(", ")}`.trimEnd());
+  const { differences, frontiers } = derivation.value;
+  const classified = [`  differences (${differences.length}): ${countedBy(differences.map(({ level }) => level))}; ${categoryRecovery({ details: "lists each with its rule and place" })}`];
+  lines.push(...(differences.length === 0 ? ["  differences (0):"] : elided(classified, [`  differences (${differences.length}):`, ...differences.map(differenceLine)], detail)));
   const counts = [`  frontiers (${frontiers.length}): ${countedBy(frontiers.map((frontier) => `${frontier.kind} (${frontier.reason})`))}; ${categoryRecovery({ details: "lists them with their places" })}`];
   lines.push(...(frontiers.length === 0 ? ["  frontiers (0):"] : elided(counts, [`  frontiers (${frontiers.length}):`, ...frontiers.map(frontierLine)], detail)));
   return lines;

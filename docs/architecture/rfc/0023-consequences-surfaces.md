@@ -28,7 +28,7 @@ What does not fit the shared surfaces as is: the change answer is not a fact; it
 request beside `base`/`head`; `consequencesOfEach` answers a list; `unknown-operation` is a call fault where a
 multi-hypothesis call needs a per-hypothesis answer; hop evidence is typed without its repository
 (`src/core/domain/contracts/consumer-flow.ts:91`); the value names no per-repository snapshots, which compose's
-multi-repository normalization reads (`vectorOf`, `src/mcp/composition-normalize.ts:281`); the name `contract-change`
+multi-repository normalization reads (`vectorOf`, `src/core/application/composition/composition-normalize.ts:292`); the name `contract-change`
 is already a compose part kind (impact's changed contracts).
 
 ## The family
@@ -62,11 +62,11 @@ only the port and the answer's assembly change.
 | `answers` | one per hypothesis, in the order asked (`ofHypotheses`) or sorted by operation and property (`ofChange`) |
 | `answers[].hypothesis` | the normalized hypothesis, as RFC-0022 "Output" echoes it today |
 | `answers[].oldContract` | the assumed or derived old guarantee (response) or old acceptance (request) |
-| `answers[].derivedFrom` | `ofChange` only: the operation, the property and its contract places at base and head |
+| `answers[].derivedFrom` | `ofChange` only: the operation, the property, the rules of the differences it answers (RFC-0022 P6) and its contract places at base and head |
 | `answers[].status` | `complete`, `partial` with its cuts, or `unknown` with its reason (an operation no repository serves, a workspace read that failed for it) |
 | `answers[].findings` | uses or producers with their verdicts, and frontiers as `unknown` findings, as today |
 | `change` | `ofChange` only: `base`, `head`, the resolved `snapshots`, and the `derivation` section; retained even when `answers` is empty |
-| `change.derivation` | a fact whose value holds gained guarantees, operations added and removed, and the frontiers of the derivation (unreadable contract, unsupported delta, unserved or ambiguous operation) as `unknown` findings; `partial` preserves the source-read cuts from both base and head, and `unknown` carries its reason and evidence without a value |
+| `change.derivation` | a fact whose value holds every classified difference (rule, level, side, operation, property, delta, places; RFC-0022 P6) and the frontiers of the derivation (unreadable contract, unsupported delta, unclassified difference, unread request, unserved or ambiguous operation) as `unknown` findings, a derivation frontier on the request naming its side; `partial` preserves the source-read cuts from both base and head, and `unknown` carries its reason and evidence without a value |
 
 **Status.** The fact is a composite of its hypothesis sections and, for `ofChange`, the `change.derivation` section
 (RFC-0002 rule 2). It is `complete` only when every section is complete; otherwise it is `partial`, retaining its value
@@ -144,7 +144,7 @@ every protocol workspace read.
 References are added to `partReferences` for each new kind. The existing relations then join them without a new rule:
 `shares-evidence` on equal places, file relations on equal files, and the handler anchor with the entrypoint and
 impact parts that name the same handler. Joined queries need equal snapshots, schema, producer and trust
-(`src/mcp/compose-evidence.ts:216-247`); compose re-reads per query (`src/mcp/compose-request.ts:169`), so joins with
+(`src/core/application/composition/compose-evidence.ts:216-247`); compose re-reads per query (`src/mcp/compose-request.ts:169`), so joins with
 `impact` or `entrypoints` hold at pinned revisions and report `snapshot-difference` under `live`, as for any family.
 
 ## What stays unchanged

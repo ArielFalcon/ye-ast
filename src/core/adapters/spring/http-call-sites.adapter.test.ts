@@ -67,9 +67,9 @@ test("a RestTemplate verb fixes the method by its name, and exchange takes it fr
   );
 
   assert.deepEqual(await read([client]), [
-    "GET /invoices/{} via http://billing-svc:8080 BillingClient.find@BillingClient.java:9",
-    "POST /payments via http://billing-svc:8080 BillingClient.pay@BillingClient.java:10",
-    "DELETE /payments/7 via http://billing-svc:8080 BillingClient.drop@BillingClient.java:11",
+    "GET http://billing-svc:8080/invoices/{} BillingClient.find@BillingClient.java:9",
+    "POST http://billing-svc:8080/payments BillingClient.pay@BillingClient.java:10",
+    "DELETE http://billing-svc:8080/payments/7 BillingClient.drop@BillingClient.java:11",
   ]);
 });
 
@@ -99,9 +99,9 @@ test("RestClient and WebClient chains give the method of the verb or of method()
   );
 
   assert.deepEqual(await read([client]), [
-    "GET /api/parcels/{id} via http://shipping-svc:9000 ShippingClient.track@ShippingClient.java:11",
-    "PUT /api/parcels/1 via http://shipping-svc:9000 ShippingClient.relabel@ShippingClient.java:12",
-    "POST /cancellations via http://shipping-svc:9000 ShippingClient.cancel@ShippingClient.java:13",
+    "GET http://shipping-svc:9000/api/parcels/{id} ShippingClient.track@ShippingClient.java:11",
+    "PUT http://shipping-svc:9000/api/parcels/1 ShippingClient.relabel@ShippingClient.java:12",
+    "POST http://shipping-svc:9000/cancellations ShippingClient.cancel@ShippingClient.java:13",
   ]);
 });
 
@@ -194,6 +194,13 @@ test("an HttpExchange interface declares its calls with the verb of the annotati
   assert.deepEqual(await read([exchange]), ["GET /catalog/products/{id} CatalogApi.product@CatalogApi.java:5", "DELETE /catalog/products/{id} CatalogApi.drop@CatalogApi.java:6"]);
 });
 
+test("a URL names its host after `scheme://` or a bare `//`, whether a call or an HttpExchange type writes it", async () => {
+  const client = java("CatalogClient", ["class CatalogClient {", "  RestTemplate rt;", "  void find() { rt.getForObject(\"//catalog-svc/products\", String.class); }", "}"].join("\n"));
+  const exchange = java("CatalogApi", ["@HttpExchange(url = \"http://catalog-svc/catalog\")", "interface CatalogApi {", "  @GetExchange(\"/products\") String product();", "}"].join("\n"), ["org.springframework.web.service.annotation.*"]);
+
+  assert.deepEqual(await read([client, exchange]), ["GET http://catalog-svc/catalog/products CatalogApi.product@CatalogApi.java:5", "GET //catalog-svc/products CatalogClient.find@CatalogClient.java:8"]);
+});
+
 test("a @Value placeholder is read from the configuration, its default applies when the key is absent, and a key without value is unknown", async () => {
   const client = java(
     "BillingClient",
@@ -213,8 +220,8 @@ test("a @Value placeholder is read from the configuration, its default applies w
   const configuration = file(RESOURCES, "billing:\n  url: http://billing-svc:8080/api\n");
 
   assert.deepEqual(await read([client, configuration]), [
-    "GET /api/invoices via http://billing-svc:8080 BillingClient.a@BillingClient.java:12",
-    "GET /status via http://fallback-svc:80 BillingClient.b@BillingClient.java:13",
+    "GET http://billing-svc:8080/api/invoices BillingClient.a@BillingClient.java:12",
+    "GET http://fallback-svc:80/status BillingClient.b@BillingClient.java:13",
     "unknown BillingClient.c@BillingClient.java:14",
   ]);
 });
@@ -243,7 +250,7 @@ test("an accessor of a @ConfigurationProperties object reads its prefix and prop
   );
   const configuration = file(RESOURCES, "clients:\n  billing:\n    base-url: http://billing-svc:8080\n");
 
-  assert.deepEqual(await read([properties, client, configuration]), ["GET /invoices via http://billing-svc:8080 BillingClient.a@BillingClient.java:9"]);
+  assert.deepEqual(await read([properties, client, configuration]), ["GET http://billing-svc:8080/invoices BillingClient.a@BillingClient.java:9"]);
 });
 
 test("a part the code fills at run time is a parameter, and a URL that starts with one is unknown", async () => {
@@ -260,7 +267,7 @@ test("a part the code fills at run time is a parameter, and a URL that starts wi
     ].join("\n"),
   );
 
-  assert.deepEqual(await read([client]), ["GET /invoices/{}/lines via http://billing-svc:8080 BillingClient.a@BillingClient.java:10", "unknown BillingClient.b@BillingClient.java:11"]);
+  assert.deepEqual(await read([client]), ["GET http://billing-svc:8080/invoices/{}/lines BillingClient.a@BillingClient.java:10", "unknown BillingClient.b@BillingClient.java:11"]);
 });
 
 test("a method that forwards its parameter into a request is a wrapper: its callers are the call sites, and its own body is not", async () => {
@@ -270,7 +277,7 @@ test("a method that forwards its parameter into a request is a wrapper: its call
   );
   const caller = java("Reports", ["@Service class Reports {", "  private final Gateway gateway;", "  void load() { gateway.fetch(\"/reports/daily\"); }", "}"].join("\n"));
 
-  assert.deepEqual(await read([wrapper, caller]), ["GET /reports/daily via http://billing-svc:8080 Reports.load@Reports.java:8"]);
+  assert.deepEqual(await read([wrapper, caller]), ["GET http://billing-svc:8080/reports/daily Reports.load@Reports.java:8"]);
 });
 
 test("a wrapper nothing in the snapshot calls stays a cut at its request", async () => {
@@ -317,7 +324,7 @@ test("library summaries evaluate source return methods as well as direct paramet
   );
   const configuration = file(RESOURCES, "acme.base: http://billing-svc:8080\n");
 
-  assert.deepEqual(await read([client, configuration], library), ["GET /k BillingClient.a@BillingClient.java:9", "GET /invoices via http://billing-svc:8080 BillingClient.a@BillingClient.java:9"]);
+  assert.deepEqual(await read([client, configuration], library), ["GET http://billing-svc:8080/invoices BillingClient.a@BillingClient.java:9", "GET /k BillingClient.a@BillingClient.java:9"]);
 });
 
 test("test sources are not call sites", async () => {
@@ -339,7 +346,7 @@ test("a Java source the parser rejects is one unknown source-unreadable site at 
 
 test("a Java source whose parsing throws is an unknown source-unreadable site at its first line", async () => {
   const base = await createJavaParser();
-  const parser: JavaParser = { parse: (source) => { if (source.includes("Explodes")) throw new RangeError("Maximum call stack size exceeded"); return base.parse(source); } };
+  const parser: JavaParser = { parse: (source) => { if (source.content.includes("Explodes")) throw new RangeError("Maximum call stack size exceeded"); return base.parse(source); } };
   const explodes = java("Explodes", "class Explodes {}");
   const sites = await createJavaHttpCallSites(parser).of([explodes], "orders-svc");
   assert.deepEqual(sites.map((site) => site.target), [{ status: "unknown", reason: "source-unreadable", evidence: [{ path: explodes.path, line: 1 }] }]);
@@ -357,7 +364,7 @@ test("source method summaries preserve argument scopes through multiple forwardi
   const sites = await reader.of([source], "service");
   assert.equal(sites.length, 1);
   assert.equal(sites[0]?.symbol, "Flow.load");
-  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", base: "http://catalog", path: "/items" });
+  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", path: "http://catalog/items" });
 });
 
 test("interface dispatch evaluates all source implementations without selecting a disagreeing target", async () => {
@@ -382,7 +389,7 @@ test("source constructors and Lombok builders retain distinct object fields for 
       rt.getForObject(query.getHost() + query.getPath() + suffix.getValue(), String.class);
     } }`);
   const sites = await reader.of([source], "service");
-  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", base: "http://catalog", path: "/items/details" });
+  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", path: "http://catalog/items/details" });
 });
 
 test("Map configuration keys are evaluated through library arguments in the consuming module", async () => {
@@ -395,7 +402,7 @@ test("Map configuration keys are evaluated through library arguments in the cons
   const caller = java("Consumer", `class Consumer { Gateway gateway; void load() { gateway.send("catalog"); } }`);
   const sites = await reader.of([caller, file(RESOURCES, "clients.systems.catalog.url: http://catalog/items\n")], "service", [inLibrary(library)]);
   assert.equal(sites.length, 1);
-  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", base: "http://catalog", path: "/items" });
+  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", path: "http://catalog/items" });
 });
 
 test("OkHttp newCall reads the standard Request builder URL and explicit or default method", async () => {
@@ -406,8 +413,8 @@ test("OkHttp newCall reads the standard Request builder URL and explicit or defa
   } }`, ["okhttp3.OkHttpClient", "okhttp3.Request"]);
   const sites = await reader.of([source], "service");
   assert.deepEqual(sites.map((site) => site.target.status === "complete" && site.target.value), [
-    { method: "PATCH", base: "http://catalog", path: "/items" },
-    { method: "GET", base: "http://catalog", path: "/default" },
+    { method: "PATCH", path: "http://catalog/items" },
+    { method: "GET", path: "http://catalog/default" },
   ]);
 });
 
@@ -420,7 +427,7 @@ test("source-proven setters update record fields before a getter reads them", as
     rt.getForObject(query.getPath(), String.class);
   } }`);
   const sites = await reader.of([source], "service");
-  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", base: "http://catalog", path: "/items" });
+  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", path: "http://catalog/items" });
 });
 
 test("recursive client summaries retain an explicit unknown instead of disappearing", async () => {
@@ -458,7 +465,7 @@ test("a source URL helper follows a proven null fallback and a single array elem
       }
     }`, ["okhttp3.OkHttpClient", "okhttp3.Request", "okhttp3.HttpUrl"]);
   const sites = await reader.of([source], "service");
-  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", base: "http://catalog", path: "/items" });
+  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", path: "http://catalog/items" });
 });
 
 test("a run-time null check in the destination stays unknown and names the value its decided branch declares", async () => {
@@ -487,7 +494,7 @@ test("a qualifier selects the implementation constructed by a named source Bean"
     }`);
   const sites = await reader.of([source], "service");
   const site = sites.find((site) => site.symbol === "Selection.load");
-  assert.deepEqual(site?.target.status === "complete" && site.target.value, { method: "GET", base: "http://two", path: "/items" });
+  assert.deepEqual(site?.target.status === "complete" && site.target.value, { method: "GET", path: "http://two/items" });
 });
 
 test("escaped mutable records never retain stale constructor, builder or setter fields", async () => {
@@ -609,6 +616,17 @@ test("an unreadable library is reported as context without claiming it declares 
   const [site] = await reader.of([caller], "app", [library]);
   assert.equal(site?.diagnostic?.cause, "source-not-read");
   assert.deepEqual(site?.diagnostic?.unreadableSources?.map(e => e.path), ["(library)/lib/src/Broken.java"]);
+});
+
+test("a client base the snapshot does not decide keeps the request the code writes, with the base's own cause", async () => {
+  const source = java("Reports", `@Service class Reports {
+      private final RestClient rest;
+      Reports(RestClient.Builder builder) { this.rest = builder.baseUrl(loop()).build(); }
+      String loop() { return loop(); }
+      void load() { rest.get().uri("/reports/daily").retrieve().body(String.class); }
+    }`);
+  const [site] = await reader.of([source], "app");
+  assert.deepEqual([site?.target.status, site?.stated, site?.diagnostic?.cause], ["unknown", { method: "GET", path: "/reports/daily" }, "recursive"]);
 });
 
 test("URL value diagnostics retain recursion and disagreement inside source return methods", async () => {

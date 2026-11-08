@@ -2,7 +2,7 @@ import { missingReferences } from "../core/adapters/openapi/contract-document.ad
 import { createPayloadShapes } from "../core/adapters/openapi/payload-shapes.adapter.ts";
 import { extractRoutes } from "../core/adapters/spring/spring-routes.adapter.ts";
 import { createSpringPayloadShapes } from "../core/adapters/spring/spring-payload-shapes.adapter.ts";
-import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
+import type { JavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
 import { createTemplateFlowReader } from "../core/adapters/angular-compiler/template-flow.adapter.ts";
 import { createAngularMetadataReader } from "../core/adapters/typescript/angular-metadata.adapter.ts";
 import { createConsumerFlowReader } from "../core/adapters/typescript/consumer-flow.adapter.ts";
@@ -20,10 +20,12 @@ import type { ContractConsequencesQueries } from "../core/ports/contract-consequ
 import type { ConsumerSources } from "../core/ports/consumer-sources.port.ts";
 import type { ContractRoutes } from "../core/ports/contract-routes.port.ts";
 import type { ImportOriginsReader } from "../core/ports/import-origins.port.ts";
+import type { DeclaredMemberNamesReader } from "../core/ports/declared-member-names.port.ts";
+import type { ModuleDependenciesReader } from "../core/ports/module-dependencies.port.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
 
 /** The workspace read of consequences queries over the workspace read, the TypeScript flow and request origin readers and the Angular template reader. */
-export function composeConsumerSources(deps: { operation: WorkspaceReadOperation; heads: HeadReaderDeps; digest: Digest; importOrigins: ImportOriginsReader; engines: Readonly<Record<string, string>> }): ConsumerSources {
+export function composeConsumerSources(deps: { operation: WorkspaceReadOperation; heads: HeadReaderDeps; digest: Digest; importOrigins: ImportOriginsReader; memberNames: DeclaredMemberNamesReader; modules: ModuleDependenciesReader; engines: Readonly<Record<string, string>> }): ConsumerSources {
   return createConsumerSources({ ...deps, flow: createConsumerFlowReader, origins: createRequestOriginReader, metadata: createAngularMetadataReader(), templateFlow: createTemplateFlowReader(), relations: composeAngularRelations() });
 }
 
@@ -36,10 +38,10 @@ const isShapeSource = (path: string): boolean => (isJavaSource(path) && !isJvmTe
  * revisions are read from git at their commits under the trust declaration, and `contracts` is the one the entrypoint
  * wiring reads routes with.
  */
-export function composeContractConsequences(deps: { sources: ConsumerSources; heads: HeadReaderDeps; contracts: ContractRoutes }): ContractConsequencesQueries {
+export function composeContractConsequences(deps: { sources: ConsumerSources; heads: HeadReaderDeps; contracts: ContractRoutes; javaParser: () => Promise<JavaParser> }): ContractConsequencesQueries {
   const revisions = createRevisionSources({ ...deps.heads, sourceSelection: isShapeSource, dependencies: missingReferences });
   let ready: Promise<ContractConsequencesQueries["ofChange"]> | undefined;
-  const ofChange = (): Promise<ContractConsequencesQueries["ofChange"]> => (ready ??= createJavaParser().then((parser) => createContractChange({
+  const ofChange = (): Promise<ContractConsequencesQueries["ofChange"]> => (ready ??= deps.javaParser().then((parser) => createContractChange({
     sources: deps.sources,
     revisions,
     shapes: [createPayloadShapes(), createSpringPayloadShapes(parser, (files) => extractRoutes(parser, files, [], deps.contracts))],

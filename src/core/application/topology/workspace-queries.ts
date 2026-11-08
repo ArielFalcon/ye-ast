@@ -9,9 +9,10 @@ import { gatherCandidates, gatherNames, sortEvidence, type NameCandidate, type O
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { JoinedSite } from "../../domain/topology/link-graph.ts";
 import { entrypointsOf, joinWorkspace, linkMapOf } from "./workspace-join.ts";
+import { hostOf, prefixOf } from "../../domain/topology/link-match.ts";
 import type { HeadReaderDeps, HeldLive } from "../snapshot/head-reading.ts";
 import type { WorkspaceReadOperation } from "./workspace-operation.ts";
-import { callSiteEvidence, unresolvedCallSite, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
+import { callSiteEvidence, unresolvedCallSite, unsettledCallSiteCut, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
 import { nameCandidates, dependencyClosures, repositoryNameOf, type RepositoryIdentity } from "../../domain/topology/repository-identity.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
@@ -64,10 +65,10 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
     const remotes = await vcs.remotes(declared, signal);
     if (!remotes.ok) return remotes;
     const sha = at.revision;
-    return withScratch(deps.scratch, async (directory) => {
+    return withScratch(deps, async (readScope) => {
       const declaredTrust = await declaredTrustOf(deps, declared);
       const trust = declaredTrust ?? "untrusted";
-      const prepared = await prepareCommit({ ...deps, preparation }, source, sha, directory, selection, { scope, trust }, signal);
+      const prepared = await prepareCommit({ ...deps, preparation }, source, sha, readScope, selection, { scope, trust }, signal);
       if (!prepared.ok) return prepared;
       const extracted = await prepared.value.extract(signal);
       if (!extracted.ok) return extracted;
@@ -189,23 +190,24 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
         const repositories = resolved.map((entry) => ({ ...entry.repository, callSites: entry.callSites })).sort((a, b) => compareText(a.repo, b.repo));
         const join = joinWorkspace(repositories, repositories.map(entrypointsOf), membership.gateways);
         const listened = destinationCandidates(join.joined);
+        const linked = linkedNames(join.joined);
         const sections: Record<string, Fact<WorkspaceSection>> = Object.create(null);
         const candidates: NameCandidate[] = [];
         const unserved: RepositoryOutwardName[] = [];
         for (const entry of resolved) {
           const names = gatherNames(entry.names);
           const unresolved = entry.callSites.flatMap((site) => (site.target.status === "unknown" ? [unresolvedCallSite(site)] : []));
-          const ambiguous = join.joined.filter(({ site, joined }) => site.repo === entry.repository.repo && joined.ambiguous !== undefined).map(({ site }) => site);
+          const unsettled = join.joined.filter(({ site, joined }) => site.repo === entry.repository.repo && (joined.ambiguous !== undefined || joined.undecided !== undefined)).map(({ site }) => site);
           const section: FactBase & { evidence: readonly { path: string; line: number }[] } = { ...(entry.base as FactBase), evidence: sortEvidence(names.flatMap((name) => name.evidence)) };
           const cuts = [
             ...entry.cuts,
             ...unresolved.map((place) => ({ kind: "unresolved-link" as const, reason: place.reason, at: [place.path, `${place.path}:${place.line}`, ...(place.via === undefined ? [] : [`library ${place.via}`])] })),
-            ...ambiguous.map((site) => ({ kind: "unresolved-link" as const, at: [site.file, `${site.file}:${site.line}`] })),
+            ...unsettled.map(unsettledCallSiteCut),
           ];
           sections[entry.repository.repo] = withCuts(section, { names, unresolved }, cuts);
           for (const name of names) {
             const served = [...nameCandidates(name, identities, entry.repository.repo), ...(name.kind === "destination" ? listened.get(`${entry.repository.repo}\0${name.name}`) ?? [] : [])];
-            if (served.length === 0) unserved.push({ ...name, evidence: name.evidence.map((place) => ({ ...place, repo: entry.repository.repo })) });
+            if (served.length === 0 && !linked.has(nameKey(entry.repository.repo, name))) unserved.push({ ...name, evidence: name.evidence.map((place) => ({ ...place, repo: entry.repository.repo })) });
             candidates.push(...served);
           }
         }
@@ -267,10 +269,10 @@ function callSiteNames(repo: string, callSites: readonly CallSite[]): OutwardNam
   return callSites.flatMap((site): OutwardName[] => {
     if (site.target.status !== "complete") return [];
     if ("destination" in site.target.value) return [{ name: site.target.value.destination, kind: "destination", evidence: [callSiteEvidence(site)] }];
-    const { base, path } = site.target.value;
+    const host = hostOf(site.target.value);
     const evidence = [callSiteEvidence(site)];
-    const prefix = path.split("/").find((segment) => segment !== "");
-    return [...(base === undefined ? [] : [{ name: base, kind: "http-host" as const, evidence }]), ...(prefix === undefined || prefix === "{}" ? [] : [{ name: prefix, kind: "path-prefix" as const, evidence }])];
+    const prefix = prefixOf(site.target.value);
+    return [...(host === undefined ? [] : [{ name: host, kind: "http-host" as const, evidence }]), ...(prefix === undefined ? [] : [{ name: prefix, kind: "path-prefix" as const, evidence }])];
   });
 }
 
@@ -278,6 +280,15 @@ function callSiteNames(repo: string, callSites: readonly CallSite[]): OutwardNam
  * Per publishing repository and destination, the repositories that listen to it as the join decided: the one a link
  * lands in, with the call site and the handler as evidence, or each one an ambiguous destination names, with the call site.
  */
+/** The names the calls the join linked carry, by calling repository: the repository each link reaches serves them. */
+function linkedNames(joined: readonly JoinedSite[]): ReadonlySet<string> {
+  return new Set(joined.flatMap(({ site, joined: answer }) => ((answer.links?.length ?? 0) === 0 ? [] : callSiteNames(site.repo, [site]).map((name) => nameKey(site.repo, name)))));
+}
+
+function nameKey(repo: string, { kind, name }: Pick<OutwardName, "kind" | "name">): string {
+  return `${repo}\0${kind}\0${name}`;
+}
+
 function destinationCandidates(joined: readonly JoinedSite[]): Map<string, NameCandidate[]> {
   const listened = new Map<string, NameCandidate[]>();
   for (const { site, joined: answer } of joined) {

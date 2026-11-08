@@ -3,12 +3,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
 import { SEMANTIC_INPUTS, TOOL_INPUTS } from "./query-schema.ts";
-import type { ToolFamily } from "./presentation.ts";
+import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
 
 const SHA = "a".repeat(40);
 const HYPOTHESIS = { method: "GET", path: "/owners/{id}", target: "response", property: "name", change: "nullable" };
-const FAMILIES = Object.keys(SEMANTIC_INPUTS) as ToolFamily[];
-const MINIMAL: Record<ToolFamily, Record<string, unknown>> = {
+const FAMILIES = Object.keys(SEMANTIC_INPUTS) as QueryFamily[];
+const MINIMAL: Record<QueryFamily, Record<string, unknown>> = {
   entrypoints: {},
   callers: { targets: [{ file: "src/S.java", symbol: "S.find" }] },
   impact: { base: "main" },
@@ -20,10 +20,10 @@ const MINIMAL: Record<ToolFamily, Record<string, unknown>> = {
   contract_consequences: { hypotheses: [HYPOTHESIS] },
 };
 const RECOVERABLE = ["entrypoints", "callers", "impact"] as const;
-const accepts = (family: ToolFamily, args: unknown, schemas = SEMANTIC_INPUTS) => schemas[family].safeParse(args).success;
+const accepts = (family: QueryFamily, args: unknown, schemas = SEMANTIC_INPUTS) => schemas[family].safeParse(args).success;
 
 test("every family has one semantic and one tool schema with the same fields apart from the controls", () => {
-  assert.deepEqual(FAMILIES.toSorted(), (Object.keys(TOOL_INPUTS) as ToolFamily[]).toSorted());
+  assert.deepEqual(FAMILIES.toSorted(), (Object.keys(TOOL_INPUTS) as QueryFamily[]).toSorted());
   for (const family of FAMILIES) {
     const controls = (RECOVERABLE as readonly string[]).includes(family) ? ["mode", "select", "page", "expect"] : ["mode"];
     const tool = Object.keys(TOOL_INPUTS[family].shape).filter((key) => !controls.includes(key));
@@ -108,7 +108,7 @@ test("each rejected cross-field constraint is reported at the control or field a
   const cut = (owner: object) => ({ kind: "cut-places", owner, cutIndex: 0 });
   const handler = (owner: object) => ({ kind: "handler-origins", owner, handler: { path: "a", symbol: "h", line: 1 } });
   const page = { limit: 1 };
-  const cases: [ToolFamily, Record<string, unknown>, string, string][] = [
+  const cases: [QueryFamily, Record<string, unknown>, string, string][] = [
     ["callers", { select: cut({ kind: "fact" }) }, "page", "select-requires-page"],
     ["impact", { page }, "select", "page-requires-select"],
     ["callers", { select: cut({ kind: "section", repo: "r" }), page }, "select.owner.kind", "owner-branch"],

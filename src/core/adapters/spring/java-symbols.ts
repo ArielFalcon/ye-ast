@@ -170,6 +170,11 @@ const TYPE_KINDS: Readonly<Record<string, TypeKind>> = {
   record_declaration: "class",
 };
 
+/** Whether a node declares a type: a class, an interface, an enum, a record or an annotation type. */
+export function isTypeDeclaration(node: Node): boolean {
+  return Object.hasOwn(TYPE_KINDS, node.type);
+}
+
 /** A placeholder is resolved at run time; U+FFFD stands for source bytes that were not UTF-8. */
 export const UNKNOWABLE_TEXT = /\$\{|#\{|\uFFFD/;
 
@@ -858,6 +863,7 @@ function parameterType(parameter: Node): string {
   return parameter.type === "spread_parameter" ? `${erased}[]` : erased;
 }
 
+/** The type declarations a block or an anonymous class body may hold: every kind but an annotation interface, which javac rejects there. */
 const LOCAL_TYPE_DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration", "interface_declaration", "enum_declaration", "record_declaration"]);
 const BLOCKS: ReadonlySet<string> = new Set(["block", "constructor_body", "switch_block_statement_group"]);
 

@@ -40,7 +40,7 @@ function setup() {
 
 test("an operation shares compatible SHA export, sources and extraction and removes retained resources after its consumers", async () => {
   const { deps, log, query, request } = setup();
-  await withSnapshotPreparation(deps.scratch, async (preparation) => {
+  await withSnapshotPreparation(deps, async (preparation) => {
     const queries = query({ preparation });
     const first = await queries.map(request);
     const second = await queries.map({ ...request, revision: "alias" });
@@ -55,7 +55,7 @@ test("an operation shares compatible SHA export, sources and extraction and remo
 
 test("preparation keeps source, SHA, scope, trust and budget boundaries separate", async () => {
   const { deps, log, query, request } = setup();
-  await withSnapshotPreparation(deps.scratch, async (preparation) => {
+  await withSnapshotPreparation(deps, async (preparation) => {
     const queries = query({ preparation });
     await queries.map(request);
     await queries.map({ ...request, repo: "/another" });
@@ -72,7 +72,7 @@ test("one operation does not reuse a preparation with a different source selecti
   const reads: string[][] = [];
   deps.vcs.exportCommit = async (_repo, _sha, _root, plan) => ({ ok: true, value: { files: ["src/app.ts", "src/data.json"].map((path) => ({ path, blob: path, written: plan.write(path) })), skipped: [] } });
   deps.reader.read = async (_root, paths) => { reads.push([...paths]); return paths.map((path) => ({ path, content: path.endsWith(".json") ? "{}" : "export const value = 1;" })); };
-  await withSnapshotPreparation(deps.scratch, async (preparation) => {
+  await withSnapshotPreparation(deps, async (preparation) => {
     assert.ok((await query({ preparation, sourceSelection: (path) => path.endsWith(".ts") }).map(request)).ok);
     assert.ok((await query({ preparation, sourceSelection: () => true }).map(request)).ok);
   });
@@ -82,7 +82,7 @@ test("one operation does not reuse a preparation with a different source selecti
 test("a cancelled consumer cannot use a prepared result and resources are removed when a consumer throws", async () => {
   const { deps, log, query, request } = setup();
   const stop = new AbortController();
-  await assert.rejects(withSnapshotPreparation(deps.scratch, async (preparation) => {
+  await assert.rejects(withSnapshotPreparation(deps, async (preparation) => {
     const queries = query({ preparation });
     await queries.map(request);
     stop.abort();
@@ -95,7 +95,7 @@ test("a cancelled consumer cannot use a prepared result and resources are remove
 
 test("workspace discovery and its trigger walk share preparation while deriving separate facts", async () => {
   const { deps, log } = setup();
-  await withSnapshotPreparation(deps.scratch, async (preparation) => {
+  await withSnapshotPreparation(deps, async (preparation) => {
     const shared = { ...deps, preparation, matcher: { matches: () => true }, engines: {} };
     const workspace = createWorkspaceQueries({ ...shared, evidence: { names: () => [], artifacts: () => [] }, callSites: { of: async () => [] } });
     const impact = impactQueriesFor(shared);
@@ -122,7 +122,7 @@ test("cancellation during a source read is retried by an independent consumer of
     if (interrupt) { interrupt = false; controller.abort(); }
     return answer;
   };
-  await withSnapshotPreparation(deps.scratch, async (preparation) => {
+  await withSnapshotPreparation(deps, async (preparation) => {
     const queries = query({ preparation });
     const aborted = await queries.map({ ...request, signal: controller.signal });
     assert.ok(!aborted.ok && aborted.fault.kind === "aborted");
@@ -139,7 +139,7 @@ test("a failed export is not retained for the next consumer", async () => {
   const original = deps.vcs.exportCommit;
   let attempts = 0;
   deps.vcs.exportCommit = async (...args) => ++attempts === 1 ? { ok: false, fault: { kind: "export-write-failed", detail: "unavailable" } } : original(...args);
-  await withSnapshotPreparation(deps.scratch, async (preparation) => {
+  await withSnapshotPreparation(deps, async (preparation) => {
     const queries = query({ preparation });
     const failed = await queries.map(request);
     assert.ok(!failed.ok && failed.fault.kind === "export-write-failed");
@@ -151,7 +151,7 @@ test("a failed export is not retained for the next consumer", async () => {
 
 function dataCache(): SnapshotDataCache {
   const entries = new Map<string, SnapshotData>();
-  return { get: (key) => { const data = entries.get(key); return data === undefined ? undefined : structuredClone(data); }, put: (key, data) => { entries.set(key, structuredClone(data)); } };
+  return { get: (key) => { const data = entries.get(key); return data === undefined ? undefined : structuredClone(data); }, put: (key, data) => { entries.set(key, structuredClone(data)); }, getFact: () => undefined, putFact: () => ({ admitted: false, entryBytes: 0, evicted: 0 }), usage: () => ({ factBytes: 0, retainedBytes: 0 }) };
 }
 
 test("independent requests reuse sources and findings but each exports into its own temporary directory", async () => {

@@ -252,12 +252,12 @@ test("a link that is not qualified is not followed: it is an unknown item that n
 });
 
 test("every qualified basis is followed", async () => {
-  const links = (["exact", "base-path", "operation-id"] as const).map((basis, index) => link({ basis, line: 10 + index }));
+  const links = (["exact", "base-path"] as const).map((basis, index) => link({ basis, line: 10 + index }));
   const { ask, followed } = setup({ links });
 
   await ask();
 
-  assert.equal(followed.length, 3);
+  assert.equal(followed.length, 2);
 });
 
 const returning = (symbol = "find") => ({ [carrierKey(siteOf())]: { uses: [], next: [{ carrier: { site: returnOf(symbol), path: path("address") }, hops: [{ step: "return" as const, evidence: { path: "src/owner.service.ts", line: 12 } }] }], frontiers: [] } });

@@ -13,16 +13,10 @@ import type { Result } from "../core/domain/shared/result.ts";
 import { executeQuery, type ExecutedSource, type QueryExecutionContext, type QueryFault } from "./query-runner.ts";
 import { familyOf, type ComposeQuery, type SemanticQuery } from "./query-schema.ts";
 import { assertSourceIdentity } from "./evidence-cursor.ts";
-import { normalizeSource } from "./composition-normalize.ts";
-import { materializeEvidence, mergeEvidence, validateCompositionReferences, validateCompositionIssues } from "./compose-evidence.ts";
-import { compositionIdentity } from "./composition-identity.ts";
 import { COMPOSE_INPUT, COMPOSE_LIMITS, COMPOSE_QUERY } from "./composition-input.ts";
-import type { CutOwner } from "./select-evidence.ts";
-import type {
-  ComposeFault, ComposeInput, CompositionCounts, CompositionIdentity, CompositionResult, CoverageSummary, EvidenceSet,
-  MaterializedComposition, Part, QueryKey, ReadOwner, RepeatRequest, SourceDelivery, SourceDescriptor, SourceId,
-  UnavailableReason, Verification,
-} from "./composition-contract.ts";
+import type { CutOwner } from "../core/domain/composition/source-read.ts";
+import type { ComposeFault, ComposeInput, CompositionCounts, CompositionResult, CoverageSummary, QueryKey, RepeatRequest, SourceDelivery, UnavailableReason, Verification } from "./composition-contract.ts";
+import type { CompositionIdentity, EvidenceComposition, EvidenceSet, MaterializedComposition, Part, ReadOwner, SourceDescriptor, SourceId } from "../core/ports/evidence-composition.port.ts";
 
 export { COMPOSE_LIMITS };
 
@@ -162,7 +156,7 @@ function yieldToEventLoop(): Promise<void> {
 }
 
 async function execute(queries: readonly Planned[], expect: CompositionIdentity | undefined, ctx: QueryExecutionContext, run: LinkedRun): Promise<Run> {
-  const { digest, redaction } = ctx.deps;
+  const { evidenceComposition, redaction } = ctx.deps;
   const internal = (error: unknown): Failure => failure({ kind: "internal-fault", detail: redaction.redactError(error) });
   let evidence: EvidenceSet | undefined;
   const contributions = new Map<SourceId, Contribution[]>();
@@ -181,8 +175,8 @@ async function execute(queries: readonly Planned[], expect: CompositionIdentity 
     }
     let set: EvidenceSet;
     try {
-      set = normalizeSource(source, digest, source.identityGuard.changedArguments ? { discriminator: query.ordinal } : undefined);
-      evidence = evidence === undefined ? set : mergeEvidence(evidence, set);
+      set = evidenceComposition.normalize(source, source.identityGuard.changedArguments ? { discriminator: query.ordinal } : undefined);
+      evidence = evidence === undefined ? set : evidenceComposition.merge(evidence, set);
     } catch (error) {
       return internal(error);
     }
@@ -199,16 +193,16 @@ async function execute(queries: readonly Planned[], expect: CompositionIdentity 
 
   let materialized: MaterializedComposition;
   try {
-    materialized = materializeEvidence(evidence, digest);
+    materialized = evidenceComposition.materialize(evidence);
   } catch (error) {
     return internal(error);
   }
-  const integrity = validateCompositionReferences(materialized.graph);
+  const integrity = evidenceComposition.checkReferences(materialized.graph);
   if (!integrity.ok) return failure({ kind: "internal-fault", detail: `Invalid composition reference ${integrity.fault.table}.${integrity.fault.field}: ${integrity.fault.id}` });
-  const issueIntegrity = validateCompositionIssues(materialized.graph, materialized.issues);
+  const issueIntegrity = evidenceComposition.checkIssues(materialized.graph, materialized.issues);
   if (!issueIntegrity.ok) return failure({ kind: "internal-fault", detail: `Invalid composition issue ${issueIntegrity.fault.field}` });
 
-  const result = assemble(materialized, contributions, digest);
+  const result = assemble(materialized, contributions, evidenceComposition);
   if (expect !== undefined) {
     if (result.verification.status === "unavailable") {
       return failure({ kind: "replay-unavailable", detail: "The composition cannot be verified", stage: "composition", reason: result.verification.reason });
@@ -331,7 +325,7 @@ function unknownFindingReason(part: Part): string | undefined {
 
 const VERIFICATION_ORDER: readonly UnavailableReason[] = ["deadline", "redacted-context", "unresolved-context"];
 
-function assemble(materialized: MaterializedComposition, contributions: ReadonlyMap<SourceId, readonly Contribution[]>, digest: QueryExecutionContext["deps"]["digest"]): CompositionResult {
+function assemble(materialized: MaterializedComposition, contributions: ReadonlyMap<SourceId, readonly Contribution[]>, evidenceComposition: EvidenceComposition): CompositionResult {
   const { graph, issues } = materialized;
   const records = [...graph.sources].sort((a, b) => compareText(a.id, b.id));
   const chosen = records.map((record) => {
@@ -345,7 +339,7 @@ function assemble(materialized: MaterializedComposition, contributions: Readonly
   const blockers = new Set(chosen.flatMap(({ blockers }) => [...blockers]));
   const blocked = VERIFICATION_ORDER.find((reason) => blockers.has(reason));
   const verification: Verification = blocked === undefined
-    ? { status: "available", identity: compositionIdentity(digest, records.map((record) => record.id)) }
+    ? { status: "available", identity: evidenceComposition.identity(records.map((record) => record.id)) }
     : { status: "unavailable", reason: blocked };
   const delivery = chosen.flatMap(({ best }) => best.delivery === undefined ? [] : [best.delivery]);
   const wire = { ...graph, sources };

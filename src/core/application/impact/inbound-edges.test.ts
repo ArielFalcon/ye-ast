@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { declarationAnchor } from "../../domain/impact/impact-cuts.ts";
 import { relation, type RelationKind, type Relation, type SymbolRef } from "../../domain/relations/relation.ts";
-import type { LocalOrigin } from "../../domain/relations/field-origin.ts";
+import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { GraphSymbol } from "../../ports/code-graph.port.ts";
 import { createInboundEdges, type InboundEdges } from "./inbound-edges.ts";
@@ -26,9 +26,10 @@ function setup(
   relations: readonly Relation[] = [],
   unresolved: readonly FakeUnresolved[] = [],
   locals: readonly LocalOrigin[] = [],
+  fields: readonly FieldOrigin[] = [],
 ): Setup {
   const graph = fakeCodeGraph(nodes, edges, unresolved);
-  const inbound = createInboundEdges(graph, isTestFile, relations, [], locals);
+  const inbound = createInboundEdges(graph, isTestFile, relations, fields, locals);
   const symbol = (id: string): GraphSymbol => {
     const [found] = graph.symbolsByIds([id as GraphSymbol["id"]]);
     assert.ok(found, id);
@@ -388,15 +389,32 @@ test("a call on a local a function takes from inject() is a caller of the method
   assert.deepEqual(s.inbound.callersOf(s.symbol("target"), false)[0]?.lines, [7]);
 });
 
-test("a local name two owners of one file share is not settled: the place keeps its cut", () => {
+test("a local name two functions of one file each take from inject() holds, in each function, its own origin", () => {
   const s = setup(
     [fakeNode("svc", "class", A, 1, 50, "Svc"), fakeNode("target", "method", A, 10, 12, "list"), fakeNode("one", "function", B, 5, 8, "one"), fakeNode("two", "function", B, 12, 15, "two")],
     [{ from: "svc", to: "target", kind: "contains" }],
     [],
-    [{ from: "one", name: "orders.list", kind: "calls", file: B, line: 7 }],
+    [{ from: "one", name: "orders.list", kind: "calls", file: B, line: 7, column: 0 }],
     [
       { owner: { path: B, symbol: "one", line: 5 }, local: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } },
       { owner: { path: B, symbol: "two", line: 12 }, local: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } },
+    ],
+  );
+
+  assert.deepEqual(s.callers("target"), ["one"]);
+  assert.deepEqual(s.inbound.settledUses().size, 1);
+});
+
+test("a field two nested classes both declare holds no one origin at a use inside both: neither settles it, and the place keeps its cut", () => {
+  const s = setup(
+    [fakeNode("svc", "class", A, 1, 50, "Svc"), fakeNode("target", "method", A, 10, 12, "list"), fakeNode("outer", "class", B, 1, 50, "Outer"), fakeNode("inner", "class", B, 10, 30, "Inner"), fakeNode("run", "method", B, 14, 16, "run")],
+    [{ from: "svc", to: "target", kind: "contains" }],
+    [],
+    [{ from: "run", name: "this.orders.list", kind: "calls", file: B, line: 15, column: 0 }],
+    [],
+    [
+      { owner: { path: B, symbol: "Outer", line: 1 }, field: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } },
+      { owner: { path: B, symbol: "Inner", line: 10 }, field: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } },
     ],
   );
 

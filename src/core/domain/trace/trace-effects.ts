@@ -10,7 +10,7 @@ import type { TraceEffect } from "./trace-fact.ts";
  * The kind is the extraction's transport, never a guess from a name.
  */
 export function effectOf(site: CallSite | DataEffectSite): { effect: TraceEffect } | { cut: Cut } {
-  if ("effect" in site) return site.effect === undefined ? { cut: unplacedEffect(site) } : { effect: site.effect };
+  if (!("transport" in site)) return site.effect === undefined ? { cut: unplacedEffect(site) } : { effect: site.effect };
   const kind = site.transport === "http" ? "http" : "message";
   const { target } = site;
   if (target.status === "complete") {
@@ -22,7 +22,7 @@ export function effectOf(site: CallSite | DataEffectSite): { effect: TraceEffect
 
 /** A call site the trace cannot carry as an effect: a cut at its place, naming the library its target goes through when the extraction names one. */
 export function unplacedEffect(site: CallSite | DataEffectSite): Cut {
-  if ("effect" in site) return { kind: "unresolved-link", at: [placeAt(site.file, site.line, "data effect")] };
+  if (!("transport" in site)) return { kind: "unresolved-link", at: [placeAt(site.file, site.line, "data effect")] };
   const kind = site.transport === "http" ? "http" : "message";
   const via = site.target.status === "unknown" ? site.target.evidence[0]?.via : undefined;
   return { kind: "unresolved-link", at: [placeAt(site.file, site.line, `${kind} effect${via === undefined ? "" : ` through ${via}`}`)] };

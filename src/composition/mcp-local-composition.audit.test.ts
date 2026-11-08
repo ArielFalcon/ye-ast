@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { composeQueries } from './compose.ts';
 import { createMcpServer } from '../mcp/server.ts';
+import { createEvidenceComposition } from '../core/application/composition/evidence-composition.ts';
 import { createSha256Digest } from '../core/adapters/crypto/sha256-digest.adapter.ts';
 import { openSession, resultFields } from '../mcp/test-session.testing.ts';
 
@@ -40,7 +41,7 @@ class OrderController {
   git('commit', '-qm', 'change');
   const head = git('rev-parse', 'HEAD');
   const q = composeQueries({ scratchRoot: root, indexCache: join(root, 'index'), trustDirectory: join(root, 'trust'), cacheDirectory: join(root, 'cache') });
-  const session = await openSession(createMcpServer({ ...q, digest: createSha256Digest(), repository: { path: repo, repoId: 'shop' } }));
+  const session = await openSession(createMcpServer({ ...q, digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()), repository: { path: repo, repoId: 'shop' } }));
   try {
     const requests: Record<string, object> = {
       entrypoints: { revision: head },

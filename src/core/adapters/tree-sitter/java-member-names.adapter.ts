@@ -27,7 +27,7 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
     memberNames: async (file) => {
       if (!isJavaSource(file.path)) return NONE;
       parser ??= createParser();
-      const parsed = (await parser).parse(file.content);
+      const parsed = (await parser).parse(file);
       if (!parsed.ok) return NONE;
       const names = new Set<string>();
       const callables: DeclaredCallable[] = [];

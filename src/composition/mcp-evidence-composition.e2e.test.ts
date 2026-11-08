@@ -9,9 +9,14 @@ import { composeCli } from "./compose.ts";
 import { CONTROLLER, CONTROLLER_PATH, GATEWAYS, GIT_ENV, PAGE_PATH, SERVICE_PATH, SHOP, WEB, createCompositionFixture, type CompositionFixture } from "./mcp-evidence-fixture.testing.ts";
 import { createMcpServer, type McpDeps } from "../mcp/server.ts";
 import { openSession, resultFields, type Session, type ToolResult } from "../mcp/test-session.testing.ts";
-import { COMPOSE_OUTPUT } from "../mcp/composition-schema.ts";
+import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
+import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
+import { composeOutput } from "../mcp/composition-schema.ts";
 import type { ComposeQuery } from "../mcp/query-schema.ts";
-import type { AnchorId, ComposeFull, ComposeReceipt, CompositionGraph, EntityId, FileId, Part, PartKind, PartOf, RepeatRequest, SnapshotId } from "../mcp/composition-contract.ts";
+import type { ComposeFull, ComposeReceipt, RepeatRequest } from "../mcp/composition-contract.ts";
+import type { AnchorId, CompositionGraph, EntityId, FileId, PartKind, PartOf } from "../core/ports/evidence-composition.port.ts";
+
+const COMPOSE_OUTPUT = composeOutput(createEvidenceComposition(createSha256Digest()));
 
 const everyDeclaration = (declarations: readonly any[]): any[] => declarations.flatMap((item) => [item, ...everyDeclaration(item.children ?? [])]);
 

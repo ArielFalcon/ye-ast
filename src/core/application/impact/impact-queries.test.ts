@@ -25,6 +25,14 @@ import type { ModuleDependenciesReader } from "../../ports/module-dependencies.p
 import type { ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
 import type { SnapshotDataCache } from "../snapshot/read-snapshot.ts";
+import type { TypeBindings, TypeBindingsAnswer, TypeTarget } from "../../ports/type-bindings.port.ts";
+import type { DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
+
+/** The checker and the build outputs the host declared for every repository. */
+interface TypedOption {
+  bindings: TypeBindings;
+  outputs: readonly DeclaredBuildOutput[];
+}
 
 const NOTHING_REPLACED = { paths: [], globalObjects: new Set<string>(), packages: new Set<string>() };
 
@@ -76,6 +84,9 @@ interface Options {
   snapshotSources?: Partial<Record<string, SourceFile[]>>;
   /** The files the unmodelled-constructs reader marks among the sources it receives. */
   unmodelled?: readonly string[];
+  typeBindings?: TypedOption;
+  /** The source reader hands over only the files the export plan wrote, as the confined reader does. */
+  readsPlanned?: true;
 }
 
 function setup(options: Options = {}) {
@@ -131,7 +142,14 @@ function setup(options: Options = {}) {
       },
       remove: async (path) => void log.removed.push(path),
     },
-    reader: { read: async (root) => { log.reads++; return options.snapshotSources?.[log.plans.find((plan) => plan.destination === root)?.sha ?? ""] ?? options.sources ?? []; } },
+    reader: {
+      read: async (root) => {
+        log.reads++;
+        const plan = log.plans.findLast((candidate) => candidate.destination === root);
+        const read = options.snapshotSources?.[plan?.sha ?? ""] ?? options.sources ?? [];
+        return options.readsPlanned ? read.filter(({ path }) => plan?.wanted.includes(path)) : read;
+      },
+    },
     extractor: { extract: async () => { log.extractions++; return []; } },
     angular: { read: async () => options.declarations ?? [] },
     relations: options.relationReader ?? { extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [], locals: [] }) },
@@ -161,6 +179,7 @@ function setup(options: Options = {}) {
     ...(options.trivia && { sourceTrivia: { triviaLines: async (file: SourceFile) => new Set(options.trivia?.[file.path] ?? []) } }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
+    ...(options.typeBindings && { typeBindings: options.typeBindings.bindings, declaredOutputs: () => options.typeBindings!.outputs }),
     ...(options.unmodelled && { unmodelled: { extract: async (sources) => sources.map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };
@@ -169,6 +188,7 @@ function setup(options: Options = {}) {
   const importersRequest: AtRevision<ImpactImportersRequest> = { repo: "/repo", repoId: "repo", revision: "head", files: [], ...(options.signal && { signal: options.signal }) };
   return {
     log,
+    deps,
     queries,
     ask: (overrides: Partial<AtRevision<ImpactOfChangeRequest>> = {}) => queries.ofChange({ ...request, ...overrides }),
     callers: (overrides: Partial<AtRevision<ImpactCallersRequest>>) => queries.callers({ ...callersRequest, ...overrides }),
@@ -715,7 +735,7 @@ test("a reached symbol names locations of the selected evidence category", async
   ];
   const answer = callersFact(await setup({ nodes, edges }).callers({ targets: [{ file: "src/A.java", symbol: "f" }] }));
   const reached = answer.status === "complete" ? answer.value.symbols.find((symbol) => symbol.symbol === "g") : undefined;
-  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [14, 21], basis: "call" });
+  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [14, 21], basis: "call", derivation: "resolved" });
   assert.equal(reached?.endLine, 40);
 });
 
@@ -724,7 +744,7 @@ test("selected constructor evidence excludes type-reference locations", async ()
   const edges = [{ from: "g", to: "f", kind: "references", confidence: 0.8, line: 11 }, { from: "g", to: "f", kind: "instantiates", confidence: 0.9, line: 13 }];
   const answer = fact(await setup({ nodes, edges, changes: { ok: true, value: [change("src/A.java")] } }).ask());
   const reached = answer.status !== "unknown" ? answer.value.symbols.find((symbol) => symbol.symbol === "g") : undefined;
-  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [13], basis: "call" });
+  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [13], basis: "call", derivation: "resolved" });
 });
 
 test("a dependence that is a use and not a call says so, so a reference is never read as a signature to change", async () => {
@@ -732,7 +752,7 @@ test("a dependence that is a use and not a call says so, so a reference is never
   const edges = [{ from: "g", to: "f", kind: "references", confidence: 0.9, line: 7 }];
   const answer = callersFact(await setup({ nodes, edges }).callers({ targets: [{ file: "src/A.java", symbol: "f" }] }));
   const reached = answer.status === "complete" ? answer.value.symbols.find((symbol) => symbol.symbol === "g") : undefined;
-  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [7], basis: "reference" });
+  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [7], basis: "reference", derivation: "resolved" });
 });
 
 test("a dependence the walk never places names its reason instead of leaving the line silent", async () => {
@@ -740,7 +760,7 @@ test("a dependence the walk never places names its reason instead of leaving the
   const edges = [{ from: "C", to: "C.m", kind: "contains" }];
   const answer = callersFact(await setup({ nodes, edges }).callers({ targets: [{ file: "src/A.java", symbol: "m" }] }));
   const owner = answer.status === "complete" ? answer.value.symbols.find((symbol) => symbol.symbol === "C") : undefined;
-  assert.deepEqual(owner?.via, { file: "src/A.java", symbol: "m", basis: "contains" });
+  assert.deepEqual(owner?.via, { file: "src/A.java", symbol: "m", basis: "contains", derivation: "resolved" });
 });
 
 const TWO_CLASSES = {
@@ -1380,7 +1400,7 @@ test("a bare call the import reader places on this, inside the class that declar
   const ask = async (reader: ImportOriginsReader) => callersFact(await setup({ ...common, importOrigins: reader }).callers({ targets: [{ file, symbol: "fetch" }] }));
   const proven = await ask(origins((site) => (site.column === 23 ? { kind: "this-member", name: "fetch" } : undefined)));
   assert.equal(proven.status, "complete");
-  assert.deepEqual(proven.status === "complete" && proven.value.symbols.find((symbol) => symbol.symbol === "load")?.via, { file, symbol: "fetch", lines: [3], basis: "call" });
+  assert.deepEqual(proven.status === "complete" && proven.value.symbols.find((symbol) => symbol.symbol === "load")?.via, { file, symbol: "fetch", lines: [3], basis: "call", derivation: "proven" });
   const unproven = await ask(origins(() => undefined));
   assert.equal(unproven.status, "partial");
   assert.equal(unproven.status === "partial" && unproven.value.symbols.some((symbol) => symbol.symbol === "load"), false);
@@ -1533,7 +1553,7 @@ test("public via follows the confidence witness while shortest depth remains ind
   const reached = answer.value.symbols.find((symbol) => symbol.symbol === "target");
   assert.equal(reached?.depth, 1);
   assert.equal(reached?.confidence, 0.8);
-  assert.deepEqual(reached?.via, { file: "src/B.java", symbol: "mid", lines: [3], basis: "reference" });
+  assert.deepEqual(reached?.via, { file: "src/B.java", symbol: "mid", lines: [3], basis: "reference", derivation: "resolved" });
 });
 
 test("public strongest reference keeps its locations and the observed call still counts", async () => {
@@ -1548,7 +1568,7 @@ test("public strongest reference keeps its locations and the observed call still
   assert.equal(answer.value.symbols.find((symbol) => symbol.symbol === "seed")?.fanIn, 1);
   const reached = answer.value.symbols.find((symbol) => symbol.symbol === "caller");
   assert.equal(reached?.confidence, 0.9);
-  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "seed", lines: [5], basis: "reference" });
+  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "seed", lines: [5], basis: "reference", derivation: "resolved" });
 });
 
 const RECORDS = {
@@ -2036,4 +2056,152 @@ test("a graph edge whose bare root Java places in another file leaves the graph'
 
   assert.ok(answer.status !== "unknown", JSON.stringify(answer));
   assert.deepEqual(answer.value.symbols.filter(({ depth }) => depth > 0).map(({ file, symbol, via }) => [file, symbol, via?.file]), [["src/gateway/Client.java", "list", "src/gateway/Visits.java"]]);
+});
+
+/**
+ * `Reader.id` calls `get` at line 8, column 5, which the index matched to `Store.get` by name; `Other.get` is its homonym. The
+ * checker's answer, given whole, says what the call binds.
+ */
+const TYPED_NODES = [fakeNode("store-get", "method", "src/store.ts", 4, 6, "get"), fakeNode("other-get", "method", "src/other.ts", 1, 3, "get"), fakeNode("id", "method", "src/reader.ts", 7, 9)];
+const TYPED_EDGES: FakeEdge[] = [{ from: "id", to: "store-get", kind: "calls", line: 8, column: 4, confidence: 0.6, provenance: "heuristic" }];
+const DECLARED = [{ kind: "node-modules" as const, at: "", path: "/host/checkout/node_modules" }];
+const USED = [{ kind: "node-modules" as const, at: "", verified: false, digest: "read" }];
+const boundTo = (target: TypeTarget): Extract<TypeBindingsAnswer, { status: "bound" }> => ({ status: "bound", bindings: [{ file: "src/reader.ts", line: 8, column: 5, name: "get", target }], unowned: [], refused: [], outputs: USED });
+const STORE_GET: TypeTarget = { kind: "repository", file: "src/store.ts", line: 4, name: "get" };
+
+function checker(answer: TypeBindingsAnswer, seen: (readonly SourceFile[])[] = []): TypedOption {
+  const bindings: TypeBindings = { of: async (sources) => (seen.push(sources), answer) };
+  return { bindings, outputs: DECLARED };
+}
+
+async function typedCallers(symbol: { file: string; symbol: string }, typeBindings?: TypedOption): Promise<Fact<ImpactValue>> {
+  return callersFact(await setup({ nodes: TYPED_NODES, edges: TYPED_EDGES, importOrigins: origins(() => undefined), ...(typeBindings && { typeBindings }) }).callers({ targets: [symbol] }));
+}
+
+const viaOf = (answer: Fact<ImpactValue>, name: string) => (answer.status === "unknown" ? undefined : answer.value.symbols.find((symbol) => symbol.symbol === name)?.via);
+
+test("a call the type checker binds to the edge's own target is typed and certain, and the fact records the declaration it read as unverified", async () => {
+  const typed = await typedCallers({ file: "src/store.ts", symbol: "get" }, checker(boundTo(STORE_GET)));
+
+  assert.deepEqual(typed.status !== "unknown" && typed.value.symbols.map(({ symbol, confidence, via }) => [symbol, confidence, via?.derivation]), [["get", 1, undefined], ["id", 1, "typed"]]);
+  assert.deepEqual(typed.inputs.buildOutputs, USED);
+});
+
+test("a call the type checker binds to another repository declaration moves there, typed, and one it binds outside the repository is no dependence", async () => {
+  const moved = checker(boundTo({ kind: "repository", file: "src/other.ts", line: 1, name: "get" }));
+
+  assert.equal(viaOf(await typedCallers({ file: "src/store.ts", symbol: "get" }, moved), "id"), undefined);
+  assert.equal(viaOf(await typedCallers({ file: "src/other.ts", symbol: "get" }, moved), "id")?.derivation, "typed");
+  for (const outside of [{ kind: "external", module: "router-kit", name: "get" }, { kind: "ambient", name: "get" }] as const) {
+    assert.equal(viaOf(await typedCallers({ file: "src/store.ts", symbol: "get" }, checker(boundTo(outside))), "id"), undefined, outside.kind);
+  }
+});
+
+test("without a declared build output every answer is the one given before", async () => {
+  const before = await typedCallers({ file: "src/store.ts", symbol: "get" });
+
+  assert.equal(viaOf(before, "id")?.derivation, "name-match");
+  assert.equal(canonicalJson(await typedCallers({ file: "src/store.ts", symbol: "get" }, { ...checker(boundTo(STORE_GET)), outputs: [] })), canonicalJson(before));
+});
+
+test("the checker reads the commit's lockfiles and declaration files apart from the index's export, which stays as it was", async () => {
+  const files = ["src/store.ts", "src/reader.ts", "package.json", "package-lock.json", "src/env.d.ts", "node_modules/kit/index.d.ts"];
+  const exports: Options["exports"] = { [HEAD]: { files: files.map((path) => ({ path, blob: path, written: true })), skipped: [] } };
+  const sources = files.map((path) => ({ path, content: path }));
+  const run = (typeBindings?: TypedOption) => setup({ nodes: TYPED_NODES, edges: TYPED_EDGES, importOrigins: origins(() => undefined), exports, sources, readsPlanned: true, ...(typeBindings && { typeBindings }) });
+  const seen: (readonly SourceFile[])[] = [];
+  const plain = run();
+  const typed = run(checker(boundTo(STORE_GET), seen));
+
+  assert.ok((await plain.callers({ targets: [{ file: "src/store.ts", symbol: "get" }] })).ok);
+  assert.ok((await typed.callers({ targets: [{ file: "src/store.ts", symbol: "get" }] })).ok);
+  assert.deepEqual(typed.log.plans[0], plain.log.plans[0]);
+  assert.deepEqual(typed.log.plans.slice(1).map(({ wanted }) => wanted), [["package-lock.json", "src/env.d.ts"]]);
+  assert.deepEqual(seen.map((read) => read.map(({ path }) => path).sort()), [["package-lock.json", "package.json", "src/env.d.ts", "src/reader.ts", "src/store.ts"]]);
+});
+
+test("a declaration the lockfile contradicts is not read: the call keeps its derivation and a build-output cut names each package", async () => {
+  const answer = await typedCallers({ file: "src/store.ts", symbol: "get" }, checker({ status: "unused", outputs: [{ kind: "node-modules", at: "", stale: [{ path: "kit", installed: "2.0.0", locked: "1.0.0" }] }] }));
+
+  assert.equal(viaOf(answer, "id")?.derivation, "name-match");
+  assert.equal(answer.inputs.buildOutputs, undefined);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "build-output", at: ["node_modules/kit"] }]);
+});
+
+test("a live tree is not typed: the call keeps its derivation and a build-output cut names each declaration it did not read", async () => {
+  const seen: (readonly SourceFile[])[] = [];
+  const live = fakeLive({ "src/store.ts": "1", "src/reader.ts": "1" });
+  const answer = callersFact(await setup({ trust: TRUSTED, live, nodes: TYPED_NODES, edges: TYPED_EDGES, importOrigins: origins(() => undefined), typeBindings: checker(boundTo(STORE_GET), seen) }).queries.callers({ ...LIVE_BASE, targets: [{ file: "src/store.ts", symbol: "get" }], live: true }));
+
+  assert.equal(viaOf(answer, "id")?.derivation, "name-match");
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "build-output", at: ["node_modules"] }]);
+  assert.equal(seen.length, 0);
+});
+
+/** `Reader.id` calls `this.store.get` at line 8, column 5, a reference the index left unresolved. */
+const UNSETTLED: FakeUnresolved[] = [{ from: "id", name: "this.store.get", kind: "calls", file: "src/reader.ts", line: 8, column: 4 }];
+
+async function unsettledCallers(typeBindings?: TypedOption): Promise<Fact<ImpactValue>> {
+  const exports: Options["exports"] = { [HEAD]: { files: ["src/store.ts", "src/other.ts", "src/reader.ts"].map((path) => ({ path, blob: path, written: true })), skipped: [] } };
+  return callersFact(await setup({ nodes: TYPED_NODES, unresolved: UNSETTLED, exports, importOrigins: origins(() => undefined), ...(typeBindings && { typeBindings }) }).callers({ targets: [{ file: "src/store.ts", symbol: "get" }] }));
+}
+
+test("an unresolved call the type checker binds to a repository declaration is a typed dependence on it, and no cut", async () => {
+  const before = await unsettledCallers();
+  const typed = await unsettledCallers(checker(boundTo(STORE_GET)));
+
+  assert.equal(viaOf(before, "id"), undefined);
+  assert.deepEqual(before.status === "partial" && before.cuts.map(({ kind }) => kind), ["unresolved-link"]);
+  assert.equal(viaOf(typed, "id")?.derivation, "typed");
+  assert.equal(typed.status, "complete");
+});
+
+test("an unresolved call the type checker binds outside the repository, or to another declaration, retires its cut and depends on nothing walked", async () => {
+  for (const target of [{ kind: "external", module: "router-kit", name: "get" }, { kind: "repository", file: "src/other.ts", line: 1, name: "get" }] as const) {
+    const answer = await unsettledCallers(checker(boundTo(target)));
+
+    assert.equal(viaOf(answer, "id"), undefined, target.kind);
+    assert.equal(answer.status, "complete", target.kind);
+  }
+});
+
+test("a checker fault leaves every call to the syntactic settlement and names each declaration it could not read", async () => {
+  const unreadable = await typedCallers({ file: "src/store.ts", symbol: "get" }, checker({ status: "fault", fault: { kind: "unreadable", outputs: [{ kind: "node-modules", at: "", paths: ["kit"] }] } }));
+  const crashed = await typedCallers({ file: "src/store.ts", symbol: "get" }, checker({ status: "fault", fault: { kind: "checker-failed", detail: "Debug Failure." } }));
+
+  assert.deepEqual([viaOf(unreadable, "id")?.derivation, viaOf(crashed, "id")?.derivation], ["name-match", "name-match"]);
+  assert.deepEqual([unreadable.inputs.buildOutputs, crashed.inputs.buildOutputs], [undefined, undefined]);
+  assert.deepEqual(unreadable.status === "partial" && unreadable.cuts, [{ kind: "build-output", at: ["node_modules/kit"] }]);
+  assert.deepEqual(crashed.status === "partial" && crashed.cuts, [{ kind: "build-output", at: ["node_modules"] }]);
+});
+
+test("when one declaration is stale, every declaration the answer did not read is named, the clean one included", async () => {
+  const two = { ...checker({ status: "unused", outputs: [{ kind: "node-modules", at: "", stale: [{ path: "kit", installed: "2.0.0", locked: "1.0.0" }] }] }), outputs: [...DECLARED, { kind: "node-modules" as const, at: "apps/web", path: "/host/checkout/apps/web/node_modules" }] };
+  const answer = await typedCallers({ file: "src/store.ts", symbol: "get" }, two);
+
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "build-output", at: ["apps/web/node_modules"] }, { kind: "build-output", at: ["node_modules/kit"] }]);
+});
+
+test("a link the declared directory refused is named in a build-output cut", async () => {
+  const answer = await typedCallers({ file: "src/store.ts", symbol: "get" }, checker({ ...boundTo(STORE_GET), refused: ["node_modules/evil"] }));
+
+  assert.equal(viaOf(answer, "id")?.derivation, "typed");
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "build-output", at: ["node_modules/evil"] }]);
+});
+
+test("an unresolved call the checker binds to a declaration the graph does not hold keeps its cut", async () => {
+  const answer = await unsettledCallers(checker(boundTo({ kind: "repository", file: "src/types.d.ts", line: 1, name: "get" })));
+
+  assert.equal(viaOf(answer, "id"), undefined);
+  assert.deepEqual(answer.status === "partial" && answer.cuts.map(({ kind }) => kind), ["unresolved-link"]);
+});
+
+test("a request's own declared build outputs reach the checker without a host-wide declaration", async () => {
+  const seen: (readonly SourceFile[])[] = [];
+  const { bindings } = checker(boundTo(STORE_GET), seen);
+  const { deps } = setup({ nodes: TYPED_NODES, edges: TYPED_EDGES, importOrigins: origins(() => undefined) });
+  const answer = callersFact(await createImpactQueries({ ...deps, typeBindings: bindings }).callers({ repo: "/repo", repoId: "repo", revision: "head", targets: [{ file: "src/store.ts", symbol: "get" }], buildOutputs: DECLARED }));
+
+  assert.equal(viaOf(answer, "id")?.derivation, "typed");
+  assert.deepEqual(answer.inputs.buildOutputs, USED);
 });

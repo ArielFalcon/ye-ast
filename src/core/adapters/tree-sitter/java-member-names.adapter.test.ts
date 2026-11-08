@@ -184,6 +184,17 @@ test("a call on a var, varargs, untyped lambda, pattern or resource variable, or
   ]) assert.deepEqual((await read([...header, ...body])).receiverBindings, [], body[0]);
 });
 
+test("a variable of a field's name declared anywhere in the type body but as a field, in another method, a constructor's lambda or an initializer, keeps a bare call from the field; a nested type's field does not", async () => {
+  const header = ["package app;", "import java.util.Map;"];
+  for (const body of [
+    "class A { private Map<String, String> cache; void run() { cache.get(\"k\"); } void other() { String cache = \"\"; } }",
+    "class A { private Map<String, String> cache; { Object cache = null; } void run() { cache.get(\"k\"); } }",
+    "class A { private Map<String, String> cache; A() { Runnable r = () -> { int cache = 1; }; } void run() { cache.get(\"k\"); } }",
+  ]) assert.deepEqual((await read([...header, body])).receiverBindings, [], body);
+  const lines = [...header, "class A { private Map<String, String> cache; static class B { private String cache; } void run() { cache.get(\"k\"); } }"];
+  assert.deepEqual((await read(lines)).receiverBindings.map(({ receiver, holds }) => [receiver, holds.kind === "annotated" ? holds.type : holds.kind]), [["cache", "Map"]]);
+});
+
 test("lambdas, method references and anonymous class bodies are function values, each whole; a named class body and a method are not", async () => {
   const values = (await read([
     "class A {",

@@ -1,19 +1,26 @@
 import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
-import type { CallSite, HttpTarget, StatedRequest } from "../../domain/topology/call-site.ts";
-import type { CallSiteReader, PlacedCallSite, PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
+import { compareCallSites, type CallSite, type CallSiteDiagnostic, type CallSiteReader, type HttpTarget, type PlacedCallSite, type PlacedCallSiteReader, type StatedRequest } from "../../domain/topology/call-site.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
+import { requestMethodOf } from "../../domain/entrypoints/http-route.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { moduleResolverOf, type ModuleResolver } from "./module-resolver.ts";
 import { buildDefines, type BuildDefines } from "./url-define.ts";
-import { compareText } from "../../domain/shared/code-node.ts";
+import { callUrl, joinedCallUrl, RUN_TIME_HOLE, urlText } from "../../domain/topology/path-template.ts";
+import { known, undecided, undecidedTarget, type Evaluated, type Undecided } from "../../domain/topology/evaluated.ts";
+import { injectedClass } from "./angular-injection.ts";
+import { declarationCounts } from "./syntax-names.ts";
+import { defaultExportOf } from "./import-bindings.ts";
+import { bindingNames, constructorParameters, hasModifier, lineOf, propertyOf, thisClass, typeName } from "./syntax.ts";
+import { ANONYMOUS_DEFAULT, recoveredModuleShape, type ModuleShape } from "./module-shape.ts";
+import { createDeclarationLookup, type DeclarationLookup } from "./declaration-lookup.ts";
 
 export const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
 const HTTP_CLIENT_PACKAGE = "@angular/common/http";
-const PLACEHOLDER = "{}";
-const UNDECIDED = Symbol("undecided");
-const RUN_TIME_VALUE: Evaluation = { kind: "value" };
+/** A value the snapshot does not decide for no cause more specific than that. */
+const UNDECIDABLE: Undecided = undecided("destination-undecidable");
+const RUN_TIME: Read = known({ kind: "value" });
 /** A class field the code assigns at run time, so no initializer states its value. */
 const ASSIGNED_AT_RUN_TIME = Symbol("assigned at run time");
 const WRITTEN_FIELDS = new WeakMap<ts.ClassDeclaration, ReadonlySet<string>>();
@@ -25,16 +32,13 @@ const CALL_ORIGINS = new WeakMap<CallSite, NonNullable<PlacedCallSite["origins"]
 /** What one file declares at its top level, and the classes and enums it holds, as the reader needs them. */
 interface FileShape {
   source: ts.SourceFile;
+  /** How often each name is declared anywhere in the file. */
+  declared: ReadonlyMap<string, number>;
   bindings: ReadonlySet<string>;
   unsafeEncoder: boolean;
   consts: Map<string, ts.Expression>;
-  imports: Map<string, { module: string; imported: string }>;
-  /** The names this file re-exports from another module: `export { X } from './m'`. */
-  reexports: Map<string, { module: string; imported: string }>;
-  /** The modules this file star-exports: `export * from './m'`. */
-  stars: string[];
-  /** The local names this file exports under another name: `export { a as b }`, by `b`. */
-  localExports: Map<string, string>;
+  module: ModuleShape;
+  imports: ModuleShape["imports"];
   /** What `export default` holds: an expression, or the class or function it declares. */
   defaultExport?: ts.Node;
   classes: Map<string, ts.ClassDeclaration>;
@@ -61,6 +65,9 @@ type RunTime = ReadonlySet<string>;
  * stopped at the query or the fragment, so it states the URL only up to there.
  */
 type Evaluation = { readonly kind: "text"; readonly text: string; readonly cut?: true } | { readonly kind: "value" };
+
+/** What a path part reads as: an evaluation, or why the snapshot does not decide it. */
+type Read = Evaluated<Evaluation>;
 
 interface HeldClass {
   shape: FileShape;
@@ -151,67 +158,25 @@ async function readPlaced(files: readonly SourceFile[], repo: string, includeFor
       }
     }
   }
-  return found.sort(({ site: a }, { site: b }) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
+  return found.sort(({ site: a }, { site: b }) => compareCallSites(a, b));
 }
 function describe(file: SourceFile): FileShape {
   const source = sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
-  const shape: FileShape = { source, bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], localExports: new Map(), classes: new Map(), enums: new Map() };
+  const module = recoveredModuleShape(source);
+  const shape: FileShape = { source, declared: declarationCounts(source), bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), module, imports: module.imports, classes: new Map(), enums: new Map() };
   for (const statement of source.statements) {
-    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
-      const module = statement.moduleSpecifier.text;
-      collectImports(statement.importClause, module, shape);
-      continue;
-    }
-    if (ts.isExportDeclaration(statement)) {
-      collectExports(statement, shape);
-      continue;
-    }
-    if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
-      shape.defaultExport = statement.expression;
-      continue;
-    }
+    const held = defaultExportOf(statement);
+    if (held !== undefined) shape.defaultExport = held;
     if (ts.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) {
         if (ts.isIdentifier(declaration.name) && declaration.initializer !== undefined) shape.consts.set(declaration.name.text, declaration.initializer);
       }
       continue;
     }
-    if ((ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) && isDefaultExport(statement)) shape.defaultExport = statement;
     if (ts.isClassDeclaration(statement) && statement.name !== undefined) shape.classes.set(statement.name.text, statement);
     if (ts.isEnumDeclaration(statement)) shape.enums.set(statement.name.text, statement);
   }
   return shape;
-}
-
-function isDefaultExport(statement: ts.ClassDeclaration | ts.FunctionDeclaration): boolean {
-  const modifiers = ts.getModifiers(statement) ?? [];
-  return modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) && modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword);
-}
-
-function collectImports(clause: ts.ImportClause | undefined, module: string, into: FileShape): void {
-  if (clause === undefined) return;
-  if (clause.name !== undefined) into.imports.set(clause.name.text, { module, imported: "default" });
-  if (clause.namedBindings === undefined) return;
-  if (ts.isNamespaceImport(clause.namedBindings)) into.imports.set(clause.namedBindings.name.text, { module, imported: "*" });
-  else for (const element of clause.namedBindings.elements) into.imports.set(element.name.text, { module, imported: element.propertyName?.text ?? element.name.text });
-}
-
-/** The names a file re-exports, by name or through `export *`, and the local names it exports under another name. */
-function collectExports(statement: ts.ExportDeclaration, shape: FileShape): void {
-  if (statement.moduleSpecifier === undefined) {
-    if (statement.exportClause !== undefined && ts.isNamedExports(statement.exportClause)) {
-      for (const element of statement.exportClause.elements) shape.localExports.set(element.name.text, element.propertyName?.text ?? element.name.text);
-    }
-    return;
-  }
-  if (!ts.isStringLiteral(statement.moduleSpecifier)) return;
-  const module = statement.moduleSpecifier.text;
-  if (statement.exportClause === undefined) {
-    shape.stars.push(module);
-    return;
-  }
-  if (!ts.isNamedExports(statement.exportClause)) return;
-  for (const element of statement.exportClause.elements) shape.reexports.set(element.name.text, { module, imported: element.propertyName?.text ?? element.name.text });
 }
 
 function calls(source: ts.SourceFile): ts.CallExpression[] {
@@ -247,10 +212,8 @@ function injectedClasses(shapes: ReadonlyMap<string, FileShape>): ReadonlySet<st
   const held = new Set<string>();
   for (const shape of shapes.values()) {
     const walk = (node: ts.Node): void => {
-      if (ts.isCallExpression(node) && node.expression.getText(shape.source) === "inject") {
-        const [first] = node.arguments;
-        if (first !== undefined && ts.isIdentifier(first)) held.add(first.text);
-      }
+      const injected = ts.isCallExpression(node) ? injectedClass(node, shape) : undefined;
+      if (injected !== undefined) held.add(injected);
       if (ts.isParameter(node) && node.type !== undefined) {
         const name = typeName(node.type);
         if (name !== undefined) held.add(name);
@@ -318,10 +281,7 @@ function httpClientFields(shape: FileShape, classDeclaration: ts.ClassDeclaratio
 }
 
 function injectsAngularHttpClient(shape: FileShape, expression: ts.Expression): boolean {
-  if (!ts.isCallExpression(expression) || expression.arguments.length === 0) return false;
-  const first = expression.arguments[0];
-  if (first === undefined || !ts.isIdentifier(first)) return false;
-  return expression.expression.getText(shape.source) === "inject" && isAngularHttpClientName(shape, first.text);
+  return isAngularHttpClientName(shape, injectedClass(expression, shape));
 }
 
 /** Whether an expression names `httpResource` or one of its variants (`httpResource.text`), imported from Angular. */
@@ -336,26 +296,11 @@ function isHttpPackageName(shape: FileShape, expression: ts.Expression, name: st
   return imported?.module === HTTP_CLIENT_PACKAGE && imported.imported === name;
 }
 
-export function propertyOf(object: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
-  const property = object.properties.find((candidate): candidate is ts.PropertyAssignment => ts.isPropertyAssignment(candidate) && candidate.name.getText() === name);
-  return property?.initializer;
-}
-
 /** Whether a name is Angular's `HttpClient`: the name alone is not enough, its import decides. */
 function isAngularHttpClientName(shape: FileShape, name: string | undefined): boolean {
   if (name === undefined) return false;
   const imported = shape.imports.get(name);
   return name === "HttpClient" && imported?.module === HTTP_CLIENT_PACKAGE;
-}
-
-/** The parameter properties of a class's constructor: the fields a class declares by writing them in its signature. */
-export function constructorParameters(classDeclaration: ts.ClassDeclaration): readonly ts.ParameterDeclaration[] {
-  return classDeclaration.members.flatMap((member) => (ts.isConstructorDeclaration(member) ? member.parameters : []));
-}
-
-export function typeName(node: ts.TypeNode): string | undefined {
-  if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) return node.typeName.text;
-  return undefined;
 }
 
 /**
@@ -471,16 +416,6 @@ function parameterNames(parameters: readonly ts.ParameterDeclaration[]): RunTime
   return new Set(parameters.flatMap((parameter) => bindingNames(parameter.name)));
 }
 
-function bindingNames(name: ts.BindingName): string[] {
-  return ts.isIdentifier(name) ? [name.text] : name.elements.flatMap((element) => ts.isBindingElement(element) ? bindingNames(element.name) : []);
-}
-
-/** The names a function or method binds, and what the variables it declares are initialized to. */
-function scopeOf(declaration: ts.MethodDeclaration | ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression): Scope {
-  const point = declaration.body ?? declaration;
-  return lexicalScope(point, true);
-}
-
 /**
  * The lexical bindings visible at a call, with inner declarations taking precedence over outer declarations.
  */
@@ -488,8 +423,8 @@ function scopeOfCall(call: ts.CallExpression): Scope {
   return lexicalScope(call);
 }
 
-function lexicalScope(point: ts.Node, includePoint = false): Scope {
-  const node = includePoint ? point : point.parent;
+function lexicalScope(point: ts.Node): Scope {
+  const node = point.parent;
   if (node === undefined || ts.isSourceFile(node)) return NO_SCOPE;
   const cached = LEXICAL_SCOPES.get(node);
   if (cached !== undefined) return cached;
@@ -563,21 +498,29 @@ interface ReadTarget {
   throughWrapper?: true;
   target: Finding<HttpTarget>;
   stated?: StatedRequest;
+  diagnostic?: CallSiteDiagnostic;
 }
 
 /** Reads one file's call sites, resolving the module specifiers it meets through the snapshot. */
 class Reader {
   private readonly unsafeEncoder: boolean;
+  private readonly fileOf: (from: string, specifier: string) => Promise<string | undefined>;
+  private readonly declarationOf: DeclarationLookup;
   /** The classes of the snapshot that extend a class, by the declaration their `extends` resolves to; built once, when first read. */
   private subclassIndex: Promise<ReadonlyMap<ts.ClassDeclaration, readonly HeldClass[]>> | undefined;
 
   constructor(
     private readonly shapes: ReadonlyMap<string, FileShape>,
-    private readonly modules: ModuleResolver,
+    modules: ModuleResolver,
     private readonly wrappers: ReadonlyMap<string, ReadonlyMap<string, string>>,
     private readonly defines: BuildDefines,
   ) {
     this.unsafeEncoder = [...shapes.values()].some((shape) => shape.unsafeEncoder);
+    this.fileOf = async (from, specifier) => {
+      const resolved = await modules.resolve(from, specifier);
+      return "file" in resolved ? resolved.file : undefined;
+    };
+    this.declarationOf = createDeclarationLookup(async (file) => shapes.get(file)?.module, this.fileOf, { anonymousDefault: true });
   }
 
   private async subclassesOf(declaration: ts.ClassDeclaration): Promise<readonly HeldClass[]> {
@@ -603,7 +546,7 @@ class Reader {
     if (read === undefined) return [];
     const start = shape.source.getLineAndCharacterOfPosition(call.getStart(shape.source)).line + 1;
     const end = shape.source.getLineAndCharacterOfPosition(call.getEnd()).line + 1;
-    const site: CallSite = { repo, file: shape.source.fileName, line: start, endLine: end, symbol: symbolOf(call) ?? "(top level)", ancestors: ancestorsOf(call, shape.source), transport: "http", target: read.target, ...(read.stated === undefined ? {} : { stated: read.stated }) };
+    const site: CallSite = { repo, file: shape.source.fileName, line: start, endLine: end, symbol: symbolOf(call) ?? "(top level)", ancestors: ancestorsOf(call, shape.source), transport: "http", target: read.target, ...(read.diagnostic === undefined ? {} : { diagnostic: read.diagnostic }), ...(read.stated === undefined ? {} : { stated: read.stated }) };
     if (includeForwarding && read.throughWrapper === true) {
       const body = await this.requestBody(shape, call);
       CALL_ORIGINS.set(site, body?.wrappers.flatMap((wrapper) => [originOf(wrapper.function), originOf(wrapper.forwarded)]) ?? []);
@@ -674,8 +617,8 @@ class Reader {
   /** The method a request object states, GET when it states none; undefined when the snapshot does not decide it. */
   private async requestMethod(shape: FileShape, object: ts.ObjectLiteralExpression, scope: Scope): Promise<HttpTarget["method"] | undefined> {
     const method = memberOf(object, "method");
-    if (method === UNDECIDED) return undefined;
-    return method === undefined ? "GET" : this.methodOf(shape, method, scope);
+    if (method === undefined) return "GET";
+    return method.status === "undecided" ? undefined : this.methodOf(shape, method.value, scope);
   }
 
   /** `request(method, url)`, or `request(new HttpRequest(method, url))`: the method is an argument, never assumed. */
@@ -708,7 +651,7 @@ class Reader {
     const described = objectOf(returned);
     if (described === undefined) return this.request(shape, call, returned, "GET", scope);
     const url = memberOf(described, "url");
-    return this.request(shape, call, url === UNDECIDED ? undefined : url, await this.requestMethod(shape, described, scope), scope);
+    return this.request(shape, call, url?.status === "known" ? url.value : undefined, await this.requestMethod(shape, described, scope), scope);
   }
 
   private async methodOf(shape: FileShape, expression: ts.Expression, scope: Scope = NO_SCOPE): Promise<HttpTarget["method"] | undefined> {
@@ -717,21 +660,27 @@ class Reader {
   }
 
   private async request(shape: FileShape, call: ts.CallExpression, pathExpression: ts.Expression | undefined, method: HttpTarget["method"] | undefined, scope = scopeOfCall(call)): Promise<ReadTarget> {
-    const unknown = unresolvedAt(shape, call);
-    const path = pathExpression === undefined ? undefined : textOf(await this.evaluate(shape, pathExpression, scope));
-    if (path === undefined || method === undefined || !startsSegments(path)) return unknown;
-    const base = await this.baseUrl(shape, call);
-    const written = normalizePath(path);
-    if (base === UNDECIDED) return { ...unknown, stated: { method, path: written } };
-    return { target: { status: "complete", value: { method, path: written, ...(base === undefined ? {} : { base }) }, evidence: unknown.target.evidence } };
+    const read = pathExpression === undefined ? UNDECIDABLE : await this.evaluate(shape, pathExpression, scope);
+    if (read.status === "undecided") return unresolvedAt(shape, call, read);
+    const path = textOf(read);
+    if (path === undefined || method === undefined || !startsSegments(path)) return unresolvedAt(shape, call);
+    const own = callUrl(path);
+    const base = own.origin === undefined ? await this.baseUrl(shape, call) : undefined;
+    if (base?.status === "undecided") return { ...unresolvedAt(shape, call, base), stated: { method, path: namedHoles(own.path) } };
+    const url = base === undefined ? own : joinedCallUrl(base.value, path);
+    return { target: { status: "complete", value: { method, path: urlText({ ...url, path: namedHoles(url.path) }) }, evidence: [placeOf(shape, call)] } };
   }
 
-  /** The base URL the call's options declare: undefined when they declare none, `UNDECIDED` when the snapshot does not decide it. */
-  private async baseUrl(shape: FileShape, call: ts.CallExpression): Promise<string | typeof UNDECIDED | undefined> {
+  /** The base URL the call's options declare: undefined when they declare none. */
+  private async baseUrl(shape: FileShape, call: ts.CallExpression): Promise<Evaluated<string> | undefined> {
     for (const argument of call.arguments.slice(1)) {
       if (!ts.isObjectLiteralExpression(argument)) continue;
       const declared = propertyOf(argument, "baseUrl");
-      if (declared !== undefined) return textOf(await this.evaluate(shape, declared, scopeOfCall(call))) ?? UNDECIDED;
+      if (declared === undefined) continue;
+      const read = await this.evaluate(shape, declared, scopeOfCall(call));
+      if (read.status === "undecided") return read;
+      const text = textOf(read);
+      return text === undefined ? UNDECIDABLE : known(text);
     }
     return undefined;
   }
@@ -742,18 +691,18 @@ class Reader {
    */
   private async ownerClass(shape: FileShape, receiver: ts.Expression): Promise<TypeNamed | undefined> {
     if (ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword) {
-      const enclosing = enclosingClassOf(receiver);
+      const enclosing = ownClassDeclaration(receiver);
       return enclosing === undefined ? undefined : this.memberType(shape, enclosing, receiver.name.text, new Set());
     }
     if (!ts.isIdentifier(receiver)) return undefined;
     const scope = lexicalScope(receiver);
     if (scope.names.has(receiver.text)) {
       const local = scope.locals.get(receiver.text);
-      const named = local === undefined ? parameterType(receiver) : appendsTo(local)?.length === 0 ? this.injectedType(shape, local) : undefined;
+      const named = local === undefined ? parameterType(receiver) : appendsTo(local)?.length === 0 ? injectedClass(local, shape) : undefined;
       return named === undefined ? undefined : { name: named, shape };
     }
     const constant = shape.consts.get(receiver.text);
-    const named = constant === undefined ? undefined : this.injectedType(shape, constant);
+    const named = constant === undefined ? undefined : injectedClass(constant, shape);
     return named === undefined ? undefined : { name: named, shape };
   }
 
@@ -764,7 +713,7 @@ class Reader {
     const parameter = constructorParameters(declaration).find((candidate) => ts.isIdentifier(candidate.name) && candidate.name.text === name && ts.isParameterPropertyDeclaration(candidate, candidate.parent));
     const declared = field ?? parameter;
     if (declared !== undefined) {
-      const named = (field?.initializer === undefined ? undefined : this.injectedType(shape, field.initializer)) ?? (declared.type === undefined ? undefined : typeName(declared.type));
+      const named = (field?.initializer === undefined ? undefined : injectedClass(field.initializer, shape)) ?? (declared.type === undefined ? undefined : typeName(declared.type));
       return named === undefined ? undefined : { name: named, shape };
     }
     const base = baseClassName(declaration);
@@ -772,36 +721,31 @@ class Reader {
     return found === undefined ? undefined : this.memberType(found.shape, found.declaration, name, new Set(visited).add(declaration));
   }
 
-  private injectedType(shape: FileShape, expression: ts.Expression): string | undefined {
-    if (!ts.isCallExpression(expression) || expression.expression.getText(shape.source) !== "inject") return undefined;
-    const [first] = expression.arguments;
-    return first !== undefined && ts.isIdentifier(first) ? first.text : undefined;
-  }
-
   /**
    * What a path expression comes down to: the text it states, a value the code being evaluated fills at run time
-   * (`kind: "value"`, written `{}` inside a path), or undefined when the snapshot does not decide it. `scope` holds the
-   * names that code binds.
+   * (`kind: "value"`, written `{}` inside a path), or why the snapshot does not decide it. `scope` holds the names that
+   * code binds.
    */
-  private async evaluate(shape: FileShape, expression: ts.Expression, scope: Scope = NO_SCOPE, trail: ReadonlySet<string> = new Set()): Promise<Evaluation | undefined> {
+  private async evaluate(shape: FileShape, expression: ts.Expression, scope: Scope = NO_SCOPE, trail: ReadonlySet<string> = new Set()): Promise<Read> {
     if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) return stated(expression.text);
     if (ts.isTemplateExpression(expression)) {
       let text = expression.head.text;
       for (const span of expression.templateSpans) {
         if (endsPath(text)) return cutAt(text);
         const part = await this.evaluate(shape, span.expression, scope, trail);
-        if (part === undefined) return undefined;
-        if (part.kind === "text" && part.cut) return cutAt(text + part.text);
-        text += written(part) + span.literal.text;
+        if (part.status === "undecided") return part;
+        if (part.value.kind === "text" && part.value.cut) return cutAt(text + part.value.text);
+        text += written(part.value) + span.literal.text;
       }
       return stated(text);
     }
     if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.PlusToken) {
       const left = await this.evaluate(shape, expression.left, scope, trail);
-      if (left?.kind === "text" && endsPath(left.text)) return cutAt(left.text);
+      if (left.status === "known" && left.value.kind === "text" && endsPath(left.value.text)) return cutAt(left.value.text);
       const right = await this.evaluate(shape, expression.right, scope, trail);
-      if (left === undefined || right === undefined) return undefined;
-      return right.kind === "text" && right.cut ? cutAt(written(left) + right.text) : stated(written(left) + written(right));
+      if (left.status === "undecided") return left;
+      if (right.status === "undecided") return right;
+      return right.value.kind === "text" && right.value.cut ? cutAt(written(left.value) + right.value.text) : stated(written(left.value) + written(right.value));
     }
     if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isNonNullExpression(expression)) {
       return this.evaluate(shape, expression.expression, scope, trail);
@@ -809,7 +753,7 @@ class Reader {
     if (ts.isIdentifier(expression)) return this.evaluateName(shape, expression.text, scope, trail);
     if (ts.isPropertyAccessExpression(expression)) return this.evaluateProperty(shape, expression, scope, trail);
     if (ts.isCallExpression(expression)) return this.evaluateCall(shape, expression, scope, trail);
-    return undefined;
+    return UNDECIDABLE;
   }
 
   /**
@@ -818,21 +762,22 @@ class Reader {
    * so a parameter that shadows a const of the file stays a value the code fills. An initializer the snapshot does not
    * decide is a value the code fills only when it reads one, so a value computed from nothing it holds stays undecided.
    */
-  private async evaluateName(shape: FileShape, name: string, scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+  private async evaluateName(shape: FileShape, name: string, scope: Scope, trail: ReadonlySet<string>): Promise<Read> {
     const local = scope.locals.get(name);
     if (local !== undefined) {
       const visited = `${shape.source.fileName}\0local ${local.pos}`;
-      if (trail.has(visited)) return undefined;
+      if (trail.has(visited)) return UNDECIDABLE;
       const declared = lexicalScope(local);
-      const initial = (await this.evaluate(shape, local, declared, new Set(trail).add(visited))) ?? (readsRunTime(local, declared) ? RUN_TIME_VALUE : undefined);
+      const evaluated = await this.evaluate(shape, local, declared, new Set(trail).add(visited));
+      const initial = evaluated.status === "undecided" && readsRunTime(local, declared) ? RUN_TIME : evaluated;
       return this.afterWrites(shape, local, initial, trail);
     }
-    if (scope.names.has(name)) return RUN_TIME_VALUE;
+    if (scope.names.has(name)) return RUN_TIME;
     const constant = await this.constantAt(shape, name, trail);
     if (constant !== undefined) return this.afterWrites(constant.shape, constant.expression, await this.evaluate(constant.shape, constant.expression, NO_SCOPE, constant.trail), constant.trail);
-    if (shape.imports.has(name) || shape.bindings.has(name)) return undefined;
+    if (shape.imports.has(name) || shape.bindings.has(name)) return UNDECIDABLE;
     const defined = this.defines.valueOf(shape.source.fileName, name);
-    return defined === undefined ? undefined : stated(defined);
+    return defined === undefined ? UNDECIDABLE : stated(defined);
   }
 
   /** Where a name's constant lives and the trail that visited it: a declaration of this file, or one an import names. */
@@ -844,7 +789,7 @@ class Reader {
     }
     const imported = shape.imports.get(name);
     if (imported === undefined || imported.imported === "*") return undefined;
-    const target = await this.moduleShape(shape, imported.module);
+    const target = await this.importedShape(shape, imported.module);
     return target === undefined ? undefined : this.exported(target, imported.imported, trail);
   }
 
@@ -860,40 +805,24 @@ class Reader {
     if (own !== undefined) return { shape, declaration: own, trail };
     const imported = shape.imports.get(name);
     if (imported === undefined || imported.imported === "*") return undefined;
-    const target = await this.moduleShape(shape, imported.module);
+    const target = await this.importedShape(shape, imported.module);
     return target === undefined ? undefined : this.exportedAs(target, imported.imported, kind, trail);
   }
 
   /**
-   * The declaration a module exports under a name: its own, the one a local `export { a as b }` or `export default`
-   * names, a named re-export, or one reached through `export *`, which a barrel chain answers. Undefined when the module
-   * states none, and when the chain repeats a module and a name it already visited.
+   * The declaration a module exports under a name, through any re-export chain (`declaration-lookup.ts`), when it is of
+   * the kind asked. Undefined when the module states none, when two `export *` could supply it, and when the evaluation
+   * already visited that declaration.
    */
   private async exportedAs<T>(shape: FileShape, name: string, kind: DeclarationKind<T>, trail: ReadonlySet<string>): Promise<Resolved<T> | undefined> {
-    const visited = `${shape.source.fileName}\0export ${name}`;
+    const found = await this.declarationOf(shape.source.fileName, name);
+    const holder = found === undefined ? undefined : this.shapes.get(found.file);
+    if (found === undefined || holder === undefined) return undefined;
+    const visited = `${found.file}\0${found.name}`;
     if (trail.has(visited)) return undefined;
-    const next = new Set(trail).add(visited);
-    if (name === "default") {
-      const held = shape.defaultExport;
-      if (held !== undefined && ts.isIdentifier(held)) return this.declaredAs(shape, held.text, kind, next);
-      const declaration = held === undefined ? undefined : kind.defaulted(held);
-      return declaration === undefined ? undefined : { shape, declaration, trail: next };
-    }
-    const local = shape.localExports.get(name);
-    if (local !== undefined) return this.declaredAs(shape, local, kind, next);
-    const own = kind.named(shape, name);
-    if (own !== undefined) return { shape, declaration: own, trail: next };
-    const reexport = shape.reexports.get(name);
-    if (reexport !== undefined) {
-      const target = await this.moduleShape(shape, reexport.module);
-      return target === undefined ? undefined : this.exportedAs(target, reexport.imported, kind, next);
-    }
-    for (const star of shape.stars) {
-      const target = await this.moduleShape(shape, star);
-      const found = target === undefined ? undefined : await this.exportedAs(target, name, kind, next);
-      if (found !== undefined) return found;
-    }
-    return undefined;
+    const held = holder.defaultExport;
+    const declaration = found.name !== ANONYMOUS_DEFAULT ? kind.named(holder, found.name) : held === undefined ? undefined : kind.defaulted(held);
+    return declaration === undefined ? undefined : { shape: holder, declaration, trail: new Set(trail).add(visited) };
   }
 
   /**
@@ -901,43 +830,43 @@ class Reader {
    * holds. A property of a value the code fills at run time is one too; a root the code binds is read through that
    * binding first.
    */
-  private async evaluateProperty(shape: FileShape, expression: ts.PropertyAccessExpression, scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+  private async evaluateProperty(shape: FileShape, expression: ts.PropertyAccessExpression, scope: Scope, trail: ReadonlySet<string>): Promise<Read> {
     const owner = expression.expression;
-    if (ts.isIdentifier(owner) && scope.names.has(owner.text)) return (await this.evaluateName(shape, owner.text, scope, trail))?.kind === "value" ? RUN_TIME_VALUE : undefined;
-    if (!ts.isIdentifier(owner) && owner.kind !== ts.SyntaxKind.ThisKeyword && (await this.evaluate(shape, owner, scope, trail))?.kind === "value") return RUN_TIME_VALUE;
+    if (ts.isIdentifier(owner) && scope.names.has(owner.text)) return isRunTime(await this.evaluateName(shape, owner.text, scope, trail)) ? RUN_TIME : UNDECIDABLE;
+    if (!ts.isIdentifier(owner) && owner.kind !== ts.SyntaxKind.ThisKeyword && isRunTime(await this.evaluate(shape, owner, scope, trail))) return RUN_TIME;
     const held = await this.memberOf(shape, expression, trail);
-    if (held === ASSIGNED_AT_RUN_TIME) return RUN_TIME_VALUE;
-    return held === undefined ? undefined : this.afterWrites(held.shape, held.expression, await this.evaluate(held.shape, held.expression, NO_SCOPE, held.trail), held.trail);
+    if (held === ASSIGNED_AT_RUN_TIME) return RUN_TIME;
+    return held === undefined ? UNDECIDABLE : this.afterWrites(held.shape, held.expression, await this.evaluate(held.shape, held.expression, NO_SCOPE, held.trail), held.trail);
   }
 
   /**
    * What a variable holds where the code reads it, given what its initializer holds: the initializer's path while the code
    * only extends it with a query or a fragment (`url += '?q=' + q`), undecided once it writes it any other way.
    */
-  private async afterWrites(shape: FileShape, initializer: ts.Expression, initial: Evaluation | undefined, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+  private async afterWrites(shape: FileShape, initializer: ts.Expression, initial: Read, trail: ReadonlySet<string>): Promise<Read> {
     const appended = appendsTo(initializer);
-    if (appended === null) return undefined;
-    if (appended.length === 0 || initial === undefined) return initial;
-    if (initial.kind !== "text") return undefined;
-    if (endsPath(initial.text)) return cutAt(initial.text);
+    if (appended === null) return UNDECIDABLE;
+    if (appended.length === 0 || initial.status === "undecided") return initial;
+    if (initial.value.kind !== "text") return UNDECIDABLE;
+    if (endsPath(initial.value.text)) return cutAt(initial.value.text);
     for (const part of appended) {
       const text = textOf(await this.evaluate(shape, part, lexicalScope(part), trail));
-      if (text === undefined || !(text.startsWith("?") || text.startsWith("#"))) return undefined;
+      if (text === undefined || !(text.startsWith("?") || text.startsWith("#"))) return UNDECIDABLE;
     }
-    return cutAt(initial.text);
+    return cutAt(initial.value.text);
   }
 
   private async memberOf(shape: FileShape, expression: ts.PropertyAccessExpression, trail: ReadonlySet<string>): Promise<Located | typeof ASSIGNED_AT_RUN_TIME | undefined> {
     const owner = expression.expression;
     const name = expression.name.text;
     if (owner.kind === ts.SyntaxKind.ThisKeyword) {
-      const enclosing = enclosingClassOf(owner);
+      const enclosing = ownClassDeclaration(owner);
       return enclosing === undefined ? undefined : await this.fieldOf(shape, enclosing, name, trail, { shape, declaration: enclosing });
     }
     if (!ts.isIdentifier(owner)) return undefined;
     const namespace = shape.imports.get(owner.text);
     if (namespace?.imported === "*") {
-      const target = await this.moduleShape(shape, namespace.module);
+      const target = await this.importedShape(shape, namespace.module);
       return target === undefined ? undefined : this.exported(target, name, trail);
     }
     const found = await this.classOf(shape, owner.text);
@@ -1006,7 +935,7 @@ class Reader {
     if (held !== undefined) return { shape, expression: held, trail };
     const imported = shape.imports.get(name);
     if (imported === undefined || imported.imported === "*") return undefined;
-    const target = await this.moduleShape(shape, imported.module);
+    const target = await this.importedShape(shape, imported.module);
     if (target === undefined) return undefined;
     const found = await this.exported(target, imported.imported, trail);
     const literal = found === undefined ? undefined : objectOf(found.expression);
@@ -1014,26 +943,26 @@ class Reader {
   }
 
   /** A function the call names, evaluated at its one returned expression: its own parameters are the run-time values. */
-  private async evaluateCall(shape: FileShape, call: ts.CallExpression, scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+  private async evaluateCall(shape: FileShape, call: ts.CallExpression, scope: Scope, trail: ReadonlySet<string>): Promise<Read> {
     if (ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === "toString") return this.scalarText(shape, call.arguments.length === 0 ? [call.expression.expression] : [], scope, trail);
     if (ts.isPropertyAccessExpression(call.expression)) return this.evaluateMethod(shape, call.expression, trail);
-    if (!ts.isIdentifier(call.expression)) return undefined;
-    if (scope.names.has(call.expression.text)) return undefined;
+    if (!ts.isIdentifier(call.expression)) return UNDECIDABLE;
+    if (scope.names.has(call.expression.text)) return UNDECIDABLE;
     if (call.expression.text === "String" && isGlobalName(shape, scope, "String")) return this.scalarText(shape, call.arguments, scope, trail);
     if (call.expression.text === "encodeURIComponent" && isGlobalName(shape, scope, "encodeURIComponent")) {
       const [argument, ...rest] = call.arguments;
-      return argument === undefined || rest.length > 0 || ts.isSpreadElement(argument) ? undefined : this.encoded(shape, argument, scope, trail);
+      return argument === undefined || rest.length > 0 || ts.isSpreadElement(argument) ? UNDECIDABLE : this.encoded(shape, argument, scope, trail);
     }
     const visited = `${shape.source.fileName}\0call ${call.expression.text}`;
-    if (trail.has(visited)) return undefined;
+    if (trail.has(visited)) return undecided("recursive", [placeOf(shape, call)]);
     const found = await this.callTargetOf(shape, call.expression.text);
-    return found === undefined ? undefined : this.evaluateReturned(found.target, found.declaration, new Set(trail).add(visited));
+    return found === undefined ? UNDECIDABLE : this.evaluateReturned(found.target, found.declaration, new Set(trail).add(visited));
   }
 
   /** `String(x)` and `x.toString()` write what a template writes for `x`. */
-  private async scalarText(shape: FileShape, operands: readonly ts.Expression[], scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+  private async scalarText(shape: FileShape, operands: readonly ts.Expression[], scope: Scope, trail: ReadonlySet<string>): Promise<Read> {
     const [operand, ...rest] = operands;
-    return operand === undefined || rest.length > 0 ? undefined : this.evaluate(shape, operand, scope, trail);
+    return operand === undefined || rest.length > 0 ? UNDECIDABLE : this.evaluate(shape, operand, scope, trail);
   }
 
   /**
@@ -1041,15 +970,16 @@ class Reader {
    * is encoded, anything else is a run-time value, unless the snapshot cannot read it and it reads nothing the code fills
    * at run time. A snapshot that may replace the global encoder leaves a text undecided: only its run-time values stay.
    */
-  private async encoded(shape: FileShape, argument: ts.Expression, scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
-    const value = await this.evaluate(shape, argument, scope, trail);
-    if (value === undefined) return readsRunTime(argument, scope) ? RUN_TIME_VALUE : undefined;
-    if (value.kind === "value" || value.cut || value.text.includes(PLACEHOLDER)) return RUN_TIME_VALUE;
-    if (this.unsafeEncoder) return undefined;
+  private async encoded(shape: FileShape, argument: ts.Expression, scope: Scope, trail: ReadonlySet<string>): Promise<Read> {
+    const read = await this.evaluate(shape, argument, scope, trail);
+    if (read.status === "undecided") return readsRunTime(argument, scope) ? RUN_TIME : read;
+    const value = read.value;
+    if (value.kind === "value" || value.cut || value.text.includes(RUN_TIME_HOLE)) return RUN_TIME;
+    if (this.unsafeEncoder) return UNDECIDABLE;
     try {
       return stated(encodeURIComponent(value.text));
     } catch {
-      return undefined;
+      return UNDECIDABLE;
     }
   }
 
@@ -1063,27 +993,30 @@ class Reader {
    * override a subclass declares must write the same; `super` calls only the inherited one. A method that reads its own
    * parameters is not read, since its arguments are not substituted.
    */
-  private async evaluateMethod(shape: FileShape, callee: ts.PropertyAccessExpression, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+  private async evaluateMethod(shape: FileShape, callee: ts.PropertyAccessExpression, trail: ReadonlySet<string>): Promise<Read> {
     const receiver = await this.receiverClass(shape, callee.expression);
-    if (receiver === undefined || (await this.assignedAbove(receiver, callee.name.text))) return undefined;
+    if (receiver === undefined || (await this.assignedAbove(receiver, callee.name.text))) return UNDECIDABLE;
     const inherited = await this.inheritedMethod(receiver.shape, receiver.declaration, callee.name.text, new Set());
-    if (inherited === undefined) return undefined;
+    if (inherited === undefined) return UNDECIDABLE;
     const overrides = receiver.virtual ? await this.overrides(receiver.declaration, callee.name.text, new Set()) : [];
-    if (overrides === undefined) return undefined;
-    let agreed: Evaluation | undefined;
-    for (const { shape: held, method } of [inherited, ...overrides]) {
+    if (overrides === undefined) return UNDECIDABLE;
+    const methods = [inherited, ...overrides];
+    let agreed: Read | undefined;
+    for (const { shape: held, method } of methods) {
       const visited = `${held.source.fileName}\0method ${method.pos}`;
-      if (trail.has(visited) || readsOwnParameters(method)) return undefined;
+      if (trail.has(visited)) return undecided("recursive", [placeOf(held, method)]);
+      if (readsOwnParameters(method)) return UNDECIDABLE;
       const value = await this.evaluateReturned(held, method, new Set(trail).add(visited));
-      if (value === undefined || (agreed !== undefined && (value.kind !== agreed.kind || written(value) !== written(agreed)))) return undefined;
+      if (value.status === "undecided") return value;
+      if (agreed !== undefined && !sameRead(agreed, value)) return undecided("dispatch-disagreement", methods.map(({ shape: owner, method: declared }) => placeOf(owner, declared)));
       agreed = value;
     }
-    return agreed;
+    return agreed ?? UNDECIDABLE;
   }
 
   /** The class a method call's receiver is an instance of; `virtual` unless the call is a `super` call. */
   private async receiverClass(shape: FileShape, receiver: ts.Expression): Promise<{ shape: FileShape; declaration: ts.ClassDeclaration; virtual: boolean } | undefined> {
-    const enclosing = enclosingClassOf(receiver);
+    const enclosing = ownClassDeclaration(receiver);
     if (receiver.kind === ts.SyntaxKind.ThisKeyword) return enclosing === undefined ? undefined : { shape, declaration: enclosing, virtual: true };
     if (receiver.kind === ts.SyntaxKind.SuperKeyword) {
       const base = enclosing === undefined ? undefined : baseClassName(enclosing);
@@ -1132,21 +1065,22 @@ class Reader {
     return found;
   }
 
-  /** What a call writes: what every return of the function it names writes, undefined when one is undecided or two disagree. */
-  private async evaluateReturned(target: FileShape, declaration: ts.Expression | ts.FunctionDeclaration | ts.MethodDeclaration, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+  /** What a call writes: what every return of the function it names writes, undecided when one is or two disagree. */
+  private async evaluateReturned(target: FileShape, declaration: ts.Expression | ts.FunctionDeclaration | ts.MethodDeclaration, trail: ReadonlySet<string>): Promise<Read> {
     if (!ts.isFunctionDeclaration(declaration) && !ts.isMethodDeclaration(declaration) && !ts.isArrowFunction(declaration) && !ts.isFunctionExpression(declaration)) return this.evaluate(target, declaration, NO_SCOPE, trail);
-    let agreed: Evaluation | undefined;
+    let agreed: Read | undefined;
     for (const returned of returnsOf(declaration)) {
-      const value = returned === undefined ? undefined : await this.evaluate(target, returned, lexicalScope(returned), trail);
-      if (value === undefined || (agreed !== undefined && (value.kind !== agreed.kind || written(value) !== written(agreed)))) return undefined;
+      const value = returned === undefined ? UNDECIDABLE : await this.evaluate(target, returned, lexicalScope(returned), trail);
+      if (value.status === "undecided") return value;
+      if (agreed !== undefined && !sameRead(agreed, value)) return UNDECIDABLE;
       agreed = value;
     }
-    return agreed;
+    return agreed ?? UNDECIDABLE;
   }
 
-  private async moduleShape(shape: FileShape, specifier: string): Promise<FileShape | undefined> {
-    const resolved = await this.modules.resolve(shape.source.fileName, specifier);
-    return "file" in resolved ? this.shapes.get(resolved.file) : undefined;
+  private async importedShape(shape: FileShape, specifier: string): Promise<FileShape | undefined> {
+    const file = await this.fileOf(shape.source.fileName, specifier);
+    return file === undefined ? undefined : this.shapes.get(file);
   }
 }
 
@@ -1173,7 +1107,7 @@ function sourceBindings(source: ts.SourceFile): ReadonlySet<string> {
 }
 
 function isAmbient(node: ts.Node): boolean {
-  return ts.canHaveModifiers(node) && (ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) ?? false);
+  return hasModifier(node, ts.SyntaxKind.DeclareKeyword);
 }
 
 function mayOverrideEncoder(source: ts.SourceFile): boolean {
@@ -1335,15 +1269,15 @@ function isGlobalName(shape: FileShape, scope: Scope, name: string): boolean {
 }
 
 /**
- * The expression an object literal states for a member, a shorthand's name included; `UNDECIDED` when a spread or a
+ * The expression an object literal states for a member, a shorthand's name included; undecided when a spread or a
  * computed name after it may state the member instead.
  */
-function memberOf(object: ts.ObjectLiteralExpression, name: string): ts.Expression | typeof UNDECIDED | undefined {
-  let found: ts.Expression | typeof UNDECIDED | undefined;
+function memberOf(object: ts.ObjectLiteralExpression, name: string): Evaluated<ts.Expression> | undefined {
+  let found: Evaluated<ts.Expression> | undefined;
   for (const property of object.properties) {
-    if (ts.isSpreadAssignment(property) || (property.name !== undefined && ts.isComputedPropertyName(property.name))) found = UNDECIDED;
+    if (ts.isSpreadAssignment(property) || (property.name !== undefined && ts.isComputedPropertyName(property.name))) found = UNDECIDABLE;
     else if (property.name !== undefined && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) && property.name.text === name) {
-      found = ts.isPropertyAssignment(property) ? property.initializer : ts.isShorthandPropertyAssignment(property) ? property.name : UNDECIDED;
+      found = ts.isPropertyAssignment(property) ? known(property.initializer) : ts.isShorthandPropertyAssignment(property) ? known(property.name) : UNDECIDABLE;
     }
   }
   return found;
@@ -1377,8 +1311,14 @@ function requestsSomething(returned: ts.Expression | undefined): returned is ts.
   return returned !== undefined && !(ts.isIdentifier(returned) && returned.text === "undefined") && !ts.isVoidExpression(returned);
 }
 
-function unresolvedAt(shape: FileShape, call: ts.CallExpression): ReadTarget {
-  return { target: { status: "unknown", reason: "unresolved", evidence: [{ path: shape.source.fileName, line: lineOf(shape.source, call) }] } };
+/** A call whose target the snapshot does not decide: unknown at the call, with why. */
+function unresolvedAt(shape: FileShape, call: ts.CallExpression, why: Undecided = UNDECIDABLE): ReadTarget {
+  return undecidedTarget(why, placeOf(shape, call));
+}
+
+/** Where a node is written, as evidence. */
+function placeOf(shape: FileShape, node: ts.Node) {
+  return { path: shape.source.fileName, line: lineOf(shape.source, node) };
 }
 
 /**
@@ -1399,8 +1339,7 @@ function objectOf(expression: ts.Expression): ts.ObjectLiteralExpression | undef
 }
 
 function verbOf(name: string): HttpTarget["method"] {
-  const upper = name.toUpperCase();
-  return (["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"] as const).find((verb) => verb === upper) ?? "GET";
+  return requestMethodOf(name.toUpperCase()) ?? "GET";
 }
 
 /**
@@ -1416,19 +1355,17 @@ function endsPath(text: string): boolean {
  * may hold an origin, a base path or several segments, so it stands for no segment.
  */
 function startsSegments(path: string): boolean {
-  for (let at = path.indexOf(PLACEHOLDER); at !== -1; at = path.indexOf(PLACEHOLDER, at + PLACEHOLDER.length)) {
+  for (let at = path.indexOf(RUN_TIME_HOLE); at !== -1; at = path.indexOf(RUN_TIME_HOLE, at + RUN_TIME_HOLE.length)) {
     if (path[at - 1] !== "/") return false;
   }
   return true;
 }
 
-/** `:name` stands for a value the code fills, like `${expr}`; the query string and the fragment are not part of the path a route serves. */
-function normalizePath(path: string): string {
-  const end = path.search(/[?#]/);
-  const withoutQuery = end === -1 ? path : path.slice(0, end);
-  return withoutQuery
+/** `:name` stands for a value the code fills, like `${expr}`. */
+function namedHoles(path: string): string {
+  return path
     .split("/")
-    .map((segment) => (/^:[A-Za-z_][A-Za-z0-9_]*$/.test(segment) ? PLACEHOLDER : segment))
+    .map((segment) => (/^:[A-Za-z_][A-Za-z0-9_]*$/.test(segment) ? RUN_TIME_HOLE : segment))
     .join("/");
 }
 
@@ -1440,32 +1377,39 @@ function enclosingMethodDeclaration(node: ts.Node): ts.MethodDeclaration | undef
   return undefined;
 }
 
-/** The class whose body a node sits in, if any. */
-function enclosingClassOf(node: ts.Node): ts.ClassDeclaration | undefined {
-  for (let current: ts.Node | undefined = node.parent; current !== undefined; current = current.parent) {
-    if (ts.isClassDeclaration(current)) return current;
-    if (ts.isSourceFile(current)) return undefined;
-  }
-  return undefined;
+/** The class declaration whose instance `this` or `super` denotes at a node. */
+function ownClassDeclaration(node: ts.Node): ts.ClassDeclaration | undefined {
+  const owner = thisClass(node);
+  return owner !== undefined && ts.isClassDeclaration(owner) ? owner : undefined;
 }
 
 /** The text a path part states. */
-function stated(text: string): Evaluation {
-  return { kind: "text", text };
+function stated(text: string): Read {
+  return known({ kind: "text", text });
 }
 
-function cutAt(text: string): Evaluation {
-  return { kind: "text", text, cut: true };
+function cutAt(text: string): Read {
+  return known({ kind: "text", text, cut: true });
+}
+
+/** Whether a read is a value the code fills at run time. */
+function isRunTime(read: Read): boolean {
+  return read.status === "known" && read.value.kind === "value";
+}
+
+/** Whether two decided reads write the same thing. */
+function sameRead(first: Read, second: Read): boolean {
+  return first.status === "known" && second.status === "known" && first.value.kind === second.value.kind && written(first.value) === written(second.value);
 }
 
 /** What an evaluation writes inside a path: the text it states, or the placeholder a run-time value leaves. */
 function written(evaluation: Evaluation): string {
-  return evaluation.kind === "text" ? evaluation.text : PLACEHOLDER;
+  return evaluation.kind === "text" ? evaluation.text : RUN_TIME_HOLE;
 }
 
-/** The text an evaluation states; undefined for a run-time value and for a part the snapshot does not decide. */
-function textOf(evaluation: Evaluation | undefined): string | undefined {
-  return evaluation?.kind === "text" ? evaluation.text : undefined;
+/** The text a read states; undefined for a run-time value and for a part the snapshot does not decide. */
+function textOf(read: Read): string | undefined {
+  return read.status === "known" && read.value.kind === "text" ? read.value.text : undefined;
 }
 
 function ancestorsOf(node: ts.Node, source: ts.SourceFile): { symbol: string; line: number; endLine: number }[] {
@@ -1495,10 +1439,6 @@ export function symbolOf(node: ts.Node): string | undefined {
   }
   if (className === undefined) return member;
   return member === undefined ? className : `${className}.${member}`;
-}
-
-export function lineOf(source: ts.SourceFile, node: ts.Node): number {
-  return source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
 }
 
 function originOf(node: ts.Node): NonNullable<PlacedCallSite["origins"]>[number] {

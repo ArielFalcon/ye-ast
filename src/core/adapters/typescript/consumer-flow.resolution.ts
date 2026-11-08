@@ -1,8 +1,9 @@
 import ts from "typescript";
 import type { Origin, Program, Unit } from "./consumer-flow.index.ts";
-import { injectedClass, methodDeclared } from "./consumer-flow.classes.ts";
-import { declaringScope, enclosingClass, isDynamicName, isFunctionNode, namedFunction, unwrap, type NamedFunction } from "./consumer-flow.syntax.ts";
-import { constructorParameters, typeName } from "./http-call-sites.adapter.ts";
+import { methodDeclared } from "./consumer-flow.classes.ts";
+import { injectedClass } from "./angular-injection.ts";
+import { declaringScope, isDynamicName, isFunctionNode, namedFunction, type NamedFunction } from "./consumer-flow.syntax.ts";
+import { constructorParameters, thisClass, typeName, unwrapped } from "./syntax.ts";
 
 export type Resolved = { kind: "function"; file: string; named: NamedFunction } | { kind: "external" };
 
@@ -12,14 +13,14 @@ export type Resolved = { kind: "function"; file: string; named: NamedFunction } 
  * snapshot does not let the reader tell.
  */
 export function resolveFunction(program: Program, unit: Unit, callee: ts.Expression): Resolved | undefined {
-  const expression = unwrap(callee);
+  const expression = unwrapped(callee);
   if (ts.isIdentifier(expression)) return functionNamed(program, unit, expression);
   if (!ts.isPropertyAccessExpression(expression)) return undefined;
-  const cls = enclosingClass(expression);
-  const receiver = unwrap(expression.expression);
+  const cls = thisClass(expression);
+  const receiver = unwrapped(expression.expression);
   if (cls === undefined) return undefined;
   if (receiver.kind === ts.SyntaxKind.ThisKeyword) return methodOf(unit.file, cls, expression.name.text);
-  const className = receiverClass(receiver, cls);
+  const className = receiverClass(unit, receiver, cls);
   if (className === undefined) return undefined;
   const owner = unit.classes.get(className);
   if (owner !== undefined) return methodOf(unit.file, owner, expression.name.text);
@@ -67,12 +68,12 @@ function methodOf(file: string, cls: ts.ClassLikeDeclaration, name: string): Res
 }
 
 /** The class a receiver is an instance of: a field or constructor parameter of the class that holds it by type or `inject(X)`. */
-function receiverClass(receiver: ts.Expression, cls: ts.ClassLikeDeclaration): string | undefined {
+function receiverClass(unit: Unit, receiver: ts.Expression, cls: ts.ClassLikeDeclaration): string | undefined {
   const name = ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword ? receiver.name.text : ts.isIdentifier(receiver) ? receiver.text : undefined;
   if (name === undefined) return undefined;
   for (const member of cls.members) {
     if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name) && member.name.text === name) {
-      const injected = member.initializer === undefined ? undefined : injectedClass(member.initializer);
+      const injected = member.initializer === undefined ? undefined : injectedClass(member.initializer, unit);
       return injected ?? (member.type === undefined ? undefined : typeName(member.type));
     }
   }

@@ -15,7 +15,7 @@ window.MODULE_DETAILS_ES = {
       may: "core/ports, core/domain",
       never: "core/adaptadores, cualquier escritura",
       facts: [
-        "McpDeps extiende QueryExecutionDeps, que solo contiene query families de lectura (entrypoints, impact, outline, trace, workspace, workspace impact, decisions) más redaction y digest, así que una escritura es imposible por tipo.",
+        "McpDeps extiende QueryExecutionDeps, que solo contiene query families de lectura (entrypoints, impact, outline, trace, workspace, workspace impact, decisions), la evidence composition, redaction y digest, así que una escritura es imposible por tipo.",
         "Diez tools: ye_ast_entrypoints, ye_ast_impact, ye_ast_callers, ye_ast_importers, ye_ast_outline, ye_ast_trace, ye_ast_workspace, ye_ast_decisions, ye_ast_contract_consequences y ye_ast_compose.",
         "Las instrucciones del servidor enseñan al agente a leer una respuesta: complete es relativo al scope declarado, partial lista sus cuts y unknown nunca significa que no hay impacto.",
         "ye_ast_compose combina de 1 a 16 consultas de las ocho familias en un solo conjunto de evidencia con una identidad de verificación; existe solo sobre MCP.",

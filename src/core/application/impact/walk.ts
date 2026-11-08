@@ -1,4 +1,4 @@
-import type { DependenceBasis, ImpactBudget } from "../../domain/impact/impact-fact.ts";
+import type { DependenceBasis, DependenceDerivation, ImpactBudget } from "../../domain/impact/impact-fact.ts";
 import { declarationAnchor } from "../../domain/impact/impact-cuts.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
 import { comparePosition } from "../../domain/shared/code-node.ts";
@@ -15,6 +15,8 @@ export interface Via {
   resource?: string;
   /** What the dependence is. */
   basis: DependenceBasis;
+  /** Who established it. */
+  derivation: DependenceDerivation;
   /** The classes a provider may inject instead of the receiver a proven call names. */
   substitutes?: readonly MemberSubstitute[];
 }
@@ -60,7 +62,7 @@ interface Link {
 }
 
 function placeOn(symbol: GraphSymbol, dependence: InboundEdge): Via {
-  return { symbol, lines: dependence.lines, ...(dependence.resource === undefined ? {} : { resource: dependence.resource }), basis: dependence.basis, ...(dependence.substitutes === undefined ? {} : { substitutes: dependence.substitutes }) };
+  return { symbol, lines: dependence.lines, ...(dependence.resource === undefined ? {} : { resource: dependence.resource }), basis: dependence.basis, derivation: dependence.derivation, ...(dependence.substitutes === undefined ? {} : { substitutes: dependence.substitutes }) };
 }
 
 /**
@@ -82,7 +84,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
   function enterOwners(rec: Rec, into: Rec[]): void {
     for (const owner of inbound.ownersOf(rec.symbol)) {
       const ownerRec = recs.get(owner.id) ?? enter(owner, rec.depth, false, into, true);
-      links.push({ from: rec, to: ownerRec, confidence: 1, via: { symbol: rec.symbol, lines: [], basis: "contains" } });
+      links.push({ from: rec, to: ownerRec, confidence: 1, via: { symbol: rec.symbol, lines: [], basis: "contains", derivation: "resolved" } });
     }
   }
 

@@ -27,7 +27,10 @@ function repositories(entrypoints: readonly HttpRoute[], repo = "orders"): Repos
 
 function joined(result: ReturnType<typeof matchCallSite>): string {
   const [link] = result.links ?? [];
-  if (link === undefined) return result.ambiguous === undefined ? `none ${result.unmatched ?? ""}`.trim() : `ambiguous ${result.ambiguous.repos.join(",")}`;
+  if (link === undefined) {
+    if (result.ambiguous !== undefined) return `ambiguous ${result.ambiguous.repos.join(",")}`;
+    return result.undecided !== undefined ? `undecided ${result.undecided}` : result.external === true ? "external" : `none ${result.unmatched ?? ""}`.trim();
+  }
   const { basis, confidence, profiles } = link;
   return `${basis} ${confidence}${profiles === undefined ? "" : ` ${profiles.join(",")}`} -> ${link.to.repo} ${link.to.name}`;
 }
@@ -167,14 +170,14 @@ function listener(protocol: Listener["protocol"], destination: string, handler =
   return { kind: "listener", name: `${protocol} ${destination}`, protocol, destination, handler };
 }
 
-function published(protocol: EventTarget["protocol"], destination: string, repo = "shop-web"): CallSite {
+function published(protocol: EventTarget["protocol"], destination: string, repo = "shop-web", exchange?: string): CallSite {
   return {
     repo,
     file: "src/main/java/app/Orders.java",
     line: 7,
     symbol: "Orders.publish",
     transport: "event",
-    target: { status: "complete", value: { protocol, destination, role: "publish" }, evidence: [] },
+    target: { status: "complete", value: { protocol, destination, role: "publish", ...(exchange === undefined ? {} : { exchange }) }, evidence: [] },
   };
 }
 
@@ -183,16 +186,20 @@ function eventTargetOf(call: CallSite): EventTarget {
 }
 
 function consumed(result: ReturnType<typeof matchEventCallSite>): string {
-  if (result.links === undefined) return result.ambiguous === undefined ? "none" : `ambiguous ${result.ambiguous.repos.join(",")}`;
-  return result.links.map(({ basis, confidence, transport, to }) => `${basis} ${confidence} ${transport} -> ${to.repo} ${to.kind} ${to.name} at ${to.handler.symbol}`).join(" | ");
+  const answers = [
+    ...(result.links ?? []).map(({ basis, confidence, transport, to }) => `${basis} ${confidence} ${transport} -> ${to.repo} ${to.kind} ${to.name} at ${to.handler.symbol}`),
+    ...(result.undecided === undefined ? [] : [`could-match ${result.undecided}`]),
+  ];
+  if (answers.length > 0) return answers.join(" | ");
+  return result.ambiguous === undefined ? "none" : `ambiguous ${result.ambiguous.repos.join(",")}`;
 }
 
 function consumedBy(call: CallSite, listeners: readonly Listener[], repo = "orders"): string {
   return consumed(matchEventCallSite(call, eventTargetOf(call), [{ repo, entrypoints: listeners }]));
 }
 
-test("a published destination equal to a listener's is one link at full confidence, for every protocol that matches by destination", () => {
-  for (const protocol of ["kafka", "rabbit", "jms", "event"] as const) {
+test("a published destination equal to a listener's of another repository is one link at full confidence, for every cross-process protocol", () => {
+  for (const protocol of ["kafka", "rabbit", "jms"] as const) {
     assert.equal(consumedBy(published(protocol, "orders.created"), [listener(protocol, "orders.created")]), `event-destination 1 event -> orders listener ${protocol} orders.created at OrdersListener.on`);
   }
 });
@@ -206,6 +213,38 @@ test("a listener of the repository that publishes is never a candidate", () => {
   const call = published("kafka", "orders.created", "orders");
 
   assert.equal(consumedBy(call, [listener("kafka", "orders.created")]), "none");
+});
+
+test("an in-process application event reaches the listeners of the repository that publishes it, and no other repository's", () => {
+  const call = published("event", "app.OrderPlaced", "orders");
+  const repositories: RepositoryEntrypoints[] = [
+    { repo: "orders", entrypoints: [listener("event", "app.OrderPlaced")] },
+    { repo: "billing", entrypoints: [listener("event", "app.OrderPlaced", { ...CONSUMER, symbol: "BillingListener.on" })] },
+  ];
+
+  assert.equal(consumed(matchEventCallSite(call, eventTargetOf(call), repositories)), "event-destination 1 event -> orders listener event app.OrderPlaced at OrdersListener.on");
+});
+
+test("a destination with a part the publisher fills at run time could match a listener whose name that part may hold, never a silent miss", () => {
+  assert.equal(consumedBy(published("kafka", "orders-{}"), [listener("kafka", "orders-eu")]), "could-match orders-{}");
+  assert.equal(consumedBy(published("nats", "orders.created-{}"), [listener("nats", "orders.created-eu")]), "could-match orders.created-{}");
+  assert.equal(consumedBy(published("kafka", "orders-{}"), [listener("kafka", "billing-eu")]), "none");
+});
+
+test("a listener subject with a part the subscriber fills at run time could match any token that part may hold", () => {
+  assert.equal(consumedBy(published("nats", "orders.created"), [listener("nats", "orders.{}")]), "could-match orders.created");
+});
+
+test("a message some listeners consume and others could is their links plus one could-match, never a silent drop", () => {
+  const call = published("nats", "orders.created");
+  assert.equal(
+    consumedBy(call, [listener("nats", "orders.*"), listener("nats", "orders.{}", { ...CONSUMER, symbol: "OrdersListener.audit", line: 20 })]),
+    "event-destination 1 event -> orders listener nats orders.* at OrdersListener.on | could-match orders.created",
+  );
+});
+
+test("a RabbitMQ message published to a named exchange reaches queues through bindings the snapshot does not read: it could match, never a link", () => {
+  assert.equal(consumedBy(published("rabbit", "orders.created", "shop-web", "orders"), [listener("rabbit", "orders.created")]), "could-match orders.created");
 });
 
 test("a listener that states another protocol does not consume the message", () => {
@@ -267,4 +306,121 @@ test("an HTTP or event link starts at its call site's column only when the reade
   const eventFrom = (call: CallSite) => matchEventCallSite(call, eventTargetOf(call), [{ repo: "orders", entrypoints: [listener("kafka", "orders.created")] }]).links?.map(link => link.from.column);
 
   assert.deepEqual([httpFrom(http), httpFrom({ ...http, column: 12 }), eventFrom(event), eventFrom({ ...event, column: 5 })], [[undefined], [12], [undefined], [5]]);
+});
+
+function handled(method: HttpRoute["method"], path: string, symbol: string, line: number): HttpRoute {
+  return route(method, path, { path: "src/main/java/app/Catalog.java", symbol, line });
+}
+
+test("a segment the call fills partly at run time matches a route segment of the same shape, as a parity", () => {
+  const call = site("/api/user-{}");
+
+  assert.equal(joined(matchCallSite(call, targetOf(call), repositories([route("GET", "/api/user-{id}")]), [])), "exact 0.6 -> orders GET /api/user-{id}");
+});
+
+test("a route's `*` segment takes exactly one segment of the call", () => {
+  const owners = repositories([route("GET", "/owners/*/pets/{petId}")]);
+
+  assert.equal(joined(matchCallSite(site("/owners/7/pets/{}"), targetOf(site("/owners/7/pets/{}")), owners, [])), "exact 0.6 -> orders GET /owners/*/pets/{petId}");
+  assert.equal(joined(matchCallSite(site("/owners/7/8/pets/{}"), targetOf(site("/owners/7/8/pets/{}")), owners, [])), "none /owners/7/8/pets/{}");
+});
+
+test("a route's `**` or `{*rest}` takes the rest of the call's path, none of it included", () => {
+  const files = repositories([route("GET", "/files/**"), route("GET", "/docs/{*path}"), route("GET", "/assets/img/**")]);
+  const name = (path: string) => joined(matchCallSite(site(path), targetOf(site(path)), files, []));
+
+  assert.equal(name("/files/a/b"), "exact 1 -> orders GET /files/**");
+  assert.equal(name("/docs"), "exact 1 -> orders GET /docs/{*path}");
+  assert.equal(name("/other/a"), "none /other/a");
+  assert.equal(name("/assets"), "none /assets");
+});
+
+test("a route segment that states part of the call's text wins over a bare parameter there", () => {
+  const call = site("/api/user-7");
+  const routes = [handled("GET", "/api/{id}", "Users.byId", 1), handled("GET", "/api/user-{id}", "Users.user", 2)];
+
+  assert.equal(joined(matchCallSite(call, targetOf(call), repositories(routes), [])), "exact 1 -> orders GET /api/user-{id}");
+  assert.equal(joined(matchCallSite(call, targetOf(call), repositories([...routes].reverse()), [])), "exact 1 -> orders GET /api/user-{id}");
+});
+
+test("a value the call fills at run time never stands for a literal segment the route names, on any rung", () => {
+  const latest = repositories([route("GET", "/api/orders/latest")], "shop-api");
+
+  assert.equal(joined(matchCallSite(site("/api/orders/{}"), targetOf(site("/api/orders/{}")), latest, [])), "none /api/orders/{}");
+  assert.equal(joined(matchCallSite(site("/orders/{}"), targetOf(site("/orders/{}")), latest, [])), "none /orders/{}");
+});
+
+test("on the suffix rung a route parameter takes a literal of the call, whichever path is longer", () => {
+  const call = site("/v1/user/DEFAULT/reset/{}");
+
+  assert.equal(joined(matchCallSite(call, targetOf(call), repositories([route("GET", "/api/v1/user/{store}/reset/{token}")]), [])), "suffix 0.5 -> orders GET /api/v1/user/{store}/reset/{token}");
+});
+
+test("a suffix match needs one literal segment both paths state", () => {
+  const call = site("/v1/manufacturers/{}");
+
+  assert.equal(joined(matchCallSite(call, targetOf(call), repositories([route("GET", "/static/files/{store}/{type}/{name}")]), [])), "none /v1/manufacturers/{}");
+});
+
+test("a call that states its origin states its whole path, so a longer route cannot end with it; a relative call still can", () => {
+  const owners = repositories([route("GET", "/api/owners/{ownerId}")]);
+  const absolute = site("/owners/{}", "GET", "http://customers-service");
+  const inPath = site("http://customers-service/owners/{}");
+  const relative = site("/owners/{}");
+
+  assert.equal(joined(matchCallSite(absolute, targetOf(absolute), owners, [])), "external");
+  assert.equal(joined(matchCallSite(inPath, targetOf(inPath), owners, [])), "external");
+  assert.equal(joined(matchCallSite(relative, targetOf(relative), owners, [])), "suffix 0.5 -> orders GET /api/owners/{ownerId}");
+});
+
+test("a gateway prefix whose removal leaves no literal the route states is no evidence: nothing is inferred and a declared one links nothing", () => {
+  const call = site("http://vets-service/vets");
+  const root = repositories([route("ANY", "/")], "clinic");
+
+  assert.deepEqual(inferGateways([call], root, []), []);
+  assert.equal(joined(matchCallSite(call, targetOf(call), root, [{ prefix: "vets", repo: "clinic", basis: "gateway-prefix" }])), "none http://vets-service/vets");
+});
+
+test("two routes of one repository that take a call equally are ambiguous, naming both routes, never a pick", () => {
+  const call = site("/category/{}");
+  const result = matchCallSite(call, targetOf(call), repositories([handled("GET", "/category/{id}", "Catalog.byId", 3), handled("GET", "/category/{friendlyUrl}", "Catalog.byUrl", 9)]), []);
+
+  assert.equal(result.links, undefined);
+  assert.deepEqual(result.ambiguous, { key: "category", repos: ["orders"], routes: ["GET /category/{friendlyUrl}", "GET /category/{id}"] });
+});
+
+test("a route that states the call's verb wins over one that names none, whatever the order they are declared in", () => {
+  const call = site("/orders", "POST");
+  const routes = [handled("ANY", "/orders", "Orders.any", 1), handled("POST", "/orders", "Orders.create", 2)];
+
+  assert.equal(joined(matchCallSite(call, targetOf(call), repositories(routes), [])), "exact 1 -> orders POST /orders");
+  assert.equal(joined(matchCallSite(call, targetOf(call), repositories([...routes].reverse()), [])), "exact 1 -> orders POST /orders");
+});
+
+test("a literal of the call that fills a route parameter keeps full confidence; a value filled at run time is a parity", () => {
+  const orders = repositories([route("GET", "/orders/{id}")]);
+
+  assert.equal(joined(matchCallSite(site("/orders/7"), targetOf(site("/orders/7")), orders, [])), "exact 1 -> orders GET /orders/{id}");
+  assert.equal(joined(matchCallSite(site("/orders/{}"), targetOf(site("/orders/{}")), orders, [])), "exact 0.6 -> orders GET /orders/{id}");
+});
+
+test("a call that matches no route is unmatched when it states no host, and external when it names one", () => {
+  const orders = repositories([route("GET", "/orders")], "shop-api");
+  const relative = site("/geo/provinces");
+  const hosted = site("https://geo.example/provinces");
+  const hostedByBase = site("/provinces", "GET", "https://geo.example");
+
+  assert.deepEqual(matchCallSite(relative, targetOf(relative), orders, []), { unmatched: "/geo/provinces" });
+  assert.deepEqual(matchCallSite(hosted, targetOf(hosted), orders, []), { external: true });
+  assert.deepEqual(matchCallSite(hostedByBase, targetOf(hostedByBase), orders, []), { external: true });
+  const runTimeHost = site("/provinces", "GET", "http://");
+  assert.deepEqual(matchCallSite(runTimeHost, targetOf(runTimeHost), orders, []), { unmatched: "/provinces" });
+});
+
+test("a segment the call fills partly that some route text could hold is undecided, and so is a later rung's match behind it", () => {
+  const call = site("/api/user-{}");
+  const admin = repositories([route("GET", "/api/user-admin")], "shop-api");
+
+  assert.deepEqual(matchCallSite(call, targetOf(call), admin, []), { undecided: "/api/user-{}" });
+  assert.deepEqual(matchCallSite(call, targetOf(call), [...admin, ...repositories([route("GET", "/user-{id}")], "users")], []), { undecided: "/api/user-{}" });
 });

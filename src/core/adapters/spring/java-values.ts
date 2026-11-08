@@ -1,10 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import type { Binding } from "./java-members.ts";
 import type { JavaFile, TypeDecl } from "./java-symbols.ts";
-
-
-/** Why method flow leaves a value undecided. */
-export type FlowCause = "recursive" | "dispatch-disagreement";
+import type { UndecidedCause } from "../../domain/topology/evaluated.ts";
 
 /** A call argument and the scope it is written in, which the called method's parameter stands for. */
 export interface Closure {
@@ -20,8 +17,8 @@ export interface UrlScope {
   receiver?: TypeDecl;
   instance?: ObjectValue;
   deferred?: boolean;
-  undecided?: boolean;
-  undecidedCause?: FlowCause;
+  /** Why method flow leaves every value written in this scope undecided. */
+  undecided?: UndecidedCause;
   configurationFile?: JavaFile;
 }
 

@@ -1,13 +1,10 @@
-import type { RawRouteFile } from "./angular-router.extractor.ts";
+import { ANONYMOUS_DEFAULT, type ModuleShape } from "./module-shape.ts";
 
 /** The declaration an exported name comes down to. */
 export interface Declaration {
   file: string;
   name: string;
 }
-
-/** What a file declares, imports and exports at its top level. */
-export type ModuleShape = Pick<RawRouteFile, "exports" | "declared" | "imports" | "stars">;
 
 export type DeclarationLookup = (file: string, name: string, trail?: ReadonlySet<string>) => Promise<Declaration | undefined>;
 
@@ -22,9 +19,15 @@ export function createExportLookup(
   /** As a module resolves an export: a star export that is ambiguous anywhere along the chain makes the name ambiguous. */
   return async (file, name) => {
     let ambiguous = false;
-    const found = await createDeclarationLookup(parse, fileOf, () => (ambiguous = true))(file, name);
+    const found = await createDeclarationLookup(parse, fileOf, { onAmbiguous: () => (ambiguous = true) })(file, name);
     return ambiguous ? "ambiguous" : found;
   };
+}
+
+export interface LookupOptions {
+  onAmbiguous?: () => void;
+  /** Answer a default export that declares no name as `{ file, name: "default" }`, for a reader that reads its value. */
+  anonymousDefault?: true;
 }
 
 /**
@@ -34,7 +37,7 @@ export function createExportLookup(
 export function createDeclarationLookup(
   parse: (file: string) => Promise<ModuleShape | undefined>,
   fileOf: (from: string, specifier: string) => Promise<string | undefined>,
-  onAmbiguous?: () => void,
+  { onAmbiguous, anonymousDefault }: LookupOptions = {},
 ): DeclarationLookup {
   const declarationOf: DeclarationLookup = async (file, name, trail = new Set()) => {
     const key = `${file}\0${name}`;
@@ -49,6 +52,7 @@ export function createDeclarationLookup(
         return target === undefined ? undefined : declarationOf(target, explicit.imported, next);
       }
       if (raw.declared.has(explicit.local)) return { file, name: explicit.local };
+      if (explicit.local === ANONYMOUS_DEFAULT) return anonymousDefault ? { file, name: ANONYMOUS_DEFAULT } : undefined;
       const imported = raw.imports.get(explicit.local);
       if (imported === undefined) return undefined;
       const target = await fileOf(file, imported.module);

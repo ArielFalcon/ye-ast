@@ -11,7 +11,7 @@ window.EXPLORER_DATA = {
 
   modules: [
     { key: "cli", layer: "entry", name: "cli", sub: "argv → query", files: ["src/cli/main.ts"] },
-    { key: "mcp", layer: "entry", name: "mcp", sub: "stdio · read-only", files: ["src/mcp/server.ts", "src/mcp/query-runner.ts", "src/mcp/composition-input.ts", "src/mcp/compose-request.ts", "src/mcp/compose-evidence.ts", "src/mcp/composition-schema.ts", "src/mcp/composition-contract.ts", "src/mcp/render-composition.ts", "src/composition/mcp.ts"] },
+    { key: "mcp", layer: "entry", name: "mcp", sub: "stdio · read-only", files: ["src/mcp/server.ts", "src/mcp/query-runner.ts", "src/mcp/composition-input.ts", "src/mcp/compose-request.ts", "src/mcp/composition-schema.ts", "src/mcp/composition-contract.ts", "src/core/ports/evidence-composition.port.ts", "src/mcp/render-composition.ts", "src/composition/mcp.ts"] },
     { key: "protocol", layer: "entry", name: "protocol", sub: "JSON-RPC · stdio", files: ["src/protocol/query-server.ts", "src/protocol/query-client.ts"] },
 
     { key: "composition", layer: "composition", name: "composition", sub: "wires both sides", files: ["src/composition/compose.ts", "src/composition/main.ts"] },
@@ -628,7 +628,7 @@ window.EXPLORER_DATA = {
           callout: "domain-shared",
           calloutText: "One record per fact of the code, with all its sources.",
           why: "Two answers about the same declaration should not look like two declarations. Keeping the sources lets the reader still see who said what.",
-          refs: ["src/mcp/compose-request.ts:184-185", "src/mcp/compose-evidence.ts:28-48", "src/mcp/composition-normalize.ts"],
+          refs: ["src/mcp/compose-request.ts:184-185", "src/core/application/composition/compose-evidence.ts:28-48", "src/core/application/composition/composition-normalize.ts"],
         },
         {
           title: "Connect only what matches",
@@ -638,7 +638,7 @@ window.EXPLORER_DATA = {
           callout: "mcp",
           calloutText: "A connection is a shared place, not a proof of cause.",
           why: "Joining reads taken in different conditions would invent links. Shared evidence means the same location, never causality, and a mismatch is reported instead of hidden.",
-          refs: ["src/mcp/compose-evidence.ts:207-237", "src/mcp/compose-evidence.ts:253-268", "src/mcp/compose-evidence.ts:600-688", "src/mcp/render-composition.ts:76-94"],
+          refs: ["src/core/application/composition/compose-evidence.ts:207-237", "src/core/application/composition/compose-evidence.ts:253-268", "src/core/application/composition/compose-evidence.ts:600-688", "src/mcp/render-composition.ts:76-94"],
         },
         {
           title: "Receipt and verification",
@@ -648,7 +648,7 @@ window.EXPLORER_DATA = {
           callout: "mcp",
           calloutText: "Verification is explicit: available, or unavailable with a reason.",
           why: "A composition is only worth reusing if it can be checked later. An identity and safe repeat requests make that a comparison, not a trust decision.",
-          refs: ["src/mcp/compose-request.ts:212-219", "src/mcp/composition-contract.ts:314-318", "src/mcp/composition-contract.ts:354-359", "src/mcp/render-composition.ts:60-64", "src/composition/mcp.ts:69"],
+          refs: ["src/mcp/compose-request.ts:212-219", "src/core/ports/evidence-composition.port.ts:337-341", "src/core/ports/evidence-composition.port.ts:377-382", "src/mcp/render-composition.ts:60-64", "src/composition/mcp.ts:69"],
         },
       ],
     },

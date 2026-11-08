@@ -14,12 +14,9 @@ import type { BasePath, BasePathKeys } from "../core/domain/entrypoints/http-rou
 import type { ResponseMode } from "./presentation.ts";
 import { shareExactContext } from "./presentation-sharing.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
-import type {
-  AnchorId, Attestation, ComparisonRef, ComposeFull, ComposeReceipt, CompositionIssue, CompositionResult, Connection,
-  EntityId, EntityRecord, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, FileId, OriginReference, Part, PartId,
-  PartKind, PartOf, ReadId, ReadOwner, ReadRecord, RelationId, RelationRecord, SnapshotId, SourceDescriptor, SourceId,
-} from "./composition-contract.ts";
-import type { CutOwner } from "./select-evidence.ts";
+import type { ComposeFull, ComposeReceipt, CompositionResult } from "./composition-contract.ts";
+import type { AnchorId, Attestation, ComparisonRef, CompositionIssue, Connection, EntityId, EntityRecord, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, FileId, OriginReference, Part, PartId, PartKind, PartOf, ReadId, ReadOwner, ReadRecord, RelationId, RelationRecord, SnapshotId, SourceDescriptor, SourceId } from "../core/ports/evidence-composition.port.ts";
+import type { CutOwner } from "../core/domain/composition/source-read.ts";
 
 /** The action receipt: verification and complete safe repeat queries; findings and coverage belong to text. */
 export function composeReceipt(result: CompositionResult, mode: "summary" | "details"): ComposeReceipt {
@@ -500,7 +497,7 @@ class CompactView {
       case "name-candidate": return `candidate ${quoted(part.name)} served by ${part.repo} basis ${part.basis} (candidate only: no membership, trust or call)${short ? "" : `, ${this.evidenceList(part.evidence)}`}`;
       case "call-site": {
         const site = part.site;
-        const target = this.finding(site.target, (value) => ("method" in value ? `${value.method} ${value.path}${value.base === undefined ? "" : ` base ${value.base}`}${value.operationId === undefined ? "" : ` operation ${value.operationId}`}` : `${value.protocol} ${value.destination} ${value.role}`));
+        const target = this.finding(site.target, (value) => ("method" in value ? `${value.method} ${value.path}${value.base === undefined ? "" : ` base ${value.base}`}` : `${value.protocol} ${value.destination} ${value.role}`));
         return `${part.disposition} call site ${site.repo} ${this.file(site.location.file)}:${span(site.location.line, site.location.endLine)} ${site.symbol} ${site.transport}${short ? "" : `; target ${target}${site.stated === undefined ? "" : `; stated ${site.stated.method} ${site.stated.path}`}`}`;
       }
       case "unresolved-call-site": return `unresolved call site ${part.site.path}:${span(part.site.line, part.site.endLine)} ${part.site.symbol} ${part.site.transport}${part.site.via === undefined ? "" : ` via ${part.site.via}`}${part.site.stated === undefined ? "" : ` stated ${part.site.stated.method} ${part.site.stated.path}`}${this.details ? `; diagnostic ${JSON.stringify({ reason: part.site.reason, ...part.site.diagnostic, evidence: part.site.evidence })}` : ` ${unresolvedLabel(part.site)}`}`;

@@ -1,8 +1,9 @@
 import type { Evidence } from "../../domain/shared/fact.ts";
 import { spanOf } from "./findings.ts";
 import { LOMBOK_VALUE, LOMBOK_BUILDER, LOMBOK_GETTERS, LOMBOK_CONSTRUCTORS } from "./java-value-vocabulary.ts";
-import type { Closure, FlowCause, ObjectValue, UrlScope } from "./java-values.ts";
-import { compareText } from "../../domain/shared/code-node.ts";
+import type { Closure, ObjectValue, UrlScope } from "./java-values.ts";
+import { known, prevailingCause, undecided, type Evaluated, type UndecidedCause } from "../../domain/topology/evaluated.ts";
+import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 import { bindMethod, methodsOf } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import type { Configuration } from "./application-config.ts";
@@ -13,7 +14,6 @@ import { annotationUses, isAnnotation } from "./request-mapping.ts";
 import { CONFIGURATION_PROPERTIES, TRANSPARENT_URI_METHODS, URI_FACTORIES, VALUE } from "./http-client-vocabulary.ts";
 
 /** What stands for a part of a URL the code fills at run time. */
-export const PLACEHOLDER = "{}";
 
 interface ConfigurationValue {
   kind: "configuration";
@@ -49,15 +49,21 @@ function isFinal(binding: Binding): boolean {
  * Runtime text uses `{}`; values the snapshot cannot decide, including exhausted evaluation stacks, are undefined.
  */
 export class JavaValueEvaluator {
-  private diagnostics: { cause?: FlowCause; evidence: Evidence[]; alternatives: Set<string> } | undefined;
+  private diagnostics: { cause?: UndecidedCause; evidence: Evidence[]; alternatives: Set<string> } | undefined;
 
-  trace<T>(evaluate: () => T): { value: T; cause?: FlowCause; evidence: Evidence[]; alternatives: string[] } {
+  /**
+   * What an evaluation written in a scope comes to: its value, or why the snapshot does not decide it. A scope method
+   * flow left undecided keeps the flow's cause; otherwise the cause, the places and the alternatives the evaluation met.
+   */
+  evaluated<T>(scope: UrlScope, evaluate: () => T | undefined): Evaluated<T> {
+    if (scope.deferred === true) return undecided("destination-undecidable");
+    if (scope.undecided !== undefined) return undecided(scope.undecided);
     const previous = this.diagnostics;
     const trace: NonNullable<JavaValueEvaluator["diagnostics"]> = { evidence: [], alternatives: new Set() };
     this.diagnostics = trace;
     try {
       const value = evaluate();
-      return { value, ...(trace.cause === undefined ? {} : { cause: trace.cause }), evidence: trace.evidence, alternatives: [...trace.alternatives].sort(compareText) };
+      return value === undefined ? undecided(trace.cause ?? "destination-undecidable", trace.evidence, [...trace.alternatives]) : known(value);
     } finally {
       this.diagnostics = previous;
     }
@@ -77,9 +83,9 @@ export class JavaValueEvaluator {
     return undefined;
   }
 
-  private record(cause: FlowCause, file: JavaFile, node: Node): void {
+  private record(cause: UndecidedCause, file: JavaFile, node: Node): void {
     if (this.diagnostics === undefined) return;
-    if (this.diagnostics.cause !== "recursive") this.diagnostics.cause = cause;
+    this.diagnostics.cause = prevailingCause([this.diagnostics.cause, cause]) ?? cause;
     this.diagnostics.evidence.push(spanOf(file.path, node));
   }
 
@@ -185,7 +191,7 @@ export class JavaValueEvaluator {
     if (current === null) return undefined;
     operands.unshift(current);
     const [first, ...rest] = operands.map((operand) => this.of(operand, scope, trail));
-    return first === undefined ? undefined : [first, ...rest.map((part) => part ?? PLACEHOLDER)].join("");
+    return first === undefined ? undefined : [first, ...rest.map((part) => part ?? RUN_TIME_HOLE)].join("");
   }
 
   private name(name: string, node: Node, scope: UrlScope, trail: ReadonlySet<number>): string | undefined {
@@ -244,7 +250,7 @@ export class JavaValueEvaluator {
     if (object !== null && TRANSPARENT_URI_METHODS.has(name)) return this.of(object, scope, trail);
     if (object !== null && name === "path" && object.type === "method_invocation") {
       const base = this.of(object, scope, trail);
-      return base === undefined ? undefined : base + (this.ofArgument(call, 0, scope, trail) ?? PLACEHOLDER);
+      return base === undefined ? undefined : base + (this.ofArgument(call, 0, scope, trail) ?? RUN_TIME_HOLE);
     }
     const held = this.held(call, scope, trail);
     if (held?.kind === "configuration") {
@@ -491,7 +497,7 @@ export class JavaValueEvaluator {
       if (!/^(?:java\.util\.)?Map</.test(type)) return undefined;
       const argument = argumentsOf(node)[0];
       const key = argument === undefined ? undefined : this.of(argument, scope, next);
-      if (key === undefined || key.includes(PLACEHOLDER)) return undefined;
+      if (key === undefined || key.includes(RUN_TIME_HOLE)) return undefined;
       const valueType = type.slice(type.indexOf(",") + 1, -1);
       return { ...base, key: `${base.key}.${key}`, typeName: valueType };
     }
@@ -509,9 +515,9 @@ export class JavaValueEvaluator {
     const [template, ...rest] = argumentsOf(call);
     const text = template === undefined ? undefined : this.of(template, scope, trail);
     if (text === undefined) return undefined;
-    const arguments_ = rest.map((argument) => this.of(argument, scope, trail) ?? PLACEHOLDER);
+    const arguments_ = rest.map((argument) => this.of(argument, scope, trail) ?? RUN_TIME_HOLE);
     let index = 0;
-    return text.replace(FORMAT_SPECIFIER, () => arguments_[index++] ?? PLACEHOLDER);
+    return text.replace(FORMAT_SPECIFIER, () => arguments_[index++] ?? RUN_TIME_HOLE);
   }
 
   private prefixOf(type: TypeDecl): string | undefined {

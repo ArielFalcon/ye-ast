@@ -2,12 +2,11 @@ import type { Node } from "web-tree-sitter";
 import { isJavaSource } from "../../domain/languages/java.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredType, ImportOrigins } from "../../ports/import-origins.port.ts";
-import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
-import { enclosingType } from "./java-root-bindings.ts";
-import { createJavaProject, describeFile, qualifiedTypeName, typeVariableAround, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
+import { enclosingType, withJavaSources } from "./java-project.ts";
+import { createJavaProject, isTypeDeclaration, qualifiedTypeName, typeVariableAround, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: DeclaredType = { kind: "unknown" };
-export const TYPE_DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration", "interface_declaration", "enum_declaration", "record_declaration"]);
 /** Values whose class is one no declaration names: an implementation of an interface the sources do not state. */
 export const FUNCTION_VALUES: ReadonlySet<string> = new Set(["lambda_expression", "method_reference"]);
 const QUALIFIED = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
@@ -46,21 +45,11 @@ export function createJavaDeclaredTypes(parser: () => Promise<JavaParser>, sourc
     const results: DeclaredType[] = sites.map(() => UNKNOWN);
     if (unreadJvm || !sites.some(({ file }) => isJavaSource(file))) return results;
     const read = await parser();
-    const trees: JavaSyntaxTree[] = [];
-    try {
-      const files = new Map<string, JavaFile>();
-      let parsedAll = true;
-      for (const source of java) {
-        const parsed = read.parse(source.content);
-        if (!parsed.ok) {
-          parsedAll = false;
-          continue;
-        }
-        trees.push(parsed.value);
-        files.set(source.path, describeFile(source.path, parsed.value.root));
-      }
-      const project = createJavaProject([...files.values()]);
-      if (!parsedAll || project.unreadable.length > 0) return results;
+    return withJavaSources(read, (parse) => {
+      const { files: parsed, unparsed } = parse(java);
+      const files = new Map(parsed.map((file) => [file.path, file]));
+      const project = createJavaProject(parsed);
+      if (unparsed.length > 0 || project.unreadable.length > 0) return results;
       const subtyped = subtypedTypes([...files.values()], project);
       if (subtyped === undefined) return results;
       for (const [index, site] of sites.entries()) {
@@ -71,9 +60,7 @@ export function createJavaDeclaredTypes(parser: () => Promise<JavaParser>, sourc
         if (resolved?.kind === "platform" && !subtyped.has(resolved.fqn)) results[index] = packageType(resolved.fqn);
       }
       return results;
-    } finally {
-      for (const tree of trees) tree.dispose();
-    }
+    });
   };
 }
 
@@ -86,7 +73,7 @@ function subtypedTypes(files: readonly JavaFile[], project: JavaProject): Readon
     const pending: Node[] = [file.root];
     for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
       if (FUNCTION_VALUES.has(node.type) || isAspect(node) || namesDynamicImplementation(node, file, project)) return undefined;
-      const scope = TYPE_DECLARATIONS.has(node.type) || isAnonymous(node) ? enclosingType(node.parent ?? node, file, project) : undefined;
+      const scope = isTypeDeclaration(node) || isAnonymous(node) ? enclosingType(node.parent ?? node, file, project) : undefined;
       for (const supertype of supertypesOf(node)) if (resolve(supertype, file, project, scope, supertype)?.kind !== "repository") return undefined;
       for (const child of node.namedChildren) if (child !== null) pending.push(child);
     }
@@ -97,7 +84,7 @@ function subtypedTypes(files: readonly JavaFile[], project: JavaProject): Readon
 /** The supertypes a declaration writes: a class's superclass and interfaces, an interface's, and an anonymous class's type. */
 export function supertypesOf(node: Node): Node[] {
   if (isAnonymous(node)) return [node.childForFieldName("type")!];
-  if (!TYPE_DECLARATIONS.has(node.type)) return [];
+  if (!isTypeDeclaration(node)) return [];
   const superclass = node.childForFieldName("superclass")?.namedChildren[0];
   const clause = node.childForFieldName("interfaces") ?? node.namedChildren.find((child) => child?.type === "extends_interfaces");
   const listed = clause?.namedChildren.find((child) => child?.type === "type_list")?.namedChildren ?? [];

@@ -1,6 +1,7 @@
 import type { LibrarySource } from "./library-source.ts";
 import type { HttpMethod } from "../entrypoints/http-route.ts";
-import { declarationSpan, type Evidence, type Finding, type UnknownReason } from "../shared/fact.ts";
+import { compareText } from "../shared/code-node.ts";
+import { declarationSpan, type Cut, type Evidence, type Finding, type UnknownReason } from "../shared/fact.ts";
 
 /** A call one repository makes out of itself: an HTTP request or a published message, with where it is written. */
 export interface CallSite {
@@ -39,15 +40,15 @@ export interface StatedRequest {
 }
 
 /**
- * A request as the code writes it. `path` is a pattern: a `{}` segment is a parameter the code fills at run time, and
- * the base URL is a finding of its own, `unknown` when the snapshot does not decide it.
+ * A request as the code writes it. `path` is the URL it reaches, its origin included when the code states one, as a
+ * pattern: a `{}` segment is a parameter the code fills at run time. A base the snapshot does not decide makes the
+ * target `unknown`.
  */
 export interface HttpTarget {
   method: HttpMethod;
   path: string;
+  /** A service the client names without a URL. */
   base?: string;
-  /** The contract operation a generated client names, when the call is made through one. */
-  operationId?: string;
 }
 
 export function httpTargetOf(site: CallSite): HttpTarget | undefined {
@@ -59,6 +60,8 @@ export interface EventTarget {
   protocol: "kafka" | "rabbit" | "jms" | "event" | "nats";
   destination: string;
   role: "publish";
+  /** The RabbitMQ exchange the code publishes to when it names one other than the default, `{}` when the snapshot does not decide it. */
+  exchange?: string;
 }
 
 /** The call sites of a repository's snapshot, read from its sources; reading them resolves the modules they import. */
@@ -109,9 +112,37 @@ export interface UnresolvedCallSite {
   stated?: StatedRequest;
 }
 
+/** Where a call site is written in the workspace: the place a link starts from. */
+export type CallPlace = Pick<CallSite, "repo" | "file" | "line" | "column" | "symbol">;
+
+export function callPlaceOf(site: CallSite): CallPlace {
+  const place = { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol };
+  return site.column === undefined ? place : { ...place, column: site.column };
+}
+
+/** The order of call places: repository, file, line, symbol, then column. */
+export function compareCallPlaces(a: CallPlace, b: CallPlace): number {
+  return compareText(a.repo, b.repo) || compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol) || (a.column ?? 0) - (b.column ?? 0);
+}
+
+/** The order of the unresolved call sites of one repository: by the place each is written. */
+export function compareUnresolvedCallSites(a: UnresolvedCallSite, b: UnresolvedCallSite): number {
+  return compareText(a.path, b.path) || a.line - b.line || compareText(a.symbol, b.symbol);
+}
+
+/** The order of call sites: by place, then by the status of the target at one place. */
+export function compareCallSites(a: CallSite, b: CallSite): number {
+  return compareCallPlaces(a, b) || compareText(a.target.status, b.target.status);
+}
+
 /** The place a call site is written, as the evidence of the finding that reports it. */
 export function callSiteEvidence(site: CallSite): Evidence {
   return site.endLine === undefined ? { path: site.file, line: site.line } : { path: site.file, line: site.line, endLine: site.endLine };
+}
+
+/** A call site the join reached and could not settle, as the cut of its repository's section: its file, then its place. */
+export function unsettledCallSiteCut(site: CallSite): Cut {
+  return { kind: "unresolved-link", at: [site.file, `${site.file}:${site.line}`] };
 }
 
 /** A call site the snapshot cannot decide, as the workspace reports it: what is known, never only its place. */

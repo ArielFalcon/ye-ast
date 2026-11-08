@@ -112,7 +112,8 @@ question an agent asks after `impact` names twelve files, and it is the one no q
   siblings), the declaration with its whole subtree, `omitted`, how many of the file's declarations it leaves out, and
   `uses`, what the declaration's own body uses outside itself (plan `2026-11-06-outline-references.md` Part B): each
   use is a repository declaration (file and span), a package or a language global, with its relations and the places of
-  the uses; a use no binding proves is an `unresolved-link` cut at the declaration, and a member used on a local value is
+  the uses; a use no binding proves, a call the index matched by name alone included (ADR-0036), is an `unresolved-link`
+  cut at the declaration, and a member used on a local value is
   not a use. A local value is one the declaration's own syntax declares, or a parameter or variable of a function
   around it that the index holds no node of; a function, class or type declaration outside the body is the node of its
   name, never a local, and a cut when no single node matches. Settling a use reads what binds its name at its place, so a focus reads the snapshot's sources as a listing

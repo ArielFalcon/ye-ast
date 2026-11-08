@@ -14,7 +14,7 @@ interface Harness {
   maps: MapRequest[];
   errors: string[];
   warmed: string[];
-  composed: { count: number; options: unknown[] };
+  composed: { count: number; options: Parameters<ProcessHost["queries"]>[0][] };
   stdin: PassThrough;
   finished: () => Promise<number>;
   call: (method: string, params?: unknown) => Promise<{ result?: { isError?: boolean }; error?: unknown }>;
@@ -32,7 +32,7 @@ function harness(
   const maps: MapRequest[] = [];
   const errors: string[] = [];
   const warmed: string[] = [];
-  const composed: { count: number; options: unknown[] } = { count: 0, options: [] };
+  const composed: Harness["composed"] = { count: 0, options: [] };
   const queries = {
     version: "0.0.0",
     entrypoints: {
@@ -250,4 +250,27 @@ test("cancellation during canonicalization stops preflight", async () => {
   h.start([]);
   assert.equal(await h.finished(), EXIT_CODE.interrupted);
   assert.deepEqual(h.warmed, []);
+});
+
+test("--node-modules declares a build output of the launch repository only, and one that declares nothing is a usage error", async () => {
+  const h = harness();
+  h.start(["shop", "--node-modules", "web=deps/node_modules"]);
+  await open(h);
+  const declared = h.composed.options[0]?.buildOutputs;
+  assert.deepEqual([declared?.("/work/projects/shop"), declared?.("/work/projects/other")], [[{ kind: "node-modules", at: "web", path: "/work/projects/deps/node_modules" }], undefined]);
+  h.stdin.end();
+  await h.finished();
+  const plain = harness();
+  plain.start(["shop"]);
+  await open(plain);
+  assert.equal(plain.composed.options[0]?.buildOutputs, undefined);
+  plain.stdin.end();
+  await plain.finished();
+  for (const args of [["shop", "--node-modules"], ["shop", "--node-modules", "../up=/host/node_modules"]]) {
+    const refused = harness();
+    refused.start(args);
+    refused.stdin.end();
+    assert.equal(await refused.finished(), EXIT_CODE.usage, args.join(" "));
+    assert.equal(refused.composed.count, 0);
+  }
 });

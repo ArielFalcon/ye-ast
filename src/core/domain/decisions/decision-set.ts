@@ -5,7 +5,7 @@ import { TRUST_MODES, type TrustMode } from "../shared/fact.ts";
 import type { RepositoryEvidence } from "../shared/repository-evidence.ts";
 import type { CallSite } from "../topology/call-site.ts";
 import { callSiteEvidence, httpTargetOf, unresolvedCallSite } from "../topology/call-site.ts";
-import { inferGateways, matchBehindGateway, prefixOf, type GatewayDeclaration, type RepositoryEntrypoints } from "../topology/link-match.ts";
+import { inferGateways, prefixOf, servedBehindGateway, type GatewayDeclaration, type RepositoryEntrypoints } from "../topology/link-match.ts";
 import { sortEvidence, type NameCandidate, type OutwardKind, type OutwardName, type RepositoryOutwardName } from "../topology/outward-name.ts";
 import type { RepositoryResolution } from "../topology/remote-snapshot.ts";
 import { decisionId, type Decision, type DecisionKind, type DecisionOption, type DecisionSet } from "./decision.ts";
@@ -194,8 +194,7 @@ function gatewayDecisions(input: DecisionInput): Decision[] {
     const options = routes.flatMap(({ repo, routes: own }): DecisionOption[] => {
       const matched = under.flatMap(({ site, target }) => {
         if (site.repo === repo) return [];
-        const match = matchBehindGateway(target, own);
-        return match === undefined ? [] : [{ path: match.route.handler.path, line: match.route.handler.line, repo }];
+        return servedBehindGateway(target, own).map((route) => ({ path: route.handler.path, line: route.handler.line, repo }));
       });
       return matched.length === 0 ? [] : [{ value: repo, evidence: sortEvidence(matched), recommended: false }];
     });

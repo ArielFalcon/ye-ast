@@ -1,9 +1,13 @@
-import { EDGE_POLICY, edgeConfidence } from "../../domain/impact/edge-policy.ts";
+import { EDGE_POLICY, edgeConfidence, LOCAL_OWNER_KINDS } from "../../domain/impact/edge-policy.ts";
+import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import { joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 
 export const SUPERTYPE_EDGES = ["extends", "implements"];
+
+/** The origin that holds a receiver at a use: the one whose owner declares the use, `ambiguous` when several do. */
+export type HeldOrigin<O> = { origin: O } | "ambiguous" | "none";
 
 /** Moves through one store in either direction; every read is cached for the life of the instance, one query. */
 export interface GraphNavigation {
@@ -23,6 +27,15 @@ export interface GraphNavigation {
   declarationAt(ref: SymbolRef, kinds?: readonly string[]): GraphSymbol | undefined;
   /** The file's unresolved member uses by the name they use up to its first member: `this.svc.get` and `this.svc` under `this.svc`. */
   referencesThrough(file: string, receiver: string): readonly GraphUnresolvedReference[];
+  /** The field origin `this.<field>` holds in the code of `user`: of the classes that declare the field, the one around `user`. */
+  fieldOriginAt(user: GraphSymbol, field: string, fields: readonly FieldOrigin[]): HeldOrigin<FieldOrigin>;
+  /** The origin a local `inject()` took holds in the code of `user`: of the declarations that take the local, the one around `user`. */
+  localOriginAt(user: GraphSymbol, local: string, locals: readonly LocalOrigin[]): HeldOrigin<LocalOrigin>;
+}
+
+/** Whether `inner` is declared within the lines of `outer`, in the same file. */
+export function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
+  return inner.file === outer.file && outer.startLine <= inner.startLine && inner.endLine <= outer.endLine;
 }
 
 export function createGraphNavigation(reader: CodeGraphReader, isTestFile: (path: string) => boolean): GraphNavigation {
@@ -110,5 +123,15 @@ export function createGraphNavigation(reader: CodeGraphReader, isTestFile: (path
     return byReceiver.get(receiver) ?? [];
   }
 
-  return { load, symbolOf, ownersOf, typesAround, methodsOf, membersOf, symbolsInFile, declarationAt, referencesThrough };
+  function enclosingOrigin<O extends { owner: SymbolRef }>(user: GraphSymbol, named: readonly O[], kinds: readonly string[]): HeldOrigin<O> {
+    const around = named.filter((origin) => {
+      const owner = declarationAt(origin.owner, kinds);
+      return owner !== undefined && isInside(user, owner);
+    });
+    return around.length === 0 ? "none" : around.length === 1 ? { origin: around[0]! } : "ambiguous";
+  }
+  const fieldOriginAt = (user: GraphSymbol, field: string, fields: readonly FieldOrigin[]) => enclosingOrigin(user, fields.filter((origin) => origin.field === field), EDGE_POLICY.relations.from);
+  const localOriginAt = (user: GraphSymbol, local: string, locals: readonly LocalOrigin[]) => enclosingOrigin(user, locals.filter((origin) => origin.local === local), LOCAL_OWNER_KINDS);
+
+  return { load, symbolOf, ownersOf, typesAround, methodsOf, membersOf, symbolsInFile, declarationAt, referencesThrough, fieldOriginAt, localOriginAt };
 }

@@ -6,7 +6,8 @@
  */
 import { z } from "zod";
 import { SEMANTIC_INPUTS, type RecoverableFamily } from "./query-schema.ts";
-import { responseModeSchema, type ToolFamily } from "./presentation.ts";
+import { responseModeSchema } from "./presentation.ts";
+import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
 import { compositionIdSchema } from "./composition-id-schema.ts";
 
 /** Operational limits of version 1; they bound transport and fan-out, not evidence or output size. */
@@ -25,7 +26,7 @@ const compositionExpect = compositionIdSchema("mcp-c1").describe("Assert the ide
 function recoverable<F extends RecoverableFamily>(family: F) {
   return z.strictObject({ name: z.literal(`ye_ast_${family}` as const), arguments: SEMANTIC_INPUTS[family], expect: sourceExpect.exactOptional() });
 }
-function fresh<F extends Exclude<ToolFamily, RecoverableFamily>>(family: F) {
+function fresh<F extends Exclude<QueryFamily, RecoverableFamily>>(family: F) {
   return z.strictObject({ name: z.literal(`ye_ast_${family}` as const), arguments: SEMANTIC_INPUTS[family] });
 }
 

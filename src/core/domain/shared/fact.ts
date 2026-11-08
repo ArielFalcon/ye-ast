@@ -93,6 +93,17 @@ export interface FactInputs {
   origin?: IndexOrigin;
   /** Version of each engine that produced the fact, by package name; only the engines that took part. */
   engines: Readonly<Record<string, string>>;
+  /** Each build output a host declared that the fact read (ADR-0037 decision 6); absent when it read none. */
+  buildOutputs?: readonly BuildOutputInput[];
+}
+
+/** A declared build output a fact read: whether the snapshot's lockfile verified it, and the digest of what was read from it. */
+export interface BuildOutputInput {
+  kind: "node-modules";
+  /** The repository directory the output stands for, `""` for the root. */
+  at: string;
+  verified: boolean;
+  digest: string;
 }
 
 export interface Evidence {
@@ -102,6 +113,16 @@ export interface Evidence {
   endLine?: number;
   via?: string;
   confidence?: number;
+}
+
+/** Whether one place holds another: same file, same first line, and it ends no earlier. */
+export function spanCovers(outer: Evidence, inner: Evidence): boolean {
+  return outer.path === inner.path && outer.line === inner.line && (outer.endLine ?? outer.line) >= (inner.endLine ?? inner.line);
+}
+
+/** Evidence that never repeats a line: a place an earlier one holds adds nothing. */
+export function distinctEvidence(evidence: readonly Evidence[]): Evidence[] {
+  return evidence.filter((span, index) => !evidence.slice(0, index).some((earlier) => spanCovers(earlier, span)));
 }
 
 /** The last line of a place, and nothing when it spans one line: one line is the common case and takes no field. */
@@ -128,6 +149,7 @@ export interface Cut {
     | "caller-budget"
     | "node-cap"
     | "unresolved-link"
+    | "build-output"
     | "deadline"
     | "section"
     | "not-exported"
@@ -222,9 +244,10 @@ const CUT_RANK: Record<Cut["kind"], number> = {
   "node-cap": 3,
   deadline: 4,
   "unresolved-link": 5,
-  "no-extractor": 6,
-  "not-exported": 7,
-  section: 8,
+  "build-output": 6,
+  "no-extractor": 7,
+  "not-exported": 8,
+  section: 9,
 };
 
 /** Complete only when nothing cut the answer; otherwise partial with the cuts in kind order, each once. */

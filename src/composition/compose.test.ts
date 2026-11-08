@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { EXIT_CODE } from "../cli/main.ts";
 import { REDACTED } from "../core/ports/redaction.port.ts";
+import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { createRemoteRefresh, defaultRemoteRefreshDeps } from "../core/adapters/git/remote-refresh.adapter.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
@@ -372,7 +373,7 @@ test("an importers fact declares no template engine and a callers fact declares 
 test("the decisions family answers over a composed workspace read: an outward name no clone serves is a free-text decision", async () => {
   const frontend = join(workspace, "shop-web");
   mkdirSync(join(frontend, "src/app"), { recursive: true });
-  writeFileSync(join(frontend, "src/app/order.page.ts"), ORDER_PAGE);
+  writeFileSync(join(frontend, "src/app/order.page.ts"), ORDER_PAGE.replace("shop-api/orders/7", "shop-api/refunds/7"));
   const inFrontend = (...args: string[]): string => execFileSync("git", args, { cwd: frontend, env: GIT_ENV, encoding: "utf8" }).trim();
   inFrontend("init", "-q");
   inFrontend("add", "-A");
@@ -441,7 +442,7 @@ test("a trusted sibling whose remote is passed is read at the remote's sha, and 
   assert.equal(read.repositorySources?.find(({ repo: id }) => id === "orders")?.path, join(cacheDirectory, "remotes", digest.of(url)));
 
   const { version, entrypoints, impact, outline, trace, workspace: workspaceQueries, workspaceImpact, decisions, contractConsequences, redaction } = composeQueries({ scratchRoot, trustDirectory, refresh });
-  const session = await openSession(createMcpServer({ version, entrypoints, impact, outline, trace, workspace: workspaceQueries, workspaceImpact, decisions, contractConsequences, digest: createSha256Digest(), redaction, repository: { path: repo, repoId: "shop-service" } }));
+  const session = await openSession(createMcpServer({ version, entrypoints, impact, outline, trace, workspace: workspaceQueries, workspaceImpact, decisions, contractConsequences, digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()), redaction, repository: { path: repo, repoId: "shop-service" } }));
   try {
     const answer = await session.callTool("ye_ast_callers", { targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }], workspace: {}, mode: "full" });
     assert.notEqual(answer.isError, true);
@@ -717,6 +718,43 @@ test("callers and a trace at one snapshot read the relations once, under the one
   assert.ok((await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [target] })).ok);
 
   assert.equal(relationReads(), 1);
+});
+
+test("a measured callers names the origin reads of its reference proofs as stages", async () => {
+  writeFileSync(join(repo, "src", "origin.ts"), ["export function origin(): number {", "  return 1;", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "user.ts"), ["import { origin } from './origin';", "export function user(): number {", "  return origin();", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "origin");
+  const lines: string[] = [];
+  const { impact } = composeQueries({ scratchRoot, measure: (line) => lines.push(line) });
+
+  assert.ok((await impact.callers({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/origin.ts", symbol: "origin" }] })).ok);
+
+  const stages = lines.map((line) => JSON.parse(line).ye_ast as { event: string; stage?: string }).flatMap((record) => (record.event === "stage" ? [record.stage] : []));
+  assert.ok(stages.includes("import-origins"));
+  assert.ok(stages.includes("root-origins"));
+});
+
+test("a repeated callers finds every derived fact it kept, and answers what a composition that keeps none answers", async () => {
+  writeFileSync(join(repo, "src", "kept.ts"), ["export function kept(redact: () => void): void {", "  redact();", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "keeper.ts"), ["import { kept } from './kept';", "export function keeper(): void {", "  kept(() => undefined);", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "kept");
+  const lines: string[] = [];
+  const { impact } = composeQueries({ scratchRoot, measure: (line) => lines.push(line) });
+  const request = { repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/kept.ts", symbol: "kept" }] };
+  const factLines = () => lines.splice(0).map((line) => JSON.parse(line).ye_ast as { event: string; reader?: string; hits: number; misses: number }).filter((record) => record.event === "derived-facts");
+
+  const first = await impact.callers(request);
+  const firstFacts = factLines();
+  const second = await impact.callers(request);
+  const secondFacts = factLines();
+
+  assert.ok(firstFacts.length > 0 && firstFacts.every((record) => record.reader === "import-origins"));
+  assert.ok(firstFacts.some((record) => record.misses > 0));
+  assert.ok(secondFacts.length > 0 && secondFacts.every((record) => record.misses === 0 && record.hits > 0), JSON.stringify(secondFacts));
+  assert.deepEqual(second, first);
+  assert.deepEqual(await composeQueries({ scratchRoot, snapshotCacheBytes: 0 }).impact.callers(request), first);
 });
 
 test("a trace over a real index leaves a library global's member call as a global leaf, and keeps it a cut where a local shadows the global", async () => {

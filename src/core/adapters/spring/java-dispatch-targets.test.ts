@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
+import { createJavaParser, createJavaTreeHolds } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchTargets } from "../../ports/import-origins.port.ts";
@@ -198,4 +198,28 @@ test("global aspect veto reasons precede dynamic generators and owner annotation
     assert.deepEqual(await targetsOf(sources, service), { kind: "unknown", reason: "aspect may replace the body" });
   }
   assert.deepEqual(await targetsOf([SENDER], service), { kind: "unknown", reason: "generated implementation" });
+});
+
+test("an annotation type in the sources is read like any type declaration: a class implementing it keeps other owners' bodies, and its elements name no body", async () => {
+  const marker = java("Marker.java", ["package app;", "", "public @interface Marker {", "  String value();", "}"]);
+  const tagged = java("Tagged.java", ["package app;", "", "public class Tagged extends Sender implements Marker {", "  public String value() { return \"\"; }", "  public Class<? extends java.lang.annotation.Annotation> annotationType() { return Marker.class; }", "}"]);
+
+  assert.deepEqual(await targetsOf([SENDER, marker, tagged]), { kind: "bodies", bodies: [body(SENDER, 4)] });
+  const [element] = await createJavaNameBindings(createJavaParser, [PORT, SENDER, marker, tagged]).dispatchTargets([{ file: marker.path, line: 4, name: "value" }]);
+  assert.deepEqual(element, { kind: "unknown", reason: "dispatch not proven" });
+});
+
+test("two files of one text at two paths are two implementations, read with or without a parse hold", async () => {
+  const impl = (module: string): SourceFile => ({ path: `${module}/src/main/java/app/Sender.java`, content: SENDER.content });
+  const twins = [impl("m1"), impl("m2")];
+  const holds = createJavaTreeHolds();
+  const hold = holds.open();
+  const kept = hold.keep([PORT, ...twins]);
+  try {
+    const [held] = await createJavaNameBindings(() => createJavaParser(holds), kept).dispatchTargets([{ file: PORT.path, line: 4, name: "send" }]);
+    assert.deepEqual(held, { kind: "bodies", bodies: twins.map((twin) => body(twin, 4)) });
+    assert.deepEqual(await targetsOf(twins), held);
+  } finally {
+    hold.release();
+  }
 });

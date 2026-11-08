@@ -2,6 +2,7 @@ import { canonicalJson } from "../shared/canonical-json.ts";
 import { compareText } from "../shared/code-node.ts";
 import type { Evidence } from "../shared/fact.ts";
 import type { AccessPath } from "./access-path.ts";
+import { holdsClass } from "./change.ts";
 import type { Hop } from "./consumer-flow.ts";
 import type { LiteralClass, ValueSet } from "./payload-shape.ts";
 import type { Literal } from "./use-operation.ts";
@@ -70,11 +71,9 @@ export function decideProducer(origins: readonly SettledOrigin[], rejected: Valu
   if (witness !== undefined) return { kind: "incompatible", witness: { value: formatOriginValue(witness.value), at: witness.at, hops: witness.hops, conditions: witness.conditions } };
   if (origins.length === 0) return { kind: "review", reason: "no-origin" };
   if (origins.some((origin) => origin.kind === "frontier")) return { kind: "review", reason: "frontier" };
-  if (origins.some((origin) => origin.kind === "approximate" && mayBeRejected(rejected.literals[origin.class]))) return { kind: "review", reason: "approximate" };
+  if (origins.some((origin) => origin.kind === "approximate" && holdsClass(rejected, origin.class))) return { kind: "review", reason: "approximate" };
   return { kind: "admits" };
 }
-
-const mayBeRejected = (values: ValueSet["literals"][LiteralClass]): boolean => values === "every" || values.length > 0;
 
 function isRejected(value: OriginValue, rejected: ValueSet): boolean {
   if (value.kind === "absent") return rejected.absent;

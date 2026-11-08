@@ -1,6 +1,7 @@
 import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { WorkspaceReadOperation } from "../topology/workspace-operation.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { callsByOwner } from "./syntax-calls.ts";
 import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
@@ -26,7 +27,7 @@ import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { EntrypointTarget, TraceFault, TraceQueries, TraceTarget, UnknownEntrypointFault } from "../../ports/trace-queries.port.ts";
 import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, triviaOncePerFile, type RootSelection } from "../navigation/root-selection.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
-import { createEdgeTargets } from "../navigation/edge-targets.ts";
+import { createEdgeTargets, NOTHING_DECLARED } from "../navigation/edge-targets.ts";
 import { retainedRelations } from "../relations/retained-relations.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps, type HeadReading } from "../snapshot/head-reading.ts";
@@ -122,7 +123,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         try {
           const trivia = triviaOncePerFile(deps.sourceTrivia);
           const unresolvedIn = unresolvedOncePerFile(store);
-          const declaredIn = declarationsOncePerFile(deps.memberNames);
+          const declaredIn = declarationsOncePerFile(deps.memberNames, head.prepared?.facts);
           const sources = new Map(head.tree.sources.map((file) => [file.path, file]));
           let declared: Promise<ReadonlyMap<string, readonly string[]>> | undefined;
           const memberDeclarations = () => (declared ??= declaringFiles(head.tree.sources.filter((file) => head.selected(file.path)), declaredIn));
@@ -152,15 +153,17 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           if (missing.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${missing.map(unknownTargetKey).join(", ")}`, entries: missing } };
 
           const roots = [...new Map(selections.flatMap(({ selection }) => selection.seeds.map(({ symbol }): [GraphNodeId, GraphSymbol] => [symbol.id, symbol]))).values()].sort(comparePosition);
-          const origins = deps.importOrigins(head.tree.sources, head.tree.export.files.map(({ path }) => path).filter(head.selected));
-          const edgeTargets = createEdgeTargets({ origins, store, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: head.tree.sources } });
+          const origins = deps.importOrigins(head.tree.sources, head.tree.export.files.map(({ path }) => path).filter(head.selected), head.prepared?.facts);
+          const edgeTargets = createEdgeTargets({ origins, store, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: head.tree.sources }, syntaxOf });
           let proven: ReturnType<typeof retainedRelations> | undefined;
           const memberProofs = () => (proven ??= retainedRelations(deps.relations, head.prepared, head.tree, request));
           const pageRoots = new Set(selections.flatMap(({ target, selection }) => (isEntrypointTarget(target) ? selection.seeds.map(({ symbol }) => symbol.id) : [])));
           const pages = pageRoots.size === 0 ? {} : { pages: { roots: pageRoots, of: pagePlans(store, memberProofs) } };
           const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, memberProofs, budget, ...pages, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
-          const effectCuts = await placeEffects(walk.roots, { store, unresolvedIn, sites: async () => [...(await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources)), ...(await deps.dataEffects?.placed(head.tree.sources) ?? [])].sort(comparePlacement).filter(({ site }) => head.selected(site.file)), lineOf: linesOncePerFile(sources), functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined) });
+          const dataEffects = () => deps.dataEffects?.placed(head.tree.sources) ?? Promise.resolve([]);
+          const dataSites = () => head.prepared?.facts === undefined ? dataEffects() : head.prepared.facts.ofInputs("trace-data-effects", { sources: head.tree.sources }, dataEffects);
+          const effectCuts = await placeEffects(walk.roots, { store, unresolvedIn, sites: async () => [...(await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources)), ...(await dataSites())].sort(comparePlacement).filter(({ site }) => head.selected(site.file)), lineOf: linesOncePerFile(sources), functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined) });
 
           const { steps, ids } = traceSteps(walk.roots);
           const rootIds = new Map(roots.map((root, index) => [root.id, ids.get(walk.roots[index]!)!]));
@@ -251,19 +254,18 @@ function unplacedHandlers(handlers: readonly HandlerPlace[], selection: Pick<Roo
 }
 
 /** Reads each source once for the life of one query, for its member names and its callables alike. */
-function declarationsOncePerFile(reader: DeclaredMemberNamesReader): (file: SourceFile) => Promise<DeclaredMemberNames> {
+function declarationsOncePerFile(reader: DeclaredMemberNamesReader, facts: DerivedFacts | undefined): (file: SourceFile) => Promise<DeclaredMemberNames> {
   const read = new Map<string, Promise<DeclaredMemberNames>>();
   return (file) => {
     let declared = read.get(file.path);
     if (declared === undefined) {
-      declared = reader.memberNames(file);
+      declared = reader.memberNames(file, facts);
       read.set(file.path, declared);
     }
     return declared;
   };
 }
 
-const NOTHING_DECLARED: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
 
 /** Each member name with the sources that declare it, sorted. */
 async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file: SourceFile) => Promise<DeclaredMemberNames>): Promise<ReadonlyMap<string, readonly string[]>> {

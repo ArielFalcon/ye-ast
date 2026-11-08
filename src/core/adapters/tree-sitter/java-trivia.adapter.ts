@@ -12,7 +12,7 @@ export function createJavaTrivia(createParser: () => Promise<JavaParser>): Sourc
     triviaLines: async (file) => {
       if (!isJavaSource(file.path)) return new Set();
       parser ??= createParser();
-      const parsed = (await parser).parse(file.content);
+      const parsed = (await parser).parse(file);
       if (!parsed.ok) return new Set();
       const code = new Set<number>();
       const visit = (node: Node): void => {

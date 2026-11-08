@@ -2,6 +2,7 @@ import ts from "typescript";
 import { ELEMENT, type AccessPath } from "../../domain/contracts/access-path.ts";
 import type { JsonValue, Literal, Replacement } from "../../domain/contracts/use-operation.ts";
 import { bindFile } from "./lexical-bindings.ts";
+import { hasModifier, unwrapped } from "./syntax.ts";
 
 export type FunctionNode = ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration;
 
@@ -39,7 +40,7 @@ export function namedFunction(node: FunctionNode): NamedFunction | undefined {
 /** The name a property name denotes: an identifier, a literal, or a literal in brackets. Undefined where it is computed from anything else. */
 export function propertyNameText(name: ts.PropertyName): string | undefined {
   if (!ts.isComputedPropertyName(name)) return name.text;
-  const key = unwrap(name.expression);
+  const key = unwrapped(name.expression);
   return ts.isStringLiteralLike(key) || ts.isNumericLiteral(key) ? key.text : undefined;
 }
 
@@ -79,19 +80,8 @@ export function enclosingFunction(node: ts.Node): FunctionNode | undefined {
   return undefined;
 }
 
-export function enclosingClass(node: ts.Node): ts.ClassLikeDeclaration | undefined {
-  for (let current = node.parent; current !== undefined; current = current.parent) if (ts.isClassLike(current)) return current;
-  return undefined;
-}
-
-export function unwrap(expression: ts.Expression): ts.Expression {
-  let current = expression;
-  while (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) || ts.isSatisfiesExpression(current) || ts.isTypeAssertionExpression(current) || ts.isNonNullExpression(current)) current = current.expression;
-  return current;
-}
-
 export function calleeName(call: ts.CallExpression): string | undefined {
-  const callee = unwrap(call.expression);
+  const callee = unwrapped(call.expression);
   return ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : undefined;
 }
 
@@ -100,7 +90,7 @@ export function isTransparent(node: ts.Node): boolean {
 }
 
 function jsonOf(expression: ts.Expression): JsonValue | undefined {
-  const bare = unwrap(expression);
+  const bare = unwrapped(expression);
   if (bare.kind === ts.SyntaxKind.NullKeyword) return null;
   const literal = literalOf(bare);
   if (literal !== undefined) return literal;
@@ -126,7 +116,7 @@ export function replacementOf(expression: ts.Expression): Replacement {
 }
 
 export function isAsyncOrGenerator(fn: FunctionNode): "async" | "generator" | undefined {
-  if (ts.getModifiers(fn)?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) === true) return "async";
+  if (hasModifier(fn, ts.SyntaxKind.AsyncKeyword)) return "async";
   return "asteriskToken" in fn && fn.asteriskToken !== undefined ? "generator" : undefined;
 }
 
@@ -160,7 +150,7 @@ export function isNumericUnary(node: ts.Node): node is ts.PrefixUnaryExpression 
 }
 
 export function isNullishLiteral(expression: ts.Expression): boolean {
-  const bare = unwrap(expression);
+  const bare = unwrapped(expression);
   return bare.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(bare) && bare.text === "undefined");
 }
 
@@ -354,9 +344,9 @@ const MUTATORS: ReadonlySet<string> = new Set(["assign", "defineProperty", "defi
 
 /** The name of the static method of the global `Object` the call invokes. */
 export function staticObjectMethod(call: ts.CallExpression): string | undefined {
-  const callee = unwrap(call.expression);
+  const callee = unwrapped(call.expression);
   if (!ts.isPropertyAccessExpression(callee)) return undefined;
-  const object = unwrap(callee.expression);
+  const object = unwrapped(callee.expression);
   return ts.isIdentifier(object) && object.text === "Object" && isUndeclaredName(object) ? callee.name.text : undefined;
 }
 
@@ -419,7 +409,7 @@ export function chainPath(expression: ts.Expression, binding: Binding): AccessPa
 /** The path an expression reaches from the binding, and whether a dynamic scope decides the name it starts at. */
 function pathFrom(expression: ts.Expression, binding: Binding): { path: AccessPath; dynamic: boolean } | undefined {
   const segments: string[] = [];
-  let current = unwrap(expression);
+  let current = unwrapped(expression);
   for (;;) {
     if (binding.kind === "name" && ts.isIdentifier(current)) {
       const binds = current.text === binding.name && bindsTo(current, binding);
@@ -428,13 +418,13 @@ function pathFrom(expression: ts.Expression, binding: Binding): { path: AccessPa
     if (ts.isPropertyAccessExpression(current)) {
       if (binding.kind === "member" && current.expression.kind === ts.SyntaxKind.ThisKeyword) return current.name.text === binding.name ? { path: segments, dynamic: false } : undefined;
       segments.unshift(current.name.text);
-      current = unwrap(current.expression);
+      current = unwrapped(current.expression);
     } else if (ts.isElementAccessExpression(current)) {
       const key = current.argumentExpression;
       segments.unshift(ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key) ? key.text : ELEMENT);
-      current = unwrap(current.expression);
+      current = unwrapped(current.expression);
     } else if (ts.isCallExpression(current) && current.arguments.length === 0) {
-      current = unwrap(current.expression);
+      current = unwrapped(current.expression);
     } else {
       return undefined;
     }

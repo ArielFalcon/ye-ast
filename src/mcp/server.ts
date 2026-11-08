@@ -9,13 +9,15 @@ import { recoveryReference } from "./presentation-guidance.ts";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { repositoryCatalog, type RepositoryBinding } from "./repository-targeting.ts";
-import type { ResponseMode, ResponseRenderer, ToolFamily } from "./presentation.ts";
+import type { ResponseMode, ResponseRenderer } from "./presentation.ts";
+import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
 import { TRUST_MODES } from "../core/domain/shared/fact.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import type { Fact } from "../core/domain/shared/fact.ts";
 import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type ComposeQuery, type SemanticQuery, type ToolArguments } from "./query-schema.ts";
-import { executeQuery, type ExecutedSource, type PublicRead, type QueryExecutionDeps } from "./query-runner.ts";
-import { COMPOSE_INPUT, COMPOSE_OUTPUT } from "./composition-schema.ts";
+import { executeQuery, type ExecutedSource, type QueryExecutionDeps } from "./query-runner.ts";
+import type { PublicRead } from "../core/ports/evidence-composition.port.ts";
+import { COMPOSE_INPUT, composeOutput } from "./composition-schema.ts";
 import { runComposition } from "./compose-request.ts";
 import { composeFull, composeReceipt, renderComposition } from "./render-composition.ts";
 import { controlFault, faultContext, renderFault, type CodedFault, type FaultQueryContext, type PublicFault } from "./fault-presentation.ts";
@@ -296,8 +298,7 @@ const shapes = {
       head: z.string(),
       snapshots: z.looseObject({ base: z.string(), head: z.string() }),
       derivation: factOf(z.looseObject({
-        gained: z.array(z.looseObject({ operation: z.string(), property: z.string() })),
-        operations: z.looseObject({ added: strings, removed: strings }),
+        differences: z.array(z.looseObject({ rule: z.string(), level: z.enum(["breaking", "review", "compatible"]), target: z.string(), operation: z.string(), delta: z.string(), places: z.looseObject({ base: repositoryEvidence.optional(), head: repositoryEvidence.optional() }) })),
         frontiers: z.array(z.looseObject({ kind: z.string(), reason: z.string(), evidence: z.array(repositoryEvidence) })),
       })),
     }).optional(),
@@ -338,7 +339,7 @@ export const TRACE_OUTPUT = outputFor(shapes.trace);
 export const WORKSPACE_OUTPUT = outputFor(shapes.workspace);
 export const DECISIONS_OUTPUT = outputFor(shapes.decisions);
 export const CONTRACT_CONSEQUENCES_OUTPUT = outputFor(shapes.contract_consequences);
-const OUTPUTS: Readonly<Record<ToolFamily, z.ZodType>> = { entrypoints: ENTRYPOINTS_OUTPUT, impact: IMPACT_OUTPUT, callers: CALLERS_OUTPUT, importers: IMPORTERS_OUTPUT, outline: OUTLINE_OUTPUT, trace: TRACE_OUTPUT, workspace: WORKSPACE_OUTPUT, decisions: DECISIONS_OUTPUT, contract_consequences: CONTRACT_CONSEQUENCES_OUTPUT };
+const OUTPUTS: Readonly<Record<QueryFamily, z.ZodType>> = { entrypoints: ENTRYPOINTS_OUTPUT, impact: IMPACT_OUTPUT, callers: CALLERS_OUTPUT, importers: IMPORTERS_OUTPUT, outline: OUTLINE_OUTPUT, trace: TRACE_OUTPUT, workspace: WORKSPACE_OUTPUT, decisions: DECISIONS_OUTPUT, contract_consequences: CONTRACT_CONSEQUENCES_OUTPUT };
 
 type Refusal = (fault: CodedFault) => CallToolResult;
 type Controls = { tool: "entrypoints" | "impact" | "callers"; select?: EvidenceSelection | undefined; page?: { limit: number; cursor?: string | undefined } | undefined; expect?: string | undefined };
@@ -421,7 +422,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
   ): CallToolResult {
     const { fact, repositoryRoots, refresh, workspaceLive } = read;
     const { recovery, live: stale } = source;
-    const tool: ToolFamily = source.family;
+    const tool: QueryFamily = source.family;
     const renderContext = { tool, ...(recovery === undefined ? {} : { recovery }) };
     const expected = cursor?.resultIdentity ?? controls?.expect;
     if (expected !== undefined && recovery !== undefined) {
@@ -558,6 +559,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
   }
 
   const annotations = { readOnlyHint: true, openWorldHint: false };
+  const output = composeOutput(deps.evidenceComposition);
 
   server.registerTool("ye_ast_compose", {
     title: "Compose evidence from related queries",
@@ -569,7 +571,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       const result = await runComposition(input, { deps, catalog, signal: ctx.mcpReq.signal });
       if (!result.ok) return failure(result.fault, sourceContext(input.queries, result.fault));
       const fields = input.mode === "full" ? composeFull(result.value) : composeReceipt(result.value, input.mode);
-      COMPOSE_OUTPUT.parse(fields);
+      output.parse(fields);
       return delivered(renderComposition(result.value, input.mode), fields, {});
     } catch (error) {
       return failure({ kind: "internal-fault", detail: redaction.redactError(error) });

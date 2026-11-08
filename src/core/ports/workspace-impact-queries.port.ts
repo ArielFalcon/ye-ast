@@ -3,7 +3,6 @@ import type { ImpactValue } from "../domain/impact/impact-fact.ts";
 import type { CallSite, UnresolvedCallSite } from "../domain/topology/call-site.ts";
 import type { ImpactedLink } from "../domain/topology/link.ts";
 import type { Fact, FactProvenance, SnapshotRef } from "../domain/shared/fact.ts";
-import type { ScopeRequest } from "../domain/shared/scope.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { Gateway, GatewayDeclaration } from "../domain/topology/link-match.ts";
 import type { CallersTarget, ImpactFault } from "./impact-queries.port.ts";
@@ -18,9 +17,9 @@ export interface RepoImpact {
   impact?: ImpactValue;
   /** The call sites of this repository that reach an entrypoint the answer's walks reached. */
   callSites: readonly CallSite[];
-  /** The call sites that reached a declared service and matched none of its entrypoints. */
+  /** The call sites no entrypoint of the repositories read takes and that name no host: a declared service's drift, or a call to a service the workspace does not declare. */
   unmatched: readonly CallSite[];
-  /** The call sites that name a service no declared repository serves. */
+  /** The call sites that leave the workspace: an HTTP call that names a host no route takes, a message no listener consumes. */
   external: readonly CallSite[];
   /** The call sites whose target this repository's snapshot does not decide, as its discovery read them. */
   unresolved: readonly UnresolvedCallSite[];

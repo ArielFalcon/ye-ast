@@ -21,8 +21,8 @@ import { repositoryCatalog } from "../src/mcp/repository-targeting.ts";
 import { runComposition } from "../src/mcp/compose-request.ts";
 import { composeFull, composeReceipt, renderComposition } from "../src/mcp/render-composition.ts";
 import { familyOf, type ComposeQuery } from "../src/mcp/query-schema.ts";
-import type { ResponseMode, ToolFamily } from "../src/mcp/presentation.ts";
-import type { CompositionResult } from "../src/mcp/composition-contract.ts";
+import type { ResponseMode } from "../src/mcp/presentation.ts";
+import type { QueryFamily } from "../src/core/ports/evidence-composition.port.ts";
 
 export const CATEGORIES = [
   "fabricated-causal-link", "reach-as-breakage", "import-as-call", "unknown-as-empty", "cross-snapshot", "invented-decision-option",
@@ -33,7 +33,7 @@ export type GraphTable = (typeof GRAPH_TABLES)[number];
 const ID_PREFIX: Record<string, GraphTable> = {
   s1: "sources", v1: "snapshots", r1: "reads", f1: "files", a1: "anchors", e1: "evidence", p1: "parts", n1: "entities", l1: "relations", c1: "connections",
 };
-const FAMILIES: readonly ToolFamily[] = ["entrypoints", "impact", "callers", "importers", "outline", "workspace", "decisions"];
+const FAMILIES: readonly QueryFamily[] = ["entrypoints", "impact", "callers", "importers", "outline", "workspace", "decisions"];
 const COUNTERS = ["unknownFindings", "unknownComponents", "uncertain"] as const;
 type Counter = (typeof COUNTERS)[number];
 
@@ -45,10 +45,10 @@ export type Proposition = {
   /** Tables of the composed graph whose ids may support this proposition. */
   composed?: readonly GraphTable[];
   /** Families of the baseline responses whose pointers may support it. */
-  baseline?: readonly ToolFamily[];
+  baseline?: readonly QueryFamily[];
   applicableWhen?: { counter: Counter; min: number };
 };
-export type QuerySelector = { family: ToolFamily; branch?: "local" | "workspace"; revision?: "base" | "head" };
+export type QuerySelector = { family: QueryFamily; branch?: "local" | "workspace"; revision?: "base" | "head" };
 export type CorpusCase = { id: string; overlap: "deliberate" | "partial" | "none" | "mismatch"; question: string; queries: readonly QuerySelector[]; propositions: readonly Proposition[] };
 export type Corpus = { schema: "ye-ast-composition-cases/1"; cases: readonly CorpusCase[] };
 
@@ -73,7 +73,7 @@ export function parseCorpus(value: unknown): Corpus {
     if (!["deliberate", "partial", "none", "mismatch"].includes(entry.overlap as string)) fail(`${at}: overlap`);
     if (entry.queries.length === 0) fail(`${at}: no queries`);
     const queries = entry.queries.map((selector, q): QuerySelector => {
-      if (!isRecord(selector) || !FAMILIES.includes(selector.family as ToolFamily)) fail(`${at}.queries[${q}]: family`);
+      if (!isRecord(selector) || !FAMILIES.includes(selector.family as QueryFamily)) fail(`${at}.queries[${q}]: family`);
       if (selector.branch !== undefined && selector.branch !== "local" && selector.branch !== "workspace") fail(`${at}.queries[${q}]: branch`);
       if (selector.revision !== undefined && (!["base", "head"].includes(selector.revision as string) || selector.family === "impact")) fail(`${at}.queries[${q}]: revision`);
       return selector as QuerySelector;
@@ -89,7 +89,7 @@ export function parseCorpus(value: unknown): Corpus {
       if (raw.category !== undefined && !CATEGORIES.includes(raw.category as Category)) fail(`${where}: category`);
       if (raw.kind !== "forbidden" && (!Array.isArray(raw.composed) || !Array.isArray(raw.baseline))) fail(`${where}: supported propositions name admissible tables and families`);
       if (raw.composed !== undefined && !(raw.composed as unknown[]).every(t => GRAPH_TABLES.includes(t as GraphTable))) fail(`${where}: table`);
-      if (raw.baseline !== undefined && !(raw.baseline as unknown[]).every(f => FAMILIES.includes(f as ToolFamily))) fail(`${where}: family`);
+      if (raw.baseline !== undefined && !(raw.baseline as unknown[]).every(f => FAMILIES.includes(f as QueryFamily))) fail(`${where}: family`);
       if (raw.applicableWhen !== undefined) {
         const when = raw.applicableWhen;
         if (!isRecord(when) || !COUNTERS.includes(when.counter as Counter) || !Number.isInteger(when.min)) fail(`${where}: applicableWhen`);
@@ -361,7 +361,7 @@ export function countersOf(structured: unknown): Record<Counter, number> {
   return { unknownFindings, unknownComponents, uncertain: unknownFindings + unknownComponents + value.coverage.reads.partial + value.coverage.reads.unknown };
 }
 
-function promptFor(entry: CorpusCase, condition: ConditionName, order: { name: OrderName }, families: readonly ToolFamily[], responses: { label: string; request: unknown; channels: Channels }[]): string {
+function promptFor(entry: CorpusCase, condition: ConditionName, order: { name: OrderName }, families: readonly QueryFamily[], responses: { label: string; request: unknown; channels: Channels }[]): string {
   const citation = condition === "baseline"
     ? "Cite a baseline response as `q<N>:<JSON pointer>`, where N is the number in the response heading and the RFC 6901 pointer (starting with `/`) selects the supporting value inside that response's result JSON. Example: `q0:/value/routes/0`."
     : "Cite composed evidence by a full wire id that appears in the result JSON's `graph` tables (for example a `p1:…` part, `l1:…` relation, `c1:…` connection, `e1:…` evidence or `r1:…` read).";
@@ -447,9 +447,9 @@ export function resolvePointer(document: unknown, pointer: string): unknown {
   return current;
 }
 
-type CaseArtifacts = { families: readonly ToolFamily[]; baseline: readonly unknown[]; graph: Map<GraphTable, Set<string>> };
+type CaseArtifacts = { families: readonly QueryFamily[]; baseline: readonly unknown[]; graph: Map<GraphTable, Set<string>> };
 
-function loadCaseArtifacts(runDir: string, caseId: string, families: readonly ToolFamily[]): CaseArtifacts {
+function loadCaseArtifacts(runDir: string, caseId: string, families: readonly QueryFamily[]): CaseArtifacts {
   const read = (path: string) => JSON.parse(readFileSync(join(runDir, path), "utf8")) as Channels;
   const baseline = families.map((_, index) => read(`outputs/${caseId}/baseline/q${index}.${PROMPT_MODE}.json`).structured);
   const structured = read(`outputs/${caseId}/composed/${PROMPT_MODE}.json`).structured as { graph?: Record<string, { id?: string }[]> };
@@ -459,7 +459,7 @@ function loadCaseArtifacts(runDir: string, caseId: string, families: readonly To
 }
 
 /** Where a citation lands, or why it does not resolve. Existence is checked against the prepared artifacts. */
-export function resolveCitation(citation: string, condition: ConditionName, artifacts: CaseArtifacts): { ok: true; table?: GraphTable; family?: ToolFamily } | { ok: false } {
+export function resolveCitation(citation: string, condition: ConditionName, artifacts: CaseArtifacts): { ok: true; table?: GraphTable; family?: QueryFamily } | { ok: false } {
   if (condition === "baseline") {
     const match = /^q(\d+):(\/.*)$/.exec(citation);
     if (match === null) return { ok: false };
@@ -490,7 +490,7 @@ export function assertionEntries(response: Pick<ResponseLine, "claims" | "uncert
 
 export function scoreRun(runDir: string, responsesText: string | undefined, judgmentsValue: unknown | undefined) {
   const manifest = JSON.parse(readFileSync(join(runDir, "manifest.json"), "utf8")) as { expectedResponses: { caseId: string; condition: ConditionName; order: OrderName; replicate: number }[] };
-  const key = JSON.parse(readFileSync(join(runDir, "answer-key.json"), "utf8")) as { cases: Record<string, { families: ToolFamily[]; propositions: KeyedProposition[] }> };
+  const key = JSON.parse(readFileSync(join(runDir, "answer-key.json"), "utf8")) as { cases: Record<string, { families: QueryFamily[]; propositions: KeyedProposition[] }> };
   const expected = new Map(manifest.expectedResponses.map(item => [keyOf(item), item]));
   const lines = (responsesText ?? "").split("\n").map(line => line.trim()).filter(line => line.length > 0);
   const byKey = new Map<string, ResponseLine | "invalid" | "duplicate">();

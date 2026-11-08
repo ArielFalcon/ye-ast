@@ -1,3 +1,4 @@
+import { LOCKFILE_NAMES } from "../shared/build-outputs.ts";
 const SOURCE = /\.[cm]?ts$/;
 const DECLARATION = /\.d\.[cm]?ts$/;
 const TEST_FILE = /\.(test|spec|e2e-spec|cy)\.[cm]?ts$/;
@@ -6,6 +7,12 @@ const INSTALLED_PACKAGES = /(^|\/)node_modules\//;
 const TEMPLATE = /\.html?$/;
 const MODULE_CONFIG = /(^|\/)[tj]sconfig(\.[^/]+)?\.json$/;
 const ANGULAR_WORKSPACE = /(^|\/)angular\.json$/;
+
+/** A file of the snapshot the type checker reads beside its sources: a lockfile, or one of the repository's own declaration files. */
+export function isTypeCheckerInput(path: string): boolean {
+  if (INSTALLED_PACKAGES.test(path)) return false;
+  return DECLARATION.test(path) || (LOCKFILE_NAMES as readonly string[]).includes(path.slice(path.lastIndexOf("/") + 1));
+}
 
 /** A TypeScript test: a `.test`, `.spec`, `.e2e-spec` or Cypress `.cy` module, or one under `__tests__`. */
 export function isTypeScriptTestFile(path: string): boolean {

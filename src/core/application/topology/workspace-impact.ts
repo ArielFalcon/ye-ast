@@ -1,12 +1,12 @@
 import type { ChangedEntrypoint } from "../../domain/impact/changed-entrypoints.ts";
 import type { ImpactValue, Seed } from "../../domain/impact/impact-fact.ts";
-import type { HttpMethod, HttpRoute } from "../../domain/entrypoints/http-route.ts";
+import { parseHttpRouteName, type HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { Cut, Fact, FactBase, SnapshotRef } from "../../domain/shared/fact.ts";
 import { incompleteSectionCuts, provenanceOf, withCuts } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
-import type { CallSite } from "../../domain/topology/call-site.ts";
+import { compareCallSites, unsettledCallSiteCut, type CallSite } from "../../domain/topology/call-site.ts";
 import {
   admitDownstream,
   admitUpstream,
@@ -45,7 +45,7 @@ export interface WorkspaceImpactDeps {
 }
 
 type Faults = WorkspaceFault | ImpactFault;
-type Section = { callSites: CallSite[]; unmatched: CallSite[]; external: CallSite[]; ambiguous: CallSite[] };
+type Section = { callSites: CallSite[]; unmatched: CallSite[]; external: CallSite[]; undecided: CallSite[] };
 type ReadLocations = ReadonlyMap<string, { root: string; source: string }>;
 
 /** What the fixpoint upstream holds when no link is left to admit. */
@@ -58,7 +58,6 @@ interface UpstreamWalk {
   sites: Map<string, CallSite[]>;
 }
 
-const HTTP_METHODS: ReadonlySet<string> = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "ANY"]);
 
 type CommittedRequest<T> = Omit<T, "repo" | "repos"> & { repo: WorkspaceRepositoryDeclaration & { live?: never }; repos?: readonly (WorkspaceRepositoryDeclaration & { live?: never })[] };
 
@@ -139,12 +138,12 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
           ...(downstream.value.facts.get(repository.repo) ?? []).map((walk) => ({ kind: "downstream" as const, fact: provenanceOf(walk) })),
         ],
         ...(walkOf === undefined ? {} : { impact: walkOf }),
-        callSites: part.callSites.sort(compareSite),
-        unmatched: part.unmatched.sort(compareSite),
-        external: part.external.sort(compareSite),
+        callSites: part.callSites.sort(compareCallSites),
+        unmatched: part.unmatched.sort(compareCallSites),
+        external: part.external.sort(compareCallSites),
         unresolved: base.status === "unknown" ? [] : base.value.unresolved,
       };
-      sections[repository.repo] = sectionOf(base, value, part.ambiguous, repository.repo === trigger ? unservedOperationCuts(impact?.changedContracts ?? []) : [], deps.digest);
+      sections[repository.repo] = sectionOf(base, value, part.undecided, repository.repo === trigger ? unservedOperationCuts(impact?.changedContracts ?? []) : [], deps.digest);
     }
 
     const triggerBase = sections[trigger] ?? fact;
@@ -172,7 +171,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
   }
 
   function driftOf(repositories: readonly WorkspaceRepository[], joined: readonly JoinedSite[]): Map<string, Section> {
-    const parts = new Map<string, Section>(repositories.map((repository) => [repository.repo, { callSites: [], unmatched: [], external: [], ambiguous: [] }]));
+    const parts = new Map<string, Section>(repositories.map((repository) => [repository.repo, { callSites: [], unmatched: [], external: [], undecided: [] }]));
     for (const { site, joined: answer } of joined) {
       const part = parts.get(site.repo);
       if (part !== undefined) drift(part, site, answer);
@@ -392,25 +391,23 @@ function withOperations(links: readonly ImpactedLink[], trigger: string, contrac
   });
 }
 
-/** A call site the join did not link: the service's drift, a name no repository given serves, or two repositories that matched it equally. */
+/**
+ * A call site the join did not link: drift no route takes, a call that leaves the workspace, or one the join cannot
+ * settle, because two entrypoints take it equally or a route could take it depending on a run-time value.
+ */
 function drift(part: Section, site: CallSite, joined: JoinResult): void {
-  if (joined.ambiguous !== undefined) part.ambiguous.push(site);
+  if (joined.ambiguous !== undefined || joined.undecided !== undefined) part.undecided.push(site);
   else if (joined.unmatched !== undefined) part.unmatched.push(site);
-  else if (joined.links === undefined) part.external.push(site);
+  else if (joined.external === true) part.external.push(site);
 }
 
-/** A route the change removed no longer exists at head, so it is rebuilt from the name the change reports: `METHOD path`. */
+/** A route the change removed no longer exists at head, so it is rebuilt from the name the change reports. */
 function routesOfRemoved(changes: readonly ChangedEntrypoint[]): HttpRoute[] {
   return changes.flatMap((change): HttpRoute[] => {
     if (change.kind !== "http-route" || change.change !== "removed") return [];
-    const [method, path] = change.name.split(" ");
-    if (method === undefined || path === undefined || !HTTP_METHODS.has(method)) return [];
-    return [{ kind: "http-route", name: change.name, method: method as HttpMethod, path, handler: change.handler, basePath: { status: "unknown", reason: "unresolved", evidence: [] } }];
+    const named = parseHttpRouteName(change.name);
+    return named === undefined ? [] : [{ kind: "http-route", name: change.name, ...named, handler: change.handler, basePath: { status: "unknown", reason: "unresolved", evidence: [] } }];
   });
-}
-
-function compareSite(a: CallSite, b: CallSite): number {
-  return compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol);
 }
 
 function unmatchedGateways(declared: readonly GatewayDeclaration[], repositories: readonly { repo: string; callSites: readonly CallSite[] }[]): GatewayDeclaration[] {
@@ -426,13 +423,13 @@ function baseOf(fact: FactBase): FactBase {
 
 /**
  * One repository's section: its own fact base, so its snapshot and trust travel with it; the call sites its snapshot
- * could not decide stay cuts, and so do the call sites two repositories matched equally.
+ * could not decide stay cuts, and so do the call sites the join could not settle.
  */
-function sectionOf(section: Fact<{ unresolved: readonly unknown[] }>, value: RepoImpact, ambiguous: readonly CallSite[], unserved: readonly Cut[], digest: Digest): Fact<RepoImpact> {
+function sectionOf(section: Fact<{ unresolved: readonly unknown[] }>, value: RepoImpact, undecided: readonly CallSite[], unserved: readonly Cut[], digest: Digest): Fact<RepoImpact> {
   if (section.status === "unknown") return section;
   const cuts: Cut[] = [
     ...value.reads.flatMap(({ kind, fact }, index): readonly Cut[] => fact.status === "partial" ? fact.cuts : fact.status === "unknown" ? [{ kind: "section", at: [kind, String(index)] }] : []),
-    ...ambiguous.map((site): Cut => ({ kind: "unresolved-link", at: [site.file, `${site.file}:${site.line}`] })),
+    ...undecided.map(unsettledCallSiteCut),
     ...unserved,
   ];
   const triggerWalk = value.reads.find(({ kind }) => kind === "trigger")?.fact;

@@ -1,9 +1,10 @@
 import { formatAccessPath } from "../../domain/contracts/access-path.ts";
-import type { ChangeFrontier, ConsequencesValue, DerivationValue } from "../../domain/contracts/consequence-fact.ts";
-import type { ResponseHypothesis } from "../../domain/contracts/hypothesis.ts";
-import type { OperationShape } from "../../domain/contracts/payload-shape.ts";
-import { deriveChanges, type DerivationFrontier, type RetiredValue } from "../../domain/contracts/shape-derivation.ts";
-import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
+import type { ChangeFrontier, ClassifiedDifference, ConsequencesValue, DerivationValue } from "../../domain/contracts/consequence-fact.ts";
+import type { Hypothesis } from "../../domain/contracts/hypothesis.ts";
+import { CONTRACT_CHANGE_RULES, type ContractChangeRule, type OperationDelta, type ResponseDelta, type RuleTarget } from "../../domain/contracts/contract-change-rules.ts";
+import { NOTHING, type ExchangeDigests, type OperationRequest, type OperationShape } from "../../domain/contracts/payload-shape.ts";
+import { deriveChanges, LISTING, REQUEST_READING, type Derivation, type DerivationFrontier } from "../../domain/contracts/shape-derivation.ts";
+import { httpRouteName, type HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { withCuts, type Evidence, type UnknownReason } from "../../domain/shared/fact.ts";
 import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
@@ -50,10 +51,14 @@ export function createContractChange({ sources, revisions, shapes }: ContractCha
       let derivation: NonNullable<ConsequencesValue["change"]>["derivation"] = { ...derivationBase, status: "unknown", reason: "revision-unavailable" };
       if (before.ok && after.ok) {
         const plan = planChange(before.value.files, after.value.files, shapes, prepared.serving);
-        for (const { hypothesis, operation, property, places } of plan.hypotheses) answered.push(await answerOn(prepared, factBase, hypothesis, { operation, property, places: { base: place(places.base), head: place(places.head) } }));
+        for (const { hypothesis, operation, property, rules, places } of plan.hypotheses) answered.push(await answerOn(prepared, factBase, hypothesis, { operation, property, rules, places: { base: place(places.base), head: place(places.head) } }));
         const value: DerivationValue = {
-          gained: plan.gained.map(({ places, ...gained }) => ({ ...gained, places: { base: place(places.base), head: place(places.head) } })),
-          operations: plan.operations,
+          differences: plan.differences.map(({ rule, places, ...difference }): ClassifiedDifference => ({
+            rule: rule.id,
+            level: rule.level,
+            ...difference,
+            places: { ...(places.base === undefined ? {} : { base: place(places.base) }), ...(places.head === undefined ? {} : { head: place(places.head) }) },
+          })),
           frontiers: plan.frontiers.map(({ evidence, reason, ...frontier }): ChangeFrontier => ({ status: "unknown", reason: reason ?? defaultReason(frontier.kind), ...frontier, evidence: evidence.map(place) })),
         };
         derivation = withCuts(derivationBase, value, [...prepared.cuts, ...before.value.cuts, ...after.value.cuts]);
@@ -67,17 +72,25 @@ const defaultReason = (kind: ChangeFrontier["kind"]): UnknownReason => (kind ===
 
 const contradiction = (detail: string): Result<never, ConsequencesFault> => ({ ok: false, fault: { kind: "contradictory-revisions", detail } });
 
-/** A guarantee the head gives that the base did not, before it is placed in a repository. */
-interface PlannedGain {
+/** A difference the change made, classified by its rule, before it is placed in a repository. */
+export interface PlannedDifference {
+  rule: ContractChangeRule;
+  target: RuleTarget;
   operation: string;
-  property: string;
-  retired: RetiredValue;
-  places: { base: Evidence; head: Evidence };
+  /** The property of the payload the difference is at; absent for the operation itself. */
+  property?: string;
+  delta: ResponseDelta | OperationDelta;
+  subject?: string;
+  base?: unknown;
+  head?: unknown;
+  /** Where the operation sits in the contract at each revision that declares it. */
+  places: { base?: Evidence; head?: Evidence };
 }
 
 /** A place the change could not be derived at, before it is placed in a repository. */
 interface PlannedFrontier {
-  kind: DerivationFrontier["kind"] | "ambiguous-operation" | "unserved-operation" | "unreadable-contract";
+  kind: DerivationFrontier["kind"] | "request-unread" | "ambiguous-operation" | "unserved-operation" | "unreadable-contract";
+  target?: "request" | "parameter";
   operation?: string;
   property?: string;
   side?: "base" | "head";
@@ -87,17 +100,19 @@ interface PlannedFrontier {
 }
 
 export interface PlannedHypothesis {
-  hypothesis: ResponseHypothesis;
+  hypothesis: Hypothesis;
   operation: string;
   property: string;
+  /** The rules of the differences the hypothesis answers, sorted. */
+  rules: readonly string[];
   places: { base: Evidence; head: Evidence };
 }
 
 export interface ChangePlan {
   hypotheses: readonly PlannedHypothesis[];
-  gained: readonly PlannedGain[];
+  /** In the order of the operations, each operation's own difference first, then its properties' in the order the derivation lists them. */
+  differences: readonly PlannedDifference[];
   frontiers: readonly PlannedFrontier[];
-  operations: { added: readonly string[]; removed: readonly string[] };
 }
 
 /** An operation as one reader states it. */
@@ -111,6 +126,8 @@ interface Held {
 
 interface Reading {
   held: ReadonlyMap<string, readonly Held[]>;
+  /** What the operations accept, as the reader whose response shape is held states it. */
+  requests: ReadonlyMap<string, OperationRequest>;
   unreadable: readonly Evidence[];
 }
 
@@ -124,10 +141,9 @@ interface Reading {
  */
 export function planChange(baseFiles: readonly SourceFile[], headFiles: readonly SourceFile[], shapes: readonly PayloadShapes[], serving: ServingWorkspace["serving"]): ChangePlan {
   const hypotheses: PlannedHypothesis[] = [];
-  const gained: PlannedGain[] = [];
+  const differences: PlannedDifference[] = [];
   const frontiers: PlannedFrontier[] = [];
-  const operations = { added: [] as string[], removed: [] as string[] };
-  if (!sourcesDiffer(baseFiles, headFiles)) return { hypotheses, gained, frontiers, operations };
+  if (!sourcesDiffer(baseFiles, headFiles)) return { hypotheses, differences, frontiers };
   const before = read(baseFiles, shapes, serving);
   const after = read(headFiles, shapes, serving);
   const changed = changedSources(baseFiles, headFiles);
@@ -135,11 +151,12 @@ export function planChange(baseFiles: readonly SourceFile[], headFiles: readonly
   const unreadable = new Map([...before.unreadable, ...after.unreadable].filter((place) => changed(place.path)).map((place) => [`${place.path}:${place.line}`, place]));
   for (const place of unreadable.values()) frontiers.push({ kind: "unreadable-contract", evidence: [place] });
 
+  const requestUnread: Evidence[] = [];
   for (const operation of [...new Set([...before.held.keys(), ...after.held.keys()])].sort(compareText)) {
     const [base, ...otherBase] = before.held.get(operation) ?? [];
     const [head, ...otherHead] = after.held.get(operation) ?? [];
-    if (base === undefined) operations.added.push(operation);
-    else if (head === undefined) operations.removed.push(operation);
+    if (base === undefined) differences.push(operationDifference("added", operation, { head: head!.place }));
+    else if (head === undefined) differences.push(operationDifference("removed", operation, { base: base.place }));
     else if (![base, ...otherBase, head, ...otherHead].some(({ shape, place }) => changed(place.path) || shape.files.some(changed))) continue;
     else {
       const entries = [base, ...otherBase, head, ...otherHead];
@@ -148,16 +165,80 @@ export function planChange(baseFiles: readonly SourceFile[], headFiles: readonly
         frontiers.push({ ...undecided, operation, evidence: entries.map(({ place }) => place) });
         continue;
       }
-      const places = { base: base.place, head: head.place };
-      const derivation = deriveChanges(base.shape.shape, head.shape.shape);
-      const { method, path } = head.identity;
-      for (const { property, change } of derivation.hypotheses) hypotheses.push({ hypothesis: { method, path, target: "response", property, change }, operation, property: formatAccessPath(property), places });
-      for (const { path: at, retired } of derivation.gained) gained.push({ operation, property: formatAccessPath(at), retired, places });
-      for (const { path: at, evidence, ...frontier } of derivation.frontiers) frontiers.push({ ...frontier, operation, property: formatAccessPath(at), evidence: evidence ?? [base.place, head.place] });
+      const at: Located = { operation, ...head.identity, places: { base: base.place, head: head.place } };
+      const request = planRequest(before.requests.get(operation), after.requests.get(operation), at);
+      const exchange = exchangeDifferences(base.shape.digests, head.shape.digests);
+      if (request === undefined) requestUnread.push(head.place);
+      for (const delta of exchange?.responses ?? []) differences.push({ rule: CONTRACT_CHANGE_RULES.response[delta], target: "response", operation, delta, places: at.places });
+      if (exchange?.request === true && request?.differences.length === 0 && request.frontiers.length === 0) frontiers.push({ kind: "unclassified-difference", operation, detail: "request", evidence: [base.place, head.place] });
+      const response = deriveChanges(base.shape.shape, head.shape.shape);
+      hypotheses.push(...response.hypotheses.map((hypothesis) => plannedHypothesis(at, "response", hypothesis)));
+      differences.push(...classified("response", response, at));
+      frontiers.push(...placedFrontiers(undefined, response, at));
+      if (request !== undefined) {
+        hypotheses.push(...request.hypotheses);
+        differences.push(...request.differences);
+        frontiers.push(...request.frontiers);
+      }
     }
   }
-  return { hypotheses, gained, frontiers, operations };
+  if (requestUnread.length > 0) frontiers.push({ kind: "request-unread", reason: "no-extractor", evidence: requestUnread });
+  return { hypotheses, differences, frontiers };
 }
+
+/** An operation both revisions declare, with the route that names it and its contract place at each. */
+interface Located {
+  operation: string;
+  method: HttpMethod;
+  path: string;
+  places: { base: Evidence; head: Evidence };
+}
+
+const NO_BODY: NonNullable<OperationRequest["body"]> = { shape: NOTHING, required: false };
+
+/**
+ * What a change did to an operation's request, when both revisions state it: the body read as a request, whose rejected
+ * values derive hypotheses, and the parameters, whose differences are listed.
+ */
+function planRequest(base: OperationRequest | undefined, head: OperationRequest | undefined, at: Located): Pick<ChangePlan, "hypotheses" | "differences" | "frontiers"> | undefined {
+  if (base === undefined || head === undefined) return undefined;
+  const [bodyBase, bodyHead] = [base.body ?? NO_BODY, head.body ?? NO_BODY];
+  const body = deriveChanges(bodyBase.shape, bodyHead.shape, REQUEST_READING, { base: !bodyBase.required, head: !bodyHead.required });
+  const parameters = deriveChanges(base.parameters, head.parameters, LISTING);
+  return {
+    hypotheses: body.hypotheses.map((hypothesis) => plannedHypothesis(at, "request", hypothesis)),
+    differences: [...classified("request", body, at), ...classified("parameter", parameters, at)],
+    frontiers: [...placedFrontiers("request", body, at), ...placedFrontiers("parameter", parameters, at)],
+  };
+}
+
+function plannedHypothesis(at: Located, target: "response" | "request", { property, change, differences }: Derivation<unknown>["hypotheses"][number]): PlannedHypothesis {
+  const hypothesis = { method: at.method, path: at.path, target, property, change } as Hypothesis;
+  const rules = differences.map(({ delta }) => CONTRACT_CHANGE_RULES[target][delta].id).sort(compareText);
+  return { hypothesis, operation: at.operation, property: formatAccessPath(property), rules, places: at.places };
+}
+
+function classified(target: "response" | "request" | "parameter", derivation: Derivation<unknown>, at: Located): PlannedDifference[] {
+  return derivation.differences.map(({ path, ...difference }) => ({ rule: CONTRACT_CHANGE_RULES[target][difference.delta], target, operation: at.operation, property: formatAccessPath(path), ...difference, places: at.places }));
+}
+
+function placedFrontiers(target: "request" | "parameter" | undefined, derivation: Derivation<unknown>, at: Located): PlannedFrontier[] {
+  return derivation.frontiers.map(({ path, evidence, ...frontier }) => ({ ...frontier, ...(target === undefined ? {} : { target }), operation: at.operation, property: formatAccessPath(path), evidence: evidence ?? [at.places.base, at.places.head] }));
+}
+
+/**
+ * What differs beside the success body, from the digests both revisions state: the response parts a rule names, and
+ * whether the request differs, which a request reading may not classify. `undefined` when a revision's reader states no digests.
+ */
+function exchangeDifferences(base: ExchangeDigests | undefined, head: ExchangeDigests | undefined): { responses: ResponseDelta[]; request: boolean } | undefined {
+  if (base === undefined || head === undefined) return undefined;
+  const responses: ResponseDelta[] = [];
+  if (base.errors !== head.errors) responses.push("errors-changed");
+  if (base.envelope !== head.envelope) responses.push("envelope-changed");
+  return { responses, request: base.request !== head.request };
+}
+
+const operationDifference = (delta: OperationDelta, operation: string, places: PlannedDifference["places"]): PlannedDifference => ({ rule: CONTRACT_CHANGE_RULES.operation[delta], target: "operation", operation, delta, places });
 
 /** Why an operation cannot be followed from its entries, when it cannot: declared more than once, undecided servers, or not exactly one route that serves it. */
 function undecidedOperation(entries: readonly Held[], repeated: boolean): Pick<PlannedFrontier, "kind" | "detail"> | undefined {
@@ -170,10 +251,11 @@ function undecidedOperation(entries: readonly Held[], repeated: boolean): Pick<P
 }
 
 /** The path the contract serves the operation at: its base path, when it states one, before its path. */
-const writtenPath = ({ basePath, path }: OperationShape): string => `${basePath ?? ""}${path}`;
+const writtenPath = ({ basePath, path }: Pick<OperationShape, "basePath" | "path">): string => `${basePath ?? ""}${path}`;
 
 function read(files: readonly SourceFile[], providers: readonly PayloadShapes[], serving: ServingWorkspace["serving"]): Reading {
   const held = new Map<string, Held[]>();
+  const requests = new Map<string, OperationRequest>();
   const unreadable: Evidence[] = [];
   for (const provider of providers) {
     const claimed = new Map<string, Held[]>();
@@ -184,21 +266,25 @@ function read(files: readonly SourceFile[], providers: readonly PayloadShapes[],
         stopped = true;
         continue;
       }
-      const entry = heldOperation(finding.value, finding.evidence[0]!, serving);
-      const key = `${entry.identity.method} ${entry.identity.path}`;
-      claimed.set(key, [...(claimed.get(key) ?? []), entry]);
+      const entry = { shape: finding.value, place: finding.evidence[0]!, ...identityOf(finding.value, serving) };
+      claimed.set(httpRouteName(entry.identity), [...(claimed.get(httpRouteName(entry.identity)) ?? []), entry]);
     }
     for (const [key, entries] of claimed) if (!held.has(key)) held.set(key, entries);
+    for (const finding of provider.requests?.(files) ?? []) {
+      if (finding.status !== "complete") continue;
+      const key = httpRouteName(identityOf(finding.value, serving).identity);
+      if (held.get(key) === claimed.get(key) && !requests.has(key)) requests.set(key, finding.value);
+    }
     if (stopped) break;
   }
-  return { held, unreadable };
+  return { held, requests, unreadable };
 }
 
-function heldOperation(shape: OperationShape, place: Evidence, serving: ServingWorkspace["serving"]): Held {
-  const written = { method: shape.method, path: writtenPath(shape) };
-  if (shape.basePath === undefined) return { shape, place, identity: written };
-  const served = serving(written);
-  return served.kind === "served" ? { shape, place, identity: { method: served.method, path: served.path } } : { shape, place, identity: written, unserved: served };
+function identityOf(written: Pick<OperationShape, "method" | "path" | "basePath">, serving: ServingWorkspace["serving"]): Pick<Held, "identity" | "unserved"> {
+  const identity = { method: written.method, path: writtenPath(written) };
+  if (written.basePath === undefined) return { identity };
+  const served = serving(identity);
+  return served.kind === "served" ? { identity: { method: served.method, path: served.path } } : { identity, unserved: served };
 }
 
 /** Whether any source differs between the two revisions, or is in only one. */

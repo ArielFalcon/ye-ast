@@ -7,7 +7,7 @@ import { compactInput, crossField } from "./compact-schema.ts";
 import { createMcpServer, type McpDeps } from "./server.ts";
 import { openSession } from "./test-session.testing.ts";
 import { TOOL_INPUTS } from "./query-schema.ts";
-import type { ToolFamily } from "./presentation.ts";
+import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
 
 function discoveryServer() {
   const unused = <T extends object>(): T => new Proxy({} as T, {
@@ -23,6 +23,7 @@ function discoveryServer() {
     contractConsequences: unused<McpDeps["contractConsequences"]>(),
     decisions: unused<McpDeps["decisions"]>(),
     digest: unused<McpDeps["digest"]>(),
+    evidenceComposition: unused<McpDeps["evidenceComposition"]>(),
     version: "0",
     repository: { path: "/work/shop", repoId: "shop" },
     redaction: {
@@ -95,7 +96,7 @@ test("listed input schemas reject exactly the cross-field combinations the runti
     const cut = (owner: object) => ({ kind: "cut-places", owner, cutIndex: 0 });
     const handler = (owner: object) => ({ kind: "handler-origins", owner, handler: { path: "a", symbol: "h", line: 1 } });
     const page = { limit: 1 };
-    const cases: [ToolFamily, Record<string, unknown>, boolean][] = [
+    const cases: [QueryFamily, Record<string, unknown>, boolean][] = [
       ["callers", { targets, select: cut({ kind: "fact" }), page }, true],
       ["callers", { targets, select: cut({ kind: "fact" }) }, false],
       ["callers", { targets, page }, false],

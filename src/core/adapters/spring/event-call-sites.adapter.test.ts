@@ -61,6 +61,18 @@ test("a Rabbit convertAndSend names the routing key: the first argument alone, t
   assert.deepEqual(await read([payments]), ["rabbit payments.sent Payments.sent@Payments.java:6", "rabbit payments.routed Payments.routed@Payments.java:7"]);
 });
 
+test("a Rabbit convertAndSend that leads with an exchange records it, unless it is the default one, and a run-time one stays a value filled at run time", async () => {
+  const payments = java(
+    "Payments",
+    ["@Service class Payments {", "  private final RabbitTemplate rabbit;", "  void sent() { rabbit.convertAndSend(\"payments.sent\", body); }", "  void routed() { rabbit.convertAndSend(\"events\", \"payments.routed\", body); }", "  void direct() { rabbit.convertAndSend(\"\", \"payments.direct\", body); }", "  void chosen(String exchange) { rabbit.convertAndSend(exchange, \"payments.chosen\", body); }", "}"].join("\n"),
+    ["org.springframework.amqp.rabbit.core.RabbitTemplate", SERVICE],
+  );
+
+  const sites = await reader.of([payments], "orders-svc");
+
+  assert.deepEqual(sites.map((site) => (site.target.status === "complete" && "protocol" in site.target.value ? [site.symbol, site.target.value.exchange] : [site.symbol, "unknown"])), [["Payments.sent", undefined], ["Payments.routed", "events"], ["Payments.direct", undefined], ["Payments.chosen", "{}"]]);
+});
+
 test("a JMS convertAndSend and send both name the destination in the first argument", async () => {
   const audit = java(
     "Audit",

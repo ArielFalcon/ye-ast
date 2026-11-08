@@ -1,5 +1,5 @@
 import type { Node } from "web-tree-sitter";
-import { namedChildren, type TypeDecl } from "./java-symbols.ts";
+import { isTypeDeclaration, namedChildren, type TypeDecl } from "./java-symbols.ts";
 
 /** A name a method can use for a value: a field, a parameter or a local variable. */
 export interface Binding {
@@ -17,7 +17,6 @@ export interface Assignment {
   member: Node;
 }
 
-const NESTED_TYPES: ReadonlySet<string> = new Set(["class_declaration", "interface_declaration", "enum_declaration", "record_declaration", "annotation_type_declaration"]);
 const MEMBERS: ReadonlySet<string> = new Set(["method_declaration", "constructor_declaration", "compact_constructor_declaration"]);
 
 const fieldCache = new WeakMap<TypeDecl, ReadonlyMap<string, Binding>>();
@@ -100,7 +99,7 @@ export function descendants(root: Node): Node[] {
   const found: Node[] = [];
   const pending = [...root.namedChildren];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (NESTED_TYPES.has(node.type)) continue;
+    if (isTypeDeclaration(node)) continue;
     found.push(node);
     pending.push(...node.namedChildren);
   }

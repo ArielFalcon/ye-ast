@@ -44,3 +44,8 @@ export function sourceTree(file: SourceFile, target: ts.ScriptTarget, kind?: ts.
   source.parsed.push({ target, kind, tree });
   return tree;
 }
+
+/** A tree a program binds: parsed alone and never shared, since binding writes into the tree it binds. */
+export function programTree(fileName: string, content: string, target: ts.ScriptTarget | ts.CreateSourceFileOptions): ts.SourceFile {
+  return ts.createSourceFile(fileName, content, target, true);
+}

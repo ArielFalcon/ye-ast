@@ -3,7 +3,7 @@ import type { Hypothesis } from "../../domain/contracts/hypothesis.ts";
 import { provenanceOf, sortedEngines } from "../../domain/shared/fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Result } from "../../domain/shared/result.ts";
-import { httpTargetOf, type CallSite } from "../../domain/topology/call-site.ts";
+import { callPlaceOf, compareCallPlaces, httpTargetOf } from "../../domain/topology/call-site.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import { matchCallSite, matchDeclaredOperation, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
@@ -19,16 +19,19 @@ import type { WorkspaceFault, WorkspaceRepository } from "../../ports/workspace-
 import type { Digest } from "../../ports/digest.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
-import { inboundEdgesOf } from "../impact/inbound-origins.ts";
+import { inboundEdgesOf, receiverSettlementsOf } from "../impact/inbound-origins.ts";
+import { createEdgeTargets, syntaxOfSources } from "../navigation/edge-targets.ts";
 import { referenceProofsOf } from "../impact/reference-origins.ts";
 import { memberProofContextOf } from "../relations/retained-relations.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
+import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
+import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { createHeadReader, type HeadReaderDeps } from "../snapshot/head-reading.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import { ABORTED, declaredTrustOf, withScratch } from "../snapshot/read-snapshot.ts";
 import type { WorkspaceReadOperation } from "../topology/workspace-operation.ts";
 import type { WorkspaceSnapshotContext } from "../topology/workspace-snapshots.ts";
-import type { Handler, HttpMethod } from "../../domain/entrypoints/http-route.ts";
+import { httpRouteName, type Handler, type HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { entrypointsOf } from "../topology/workspace-join.ts";
 import { callersOfFunction, occurrencesOfMember } from "./consumer-callers.ts";
 import { createConsumerTemplateReader } from "./consumer-templates.ts";
@@ -49,6 +52,10 @@ export interface ConsumerSourcesDeps {
   engines: Readonly<Record<string, string>>;
   /** Proves which unresolved references of the code graph are real occurrences; without it no call through an injected field or local is settled. */
   importOrigins?: ImportOriginsReader;
+  /** What a source's syntax states; without it no call on a value receiver is settled, and each stays as the graph resolved it. */
+  memberNames?: DeclaredMemberNamesReader;
+  /** The TypeScript module statements that bind a receiver's declared type to its declaration. */
+  modules?: ModuleDependenciesReader;
 }
 
 type ReadPlan = Extract<WorkspaceSnapshotContext["plans"][number], { kind: "read" }>;
@@ -74,7 +81,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
         const { fact } = read;
         if (fact.status === "unknown") return { ok: false as const, fault: { kind: "git-failed" as const, detail: "the workspace read answered nothing" } };
 
-        return withScratch(deps.heads.scratch, async (directory) => {
+        return withScratch(deps.heads, async (readScope) => {
           const readings = new Map<string, Promise<Result<Reading, WorkspaceFault>>>();
           const stores: CodeGraphReader[] = [];
           let workspaceJoin: WorkspaceHttpJoin | undefined;
@@ -83,17 +90,22 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
 
           const readRepository = async (plan: ReadPlan): Promise<Result<Reading, WorkspaceFault>> => {
             const trust = (await declaredTrustOf(deps.heads, plan.at.declared)) ?? "untrusted";
-            const prepared = await prepareCommit({ ...deps.heads, preparation: context.preparation }, plan.at.source, plan.at.revision, directory, context.selection, { scope: context.scope, trust }, context.signal);
+            const prepared = await prepareCommit({ ...deps.heads, preparation: context.preparation }, plan.at.source, plan.at.revision, readScope, context.selection, { scope: context.scope, trust }, context.signal);
             if (!prepared.ok) return prepared;
             const loaded = await prepared.value.sources(context.signal);
             if (!loaded.ok) return loaded;
             const { sources } = loaded.value;
-            const indexed = await heads.indexHead(prepared.value, directory, context.signal);
+            const indexed = await heads.indexHead(prepared.value, readScope.directory, context.signal);
             if (indexed === "aborted") return ABORTED;
             if (indexed !== "unavailable" && "fault" in indexed) return { ok: false, fault: indexed.fault };
             if (indexed !== "unavailable") stores.push(indexed.store);
             const origins = indexed === "unavailable" ? undefined : await deps.relations.extract(sources, { memberProofs: memberProofContextOf(loaded.value, context.scope) });
-            const proofs = indexed === "unavailable" ? undefined : await referenceProofsOf(deps.importOrigins?.(loaded.value.sources), indexed.store, loaded.value, context.signal);
+            const importOrigins = deps.importOrigins?.(sources, undefined, prepared.value.facts);
+            const proofs = indexed === "unavailable" ? undefined : await referenceProofsOf(importOrigins, indexed.store, loaded.value, context.signal);
+            const settled = indexed === "unavailable" || origins === undefined || importOrigins === undefined
+              ? undefined
+              : await receiverSettlementsOf(indexed.store, createEdgeTargets({ origins: importOrigins, store: indexed.store, modules: deps.modules === undefined ? undefined : { reader: deps.modules, sources }, syntaxOf: syntaxOfSources(deps.memberNames, sources, prepared.value.facts), proofs: async () => origins }), sources.map((file) => file.path), context.signal);
+            if (context.signal?.aborted) return ABORTED;
             return {
               ok: true,
               value: {
@@ -101,7 +113,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
                 origins: deps.origins(sources),
                 templates: await createConsumerTemplateReader({ metadata: deps.metadata, flow: deps.templateFlow }, sources),
                 graph: indexed === "unavailable" ? undefined : indexed.store,
-                inbound: indexed === "unavailable" || origins === undefined ? undefined : inboundEdgesOf(indexed.store, origins, proofs),
+                inbound: indexed === "unavailable" || origins === undefined ? undefined : inboundEdgesOf(indexed.store, origins, proofs, settled === undefined ? undefined : { dropped: new Set(), into: new Map(), settled }),
               },
             };
           };
@@ -119,7 +131,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
           };
 
           const session = async (hypothesis: Hypothesis): Promise<Result<ConsumerSession, WorkspaceFault>> => {
-            const operation = `${hypothesis.method} ${hypothesis.path}`;
+            const operation = httpRouteName({ method: hypothesis.method, path: hypothesis.path });
             const join = (workspaceJoin ??= joinHttpCalls(fact.value.repositories, entrypointsOfWorkspace(), fact.value.workspace.gateways));
             const callers = new Set(join.links.filter((link) => isCallOf(link, operation)).map((link) => link.from.repo));
 
@@ -198,19 +210,16 @@ function joinHttpCalls(repositories: readonly WorkspaceRepository[], entrypoints
   for (const site of repositories.flatMap((repository) => repository.callSites)) {
     if (site.transport !== "http") continue;
     const target = httpTargetOf(site);
-    const from = { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol };
+    const from = callPlaceOf(site);
     if (target === undefined) {
       if (site.target.status === "unknown") unresolvedCalls.push(from);
       continue;
     }
     const joined = matchCallSite(site, target, entrypoints, gateways);
     for (const link of joined.links ?? []) links.set(link.id, link);
-    const repos = joined.ambiguous?.repos.toSorted(compareText);
-    if (repos === undefined) continue;
-    const reaching = new Set(repos.flatMap((repo) => (matchCallSite(site, target, entrypoints.filter((candidate) => candidate.repo === repo), gateways).links ?? []).flatMap((link) => httpRouteName(link) ?? [])));
-    ambiguousCalls.push({ from, repos, reaching });
+    if (joined.ambiguous === undefined) continue;
+    ambiguousCalls.push({ from, repos: joined.ambiguous.repos.toSorted(compareText), reaching: new Set(joined.ambiguous.routes) });
   }
-  const byPlace = (a: { repo: string; file: string; line: number }, b: { repo: string; file: string; line: number }) => compareText(a.repo, b.repo) || compareText(a.file, b.file) || a.line - b.line;
   const serving = new Map<string, { repo: string; handler: Handler }[]>();
   for (const { repo, entrypoints: routes } of entrypoints) {
     for (const entrypoint of routes) {
@@ -220,8 +229,8 @@ function joinHttpCalls(repositories: readonly WorkspaceRepository[], entrypoints
   for (const handlers of serving.values()) handlers.sort((a, b) => compareText(a.repo, b.repo) || compareText(a.handler.path, b.handler.path) || a.handler.line - b.handler.line);
   return {
     links: [...links.values()].sort((a, b) => compareText(a.id, b.id)),
-    unresolvedCalls: unresolvedCalls.sort(byPlace),
-    ambiguousCalls: ambiguousCalls.sort((a, b) => byPlace(a.from, b.from)),
+    unresolvedCalls: unresolvedCalls.sort(compareCallPlaces),
+    ambiguousCalls: ambiguousCalls.sort((a, b) => compareCallPlaces(a.from, b.from)),
     serving,
   };
 }
@@ -233,10 +242,10 @@ function servingOperation(declared: { method: HttpMethod; path: string }, entryp
   return { kind: "served", method: matched.route.method, path: matched.route.path };
 }
 
-function httpRouteName(link: Link): string | undefined {
+function reachedRouteName(link: Link): string | undefined {
   return link.transport === "http" && link.to.kind === "http-route" ? link.to.name : undefined;
 }
 
 export function isCallOf(link: Link, operation: string): boolean {
-  return httpRouteName(link) === operation;
+  return reachedRouteName(link) === operation;
 }

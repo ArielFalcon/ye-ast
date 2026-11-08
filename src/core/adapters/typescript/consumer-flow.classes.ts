@@ -1,7 +1,8 @@
 import ts from "typescript";
-import { constructorParameters, typeName } from "./http-call-sites.adapter.ts";
 import type { Program, Unit } from "./consumer-flow.index.ts";
-import { declaringScope, namedFunction, propertyNameText, unwrap, type NamedFunction } from "./consumer-flow.syntax.ts";
+import { declaringScope, namedFunction, propertyNameText, type NamedFunction } from "./consumer-flow.syntax.ts";
+import { injectedClass } from "./angular-injection.ts";
+import { constructorParameters, isStatic, thisClass, typeName, unwrapped } from "./syntax.ts";
 
 /** A class of the snapshot with the unit that declares it. */
 export interface ClassRef {
@@ -38,11 +39,9 @@ export function lineage(program: Program, ref: ClassRef): ClassRef[] {
 /** A key read from `Symbol` (`[Symbol.iterator]`) is a symbol, which no string name ever equals. */
 function keyedBySymbol(name: ts.PropertyName): boolean {
   if (!ts.isComputedPropertyName(name)) return false;
-  const key = unwrap(name.expression);
+  const key = unwrapped(name.expression);
   return ts.isPropertyAccessExpression(key) && ts.isIdentifier(key.expression) && key.expression.text === "Symbol";
 }
-
-const isStatic = (member: ts.ClassElement): boolean => ts.canHaveModifiers(member) && (ts.getModifiers(member)?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword) ?? false);
 
 /**
  * The declaration that may be the member `name` denotes. Names are the language's: `render`, `'render'` and `['render']`
@@ -66,52 +65,34 @@ export function methodDeclared(cls: ts.ClassLikeDeclaration, name: string): Name
   return fn === undefined ? undefined : namedFunction(fn);
 }
 
-export function injectedClass(expression: ts.Expression): string | undefined {
-  if (!ts.isCallExpression(expression) || !ts.isIdentifier(expression.expression) || expression.expression.text !== "inject") return undefined;
-  const [first] = expression.arguments;
-  return first !== undefined && ts.isIdentifier(first) ? first.text : undefined;
-}
-
-/**
- * The class `this` is an instance of at `node`: the class around it, unless a `function` rebinds `this` on the way.
- * Arrow functions, methods, accessors and property initializers keep it.
- */
-export function thisClass(node: ts.Node): ts.ClassLikeDeclaration | undefined {
-  for (let current = node.parent; current !== undefined; current = current.parent) {
-    if (ts.isFunctionExpression(current) || ts.isFunctionDeclaration(current)) return undefined;
-    if (ts.isClassLike(current)) return current;
-  }
-  return undefined;
-}
-
 /**
  * The class of the instance `receiver` denotes when the framework injects it: a field initialized by `inject(X)`, a
  * parameter property of a decorated class, or a local `const x = inject(X)`. A declared type alone is no provenance.
  */
 export function injectedInstance(program: Program, unit: Unit, receiver: ts.Expression): ClassRef | undefined {
-  const bare = unwrap(receiver);
+  const bare = unwrapped(receiver);
   let name: string | undefined;
-  if (ts.isPropertyAccessExpression(bare) && bare.expression.kind === ts.SyntaxKind.ThisKeyword) name = injectedField(thisClass(bare), bare.name.text);
-  else if (ts.isIdentifier(bare)) name = injectedLocal(bare);
+  if (ts.isPropertyAccessExpression(bare) && bare.expression.kind === ts.SyntaxKind.ThisKeyword) name = injectedField(unit, thisClass(bare), bare.name.text);
+  else if (ts.isIdentifier(bare)) name = injectedLocal(unit, bare);
   return name === undefined ? undefined : classNamed(program, unit, name);
 }
 
-function injectedField(cls: ts.ClassLikeDeclaration | undefined, field: string): string | undefined {
+function injectedField(unit: Unit, cls: ts.ClassLikeDeclaration | undefined, field: string): string | undefined {
   if (cls === undefined) return undefined;
   const property = cls.members.find((member): member is ts.PropertyDeclaration => ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name) && member.name.text === field);
-  if (property !== undefined) return property.initializer === undefined ? undefined : injectedClass(property.initializer);
+  if (property !== undefined) return property.initializer === undefined ? undefined : injectedClass(property.initializer, unit);
   if (!ts.isClassDeclaration(cls) || !(ts.getDecorators(cls)?.length ?? 0)) return undefined;
   const parameter = constructorParameters(cls).find((candidate) => ts.isIdentifier(candidate.name) && candidate.name.text === field && ts.isParameterPropertyDeclaration(candidate, candidate.parent));
   return parameter?.type === undefined ? undefined : typeName(parameter.type);
 }
 
-function injectedLocal(identifier: ts.Identifier): string | undefined {
+function injectedLocal(unit: Unit, identifier: ts.Identifier): string | undefined {
   const scope = declaringScope(identifier);
   const statements = ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isModuleBlock(scope) ? scope.statements : [];
   for (const statement of statements) {
     if (!ts.isVariableStatement(statement)) continue;
     for (const declaration of statement.declarationList.declarations) {
-      if (ts.isIdentifier(declaration.name) && declaration.name.text === identifier.text && declaration.initializer !== undefined) return injectedClass(declaration.initializer);
+      if (ts.isIdentifier(declaration.name) && declaration.name.text === identifier.text && declaration.initializer !== undefined) return injectedClass(declaration.initializer, unit);
     }
   }
   return undefined;

@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { recoveryControlShapeFor, recoveryControlIssues, recoveryControlConstraintsFor } from "./evidence-schema.ts";
 import { crossField, type CrossField } from "./compact-schema.ts";
-import { responseModeSchema, type ToolFamily } from "./presentation.ts";
+import { responseModeSchema } from "./presentation.ts";
+import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
 import { isWorkspaceReplayContext } from "../core/domain/topology/workspace-replay.ts";
 import { FULL_OBJECT_ID_PATTERN, isFullObjectId } from "../core/domain/shared/revision.ts";
 import type { WalkBoundsField } from "../core/domain/shared/fact.ts";
@@ -283,7 +284,7 @@ export const SEMANTIC_INPUTS = {
   workspace: liveSchema(workspaceFields, ["revision"]),
   decisions: liveSchema(workspaceFields, ["revision"]),
   contract_consequences: consequencesInput({}),
-} satisfies Record<ToolFamily, z.ZodType>;
+} satisfies Record<QueryFamily, z.ZodType>;
 
 /** The inputs each original tool publishes and validates: the semantic fields plus presentation and recovery controls. */
 export const TOOL_INPUTS = {
@@ -304,17 +305,17 @@ export const TOOL_INPUTS = {
   workspace: liveSchema({ ...workspaceFields, mode }, ["revision"]),
   decisions: liveSchema({ ...workspaceFields, mode }, ["revision"]),
   contract_consequences: consequencesInput({ mode }),
-} satisfies Record<ToolFamily, z.ZodType>;
+} satisfies Record<QueryFamily, z.ZodType>;
 
-export type QueryName = `ye_ast_${ToolFamily}`;
-export type SemanticArguments<F extends ToolFamily> = z.infer<(typeof SEMANTIC_INPUTS)[F]>;
-export type ToolArguments<F extends ToolFamily> = z.infer<(typeof TOOL_INPUTS)[F]>;
-export type SemanticQuery = { [F in ToolFamily]: { name: `ye_ast_${F}`; arguments: SemanticArguments<F> } }[ToolFamily];
-export type SemanticQueryOf<F extends ToolFamily> = Extract<SemanticQuery, { name: `ye_ast_${F}` }>;
+export type QueryName = `ye_ast_${QueryFamily}`;
+export type SemanticArguments<F extends QueryFamily> = z.infer<(typeof SEMANTIC_INPUTS)[F]>;
+export type ToolArguments<F extends QueryFamily> = z.infer<(typeof TOOL_INPUTS)[F]>;
+export type SemanticQuery = { [F in QueryFamily]: { name: `ye_ast_${F}`; arguments: SemanticArguments<F> } }[QueryFamily];
+export type SemanticQueryOf<F extends QueryFamily> = Extract<SemanticQuery, { name: `ye_ast_${F}` }>;
 
 /** The family a query name addresses. */
-export function familyOf(name: QueryName): ToolFamily {
-  return name.slice("ye_ast_".length) as ToolFamily;
+export function familyOf(name: QueryName): QueryFamily {
+  return name.slice("ye_ast_".length) as QueryFamily;
 }
 
 /** The three families whose answers carry an `mcp-r1` recovery identity. */
@@ -324,5 +325,5 @@ export type RecoverableFamily = "entrypoints" | "impact" | "callers";
  * The runtime schema of `ye_ast_compose` (composition-schema.ts) must accept exactly these shapes.
  */
 export type ComposeQuery = {
-  [F in ToolFamily]: { name: `ye_ast_${F}`; arguments: SemanticArguments<F> } & (F extends RecoverableFamily ? { expect?: `mcp-r1:${string}` } : { expect?: never });
-}[ToolFamily];
+  [F in QueryFamily]: { name: `ye_ast_${F}`; arguments: SemanticArguments<F> } & (F extends RecoverableFamily ? { expect?: `mcp-r1:${string}` } : { expect?: never });
+}[QueryFamily];

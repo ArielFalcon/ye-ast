@@ -5,6 +5,8 @@ export interface PublishClient {
   protocol: EventTarget["protocol"];
   /** The index of the destination argument, from the call's arity. */
   destinations: ReadonlyMap<string, (arity: number) => number>;
+  /** The index of the argument that names the exchange, from the call's arity; none when the call names no exchange. */
+  exchange?: (arity: number) => number | undefined;
   /** The destination is the qualified type of the argument, not the text it holds. */
   byType?: true;
 }
@@ -12,12 +14,13 @@ export interface PublishClient {
 const FIRST = (): number => 0;
 /** Rabbit's two forms: `convertAndSend(routingKey, object)` and `convertAndSend(exchange, routingKey, object)`. */
 const ROUTING_KEY = (arity: number): number => (arity >= 3 ? 1 : 0);
+const EXCHANGE = (arity: number): number | undefined => (arity >= 3 ? 0 : undefined);
 
 export const PUBLISH_CLIENTS: ReadonlyMap<string, PublishClient> = new Map([
   ["org.springframework.kafka.core.KafkaTemplate", { protocol: "kafka", destinations: new Map([["send", FIRST]]) }],
   ["org.springframework.kafka.core.KafkaOperations", { protocol: "kafka", destinations: new Map([["send", FIRST]]) }],
-  ["org.springframework.amqp.rabbit.core.RabbitTemplate", { protocol: "rabbit", destinations: new Map([["convertAndSend", ROUTING_KEY]]) }],
-  ["org.springframework.amqp.core.AmqpTemplate", { protocol: "rabbit", destinations: new Map([["convertAndSend", ROUTING_KEY]]) }],
+  ["org.springframework.amqp.rabbit.core.RabbitTemplate", { protocol: "rabbit", destinations: new Map([["convertAndSend", ROUTING_KEY]]), exchange: EXCHANGE }],
+  ["org.springframework.amqp.core.AmqpTemplate", { protocol: "rabbit", destinations: new Map([["convertAndSend", ROUTING_KEY]]), exchange: EXCHANGE }],
   [
     "org.springframework.jms.core.JmsTemplate",
     {

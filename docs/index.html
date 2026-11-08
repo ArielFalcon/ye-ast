@@ -249,7 +249,7 @@
           <div><dt>Connections need matching reads</dt><dd><code>handler-declaration</code>, <code>reached-handler</code>, <code>linked-entrypoint</code>, <code>change-dependent</code>, <code>shared-file-import</code>, <code>used-import</code> and <code>shared-support</code> link findings only between reads with the same schema, producer, trust, engines, workspace and snapshot. <code>shared-file-import</code> and <code>shared-support</code> only repeat an exact observation, so they also accept another version of the same producer. Otherwise a <code>context-mismatch</code> or <code>snapshot-difference</code> issue is reported. <code>shares-evidence</code> means the same location, not causality.</dd></div>
           <div data-tone="contract"><dt>A receipt you can replay</dt><dd>The <code>summary</code> and <code>details</code> modes return text plus a receipt: a verification identity (<code>mcp-c1</code>) and the requests to run again. Send them back with <code>expect</code> and the same set must still give the same result.</dd></div>
         </dl>
-        <p class="ref"><code>src/mcp/composition-input.ts:13-19</code> · <code>src/mcp/compose-request.ts</code> · <code>src/mcp/compose-evidence.ts:207-237, 600-682</code> · <code>src/mcp/render-composition.ts:93</code></p>
+        <p class="ref"><code>src/mcp/composition-input.ts:13-19</code> · <code>src/mcp/compose-request.ts</code> · <code>src/core/application/composition/compose-evidence.ts:207-237, 600-682</code> · <code>src/mcp/render-composition.ts:93</code></p>
       </div>
     </section>
 

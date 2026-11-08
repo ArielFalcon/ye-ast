@@ -3,42 +3,48 @@ import { isJavaSource } from "../../domain/languages/java.ts";
 import type { ModuleBinding, ModuleDependencies, ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import type { ModuleTarget } from "../../domain/shared/module-target.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
-import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
-import { createJavaProject, describeFile, namedChildren, type JavaFile, type JavaProject } from "./java-symbols.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
+import { withJavaSources } from "./java-project.ts";
+import { createJavaProject, namedChildren, type JavaFile, type JavaProject } from "./java-symbols.ts";
+
+/** The imports of every readable Java source of one list, in list order, and the sources that could not be read. */
+interface JavaUniverse {
+  read: readonly { file: string; dependencies: readonly ModuleDependency[] }[];
+  unread: ModuleDependencies["unread"];
+}
 
 /**
  * The import declarations of every Java source, or of the selected ones, each resolved by the types the snapshot's Java
  * sources declare: a type one source declares leads to its file, a name under a platform package is external, anything
- * else is unresolved with its reason. Nothing comes from the graph.
+ * else is unresolved with its reason. Nothing comes from the graph. A source list is parsed once for the life of the
+ * list, however many selections read it.
  */
 export function createJavaImportsReader(parser: JavaParser): ModuleDependenciesReader {
+  const universes = new WeakMap<readonly SourceFile[], JavaUniverse>();
   return {
     async extract(sources, options): Promise<ModuleDependencies> {
       const selected = options?.files === undefined ? undefined : new Set(options.files);
       if (selected !== undefined && !sources.some(({ path }) => isJavaSource(path) && selected.has(path))) return { files: [], dependencies: [], unread: [] };
-      const trees: JavaSyntaxTree[] = [];
-      const files: JavaFile[] = [];
-      const unread: ModuleDependencies["unread"][number][] = [];
-      try {
-        for (const source of sources.filter(({ path }) => isJavaSource(path))) {
-          const parsed = parser.parse(source.content);
-          if (!parsed.ok) {
-            unread.push({ file: source.path, reason: "source-unreadable" });
-            continue;
-          }
-          trees.push(parsed.value);
-          files.push(describeFile(source.path, parsed.value.root));
-        }
-        const project = createJavaProject(files);
-        const unreadable = new Set(project.unreadable);
-        for (const file of project.unreadable) unread.push({ file: file.path, reason: "source-unreadable" });
-        const read = files.filter((file) => !unreadable.has(file) && (selected === undefined || selected.has(file.path)));
-        return { files: read.map((file) => ({ file: file.path, statements: [], moduleOnly: false })), dependencies: read.flatMap((file) => importsOf(file, project)), unread };
-      } finally {
-        for (const tree of trees) tree.dispose();
+      let universe = universes.get(sources);
+      if (universe === undefined) {
+        universe = readUniverse(parser, sources);
+        universes.set(sources, universe);
       }
+      const chosen = selected === undefined ? universe.read : universe.read.filter(({ file }) => selected.has(file));
+      return { files: chosen.map(({ file }) => ({ file, statements: [], moduleOnly: false })), dependencies: chosen.flatMap(({ dependencies }) => dependencies), unread: universe.unread };
     },
   };
+}
+
+function readUniverse(parser: JavaParser, sources: readonly SourceFile[]): JavaUniverse {
+  return withJavaSources(parser, (parse) => {
+    const { files, unparsed } = parse(sources.filter(({ path }) => isJavaSource(path)));
+    const project = createJavaProject(files);
+    const unreadable = new Set(project.unreadable);
+    const unread = [...unparsed, ...project.unreadable].map(({ path }) => ({ file: path, reason: "source-unreadable" as const }));
+    return { read: files.filter((file) => !unreadable.has(file)).map((file) => ({ file: file.path, dependencies: importsOf(file, project) })), unread };
+  });
 }
 
 function importsOf(file: JavaFile, project: JavaProject): ModuleDependency[] {

@@ -1,14 +1,15 @@
 import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
-import type { BasePath, HttpMethod } from "../../domain/entrypoints/http-route.ts";
+import { httpRouteName, requestMethodOf, type BasePath, type HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
 import { isSpringConfigFile, resourcesOfSource } from "../../domain/languages/spring-config.ts";
 import { declarationSpan } from "../../domain/shared/fact.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { ContractOperation, ContractRoutes } from "../../ports/contract-routes.port.ts";
 import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
+import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
+import { withJavaSources, type ParseJava } from "./java-project.ts";
 import { delegateMethodsOf, sourceGeneratorIn } from "./api-delegates.ts";
 import { basePathOf, configurationsOf } from "./application-config.ts";
 import { spanOf, unknown, unknownAt, type MappedEntrypoint, type MappedRoute } from "./findings.ts";
@@ -20,7 +21,6 @@ import {
   counterpart,
   asLibrarySources,
   createJavaProject,
-  describeFile,
   isLibraryPath,
   externalNames,
   scopeOf,
@@ -48,7 +48,6 @@ import {
 import { JavaValueEvaluator } from "./java-value-evaluator.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 
-const REQUEST_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"]);
 const ROUTER_FUNCTIONS: readonly string[] = [
   "org.springframework.web.reactive.function.server.RouterFunction",
   "org.springframework.web.servlet.function.RouterFunction",
@@ -107,20 +106,11 @@ export function createSpringRoutesExtractor(parser: JavaParser, contracts: Contr
   return { extract: async (files, libraries = []) => extractRoutes(parser, files, libraries, contracts) };
 }
 
-type Parsed = { file: JavaFile } | { fault: Finding<never> };
-
 export function extractRoutes(parser: JavaParser, files: readonly SourceFile[], libraries: readonly LibrarySource[], contracts: ContractRoutes): readonly Finding<Entrypoint>[] {
-  const findings: Finding<MappedEntrypoint>[] = [];
-  const trees: JavaSyntaxTree[] = [];
-  const parsed: JavaFile[] = [];
   const index = contractIndex(contracts.operations(files));
-  try {
-    for (const source of files) {
-      if (!isJavaSource(source.path) || isJvmTestFile(source.path)) continue;
-      const result = parseSource(parser, source, trees);
-      if ("fault" in result) findings.push(result.fault);
-      else parsed.push(result.file);
-    }
+  return withJavaSources(parser, (parse) => {
+    const { files: parsed, unparsed } = parse(files.filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path)));
+    const findings: Finding<MappedEntrypoint>[] = unparsed.map(({ path, line }) => unreadable(path, line));
     const project = createJavaProject(parsed);
     const annotations = createSpringAnnotations(project);
     const text = new JavaValueEvaluator(project, configurationsOf(files.filter((file) => isSpringConfigFile(file.path))));
@@ -129,45 +119,29 @@ export function extractRoutes(parser: JavaParser, files: readonly SourceFile[], 
     for (const type of project.types) {
       findings.push(...guarded(() => findingsOfType(type, project, annotations, text, generator, index), () => unknown("unresolved", [spanOf(type.file.path, type.node)])));
     }
-    findings.push(...natsListeners(project, text, parsed, libraries, files, parser, trees));
+    findings.push(...natsListeners(project, text, parsed, libraries, files, parse));
     const readable = parsed.filter((file) => !project.unreadable.includes(file));
     const entrypoints = sortFindings(withPathPrefixes(findings, pathPrefixConfigurations(project, readable)));
     return withBasePaths(entrypoints, files, applicationModules(project, annotations), basePathConfigurations(project, readable, annotations), index.undecided);
-  } finally {
-    for (const tree of trees) tree.dispose();
-  }
+  });
 }
 
 /**
  * The NATS listeners of the repository's own classes. With libraries, the classes are read over a project that also
  * holds the library sources, so a subscription a base class declares there is found; without, over the repository's own.
  */
-function natsListeners(project: JavaProject, text: JavaValueEvaluator, parsed: readonly JavaFile[], libraries: readonly LibrarySource[], files: readonly SourceFile[], parser: JavaParser, trees: JavaSyntaxTree[]): Finding<MappedEntrypoint>[] {
+function natsListeners(project: JavaProject, text: JavaValueEvaluator, parsed: readonly JavaFile[], libraries: readonly LibrarySource[], files: readonly SourceFile[], parse: ParseJava): Finding<MappedEntrypoint>[] {
   const javaLibraries = libraries.filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path));
-  const view = javaLibraries.length === 0 ? { project, text } : withLibraries(parsed, javaLibraries, files, parser, trees);
+  const view = javaLibraries.length === 0 ? { project, text } : withLibraries(parsed, javaLibraries, files, parse);
   return view.project.types
     .filter((type) => type.kind === "class" && !type.isAbstract && !isLibraryPath(type.file.path))
     .flatMap((type) => guarded(() => natsListenersOf(type, view.project, view.text), () => unknown("unresolved", [spanOf(type.file.path, type.node)])));
 }
 
-function withLibraries(parsed: readonly JavaFile[], libraries: readonly LibrarySource[], files: readonly SourceFile[], parser: JavaParser, trees: JavaSyntaxTree[]): { project: JavaProject; text: JavaValueEvaluator } {
-  const foreign = asLibrarySources(libraries).flatMap((source) => {
-    const result = parseSource(parser, source, trees);
-    return "file" in result ? [result.file] : [];
-  });
+function withLibraries(parsed: readonly JavaFile[], libraries: readonly LibrarySource[], files: readonly SourceFile[], parse: ParseJava): { project: JavaProject; text: JavaValueEvaluator } {
+  const foreign = parse(asLibrarySources(libraries)).files;
   const project = createJavaProject([...parsed, ...foreign]);
   return { project, text: new JavaValueEvaluator(project, configurationsOf(files.filter((file) => isSpringConfigFile(file.path)))) };
-}
-
-function parseSource(parser: JavaParser, source: SourceFile, trees: JavaSyntaxTree[]): Parsed {
-  try {
-    const result = parser.parse(source.content);
-    if (!result.ok) return { fault: unreadable(source.path, result.fault.line) };
-    trees.push(result.value);
-    return { file: describeFile(source.path, result.value.root) };
-  } catch {
-    return { fault: unreadable(source.path, 1) };
-  }
 }
 
 function unreadable(path: string, line: number): Finding<never> {
@@ -393,7 +367,7 @@ function contractJoin(controller: Controller, method: MethodDecl): { operation: 
     status: "complete",
     value: {
       kind: "http-route",
-      name: `${operation.method} ${path}`,
+      name: httpRouteName({ method: operation.method, path }),
       method: operation.method,
       path,
       handler: { path: span.path, symbol: `${method.owner.qualifiedName}.${method.name}`, line: span.line, ...declarationSpan(span.line, span.endLine) },
@@ -454,7 +428,7 @@ function routesOfHandler(handler: MethodDecl, mapping: Mapping, classMapping: Ma
             status: "complete",
             value: {
               kind: "http-route",
-              name: `${method} ${routePath}${version === undefined ? "" : ` v${version}`}`,
+              name: httpRouteName({ method, path: routePath, ...(version === undefined ? {} : { version }) }),
               method,
               path: routePath,
               ...(version === undefined ? {} : { version }),
@@ -486,7 +460,7 @@ function resolveMethods(mappings: readonly (Mapping | undefined)[]): Resolution<
   for (const mapping of mappings) {
     if (mapping === undefined) continue;
     if (mapping.verb !== undefined) values.add(mapping.verb);
-    const resolution = partition(mapping.attributes.get("method") ?? [], requestMethodOf);
+    const resolution = partition(mapping.attributes.get("method") ?? [], mappedMethod);
     resolution.values.forEach((value) => values.add(value));
     gaps.push(...resolution.gaps);
   }
@@ -494,9 +468,10 @@ function resolveMethods(mappings: readonly (Mapping | undefined)[]): Resolution<
   return { values: [...values], gaps };
 }
 
-function requestMethodOf(expr: Expr): Outcome<HttpMethod> {
+function mappedMethod(expr: Expr): Outcome<HttpMethod> {
   const name = expr.node.type === "identifier" || expr.node.type === "field_access" ? (expr.node.text.split(".").pop() ?? "") : "";
-  return REQUEST_METHODS.has(name) ? { value: name as HttpMethod } : { gap: "unresolved" };
+  const method = requestMethodOf(name);
+  return method === undefined ? { gap: "unresolved" } : { value: method };
 }
 
 function partition<T>(exprs: readonly Expr[], resolve: (expr: Expr) => Outcome<T>): Resolution<T> {

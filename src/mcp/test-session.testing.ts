@@ -21,6 +21,13 @@ export function resultFields(result: ToolResult): Record<string, any> {
   return { text: text.slice(0, at), ...JSON.parse(text.slice(at + 1 + RESULT_JSON_LABEL.length)) };
 }
 
+/** The presentation text a reader sees: content without its closing result JSON line. */
+export function textOf(result: { content: { text: string }[] }): string {
+  const whole = result.content.map((block) => block.text).join("\n");
+  const at = whole.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
+  return at === -1 ? whole : whole.slice(0, at);
+}
+
 export interface ToolInfo {
   name: string;
   description?: string;

@@ -1024,12 +1024,31 @@ test("a call the join reaches without a link is an explicit outcome: unmatched u
 
   assert.deepEqual(value.links, []);
   assert.deepEqual(value.unlinked, [
-    { from: { repo: "shop-web", file: "src/app/shop-web.api.ts", line: 3, symbol: "shop-web.call3" }, transport: "http", outcome: "ambiguous", name: "shared", repos: ["billing", "orders"] },
+    { from: { repo: "shop-web", file: "src/app/shop-web.api.ts", line: 3, symbol: "shop-web.call3" }, transport: "http", outcome: "ambiguous", name: "shared", repos: ["billing", "orders"], routes: ["POST /shared"] },
     { from: { repo: "shop-web", file: "src/app/shop-web.api.ts", line: 5, symbol: "shop-web.call5" }, transport: "http", outcome: "unmatched", name: "/orders/missing" },
   ]);
   const section = value.sections["shop-web"];
   assert.equal(section?.status, "partial");
   assert.deepEqual(section?.status === "partial" ? section.cuts : [], [{ kind: "unresolved-link", at: ["src/app/shop-web.api.ts", "src/app/shop-web.api.ts:3"] }]);
+});
+
+test("an absolute URL names its origin as the host and its first path segment as the prefix, never a value filled at run time", async () => {
+  const queries = setup({ "/work/shop-web": { files: {} } }, sitesOf({ "shop-web": [postSite("shop-web", "http://localhost:9966/petclinic/api/owners", 3), postSite("shop-web", "/user-{}/orders", 5)] }));
+
+  const section = valueOf(await queries.outwardNames({ repo: { path: "/work/shop-web" } })).sections["shop-web"];
+
+  assert.deepEqual(section?.status === "unknown" ? [] : section?.value.names.map((name) => `${name.kind} ${name.name}`), ["http-host http://localhost:9966", "path-prefix petclinic"]);
+});
+
+test("a call no route takes and that names no host is unmatched; one a route could take is listed as could-match and is the only cut", async () => {
+  const repositories: Repositories = { "/work/shop-web": { files: {} }, "/work/orders": { files: {}, entrypoints: [postRoute("/orders/user-admin")] } };
+  const queries = setup(repositories, sitesOf({ "shop-web": [postSite("shop-web", "/geo/provinces", 3), postSite("shop-web", "/orders/user-{}", 5)] }));
+
+  const value = valueOf({ ok: true, value: readOf(await queries.outwardNames({ ...LINKED, repos: [{ path: "/work/orders" }] })) });
+
+  assert.deepEqual(value.unlinked.map(({ from, outcome, name }) => `${from.line} ${outcome} ${name}`), ["3 unmatched /geo/provinces", "5 could-match /orders/user-{}"]);
+  const section = value.sections["shop-web"];
+  assert.deepEqual(section?.status === "partial" ? section.cuts : [], [{ kind: "unresolved-link", at: ["src/app/shop-web.api.ts", "src/app/shop-web.api.ts:5"] }]);
 });
 
 test("a published destination is an outward name the repository whose listener the join linked serves, with basis event-destination; one nothing consumes is unserved", async () => {
@@ -1044,6 +1063,16 @@ test("a published destination is an outward name the repository whose listener t
     evidence: [{ path: "src/main/java/app/OrdersListener.java", line: 8, repo: "orders" }, { path: "src/main/java/app/shop-web/Publisher.java", line: 7, repo: "shop-web" }],
   }]);
   assert.deepEqual(value.unserved.map(({ name }) => name), ["audit.logged"]);
+});
+
+test("the host and prefix of a call the join links are served by the repository it reaches; those of a call that links nowhere stay unserved", async () => {
+  const repositories: Repositories = { "/work/shop-web": { files: {} }, "/work/orders": { files: {}, entrypoints: [postRoute("/api/orders")] } };
+  const queries = setup(repositories, sitesOf({ "shop-web": [postSite("shop-web", "http://localhost:9966/api/orders"), postSite("shop-web", "http://billing.example/charges", 9)] }));
+
+  const value = valueOf(await queries.outwardNames(LINKED));
+
+  assert.deepEqual(value.links.map(({ to }) => `${to.repo} ${to.name}`), ["orders POST /api/orders"]);
+  assert.deepEqual(value.unserved.map(({ name, kind }) => `${kind} ${name}`), ["path-prefix charges", "http-host http://billing.example"]);
 });
 
 test("a destination is never served by a repository whose name equals it: only a listener the join linked serves it", async () => {

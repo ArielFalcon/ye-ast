@@ -10,12 +10,16 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { composeCli, composeQueries } from "./compose.ts";
+import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { createMcpServer, type McpDeps } from "../mcp/server.ts";
 import { openSession, resultFields, type Session, type ToolResult } from "../mcp/test-session.testing.ts";
-import { COMPOSE_OUTPUT } from "../mcp/composition-schema.ts";
+import { composeOutput } from "../mcp/composition-schema.ts";
 import type { ComposeQuery } from "../mcp/query-schema.ts";
-import type { AnchorId, ComposeFull, CompositionGraph, EntityId, PartKind, PartOf } from "../mcp/composition-contract.ts";
+import type { ComposeFull } from "../mcp/composition-contract.ts";
+import type { AnchorId, CompositionGraph, EntityId, PartKind, PartOf } from "../core/ports/evidence-composition.port.ts";
+
+const COMPOSE_OUTPUT = composeOutput(createEvidenceComposition(createSha256Digest()));
 
 const GIT_ENV = {
   ...process.env,
@@ -133,7 +137,7 @@ before(async () => {
   const state = join(root, "state");
   mkdirSync(join(state, "scratch"), { recursive: true });
   const queries = composeQueries({ scratchRoot: join(state, "scratch"), indexCache: join(state, "index"), cacheDirectory: join(state, "cache"), trustDirectory: trust });
-  deps = { ...queries, digest: createSha256Digest(), repository: { path: api.root, repoId: api.id }, repositories: [{ path: web.root, repoId: web.id }] };
+  deps = { ...queries, digest: createSha256Digest(), evidenceComposition: createEvidenceComposition(createSha256Digest()), repository: { path: api.root, repoId: api.id }, repositories: [{ path: web.root, repoId: web.id }] };
   session = await openSession(createMcpServer(deps));
 });
 

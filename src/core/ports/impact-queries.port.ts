@@ -1,5 +1,6 @@
 import type { ImpactBudget, ImpactValue } from "../domain/impact/impact-fact.ts";
 import type { ImportersValue } from "../domain/impact/importers-fact.ts";
+import type { DeclaredBuildOutput } from "../domain/shared/build-outputs.ts";
 import type { ScopeRequest } from "../domain/shared/scope.ts";
 import type { Fact } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
@@ -27,6 +28,12 @@ interface ImpactOfChangeBase {
   scope?: ScopeRequest;
   /** Bounds on the walk; without one the walk runs to its end. */
   budget?: ImpactBudget;
+  /**
+   * Directories the host's own install produced for this repository (ADR-0037), read as data at a commit, never on a
+   * live tree; without one the answer is the one given before.
+   */
+  buildOutputs?: readonly DeclaredBuildOutput[];
+
   /** Aborting stops the work, removes every temporary directory and answers an `aborted` fault. */
   signal?: AbortSignal;
 }
@@ -44,6 +51,12 @@ interface ImpactCallersBase {
   targets: readonly CallersTarget[];
   scope?: ScopeRequest;
   budget?: ImpactBudget;
+  /**
+   * Directories the host's own install produced for this repository (ADR-0037), read as data at a commit, never on a
+   * live tree; without one the answer is the one given before.
+   */
+  buildOutputs?: readonly DeclaredBuildOutput[];
+
   signal?: AbortSignal;
 }
 

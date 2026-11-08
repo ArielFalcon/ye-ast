@@ -1,18 +1,22 @@
 import ts from "typescript";
+import { lineOf } from "./syntax.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { Evidence } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import { readAngularRouteFile, type RawImport } from "./angular-router.extractor.ts";
+import { readAngularRouteFile } from "./angular-router.extractor.ts";
+import type { RawImport } from "./module-shape.ts";
 import { createDeclarationLookup, type Declaration, type DeclarationLookup } from "./declaration-lookup.ts";
-import { lineOf } from "./http-call-sites.adapter.ts";
 import { moduleResolverOf } from "./module-resolver.ts";
 import { namedFunction, type NamedFunction } from "./consumer-flow.syntax.ts";
 import { sourceTree } from "./source-tree.ts";
+import { declarationCounts } from "./syntax-names.ts";
 
 export interface Unit {
   file: string;
   tree: ts.SourceFile;
   imports: ReadonlyMap<string, RawImport>;
+  /** How often each name is declared anywhere in the file. */
+  declared: ReadonlyMap<string, number>;
   classes: ReadonlyMap<string, ts.ClassDeclaration>;
   functions: ReadonlyMap<string, NamedFunction>;
 }
@@ -89,7 +93,7 @@ function describe(file: string, tree: ts.SourceFile, imports: ReadonlyMap<string
       if (named !== undefined) functions.set(named.name, named);
     }
   }
-  return { file, tree, imports, classes, functions };
+  return { file, tree, imports, declared: declarationCounts(tree), classes, functions };
 }
 
 interface RouterCall {
