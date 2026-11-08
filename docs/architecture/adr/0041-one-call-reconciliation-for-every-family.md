@@ -30,15 +30,15 @@
 judge an index edge but never adds a call the index lacks, so `callers` silently misses calls codegraph does not record.
 One module of the core becomes the owner of what a body calls: it aligns the index's records with the written calls
 per file, binds every call to its compile-time target with one chain of proofs, and answers forward (a body's calls)
-and reverse (the calls into a declaration) through a name index retained by content. Families extend it by
+and reverse (the calls into a declaration) through a name index retained by its complete inputs. Families extend it by
 composition: each applies its own policy to the reconciled calls, and may narrow a binding but never re-bind one.
 
 ## Context
 
 ### One merge, in trace only
 
-- Trace reconciles per body in `bodyOf` (`src/core/application/trace/trace-walk.ts:378-634`). It matches each index edge
-  and unresolved reference to a written call by line, column and name (`matchOwnedCall`,
+- Trace reconciles per body in `bodyOf` (`src/core/application/trace/trace-walk.ts:378-634`). It matches each call edge
+  and unresolved call reference to a written call by line, column and name (`matchOwnedCall`,
   `src/core/application/trace/syntax-calls.ts:48`), after placing bodies (`positionedBodies`, `:15`) and giving each
   written call its lexical owner (`callsByOwner`, `:32`). A matched record keeps the written position
   (`trace-walk.ts:397-411`); a record the body's syntax does not write becomes an `unplaced` cut (`:401`, `:409`, `:428`);
@@ -55,10 +55,15 @@ composition: each applies its own policy to the reconciled calls, and may narrow
 
 ### What was measured (11 repositories, 2026-11-08)
 
+The figures below come from the 2026-11-08 research, a scratch measurement not kept in the repository. This ADR does not
+reproduce them; M1 to M5 measure the implementation.
+
 - Written calls codegraph records nowhere (no edge of any kind but containment and imports, no unresolved reference at
-  the same place): 1,516. Only 144 name a repository declaration: 116 Java `super(...)`/`this(...)` into repository
-  constructors, 19 calls inside top-level `const X = f(...)` initializers, 9 scattered. The rest are library calls
-  (712 inside class-field wrappers such as `computed(() => ...)`, about 450 on receivers that are no name).
+  the same place; the base aligns call-bearing records only, decision 2, and M4 counts again): 1,516. Only 144 name a
+  repository declaration: 116 Java `super(...)`/`this(...)` into repository constructors, 19 calls inside top-level
+  `const X = f(...)` initializers, 9 scattered. The rest are library calls (712 inside class-field wrappers such as
+  `computed(() => ...)`, about 450 on receivers that are no name). These counts size the enrichment, not the noise:
+  M5 measures what the recovered library calls produce.
 - Every record only codegraph has is a synthesized heuristic edge without a column (interface dispatch, template
   calls): the syntax readers miss no written call.
 - Matching by column alone invents about 30 false gaps (two calls of one chain start at the same column); line, column
@@ -83,9 +88,12 @@ composition: each applies its own policy to the reconciled calls, and may narrow
   (`trace-walk.ts:387`) cannot tell an unread source from one that writes no call. RFC-0002: empty never means none.
   Whether a walk reaches a body in an unread source (a `.js` file, a TypeScript test, a Java file the parser rejects) and
   cuts all its edges as `unplaced` is a hypothesis, not measured.
-- **Records without a column are cut.** A kept call edge with no column finds no written call by column, so trace sends
-  it to the `unplaced` cut unless one written call of its name sits on its line (`trace-walk.ts:386-402`). Synthesized
-  edges have no written call by construction.
+- **Records without a column are cut.** After `callEdgesOf` drops the synthesizers `EDGE_POLICY` ignores
+  (`trace-walk.ts:47-49`, `src/core/domain/impact/edge-policy.ts:62`), a kept call edge with no column finds no written
+  call by column, so trace sends it to the `unplaced` cut unless one written call of its name sits on its line
+  (`trace-walk.ts:386-402`). Synthesized edges have no written call by construction.
+- **A place matches whatever its name.** When no written call at a record's place agrees with its name, `matchOwnedCall`
+  still matches the one written call that starts there (`syntax-calls.ts:56`): a record `beta` matches a call `alpha`.
 - **Columns counted apart.** codegraph and the TypeScript compiler count columns differently past a line's first
   character outside ASCII. Trace's effects compare columns only before it (`countedAlike`,
   `src/core/application/trace/trace-effects.ts:131`); `matchOwnedCall` compares them everywhere, so such a line can yield
@@ -118,7 +126,7 @@ composition: each applies its own policy to the reconciled calls, and may narrow
 |---|---|---|---|---|
 | Per body at query time, as trace does | Parses the bodies' files | Needs every file aligned and bound per query | Nothing kept | Forward only |
 | Whole graph at indexing, bindings included | Free | Free | Rebuilt whole; bindings need per-request inputs (build outputs, relations, scope) unknown at indexing | Discarded |
-| **Per-file alignment retained by content, binding lazy, a name index per read** | As today | First need in a read aligns every read source once per content; binds only the candidates of reached names | Only edited files align again | Chosen |
+| **Per-file alignment retained by its complete inputs, binding lazy, a name index per read** | As today | First need in a read aligns every read source whose inputs it has not seen; binds only the candidates of reached declarations | Only files whose inputs changed align again | Chosen |
 | The same, aligning only files whose text spells a reached name | As today | Cheaper cold | As above | Kept as the fallback of open question 1 |
 
 ### Pattern: composition or another
@@ -140,18 +148,26 @@ refuse a binding or add facts the base does not model, so one call never has two
 1. **One owner.** A module of `core/application/navigation/`, working name `ReconciledCalls`, created per snapshot read
    as `EdgeTargets` is today, owns what a body calls: it aligns the index's records with the written calls and binds
    every call to its compile-time target. `EdgeTargets` becomes its component for the index's edges; the alignment of
-   `syntax-calls.ts` and the static binding of `bodyOf` move into it; `DeclarationUses` is subsumed. No family aligns or
-   binds calls itself, and a fitness test over imports holds it. The pure rules it shares with trace (owning body, call
-   place, column comparability) move from `core/domain/trace/` to `core/domain/shared/`.
-2. **Inputs and coverage.** A file's records are the edges of its declarations, every kind but containment and imports,
-   and its unresolved references with retyped calls read back (`declaration-uses.ts:46`). Its written calls are
-   `DeclaredMemberNames.calls`, absent when no reader parsed the file: composition keeps the absence, and absent is
+   `syntax-calls.ts` and the static binding of `bodyOf` move into it; the reading of calls of `DeclarationUses` moves
+   into it, and its reading of `references`, `extends` and `implements` stays. No family aligns or binds calls itself,
+   and a fitness test over imports holds it. The pure rules it shares with trace (owning body, call place, column
+   comparability) move from `core/domain/trace/` to `core/domain/shared/`.
+2. **Inputs and coverage.** A file's call-bearing records are the `calls` and `instantiates` edges of its declarations,
+   the calls a resolver retyped into an edge of another kind, read back as references (`declaration-uses.ts:46-54`), and
+   its unresolved references of those two kinds. Only they are aligned, and only they can be `contradicted`: a
+   `SyntaxCall` is a call or a construction (`src/core/ports/declared-member-names.port.ts:115-116`), while `references`,
+   `extends` and `implements` need no invocation syntax (`edge-policy.ts:23-25`). Records of those kinds keep their
+   existing reading and verdicts, as trace already reads them apart (`trace-walk.ts:379-380`). A file's written calls
+   are `DeclaredMemberNames.calls`, absent when no reader parsed the file: composition keeps the absence, and absent is
    `unread`, never "no call".
 3. **Alignment, per file.** Each written call gets its innermost index body by exact lexical ownership, `deferred` when a
-   function value its body does not run encloses it. A record matches a written call on its line when column and name
-   agree (the spelling, the callee, or an anchor the reader lists); a record without a column matches only the one
-   written call of its name on its line; past a line's first character outside ASCII, columns are not compared and the
-   line rule applies. Every record and written call then falls in exactly one class:
+   function value its body does not run encloses it. A record matches a written call at its place (its line and column,
+   or an anchor the reader lists) when the spelling or the callee agrees with the record's name; a record without a
+   column is compared on its line. Today a place also matches the one written call that starts there whatever its name
+   (`syntax-calls.ts:56`): U1 keeps that rule byte for byte, and U2 decides, with a mismatched-name fixture and the M4
+   count of such matches, whether name agreement becomes required. From U2, past a line's first character outside ASCII
+   columns are not compared and the line rule applies. Every call-bearing record and written call then falls in exactly
+   one class:
 
    | Class | What it is | What the base does |
    |---|---|---|
@@ -163,7 +179,8 @@ refuse a binding or add facts the base does not model, so one call never has two
    | `contradicted` | A record with line and column, not synthesized, in a read source, matching no written call | Pruned, with one `unresolved-link` cut at its place naming its target |
    | `unowned` | A written call no single index body owns | A cut at its place wherever a family reaches its name |
 
-   Alignment reads recorded places, never resolutions, so it depends on the file's content and its extraction only.
+   Alignment reads the file's syntax, its index declarations (kind, name, span) and its call-bearing records (kind,
+   place, name, synthesizer, retyping); those are its complete inputs (decision 9).
 4. **Binding, one chain.** Every call the index left without a target (a recovered call, an unresolved reference) and
    the receiver of every kept edge are bound by one chain, in order, with the proofs the family reads: the type checker
    (ADR-0037); a member proof of the relations; the body's own member (R2); constructor chaining (`super(...)` to the
@@ -187,19 +204,48 @@ refuse a binding or add facts the base does not model, so one call never has two
 7. **Forward access.** `callsOf(body)` answers a body's reconciled calls in source order, bound lazily and memoized for
    the read. It parses only the files whose bodies are asked, as today.
 8. **Reverse access.** `into(nodes)` answers, for declarations a reverse walk reached, the recovered calls and unresolved
-   references whose binding reaches one of them, as edges into it (the `FollowedEdge` that `typedReferencesOf`,
-   `reference-origins.ts:77`, and `redirectedInto`, `edge-targets.ts:297`, already produce), and the unbound ones that
-   name them as unresolved uses. It reads a name index of every read source's recovered calls and unresolved references,
-   by callee name (the class name for `new`, `super` and `this` for chaining), and binds only the candidates of reached
-   names. Impact and `callers` call it in `walkInside`'s fixpoint beside `redirectedInto`
-   (`impact-queries.ts:619-673`): a bound call is a dependence with its derivation; an unbound one passes through
-   `unresolvedLinkCuts` (`src/core/domain/impact/impact-cuts.ts:131`) as an index unresolved reference does, so it cuts
-   only where its name points at a reached declaration of the same runtime.
-9. **Retention by content.** A file's alignment delta (its recovered and unowned calls with their owner spans and flags,
-   its `contradicted` and `misowned` places; positions and names, never node ids or trees) is an ADR-0035 derived fact
-   keyed by the file's path and content. A warm name index parses nothing. Bindings live for one read.
+   call references whose binding reaches one of them, as edges into it (the `FollowedEdge` that `typedReferencesOf`,
+   `reference-origins.ts:77`, and `redirectedInto`, `edge-targets.ts:297`, already produce). It reads a name index of
+   every read source's recovered calls and unresolved call references, by the name each spells as its callee, and binds
+   only the candidates of reached declarations. A reached declaration's candidates are complete when looked up under:
+   - its own name, in every file: a bare call, a member call `x.f()` and a namespace call `ns.f()` all spell it;
+   - each local name an import binding proves reaches it (`importBindings`,
+     `src/core/application/navigation/import-bindings.ts:15-31`), only in the importing file, the expansion
+     `candidatesInto` already makes for index edges (`edge-targets.ts:325-328`): `import { f as g }` files `g()` and
+     `new g()` there;
+   - for a class `C`, or a constructor of `C`: `C`'s name and its import aliases, for `new`; `super` among the calls the
+     constructors of each direct subclass own (the subclasses by the index's `extends` edges into `C`, and a
+     parameterized supertype by its raw name, as `supertypesOf` reads it, `trace-walk.ts:244-251`); `this` among the
+     calls `C`'s own constructors own. The Java reader spells chaining `super` or `this` with no callee
+     (`src/core/adapters/tree-sitter/java-member-names.adapter.ts:48-60`), so no constructor name finds it otherwise.
+
+   A call spelled any other way (a value alias `const g = f; g()`, a computed callee) is in neither source and reaches
+   the declaration through the value's `references` edge, as today; an alias the import join does not prove leaves the
+   call unbound under its own name. Impact and `callers` call `into` in `walkInside`'s fixpoint beside `redirectedInto`
+   (`impact-queries.ts:619-673`): a bound call is a dependence with its derivation. An unbound recovered call is a cut
+   only when attributed: a bare call that names the declaration in its own file or through its proven import, or a
+   member call whose receiver a proof types and whose candidates at that type include the declaration (overloads the
+   reading does not settle). A member call on a receiver no proof types (a call result, a computed value, an
+   unannotated or callback parameter) never reaches the unattributed homonym cut that `unresolvedLinkCuts` makes for a
+   qualified index reference without candidates (`src/core/domain/impact/impact-cuts.ts:164-183`): it is counted (M5),
+   not emitted, and stays as absent as it is today. Noise is worse than no fix. Index unresolved references keep
+   today's rules (open question 7).
+9. **Retention by complete inputs.** Two ADR-0035 derived facts, each keyed by every input it is derived from (ADR-0035
+   decisions 1 and 2):
+   - a file's written calls (with their owner scopes and its function values), derived from the file alone, keyed by its
+     path and content;
+   - a file's alignment delta (its recovered and unowned calls with their owner spans and flags, its `contradicted` and
+     `misowned` places; positions and names, never node ids or trees), keyed by its path and content and the digest of
+     its normalized index inputs: its declarations (kind, name, span) and its call-bearing records (kind, line, column,
+     name, synthesizer, retyping).
+
+   The delta's key costs one read of the file's declarations and records from the store; a delta miss with a written
+   calls hit aligns without parsing. Whether the written calls fact is retained at all depends on its bytes (M3);
+   without it a delta miss parses the file again. The index digest leaves the key only on the proof of open question 2.
+   Bindings live for one read.
 10. **Laziness.** Nothing runs at indexing. The full alignment runs the first time a read needs the name index, inside
-    the read's parse hold (ADR-0040), file by file, keeping only each delta. Forward families never trigger it.
+    the read's parse hold (ADR-0040), file by file, reducing each TypeScript output to its delta; the Java trees it
+    parses stay held until the read ends. Forward families never trigger it.
 11. **Coverage grows by reader.** Only sources a syntax reader parses (TypeScript, Java) are reconciled; others keep the
     index's records. A new language's reader brings its conformance fixtures (ADR-0013).
 12. **No answer shape changes.** No field, no derivation value and no SCHEMA bump; cuts are `unresolved-link`.
@@ -235,26 +281,34 @@ interface ReconciledCalls {
 
 ## Efficiency
 
-- **Parse dominates.** Alignment is linear in records and written calls once a file is parsed. Forward families parse
-  what they parse today. A reverse family's first need in a read parses every read source once per content: at most the
-  measured 0.06 to 2.5 s, only for content not seen before, and keeping one file's delta at a time instead of every
-  output (the 154 MB above were measured with every output kept; what this saves is part of M1).
-- **Warm.** The deltas are small (1,516 written calls without a record over 11 repositories, all of them kept), so a warm
-  name index costs lookups. Binding cost follows the candidates of reached names, not the repository.
-- **Incremental.** A commit or a live sync aligns again only the files whose content changed; the name index of a read is
+Every cost below is a measurement to obtain, not a guarantee.
+
+- **Parse.** Forward families parse what they parse today. A reverse family's first need in a read parses every read
+  source whose content it has not seen. The 2026-11-08 research measured that parse at 0.06 to 2.5 s per snapshot.
+- **Alignment.** Today's code compares by scanning lists: `positionedBodies` filters every scope per declaration,
+  `callsByOwner` every body and function value per written call, and `matchOwnedCall` every owned call per record
+  (`syntax-calls.ts:15-56`). The base builds per-file lookups once (written calls and records by line, bodies ordered by
+  span start), so a record is compared only with the written calls of its line and a call only with the bodies around
+  it. M1 measures the result.
+- **Memory.** Under ADR-0040 every Java tree the full pass parses stays held until the read ends, so the pass's peak
+  includes the Java trees of the whole snapshot; TypeScript outputs are reduced to their delta file by file. M1 measures
+  peak heap and WASM memory.
+- **Warm.** A warm name index reads each file's declarations and call-bearing records (for the delta's key) and its
+  retained delta, and parses nothing. Binding follows the candidates of reached declarations, not the repository.
+- **Incremental.** A commit or a live sync aligns again only the files whose inputs changed; the name index of a read is
   rebuilt from retained deltas.
 - **One-shot processes.** Derived facts live in the process (ADR-0035), so each CLI `callers` or `impact` run pays the
-  cold parse; the MCP server and `serve` pay it once per content.
+  cold pass; the MCP server and `serve` pay it once per input.
 
 Measurements before acceptance, on the corpus manifest of ADR-0039:
 
 | # | Measure | Why |
 |---|---|---|
-| M1 | Cold and warm cost of the full alignment per repository (CPU, peak heap, Java parses) against its indexing time | Bounds the reverse first need |
-| M2 | One-shot CLI `callers` and `impact`, base against candidate, on the largest repositories | Decides open question 1 |
-| M3 | Retained bytes of the deltas against the 32 MiB default budget (ADR-0021), evictions | Cache pressure |
-| M4 | Per repository: `matched`, `recovered` (bound by derivation, unbound, outside), `synthesized`, `unread`, `misowned`, `contradicted`, `unowned` | Confirms "the readers miss no written call" and sizes every class |
-| M5 | New cuts per corpus query in `callers`, `impact`, `outline`, `importers`, trace, each inspected | Noise: at most the 144 repository-naming calls over 11 repositories, and only where a reached name is named |
+| M1 | Complete `callers`, `impact` and `importers` queries, cold and warm, per repository: CPU, peak heap, peak WASM memory under the Java hold, Java parses, against the indexing time | Bounds the reverse first need and the hold's memory |
+| M2 | One-shot CLI `callers` and `impact`, base against candidate, cold and warm, on the largest repositories | With M1 and M3, decides open question 1 |
+| M3 | Retained bytes of both derived facts against the 32 MiB default budget (ADR-0021), and the evictions they cause in repeated queries | Cache pressure |
+| M4 | Per repository, over call-bearing records only: `matched` (and how many by the one-call-at-a-place rule with another name), `recovered`, `synthesized`, `unread`, `misowned`, `contradicted`, `unowned` | Sizes every class; decides the U2 name rule |
+| M5 | Every recovered call per repository, split into bound to a repository declaration, proven outside, unbound and attributed (a cut), unbound and unattributed (a homonym of a reached name, not emitted); and the new cuts per corpus query in `callers`, `impact`, `outline`, `importers` and trace, each inspected | Noise; the report is inspected before U4 is accepted |
 | M6 | Answers byte-identical for every refactor unit | Behavior preserved |
 
 ## Migration
@@ -265,38 +319,60 @@ reaches `main` with the expectations stated (ADR-0039).
 | Unit | Change | Gate expectation |
 |---|---|---|
 | U0 | Composition keeps `calls` absent for unread sources; the `unread` class in trace | `none` on the corpus expected; `trace:+` where a walk enters an unread source |
-| U1 | Alignment moves to `ReconciledCalls`; domain rules to `core/domain/shared/`; trace reads `callsOf` | `none` (M6) |
-| U2 | `synthesized`, column comparability, `misowned` and `contradicted` replace trace's blind `unplaced` | `trace:±` |
-| U3 | One binder: trace's static chain and `EdgeTargets`' receiver settlement become one; trace hands over field and local origins | `trace:+`; `callers`, `impact` none |
-| U4 | Name index, `into`, constructor chaining; `impact` and `callers` read it in the fixpoint | `callers:+`, `impact:+`, `±` where a scoped cut appears |
+| U1 | Alignment of call-bearing records moves to `ReconciledCalls`, today's matching rule kept byte for byte; domain rules to `core/domain/shared/`; trace reads `callsOf` | `none` (M6) |
+| U2 | `synthesized`, column comparability, `misowned` and `contradicted` replace trace's blind `unplaced`; the name rule at a shared place is decided on M4 | `trace:±` |
+| U3 | One binder: trace's static chain and `EdgeTargets`' receiver settlement become one; trace hands over field and local origins. Before the move, regression tests pin through `callers` and `impact` every settlement `EdgeTargets` makes today: `proven` and `name-match` for a field origin, an `inject()` local, a constructed, a declared and an annotated receiver, `typed`, a drop and a redirect | `trace:+`; `callers` and `impact` `none`, answers byte-identical |
+| U4 | Name index with its complete candidate lookup, `into`, constructor chaining, the attribution rule of decision 8; `impact` and `callers` read it in the fixpoint; accepted only after the M5 report is inspected | `callers:+`, `impact:+`, `±` where an attributed cut appears |
 | U5 | `outline` focus, `importers` and `contract_consequences` read the base | `outline:+`, `importers:±`, `contract_consequences:±` |
 | U6 | `contradicted` pruning in the reverse families | `callers:±`, `impact:±`; none expected (M4 first) |
 
-Conformance fixtures, in the base's tests through its public seam and once per family that wires it:
+Conformance fixtures, in the base's tests through its public seam and once per family that wires it, each added failing
+first in the unit named:
 
-1. **Constructor chaining (Java).** `class B extends A { B() { super(1); } B(String s) { this(); } }` with `A(int)` and
-   `A(int, int)`: `callers` of `A(int)` lists `B()`, `callers` of `B()` lists `B(String)`, trace from `B(String)` steps
-   to `B()` and then `A(int)`. With `A(String)` added, the signatures at the call's arity differ and the reading does not
-   settle them, so `super(1)` is a cut listing `A(int)` and `A(String)` (R5).
-2. **Call in a top-level const initializer (TypeScript).** `export const Store = signalStore(withMethods((s, api =
+1. **Only calls are reconciled (U1).** `class C extends Base implements Port { dto: Dto; run() { this.svc.load(); } }`
+   with the index holding `extends`, `implements`, a `references` edge to `Dto` and a `calls` edge to `load`: only
+   `load` is aligned; the other three edges are neither matched nor contradicted, and every family follows them as
+   before.
+2. **Homonym false gap (U1).** `this.http.get(url).pipe(map(f))`, with the index recording `pipe` only: `pipe` is
+   `matched`, `get` `recovered`, nothing `contradicted`; and `a.save(); b.save();` on one line pairs each record with
+   its own call.
+3. **Unread source (U0).** A body in a source no reader parses: its records kept, nothing recovered or contradicted.
+4. **Synthesized edge, policy unchanged (U2).** A call edge with no column and a synthesizer `EDGE_POLICY` does not
+   ignore: the base classifies it `synthesized`, trace and `callers` follow it, and trace emits no `unplaced` cut. An
+   edge of `angular-template`, `angular-event` or `interface-impl`: the base preserves it as `synthesized`, and every
+   family still leaves it unfollowed (`edge-policy.ts:62`).
+5. **Mismatched name at a place (U2).** A record `beta` at a place where the only written call is `alpha`: U1 matches
+   them as today; from U2 the outcome follows the rule M4 decides (kept, or `beta` `contradicted` and `alpha`
+   `recovered`).
+6. **Contradicted record (U2, U6).** A call edge placed where the source writes no call: pruned with one cut, never
+   silent.
+7. **Constructor chaining (U4, Java).** `class B extends A { B() { super(1); } B(String s) { this(); } }` with `A(int)`
+   and `A(int, int)`: `callers` of `A(int)` lists `B()`, `callers` of `B()` lists `B(String)`, trace from `B(String)`
+   steps to `B()` and then `A(int)`. With `A(String)` added, the signatures at the call's arity differ and the reading
+   does not settle them, so `super(1)` is a cut listing `A(int)` and `A(String)` (R5).
+8. **Call in a top-level const initializer (U4, TypeScript).** `export const Store = signalStore(withMethods((s, api =
    inject(Api)) => ({ load: () => api.getArticle() })))`, which the index records nothing of: `callers` of
    `Api.getArticle` lists `Store` at the call's line, `proven`; trace marks the call `deferred`.
-3. **Synthesized edge kept.** A call edge with a synthesizer and no column: kept, no cut, in trace and `callers`.
-4. **Homonym false gap.** `this.http.get(url).pipe(map(f))`, with the index recording `pipe` only: `pipe` is `matched`,
-   `get` `recovered`, nothing `contradicted`; and `a.save(); b.save();` on one line pairs each record with its own call.
-5. **Unread source.** A body in a source no reader parses: its records kept, nothing recovered or contradicted.
-6. **Contradicted record.** An edge placed where the source writes no call: pruned with one cut, never silent.
-7. **No noise from library calls.** `x = computed(() => Math.max(a, b))` adds no cut in `callers` or `impact`.
+9. **Aliased call and construction (U4, TypeScript).** In a const initializer the index records nothing of,
+   `import { getArticle as load } from "./api"` and `import { Store as S } from "./store"`, then `load()` and `new S()`:
+   `callers` of `getArticle` and of `Store` each list the initializer's constant.
+10. **Unknown call-result receiver (U4).** `factory().get(id)` with a reached `B.get`: no cut in `callers` or `impact`;
+    M5 counts it as unattributed.
+11. **Deferred callback with repository homonyms (U4).** `items.forEach((item) => item.save())` with a reached
+    `Repo.save`: no cut in `callers` or `impact`; trace keeps its own R6 cut at the call, as today.
+12. **No noise from library calls (U4).** `x = computed(() => Math.max(a, b))` adds no cut in `callers` or `impact`.
 
 ## Consequences
 
-- `callers` and `impact` gain the dependences codegraph does not record: on the corpus 144 call sites name repository
-  declarations, each now a dependence or a scoped cut instead of nothing.
-- A call has one target in every family that binds it; trace steps where `callers` proves.
+- `callers` and `impact` gain the dependences codegraph does not record and ye-ast's proofs bind; an unbound one is an
+  attributed cut, or, with no proof to attribute it, stays absent as today and is counted by M5.
+- A call has one static target in every family that binds it. Trace starts from the binding `callers` uses, but its
+  execution policy may still refuse it (a nominal class, dispatch), so a dependence `callers` proves can stay a trace
+  cut, now for a stated execution reason.
 - An index error the syntax contradicts is pruned with a cut; a synthesized record is never pruned for lacking a written
-  call.
-- A reverse query's first need in a read parses every read source once per content; one-shot CLI runs pay it every time
-  until open question 1 decides otherwise.
+  call; `references`, `extends` and `implements` are never aligned.
+- A reverse query's first need in a read parses every read source whose inputs it has not seen; one-shot CLI runs pay it
+  every time until open question 1 decides otherwise.
 - `DeclaredMemberNamesReader` is consumed by navigation, not only trace; its port comment and the alignment rules'
   domain move with U1.
 - Coverage of a new language's calls arrives with its reader, not with family code.
@@ -304,26 +380,33 @@ Conformance fixtures, in the base's tests through its public seam and once per f
 ## Risks
 
 - **Several families move at once.** Mitigated by U0 to U6, each gated with stated directions.
-- **Noise from recovered calls.** Unbound recovered calls follow the existing cut rules for unresolved references, scoped
-  to reached names and the language rule; M5 counts them.
-- **Cache pressure and cold cost.** M1 to M3 before acceptance.
+- **Noise from recovered calls.** An unbound recovered call cuts only when attributed (decision 8); the unattributed
+  homonym cut of `unresolvedLinkCuts` is closed to it; M5 reports what is attributed and what is not emitted, and U4 is
+  accepted only after that report is inspected.
+- **Silence kept where nothing attributes a call.** A recovered call on an untyped receiver that does reach a reached
+  declaration stays absent, as today; M5 sizes it.
+- **Cache pressure, cold cost and the Java hold.** M1 to M3 before acceptance.
 - **Alignment depends on codegraph's places.** A codegraph upgrade that moves its columns changes the classes;
-  conformance fixtures 3, 4 and 6 and the version-checked adapter (RFC-0003) catch it.
+  conformance fixtures 2, 4 and 6 and the version-checked adapter (RFC-0003) catch it.
 - **A family keeps a private binder.** The import fitness test of decision 1.
 
 ## Not decided here
 
 Open questions, each with the recommended answer:
 
-1. **Persist the deltas beside the kept index?** Recommended: decide on M2. If one-shot runs need it, write them in
-   ye-ast's own store, keyed by the kept index's content digest, with its retention (ADR-0027); never into codegraph's
-   store. The text pre-filter (align only files that spell a reached name) is the alternative to measure then.
-2. **Key the delta by content alone?** Recommended: yes, if a fitness test shows codegraph's recorded places of a file
-   depend on that file alone (index it in two snapshots of different neighbours and compare); otherwise add the digest
-   of the file's recorded places to the key.
+1. **Persist the deltas beside the kept index?** Recommended: decide on M1 to M3 (complete cold and warm queries,
+   evictions and the memory of the Java hold) and M2. If one-shot runs need it, write them in ye-ast's own store, keyed
+   by the kept index's content digest, with its retention (ADR-0027); never into codegraph's store. The text pre-filter
+   (align only files that spell a reached name) is the alternative to measure then.
+2. **Drop the index digest from the delta's key?** Recommended: only on a proof that equal file content gives equal
+   complete inputs (declarations with kind, name and span; call-bearing records with kind, place, name, synthesizer and
+   retyping), for example a fitness test that indexes one file within two snapshots of different neighbours and compares
+   them. Until then the digest stays in the key; decided before U4 relies on retention across snapshots.
 3. **Move or cut a `misowned` record?** Recommended: move it, since lexical ownership is exact; M4 counts them before U2.
 4. **Deferred calls in reverse families.** Recommended: a dependence, as index edges inside function values count today;
    only trace reads `deferred` (R8).
 5. **An `unowned` written call.** Recommended: a cut where a family reaches its name, never attributed to the file's
    top-level code by guess.
 6. **Languages beyond TypeScript and Java.** Out of scope; each enters with its reader under ADR-0013.
+7. **Should index unresolved references lose the unattributed homonym cut too?** Recommended: decide on the M5 report;
+   U4 leaves their rule as it is, so it changes no answer it does not have to.
