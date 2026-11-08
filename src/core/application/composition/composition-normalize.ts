@@ -15,7 +15,7 @@ import type { ImportedFile, ImportersValue } from "../../domain/impact/importers
 import type { OutlineDeclaration, OutlineValue } from "../../domain/outline/outline-fact.ts";
 import { hasUnprovedUses } from "../../domain/outline/outline-uses.ts";
 import type { TraceValue } from "../../domain/trace/trace-fact.ts";
-import type { CallSite } from "../../domain/topology/call-site.ts";
+import { callPlaceEvidence, type CallSite } from "../../domain/topology/call-site.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import type { Decision } from "../../domain/decisions/decision.ts";
 import type { ConsequencesValue, HypothesisAnswer, LocatedHop, ProducerConsequence, UseConsequence } from "../../domain/contracts/consequence-fact.ts";
@@ -445,15 +445,11 @@ function repoImpact(b: Builder, section: ReadContext, repo: string, prefix: stri
   value.unresolved.forEach((site, index) => b.part({ kind: "unresolved-call-site", site }, section.id, [`${prefix}/unresolved/${index}`]));
 }
 
-/** A call's exact place, shared by call sites, links and trace effects; a line without a column has none. */
-function callPlace(b: Builder, place: Place, path: string, line: number, column: number | undefined, read: ReadId, pointer: string): { column?: number; place?: EvidenceId } {
-  return column === undefined ? {} : { column, place: b.evidence(place, { path, line, column }, read, pointer) };
-}
-
 function callSite(b: Builder, section: ReadContext, repo: string, pointer: string, site: CallSite, disposition: "matched" | "unmatched" | "external"): void {
   const place = site.repo === repo ? section.here : b.placeOf(site.repo, section.id);
   const { file, line, column, endLine, target, ...rest } = site;
-  const location = { ...callPlace(b, place, file, line, column, section.id, pointer), file: b.file(place, file, section.id, `${pointer}/file`), line, ...(endLine === undefined ? {} : { endLine }) };
+  const exact = callPlaceEvidence(site);
+  const location = { ...(exact === undefined ? {} : { column: exact.column, place: b.evidence(place, exact, section.id, pointer) }), file: b.file(place, file, section.id, `${pointer}/file`), line, ...(endLine === undefined ? {} : { endLine }) };
   b.part({ kind: "call-site", site: { ...rest, location, target: b.finding(place, target, section.id, `${pointer}/target`) }, disposition }, section.id, [pointer]);
 }
 
@@ -463,9 +459,10 @@ function callSite(b: Builder, section: ReadContext, repo: string, pointer: strin
  */
 function linkData(b: Builder, root: ReadContext, { from, to, ...link }: Link, pointer: string, toPlace: Place = b.placeOf(to.repo, root.id)): LinkData {
   const fromPlace = b.placeOf(from.repo, root.id);
+  const exact = callPlaceEvidence(from);
   return {
     ...link,
-    from: { ...callPlace(b, fromPlace, from.file, from.line, from.column, root.id, `${pointer}/from`), file: b.file(fromPlace, from.file, root.id, `${pointer}/from/file`), line: from.line, repo: from.repo, symbol: from.symbol },
+    from: { ...(exact === undefined ? {} : { column: exact.column, place: b.evidence(fromPlace, exact, root.id, `${pointer}/from`) }), file: b.file(fromPlace, from.file, root.id, `${pointer}/from/file`), line: from.line, repo: from.repo, symbol: from.symbol },
     to: { repo: to.repo, kind: to.kind, name: to.name, handler: b.anchor(toPlace, to.handler, root.id, `${pointer}/to/handler`, `${pointer}/to/handler/path`) },
   };
 }
@@ -548,7 +545,10 @@ function trace(b: Builder, root: ReadContext, value: TraceValue): void {
       ...(leaves === undefined ? {} : { leaves }),
       ...(step.external === undefined ? {} : { external: step.external }),
       ...(alternatives === undefined ? {} : { alternatives }),
-      ...(step.effects === undefined ? {} : { effects: step.effects.map((effect, k) => ({ ...effect, ...callPlace(b, root.here, step.file, effect.line, effect.column, root.id, `${pointer}/effects/${k}`) })) }),
+      ...(step.effects === undefined ? {} : { effects: step.effects.map((effect, k) => {
+        const exact = callPlaceEvidence({ ...effect, repo: root.here.repo, file: step.file, symbol: step.symbol });
+        return { ...effect, ...(exact === undefined ? {} : { column: exact.column, place: b.evidence(root.here, exact, root.id, `${pointer}/effects/${k}`) }) };
+      }) }),
     }, root.id, [pointer]);
   });
   value.readingPlan.ranges.forEach(({ file, start, end, steps }, index) => {

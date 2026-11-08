@@ -115,9 +115,15 @@ export interface UnresolvedCallSite {
 /** Where a call site is written in the workspace: the place a link starts from. */
 export type CallPlace = Pick<CallSite, "repo" | "file" | "line" | "column" | "symbol">;
 
-export function callPlaceOf(site: CallSite): CallPlace {
+export function callPlaceOf(site: CallPlace): CallPlace {
   const place = { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol };
   return site.column === undefined ? place : { ...place, column: site.column };
+}
+
+/** Exact occurrence evidence omits the enclosing symbol and requires a column. */
+export function callPlaceEvidence(site: CallPlace): (Evidence & { column: number }) | undefined {
+  const { file, line, column } = callPlaceOf(site);
+  return column === undefined ? undefined : { path: file, line, column };
 }
 
 /** The order of call places: repository, file, line, symbol, then column. */
