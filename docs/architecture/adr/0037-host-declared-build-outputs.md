@@ -1,6 +1,6 @@
 # ADR-0037: A host may declare build outputs, and TypeScript bindings are then read from the type checker
 
-- Status: Proposed
+- Status: Accepted, 2026-11-08, after an independent review and the corpus gate (ADR-0039) passed
 - Decision source: the owner, 2026-11-07, answering the tech lead's recommendation "B6: aceptar build outputs
   declarados por el host (por ejemplo node_modules), sin ejecutar nada del repo" (B6: accept build outputs a host
   declares, for example `node_modules`, without running anything of the repository): "B6 acepto tu recomendacion, me
