@@ -1,4 +1,5 @@
 import { isBareName, type UnresolvedUse } from "./impact-cuts.ts";
+import { sharesRuntime } from "../languages/call-targets.ts";
 import { compareText } from "../shared/code-node.ts";
 
 /** Who depends on one file, as repo-relative paths sorted by code unit; the file itself is never listed. */
@@ -40,11 +41,11 @@ function segmentsOf(name: string): string[] {
 /**
  * The other files with an unresolved reference that names one of the file's declared names, one of its qualified names
  * the index considered, or a segment equal to the file's stem; a qualified reference the index attributed to no
- * candidate names none of them, so a homonym elsewhere is never a namer.
+ * candidate names none of them, so a homonym elsewhere is never a namer. A reference of another runtime names no file.
  */
 export function unresolvedNamersOf(file: string, declared: ReadonlySet<string>, qualified: ReadonlySet<string>, references: readonly UnresolvedUse[]): string[] {
   const stem = stemOf(file);
-  const namers = references.filter((reference) => reference.file !== file && namesIt(reference, declared, qualified, stem));
+  const namers = references.filter((reference) => reference.file !== file && sharesRuntime(reference.file, file) && namesIt(reference, declared, qualified, stem));
   return sortedUnique(namers.map((reference) => reference.file));
 }
 

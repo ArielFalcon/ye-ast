@@ -32,6 +32,17 @@ test("a qualified reference names a file's declaration only when the index consi
   assert.deepEqual(unresolvedNamersOf("src/app/address.service.ts", declared, qualifiedNames, [qualified("AddressService.resolve", ["AddressService::resolve"])]), ["src/app/other.ts"]);
 });
 
+test("a reference of the other runtime never names a file, by declared name or by stem, while one of its own does", () => {
+  const declared = new Set(["Configuration"]);
+  const references = [use("Configuration", "src/main/java/a/CacheConfiguration.java"), use("configuration.get", "src/main/java/a/AsyncConfiguration.java"), use("Configuration", "src/app/admin/admin.ts")];
+
+  assert.deepEqual(unresolvedNamersOf("src/app/configuration.ts", declared, new Set(["Configuration"]), references), ["src/app/admin/admin.ts"]);
+});
+
+test("a reference still names a configuration file it reads", () => {
+  assert.deepEqual(unresolvedNamersOf("package.json", new Set(["version"]), new Set(["version"]), [use("version", "src/app/about.ts")]), ["src/app/about.ts"]);
+});
+
 test("a file never names itself", () => {
   assert.deepEqual(unresolvedNamersOf("src/app/order.ts", new Set(["Order"]), new Set(["Order"]), [use("Order.create", "src/app/order.ts")]), []);
 });
