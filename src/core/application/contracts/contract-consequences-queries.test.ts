@@ -394,6 +394,18 @@ test("a frontier a reader reports keeps its place, cause and the chain that reac
   assert.deepEqual(item.evidence.map((evidence) => [evidence.line, evidence.via]), [[10, "basis:exact"], [11, undefined], [15, "unmodelled-flow:spread"]]);
 });
 
+test("a frontier's chain names each place once, at its last pass and with the label a pass gave it, while two labels at one place stay apart", async () => {
+  const at = (line: number) => ({ path: "src/owner.service.ts", line });
+  const hops = [{ step: "return" as const, evidence: at(10) }, { step: "caller" as const, evidence: at(11) }, { step: "argument" as const, evidence: at(12) }, { step: "pipe" as const, evidence: at(11) }];
+  const flow = { [carrierKey(siteOf())]: { uses: [], next: [], frontiers: [{ at: at(10), cause: "unmodelled-flow" as const, reason: "unresolved" as const, detail: "spread", hops }] } };
+
+  const fact = await setup({ flow }).ask();
+
+  const item = fact.value.findings[0];
+  assert.ok(item?.status === "unknown");
+  assert.deepEqual(item.evidence.map((evidence) => [evidence.line, evidence.via]), [[10, "basis:exact"], [12, undefined], [11, undefined], [10, "unmodelled-flow:spread"]]);
+});
+
 const UTIL = { file: "src/util.ts", symbol: "valueOrDefault", line: 3 };
 const parameterOf = { kind: "parameter" as const, repo: "web", ...UTIL, index: 0 };
 const utilReturn = { kind: "return" as const, repo: "web", ...UTIL };

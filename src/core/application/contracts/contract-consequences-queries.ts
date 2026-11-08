@@ -250,7 +250,7 @@ async function producerOf(session: ConsumerSession, link: Link, hypothesis: Requ
   const frontiers = settled.flatMap((origin): ConsequenceFinding<ProducerConsequence>[] => {
     if (origin.kind !== "frontier") return [];
     const via = origin.detail === undefined ? origin.reason : `${origin.reason}:${origin.detail}`;
-    return [{ status: "unknown", reason: "unresolved", evidence: [call, ...origin.hops].map((hop) => located(hop.evidence, repo)).concat(located({ ...origin.at, via }, repo)) }];
+    return [{ status: "unknown", reason: "unresolved", evidence: chainEvidence([call, ...origin.hops], { ...origin.at, via }, repo) }];
   });
   return [decided, ...frontiers];
 }
@@ -374,7 +374,26 @@ function entriesAfter({ site }: Carrier, { carrier, hops, returnsTo }: FlowNext,
 
 function frontierItem(frontier: FlowFrontier, chain: readonly Hop[], repo: string): ConsequenceFinding<UseConsequence> {
   const via = frontier.detail === undefined ? frontier.cause : `${frontier.cause}:${frontier.detail}`;
-  return { status: "unknown", reason: frontier.reason, evidence: [...chain, ...frontier.hops].map((hop) => located(hop.evidence, repo)).concat(located({ ...frontier.at, via }, repo)) };
+  return { status: "unknown", reason: frontier.reason, evidence: chainEvidence([...chain, ...frontier.hops], { ...frontier.at, via }, repo) };
+}
+
+/**
+ * The places a chain passed through on its way to `at`, which stays last: each place once, at its last pass, with the
+ * label a pass gave it; two different labels at one place stay apart.
+ */
+function chainEvidence(hops: readonly Hop[], at: Evidence, repo: string): RepositoryEvidence[] {
+  const places: RepositoryEvidence[] = [];
+  for (const place of [...hops.map((hop) => hop.evidence), at].map((evidence) => located(evidence, repo))) {
+    const earlier = places.findIndex((kept) => samePlace(kept, place) && (kept.via === undefined || place.via === undefined || kept.via === place.via));
+    const via = place.via ?? (earlier === -1 ? undefined : places[earlier]!.via);
+    if (earlier !== -1) places.splice(earlier, 1);
+    places.push(via === undefined ? place : { ...place, via });
+  }
+  return places;
+}
+
+function samePlace(a: Evidence, b: Evidence): boolean {
+  return a.path === b.path && a.line === b.line && a.endLine === b.endLine && a.column === b.column;
 }
 
 function placeOf({ site }: Carrier, chain: readonly Hop[]): Evidence {
