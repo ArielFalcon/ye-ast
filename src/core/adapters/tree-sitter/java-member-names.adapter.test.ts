@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { createJavaParser } from "./java-parser.adapter.ts";
 import { createJavaMemberNames } from "./java-member-names.adapter.ts";
 
@@ -203,4 +204,33 @@ test("lambdas, method references and anonymous class bodies are function values,
     "}",
   ])).functionValues;
   assert.deepEqual(values.map(({ start, end }) => [start.line, start.column, end.line, end.column]), [[2, 28, 2, 38], [2, 53, 2, 63], [3, 32, 3, 63]]);
+});
+
+test("given derived facts, a Java source is parsed once by its content across readers, and answers what it answers without facts", async () => {
+  const kept = new Map<string, string>();
+  const facts: DerivedFacts = {
+    ofFile(slot, file, derive) {
+      const key = JSON.stringify([slot, file.path, file.content]);
+      if (!kept.has(key)) kept.set(key, JSON.stringify(derive()));
+      return JSON.parse(kept.get(key)!);
+    },
+    ofInputs: (_slot, _inputs, derive) => derive(),
+    fingerprint: (inputs) => JSON.stringify(inputs),
+    drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
+  };
+  let parsed = 0;
+  const counting = async () => {
+    const parser = await createJavaParser();
+    return { ...parser, parse: (file: Parameters<typeof parser.parse>[0]) => (parsed += 1, parser.parse(file)) };
+  };
+  const file = { path: "src/A.java", content: ["class A {", "  void run() { B b = new B(); b.go(); Runnable r = () -> run(); }", "}"].join("\n") };
+  const alone = await createJavaMemberNames(createJavaParser).memberNames(file);
+
+  const first = await createJavaMemberNames(counting).memberNames(file, facts);
+  const again = await createJavaMemberNames(counting).memberNames({ ...file }, facts);
+
+  assert.ok(alone.receiverBindings.length > 0 && (alone.calls?.length ?? 0) > 0);
+  assert.equal(parsed, 1);
+  assert.deepEqual(first, alone);
+  assert.deepEqual(again, alone);
 });

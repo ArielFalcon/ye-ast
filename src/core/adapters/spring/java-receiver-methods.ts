@@ -2,7 +2,8 @@ import type { Node } from "web-tree-sitter";
 import { isJavaSource } from "../../domain/languages/java.ts";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { ImportOrigins, ReceiverMethod } from "../../ports/import-origins.port.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
+import type { ImportOrigins, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, thisType, withJavaSources } from "./java-project.ts";
@@ -10,6 +11,7 @@ import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import { createJavaProject, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
+const SLOT = "java-receiver-methods";
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
 /** Methods every class inherits from `Object` (JLS 4.3.2): a call of one of these names may resolve to `Object`'s. */
@@ -48,12 +50,12 @@ interface ReadFile {
  * runtime dispatch are separate obligations. An unproven value receiver or declared repository member remains a cut;
  * no name-only index target proves it. Non-Java and non-invocation sites remain unknown.
  */
-export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[]): ImportOrigins["receiverMethods"] {
+export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts): ImportOrigins["receiverMethods"] {
   const java = sources.filter(({ path }) => isJavaSource(path));
   const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
-  return async (sites, signal) => {
+  let layout: string | undefined;
+  const resolved = async (sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ReceiverMethod[]> => {
     const results: ReceiverMethod[] = sites.map(() => UNKNOWN);
-    if (!sites.some(({ file }) => isJavaSource(file))) return results;
     const read = await parser();
     return withJavaSources(read, (parse) => {
       const { files, unparsed } = parse(java);
@@ -91,6 +93,28 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
       return results;
     });
   };
+  return async (sites, signal) => {
+    if (!sites.some(({ file }) => isJavaSource(file))) return sites.map(() => UNKNOWN);
+    if (facts === undefined) return resolved(sites, signal);
+    layout ??= facts.fingerprint({ java: java.map(({ path, content }) => [path, content]), paths });
+    try {
+      return await facts.ofInputs(SLOT, { layout, sites }, async () => {
+        const results = await resolved(sites, signal);
+        if (signal?.aborted) throw new DeadlineCut(results);
+        return results;
+      });
+    } catch (error) {
+      if (error instanceof DeadlineCut) return error.results;
+      throw error;
+    }
+  };
+}
+
+/** An answer a deadline cut, which no derived fact retains. */
+class DeadlineCut extends Error {
+  constructor(readonly results: readonly ReceiverMethod[]) {
+    super("deadline");
+  }
 }
 
 function createResolver(project: JavaProject) {

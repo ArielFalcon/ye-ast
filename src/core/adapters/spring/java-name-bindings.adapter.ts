@@ -11,6 +11,7 @@ import { createJavaDispatchTargets } from "./java-dispatch-targets.ts";
 import { createJavaReceiverMethods } from "./java-receiver-methods.ts";
 import { declaredVariablesOnce, declaresAnyVariable, type DeclaredVariables } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { withJavaSources } from "./java-project.ts";
 import { createJavaProject, isTypeDeclaration, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
@@ -32,14 +33,14 @@ interface Spelled {
  * outside the snapshot may declare, two on-demand imports that may both offer the name, a variable that obscures a
  * type, a class the reader does not place) is `unknown`. Nothing comes from the graph.
  */
-export function createJavaNameBindings(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[] = sources.map(({ path }) => path)): ImportOrigins {
+export function createJavaNameBindings(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[] = sources.map(({ path }) => path), facts?: DerivedFacts): ImportOrigins {
   const javaSources = sources.filter(({ path }) => isJavaSource(path));
   return {
     origins: async (sites) => sites.map((site) => unresolved(site)),
     rootBindings: (sites, signal) => createJavaRootBindings(parser(), sources)(sites, signal),
     declaredTypes: createJavaDeclaredTypes(parser, sources, paths),
     dispatchTargets: createJavaDispatchTargets(parser, sources, paths),
-    receiverMethods: createJavaReceiverMethods(parser, sources, paths),
+    receiverMethods: createJavaReceiverMethods(parser, sources, paths, facts),
     replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),
     rootOrigins: async (sites, signal) => {
       const results: RootOrigin[] = sites.map((site) => unresolved(site));

@@ -179,9 +179,9 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   };
   const typescriptMemberNames = createTypeScriptMemberNames();
   const javaMemberNames = createJavaMemberNames(javaParser);
-  const memberNames: DeclaredMemberNamesReader = {
+  const memberNames = staged<DeclaredMemberNamesReader>({
     memberNames: async (file, facts) => {
-      const [typescript, java] = [await typescriptMemberNames.memberNames(file, facts), await javaMemberNames.memberNames(file)];
+      const [typescript, java] = [await typescriptMemberNames.memberNames(file, facts), await javaMemberNames.memberNames(file, facts)];
       const calls = typescript.calls === undefined && java.calls === undefined ? undefined : [...typescript.calls ?? [], ...java.calls ?? []];
       return {
         names: [...new Set([...typescript.names, ...java.names])].sort(compareText),
@@ -193,7 +193,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
         ...(calls === undefined ? {} : { calls }),
       };
     },
-  };
+  }, { memberNames: "member-names" });
   const callSites = staged<CallSiteReader>({
     of: async (files, repo, libraries) => {
       const java = await createJavaCallSites(await javaParser()).of(files, repo, libraries);
@@ -235,8 +235,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   let javaImportsReader: Promise<ModuleDependenciesReader> | undefined;
   const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => (await (javaImportsReader ??= javaParser().then(createJavaImportsReader))).extract(sources, options) }, { extract: "java-imports" });
   const importOrigins = (sources: readonly SourceFile[], paths?: readonly string[], facts?: DerivedFacts) => {
-    const reader = importOriginsByLanguage([createImportOrigins(sources, facts === undefined ? {} : { facts }), createJavaNameBindings(javaParser, sources, paths)]);
-    return staged(measurement === undefined || facts === undefined ? reader : measuredDerivedFacts(reader, facts, "import-origins", measurement), { origins: "import-origins", rootOrigins: "root-origins" });
+    const reader = importOriginsByLanguage([createImportOrigins(sources, facts === undefined ? {} : { facts }), createJavaNameBindings(javaParser, sources, paths, facts)]);
+    return staged(measurement === undefined || facts === undefined ? reader : measuredDerivedFacts(reader, facts, "import-origins", measurement), { origins: "import-origins", rootOrigins: "root-origins", rootBindings: "root-bindings", receiverMethods: "receiver-methods", declaredTypes: "declared-types" });
   };
   const unmodelled = staged<UnmodelledConstructsReader>({ extract: async (sources) => createJavaRecordsReader(await javaParser()).extract(sources) }, { extract: "java-records" });
   const impactDeps: ImpactQueriesDeps = {

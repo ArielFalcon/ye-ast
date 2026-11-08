@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ReceiverMethod } from "../../ports/import-origins.port.ts";
 
@@ -172,4 +173,33 @@ test("this(...) in a record names its declared constructor of the call's arity, 
   assert.deepEqual(await chainedAt([compact], compact, 4, "this"), method(compact, 6));
   assert.deepEqual(await chainedAt([compact], compact, 5, "this"), method(compact, 4));
   assert.deepEqual(await chainedAt([implicit], implicit, 4, "this"), { kind: "unknown" });
+});
+
+test("given derived facts, a second reader over the same sources answers the same sites without parsing them again", async () => {
+  const kept = new Map<string, string>();
+  const facts: DerivedFacts = {
+    ofFile: (_slot, _file, derive) => derive(),
+    async ofInputs(slot, inputs, derive) {
+      const key = JSON.stringify([slot, inputs]);
+      if (!kept.has(key)) kept.set(key, JSON.stringify(await derive()));
+      return JSON.parse(kept.get(key)!);
+    },
+    fingerprint: (inputs) => JSON.stringify(inputs),
+    drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
+  };
+  let parsed = 0;
+  const counting = async () => {
+    const parser = await createJavaParser();
+    return { ...parser, parse: (file: Parameters<typeof parser.parse>[0]) => (parsed += 1, parser.parse(file)) };
+  };
+  const sources = [STORE, JDBC, use("store.save(\"x\")")];
+  const sites = [{ file: sources[2]!.path, line: 4, column: sources[2]!.content.split("\n")[3]!.indexOf("{ ") + 3, member: "save" }];
+
+  const first = await createJavaNameBindings(counting, sources, undefined, facts).receiverMethods(sites);
+  const afterFirst = parsed;
+  const again = await createJavaNameBindings(counting, sources.map((source) => ({ ...source })), undefined, facts).receiverMethods(sites);
+
+  assert.deepEqual(first, [method(STORE, 4)]);
+  assert.deepEqual(again, first);
+  assert.equal(parsed, afterFirst);
 });

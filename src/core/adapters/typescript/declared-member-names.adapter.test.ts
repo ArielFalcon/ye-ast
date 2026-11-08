@@ -574,7 +574,7 @@ test("arrows and function expressions are function values, each whole; a method 
   assert.deepEqual(values.map(({ start, end }) => [start.line, start.column, end.line, end.column]), [[2, 20, 2, 30], [2, 37, 2, 63]]);
 });
 
-test("given derived facts, the receivers a file binds are derived once by its content across readers, and answer what they answer without facts", async () => {
+test("given derived facts, the member names a file declares are derived once by its content across readers, and answer what they answer without facts", async () => {
   const kept = new Map<string, string>();
   const derived: string[] = [];
   const facts: DerivedFacts = {
@@ -597,7 +597,7 @@ test("given derived facts, the receivers a file binds are derived once by its co
   const again = await createTypeScriptMemberNames().memberNames({ ...file }, facts);
 
   assert.ok(alone.functionValueCalls.length > 0 && alone.receiverBindings.length > 0);
-  assert.deepEqual(derived, ["ts-local-receivers src/a.ts"]);
+  assert.deepEqual(derived, ["ts-member-names src/a.ts"]);
   assert.equal(JSON.stringify(first), JSON.stringify(alone));
   assert.equal(JSON.stringify(again), JSON.stringify(alone));
 });
