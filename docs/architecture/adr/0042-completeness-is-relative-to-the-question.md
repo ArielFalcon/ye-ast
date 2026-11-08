@@ -1,20 +1,25 @@
 # ADR-0042: A fact's completeness is relative to what its answer asserts, and every cut states why it exists
 
 - Status: Proposed, 2026-11-08
-- Decision source: pending the owner. The tech lead asked, on 2026-11-08, for one design per base proposal after the
-  MCP evaluation of that day; this one is "completeness relative to the question: every cut carries a typed reason and a
-  scope, and a fact's completeness is computed only over what the answer asserts, so `partial` keeps meaning something".
+- Decision source: the owner, 2026-11-08, verbatim: "lanza un agente con esfuerzo high por cada propuesta para que la
+  analice conjuntamente con la evidencia, que investigue y proponga un ADR de cambio". Translated: launch one
+  high-effort agent per proposal to analyse it together with the evidence, investigate, and propose an ADR of change.
+  This proposal was "completeness relative to the question: every cut carries a typed reason and a scope, and a fact's
+  completeness is computed only over what the answer asserts, so `partial` keeps meaning something".
 - Related: amends [RFC-0002](../rfc/0002-facts-contract.md) (envelope, rules 1 and 2); generalizes
   [ADR-0019](0019-cuts-retired-on-a-proven-external-target.md); [ADR-0013](0013-coverage-grows-only-with-evidence.md)
   rule 7, [ADR-0039](0039-behavior-changes-pass-a-corpus-gate.md), [ADR-0041](0041-one-call-reconciliation-for-every-family.md)
+- Revisions: measurements come from the evaluation engine `be0d6084` and CLI re-runs at `9961fd13`; every code citation
+  (`path:line`) is against `main` at `ac475e50`.
 
 **In short:** today any cut a query meets anywhere in the snapshot makes the whole answer `partial`, and no cut says
 why it exists. Measured on the 2026-11-08 evaluation, 55 of 94 answers are `partial`, 681 cuts reach the agent and none
 carries a typed reason. Every cut gets a required reason from a closed set and a typed reach (what it could hide); each
 family declares what its answer asserts; a cut degrades the answer only when its reach can hold an asserted item, by
-positive proof, failing closed. A construct read but not resolved is an item, never also a cut. `partial` then means "a
-place that could hold part of this answer was not reached", and the status line states undecided items instead of
-printing a bare `complete`.
+positive proof from the rule that already owns that question, failing closed. An enumerated topology item the workspace
+cannot resolve is an item, never also a cut; a walk's frontier stays a cut. `partial` then means "a place that could
+hold part of this answer was not reached", and the status line states undecided items instead of printing a bare
+`complete`.
 
 ## Context
 
@@ -28,7 +33,7 @@ requests at `main` `9961fd13` with JSON output, one at a time, on nname and real
 |---|---|---|---|---|
 | trace | 21 | 20 | 338 `unresolved-link` | Every cut sits on the walk. NO-TR-2 re-run (51 cuts): 22 member calls whose receiver is not proven (candidates by name), 10 calls with no candidate (`List.of`, `Objects.requireNonNullElse`, stream chains), 9 constructions, 7 bare calls, 2 dispatch, 1 other; 49 carry no reason, 2 carry `detail: "dispatch not proven"` |
 | contract_consequences | 25 | 19 | 19 `section` | 12 only because the workspace's cuts are copied into every answer (realworld 7: one unresolved call site, already listed as an `unknown` finding of each answer; nname 5: NATS event publishers and HTTP sites already listed as findings). 7 wrap a single answer that is itself `unknown` ("no repository of the workspace serves …") |
-| callers | 9 | 3 | 173 `unresolved-link`, 1 `section` | NW-CAL-1 re-run: 174 cuts, all qualified references whose name tail matches a walked declaration; 733 of their 891 places match only a declaration at depth 11 (`set`), 9 places a declaration at depth ≤ 1. RW-CAL-1: one reference `this.articleStore.getArticle` (in question). RWB-CAL-1: the frontend section, from the same realworld call site |
+| callers | 9 | 3 | 173 `unresolved-link`, 1 `section` | NW-CAL-1 re-run: 174 cuts, all qualified references whose name tail matches a walked declaration; 733 of their 891 places match only a declaration at depth 11 (`set`), 9 places a declaration at depth ≤ 1. RW-CAL-1: one reference `this.articleStore.getArticle` (in question). RWB-CAL-1: the frontend section, from the same realworld call site, here an undecided call that may reach the walked handler: a frontier (decision 6), in question |
 | impact | 4 | 3 | 100 `unresolved-link`, 2 `no-extractor` | NW-IMPACT-1 re-run (89 cuts): 28 are unresolved module specifiers anywhere in the base and head snapshots (`geojson` ×24, `@/environments/environment` ×4) that resolve to no reached module; 61 are references to walked declarations. RW-IMPACT-1: an unresolved import of a walked component (in question). IMP-JH-1 not classified |
 | importers | 5 | 2 | 22 `unresolved-link` | 22 of 22 outside the question: TypeScript build specifiers (`esbuild`, `chrome-launcher`) for a Java file; `geojson` and `@/environments/environment` for `auth-hint.service.ts` |
 | workspace, decisions | 13 | 7 | 25 `section` | Realworld (2): its one section cut is the unresolved call site that the same section also lists as an `unresolved` item. nname and petclinic microservices (5): sections led by NATS event sites; other cut kinds not verified |
@@ -37,32 +42,36 @@ requests at `main` `9961fd13` with JSON output, one at a time, on nname and real
 
 Totals: 55 of 94 answered queries are `partial` (8 more are faults). Of the 55, 16 are `partial` only through cuts
 outside what the answer asserts or through an item counted a second time as a cut (importers 2, contract 12, realworld
-workspace and decisions 2), 6 more probably so (5 nname and petclinic microservice workspace and decisions answers,
-RWB-CAL-1: not fully verified), 7 wrap an `unknown` answer, 25 have cuts inside the question (trace 20, NW-CAL-1,
-NW-IMPACT-1, NO-OUT, RW-CAL-1, RW-IMPACT-1), and 1 is not classified (IMP-JH-1). Of the 681 cuts, none reaches the agent
-with a typed reason.
+workspace and decisions 2), 5 more probably so (nname and petclinic microservice workspace and decisions answers: not
+fully verified), 7 wrap an `unknown` answer, 26 have cuts inside the question (trace 20, NW-CAL-1, NW-IMPACT-1, NO-OUT,
+RW-CAL-1, RW-IMPACT-1, RWB-CAL-1), and 1 is not classified (IMP-JH-1). Of the 681 cuts, none reaches the agent with a
+typed reason.
 
 ### The mechanisms
 
-1. **One status for the whole snapshot.** `withCuts` (`src/core/domain/shared/fact.ts:253-259`) makes a fact `partial`
+1. **One status for the whole snapshot.** `withCuts` (`src/core/domain/shared/fact.ts:254-259`) makes a fact `partial`
    when any cut is passed in, and every family passes repository-wide cuts:
    - importers: every unresolved module specifier of the snapshot and every file the index did not hold
-     (`src/core/application/impact/impact-queries.ts:279-289`), whatever file was asked;
+     (`src/core/application/impact/impact-queries.ts:279-290`), whatever file was asked;
    - impact: every unresolved specifier of base and head (`src/core/domain/impact/module-impact.ts:39-48`);
    - outline and trace: every file the index did not hold, and the export's cuts
-     (`src/core/application/outline/outline-queries.ts:51,74-80`, `src/core/application/trace/trace-queries.ts:175-184`);
+     (`src/core/application/outline/outline-queries.ts:52,75-81`, `src/core/application/trace/trace-queries.ts:113-116,176-184`);
    - contract consequences: every cut of the workspace fact goes into every hypothesis answer
      (`src/core/application/contracts/contract-consequences-queries.ts:112`, from
      `src/core/application/contracts/consumer-sources.ts:179`).
 2. **One place, two encodings.** RFC-0002 rule 2 and ADR-0013 rule 7 say that a construct an extractor reads but cannot
    resolve is an `unknown` item, not a cut. The workspace makes each unresolved call site both an `unresolved` item and
-   an `unresolved-link` cut of its section (`src/core/application/topology/workspace-queries.ts:200-207`), and an
-   ambiguous join a cut only (`src/core/domain/topology/call-site.ts:150-152`). Contract consequences then inherit the
-   cut and list the same site as an `unknown` finding.
-3. **No reason.** `Cut` (`src/core/domain/shared/fact.ts:145-167`) has an optional `detail` with three literals, an
-   optional `reason` typed as `UnknownReason`, and ten kinds. Trace emits every situation (receiver not proven, no
-   candidate, construction, dispatch, effect not placed, page member missing) as `unresolved-link`
-   (`src/core/application/trace/trace-walk.ts:236-239,272-275,451,600-606`); only dispatch sets `detail` (`:338`).
+   an `unresolved-link` cut of its section (`src/core/application/topology/workspace-queries.ts:199-207`, the cut at
+   `:204`), and an ambiguous join a cut only (`:200,205`, `src/core/domain/topology/call-site.ts:150-152`). Contract
+   consequences then inherit the cut and list the same site as an `unknown` finding.
+3. **No reason.** `Cut` (`src/core/domain/shared/fact.ts:145-167`) has an optional `detail` with three literals (`:160`),
+   an optional `reason` typed as `UnknownReason` (`:161`), and ten kinds. Trace emits every situation as
+   `unresolved-link`: a call no rule settles (`src/core/application/trace/trace-walk.ts:232-235`, called at
+   `:386,403,460-472,547,579`), a call settled by name only (`:409`), a receiver held by a value (`:552-558`), a function
+   value run (`:598`), dispatch (`:268-271`), a page without plan (`:627,676`,
+   `src/core/application/trace/page-plans.ts:29,37,44,51`), an unplaced handler
+   (`src/core/application/trace/trace-queries.ts:234,253`), an unplaced effect
+   (`src/core/domain/trace/trace-effects.ts:25,28`). Only dispatch sets `detail` (`trace-walk.ts:334`).
 4. **What the renderer drops.** The status line prints counts per kind (`src/mcp/presentation-context.ts:33-37`);
    trace groups cuts by name and candidates (`src/mcp/render.ts:1257-1262`). Nothing under `src/mcp` reads
    `Cut.detail` or `Cut.reason`, so even the two dispatch reasons never reach the agent, as the evaluation noted ("The
@@ -95,41 +104,75 @@ importers and contract answers `partial` for files and transports they cannot re
 | D. Make a collection with `unknown` items `partial` | `complete` never hides an unknown | `partial` becomes universal again (entrypoints 9 of 9, jhipster contract answers) and means two things: not reached, or reached and undecided |
 | E. Several statuses per fact (one per claim) | Most precise | More output and more decisions per family before any measurement; deferred to open question 3 |
 | F. Partial only above a number of cuts | Simple | A size threshold: forbidden by the design pillars |
-| **G. Typed reason and reach per cut; each family declares what it asserts; a cut counts only when its reach can hold an asserted item, by positive proof; one encoding per place; undecided items stated** | Fixes the mechanism for every family; a `partial` says where and why; fails closed | A reach proof per cut source; every emitter changes; risk of a false `complete` if a proof is wrong (see Risks) |
+| **G. Typed reason and reach per cut; each family declares what it asserts; a cut counts only when its reach can hold an asserted item, by positive proof; one encoding per enumerated topology item; undecided items stated** | Fixes the mechanism for every family; a `partial` says where and why; fails closed | A reach proof per cut source; every emitter changes; risk of a false `complete` if a proof is wrong (see Risks) |
 
 ## Decision
 
 1. **Every cut states why it exists.** `Cut` gains a required `reason` from one closed union in
-   `core/domain/shared/fact.ts`, replacing the optional `detail` and the optional `UnknownReason`. A bound kind
-   (`depth`, `hub`, `caller-budget`, `node-cap`, `deadline`) is its own reason. The other kinds take one reason per
-   situation an emitter meets; the initial set, from the emitters found today:
+   `core/domain/shared/fact.ts`, replacing the optional `detail` and the optional `UnknownReason`. Every cut has one,
+   structural ones included. Where a port already owns the vocabulary of a reason, the union imports that type instead
+   of copying it: the export's skip reasons (`src/core/ports/vcs.port.ts:13`) and the dispatch reasons
+   (`DispatchTargets`, `src/core/ports/import-origins.port.ts:138`). The mapping below is the inventory of every `Cut`
+   construction under `src/core` at `ac475e50` (`rg` over the ten kind literals, the cut helpers and the bound
+   builders); U1 starts by re-running it and the union holds exactly what it finds:
 
-   | Kind | Reasons |
-   |---|---|
-   | `no-extractor` | `language` (no extractor for the file's language), `not-indexed` (the index skipped or failed the file), `unmodelled` (a construct no extractor models), `template-uncovered`, `module-unread` |
-   | `not-exported` | `symlink`, `unsafe-path`, `case-collision`, `submodule` |
-   | `build-output` | `version-mismatch`, `link-outside`, `live-tree` |
-   | `unresolved-link` | `specifier` (a module specifier the resolver did not resolve), `dynamic-load`, `hidden-caller` (an unresolved reference names a walked declaration), `receiver-unproven` (candidates are the declarations of the name), `callee-unknown` (no candidate, not proven external), `dispatch` (with the existing three details as sub-reasons), `effect-unplaced`, `removed-declaration`, `join-unsettled` |
-   | `section` | none: the section's own fact carries its cuts or its `unknown` reason |
+   | Emitter | Kind | Reason |
+   |---|---|---|
+   | Walk bounds: `src/core/application/impact/walk.ts:146-153`, `src/core/domain/impact/module-impact.ts:76,87,108`, `src/core/application/trace/trace-walk.ts:656-659` | `depth`, `hub`, `caller-budget` | the kind itself |
+   | No emitter under `src/core` today | `node-cap`, `deadline` | the kind itself |
+   | Export budget: `src/core/domain/map/entrypoint-map.ts:95` | `caller-budget` | `export-budget` |
+   | Export skips: `entrypoint-map.ts:96-99` | `not-exported` | the skip reason the VCS port owns: `symlink`, `submodule`, `unsafe-path`, `collision` |
+   | Listed but not written: `src/core/application/impact/impact-queries.ts:258,287`, `src/core/application/outline/outline-queries.ts:79` | `not-exported` | `unwritten` |
+   | Language without extractor: `entrypoint-map.ts:100-103`, `impact-queries.ts:258,413`, `outline-queries.ts:52` | `no-extractor` | `language` |
+   | Angular template no component covers: `impact-queries.ts:413` | `no-extractor` | `template-uncovered` |
+   | Changed file that is not source: `impact-queries.ts:206`, `src/core/application/trace/trace-queries.ts:115` | `no-extractor` | `not-source` |
+   | Not held by the index: `impact-queries.ts:286,287,576`, `outline-queries.ts:78,79`, `trace-queries.ts:178` | `no-extractor` | `not-indexed` |
+   | File without symbols: `impact-queries.ts:577`, `trace-queries.ts:179` | `no-extractor` | `no-symbols` |
+   | Unmodelled construct: `impact-queries.ts:578`, `outline-queries.ts:80` | `no-extractor` | `unmodelled` |
+   | Module reader did not read: `impact-queries.ts:288`, `module-impact.ts:56`, `src/core/application/outline/outline.ts:41` | `no-extractor` | `module-unread` |
+   | Contract document finding unknown: `src/core/domain/impact/changed-contracts.ts:66` | `no-extractor` | `contract-unread` |
+   | Build outputs (`src/core/domain/shared/build-outputs.ts:27-30` from `impact-queries.ts:168-181`) | `build-output` | `live-tree` (`:169`), `inputs-unreadable` (`:172`), `version-mismatch` (`:179`, `unused`), `outputs-unreadable` (`:180`, fault `unreadable`), `checker-failed` (`:180`, fault `checker-failed`, `src/core/ports/type-bindings.port.ts:37-39`), `link-outside` (`:181`, `refused`) |
+   | `unresolvedLinkCuts`, `src/core/domain/impact/impact-cuts.ts:131-190` | `unresolved-link` | `hidden-caller` (`hidden`), `dynamic-load` (`loaders`), `name-only` (`unattributed`) |
+   | `unresolvedPlaceCuts`, `impact-cuts.ts:96` (from `impact-queries.ts:289`); `module-impact.ts:47` | `unresolved-link` | `specifier` |
+   | `module-impact.ts:41` | `unresolved-link` | `dynamic-load` |
+   | `removedDeclarationCuts`, `impact-cuts.ts:196` | `unresolved-link` | `removed-declaration` |
+   | `unreadRelationCuts`, `impact-cuts.ts:234` | `unresolved-link` | `relation-unread` |
+   | `unprovedUseCuts`, `src/core/domain/outline/outline-uses.ts:36-42` | `unresolved-link` | `use-unproven` |
+   | Trace call no rule settles: `trace-walk.ts:232-235` at `:386,403,460-472,547,579`; `:409`; `:552-558` | `unresolved-link` | `receiver-unproven` when candidates are listed, `callee-unknown` when none; the call site decides which |
+   | Trace dispatch: `trace-walk.ts:268-271,326-337` | `unresolved-link` | `dispatch`, with the sub-reason `DispatchTargets` owns when the port gave one, otherwise `several-bodies` or `overridable` |
+   | Trace function value: `trace-walk.ts:598` | `unresolved-link` | `function-value` |
+   | Trace page: `trace-walk.ts:627,676`, `page-plans.ts:29,37,44,51` | `unresolved-link` | `page-unplanned` |
+   | Trace handler: `trace-queries.ts:234,253` | `unresolved-link` | `handler-unplaced` |
+   | Trace effect: `src/core/domain/trace/trace-effects.ts:25,28` | `unresolved-link` | `effect-unplaced` |
+   | Workspace dependency closure: `src/core/application/topology/workspace-queries.ts:139-145` | `unresolved-link` | `dependency-unresolved` (its `dependency` diagnostic stays) |
+   | Workspace call site: `workspace-queries.ts:204` | `unresolved-link` | `call-site-unresolved` until U3 makes it an item only |
+   | Unsettled join: `src/core/domain/topology/call-site.ts:151`, at `workspace-queries.ts:205` and `src/core/application/topology/workspace-impact.ts:432` | `unresolved-link` | `join-unsettled` |
+   | Unserved operation: `workspace-impact.ts:381-383` | `unresolved-link` | `operation-unserved` |
+   | Sections: `src/core/domain/shared/fact.ts:214-219`, `workspace-impact.ts:431` | `section` | `section-partial` or `section-unknown`, from the section's own status, which still holds its cuts or its `unknown` reason |
+   | ADR-0041 reconciliation, not emitted at `ac475e50` | `unresolved-link` | `contradicted`, `unowned`: owned by ADR-0041 decision 3, added by its U2 when it emits them |
 
-   Each emitter maps to exactly one reason; a new situation adds a member to the union in the commit that emits it.
-   The union stays closed and small, because its members are rendered as counts.
+   Each emitter maps to exactly one reason; a new situation adds a member in the commit that emits it, and the type
+   makes a cut without a reason a compile error. The union is closed, not small: it is rendered as counts per kind and
+   reason, and in full only in `details`.
 2. **Every cut states what it could hide.** `Cut` gains a typed `reach`, set by the emitter from data it already holds:
    `anything` (with the file's runtime when known), `callers-of` (declaration anchors), `call-at` (a place inside a
    walked body), `module` (the specifier, its importing file, and whether the resolver classified it as a package),
-   `operation` (transport, and method or literal path prefix when known). An emitter that cannot fill a narrower reach
-   sets `anything`.
+   `call-site` (the call site as the topology extractor read it: its transport, and its method and path template when
+   known). An emitter that cannot fill a narrower reach sets `anything`.
 3. **Each family declares what its answer asserts**, as a value its use case builds from the request and the walk, in
-   the family's domain:
+   the family's domain. Two families that ask about the same files ask different questions, so the shared `Asserted`
+   union separates them: the files' own content (outline) from what depends on the files (importers). An unread `B.ts`
+   in the runtime of an asked `A.ts` (`impact-queries.ts:286`, `outline-queries.ts:78`, and the export cuts of
+   `entrypoint-map.ts:92-105` both share) cannot change `A.ts`'s declarations, and can import `A.ts`:
 
    | Family | Asserts | A cut is in question when its reach can hold |
    |---|---|---|
-   | importers | importers and users of the asked files | an import or use of an asked file: a specifier the resolver's own rules could resolve to it, a dynamic load or an unread file sharing its runtime |
-   | outline | declarations and imports of the asked files | a place in an asked file, or an asked file not read |
-   | callers, impact | the dependents reached, their entrypoints, the modules reached | a caller of a walked declaration, an edge into a walked module, a file sharing the runtime of a walked file |
-   | trace | the steps and effects of the walk | a call inside a walked body, or a file sharing the runtime of a walked file |
-   | contract consequences | consumers and producers of the operation and their uses of the property | a call of that operation: same transport, and no known method or literal prefix that excludes it |
-   | workspace, decisions, entrypoints | the whole topology or map | every cut (no change) |
+   | importers (`dependents`) | importers and users of the asked files | an import or use of an asked file: a specifier the resolver's own rules could resolve to it, a dynamic load or an unread file sharing its runtime |
+   | outline (`local`) | declarations and imports of the asked files | a place in an asked file, or an asked file not read |
+   | callers, impact (`walk`) | the dependents reached, their entrypoints, the modules reached | a caller of a walked declaration, an edge into a walked module, a file sharing the runtime of a walked file |
+   | trace (`walk`) | the steps and effects of the walk | a call inside a walked body, or a file sharing the runtime of a walked file |
+   | contract consequences (`operation`) | consumers and producers of the operation and their uses of the property | a call site the topology matcher cannot exclude from that operation (decision 4) |
+   | workspace, decisions, entrypoints (`everything`) | the whole topology or map | every cut (no change) |
 
    Every bound and every export cut (`caller-budget` of the export, `not-exported` of a submodule) is in question for
    every family, since what it left out is unknown.
@@ -137,16 +180,37 @@ importers and contract answers `partial` for files and transports they cannot re
    `inQuestion(cut, asserted)` in `core/domain/shared` decides it: a reach of `anything` without a runtime, a missing
    datum, or a proof that needs a rule the resolver did not apply, keeps the cut in question. A runtime proof reuses
    `sharesRuntime` (`src/core/domain/languages/call-targets.ts:16-20`); a specifier proof reuses the resolver's own
-   classification (path mapping, package, relative), never a file name heuristic. This generalizes ADR-0019, whose
-   proof that a reference names an external target is one such proof.
+   classification (path mapping, package, relative), never a file name heuristic. A call site is out of an operation's
+   question only when its transport is not the operation's (a datum the extractor states), or when the topology matcher,
+   `matchCallSite` (`src/core/domain/topology/link-match.ts:253`), with the workspace's gateways and configured base
+   paths, finds neither a match nor a `could` on any rung: exact, base path, behind a gateway, suffix
+   (`link-match.ts:136-181`). A gateway prefix (`POST /orders-api/orders` reaching `POST /orders`), a base path
+   (`/billing/orders` reaching `GET /orders`) or a suffix (`/restaurants/daily-menus` reaching `GET /daily-menus`)
+   therefore keeps the cut (`src/core/domain/topology/link-match.test.ts:80,86,107`). `inQuestion` holds no path
+   matcher of its own; without the matcher's answer the cut stays. This generalizes ADR-0019, whose proof that a
+   reference names an external target is one such proof.
 5. **Status over the question.** `withCuts` takes the asserted value and keeps only the cuts in question; the fact is
    `complete` when none is left. A cut out of question is not emitted, as ADR-0019 already does for a proven external
    target: it bounds no part of this answer, and listing it is the noise this decision removes. Its effect stays
    visible in the conformance fixtures and in the corpus gate's report.
-6. **One place, one encoding.** A construct read but not resolved is an `unknown` item of the collection that owns it,
-   never also a cut (RFC-0002 rule 2, ADR-0013 rule 7). An unresolved or unsettled call site is an item of its
-   workspace section; a composite that reads another fact's items (contract consequences) takes the items that can
-   belong to its question as findings, and the other fact's cuts only through rule 5.
+6. **An enumerated item is never also a cut; a frontier is always a cut.** Two things differ:
+   - an *enumerated item* is an element the answer lists, found by an extractor independently of any walk: a topology
+     call site, an entrypoint, a contract finding. Unresolved, it is an `unknown` item of its collection, never also a
+     cut (RFC-0002 rule 2, ADR-0013 rule 7): the item already says that what it would bind is undecided;
+   - a *frontier* is where a walk or an execution stopped without reaching what lies beyond: an unresolved call or an
+     unproven dispatch in a trace body (`trace-walk.ts:326-337,630-636`), an unresolved reference to a walked
+     declaration, an undecided call site that may reach a walked handler (`workspace-impact.ts:432`), ADR-0041's
+     `contradicted` and `unowned` records (ADR-0041 decision 3, "a cut at its place"). What lies beyond is not
+     enumerated anywhere, so it can hide declarations, effects and dependents; it stays a cut even when the same place is
+     listed elsewhere as an item, and the trace port's promise holds (`src/core/ports/trace-queries.port.ts:63-66`: "a
+     call no rule settles is an `unresolved-link` cut with its candidates").
+
+   The deduplication applies only to topology: a workspace or decisions section stops cutting at its unresolved call
+   sites (`workspace-queries.ts:204`), which it already lists as `unresolved` items (`:199,207`). An unsettled join
+   (`:205`) stays a cut until U3 shows that the section lists it as an item; this design did not verify that it does.
+   Contract consequences take from the listed items, as findings, the ones whose transport can carry the operation, and
+   the workspace's remaining cuts only through decision 5. Trace, callers, impact, workspace callers and workspace
+   impact are unchanged by this decision.
 7. **Undecided items are stated.** RFC-0002 rule 2 stands: a collection that reached every place that could hold an
    item is `complete`, even with `unknown` items. The renderer never prints a bare `complete` for it: the status line
    reads `complete (N undecided)`, counted from the items the family asserts. A composite whose only section is
@@ -162,7 +226,8 @@ This ADR amends RFC-0002 explicitly, without superseding it:
 
 - the envelope's `Cut` gains `reason` (required, closed) and `reach`;
 - rule 1 reads "a fact a bound cut is `partial` and lists every cut that could hold an item its answer asserts";
-- rule 2 adds "a place is an item or a cut, never both", and that the status line states undecided items;
+- rule 2 adds "an enumerated item is never also a cut; a walk's frontier is always a cut", and that the status line
+  states undecided items;
 - rule 4 (completeness relative to the declared scope) is unchanged: the question narrows completeness inside the
   declared scope, never beyond it.
 
@@ -173,16 +238,19 @@ A family's use case builds its asserted value next to the walk it already runs, 
 ```ts
 // core/domain/shared/fact.ts
 type Asserted =
-  | { kind: "files"; files: readonly string[] }                     // importers, outline
+  | { kind: "local"; files: readonly string[] }        // outline: what the asked files themselves hold
+  | { kind: "dependents"; files: readonly string[] }   // importers: what could import or use the asked files
   | { kind: "walk"; declarations: readonly string[]; files: readonly string[]; modules: readonly string[] } // callers, impact, trace
-  | { kind: "operation"; transport: string; method: string; path: string }  // contract consequences
-  | { kind: "everything" };                                           // map, workspace, decisions
+  | { kind: "operation"; transport: string; excludes: (site: CallSiteReach) => boolean } // contract consequences
+  | { kind: "everything" };                              // map, workspace, decisions
 
 function withCuts<T>(base: FactBase, value: T, cuts: readonly Cut[], asserted: Asserted): CompleteFact<T> | PartialFact<T>;
 ```
 
-The emitter fills `reach`; the family fills `asserted`; `inQuestion` is the only owner of the rule. A family that
-cannot yet state what it asserts passes `everything`, which keeps today's behavior.
+The emitter fills `reach`; the family supplies data (`asserted`), never a rule; `inQuestion` is the only owner of the
+rule. The one exception is `operation.excludes`, which contract consequences build from `matchCallSite` with the
+workspace's gateways, so the path rule keeps its one owner in the topology domain and `inQuestion` only reads its
+answer. A family that cannot yet state what it asserts passes `everything`, which keeps today's behavior.
 
 ## Migration
 
@@ -191,15 +259,15 @@ Expected moves come from the evaluation above; the gate's report is the proof.
 
 | Unit | Change | Gate expectation |
 |---|---|---|
-| U1 | Required `reason` and `reach` on every emitter; `withCuts` still keeps every cut | `<family>:+` for every family with cuts (a field added to each cut); no status changes |
+| U1 | Re-run the emitter inventory of decision 1; required `reason` and `reach` on every emitter, `detail` and the `UnknownReason` values removed from cuts; `withCuts` still keeps every cut | `±` for every family with cuts, because a field is removed and values change (the gate rejects removals under `+`, `scripts/corpus-gate-diff.ts:175-198`). The report must show statuses and payloads unchanged except cut metadata (`reason`, `reach`, `detail`) |
 | U2 | Render reasons in the status line and in `details`; `complete (N undecided)`; a composite over one `unknown` section prints it (only `src/mcp`) | not gated (outside `src/core`); MCP tests |
-| U3 | One encoding: workspace call sites become items only; contract consequences take items as findings | `workspace:±`, `decisions:±`, `contract-consequences:±`, `callers:±` (workspace callers). Expected: realworld workspace, decisions and 7 contract answers become `complete (N undecided)` |
-| U4 | `inQuestion` and `asserted` for importers and outline | `importers:±`, `outline:±`. Expected: both importers partials of the evaluation become `complete`; outline unchanged on its one case |
+| U3 | Topology deduplication (decision 6): workspace and decisions sections stop cutting at call sites they list; contract consequences take those items as findings | `workspace:±`, `decisions:±`, `contract-consequences:±`. Expected: realworld workspace, decisions and 7 contract answers become `complete (N undecided)`; the 5 nname contract answers lose their event-site cuts. No other family moves |
+| U4 | `inQuestion` and `asserted` for importers (`dependents`) and outline (`local`) | `importers:±`, `outline:±`. Expected: both importers partials of the evaluation become `complete`; outline unchanged on its one case |
 | U5 | Impact's module walk and the symbol walks of callers, impact and trace: specifier and runtime reach | `impact:±`, `callers:±`, `trace:±`. Expected: NW-IMPACT-1 loses its 28 specifier cuts and stays `partial` (61 in question); trace and callers keep their in-walk cuts |
-| U6 | Contract consequences: operation reach over the workspace's remaining cuts | `contract-consequences:±`. Expected: the 5 nname answers lose their event-transport cuts |
+| U6 | Contract consequences: `operation` reach through `matchCallSite` over the workspace's remaining cuts | `contract-consequences:±`. Expected: no evaluation answer moves after U3; moves only where a workspace keeps dependency or export cuts |
 
-U1 lands first because every later unit reads `reason` and `reach`; U3 before U6 because U6 assumes items no longer
-arrive as cuts.
+U1 lands first because every later unit reads `reason` and `reach`; U3 before U6 because U6 assumes topology items no
+longer arrive as cuts.
 
 ## Conformance fixtures
 
@@ -209,21 +277,32 @@ Each fixture names the rule it guards; the negative ones guard the golden rule.
 2. Importers of a TypeScript file with an unresolved specifier that a path mapping pattern of the snapshot could resolve
    to it: `partial` with reason `specifier` (fails closed).
 3. Importers of a TypeScript file with a non-literal dynamic import in the same runtime: `partial`, `dynamic-load`.
-4. Outline of a file while another file of the commit has no extractor: `complete`; outline of a file the index did not
-   hold: `partial`, `not-indexed`.
+4. One snapshot where `B.ts`, in the runtime of `A.ts`, is not held by the index: outline of `A.ts` is `complete`;
+   importers of `A.ts` is `partial`, `not-indexed` at `B.ts`. Outline of a file the index did not hold: `partial`,
+   `not-indexed`.
 5. A workspace section with one unresolved call site: one `unknown` item, no cut, `complete (1 undecided)`.
 6. A contract hypothesis on HTTP with an unresolved event call site in a consumer: `complete`; with an unresolved HTTP
    call site of unknown method: one `unknown` finding, `complete (1 undecided)`; with a consumer file in a runtime
    without extractor: `partial`, `language`.
-7. Every bound (`depth`, `hub`, `caller-budget`, export `caller-budget`, `deadline`) keeps the answer `partial` for
+7. Contract cuts the topology matcher cannot exclude stay: a hypothesis on `POST /orders` with an undecided call site
+   whose known template is `orders-api/orders` and a declared gateway `orders-api`; on `GET /orders` with
+   `billing/orders` and a route whose configuration adds `/billing`; on `GET /daily-menus` with
+   `restaurants/daily-menus` (suffix). Each stays `partial` (or keeps its finding); the same call site with a template no
+   rung can match and no `could` is out of question.
+8. Frontiers are never deduplicated: a trace whose unresolved dispatch hides an implementation with an HTTP effect stays
+   `partial` with a `dispatch` cut, even when a workspace lists the same call place as an item; a trace over a call
+   ADR-0041 reconciles as `contradicted` or `unowned` keeps that cut; a recovered call the walk cannot follow keeps its
+   `receiver-unproven` or `callee-unknown` cut.
+9. Every bound (`depth`, `hub`, `caller-budget`, export `caller-budget`, `deadline`) keeps the answer `partial` for
    every family, whatever the asserted value.
-8. A cut whose reach is `anything` without a runtime keeps every family `partial`.
-9. A trace dispatch cut renders its reason in summary and details.
+10. A cut whose reach is `anything` without a runtime keeps every family `partial`.
+11. Every cut carries a reason, sections included (`section-partial`, `section-unknown`); a trace dispatch cut renders its
+    reason, with the `DispatchTargets` sub-reason, in summary and details.
 
 ## Consequences
 
 - `partial` means that a place that could hold part of this answer was not reached, and says why. On the evaluation,
-  16 of 55 `partial` answers (up to 22 with the unverified ones) become `complete` or `complete (N undecided)`, and 7
+  16 of 55 `partial` answers (up to 21 with the unverified ones) become `complete` or `complete (N undecided)`, and 7
   print as the `unknown` answer they wrap; trace stays `partial` where its walk truly stops, now with a reason per cut.
 - Fewer cuts reach the agent where they cannot matter (importers: 22 to 0 on the evaluation; NW-IMPACT-1: 89 to 61).
 - Every emitter changes once (U1); `withCuts` gains one argument; one shared predicate owns relevance.
@@ -235,11 +314,16 @@ Each fixture names the rule it guards; the negative ones guard the golden rule.
 - **A false `complete`.** A reach proof that is wrong turns a true unknown into `complete`: an unresolved specifier a
   path mapping, a package `exports` map or a workspace package link could resolve to the asked file; a file without
   extractor in a runtime that does call into the asked one (Kotlin into Java, JavaScript into TypeScript); an event
-  call site the workspace mislabels. Mitigations: proofs only from the resolver's own classification and
-  `sharesRuntime`; a missing datum fails closed; fixtures 2, 3, 6 and 8; the gate fails on any status change not
-  declared `±`, and each one is reviewed in the report.
+  call site the workspace mislabels; a call that reaches the operation through a gateway or a base path. Mitigations:
+  proofs only from the resolver's own classification, `sharesRuntime` and `matchCallSite`; a missing datum fails
+  closed; fixtures 2, 3, 4, 6, 7 and 10; the gate fails on any status change not declared `±`, and each one is
+  reviewed in the report.
+- **A frontier taken for an item.** Deduplicating a place a walk could not cross hides what lies beyond it: effects
+  behind a dispatch, dependents behind an undecided call. Decision 6 limits deduplication to topology items the
+  workspace enumerates; fixture 8 guards it.
 - **Noise moved, not removed.** A reason union that grows per case becomes its own drawer of rules. The union is closed,
-  rendered as counts, and a new member needs an emitter that cannot use an existing one.
+  maps one reason per emitter situation, reuses the vocabularies its ports already own, is rendered as counts, and a
+  new member needs an emitter that cannot use an existing one.
 - **Hidden context.** Dropping an out-of-question cut hides it from a caller who wanted the whole snapshot's coverage.
   That question belongs to `entrypoints` and `workspace`, which assert everything and keep every cut.
 
@@ -250,7 +334,7 @@ Each fixture names the rule it guards; the negative ones guard the golden rule.
 | 1 | RFC-0002 rule 2, "complete with only unknowns": should a collection with `unknown` items stay `complete`? | Yes, with decision 7: `complete (N undecided)` on the status line. Making it `partial` (option D) gives `partial` two meanings and makes it universal again |
 | 2 | Drop out-of-question cuts, or keep them in a separate list? | Drop them (decision 5), as ADR-0019 does; the gate report and fixtures carry the evidence |
 | 3 | One status per claim (trace effects vs steps; callers direct vs transitive)? | Not now. After U5, measure on the corpus how many trace partials have only `receiver-unproven` cuts whose candidates are all walked and effect-free, and how many callers cuts reach only depth > 1; decide with those numbers |
-| 4 | Does a `section` cut carry a summary of its section's reasons? | No: the section's own fact holds them, and the renderer reads it (decision 7) |
+| 4 | Does a `section` cut carry a summary of its section's reasons? | No: beyond its own reason (`section-partial` or `section-unknown`), the section's fact holds them, and the renderer reads it (decision 7) |
 
 ## Not decided here
 
