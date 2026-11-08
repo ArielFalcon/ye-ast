@@ -65,8 +65,7 @@ export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sou
       if (project.unreadable.length > 0) return results;
       const veto = globalVeto(files, project);
       if (veto !== undefined) return sites.map(({ file }) => isJavaSource(file) ? { kind: "unknown", reason: veto } : { kind: "unknown" });
-      const hierarchy = hierarchyOf(files, project);
-      if (hierarchy === undefined) return results;
+      const hierarchy = readHierarchy(files, project);
       for (const [index, site] of sites.entries()) {
         if (signal?.aborted) break;
         const method = project.types.flatMap((type) => (type.file.path === site.file ? type.methods : [])).find((candidate) => candidate.name === site.name && !candidate.hasBody && spansLine(candidate.node, site.line));
@@ -214,7 +213,10 @@ function belowOf(type: TypeDecl, hierarchy: Hierarchy): ReadonlySet<TypeDecl> {
 
 /** Reads every declaration's supertypes; `undefined` when an aspect or a JDK API that implements an interface at run time may run code behind any type. */
 export function hierarchyOf(files: readonly JavaFile[], project: JavaProject): Hierarchy | undefined {
-  if (globalVeto(files, project) !== undefined) return undefined;
+  return globalVeto(files, project) === undefined ? readHierarchy(files, project) : undefined;
+}
+
+function readHierarchy(files: readonly JavaFile[], project: JavaProject): Hierarchy {
   const placed = new Map(project.types.map((type) => [type.node.id, type]));
   const subtypes = new Map<TypeDecl, TypeDecl[]>();
   const supertypes = new Map<TypeDecl, TypeDecl[]>();
@@ -273,7 +275,6 @@ function simpleName(type: Node): string {
 function spansLine(declaration: Node, line: number): boolean {
   return declaration.startPosition.row + 1 <= line && line <= (declaration.childForFieldName("name") ?? declaration).startPosition.row + 1;
 }
-
 
 function globalVeto(files: readonly JavaFile[], project: JavaProject): Extract<DispatchTargets, { kind: "unknown" }>["reason"] {
   let dynamic = false;
