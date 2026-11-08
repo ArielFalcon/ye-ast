@@ -2210,3 +2210,21 @@ test("a request's own declared build outputs reach the checker without a host-wi
   assert.equal(viaOf(answer, "id")?.derivation, "typed");
   assert.deepEqual(answer.inputs.buildOutputs, USED);
 });
+
+test("the reverse lookup keeps each source's alignment only for an index the index cache keeps by content", async () => {
+  const kept = async (cache: boolean): Promise<string[]> => {
+    const real = createSnapshotDataCache(RETAINED_BYTES);
+    const slots: string[] = [];
+    const snapshotCache = { ...real, putFact: (key: string, json: string) => (slots.push(key), real.putFact(key, json)) };
+    const nodes = [fakeNode("Svc", "class", SVC_FILE, 2, 9), fakeNode("get", "method", SVC_FILE, 4, 6), fakeNode("Cmp", "class", CMP_FILE, 2, 9), fakeNode("viaSvc", "method", CMP_FILE, 5, 7)];
+    const edges = [{ from: "Svc", to: "get", kind: "contains" }, { from: "Cmp", to: "viaSvc", kind: "contains" }];
+    const unresolved = [{ from: "viaSvc", name: "this.svc.get", kind: "calls", file: CMP_FILE, line: 6, column: 4 }];
+    const sources = [{ path: SVC_FILE, content: "class Svc { get() {} }" }, { path: CMP_FILE, content: "this.svc.get();" }];
+    const exports = { [HEAD]: { files: sources.map(({ path }, index) => ({ path, blob: `${index}`, written: true })), skipped: [] } };
+    await setup({ nodes, edges, unresolved, sources, exports, syntax: true, importOrigins: origins(() => undefined), snapshotCache, ...(cache ? { cache: true } : {}) }).callers({ targets: [{ file: SVC_FILE, symbol: "get" }] });
+    return slots.flatMap((key) => (key.includes("reverse-") ? [(JSON.parse(key) as { fact: string }).fact] : []));
+  };
+
+  assert.deepEqual(await kept(true), ["reverse-looked-up-names", "reverse-looked-up-names", "reverse-unbound-calls"]);
+  assert.deepEqual(await kept(false), []);
+});

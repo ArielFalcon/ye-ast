@@ -251,6 +251,16 @@ refuse a binding or add facts the base does not model, so one call never has two
    calls hit aligns without parsing. Whether the written calls fact is retained at all depends on its bytes (M3);
    without it a delta miss parses the file again. The index digest leaves the key only on the proof of open question 2.
    Bindings live for one read.
+
+   Delivered in U4c (2026-11-09) for the reverse lookup. The written calls are the member names fact
+   (`java-member-names`, `ts-member-names`), keyed by path and content. The delta is two facts per source, keyed by
+   path, content and the digest of the whole index (`HeadIndex.digest`: the snapshot's content and the store's versions):
+   `reverse-looked-up-names` (the names its owned calls are looked up by, which decide whether it can contribute) and
+   `reverse-unbound-calls` (its written calls alignment leaves unmatched, `deferred` ones included). With the whole
+   index's digest in the key, the value holds the references as the index places them, node ids included; no read of
+   the file's records is needed for the key. The name index is rebuilt per read from them. Only an index the index
+   cache keeps by content has a digest, so a read without the index cache, and a `--live` read, retain nothing and pay
+   the alignment on every read, as before U4c.
 10. **Laziness.** Nothing runs at indexing. The full alignment runs the first time a read needs the name index, inside
     the read's parse hold (ADR-0040), file by file, reducing each TypeScript output to its delta; the Java trees it
     parses stay held until the read ends. Forward families never trigger it.
@@ -353,6 +363,7 @@ reaches `main` with the expectations stated (ADR-0039).
 | U4 (delivered) | `CallBindings` (`navigation/call-binding.ts`) owns the base `bind()`: trace's bare, rooted, own-member and Java chaining branches moved there, and trace settles the declared-receiver ones in its one `receiverMethods` read per body. `ReverseCalls` (`navigation/reverse-calls.ts`) owns `into`, with the text pre-filter (open question 1); `walkInside` reads it after `redirectedInto`, and an attributed unbound call is one `unresolved-link` cut per declaration (`attributedCallCuts`). Java `receiverMethods` names the constructor `super(...)` and `this(...)` chain to by arity, a compact constructor counting the record's components; a superclass declaring no constructor is its implicit one, and a record's constructors, which the index holds outside any class, are found by name in the record's file. Alignment agrees a record the index names by an import's target with the call spelled by its local alias, so the call is matched once instead of contradicted and recovered. Member-proof spellings compare with whitespace removed, so a call broken across lines binds. Trace steps into a recovered `deferred` call the base binds. Fixtures 10 to 12 hold in the base's tests: codegraph records an unresolved reference for each of their calls in every shape tried | `callers:+` (realworld `callers-frontend-get-article`), trace `±` (shopizer `trace-backend`: two homonym cuts become the methods a fully qualified local type names); `impact` none on the corpus |
 | U3b | The reverse families read the base binding instead of the index's target where the base binds one: the residual divergences below close, each moved answer inspected before acceptance | `callers:±`, `impact:±` |
 | U3b (delivered) | `EdgeTargets` settles a kept call edge on a value receiver by `CallBindings.ofReceiver`, the base's receiver rule: `proven` at the declaration it binds, a redirect from a homonym or a method of a class above the nearest one, `proven` where the receiver's type declares several members of the name, a `name-match` otherwise; a Java call edge moves to the method `receiverMethods` names. A member proof places the one member, a method or a property holding a function, of the one class it names. The member calls through a field's or an `inject()` local's origin are bound by the base (`originCallsOf`, `impact/inbound-origins.ts`) and read by `impact`, `callers` and the contract reading; `inbound-edges.ts` no longer settles them. Trace keeps settling a redirected value receiver itself; the contract reading applies the receiver redirects | `callers:±`, `impact:±`: none on the 27 corpus answers, nor on trace, `outline` and `importers` (2026-11-08); `contract_consequences:+` where a consumer calls through an `inject()` field of a class that inherits the method (the corpus contract queries, which run trusted, were not compared) |
+| U4c (delivered) | Efficiency, no rule changed. Member names of both languages and Java `receiverMethods` (by the content of every Java source and the sites asked) are derived facts; the reverse lookup aligns only sources one of whose owned calls spells a looked-up name, reads import bindings only when alignment consults an alias, and keeps each source's alignment by decision 9; the calls through an origin are bound only once the walk reaches a declaration of the name they call, each holder file read once. The `member-names` stage writes one line per query with its calls | `none`: all 32 measured `callers`, `impact` and `trace` answers byte-identical to U3b |
 | U5 | `outline` focus, `importers` and `contract_consequences` read the base | `outline:+`, `importers:±`, `contract_consequences:±` |
 | U6 | `contradicted` pruning in the reverse families | `callers:±`, `impact:±`; none expected (M4 first) |
 
@@ -416,7 +427,8 @@ first in the unit named:
 - An index error the syntax contradicts is pruned with a cut; a synthesized record is never pruned for lacking a written
   call; `references`, `extends` and `implements` are never aligned.
 - A reverse query's first need in a read parses every read source whose inputs it has not seen; one-shot CLI runs pay it
-  every time until open question 1 decides otherwise.
+  every time until open question 1 decides otherwise, and so does every read without the index cache or under `--live`,
+  whose index has no digest to key the alignment by (decision 9).
 - `DeclaredMemberNamesReader` is consumed by navigation, not only trace; its port comment and the alignment rules'
   domain move with U1.
 - Coverage of a new language's calls arrives with its reader, not with family code.
@@ -459,7 +471,10 @@ Open questions, each with the recommended answer:
    (align only files whose text spells a name a reached declaration is looked up by, where it is looked up) is adopted
    in U4 on measurement (2026-11-08): the 27 corpus `callers` and `impact` answers are byte-identical with and without
    it, and the largest move back toward the base (shopizer `callers` backend 4.5 s on the base, 13.4 s with the full
-   pass, 9.7 s with the pre-filter; nname `callers` webapp 4.3 s, 8.3 s, 4.4 s).
+   pass, 9.7 s with the pre-filter; nname `callers` webapp 4.3 s, 8.3 s, 4.4 s). Those were one-shot CLI times. Warm,
+   on one live stdio MCP server per repository (32 calls, warm median of two passes in alternating order, 2026-11-09,
+   load average 13 to 16): `callers` 5.0 s on the base, 13.3 s after U3b, 5.2 s after U4c; `impact` 9.3 s, 19.3 s,
+   9.3 s; shopizer `callers` backend 1.85 s, 8.1 s, 1.94 s. Persisting the deltas for one-shot runs stays open.
 2. **Drop the index digest from the delta's key?** Recommended: only on a proof that equal file content gives equal
    complete inputs (declarations with kind, name and span; call-bearing records with kind, place, name, synthesizer and
    retyping), for example a fitness test that indexes one file within two snapshots of different neighbours and compares

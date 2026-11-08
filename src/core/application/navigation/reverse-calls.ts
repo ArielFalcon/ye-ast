@@ -2,12 +2,14 @@ import { sharesRuntime } from "../../domain/languages/call-targets.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
 import { isClassKind } from "../../domain/impact/edge-policy.ts";
 import { calleeOf } from "../../domain/shared/call-place.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { CallBindings, SettledBinding, UnboundCall } from "./call-binding.ts";
 import type { FollowedEdge } from "./edge-targets.ts";
 import type { GraphNavigation } from "./graph-navigation.ts";
-import type { OwnedCall, ReconciledCalls } from "./reconciled-calls.ts";
+import type { ReconciledCalls } from "./reconciled-calls.ts";
 
 /** A recovered call nothing binds that is attributed to a reached declaration (ADR-0041 decision 8): a cut at the call. */
 export interface AttributedCall {
@@ -34,7 +36,12 @@ export interface ReverseCallsDeps {
   sources: readonly SourceFile[];
   /** Whether a declaration's syntax states it is a constructor, for one the index holds outside any class (a record's). */
   constructs: (node: GraphSymbol) => Promise<boolean>;
+  /** Where a read keeps each source's alignment, under the digest of the index it aligned with; none keeps nothing. */
+  retained?: { facts: DerivedFacts; index: string };
 }
+
+const REVERSE_NAMES = "reverse-looked-up-names";
+const REVERSE_UNBOUND = "reverse-unbound-calls";
 
 /** Java constructor chaining, which the Java reader spells with no callee. */
 const CHAINING: readonly string[] = ["super", "this"];
@@ -52,7 +59,8 @@ interface LookupKey {
   files?: ReadonlySet<string>;
 }
 
-export function createReverseCalls({ store, navigation, reconciled, bindings, importedDeclarations, sources, constructs }: ReverseCallsDeps): ReverseCalls {
+export function createReverseCalls({ store, navigation, reconciled, bindings, importedDeclarations, sources, constructs, retained }: ReverseCallsDeps): ReverseCalls {
+  const contents = new Map<string, string>();
   const byName = new Map<string, UnboundCall[]>();
   const aligned = new Set<string>();
   const bound = new Map<UnboundCall, Promise<SettledBinding>>();
@@ -75,21 +83,43 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, im
     const spelled = sources.filter((file) => !aligned.has(file.path) && [...keysIn(file.path)].some((name) => wordsOf(file).has(name)));
     for (const file of spelled) {
       const looked = keysIn(file.path);
-      const owned = await reconciled.ownedIn(file.path);
-      const looksUp = (call: OwnedCall): boolean => {
-        const name = lookupName(file.path, call.name);
-        return name !== undefined && looked.has(name);
-      };
-      if (![...owned.values()].some((calls) => calls.some(looksUp))) continue;
+      if (!(await lookedUpIn(file)).some((name) => looked.has(name))) continue;
       aligned.add(file.path);
-      for (const body of store.symbolsInFiles([file.path])) {
-        const { writtenOnly, deferredOnly } = await reconciled.callsOf(body);
-        for (const reference of [...writtenOnly, ...deferredOnly]) {
-          const name = lookupName(reference.file, reference.name);
-          if (name !== undefined) byName.set(name, [...(byName.get(name) ?? []), { body, reference }]);
-        }
+      const references = await unboundIn(file);
+      const bodies = new Map(store.symbolsByIds([...new Set(references.map(({ from }) => from))]).map((body) => [body.id, body]));
+      for (const reference of references) {
+        const name = lookupName(reference.file, reference.name);
+        const body = bodies.get(reference.from);
+        if (name !== undefined && body !== undefined) byName.set(name, [...(byName.get(name) ?? []), { body, reference }]);
       }
     }
+  }
+
+  /** The names the calls a source's declarations own are looked up by. */
+  function lookedUpIn(file: SourceFile): Promise<readonly string[]> {
+    return retainedOf(REVERSE_NAMES, file, async () => {
+      const owned = await reconciled.ownedIn(file.path);
+      return [...new Set([...owned.values()].flatMap((calls) => calls.flatMap((call) => lookupName(file.path, call.name) ?? [])))].sort(compareText);
+    });
+  }
+
+  /** A source's written calls alignment leaves unmatched, `deferred` ones included, by body in the index's order. */
+  function unboundIn(file: SourceFile): Promise<readonly GraphUnresolvedReference[]> {
+    return retainedOf(REVERSE_UNBOUND, file, async () => {
+      const calls = await Promise.all(store.symbolsInFiles([file.path]).map((body) => reconciled.callsOf(body)));
+      return calls.flatMap(({ writtenOnly, deferredOnly }) => [...writtenOnly, ...deferredOnly]);
+    });
+  }
+
+  /** What `derive` answers for a source, kept by its path, its content and the index digest when the read has both (ADR-0041 decision 9). */
+  function retainedOf<T>(slot: string, file: SourceFile, derive: () => Promise<T>): Promise<T> {
+    if (retained === undefined) return derive();
+    let content = contents.get(file.path);
+    if (content === undefined) {
+      content = retained.facts.fingerprint({ content: file.content });
+      contents.set(file.path, content);
+    }
+    return retained.facts.ofInputs(slot, { index: retained.index, path: file.path, content }, derive);
   }
 
   /** The names a reached declaration is looked up by (ADR-0041 decision 8): its own, its proven import aliases, and for a class or its constructor `new` and Java chaining. */

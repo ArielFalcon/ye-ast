@@ -5,7 +5,8 @@ import type { CallBindings, SettledBinding, UnboundCall } from "./call-binding.t
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "./fake-code-graph.testing.ts";
 import { createGraphNavigation } from "./graph-navigation.ts";
 import type { BodyCalls, OwnedCall, ReconciledCalls } from "./reconciled-calls.ts";
-import { createReverseCalls } from "./reverse-calls.ts";
+import { createReverseCalls, type ReverseCallsDeps } from "./reverse-calls.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 
 interface Written {
   body: string;
@@ -19,13 +20,13 @@ interface Written {
  * `into(nodes)` over written calls no record matches, each bound by `bind` (by spelling), with `imports` the local names
  * each file's imports bind and `text` each source's content (by default its calls' spellings).
  */
-function setup(nodes: readonly FakeNode[], edges: readonly FakeEdge[], written: readonly Written[], bind: (call: UnboundCall) => SettledBinding, imports: Readonly<Record<string, Readonly<Record<string, string>>>> = {}, text: Readonly<Record<string, string>> = {}) {
+function setup(nodes: readonly FakeNode[], edges: readonly FakeEdge[], written: readonly Written[], bind: (call: UnboundCall) => SettledBinding, imports: Readonly<Record<string, Readonly<Record<string, string>>>> = {}, text: Readonly<Record<string, string>> = {}, retained?: ReverseCallsDeps["retained"]) {
   const store = fakeCodeGraph(nodes, edges);
   const navigation = createGraphNavigation(store, () => false);
   const read: string[] = [];
   const empty: BodyCalls = { edges: [], references: [], contradicted: [], writtenOnly: [], ambiguous: [], deferredOnly: [] };
   const reconciled: ReconciledCalls = {
-    ownedIn: async (file) => new Map(nodes.filter((node) => node.file === file).map((node) => [node.id as GraphNodeId, written.filter((call) => call.body === node.id).map((call): OwnedCall => ({ kind: (call.kind ?? "calls") as OwnedCall["kind"], line: call.line, column: 3, name: call.name, owners: [] }))])),
+    ownedIn: async (file) => (read.push(`owned ${file}`), new Map(nodes.filter((node) => node.file === file).map((node) => [node.id as GraphNodeId, written.filter((call) => call.body === node.id).map((call): OwnedCall => ({ kind: (call.kind ?? "calls") as OwnedCall["kind"], line: call.line, column: 3, name: call.name, owners: [] }))]))),
     async callsOf(body) {
       read.push(body.id);
       const mine = written.filter((call) => call.body === body.id).map((call): GraphUnresolvedReference & { deferred?: true } => ({ from: body.id, file: body.file, line: call.line, column: 2, name: call.name, kind: call.kind ?? "calls", candidates: [], ...(call.deferred ? { deferred: true } : {}) }));
@@ -36,7 +37,7 @@ function setup(nodes: readonly FakeNode[], edges: readonly FakeEdge[], written: 
   const files = [...new Set(nodes.map(({ file }) => file))];
   const sources = files.map((path) => ({ path, content: text[path] ?? written.filter((call) => nodes.find(({ id }) => id === call.body)?.file === path).map(({ name }) => `${name}();`).join("\n") }));
   const importedDeclarations = async (file: string) => new Map(Object.entries(imports[file] ?? {}).map(([local, id]) => [local, store.symbolsByIds([id as GraphNodeId])[0]!]));
-  const reverse = createReverseCalls({ store, navigation, reconciled, bindings, importedDeclarations, sources, constructs: async () => false });
+  const reverse = createReverseCalls({ store, navigation, reconciled, bindings, importedDeclarations, sources, constructs: async () => false, ...(retained === undefined ? {} : { retained }) });
   const symbol = (id: string): GraphSymbol => store.symbolsByIds([id as GraphNodeId])[0]!;
   return { reverse, symbol, read };
 }
@@ -70,7 +71,7 @@ test("a source whose text spells no name a reached declaration is looked up by i
   await reverse.into([symbol("fetch")]);
   await reverse.into([symbol("fetch")]);
 
-  assert.deepEqual(read, ["a"]);
+  assert.deepEqual(read.filter((entry) => !entry.startsWith("owned ")), ["a"]);
 });
 
 test("a source whose text spells a looked-up name but none of whose written calls calls it is never aligned", async () => {
@@ -79,5 +80,38 @@ test("a source whose text spells a looked-up name but none of whose written call
   const { reverse, symbol, read } = setup(nodes, [], written, () => declaration(symbol("fetch")), {}, { "src/b.ts": "fetch.other(); // fetch" });
   await reverse.into([symbol("fetch")]);
 
-  assert.deepEqual(read, ["a"]);
+  assert.deepEqual(read.filter((entry) => !entry.startsWith("owned ")), ["a"]);
+});
+
+test("with the index digest and derived facts, a second read finds the calls the first aligned without aligning any source, and another index aligns again", async () => {
+  const kept = new Map<string, string>();
+  const facts: DerivedFacts = {
+    ofFile: (_slot, _file, derive) => derive(),
+    async ofInputs(slot, inputs, derive) {
+      const key = JSON.stringify([slot, inputs]);
+      if (!kept.has(key)) kept.set(key, JSON.stringify(await derive()));
+      return JSON.parse(kept.get(key)!);
+    },
+    fingerprint: (inputs) => JSON.stringify(inputs),
+    drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
+  };
+  const nodes = [fakeNode("fetch", "function", "src/api.ts", 1, 3), fakeNode("a", "constant", "src/a.ts", 2, 4), fakeNode("b", "constant", "src/b.ts", 2, 4)];
+  const written: Written[] = [{ body: "a", line: 3, name: "fetch" }, { body: "b", line: 3, name: "other" }];
+  const read = (index: string) => {
+    const world = setup(nodes, [], written, () => declaration(world.symbol("fetch")), {}, {}, { facts, index });
+    return world;
+  };
+
+  const first = read("one");
+  const found = await first.reverse.into([first.symbol("fetch")]);
+  const again = read("one");
+  const refound = await again.reverse.into([again.symbol("fetch")]);
+  const other = read("two");
+  await other.reverse.into([other.symbol("fetch")]);
+
+  assert.deepEqual(first.read, ["owned src/a.ts", "a"]);
+  assert.deepEqual(refound.edges.map(({ source, edge }) => `${source.id}@${edge.line}`), found.edges.map(({ source, edge }) => `${source.id}@${edge.line}`));
+  assert.deepEqual(found.edges.map(({ source }) => source.id), ["a"]);
+  assert.deepEqual(again.read, []);
+  assert.deepEqual(other.read, ["owned src/a.ts", "a"]);
 });

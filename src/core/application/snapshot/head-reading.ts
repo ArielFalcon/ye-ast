@@ -172,6 +172,11 @@ export interface FactSpec {
 export interface HeadIndex {
   store: CodeGraphReader;
   summary: Pick<IndexSummary, "filesNotIndexed">;
+  /**
+   * The digest of what the index was built from, for an index the index cache keeps by content: the snapshot's content
+   * and the store's versions. Derived facts that read the index are kept under it; without it they are kept by none.
+   */
+  digest?: string;
 }
 
 /** What opening a head's index answers; `fault` is the export fault that kept the index from being built. */
@@ -243,8 +248,9 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
         exportFault = ready.fault;
         return { ok: false, fault: { kind: ready.fault.kind === "aborted" ? "aborted" : "stage-failed", detail: ready.fault.detail } };
       };
-      const kept = await deps.indexes.obtain({ content: deps.digest.of(contentFingerprint(tree.export, deps.sourceSelection)), snapshot: root, prepare, signal });
-      if (kept.ok) return { store: kept.value.store, summary: notHeldInExport(kept.value.summary.filesNotIndexed, tree.export) };
+      const content = deps.digest.of(contentFingerprint(tree.export, deps.sourceSelection));
+      const kept = await deps.indexes.obtain({ content, snapshot: root, prepare, signal });
+      if (kept.ok) return { store: kept.value.store, summary: notHeldInExport(kept.value.summary.filesNotIndexed, tree.export), digest: deps.digest.of(canonicalJson({ content, versions: kept.value.store.versions })) };
       if (exportFault !== undefined) return exportFailure(exportFault);
       if (kept.fault.kind === "aborted") return "aborted";
       if (kept.fault.kind !== "cache-unavailable") return "unavailable";

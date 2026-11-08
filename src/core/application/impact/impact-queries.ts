@@ -58,7 +58,7 @@ import { combinedModuleReader } from "../navigation/module-readers.ts";
 import { createGraphNavigation } from "../navigation/graph-navigation.ts";
 import { createDeclarationUses } from "../navigation/declaration-uses.ts";
 import { createReconciledCalls, linesOncePerFile } from "../navigation/reconciled-calls.ts";
-import { createReverseCalls, type AttributedCall, type ReverseCalls } from "../navigation/reverse-calls.ts";
+import { createReverseCalls, type AttributedCall, type ReverseCalls, type ReverseCallsDeps } from "../navigation/reverse-calls.ts";
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, targetKey } from "../navigation/root-selection.ts";
@@ -242,7 +242,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const typed = await typedReading(request, head.base(content).snapshot, headTree.sources, head.prepared?.facts);
           if (typed === "aborted") return ABORTED;
-          const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources, head.prepared?.facts), typed: typed.typed, signal });
+          const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources, head.prepared?.facts), typed: typed.typed, retained: alignmentRetention(head.prepared, index), signal });
           if (signal?.aborted) return ABORTED;
           return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), read.value, [...fixed, ...typed.cuts, ...read.cuts]) };
         } finally {
@@ -485,7 +485,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (signal?.aborted) return ABORTED;
       const typed = await typedReading(request, head.base(content).snapshot, headTree.sources, head.prepared?.facts);
       if (typed === "aborted") return ABORTED;
-      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources, head.prepared?.facts), typed: typed.typed, signal });
+      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources, head.prepared?.facts), typed: typed.typed, retained: alignmentRetention(head.prepared, index), signal });
       if (signal?.aborted) return ABORTED;
       return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), { ...value, ...read.value }, [...unaccounted([...fixed, ...typed.cuts, ...read.cuts]), ...moduleCuts]) };
     } finally {
@@ -548,6 +548,8 @@ interface WalkInput {
   syntaxOf?: EdgeTargetsDeps["syntaxOf"];
   /** What the type checker binds each call to, consulted first. */
   typed?: EdgeTargetsDeps["typed"];
+  /** Where the reverse lookup keeps each source's alignment, when the index has a digest. */
+  retained?: ReverseCallsDeps["retained"];
   signal?: AbortSignal | undefined;
 }
 
@@ -618,6 +620,11 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   return { value, cuts };
 }
 
+/** Where a read keeps what it derives from the index: its derived facts, under the index's digest; none without both. */
+function alignmentRetention(prepared: PreparedCommit | undefined, index: HeadIndex): ReverseCallsDeps["retained"] {
+  return prepared?.facts === undefined || index.digest === undefined ? undefined : { facts: prepared.facts, index: index.digest };
+}
+
 /** The written calls the index does not record into what the walk reaches, read from the head's syntax; none without it. */
 function reverseCallsOf(input: WalkInput, targets: EdgeTargets | undefined): ReverseCalls | undefined {
   if (targets?.bindings === undefined || input.syntaxOf === undefined) return undefined;
@@ -628,7 +635,7 @@ function reverseCallsOf(input: WalkInput, targets: EdgeTargets | undefined): Rev
   const sources = headTree.sources.filter((file) => isTypeScriptSource(file.path) || isJavaSource(file.path));
   const syntaxOf = input.syntaxOf;
   const constructs = async (node: GraphSymbol): Promise<boolean> => (await syntaxOf(node.file)).callables.some((callable) => callable.construction && callable.name === node.name && callable.start <= node.startLine && node.startLine <= callable.nameLine);
-  return createReverseCalls({ store, navigation, reconciled, bindings: targets.bindings, importedDeclarations: targets.importedDeclarations, sources, constructs });
+  return createReverseCalls({ store, navigation, reconciled, bindings: targets.bindings, importedDeclarations: targets.importedDeclarations, sources, constructs, ...(input.retained === undefined ? {} : { retained: input.retained }) });
 }
 
 /**
