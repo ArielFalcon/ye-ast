@@ -211,10 +211,10 @@ refuse a binding or add facts the base does not model, so one call never has two
    locals, member uses), trace included. ADR-0036 decision 4 holds: `importers` and `outline` bind by syntax alone.
 7. **Forward access.** `callsOf(body)` answers a body's reconciled calls in source order, bound lazily and memoized for
    the read. It parses only the files whose bodies are asked, as today.
-8. **Reverse access.** `into(nodes)` answers, for declarations a reverse walk reached, the recovered calls and unresolved
-   call references whose binding reaches one of them, as edges into it (the `FollowedEdge` that `typedReferencesOf`,
+8. **Reverse access.** `into(nodes)` answers, for declarations a reverse walk reached, the recovered calls (`deferred`
+   ones included) whose binding reaches one of them, as edges into it (the `FollowedEdge` that `typedReferencesOf`,
    `reference-origins.ts:77`, and `redirectedInto`, `edge-targets.ts:297`, already produce). It reads a name index of
-   every read source's recovered calls and unresolved call references, by the name each spells as its callee, and binds
+   every read source's recovered calls, by the name each spells as its callee, and binds
    only the candidates of reached declarations. A reached declaration's candidates are complete when looked up under:
    - its own name, in every file: a bare call, a member call `x.f()` and a namespace call `ns.f()` all spell it;
    - each local name an import binding proves reaches it (`importBindings`,
@@ -350,6 +350,7 @@ reaches `main` with the expectations stated (ADR-0039).
 | U3 | One binder: trace's static chain and `EdgeTargets`' receiver settlement become one; trace hands over field and local origins. Before the move, regression tests pin through `callers` and `impact` every settlement `EdgeTargets` makes today: `proven` and `name-match` for a field origin, an `inject()` local, a constructed, a declared and an annotated receiver, `typed`, a drop and a redirect | `trace:+`; `callers` and `impact` `none`, answers byte-identical |
 | U3 (delivered) | `CallBinder` (`navigation/call-binder.ts`) owns the receiver chain: member proof, outside proof, field and `inject()` local origins, the receiver's syntax binding with the repository type a `declared`, `annotated` or `constructed` binding names (the import join or the file's one declaration), and the nearest class method. `EdgeTargets` reads it and still accepts only the member, field, local, declared, annotated and constructed links under its "declares or lies below" rule, so `callers` and `impact` answer as before; trace reads it and narrows: a receiver a provider may replace runs no proven class, and an annotation binds only the same class `declaredTypes` names nominal | `trace:±`; `callers` and `impact` `none` |
 | U4 | Name index with its complete candidate lookup, `into`, constructor chaining, the attribution rule of decision 8; `impact` and `callers` read it in the fixpoint; accepted only after the M5 report is inspected | `callers:+`, `impact:+`, `±` where an attributed cut appears |
+| U4 (delivered) | `CallBindings` (`navigation/call-binding.ts`) owns the base `bind()`: trace's bare, rooted, own-member and Java chaining branches moved there, and trace settles the declared-receiver ones in its one `receiverMethods` read per body. `ReverseCalls` (`navigation/reverse-calls.ts`) owns `into`, with the text pre-filter (open question 1); `walkInside` reads it after `redirectedInto`, and an attributed unbound call is one `unresolved-link` cut per declaration (`attributedCallCuts`). Java `receiverMethods` names the constructor `super(...)` and `this(...)` chain to by arity, a compact constructor counting the record's components; a superclass declaring no constructor is its implicit one, and a record's constructors, which the index holds outside any class, are found by name in the record's file. Alignment agrees a record the index names by an import's target with the call spelled by its local alias, so the call is matched once instead of contradicted and recovered. Member-proof spellings compare with whitespace removed, so a call broken across lines binds. Trace steps into a recovered `deferred` call the base binds. Fixtures 10 to 12 hold in the base's tests: codegraph records an unresolved reference for each of their calls in every shape tried | `callers:+` (realworld `callers-frontend-get-article`), trace `±` (shopizer `trace-backend`: two homonym cuts become the methods a fully qualified local type names); `impact` none on the corpus |
 | U3b | The reverse families read the base binding instead of the index's target where the base binds one: the residual divergences below close, each moved answer inspected before acceptance | `callers:±`, `impact:±` |
 | U5 | `outline` focus, `importers` and `contract_consequences` read the base | `outline:+`, `importers:±`, `contract_consequences:±` |
 | U6 | `contradicted` pruning in the reverse families | `callers:±`, `impact:±`; none expected (M4 first) |
@@ -453,7 +454,10 @@ Open questions, each with the recommended answer:
 1. **Persist the deltas beside the kept index?** Recommended: decide on M1 to M3 (complete cold and warm queries,
    evictions and the memory of the Java hold) and M2. If one-shot runs need it, write them in ye-ast's own store, keyed
    by the kept index's content digest, with its retention (ADR-0027); never into codegraph's store. The text pre-filter
-   (align only files that spell a reached name) is the alternative to measure then.
+   (align only files whose text spells a name a reached declaration is looked up by, where it is looked up) is adopted
+   in U4 on measurement (2026-11-08): the 27 corpus `callers` and `impact` answers are byte-identical with and without
+   it, and the largest move back toward the base (shopizer `callers` backend 4.5 s on the base, 13.4 s with the full
+   pass, 9.7 s with the pre-filter; nname `callers` webapp 4.3 s, 8.3 s, 4.4 s).
 2. **Drop the index digest from the delta's key?** Recommended: only on a proof that equal file content gives equal
    complete inputs (declarations with kind, name and span; call-bearing records with kind, place, name, synthesizer and
    retyping), for example a fitness test that indexes one file within two snapshots of different neighbours and compares
@@ -470,4 +474,8 @@ Open questions, each with the recommended answer:
    top-level code by guess.
 6. **Languages beyond TypeScript and Java.** Out of scope; each enters with its reader under ADR-0013.
 7. **Should index unresolved references lose the unattributed homonym cut too?** Recommended: decide on the M5 report;
-   U4 leaves their rule as it is, so it changes no answer it does not have to.
+   U4 leaves their rule as it is, so it changes no answer it does not have to. Measured in U4 phase 1 (2026-11-08):
+   feeding them to `into` adds 1,068 cuts to each of shopizer's backend `callers` and `impact` answers and takes them
+   from 3.6 s and 5.2 s to about 140 s. The cause is attribution: an unresolved reference with no candidates is
+   attributed to every homonym of its name, not to the candidates at its receiver's type, so a decision here first needs
+   the receiver type's candidates for those references.

@@ -1,0 +1,153 @@
+import { sharesRuntime } from "../../domain/languages/call-targets.ts";
+import { isJavaSource } from "../../domain/languages/java.ts";
+import { isClassKind } from "../../domain/impact/edge-policy.ts";
+import { calleeOf } from "../../domain/shared/call-place.ts";
+import type { CodeGraphReader, GraphEdge, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { CallBindings, SettledBinding, UnboundCall } from "./call-binding.ts";
+import type { FollowedEdge } from "./edge-targets.ts";
+import type { GraphNavigation } from "./graph-navigation.ts";
+import type { ReconciledCalls } from "./reconciled-calls.ts";
+
+/** A recovered call nothing binds that is attributed to a reached declaration (ADR-0041 decision 8): a cut at the call. */
+export interface AttributedCall {
+  node: GraphSymbol;
+  call: UnboundCall;
+}
+
+/**
+ * The calls into declarations a reverse walk reached that the index does not record (ADR-0041 decision 8): the written
+ * calls no record matches, `deferred` ones included, looked up by the name each spells as its callee and bound by the
+ * base. A bound call is an edge into the declaration; an unbound one is a cut only when attributed to it.
+ */
+export interface ReverseCalls {
+  into(nodes: readonly GraphSymbol[], signal?: AbortSignal): Promise<{ edges: readonly FollowedEdge[]; attributed: readonly AttributedCall[] }>;
+}
+
+export interface ReverseCallsDeps {
+  store: CodeGraphReader;
+  navigation: GraphNavigation;
+  reconciled: ReconciledCalls;
+  bindings: CallBindings;
+  importedDeclarations: (file: string) => Promise<ReadonlyMap<string, GraphSymbol>>;
+  /** The read's sources a syntax reader parses, with their text. */
+  sources: readonly SourceFile[];
+  /** Whether a declaration's syntax states it is a constructor, for one the index holds outside any class (a record's). */
+  constructs: (node: GraphSymbol) => Promise<boolean>;
+}
+
+/** Java constructor chaining, which the Java reader spells with no callee. */
+const CHAINING: readonly string[] = ["super", "this"];
+
+/** The name a written call is looked up by: its callee, a constructed class's last name, or the chaining keyword. */
+function lookupName(reference: GraphUnresolvedReference): string | undefined {
+  if (isJavaSource(reference.file) && CHAINING.includes(reference.name)) return reference.name;
+  const callee = calleeOf(reference.name.replace(/<[^]*$/, ""));
+  return callee.form === "computed" ? undefined : callee.name;
+}
+
+/** A name a reached declaration is looked up by, in every file or only in `files`. */
+interface LookupKey {
+  name: string;
+  files?: ReadonlySet<string>;
+}
+
+export function createReverseCalls({ store, navigation, reconciled, bindings, importedDeclarations, sources, constructs }: ReverseCallsDeps): ReverseCalls {
+  const byName = new Map<string, UnboundCall[]>();
+  const aligned = new Set<string>();
+  const bound = new Map<UnboundCall, Promise<SettledBinding>>();
+  const words = new Map<string, ReadonlySet<string>>();
+  const wordsOf = (file: SourceFile): ReadonlySet<string> => {
+    let found = words.get(file.path);
+    if (found === undefined) {
+      found = new Set(file.content.match(/[A-Za-z_$][\w$]*/g) ?? []);
+      words.set(file.path, found);
+    }
+    return found;
+  };
+
+  /** Aligns the sources not aligned yet whose text spells one of `keys` where it is looked up (ADR-0041 open question 1). */
+  async function align(keys: readonly LookupKey[]): Promise<void> {
+    const wanted = sources.filter((file) => !aligned.has(file.path) && keys.some(({ name, files }) => (files === undefined || files.has(file.path)) && wordsOf(file).has(name)));
+    for (const file of wanted) {
+      aligned.add(file.path);
+      for (const body of store.symbolsInFiles([file.path])) {
+        const { writtenOnly, deferredOnly } = await reconciled.callsOf(body);
+        for (const reference of [...writtenOnly, ...deferredOnly]) {
+          const name = lookupName(reference);
+          if (name !== undefined) byName.set(name, [...(byName.get(name) ?? []), { body, reference }]);
+        }
+      }
+    }
+  }
+
+  /** The names a reached declaration is looked up by (ADR-0041 decision 8): its own, its proven import aliases, and for a class or its constructor `new` and Java chaining. */
+  async function keysOf(node: GraphSymbol): Promise<LookupKey[]> {
+    const keys: LookupKey[] = [{ name: node.name }];
+    const aliases = async (target: GraphSymbol): Promise<void> => {
+      const importing = store.symbolsByIds([...new Set(store.incomingEdges([target.id], ["imports"]).map((edge) => edge.source))]);
+      for (const file of new Set(importing.map((symbol) => symbol.file))) {
+        for (const [local, declaration] of await importedDeclarations(file)) if (declaration.id === target.id && local !== target.name) keys.push({ name: local, files: new Set([file]) });
+      }
+    };
+    await aliases(node);
+    const type = typeConstructed(node);
+    if (type !== undefined) {
+      if (type.id !== node.id) {
+        keys.push({ name: type.name });
+        await aliases(type);
+      }
+      if (isJavaSource(type.file)) {
+        const subclasses = store.symbolsByIds(store.incomingEdges([type.id], ["extends"]).map((edge) => edge.source));
+        keys.push({ name: "super", files: new Set(subclasses.map((subclass) => subclass.file)) }, { name: "this", files: new Set([type.file]) });
+      }
+    } else if (isJavaSource(node.file) && node.kind === "function" && navigation.ownersOf(node).length === 0 && (await constructs(node))) keys.push({ name: "this", files: new Set([node.file]) });
+    return keys;
+  }
+
+  /** The class a declaration constructs: the class itself, or the class whose constructor it is. */
+  function typeConstructed(node: GraphSymbol): GraphSymbol | undefined {
+    if (isClassKind(node.kind)) return node;
+    const [owner] = navigation.ownersOf(node).filter((type) => isClassKind(type.kind));
+    return owner !== undefined && (node.name === owner.name || node.name === "constructor") ? owner : undefined;
+  }
+
+  /** Whether a binding reaches `node`: its target, or for `new C()` the one constructor `node` is of the class it binds. */
+  function reaches(binding: SettledBinding, call: UnboundCall, node: GraphSymbol): boolean {
+    const target = binding.kind === "declaration" || binding.kind === "receiver" ? binding.target : undefined;
+    if (target === undefined) return false;
+    if (target.id === node.id) return true;
+    const constructors = call.reference.kind === "instantiates" && isClassKind(target.kind) ? navigation.membersOf(target).filter((member) => typeConstructed(member)?.id === target.id) : [];
+    return constructors.length === 1 && constructors[0]!.id === node.id;
+  }
+
+  return {
+    async into(nodes, signal) {
+      const asked = await Promise.all(nodes.map(async (node) => ({ node, keys: await keysOf(node) })));
+      await align(asked.flatMap(({ keys }) => keys));
+      const candidates = asked.map(({ node, keys }) => ({
+        node,
+        calls: [...new Set(keys.flatMap(({ name, files }) => (byName.get(name) ?? []).filter((call) => (files === undefined || files.has(call.reference.file)) && sharesRuntime(call.reference.file, node.file))))],
+      }));
+      const fresh = [...new Set(candidates.flatMap(({ calls }) => calls))].filter((call) => !bound.has(call));
+      if (fresh.length > 0) {
+        const settled = bindings.boundCalls(fresh, signal);
+        for (const [index, call] of fresh.entries()) bound.set(call, settled.then((all) => all[index]!));
+      }
+      const edges: FollowedEdge[] = [];
+      const attributed: AttributedCall[] = [];
+      for (const { node, calls } of candidates) {
+        for (const call of calls) {
+          const binding = await bound.get(call)!;
+          if (reaches(binding, call, node)) {
+            const edge: GraphEdge = { source: call.body.id, target: node.id, kind: call.reference.kind, line: call.reference.line, column: call.reference.column, confidence: null, provenance: null, synthesizedBy: null, resolvedFrom: null };
+            edges.push({ edge, source: call.body, target: node });
+          } else if ((binding.kind === "unbound" || binding.kind === "receiver") && binding.attributed.some((symbol) => symbol.id === node.id)) {
+            attributed.push({ node, call });
+          }
+        }
+      }
+      return { edges, attributed };
+    },
+  };
+}

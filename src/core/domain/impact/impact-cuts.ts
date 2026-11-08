@@ -89,6 +89,14 @@ function isKnownReference(reference: UnresolvedUse, known: ReadonlySet<string>, 
   return key !== undefined && unique.has(key) && known.has(key);
 }
 
+/**
+ * The written calls nothing binds that are attributed to a reached declaration (ADR-0041 decision 8): one cut per
+ * declaration, led by it, at every such call, as a reference the index left unresolved that names it is cut.
+ */
+export function attributedCallCuts(calls: readonly { declaration: { file: string; name: string }; place: { file: string; line: number; name: string } }[]): Cut[] {
+  return [...Map.groupBy(calls, ({ declaration }) => declarationAnchor(declaration.file, declaration.name))].map(([anchor, here]) => unresolvedLinkAt(anchor, new Set(here.map(({ place }) => placeAt(place.file, place.line, place.name)))));
+}
+
 function unresolvedLinkAt(anchor: string, places: Iterable<string>): Cut {
   return { kind: "unresolved-link", at: [anchor, ...[...places].sort()] };
 }

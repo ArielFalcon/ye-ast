@@ -9,7 +9,7 @@ import type { FileChange } from "../../domain/change/diff-reader.ts";
 import type { ComponentRef } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
-import { unresolvedPlaceCuts, removedDeclarationCuts, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
+import { attributedCallCuts, unresolvedPlaceCuts, removedDeclarationCuts, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
 import { impactFact, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
@@ -55,6 +55,11 @@ import type { DeclaredMemberNamesReader } from "../../ports/declared-member-name
 import type { ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
 import { createEdgeTargets, edgeKey, SYNTAX_ONLY, syntaxOfSources, type EdgeTargets, type EdgeTargetsDeps, type FollowedEdge } from "../navigation/edge-targets.ts";
 import { combinedModuleReader } from "../navigation/module-readers.ts";
+import { createGraphNavigation } from "../navigation/graph-navigation.ts";
+import { createDeclarationUses } from "../navigation/declaration-uses.ts";
+import { createReconciledCalls, linesOncePerFile } from "../navigation/reconciled-calls.ts";
+import { createReverseCalls, type AttributedCall, type ReverseCalls } from "../navigation/reverse-calls.ts";
+import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, targetKey } from "../navigation/root-selection.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
@@ -560,7 +565,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const build = (corrections: EdgeCorrections): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, corrections);
   const targets = input.origins === undefined ? undefined : createEdgeTargets({ origins: input.origins, store, modules: input.modules, syntaxOf: input.syntaxOf, proofs: async () => ({ fields, locals, memberUses, externalUses: input.externalUses }), typed: input.typed });
   const typedReferences = input.typed === undefined ? undefined : typedReferencesOf(store, unresolved, input.typed);
-  const { inbound, walk } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges);
+  const { inbound, walk, attributed } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, reverseCallsOf(input, targets));
 
   const walked = walk.reached.map(({ symbol }) => symbol);
   const reachedIds = new Set(walked.map((symbol) => symbol.id));
@@ -570,6 +575,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
 
   const cuts: Cut[] = [
     ...walk.cuts,
+    ...attributedCallCuts(attributed.map(({ node, call: { reference } }) => ({ declaration: node, place: { ...reference, name: compactSpelling(reference.name) } }))),
     ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(walk.expanded, reachedIds), knownPlaces, input.proofs?.bound, inbound.memberProofs(walk.expanded)),
     ...removedDeclarationCuts(unresolved, selection.removed, knownPlaces, input.proofs?.bound, input.proofs?.localParameters),
     ...unreadRelationCuts(unread, new Set(walked.map((symbol) => symbol.file)), templateOwners(componentsByResource)),
@@ -611,12 +617,28 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   return { value, cuts };
 }
 
+/** The written calls the index does not record into what the walk reaches, read from the head's syntax; none without it. */
+function reverseCallsOf(input: WalkInput, targets: EdgeTargets | undefined): ReverseCalls | undefined {
+  if (targets?.bindings === undefined || input.syntaxOf === undefined) return undefined;
+  const { store, headTree } = input;
+  const navigation = createGraphNavigation(store, () => false);
+  const lineOf = linesOncePerFile(new Map(headTree.sources.map((file) => [file.path, file])));
+  const reconciled = createReconciledCalls({ store, uses: createDeclarationUses(store, navigation), syntaxOf: input.syntaxOf, lineOf, importedDeclarations: targets.importedDeclarations });
+  const sources = headTree.sources.filter((file) => isTypeScriptSource(file.path) || isJavaSource(file.path));
+  const syntaxOf = input.syntaxOf;
+  const constructs = async (node: GraphSymbol): Promise<boolean> => (await syntaxOf(node.file)).callables.some((callable) => callable.construction && callable.name === node.name && callable.start <= node.startLine && node.startLine <= callable.nameLine);
+  return createReverseCalls({ store, navigation, reconciled, bindings: targets.bindings, importedDeclarations: targets.importedDeclarations, sources, constructs });
+}
+
 /**
  * Walks from the seeds with the edges as `EdgeTargets` judges them: the edges each walk read, the edges an import
- * proves reach a symbol it reached, and the `typed` edges the checker made of unresolved calls. When a verdict changes what a symbol depends on, the walk runs again, because a bound
- * it frees, or an edge it moves, can read edges no earlier walk read.
+ * proves reach a symbol it reached, the `typed` edges the checker made of unresolved calls, and the written calls the
+ * index does not record that the base binds into a symbol it reached (`ReverseCalls`). When a verdict changes what a
+ * symbol depends on, the walk runs again, because a bound it frees, or an edge it moves, can read edges no earlier walk
+ * read. `attributed` holds the unbound written calls attributed to a symbol it reached.
  */
-async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = []): Promise<{ inbound: InboundEdges; walk: Walk }> {
+async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = [], reverse?: ReverseCalls): Promise<{ inbound: InboundEdges; walk: Walk; attributed: readonly AttributedCall[] }> {
+  const attributed: AttributedCall[] = [];
   const dropped = new Set<string>();
   const settled = new Map<string, ReceiverSettlement>();
   const into = new Map<GraphNodeId, Map<string, FollowedEdge>>();
@@ -636,10 +658,10 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
   for (;;) {
     const inbound = build({ dropped, into: new Map([...into].map(([id, edges]) => [id, [...edges.values()]])), settled });
     const walk = walkImpact(seeds, inbound, budget);
-    if (targets === undefined || signal?.aborted) return { inbound, walk };
+    if (targets === undefined || signal?.aborted) return { inbound, walk, attributed };
     const fresh = inbound.followed().filter(({ edge }) => !checked.has(edgeKey(edge)));
     const reached = [...seeds, ...walk.reached.map(({ symbol }) => symbol)].filter((symbol) => !probed.has(symbol.id));
-    if (fresh.length === 0 && reached.length === 0) return { inbound, walk };
+    if (fresh.length === 0 && reached.length === 0) return { inbound, walk, attributed };
     for (const { edge } of fresh) checked.add(edgeKey(edge));
     for (const symbol of reached) probed.add(symbol.id);
     let changed = false;
@@ -668,7 +690,12 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
       if (verdict.kind === "redirect" && verdict.derivation !== undefined) settled.set(edgeKey(followed.edge), verdict.derivation);
       if (moveTo(followed.target, followed)) changed = true;
     }
-    if (!changed) return { inbound, walk };
+    if (reverse !== undefined && reached.length > 0) {
+      const recovered = await reverse.into(reached, signal);
+      for (const followed of recovered.edges) if (moveTo(followed.target, followed)) changed = true;
+      attributed.push(...recovered.attributed);
+    }
+    if (!changed) return { inbound, walk, attributed };
   }
 }
 
