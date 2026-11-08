@@ -104,7 +104,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             const proofs = indexed === "unavailable" ? undefined : await referenceProofsOf(importOrigins, indexed.store, loaded.value, context.signal);
             const settled = indexed === "unavailable" || origins === undefined || importOrigins === undefined
               ? undefined
-              : await receiverSettlementsOf(indexed.store, createEdgeTargets({ origins: importOrigins, store: indexed.store, modules: deps.modules === undefined ? undefined : { reader: deps.modules, sources }, syntaxOf: syntaxOfSources(deps.memberNames, sources), proofs: async () => origins }), sources.map((file) => file.path), context.signal);
+              : await receiverSettlementsOf(indexed.store, createEdgeTargets({ origins: importOrigins, store: indexed.store, modules: deps.modules === undefined ? undefined : { reader: deps.modules, sources }, syntaxOf: syntaxOfSources(deps.memberNames, sources, prepared.value.facts), proofs: async () => origins }), sources.map((file) => file.path), context.signal);
             if (context.signal?.aborted) return ABORTED;
             return {
               ok: true,

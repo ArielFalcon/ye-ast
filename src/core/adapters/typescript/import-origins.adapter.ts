@@ -82,20 +82,20 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
     return typeShapes.get(file);
   }, resolvedFile);
   const shapes = new Map<string, FileShape>();
-  const starts = new Map<string, ReadonlySet<number>>();
-  /** The name starts one binding of a file proves, read once per file for the life of the reader (ADR-0029). */
-  const startsOf = (slot: string, path: string, read: () => Iterable<number>): ReadonlySet<number> => {
-    const key = `${slot}\u0000${path}`;
-    let held = starts.get(key);
+  const uses = new Map<string, { parameters: ReadonlySet<number>; dynamic: ReadonlySet<number> }>();
+  /** The name starts one bind of a file proves, read once per file for the life of the reader (ADR-0029 decision 4). */
+  const usesOf = (source: ts.SourceFile, text: string): { parameters: ReadonlySet<number>; dynamic: ReadonlySet<number> } => {
+    let held = uses.get(source.fileName);
     if (held === undefined) {
-      held = new Set(derivedOf(slot, path, () => [...read()]));
-      starts.set(key, held);
+      const read = derivedOf("ts-binding-uses", source.fileName, () => bindingUses(source.fileName, text));
+      held = { parameters: new Set(read.parameters), dynamic: new Set(read.dynamic) };
+      uses.set(source.fileName, held);
     }
     return held;
   };
-  const isParameterUse: ParameterUse = (source, text, identifier) => startsOf("ts-parameter-uses", source.fileName, () => parameterUses(source.fileName, text)).has(identifier.getStart(source));
-  /** A name a `with` body or a direct `eval` may rebind proves no origin; only a file that has either is bound for it. */
-  const isDynamicUse: ParameterUse = (source, text, identifier) => startsOf("ts-dynamic-uses", source.fileName, () => (DYNAMIC_SCOPE.test(text) ? dynamicUses(source.fileName, text) : [])).has(identifier.getStart(source));
+  const isParameterUse: ParameterUse = (source, text, identifier) => usesOf(source, text).parameters.has(identifier.getStart(source));
+  /** A name a `with` body or a direct `eval` may rebind proves no origin; a file that has neither is not bound for it. */
+  const isDynamicUse: ParameterUse = (source, text, identifier) => DYNAMIC_SCOPE.test(text) && usesOf(source, text).dynamic.has(identifier.getStart(source));
   const bindsOncePerFile = (): ((path: string) => BoundFile) => {
     const bound = new Map<string, BoundFile>();
     return (path) => {
@@ -796,10 +796,15 @@ function bindsParameter(binding: LexicalBinding, name: string): boolean {
   return body === undefined || !ts.isBlock(body) || !body.statements.some((statement) => topLevelNames(statement).includes(name));
 }
 
+/** Text that may hold a `with` statement or a direct `eval`, the only scopes the binder calls dynamic. */
+const DYNAMIC_SCOPE = /\bwith\b|\beval\b/;
+
 /**
- * The start of every name of the file that `bindsParameter` proves. Only names spelled like a parameter are asked.
+ * From one bind of the file: the start of every name `bindsParameter` proves, asked only of names spelled like a
+ * parameter, and of every name whose binding a dynamic scope decides (ADR-0029 decision 3), asked only in a file whose
+ * text may hold one.
  */
-function parameterUses(path: string, text: string): ReadonlySet<number> {
+function bindingUses(path: string, text: string): { parameters: number[]; dynamic: number[] } {
   const { tree, bindingOf } = bindFile(path, text);
   const names = new Set<string>();
   const collect = (node: ts.Node): void => {
@@ -807,28 +812,18 @@ function parameterUses(path: string, text: string): ReadonlySet<number> {
     node.forEachChild(collect);
   };
   collect(tree);
-  const starts = new Set<number>();
+  const mayBeDynamic = DYNAMIC_SCOPE.test(text);
+  const parameters: number[] = [];
+  const dynamic: number[] = [];
   const visit = (node: ts.Node): void => {
-    if (ts.isIdentifier(node) && names.has(node.text) && bindsParameter(bindingOf(node), node.text)) starts.add(node.getStart(tree));
+    if (ts.isIdentifier(node)) {
+      if (names.has(node.text) && bindsParameter(bindingOf(node), node.text)) parameters.push(node.getStart(tree));
+      if (mayBeDynamic && bindingOf(node).kind === "dynamic") dynamic.push(node.getStart(tree));
+    }
     node.forEachChild(visit);
   };
-  if (names.size > 0) visit(tree);
-  return starts;
-}
-
-/** Text that may hold a `with` statement or a direct `eval`, the only scopes the binder calls dynamic. */
-const DYNAMIC_SCOPE = /\bwith\b|\beval\b/;
-
-/** The start of every name of the file whose binding a dynamic scope decides (ADR-0029 decision 3). */
-function dynamicUses(path: string, text: string): ReadonlySet<number> {
-  const { tree, bindingOf } = bindFile(path, text);
-  const starts = new Set<number>();
-  const visit = (node: ts.Node): void => {
-    if (ts.isIdentifier(node) && bindingOf(node).kind === "dynamic") starts.add(node.getStart(tree));
-    node.forEachChild(visit);
-  };
-  visit(tree);
-  return starts;
+  if (names.size > 0 || mayBeDynamic) visit(tree);
+  return { parameters, dynamic };
 }
 
 function topLevelNames(statement: ts.Statement): string[] {

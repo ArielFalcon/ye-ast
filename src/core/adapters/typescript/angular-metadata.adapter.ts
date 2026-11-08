@@ -510,6 +510,17 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
     const fieldsByOwner = Map.groupBy(proofFields, (field) => `${field.owner.path}\0${field.owner.line}\0${field.field}`);
     const resolvedImports = new Map<string, Promise<{ file: string; name: string } | undefined>>();
     const methodsByFile = new Map<string, ReadonlyMap<string, readonly RawInstanceMethod[]>>();
+    const libraryGlobalsByFile = new Map<string, ReadonlySet<string>>();
+    const constructsLibraryGlobal = (file: string, owner: string, field: string): boolean => {
+      const content = contents.get(file)?.content;
+      if (content === undefined) return false;
+      let fields = libraryGlobalsByFile.get(file);
+      if (fields === undefined) {
+        fields = libraryGlobalFields(file, content);
+        libraryGlobalsByFile.set(file, fields);
+      }
+      return fields.has(`${owner}\0${field}`);
+    };
     const memberOf = async (file: string, source: Parsed, reference: RawReference, receiver: SymbolRef, name: string): Promise<{ member: SymbolRef; substitutes?: readonly MemberSubstitute[] } | undefined> => {
       const evidence = source.angular.memberEvidence;
       const root = reference.name;
@@ -561,7 +572,7 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
         const raw = rawFields[0]!;
         if (risks.reaches(field.owner, call.field) || "opaque" in raw.target || (raw.via === "inject" && angularShadow) || (template && raw.via !== "inject")) return;
         if ("external" in field.holds) {
-          const proven = field.holds.external.startsWith("global#") ? constructsLibraryGlobal(file, contents.get(file)?.content, call.owner, call.field) : raw.via !== "inject" || !substituted.has(holdsKey(field.holds));
+          const proven = field.holds.external.startsWith("global#") ? constructsLibraryGlobal(file, call.owner.name, call.field) : raw.via !== "inject" || !substituted.has(holdsKey(field.holds));
           if (!template && proven) externalUses.push({ owner: field.owner, field: call.field, holds: field.holds.external, reference });
           return;
         }
@@ -594,27 +605,34 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
   return { classes, findings: [...findings, ...injects.values()], fields, locals, ...(proveMembers ? { memberUses, externalUses } : {}) };
 }
 
-/**
- * Whether the field's initializer constructs a name that, by the binder (ADR-0029), binds nothing the file declares or
- * imports and is not in a dynamic scope, and that the language's libraries declare. The unresolved-name fallback of a
- * field origin proves neither: a generated or unavailable class is unresolved too.
- */
 const LIBRARY_GLOBALS: ReadonlySet<string> = new Set(TYPESCRIPT_LIB_GLOBALS);
 
-function constructsLibraryGlobal(path: string, content: string | undefined, owner: { name: string; line: number }, field: string): boolean {
-  if (content === undefined) return false;
+/**
+ * Every `<class>\0<field>` of the file, among the classes of that name, whose one initializer constructs a name that, by
+ * the binder (ADR-0029), binds nothing the file declares or imports and is not in a dynamic scope, and that the
+ * language's libraries declare; one bind answers the whole file. The unresolved-name fallback of a field origin proves
+ * neither: a generated or unavailable class is unresolved too.
+ */
+function libraryGlobalFields(path: string, content: string): ReadonlySet<string> {
   const { tree, bindingOf } = bindFile(path, content);
-  const initializers: ts.Expression[] = [];
+  const initializers = new Map<string, ts.Expression[]>();
   const visit = (node: ts.Node): void => {
-    if (ts.isClassLike(node) && node.name?.text === owner.name) {
-      for (const member of node.members) if (ts.isPropertyDeclaration(member) && member.name.getText(tree) === field && member.initializer !== undefined) initializers.push(unwrapped(member.initializer));
+    if (ts.isClassLike(node) && node.name !== undefined) {
+      for (const member of node.members) {
+        if (!ts.isPropertyDeclaration(member) || member.initializer === undefined) continue;
+        const key = `${node.name.text}\0${member.name.getText(tree)}`;
+        initializers.set(key, [...(initializers.get(key) ?? []), unwrapped(member.initializer)]);
+      }
     }
     node.forEachChild(visit);
   };
   visit(tree);
-  const only = initializers.length === 1 ? initializers[0] : undefined;
-  const name = only !== undefined && ts.isNewExpression(only) && ts.isIdentifier(only.expression) ? only.expression : undefined;
-  return name !== undefined && LIBRARY_GLOBALS.has(name.text) && bindingOf(name).kind === "none";
+  const fields = new Set<string>();
+  for (const [key, [only, ...others]] of initializers) {
+    const name = others.length === 0 && only !== undefined && ts.isNewExpression(only) && ts.isIdentifier(only.expression) ? only.expression : undefined;
+    if (name !== undefined && LIBRARY_GLOBALS.has(name.text) && bindingOf(name).kind === "none") fields.add(key);
+  }
+  return fields;
 }
 
 function holdsKey(holds: FieldOrigin["holds"]): string {

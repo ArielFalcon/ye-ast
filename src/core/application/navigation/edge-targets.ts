@@ -1,3 +1,4 @@
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, LOCAL_OWNER_KINDS, type EdgeVerdict } from "../../domain/impact/edge-policy.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
@@ -68,13 +69,13 @@ export const NOTHING_DECLARED: DeclaredMemberNames = { names: [], functionValueC
 /** No relation proof: for a family that reads no Angular relations, only a receiver's syntax binds it. */
 export const SYNTAX_ONLY: ReceiverProofs = { fields: [], locals: [] };
 
-/** What each of `sources` states in its syntax; nothing without a reader. */
-export function syntaxOfSources(reader: DeclaredMemberNamesReader | undefined, sources: readonly SourceFile[]): EdgeTargetsDeps["syntaxOf"] {
+/** What each of `sources` states in its syntax, kept between requests in `facts` where the reader can; nothing without a reader. */
+export function syntaxOfSources(reader: DeclaredMemberNamesReader | undefined, sources: readonly SourceFile[], facts?: DerivedFacts): EdgeTargetsDeps["syntaxOf"] {
   if (reader === undefined) return undefined;
   const byPath = new Map(sources.map((file) => [file.path, file]));
   return async (path) => {
     const file = byPath.get(path);
-    return file === undefined ? NOTHING_DECLARED : reader.memberNames(file);
+    return file === undefined ? NOTHING_DECLARED : reader.memberNames(file, facts);
   };
 }
 
