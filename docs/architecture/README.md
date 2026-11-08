@@ -42,6 +42,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0034](adr/0034-name-contract-consequences-explicitly.md) | Name the family `contractConsequences`, MCP and compose `ye_ast_contract_consequences`, and CLI `contract-consequences`; supersedes the naming in 0033 | Accepted |
 | [0035](adr/0035-derived-facts-are-retained-by-content.md) | The snapshot data cache may retain plain facts derived from one file or from named inputs, keyed by content; amends 0020 and 0026 | Accepted |
 | [0036](adr/0036-dependence-is-the-compile-time-binding.md) | A graph edge on a value receiver is a name match (confidence 0.3) until a source proof binds the receiver to the member's class; every followed dependence carries its derivation | Accepted |
+| [0038](adr/0038-evidence-composition-is-derived-in-the-core.md) | Evidence composition (normalize, identity, materialize, reference and issue checks) is derived in the core behind a driving port; the MCP executes queries, orchestrates compose requests and renders | Accepted |
 
 ## Designs (RFC)
 
