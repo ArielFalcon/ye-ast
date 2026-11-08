@@ -43,6 +43,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0035](adr/0035-derived-facts-are-retained-by-content.md) | The snapshot data cache may retain plain facts derived from one file or from named inputs, keyed by content; amends 0020 and 0026 | Accepted |
 | [0036](adr/0036-dependence-is-the-compile-time-binding.md) | A graph edge on a value receiver is a name match (confidence 0.3) until a source proof binds the receiver to the member's class; every followed dependence carries its derivation | Accepted |
 | [0038](adr/0038-evidence-composition-is-derived-in-the-core.md) | Evidence composition (normalize, identity, materialize, reference and issue checks) is derived in the core behind a driving port; the MCP executes queries, orchestrates compose requests and renders | Accepted |
+| [0039](adr/0039-behavior-changes-pass-a-corpus-gate.md) | Every change of behavior under `src/core/` passes a corpus gate before reaching `main`: base and candidate runs over a frozen out-of-repository manifest, differences explained by declared families and directions; extends 0013 rule 4 | Accepted |
 | [0040](adr/0040-a-snapshot-read-parses-each-java-source-once.md) | A snapshot read parses each Java source once into trees its hold keeps, and frees them when the read ends, whether it answers or throws; concurrent reads never share trees | Accepted |
 
 ## Designs (RFC)
