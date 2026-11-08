@@ -344,3 +344,40 @@ test("compiled review counterexamples cannot invent framework identity, entity i
   assert.equal(effects.length, 1);
   assert.equal(effects[0]!.target, undefined);
 });
+
+test("construction accounts for field initializers before reporting complete", async () => {
+  commit({
+    "src/entry.ts": `class Worker {
+  constructor() { unknownWork(); }
+}
+class Holder {
+  worker = new Worker();
+  static shared = new Worker();
+  constructor() {}
+}
+export function run() { return new Holder(); }
+`,
+    "src/Entry.java": `class Worker {
+  Worker() { unknownWork(); }
+}
+class Holder {
+  Worker worker = new Worker();
+  static Worker shared = new Worker();
+  Holder() {}
+}
+class Entry {
+  static Holder run() { return new Holder(); }
+}
+`,
+  });
+  const queries = composeQueries({ scratchRoot: join(workspace, "scratch"), indexCache: join(workspace, "cache") });
+  for (const [file, symbol] of [["src/entry.ts", "run"], ["src/Entry.java", "Entry.run"]]) {
+    const result = await queries.trace.walk({ repo, repoId: "fixture", revision: "HEAD", targets: [{ file: file!, symbol: symbol! }] });
+    assert.ok(result.ok);
+    assert.equal(result.value.status, "partial", file);
+    assert.ok(result.value.cuts?.some(cut => cut.kind === "unresolved-link"), file);
+    for (const field of ["worker", "shared"]) {
+      assert.ok(result.value.value.steps.some(step => step.symbol === field), `${file}: ${field}`);
+    }
+  }
+});
