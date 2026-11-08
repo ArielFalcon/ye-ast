@@ -7,7 +7,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { CallBindings, SettledBinding, UnboundCall } from "./call-binding.ts";
 import type { FollowedEdge } from "./edge-targets.ts";
 import type { GraphNavigation } from "./graph-navigation.ts";
-import type { ReconciledCalls } from "./reconciled-calls.ts";
+import type { OwnedCall, ReconciledCalls } from "./reconciled-calls.ts";
 
 /** A recovered call nothing binds that is attributed to a reached declaration (ADR-0041 decision 8): a cut at the call. */
 export interface AttributedCall {
@@ -40,9 +40,9 @@ export interface ReverseCallsDeps {
 const CHAINING: readonly string[] = ["super", "this"];
 
 /** The name a written call is looked up by: its callee, a constructed class's last name, or the chaining keyword. */
-function lookupName(reference: GraphUnresolvedReference): string | undefined {
-  if (isJavaSource(reference.file) && CHAINING.includes(reference.name)) return reference.name;
-  const callee = calleeOf(reference.name.replace(/<[^]*$/, ""));
+function lookupName(file: string, name: string): string | undefined {
+  if (isJavaSource(file) && CHAINING.includes(name)) return name;
+  const callee = calleeOf(name.replace(/<[^]*$/, ""));
   return callee.form === "computed" ? undefined : callee.name;
 }
 
@@ -66,15 +66,26 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, im
     return found;
   };
 
-  /** Aligns the sources not aligned yet whose text spells one of `keys` where it is looked up (ADR-0041 open question 1). */
+  /**
+   * Aligns the sources not aligned yet with a written call looked up by one of `keys` there (ADR-0041 open question 1):
+   * their text spells the key, and so does a call one of their declarations owns, the only calls alignment leaves unmatched.
+   */
   async function align(keys: readonly LookupKey[]): Promise<void> {
-    const wanted = sources.filter((file) => !aligned.has(file.path) && keys.some(({ name, files }) => (files === undefined || files.has(file.path)) && wordsOf(file).has(name)));
-    for (const file of wanted) {
+    const keysIn = (file: string): ReadonlySet<string> => new Set(keys.flatMap(({ name, files }) => (files === undefined || files.has(file) ? [name] : [])));
+    const spelled = sources.filter((file) => !aligned.has(file.path) && [...keysIn(file.path)].some((name) => wordsOf(file).has(name)));
+    for (const file of spelled) {
+      const looked = keysIn(file.path);
+      const owned = await reconciled.ownedIn(file.path);
+      const looksUp = (call: OwnedCall): boolean => {
+        const name = lookupName(file.path, call.name);
+        return name !== undefined && looked.has(name);
+      };
+      if (![...owned.values()].some((calls) => calls.some(looksUp))) continue;
       aligned.add(file.path);
       for (const body of store.symbolsInFiles([file.path])) {
         const { writtenOnly, deferredOnly } = await reconciled.callsOf(body);
         for (const reference of [...writtenOnly, ...deferredOnly]) {
-          const name = lookupName(reference);
+          const name = lookupName(reference.file, reference.name);
           if (name !== undefined) byName.set(name, [...(byName.get(name) ?? []), { body, reference }]);
         }
       }

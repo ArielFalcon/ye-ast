@@ -70,7 +70,7 @@ interface CallRecord {
   name: string;
   synthesized: boolean;
   /** The local names the file's imports bind to the edge's target, which a call may spell instead of its name. */
-  aliases: readonly string[];
+  aliases: () => readonly string[];
 }
 
 /** What alignment decided for a record: at a written call, in `body`, as the index has it, or contradicted by its source. */
@@ -98,7 +98,7 @@ function agreeingCalls(at: readonly SyntaxCall[], { name, aliases }: CallRecord)
   if (spelled.length > 0) return spelled;
   const callee = calleeOf(name);
   const named = callee.form === "computed" ? [] : at.filter((call) => call.callee === callee.name);
-  return named.length > 0 ? named : at.filter((call) => call.callee !== undefined && aliases.includes(call.callee));
+  return named.length > 0 ? named : at.filter((call) => call.callee !== undefined && aliases().includes(call.callee));
 }
 
 /**
@@ -155,13 +155,23 @@ export function createReconciledCalls({ store, uses, syntaxOf, lineOf, importedD
     const syntax = await syntaxOf(file);
     const owned = await ownedIn(file);
     const bodies = store.symbolsInFiles([file]).map((node) => ({ node, edges: uses.followed(node, callEdgesOf(store, node)), references: uses.referencesFrom(node, CALL_EDGE_KINDS) }));
-    const imported = importedDeclarations === undefined ? new Map<string, GraphSymbol>() : await importedDeclarations(file);
-    const aliasesOf = (target: GraphSymbol): string[] => [...imported].flatMap(([local, declaration]) => (declaration.id === target.id && local !== target.name ? [local] : []));
+    let imported: ReadonlyMap<string, GraphSymbol> | undefined;
+    let consulted = false;
+    const aliasesOf = (target: GraphSymbol) => (): string[] => {
+      consulted = true;
+      return [...(imported ?? [])].flatMap(([local, declaration]) => (declaration.id === target.id && local !== target.name ? [local] : []));
+    };
     const records = bodies.flatMap(({ node, edges, references }): CallRecord[] => [
       ...edges.map(({ edge, target }) => ({ node, line: edge.line, column: edge.column, name: target.name, synthesized: edge.synthesizedBy !== null, aliases: aliasesOf(target) })),
-      ...references.map(({ line, column, name }) => ({ node, line, column, name, synthesized: false, aliases: [] })),
+      ...references.map(({ line, column, name }) => ({ node, line, column, name, synthesized: false, aliases: () => [] })),
     ]);
-    const { alignments, accounted } = alignRecords(records, syntax, owned, store.symbolsInFiles([file]), (line) => lineOf(file, line));
+    const align = () => alignRecords(records, syntax, owned, store.symbolsInFiles([file]), (line) => lineOf(file, line));
+    let aligned = align();
+    if (consulted && importedDeclarations !== undefined) {
+      imported = await importedDeclarations(file);
+      aligned = align();
+    }
+    const { alignments, accounted } = aligned;
     const placed = new Map(bodies.map(({ node }) => [node.id, { edges: [] as FollowedEdge[], references: [] as GraphUnresolvedReference[], contradicted: [] as BodyCalls["contradicted"][number][] }]));
     let next = 0;
     for (const { node, edges, references } of bodies) {

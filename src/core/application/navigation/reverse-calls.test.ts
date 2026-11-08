@@ -4,7 +4,7 @@ import type { GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../p
 import type { CallBindings, SettledBinding, UnboundCall } from "./call-binding.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "./fake-code-graph.testing.ts";
 import { createGraphNavigation } from "./graph-navigation.ts";
-import type { BodyCalls, ReconciledCalls } from "./reconciled-calls.ts";
+import type { BodyCalls, OwnedCall, ReconciledCalls } from "./reconciled-calls.ts";
 import { createReverseCalls } from "./reverse-calls.ts";
 
 interface Written {
@@ -25,7 +25,7 @@ function setup(nodes: readonly FakeNode[], edges: readonly FakeEdge[], written: 
   const read: string[] = [];
   const empty: BodyCalls = { edges: [], references: [], contradicted: [], writtenOnly: [], ambiguous: [], deferredOnly: [] };
   const reconciled: ReconciledCalls = {
-    ownedIn: async () => new Map(),
+    ownedIn: async (file) => new Map(nodes.filter((node) => node.file === file).map((node) => [node.id as GraphNodeId, written.filter((call) => call.body === node.id).map((call): OwnedCall => ({ kind: (call.kind ?? "calls") as OwnedCall["kind"], line: call.line, column: 3, name: call.name, owners: [] }))])),
     async callsOf(body) {
       read.push(body.id);
       const mine = written.filter((call) => call.body === body.id).map((call): GraphUnresolvedReference & { deferred?: true } => ({ from: body.id, file: body.file, line: call.line, column: 2, name: call.name, kind: call.kind ?? "calls", candidates: [], ...(call.deferred ? { deferred: true } : {}) }));
@@ -68,6 +68,15 @@ test("a source whose text spells no name a reached declaration is looked up by i
   const written: Written[] = [{ body: "a", line: 3, name: "fetch" }, { body: "b", line: 3, name: "other" }];
   const { reverse, symbol, read } = setup(nodes, [], written, () => declaration(symbol("fetch")));
   await reverse.into([symbol("fetch")]);
+  await reverse.into([symbol("fetch")]);
+
+  assert.deepEqual(read, ["a"]);
+});
+
+test("a source whose text spells a looked-up name but none of whose written calls calls it is never aligned", async () => {
+  const nodes = [fakeNode("fetch", "function", "src/api.ts", 1, 3), fakeNode("a", "constant", "src/a.ts", 2, 4), fakeNode("b", "constant", "src/b.ts", 2, 4)];
+  const written: Written[] = [{ body: "a", line: 3, name: "api.fetch" }, { body: "b", line: 3, name: "fetch.other" }];
+  const { reverse, symbol, read } = setup(nodes, [], written, () => declaration(symbol("fetch")), {}, { "src/b.ts": "fetch.other(); // fetch" });
   await reverse.into([symbol("fetch")]);
 
   assert.deepEqual(read, ["a"]);

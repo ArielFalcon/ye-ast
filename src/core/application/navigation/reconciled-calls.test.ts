@@ -9,6 +9,8 @@ import { createGraphNavigation } from "./graph-navigation.ts";
 import { createReconciledCalls, type BodyCalls } from "./reconciled-calls.ts";
 
 const FILE = "src/c.ts";
+/** The files whose import bindings the last `callsOf` read. */
+let importsRead: string[] = [];
 
 function written(line: number, column: number, name: string, callee: string): SyntaxCall {
   return { kind: "calls", line, column, name, callee, owners: [] };
@@ -29,7 +31,8 @@ async function callsOf(body: string, nodes: readonly FakeNode[], edges: readonly
   const uses = createDeclarationUses(store, createGraphNavigation(store, () => false));
   const syntax: DeclaredMemberNames = { ...NOTHING_DECLARED, calls, functionValues };
   const imported = new Map(Object.entries(imports).map(([local, id]) => [local, store.symbolsByIds([id as GraphNodeId])[0]!]));
-  const reconciled = createReconciledCalls({ store, uses, syntaxOf: async (file) => (file === FILE ? syntax : NOTHING_DECLARED), lineOf: (file, line) => (file === FILE ? text[line] : undefined), importedDeclarations: async (file) => (file === FILE ? imported : new Map()) });
+  const reconciled = createReconciledCalls({ store, uses, syntaxOf: async (file) => (file === FILE ? syntax : NOTHING_DECLARED), lineOf: (file, line) => (file === FILE ? text[line] : undefined), importedDeclarations: async (file) => (importsRead.push(file), file === FILE ? imported : new Map()) });
+  importsRead = [];
   const [node] = store.symbolsByIds([body as GraphNodeId]);
   return reconciled.callsOf(node!);
 }
@@ -237,4 +240,13 @@ test("a top-level call and a static initializer's call match the records of the 
   const unresolved: FakeUnresolved[] = [{ from: "main", name: "enableProdMode", kind: "calls", file: FILE, line: 1, column: 0 }, { from: "LOG", name: "LoggerFactory.getLogger", kind: "calls", file: FILE, line: 3, column: 36 }];
   const [main, constant, owner] = await Promise.all(["main", "LOG", "App"].map(async (body) => placed(await callsOf(body, nodes, [], calls, unresolved))));
   assert.deepEqual([main!.references, main!.writtenOnly, constant!.references, constant!.contradicted, owner!.writtenOnly], [["enableProdMode@1:0"], [], ["LoggerFactory.getLogger@3:36"], [], []]);
+});
+
+test("a file reads its import bindings only when a record agrees with no call at its place by its name or its callee", async () => {
+  const record: FakeEdge[] = [{ from: "run", to: "beta", kind: "calls", line: 3, column: 2 }];
+
+  placed(await callsOf("run", [RUN, ...LIB], record, [written(3, 3, "beta", "beta")], [], [], {}, { alpha: "beta" }));
+  assert.deepEqual(importsRead, []);
+  assert.deepEqual(placed(await callsOf("run", [RUN, ...LIB], record, [written(3, 3, "alpha", "alpha")], [], [], {}, { alpha: "beta" })).edges, ["beta@3:2"]);
+  assert.deepEqual(importsRead, [FILE]);
 });
