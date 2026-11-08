@@ -1778,18 +1778,23 @@ test("callers over a range inside a property initializer still seeds the class t
   assert.deepEqual(answer.value.value.seeds.map(({ symbol, basis }) => ({ symbol, basis })), [{ symbol: "Page", basis: "lines" }]);
 });
 
-test("a trace over a real index names each candidate by its file and dotted containment path, a top-level one by its name", async () => {
+test("a trace over a real index names each candidate of the call's runtime by its file and dotted containment path, a top-level one by its name", async () => {
   writeFileSync(join(repo, "src", "Outer.java"), ["public class Outer {", "  static class Inner {", "    int pick() { return 1; }", "  }", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "Use.java"), ["public class Use {", "  int run(Object x) {", "    return x.get().pick();", "  }", "}", ""].join("\n"));
   writeFileSync(join(repo, "src", "store.ts"), ["export class Store {", "  pick(): number {", "    return 2;", "  }", "}", ""].join("\n"));
   writeFileSync(join(repo, "src", "util.ts"), ["export function pick(): number {", "  return 3;", "}", "export function run(x: any): number {", "  return x.get().pick();", "}", ""].join("\n"));
   git("add", "-A");
   git("commit", "-q", "-m", "picks");
   const { trace } = composeQueries({ scratchRoot });
 
-  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/util.ts", symbol: "run" }] });
+  const [typescript, java] = await Promise.all([
+    trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/util.ts", symbol: "run" }] }),
+    trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/Use.java", symbol: "Use.run" }] }),
+  ]);
 
-  assert.ok(answer.ok && answer.value.status === "partial");
-  assert.deepEqual(answer.value.cuts.map((cut) => cut.at), [["src/util.ts:5 x.get().pick", "src/Outer.java::Outer.Inner.pick", "src/store.ts::Store.pick", "src/util.ts::pick"]]);
+  const pickCuts = (answer: typeof typescript) => (answer.ok && answer.value.status === "partial" ? answer.value.cuts.map((cut) => cut.at).filter(([place]) => place!.endsWith(".pick")) : []);
+  assert.deepEqual(pickCuts(typescript), [["src/util.ts:5 x.get().pick", "src/store.ts::Store.pick", "src/util.ts::pick"]]);
+  assert.deepEqual(pickCuts(java), [["src/Use.java:3 x.get().pick", "src/Outer.java::Outer.Inner.pick"]]);
 });
 
 test("a trace over a real index keeps a member call a cut when the code declares its name in a value position the index holds no node for, and external when only types or nothing declare it", async () => {
