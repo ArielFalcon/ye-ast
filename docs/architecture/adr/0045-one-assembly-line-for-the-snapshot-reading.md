@@ -19,6 +19,11 @@
   and that each may extend with what it needs. Is that resource not supposed to be prebuilt, so it is ready when the
   tools ask for it, and changed only when the code changes, modularly if possible, rebuilding only what the changed
   code affects?
+  On its split by language, 2026-11-09, verbatim: "Es viable que este mecanismo del ADR 0045 de ensamblaje tenga una
+  parte agnóstica al lenguaje que declare como es la estructura y funcionamiento y luego una implementación por cada
+  lenguaje? De forma que sea extensión para cuando se agreguen más en el futuro?" Translated: is it viable for this
+  assembly mechanism to have a language-agnostic part that declares its structure and how it works, and then one
+  implementation per language, so that it is an extension point when more languages are added in the future?
 - Related: [ADR-0011](0011-query-protocol-in-the-mvp.md), [ADR-0020](0020-host-budgeted-snapshot-memory-cache.md),
   [ADR-0021](0021-enable-snapshot-memory-cache-by-default.md), [ADR-0026](0026-snapshot-data-may-retain-reader-outputs.md),
   [ADR-0029](0029-lexical-bindings-from-the-typescript-binder.md) decision 11, [ADR-0031](0031-snapshot-data-is-keyed-by-the-written-files.md),
@@ -39,7 +44,10 @@ assembles per snapshot every evidence stage in one dependency order, retains eac
 stages of the snapshot a server is bound to in the background, and rebuilds after a change only the per-file entries
 whose content changed and the cross-file stages that depend on them. Families receive the assembled reading and extend
 it by composition, narrowing or adding, never re-assembling nor re-binding; a fitness test keeps every stage
-constructor private to the line.
+constructor private to the line. The line is language-agnostic: it declares the stage contracts, their graph, lifecycle,
+retention and the reconciliation and binder rules; one language pack per language implements the contracts it can,
+declares the ones it cannot as absent capabilities, and supplies the language profile the base rules read, so a new
+language is one pack, its profile and its fixtures, with no edit to the line (decision 12).
 
 ## Context
 
@@ -137,6 +145,44 @@ Two lessons from ADR-0040 apply. The hold halved trace's repeat (11.0 → 5.5 s)
 per-file derived facts covered only 9% of trace's Java parses, because Java facts are cross-file (`JavaProject`): a
 cross-file stage needs a per-snapshot retention, not only per-file ADR-0035 slots. And a stage added without a declared
 retention silently becomes a per-call cost.
+
+### Languages today: merged by hand, checked inline
+
+- RFC-0007 already names the plugin kinds: Language (module, statement and decision syntax, test-file rule), Framework
+  and Protocol (`rfc/0007-extension-model.md:15-21`, confirmed).
+- `core/domain/languages/` already holds pure per-language rules: `java.ts` (`isJavaSource`, `isJvmTestFile`),
+  `typescript.ts` (`isTypeScriptSource`, `isTypeScriptFile`, `isTypeCheckerInput`, `isJsonModuleResource`, ...) and
+  `call-targets.ts`, whose `runtimeOf` names the two runtimes (`call-targets.ts:5-10`), confirmed.
+- Composition merges the readers of each stage by hand, each merge with its own rule: member names by concatenation
+  (`compose.ts:182-195`, the merge that lost "unread" before ADR-0041 U0), trivia by set union (`compose.ts:177-178`),
+  call sites by concatenation and sort (`compose.ts:197-200`), origins by "first complete answer" over every reader for
+  every site (`import-origins-by-language.ts:10-36`), module statements by concatenation in `navigation/module-readers.ts`
+  and by a list passed separately (`compose.ts:267`, `:304`). No merge routes a file to the reader of its language;
+  every reader filters files itself (confirmed).
+- An absent capability is already explicit in one place: the TypeScript origins answer `unknown` per site for
+  `dispatchTargets` and `receiverMethods` (`import-origins.adapter.ts:240`, `:242`), and Java answers every `origins`
+  site unresolved and replaces no root (`java-name-bindings.adapter.ts:38`, `:43`). Elsewhere absence is a missing
+  reader (`unmodelled` is Java-only, `compose.ts:241`; `dynamicLoads` TypeScript-only).
+- Language checks outside `domain/languages/`, non-import lines, on `main` 9e686958 (confirmed by search for
+  `isJavaSource|isTypeScriptSource|isTypeScriptFile|isJvmTestFile|isTypeScriptTestFile|isJsonModuleResource|isTypeCheckerInput`):
+  22 lines in 10 files.
+
+  | File | Lines | What the check decides |
+  |---|---|---|
+  | `application/impact/impact-queries.ts` | 7 (`:152`, `:154`, `:258`, `:259`, `:424`, `:496`, `:497`) | Which files importers and module impact read |
+  | `domain/impact/module-impact.ts` | 5 (`:13`, `:28`, `:41`, `:45`, `:55`) | Module impact is TypeScript and JSON resources |
+  | `domain/map/entrypoint-map.ts` | 2 (`:39`, `:75`) | Map scope: sources and test rule |
+  | `domain/change/changed-file.ts` | 2 (`:12`, `:13`) | A changed file is a source or a test |
+  | `application/navigation/edge-targets.ts` | 1 (`:199`) | Structural typing: a value receiver needs settling (ADR-0029 decision 11) |
+  | `application/trace/trace-walk.ts` | 1 (`:457`) | Nominal typing: Java's own members are bound by the receiver reading |
+  | `application/relations/retained-relations.ts` | 1 (`:28`) | Member-proof completeness counts TypeScript sources |
+  | `application/impact/inbound-origins.ts` | 1 (`:36`) | Field and local origins exist only in TypeScript |
+  | `application/impact/importers.ts` | 1 (`:40`) | JSON module resources |
+  | `domain/snapshot/live-export.ts` | 1 (`:25`) | The live export keeps JSON module resources |
+
+  On the ADR-0041 branch the binder adds Java constructor chaining twice, with two copies of one constant:
+  `CHAINING = ["super", "this"]` in `navigation/call-binding.ts:86` and `navigation/reverse-calls.ts:40`, the second
+  behind `isJavaSource` (`:44`) (confirmed on `t3/reverse-call-reconciliation`).
 
 ### Lifecycle today
 
@@ -236,6 +282,67 @@ retention silently becomes a per-call cost.
       read); a test lists the per-read ones, so a new one is a reviewed diff.
 11. **No answer shape changes from the line itself.** Each moved answer comes from a unit of the migration, gated with
     its stated expectations (ADR-0039).
+12. **A language-agnostic line, one language pack per language.** RFC-0007's Language plugin kind becomes the pack the
+    line reads.
+    - **The agnostic part** declares, and no language implements: the stage contracts, which are the existing ports
+      (`DeclaredMemberNamesReader`, `ImportOrigins`, `ModuleDependenciesReader`, `CallSiteReader`, `SourceTrivia`,
+      `UnmodelledConstructsReader`, `TypeBindings`); the stage graph, lifecycle, retention and invalidation of decisions
+      2, 3 and 6 to 8 (`snapshot/base-reading.ts`); and the alignment and binder rules of ADR-0041 (`navigation`,
+      `domain/shared`). Only shapes with two implementations today are contracts; a stage only one language has
+      (`TypeBindings`, `UnmodelledConstructsReader`, `DynamicLoadReader`) stays a single-language stage, and its contract
+      is generalized when a second language implements it, never before.
+    - **A language pack** (`core/ports/language-pack.port.ts`, a contract the core consumes; built by composition from
+      that language's adapters) declares which paths it owns, implements the stage contracts it can, and declares every
+      other stage as an absent capability. The line routes each file to the one pack that owns it, which replaces the
+      hand merges of `compose.ts:177-200`, `:237-238`, `import-origins-by-language.ts` and `module-readers.ts`. A file no
+      pack owns is `unread` (ADR-0041 decision 2), never "no call".
+    - **An absent capability is a statement, never an empty result.** Where a family asserts an item an absent stage
+      would decide, the line answers what the stage already answers today: `unknown` per site (the TypeScript
+      `receiverMethods` and `dispatchTargets`), a `no-extractor` cut for a file no pack reads, or the cut the family's
+      policy makes for an unproven link (ADR-0042 reach applies). No family tests a language to find out.
+    - **A language profile** (pure data and rules in `core/domain/languages/<language>.ts`, the folder that already holds
+      them) supplies what the agnostic rules read per language: the file rules (source, test, manifest, module resource),
+      the runtime (`call-targets.ts`), the typing discipline (structural for TypeScript, which ADR-0029 decision 11 reads,
+      nominal for Java, which `trace-walk.ts:457` reads), constructor chaining (`super` and `this` for Java; none for
+      TypeScript, whose binder chaining has no rule today), and the callee spelling rules of ADR-0041 decision 3 (type
+      argument syntax, argument lists). A profile states a value for every field the base reads; a field enters when a
+      base rule needs it, never ahead.
+    - **Frameworks are plugins over packs.** A framework plugin (RFC-0007: Angular, Spring) names the languages it reads
+      and contributes framework stages through the same contracts: Angular the relations (B4) and template readers over
+      the TypeScript pack, Spring the entrypoints, routes, call sites and data effects over the Java pack. A framework
+      reads a pack's outputs and never implements a language stage; the frozen exception that lets `spring` read the
+      Java trees (`.dependency-cruiser.cjs`, `spring-reads-only-the-java-parser`) stays, inside the Java hold.
+    - **Adding a language** is one pack, one profile, its registration in composition and in the profile list of
+      `domain/languages`, and the conformance fixtures of each stage it implements (ADR-0013, RFC-0007 Conformance). The
+      line, `navigation` and every family stay unedited. Two limits are stated, not hidden: the index (B0) covers a
+      language only where codegraph parses it (RFC-0003), and a language without it answers `no-extractor` for graph
+      questions; and a profile field a new language needs that no base rule reads yet is an edit to the base rule, the
+      one change this design cannot avoid.
+    - **Fitness.** A test lists the language checks (`isJavaSource`, `isTypeScriptSource`, `isTypeScriptFile`,
+      `isJvmTestFile`, `isTypeScriptTestFile`, `isJsonModuleResource`, `isTypeCheckerInput` and any later one exported
+      by `domain/languages/`) in `core/application` and `core/domain` outside `domain/languages/`, by file and count. It
+      starts as the frozen list of the Context table (22 lines, 10 files) and may only shrink; packs, profiles and
+      adapters are outside it.
+
+    | Stage | TypeScript pack | Java pack |
+    |---|---|---|
+    | B0 index | codegraph | codegraph |
+    | B1 syntax: written calls, receiver bindings, function values | yes (`declared-member-names.adapter.ts`) | yes (`java-member-names.adapter.ts`) |
+    | B2 origins, root origins, root bindings | yes (`import-origins.adapter.ts`) | root origins and bindings yes; import `origins` answered unresolved per site (`java-name-bindings.adapter.ts:38`) |
+    | B2 declared types | yes (`import-origins.adapter.ts:243`) | yes (`java-declared-types.ts`) |
+    | B2 receiver methods, dispatch targets | absent: `unknown` per site (`:240`, `:242`); structural typing keeps trace's R7 cut | yes (`java-receiver-methods.ts`, `java-dispatch-targets.ts`; ADR-0044) |
+    | B2 replaced roots | yes | absent: none replaced (`java-name-bindings.adapter.ts:43`) |
+    | B3 module statements | yes, JSON module resources included | yes (`java-imports.adapter.ts`) |
+    | B4 relations (fields, locals, member proofs) | through the Angular framework plugin | absent: no Java relations reader; Java receivers settle through B2 |
+    | B5 cross-file project in the read's hold | absent (B7 is TypeScript's cross-file reading) | yes (`JavaProject`, ADR-0040) |
+    | B7 typed bindings over declared build outputs | yes (ADR-0037) | absent until a class-file or generated-source reader (ADR-0044 decision 6) |
+    | B9 alignment | yes (base rule over B1 and B0) | yes |
+    | B11 trivia | yes | yes |
+    | B11 call sites | yes (`http-call-sites.adapter.ts`) | yes (`java-call-sites.adapter.ts`, Spring) |
+    | B11 dynamic loads | yes | absent |
+    | B11 unmodelled constructs | absent | yes (records, `java-records.adapter.ts`) |
+    | B11 data effects | absent | yes (Spring, `data-effects.adapter.ts`) |
+    | Profile: typing, chaining, runtime | structural; none; `typescript` | nominal; `super`/`this`; `java` |
 
 Sketch (names indicative):
 
@@ -282,8 +389,10 @@ ADR-0041's units U0 to U4c stay as delivered; the line takes them over by moving
 
 | Unit | Change | Gate expectation |
 |---|---|---|
-| L0 | Fitness tests of decision 10 written against today's code, listing the five `createEdgeTargets` sites and two `createReconciledCalls` sites as the frozen set that may only shrink; the cruiser rule extended | `none` |
+| L0 | Fitness tests of decision 10 written against today's code, listing the five `createEdgeTargets` sites and two `createReconciledCalls` sites as the frozen set that may only shrink; the cruiser rule extended; the language-check test of decision 12 with its frozen list of 22 lines in 10 files (plus the branch's `CHAINING` sites when it lands) | `none` |
 | L1 | `BaseReading` created; `callers`, `impact` and trace read B1-B10 from it with today's proof sets kept per family (a refactor); the typed reading, reference proofs and the two `ReconciledCalls` constructions move into it; Java member names receive the facts view | `none`, answers byte-identical (ADR-0041 M6); M1 no worse |
+| L1b | Language packs (decision 12): the pack port; composition builds the TypeScript and Java packs from today's adapters; the line routes each file to its pack and the hand merges of `compose.ts`, `import-origins-by-language.ts` and `module-readers.ts` go; the profiles gain the typing discipline and constructor chaining, which replace the checks at `edge-targets.ts:199`, `trace-walk.ts:457`, `inbound-origins.ts:36` and the branch's two `CHAINING` constants; `retained-relations.ts:28` reads the Angular plugin's language. The frozen list shrinks by those sites | `none`, answers byte-identical; M1 no worse (routing removes calls of every reader on every site) |
+| L1c | File rules from the profiles: the remaining checks of the frozen list (`impact-queries.ts`, `module-impact.ts`, `entrypoint-map.ts`, `changed-file.ts`, `importers.ts`, `live-export.ts`) read the profile list of `domain/languages`; the list ends empty or with each survivor justified in the test | `none`, answers byte-identical |
 | L2 | One proof set (decision 4): `importers`, `outline` focus and contract consequences read the line, which is ADR-0041 U5; contracts stops re-extracting relations | `importers:±`, `outline:+`, `contract-consequences:±` with a declared build output; `none` without one |
 | L3 | Trace reads typed bindings and the Java module readers, narrowed by decision 5 | `trace:±` with a declared build output; `trace:+` on Java import redirects |
 | L4 | B3 and B4 split into per-file facts and a join | `none`; M2 and M4 |
@@ -295,6 +404,13 @@ The one-owner audit follow-ups map onto L1 and L2: trace effects and seeds re-de
 from raw index spans (`trace-effects.ts`, `seeds.ts`, `link-graph.ts`) read B-stage ownership instead; the candidate
 rule divergence between `impact-cuts.ts` and `trace-walk.ts` becomes one stage rule; and the split-on-dot callee names
 move to the base's `nameTail`. U6 is L6.
+
+Cost of L1b and L1c, stated honestly (estimate, not measured): a pack port and two packs assembled from existing
+adapters, a router in the line, two profile fields, and every hand merge and inline check rewritten, about 400 to 700
+authored lines across composition, `snapshot`, `navigation`, `domain/languages` and four families, with no new behavior
+to show for it in the answers. The merges' rules differ today (concatenation, union, "first complete answer"), so routing
+must reproduce each one's answer for files of the owning language; M6 (byte-identical answers) and the corpus gate are
+the proof. L1b lands after L1 so the line already owns the construction it routes; L1c may follow any later unit.
 
 ## Alternatives
 
@@ -309,6 +425,16 @@ move to the base's `nameTail`. U6 is L6.
 | Decorator over the reader ports | No family change | Hides retention per port; cannot share proofs across ports; same reasons as ADR-0041 | Discarded |
 | The line in `navigation/` | Beside `EdgeTargets` | See Placement | Discarded |
 
+Alternatives to decision 12 (language split):
+
+| Option | For | Against | Verdict |
+|---|---|---|---|
+| **Agnostic line, one pack per language with capabilities, a profile per language** | A new language is a pack, a profile and fixtures; absence is explicit per stage; the hand merges and inline checks have one owner | L1b/L1c cost (about 400-700 lines, no answer moves); a pack port to keep | Chosen |
+| Keep per-stage merges in composition, add the language-check fitness test only | Smallest change | Each new language edits every merge and every inline check; each merge keeps its own rule, so absence stays implicit (the U0 defect class) | Discarded |
+| A plugin registry with per-language hooks into each stage (strategy per language inside the line) | One call site per decision | The line would call language code at its decision points: the inversion ADR-0041 rejected for families; profiles as data cover the same need without callbacks | Discarded |
+| One pack per language with every stage contract generalized now, a third-language shape included (for example value flow or a generic project stage) | Ready for any language | Speculative: no third language, and `TypeBindings`, unmodelled constructs and dynamic loads have one implementation each; AGENTS.md "shared types are earned" | Discarded |
+| Frameworks as packs (Angular and Spring beside TypeScript and Java) | One kind of plugin | A framework reads a language's outputs and spans one or more languages; RFC-0007 keeps the kinds apart; Spring would duplicate the Java pack's parse | Discarded |
+
 ## Consequences
 
 - Every family binds with the same proofs; a dependence `callers` proves is the input of every other family's policy.
@@ -318,6 +444,9 @@ move to the base's `nameTail`. U6 is L6.
 - The stdio MCP server does background work after start; a host that wants none sets no build output and receives only
   the always-prebuilt stages (open question 4 offers a switch).
 - The trace-only and two-tool patterns become detectable: a second construction of a stage fails the import test.
+- A new language is one pack, one profile and fixtures; what it cannot provide is stated per stage, so an agent sees
+  `unknown` or `no-extractor` instead of silence. The capability table of decision 12 is the source of RFC-0007's
+  capability matrix for languages.
 
 ## Risks
 
@@ -329,6 +458,17 @@ move to the base's `nameTail`. U6 is L6.
 - **Cache pressure.** Prebuilt plain data may evict snapshot entries; M3, with no new budget until measured.
 - **Java cross-file stages.** Facts keyed by every Java source miss on any Java edit; a per-file Java declarations fact
   that rebuilds the project without trees is open question 2.
+- **Routing changes a merged answer.** Today every origins reader answers every site and the first complete answer wins
+  (`import-origins-by-language.ts:37-39`); routing asks only the owning pack. A site whose file one pack owns but another
+  reader answered completely today would move. L1b's byte-identical gate catches it; a moved answer is a defect of the
+  routing rule, not an accepted difference.
+- **Ownership of a path by two packs.** Angular templates count as the TypeScript runtime (`call-targets.ts:7-10`) but are
+  a framework resource; JSON module resources are TypeScript module inputs. Each path has one owner pack, and the
+  framework reads the paths it names; the profile's file rules decide, and the fitness test fails on overlap.
+- **Language readers outside their language's adapter folder.** Java's receiver, dispatch, declared-type and name-binding
+  readers live in `core/adapters/spring/` (confirmed: `java-receiver-methods.ts`, `java-dispatch-targets.ts`,
+  `java-declared-types.ts`, `java-name-bindings.adapter.ts`). Composition assembles the Java pack across folders; moving
+  them is open question 7, not part of L1b.
 
 ## Not decided here
 
@@ -346,3 +486,9 @@ move to the base's `nameTail`. U6 is L6.
    lazily, and the daemon's watcher takes it (decision 9).
 6. **Prebuilding a workspace's other repositories.** Recommended: no until M3 shows the memory of one repository fits
    with room; the launch repository only.
+7. **Move Java language readers out of `adapters/spring/`?** Recommended: yes, into `adapters/tree-sitter/` or a Java
+   adapter folder, in its own refactor after L1b, gated `none`; it shrinks the `spring` cruiser exception to what Spring
+   itself reads.
+8. **Where the profile list lives.** Recommended: one list in `core/domain/languages/` that the domain rules read
+   (`changed-file.ts`, `entrypoint-map.ts`, `module-impact.ts` are pure and cannot receive composition's packs), with
+   composition building packs that name the same profile; a test fails when a pack's profile is not in the list.
