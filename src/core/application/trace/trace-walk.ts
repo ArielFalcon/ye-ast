@@ -63,6 +63,8 @@ export interface TraceWalkInput {
    * calls whose receiver it binds to a function value, for a member call R6 reaches.
    */
   syntaxOf: (file: string) => Promise<DeclaredMemberNames>;
+  /** A line of a source, as the reconciliation of the index's calls with the written ones reads it. */
+  lineOf: (file: string, line: number) => string | undefined;
   /** The relations impact reads, for the member calls they prove; read when a member call first needs them. */
   memberProofs: () => Promise<Pick<RelationExtraction, "memberUses" | "externalUses">>;
   budget: TraceBudget;
@@ -150,11 +152,11 @@ interface Body {
  * cut that leaves it free to expand at a later, shallower one. Every read is cached for this walk only.
  */
 export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkInput): Promise<TraceWalk | "aborted"> {
-  const { store, unresolvedIn, origins, targets, inScope, memberDeclarations, syntaxOf, memberProofs, budget, pages, signal } = input;
+  const { store, unresolvedIn, origins, targets, inScope, memberDeclarations, syntaxOf, lineOf, memberProofs, budget, pages, signal } = input;
   const navigation = createGraphNavigation(store, () => false);
   const uses = createDeclarationUses(store, navigation, unresolvedIn);
   const callsFrom = (node: GraphSymbol): readonly GraphUnresolvedReference[] => uses.referencesFrom(node, CALL_EDGE_KINDS);
-  const reconciled = createReconciledCalls({ store, uses, syntaxOf });
+  const reconciled = createReconciledCalls({ store, uses, syntaxOf, lineOf });
 
   const namedCache = new Map<string, readonly GraphSymbol[]>();
   /** The declarations of a name a call written in `from` may run. */
@@ -366,7 +368,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   async function bodyOf(node: GraphSymbol, root: boolean): Promise<Body> {
     const values = store.outgoingEdges([node.id], ["references"]);
     const syntax = await syntaxOf(node.file);
-    const { edges: called, references: indexed, indexOnly, writtenOnly: missing, ambiguous } = await reconciled.callsOf(node);
+    const { edges: called, references: indexed, contradicted, writtenOnly: missing, ambiguous } = await reconciled.callsOf(node);
     const passed = uses.followed(node, values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));
     const verdicts = await targets.verdictsOf([...called, ...passed], signal);
     const valueRoots = new Map(
@@ -383,7 +385,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         children.push(...await membersOf(owner, true));
       }
     }
-    const cuts: Cut[] = indexOnly.map((reference) => unresolvedAt(reference, []));
+    const cuts: Cut[] = contradicted.map(({ record, target }) => unresolvedAt(record, target === undefined ? [] : [target]));
     /** An external call is a leaf only while the repository writes nothing over what it names; otherwise `replaced` decides. */
     const leafUnlessReplaced = async (call: ExternalCall, root: LeafRoot, replaced: () => unknown): Promise<void> => {
       if (await isReplaced(root)) await replaced();

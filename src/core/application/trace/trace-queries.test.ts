@@ -1313,7 +1313,7 @@ test("each function-value shape keeps its call sites from the body around it unl
   }
 });
 
-test("line-only call records settle only a unique site in their own body", async () => {
+test("a line-only call record settles a unique site and, with more than one on its line, is kept as the index has it, never cut", async () => {
   const nodes = [
     { ...fakeNode("run", "function", A, 1), startColumn: 0, endColumn: 80 },
     { ...fakeNode("target", "function", B, 5), startColumn: 0, endColumn: 30 },
@@ -1321,14 +1321,22 @@ test("line-only call records settle only a unique site in their own body", async
   const first: SyntaxCall = { kind: "calls", line: 1, column: 10, name: "target", callee: "target", owners: [] };
   for (const sites of [[first], [first, { ...first, column: 30 }]]) {
     const fact = await factOf({ nodes, sources: [{ path: A, content: "run" }, { path: B, content: "target" }], edges: [{ from: "run", to: "target", kind: "calls", line: 1 }], syntaxCalls: { [A]: sites } });
-    const leaves = valueOf(fact).steps.flatMap((step) => step.leaves ?? []).map((leaf) => leaf.symbol);
-    if (sites.length === 1) assert.deepEqual(leaves, ["target"]);
-    else {
-      assert.equal(fact.status, "partial");
-      assert.deepEqual(leaves, []);
-      assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["run"]);
-    }
+    assert.equal(fact.status, "complete");
+    assert.deepEqual(valueOf(fact).steps.flatMap((step) => step.leaves ?? []).map((leaf) => leaf.symbol), ["target"]);
   }
+});
+
+test("trace follows a synthesized call edge its source does not write and cuts a contradicted record once, at its place", async () => {
+  const nodes = [
+    { ...fakeNode("run", "function", A, 1, 4), startColumn: 0, endColumn: 80 },
+    { ...fakeNode("handler", "function", B, 5), startColumn: 0, endColumn: 30 },
+    { ...fakeNode("beta", "function", B, 7), startColumn: 0, endColumn: 30 },
+  ];
+  const edges = [{ from: "run", to: "handler", kind: "calls" as const, line: 2, column: 2, synthesizedBy: "mybatis-java-xml" }, { from: "run", to: "beta", kind: "calls" as const, line: 3, column: 2 }];
+  const alpha: SyntaxCall = { kind: "calls", line: 3, column: 3, name: "alpha", callee: "alpha", owners: [] };
+  const fact = await factOf({ nodes, sources: [{ path: A, content: "run" }, { path: B, content: "handler" }], edges, syntaxCalls: { [A]: [alpha] } });
+  assert.deepEqual(valueOf(fact).steps.flatMap((step) => step.leaves ?? []).map((leaf) => leaf.symbol), ["handler"]);
+  assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/a.ts:3 alpha"]], ["unresolved-link", ["src/a.ts:3 beta", "src/b.ts::beta"]]]);
 });
 
 test("a call record in a source no reader parsed is kept as the index has it, while a parsed source writing no call cuts it", async () => {

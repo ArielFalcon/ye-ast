@@ -163,13 +163,19 @@ refuse a binding or add facts the base does not model, so one call never has two
    are `DeclaredMemberNames.calls`, absent when no reader parsed the file: composition keeps the absence, and absent is
    `unread`, never "no call".
 3. **Alignment, per file.** Each written call gets its innermost index body by exact lexical ownership, `deferred` when a
-   function value its body does not run encloses it. A record matches a written call at its place (its line and column,
-   or an anchor the reader lists) when the spelling or the callee agrees with the record's name; a record without a
-   column is compared on its line. Today a place also matches the one written call that starts there whatever its name
-   (`syntax-calls.ts:56`): U1 keeps that rule byte for byte, and U2 decides, with a mismatched-name fixture and the M4
-   count of such matches, whether name agreement becomes required. From U2, past a line's first character outside ASCII
-   columns are not compared and the line rule applies. Every call-bearing record and written call then falls in exactly
-   one class:
+   function value its body does not run encloses it; a call no body encloses belongs to the file's top level, and an
+   anonymous class the index places at its construction (`new X() { ... }`) takes the one syntax scope that ends where it
+   ends, so the construction stays with the body that runs it. A record is compared with the written calls of its file at
+   its place (its line and column, or an anchor the reader lists); a record without a column, or whose column lies past
+   its line's first character outside ASCII, is compared with the calls on its line. A written call agrees with the
+   record when its spelling equals the record's name, before or after normalization (whitespace, comments, argument lists
+   and a member's type arguments removed, so `a.append("x").append` and `a.append().append` agree), or else when its
+   callee is the record's last name. Exactly one agreeing call matches; the one-call-at-a-place fallback U1 kept is
+   dropped (M4: 47 such matches, 44 of them a receiver root and 3 index mis-resolutions). Two exceptions keep a record as
+   the index has it, with no cut: a record that names the receiver root a written call at its place starts from (`X` at
+   `X.m()`), which never hides the recovery of `X.m`; and a record more than one written call agrees with (`getCurrency`
+   at `store.getCurrency().getCurrency()`), whose agreeing calls are then not recovered. Every call-bearing record and
+   written call then falls in exactly one class:
 
    | Class | What it is | What the base does |
    |---|---|---|
@@ -177,9 +183,9 @@ refuse a binding or add facts the base does not model, so one call never has two
    | `recovered` | A written call no record matches | Added, bound by decision 4 |
    | `synthesized` | A record whose synthesizer is set, or without a column | Kept as the index has it, never cut for want of a written call |
    | `unread` | A record of a source no reader parsed | Kept as the index has it |
-   | `misowned` | A record whose written call another body owns | Moved to that body, dropped when that body holds its own record of it |
-   | `contradicted` | A record with line and column, not synthesized, in a read source, matching no written call | Pruned, with one `unresolved-link` cut at its place naming its target |
-   | `unowned` | A written call no single index body owns | A cut at its place wherever a family reaches its name |
+   | `misowned` | A record whose written call another body owns | Stays in the index's body, which lexically contains it, at the written position; the call is accounted, so no body recovers it |
+   | `contradicted` | A record with line and column, not synthesized, in a read source, that no written call of its file at its place agrees with, outside both exceptions | Pruned, with one `unresolved-link` cut at its place naming its target |
+   | `unowned` | A written call no single index body owns and no record matches | A cut at its place wherever a family reaches its name |
 
    Alignment reads the file's syntax, its index declarations (kind, name, span) and its call-bearing records (kind,
    place, name, synthesizer, retyping); those are its complete inputs (decision 9).
@@ -310,6 +316,24 @@ Measurements on the corpus manifest of ADR-0039, each a gate of the unit or open
 | M2 | One-shot CLI `callers` and `impact`, base against candidate, cold and warm, on the largest repositories | With M1 and M3, decides open question 1 |
 | M3 | Retained bytes of both derived facts against the 32 MiB default budget (ADR-0021), and the evictions they cause in repeated queries | Cache pressure |
 | M4 | Per repository, over call-bearing records only: `matched` (and how many by the one-call-at-a-place rule with another name), `recovered`, `synthesized`, `unread`, `misowned`, `contradicted`, `unowned` | Sizes every class; decides the U2 name rule |
+
+M4, measured 2026-11-08 on the 14 repositories of the corpus manifest with a scratch script that replicates the U1 rule
+(counts approximate, classes and causes confirmed by inspection):
+
+- `matched`: about 67,000 by the U1 rule, and 6,007 more once spellings are normalized; under U1 those 6,007 were
+  contradicted, about 98% of its 1,510, all chain links whose name repeats (`append().append()`), which codegraph spells
+  without arguments.
+- One-call-at-a-place matches with another name: 47, of which 44 name the receiver root of the written call and 3 are
+  index mis-resolutions.
+- `recovered` after normalization: about 1,750 (891 in the largest TypeScript repository); `synthesized`: about 3,000
+  of ignored synthesizers and 150 followed (`test-request`, `mybatis-java-xml`), none without a column; `unread`: about
+  91,000, almost all `.js` and test sources.
+- `misowned`: about 850, all inside the index's body: about 800 decorators the index gives the file, about 55
+  constructions of anonymous classes, 4 field initializers beside generated accessors.
+- Written calls only the file's top level or a constant's initializer owns: about 680 records, none contradicted.
+- `contradicted` after normalization: about 26, of which 5 are `typeof import(...)` type queries (index errors) and the
+  rest chains with comments or member type arguments, which the normalization covers, and homonym chains, which are
+  undecidable. Columns past a character outside ASCII changed no class.
 | M5 | Every recovered call per repository, split into bound to a repository declaration, proven outside, unbound and attributed (a cut), unbound and unattributed (a homonym of a reached name, not emitted); and the new cuts per corpus query in `callers`, `impact`, `outline`, `importers` and trace, each inspected | Noise; the report is inspected before U4 is accepted |
 | M6 | Answers byte-identical for every refactor unit | Behavior preserved |
 
@@ -343,11 +367,24 @@ first in the unit named:
    ignore: the base classifies it `synthesized`, trace and `callers` follow it, and trace emits no `unplaced` cut. An
    edge of `angular-template`, `angular-event` or `interface-impl`: the base preserves it as `synthesized`, and every
    family still leaves it unfollowed (`edge-policy.ts:62`).
-5. **Mismatched name at a place (U2).** A record `beta` at a place where the only written call is `alpha`: U1 matches
-   them as today; from U2 the outcome follows the rule M4 decides (kept, or `beta` `contradicted` and `alpha`
-   `recovered`).
-6. **Contradicted record (U2, U6).** A call edge placed where the source writes no call: pruned with one cut, never
-   silent.
+5. **Mismatched name at a place (U2).** A record `beta` at a place where the only written call is `alpha`: U1 matched
+   them; from U2 `beta` is `contradicted`, with one cut naming it, and `alpha` `recovered`.
+6. **Contradicted record (U2, U6).** A call edge placed where the source writes no call (`typeof import("lib")`): pruned
+   with one cut, never silent.
+6a. **Normalized chain (U2).** `sb.append("a") // .append(old) .append(x).append("c")` with the index recording only
+   `sb.append().append`: it matches the second link; the first and the third are `recovered`.
+6b. **Receiver root (U2).** `SCHEMA.safeParse(value)` with a call edge to the constant `SCHEMA` at the place: the edge is
+   kept as the index has it, no cut, and `SCHEMA.safeParse` is `recovered`.
+6c. **Undecidable homonym chain (U2).** `store.getCurrency().getCurrency()` with one edge `getCurrency` at the place: the
+   edge is kept, nothing is cut or recovered.
+6d. **Anonymous class construction (U2).** `return new HashMap<>() {{ put(k, v); }}`: the construction belongs to the
+   method, `put` to the anonymous class.
+6e. **Top level and static initializer (U2).** `enableProdMode();` at a file's top level and
+   `static final Logger LOG = LoggerFactory.getLogger(App.class);`: the records of the file and of the constant match,
+   nothing is contradicted or recovered; a top-level call inside a function value the top level does not run is
+   `deferred`.
+6f. **Misowned decorator (U2).** `@Injectable(...)` recorded from the file and owned by the class in the syntax: the record
+   stays in the file at the written position and the class recovers nothing.
 7. **Constructor chaining (U4, Java).** `class B extends A { B() { super(1); } B(String s) { this(); } }` with `A(int)`
    and `A(int, int)`: `callers` of `A(int)` lists `B()`, `callers` of `B()` lists `B(String)`, trace from `B(String)`
    steps to `B()` and then `A(int)`. With `A(String)` added, the signatures at the call's arity differ and the reading
@@ -404,7 +441,10 @@ Open questions, each with the recommended answer:
    complete inputs (declarations with kind, name and span; call-bearing records with kind, place, name, synthesizer and
    retyping), for example a fitness test that indexes one file within two snapshots of different neighbours and compares
    them. Until then the digest stays in the key; decided before U4 relies on retention across snapshots.
-3. **Move or cut a `misowned` record?** Recommended: move it, since lexical ownership is exact; M4 counts them before U2.
+3. **Move or cut a `misowned` record?** Answered by M4 (2026-11-08): neither. Every `misowned` record lies inside the
+   index's body, and the index was right in the measured cases (anonymous-class constructions, field initializers beside
+   generated accessors) or defensible (decorators, which the file's top level runs); the record stays in the index's
+   body and its written call is accounted.
 4. **Deferred calls in reverse families.** Recommended: a dependence, as index edges inside function values count today;
    only trace reads `deferred` (R8).
 5. **An `unowned` written call.** Recommended: a cut where a family reaches its name, never attributed to the file's

@@ -1,4 +1,4 @@
-import { calleeOf } from "../../domain/shared/call-place.ts";
+import { calleeOf, countedAlike, normalizedSpelling, receiverRootOf } from "../../domain/shared/call-place.ts";
 import { CALL_EDGE_KINDS, holdsValue, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import { comparePositions, containsPosition, declarationSpan, executesInBody, owningBody, type SourceSpan } from "../../domain/shared/owning-body.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
@@ -61,33 +61,58 @@ export function callsByOwner(calls: readonly SyntaxCall[], declarations: readonl
   return found;
 }
 
-/** A line-only record can name a site only when the owner and callee leave exactly one occurrence on that line. */
-function matchOwnedCall(calls: readonly OwnedCall[], line: number | null, column: number | null, name: string): OwnedCall | undefined {
-  const placed = column !== null && Number.isFinite(column);
-  const primary = calls.filter((call) => !call.ambiguous && call.line === line && call.column - 1 === column);
-  const at = placed && primary.length > 0 ? primary : calls.filter((call) => !call.ambiguous && (placed ? call.anchors?.some((anchor) => anchor.line === line && anchor.column - 1 === column) : call.line === line));
-  const spelled = at.filter((call) => call.name === name);
-  if (spelled.length > 0) return spelled.length === 1 ? spelled[0] : undefined;
-  const callee = calleeOf(name);
-  const named = at.filter((call) => callee.form !== "computed" && call.callee === callee.name);
-  return named.length === 1 ? named[0] : named.length === 0 && at.length === 1 ? at[0] : undefined;
+/** What alignment reads of an index record that names a call: a call edge whose target the store holds, or an unresolved call reference. */
+interface CallRecord {
+  node: GraphSymbol;
+  line: number | null;
+  column: number | null;
+  name: string;
+  synthesized: boolean;
+}
+
+/** What alignment decided for a record: at a written call, as the index has it, or contradicted by its source. */
+type Alignment = { kind: "matched"; call: SyntaxCall; deferred: boolean } | { kind: "kept" } | { kind: "contradicted" };
+
+const callKey = (call: SyntaxCall): string => `${call.kind}:${call.line}:${call.column}:${call.name}`;
+
+/**
+ * The written calls a record is compared with: those at its line and column, or at an anchor the reader lists there, or,
+ * when the record has no column or its column lies past its line's first character outside ASCII, those on its line.
+ */
+function callsAtPlace(calls: readonly SyntaxCall[], { line, column }: CallRecord, text: string | undefined): readonly SyntaxCall[] {
+  if (column === null || !Number.isFinite(column) || !countedAlike(column, text ?? "")) return calls.filter((call) => call.line === line);
+  const primary = calls.filter((call) => call.line === line && call.column - 1 === column);
+  return primary.length > 0 ? primary : calls.filter((call) => call.anchors?.some((anchor) => anchor.line === line && anchor.column - 1 === column));
 }
 
 /**
- * A body's call-bearing records aligned with the calls its source writes. A record keeps the index's place when its source
- * is unread, when it matches a deferred call, or when it matches none and has no column or lies in a function value the
- * body does not run; every other record is at its written call or index-only.
+ * The written calls at a record's place that agree with its name: those spelled as the record, before or after
+ * normalization, or else those whose callee is the record's last name. More than one is undecidable.
+ */
+function agreeingCalls(at: readonly SyntaxCall[], name: string): readonly SyntaxCall[] {
+  const normalized = normalizedSpelling(name);
+  const spelled = at.filter((call) => call.name === name || normalizedSpelling(call.name) === normalized);
+  if (spelled.length > 0) return spelled;
+  const callee = calleeOf(name);
+  return callee.form === "computed" ? [] : at.filter((call) => call.callee === callee.name);
+}
+
+/**
+ * A body's call-bearing records aligned with the calls its file writes (ADR-0041 decision 3). A record keeps the index's
+ * place when its source is unread, its edge is synthesized, it matches a deferred call, it names the receiver a written
+ * call starts from, or more than one written call agrees with it; it is contradicted when it has a column and no written
+ * call of its file at its place agrees with it; otherwise it is at its written call, in the body the index gives it.
  */
 export interface BodyCalls {
-  /** The body's call edges whose target the store holds, in the store's order. */
+  /** The body's call edges whose target the store holds and no policy ignores, in the store's order. */
   edges: readonly FollowedEdge[];
   /** The body's unresolved call references, in the store's order. */
   references: readonly GraphUnresolvedReference[];
-  /** Records no call the body writes at their place matches: edges first, then references. */
-  indexOnly: readonly GraphUnresolvedReference[];
+  /** Records placed where the file writes no call they name, with the edge's target: edges first, then references. */
+  contradicted: readonly { record: GraphUnresolvedReference; target?: GraphSymbol }[];
   /** Calls the body writes and runs that no record matches, in written order. */
   writtenOnly: readonly GraphUnresolvedReference[];
-  /** Calls written where no single index body owns them, in written order. */
+  /** Calls written where no single index body owns them and no record matches, in written order. */
   ambiguous: readonly GraphUnresolvedReference[];
 }
 
@@ -102,6 +127,8 @@ export interface ReconciledCallsInput {
   store: CodeGraphReader;
   uses: DeclarationUses;
   syntaxOf: (file: string) => Promise<DeclaredMemberNames>;
+  /** A line of a source, to tell where two parsers stop counting columns alike. */
+  lineOf: (file: string, line: number) => string | undefined;
 }
 
 /** The call edges of `symbol` no policy ignores. */
@@ -109,57 +136,77 @@ export function callEdgesOf(store: CodeGraphReader, symbol: GraphSymbol): GraphE
   return store.outgoingEdges([symbol.id], CALL_EDGE_KINDS).filter((edge) => !isIgnoredEdge(edge));
 }
 
-export function createReconciledCalls({ store, uses, syntaxOf }: ReconciledCallsInput): ReconciledCalls {
+const NO_CALLS: BodyCalls = { edges: [], references: [], contradicted: [], writtenOnly: [], ambiguous: [] };
+
+export function createReconciledCalls({ store, uses, syntaxOf, lineOf }: ReconciledCallsInput): ReconciledCalls {
   const ownedIn = oncePerFile(async (file) => {
     const syntax = await syntaxOf(file);
     return callsByOwner(syntax.calls ?? [], store.symbolsInFiles([file]), syntax.functionValues);
   });
-  const bodiesIn = oncePerFile(async (file) =>
-    positionedBodies(store.symbolsInFiles([file]), (await syntaxOf(file)).calls ?? []).map((body) => ({ ...body, ...declarationSpan(body) })));
-  return {
-    ownedIn,
-    async callsOf(node) {
-      const syntax = await syntaxOf(node.file);
-      const calls = (await ownedIn(node.file)).get(node.id) ?? [];
-      const accounted = new Set<OwnedCall>();
-      const indexOnly: GraphUnresolvedReference[] = [];
-      const indexedBodies = await bodiesIn(node.file);
-      const aligned = (line: number | null, column: number | null, name: string): boolean => {
-        if (syntax.calls === undefined) return false;
-        const site = matchOwnedCall(calls, line, column, name);
-        return site !== undefined ? site.deferred !== true : line === null || column === null || executesInBody(declarationSpan(node), syntax.functionValues, { line, column });
-      };
-      const accountedSite = (line: number | null, column: number | null, name: string): OwnedCall | undefined => {
-        const owner = line === null || column === null || !Number.isFinite(column) ? undefined : owningBody(indexedBodies, { line, column });
-        const site = owner !== undefined && owner.id !== node.id ? undefined : matchOwnedCall(calls, line, column, name);
-        if (site !== undefined) accounted.add(site);
-        return site;
-      };
-      const edges = uses.followed(node, callEdgesOf(store, node)).flatMap((followed) => {
-        if (!aligned(followed.edge.line, followed.edge.column, followed.target.name)) return [followed];
-        const site = accountedSite(followed.edge.line, followed.edge.column, followed.target.name);
-        if (site === undefined) {
-          indexOnly.push({ from: node.id, file: node.file, line: followed.edge.line ?? node.startLine, column: followed.edge.column ?? 0, name: followed.target.name, kind: followed.edge.kind, candidates: [] });
-          return [];
-        }
-        return [{ ...followed, edge: { ...followed.edge, line: site.line, column: site.column - 1 } }];
+  const alignedIn = oncePerFile(async (file): Promise<ReadonlyMap<GraphNodeId, BodyCalls>> => {
+    const syntax = await syntaxOf(file);
+    const owned = await ownedIn(file);
+    const bodies = store.symbolsInFiles([file]).map((node) => ({ node, edges: uses.followed(node, callEdgesOf(store, node)), references: uses.referencesFrom(node, CALL_EDGE_KINDS) }));
+    const records = bodies.flatMap(({ node, edges, references }): CallRecord[] => [
+      ...edges.map(({ edge, target }) => ({ node, line: edge.line, column: edge.column, name: target.name, synthesized: edge.synthesizedBy !== null })),
+      ...references.map(({ line, column, name }) => ({ node, line, column, name, synthesized: false })),
+    ]);
+    const { alignments, accounted } = alignRecords(records, syntax, owned, (line) => lineOf(file, line));
+    let next = 0;
+    return new Map(bodies.map(({ node, edges, references }) => {
+      const contradicted: BodyCalls["contradicted"][number][] = [];
+      const placedEdges = edges.flatMap((followed) => {
+        const alignment = alignments[next++]!;
+        const { edge, target } = followed;
+        if (alignment.kind === "contradicted") contradicted.push({ record: { from: node.id, file: node.file, line: edge.line!, column: edge.column!, name: target.name, kind: edge.kind, candidates: [] }, target });
+        else return [alignment.kind === "matched" && !alignment.deferred ? { ...followed, edge: { ...edge, line: alignment.call.line, column: alignment.call.column - 1 } } : followed];
+        return [];
       });
-      const references = uses.referencesFrom(node, CALL_EDGE_KINDS).flatMap((reference) => {
-        if (!aligned(reference.line, reference.column, reference.name)) return [reference];
-        const site = accountedSite(reference.line, reference.column, reference.name);
-        if (site === undefined) { indexOnly.push(reference); return []; }
-        return [{ ...reference, line: site.line, column: site.column - 1 }];
+      const placedReferences = references.flatMap((reference) => {
+        const alignment = alignments[next++]!;
+        if (alignment.kind === "contradicted") contradicted.push({ record: reference });
+        else return [alignment.kind === "matched" && !alignment.deferred ? { ...reference, line: alignment.call.line, column: alignment.call.column - 1 } : reference];
+        return [];
       });
       const writtenOnly: GraphUnresolvedReference[] = [];
       const ambiguous: GraphUnresolvedReference[] = [];
-      for (const call of calls) {
-        if (accounted.has(call) || call.deferred) continue;
+      for (const call of owned.get(node.id) ?? []) {
+        if (accounted.has(callKey(call)) || call.deferred) continue;
         const reference = { from: node.id, file: node.file, line: call.line, column: call.column - 1, name: call.name, kind: call.kind, candidates: [] };
         (call.ambiguous ? ambiguous : writtenOnly).push(reference);
       }
-      return { edges, references, indexOnly, writtenOnly, ambiguous };
+      return [node.id, { edges: placedEdges, references: placedReferences, contradicted, writtenOnly, ambiguous }];
+    }));
+  });
+  return {
+    ownedIn,
+    async callsOf(node) {
+      return (await alignedIn(node.file)).get(node.id) ?? NO_CALLS;
     },
   };
+}
+
+/**
+ * Aligns a file's records with its written calls, in the records' order; a record stays in the body the index gives it
+ * whichever body owns its call. A written call is accounted when a record matches it or is undecided between it and others.
+ */
+function alignRecords(records: readonly CallRecord[], syntax: DeclaredMemberNames, owned: ReadonlyMap<GraphNodeId, readonly OwnedCall[]>, lineOf: (line: number) => string | undefined): { alignments: readonly Alignment[]; accounted: ReadonlySet<string> } {
+  const accounted = new Set<string>();
+  const { calls } = syntax;
+  const alignments = records.map((record): Alignment => {
+    if (calls === undefined || record.synthesized) return { kind: "kept" };
+    const at = callsAtPlace(calls, record, record.line === null ? undefined : lineOf(record.line));
+    const agreeing = agreeingCalls(at, record.name);
+    for (const call of agreeing) accounted.add(callKey(call));
+    const [call] = agreeing;
+    if (call !== undefined && agreeing.length === 1) {
+      const own = owned.get(record.node.id)?.find((candidate) => callKey(candidate) === callKey(call));
+      return { kind: "matched", call, deferred: own !== undefined ? own.deferred === true : !executesInBody(declarationSpan(record.node), syntax.functionValues, { line: call.line, column: call.column - 1 }) };
+    }
+    const receiver = at.some((written) => receiverRootOf(written.name) === record.name);
+    return agreeing.length > 1 || receiver || record.column === null ? { kind: "kept" } : { kind: "contradicted" };
+  });
+  return { alignments, accounted };
 }
 
 function oncePerFile<V>(derive: (file: string) => Promise<V>): (file: string) => Promise<V> {

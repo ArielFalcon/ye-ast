@@ -159,11 +159,12 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const memberProofs = () => (proven ??= retainedRelations(deps.relations, head.prepared, head.tree, request));
           const pageRoots = new Set(selections.flatMap(({ target, selection }) => (isEntrypointTarget(target) ? selection.seeds.map(({ symbol }) => symbol.id) : [])));
           const pages = pageRoots.size === 0 ? {} : { pages: { roots: pageRoots, of: pagePlans(store, memberProofs) } };
-          const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, memberProofs, budget, ...pages, ...(signal === undefined ? {} : { signal }) });
+          const lineOf = linesOncePerFile(sources);
+          const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, lineOf, memberProofs, budget, ...pages, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
           const dataEffects = () => deps.dataEffects?.placed(head.tree.sources) ?? Promise.resolve([]);
           const dataSites = () => head.prepared?.facts === undefined ? dataEffects() : head.prepared.facts.ofInputs("trace-data-effects", { sources: head.tree.sources }, dataEffects);
-          const effectCuts = await placeEffects(walk.roots, { store, unresolvedIn, sites: async () => [...(await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources)), ...(await dataSites())].sort(comparePlacement).filter(({ site }) => head.selected(site.file)), lineOf: linesOncePerFile(sources), functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined) });
+          const effectCuts = await placeEffects(walk.roots, { store, unresolvedIn, sites: async () => [...(await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources)), ...(await dataSites())].sort(comparePlacement).filter(({ site }) => head.selected(site.file)), lineOf, functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined) });
 
           const { steps, ids } = traceSteps(walk.roots);
           const rootIds = new Map(roots.map((root, index) => [root.id, ids.get(walk.roots[index]!)!]));
