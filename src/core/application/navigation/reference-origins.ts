@@ -3,6 +3,7 @@ import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { DeclaredScope } from "../../domain/shared/fact.ts";
 import { referenceKey, rootedName, uniqueReferenceKeys } from "../../domain/impact/impact-cuts.ts";
 import { CALL_EDGE_KINDS, readsPastRoot } from "../../domain/impact/edge-policy.ts";
+import { nameTail } from "../../domain/shared/call-place.ts";
 import type { CodeGraphReader, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
@@ -79,7 +80,7 @@ export function typedReferencesOf(store: CodeGraphReader, unresolved: readonly G
   const into: { reference: GraphUnresolvedReference; target: GraphSymbol }[] = [];
   for (const reference of unresolved) {
     const key = referenceKey(reference);
-    const bound = CALL_EDGE_KINDS.includes(reference.kind) ? typed.get(provenKey(reference.file, reference.line, reference.column + 1, reference.name.slice(reference.name.lastIndexOf(".") + 1))) : undefined;
+    const bound = CALL_EDGE_KINDS.includes(reference.kind) ? typed.get(provenKey(reference.file, reference.line, reference.column + 1, nameTail(reference.name))) : undefined;
     if (key === undefined || bound === undefined) continue;
     const target = bound.kind === "repository" ? typedDeclaration(store, bound) : undefined;
     if (bound.kind === "repository" && target === undefined) continue;

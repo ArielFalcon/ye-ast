@@ -66,6 +66,17 @@ test("the tail of a name is what follows its last separator", () => {
   assert.deepEqual(["x.save", "this.svc.load", "Class.forName", "a::b", "Plain"].map(nameTail), ["save", "load", "forName", "b", "Plain"]);
 });
 
+test("a `#` that starts a name's last segment is part of the name, and one inside it separates a module from its name", () => {
+  assert.deepEqual(["x.#save", "this.#save", "#save", "x?.#save", "a::#save"].map(nameTail), ["#save", "#save", "#save", "#save", "#save"]);
+  assert.deepEqual(["module#name", "a#b.#c", "module#name.save"].map(nameTail), ["name", "#c", "save"]);
+});
+
+test("a private name is the callee a spelling names, not a computed one", () => {
+  assert.deepEqual(calleeOf("this.#save"), { form: "member", name: "#save" });
+  assert.deepEqual(calleeOf("#save"), { form: "bare", name: "#save" });
+  assert.equal(ownMemberOf("this.#save"), "#save");
+});
+
 test("a chain spelled with its arguments, line breaks and comments normalizes to the spelling without them", () => {
   const written = 'sb.append("a(", x.get())\n    // .append(old)\n    .append(\')\') /* note */ .append';
   assert.equal(normalizedSpelling(written), "sb.append().append().append");

@@ -27,6 +27,7 @@ const FILES: Record<string, string> = {
   "src/silent.ts": "class Silent {}\n\nexport function hush(): void {\n  const silent = new Silent();\n  silent.tick();\n}\n",
   "src/field-inherited.ts": "import { Injectable, inject } from '@angular/core';\nimport { Child } from './base';\n\n@Injectable()\nexport class FieldInherited {\n  private child = inject(Child);\n\n  flush(): number {\n    return this.child.load();\n  }\n}\n",
   "src/annotated.ts": "import { Store } from './store';\nimport { Other } from './other';\n\nexport function keepStore(store: Store): void {\n  store.save('e');\n}\n\nexport function keepOther(other: Other): void {\n  other.save('f');\n}\n",
+  "src/ledger.ts": "export class Ledger {\n  #save(value: string): void {\n    console.log(value);\n  }\n\n  run(x: Ledger): void {\n    x.#save('a');\n  }\n}\n",
 };
 
 /** `save` changes, so `impact` walks from it as `callers` of `Store.save` does. */
@@ -118,6 +119,14 @@ test("in a scoped read, with no member proof, a call on an injected field of a c
   assert.ok(result.ok && result.value.status !== "unknown", JSON.stringify(result));
 
   assert.deepEqual(settlement(result.value.value, "src/field-inherited.ts", "flush"), PROVEN);
+});
+
+test("a call on a private member of a typed receiver that no base proves leaves a cut at it, never a complete answer with no caller", async () => {
+  const result = await composeQueries({ scratchRoot }).impact.callers({ repo, repoId: "receiver-settlement", revision: "HEAD", targets: [{ file: "src/ledger.ts", symbol: "#save" }] });
+  assert.ok(result.ok && result.value.status !== "complete", JSON.stringify(result));
+
+  const cuts = result.ok && result.value.status === "partial" ? result.value.cuts : [];
+  assert.ok(cuts.some((cut) => cut.kind === "unresolved-link" && cut.reach.kind === "callers-of" && cut.reach.declarations.includes("src/ledger.ts::#save")), JSON.stringify(cuts));
 });
 
 test("impact of a change settles every receiver as callers of the changed declaration does", async () => {
