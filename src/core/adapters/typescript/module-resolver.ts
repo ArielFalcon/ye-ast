@@ -90,10 +90,11 @@ export function manifestDependencies(manifest: string | undefined): Set<string> 
 }
 
 /**
- * Which file a module specifier names, from the file that imports it. A relative specifier is read as written, with each
- * TypeScript extension or as a directory's index; any other goes through the nearest `tsconfig` or `jsconfig` (its
- * `paths`, `baseUrl` and `extends` chain) and the TypeScript compiler's resolver. The compiler's host is synchronous and
- * the reader is not, so a resolution runs again over the files it asked for until it asks for no more; a file the
+ * Which file a module specifier names, from the file that imports it. Every specifier goes through the TypeScript
+ * compiler's resolver under the nearest `tsconfig` or `jsconfig` (its `paths`, `baseUrl`, `rootDirs` and `extends`
+ * chain); a relative one the compiler finds nothing for is still read as written, with each TypeScript extension or as a
+ * directory's index. A resolved file the engine does not read (`.tsx`, `.d.ts`, JavaScript) stays unresolved with that
+ * file named. The compiler's host is synchronous and the reader is not, so a resolution runs again over the files it asked for until it asks for no more; a file the
  * reader cannot give is absent. A specifier no configuration resolves is external when a manifest depends on its package
  * and no manifest of the snapshot is that package, otherwise unresolved with the reason. No program is built and no file the resolution does not ask for is read.
  */
@@ -111,14 +112,17 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
   const relative = async (from: string, specifier: string): Promise<ModuleResolution> => {
     const base = posix.join(posix.dirname(from), specifier);
     if (base.startsWith("..")) return { unresolved: `${specifier} leaves the repository`, namesNoFile: true };
-    const unresolved = async (): Promise<ModuleResolution> => {
-      const config = await configOf(posix.dirname(from));
-      const proven = config !== "unreadable" && config?.complete !== false && config?.options.rootDirs === undefined && namesNoFile(listing, [base]);
+    const found = await configOf(posix.dirname(from));
+    const config = found === "unreadable" ? undefined : found;
+    const unresolved = (): ModuleResolution => {
+      const proven = found !== "unreadable" && config?.complete !== false && config?.options.rootDirs === undefined && namesNoFile(listing, [base]);
       return proven ? { unresolved: `${specifier} names no file`, namesNoFile: true } : { unresolved: `${specifier} names no file` };
     };
-    if (options?.jsonModules && specifier.endsWith(".json")) {
+    if (explicitJson(specifier)) {
       return await present(base) ? { file: base } : unresolved();
     }
+    const { resolved } = await compiled(from, specifier, config?.options ?? {});
+    if (resolved !== undefined) return typeScriptTarget(specifier, resolved);
     const tried = [base, ...EXTENSIONS.map((ext) => `${base}.${ext}`), ...EXTENSIONS.map((ext) => `${base}/index.${ext}`)];
     for (const file of tried) if (isTypeScriptFile(file) && (await present(file))) return { file };
     return unresolved();
@@ -172,6 +176,30 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
 
   /** Keyed by the importing directory: the compiler's resolution reads nothing else of the importing file. */
   const resolutions = new Map<string, Promise<{ resolved: ts.ResolvedModuleFull | undefined; probed: readonly string[] }>>();
+  const explicitJson = (specifier: string): boolean => options?.jsonModules === true && specifier.endsWith(".json");
+  const compiled = (from: string, specifier: string, compilerOptions: ts.CompilerOptions) => {
+    const key = JSON.stringify([posix.dirname(from), specifier]);
+    let held = resolutions.get(key);
+    if (held === undefined) {
+      held = settle((host) => {
+        const probed: string[] = [];
+        const fileExists = (file: string): boolean => {
+          probed.push(file);
+          return (!explicitJson(specifier) || file.endsWith(".json")) && host.fileExists(file);
+        };
+        const { resolvedModule } = ts.resolveModuleName(specifier, absolute(from), { ...compilerOptions, resolveJsonModule: options?.jsonModules === true, moduleResolution: compilerOptions.moduleResolution ?? ts.ModuleResolutionKind.Bundler }, { ...host, fileExists });
+        return { resolved: resolvedModule, probed };
+      });
+      resolutions.set(key, held);
+    }
+    return held;
+  };
+  /** The file a compiler resolution names, when it is a source the engine reads (or the explicit JSON resource asked for). */
+  const typeScriptTarget = (specifier: string, resolved: ts.ResolvedModuleFull): ModuleResolution => {
+    const file = resolved.resolvedFileName.replace(/^\//, "");
+    return (explicitJson(specifier) ? file.endsWith(".json") : isTypeScriptFile(file)) ? { file } : { unresolved: `${specifier} resolves to ${file}, which is no TypeScript source` };
+  };
+
   const aliased = async (from: string, specifier: string): Promise<ModuleResolution> => {
     const pkg = packageOf(specifier);
     /** A package the snapshot itself is never outside it: a configuration may name its file, nothing else proves one. */
@@ -183,22 +211,7 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
     if (config === undefined) return external ? { external: true } : { unresolved: declared ? ownPackage : `${specifier} is not relative and no module configuration governs ${from}` };
     const compilerOptions = config.options;
     if (external && compilerOptions.paths === undefined && compilerOptions.baseUrl === undefined) return { external: true };
-    const explicitJson = options?.jsonModules === true && specifier.endsWith(".json");
-    const key = JSON.stringify([posix.dirname(from), specifier]);
-    let held = resolutions.get(key);
-    if (held === undefined) {
-      held = settle((host) => {
-        const probed: string[] = [];
-        const fileExists = (file: string): boolean => {
-          probed.push(file);
-          return (!explicitJson || file.endsWith(".json")) && host.fileExists(file);
-        };
-        const { resolvedModule } = ts.resolveModuleName(specifier, absolute(from), { ...compilerOptions, allowJs: true, resolveJsonModule: options?.jsonModules === true, moduleResolution: compilerOptions.moduleResolution ?? ts.ModuleResolutionKind.Bundler }, { ...host, fileExists });
-        return { resolved: resolvedModule, probed };
-      });
-      resolutions.set(key, held);
-    }
-    const { resolved, probed } = await held;
+    const { resolved, probed } = await compiled(from, specifier, { ...compilerOptions, allowJs: true });
     if (resolved === undefined) {
       if (external) return { external: true };
       if (declared) return { unresolved: ownPackage };
@@ -207,8 +220,7 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
       return config.complete && namesNoFile(listing, candidates) ? { unresolved: unmatched, namesNoFile: true } : { unresolved: unmatched };
     }
     if (resolved.isExternalLibraryImport === true) return declared ? { unresolved: ownPackage } : { external: true };
-    const file = resolved.resolvedFileName.replace(/^\//, "");
-    return (explicitJson ? file.endsWith(".json") : isTypeScriptFile(file)) ? { file } : { unresolved: `${specifier} resolves to ${file}, which is no TypeScript source` };
+    return typeScriptTarget(specifier, resolved);
   };
 
   return {
