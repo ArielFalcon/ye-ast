@@ -234,6 +234,16 @@ test("a waiter's abort ends its own wait while the pass it shares is still runni
   assert.equal(facts.derivations, 1);
 });
 
+test("a requester aborted while its shared pass is being registered rejects instead of waiting for the pass", async () => {
+  const facts = memo();
+  const requester = new AbortController();
+  const ofInputs = facts.ofInputs.bind(facts);
+  const bindings = withFacts(createTypeBindings({ digest: DIGEST, trees: declared(KIT) }), Object.assign(facts, {
+    ofInputs: <T>(slot: string, inputs: object, derive: () => Promise<T>) => (requester.abort(), ofInputs(slot, inputs, derive)),
+  }));
+  await assert.rejects(bindings.of(sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") }), [OUTPUT], requester.signal), { name: "AbortError" });
+});
+
 test("shutdown aborts a shared pass: every waiter rejects and nothing is kept", async () => {
   const facts = gated(memo());
   const shutdown = new AbortController();

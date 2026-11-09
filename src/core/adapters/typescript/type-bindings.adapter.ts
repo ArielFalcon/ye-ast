@@ -159,6 +159,7 @@ export function createTypeBindings({ trees, digest, shutdown }: { trees: Declare
 /** `pass`'s outcome, or `signal`'s reason as soon as it aborts; the abort never reaches `pass`. */
 function waitFor<T>(pass: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
   if (signal === undefined) return pass;
+  if (signal.aborted) return Promise.reject(signal.reason);
   return new Promise<T>((resolve, reject) => {
     const abort = () => reject(signal.reason);
     signal.addEventListener("abort", abort, { once: true });
