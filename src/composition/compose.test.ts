@@ -363,7 +363,7 @@ test("an importers fact declares no template engine and a callers fact declares 
   const request = { repo, repoId: "shop-service", revision: "HEAD" };
 
   const importers = await impact.importers({ ...request, files: ["README.md"] });
-  const callers = await impact.callers({ ...request, targets: [{ file: "README.md", start: 1, end: 1 }] });
+  const callers = await impact.callers({ ...request, targets: [{ file: "src/OrderController.java", start: 1, end: 1 }] });
 
   assert.ok(importers.ok && callers.ok);
   assert.equal("@angular/compiler" in importers.value.inputs.engines, false);

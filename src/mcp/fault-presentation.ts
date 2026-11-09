@@ -91,7 +91,8 @@ function displayDetail(fault: RenderedFault): string {
   }
 }
 
-function declarationText(entry: { file: string; candidates: readonly string[] }): string {
+function declarationText(entry: { file: string; candidates: readonly string[]; absent?: boolean }): string {
+  if (entry.absent === true) return entry.candidates.length === 0 ? `${entry.file} is not in the snapshot` : `${entry.file} is not in the snapshot; snapshot paths: ${entry.candidates.join(", ")}`;
   return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
 }
 
@@ -161,10 +162,14 @@ function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-faul
     case "aborted":
     case "internal-fault":
       return undefined;
-    case "unknown-symbol":
-      return query?.family === "outline"
+    case "unknown-symbol": {
+      const step = query?.family === "outline"
         ? "Use a listed dotted path as focus[].symbol, or a line inside a declaration as focus[].line; files lists the file whole. Candidates are alternatives, not substitutions."
         : `Use a listed candidate as targets[].symbol, or an inclusive line range {file, start, end}. A line range listed here covers no declaration and no code: call ye_ast_outline for these files at the same ${query?.live ? "live state" : "revision"} and pick a range inside a declaration's span. Candidates are alternatives, not substitutions.`;
+      return fault.entries.some((entry) => entry.absent)
+        ? `${step} ${query?.family === "outline" ? "focus[].file" : "targets[].file"} takes a repository-relative path from the repository root.`
+        : step;
+    }
     case "unknown-entrypoint":
       return "Use a listed name of that kind as targets[].name, spelled as ye_ast_entrypoints lists it at the same revision; an empty list means the map holds no entrypoint of that kind. Candidates are alternatives, not substitutions.";
     case "top-level-line":

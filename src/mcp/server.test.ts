@@ -2053,9 +2053,9 @@ test("an unknown-symbol fault lists every entry that names no node and what its 
     kind: "unknown-symbol",
     detail: "no such symbol",
     entries: [
-      { file: "src/A.java", symbol: "A.gone", candidates: ["A.other", "A.used"] },
-      { file: "src/B.java", symbol: "B.gone", candidates: [] },
-      { file: "src/C.java", start: 30, end: 35, candidates: ["C"] },
+      { file: "src/A.java", symbol: "A.gone", absent: false, candidates: ["A.other", "A.used"] },
+      { file: "src/B.java", symbol: "B.gone", absent: false, candidates: [] },
+      { file: "src/C.java", start: 30, end: 35, absent: false, candidates: ["C"] },
     ],
   };
   const { session } = await setup({ callers: async () => ({ ok: false, fault }) });
@@ -2068,6 +2068,21 @@ test("an unknown-symbol fault lists every entry that names no node and what its 
   assert.match(text, /line range listed here covers no declaration and no code: call ye_ast_outline/);
   assert.ok(text.includes("targets") && text.includes("ye_ast_outline"));
   assert.deepEqual(result._meta?.["ye-ast/fault"], fault);
+  await session.close();
+});
+
+test("an absent path is printed as not in the snapshot with the snapshot paths that could be asked instead", async () => {
+  const fault: ImpactFault = {
+    kind: "unknown-symbol",
+    detail: "no such symbol",
+    entries: [{ file: "src/gone/A.java", symbol: "A.gone", absent: true, candidates: ["src/A.java", "src/B.java"] }],
+  };
+  const { session } = await setup({ callers: async () => ({ ok: false, fault }) });
+  const result = await session.callTool("ye_ast_callers", { targets: [{ file: "src/gone/A.java", symbol: "A.gone" }] });
+  assert.equal(result.isError, true);
+  const text = textOf(result);
+  assert.match(text, /src\/gone\/A\.java:A\.gone: src\/gone\/A\.java is not in the snapshot; snapshot paths: src\/A\.java, src\/B\.java/);
+  assert.match(text, /targets\[\]\.file takes a repository-relative path from the repository root/);
   await session.close();
 });
 
@@ -2084,7 +2099,7 @@ test("an unknown-change-path fault names the globs that selected no changed path
 });
 
 test("fault guidance names only the arguments of the tool that faulted", async () => {
-  const unknownSymbol: ImpactFault = { kind: "unknown-symbol", detail: "no such symbol", entries: [{ file: "src/A.java", symbol: "gone", candidates: ["A.used"] }] };
+  const unknownSymbol: ImpactFault = { kind: "unknown-symbol", detail: "no such symbol", entries: [{ file: "src/A.java", symbol: "gone", absent: false, candidates: ["A.used"] }] };
   const unknownRevision = { kind: "unknown-revision" as const, detail: "does not resolve" };
   const { session } = await setup({ outline: async () => ({ ok: false, fault: unknownSymbol }), callers: async () => ({ ok: false, fault: unknownSymbol }) });
   const revisions = await setup({ outline: async () => ({ ok: false, fault: unknownRevision }), ofChange: async () => ({ ok: false, fault: unknownRevision }) });

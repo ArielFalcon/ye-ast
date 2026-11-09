@@ -9,8 +9,8 @@ import { importBindings } from "../navigation/import-bindings.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { branchesOf, declarationPath, innermostAt, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
-import type { UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
 import type { OutlineSelector, TopLevelLineFault } from "../../ports/outline-queries.port.ts";
+import type { SnapshotFiles, RawUnknownEntry } from "../navigation/snapshot-files.ts";
 import type { ImportOrigins } from "../../ports/import-origins.port.ts";
 import { outlineUses, unprovedUseCuts } from "../../domain/outline/outline-uses.ts";
 import { createDeclarationUses, usesOf } from "../navigation/declaration-uses.ts";
@@ -90,8 +90,8 @@ function outlined({ declaration, children }: DeclarationBranch<GraphSymbol>): Ou
 
 export interface FocusRead {
   value: OutlineFocusValue;
-  /** The symbol selectors that match no declaration of their file. */
-  unknown: UnknownSymbolFault["entries"];
+  /** The symbol selectors that match no declaration of their file, whose file the snapshot may not even hold. */
+  unknown: RawUnknownEntry[];
   /** The line selectors no declaration of their file holds. */
   topLevel: TopLevelLineFault["entries"];
   /** The matched declaration of each entry of `value.focus` with what it contains, in the same order. */
@@ -99,7 +99,7 @@ export interface FocusRead {
 }
 
 /** The declarations the selectors match, each with its containers and the count of its file's declarations left out. */
-export function readFocus(store: CodeGraphReader, selectors: readonly OutlineSelector[]): FocusRead {
+export function readFocus(store: CodeGraphReader, selectors: readonly OutlineSelector[], snapshot: SnapshotFiles): FocusRead {
   const focus: { entry: OutlineFocus; branch: DeclarationBranch<GraphSymbol> }[] = [];
   const unheld: string[] = [];
   const unknown: FocusRead["unknown"][number][] = [];
@@ -107,7 +107,13 @@ export function readFocus(store: CodeGraphReader, selectors: readonly OutlineSel
   for (const [file, asked] of [...Map.groupBy(selectors, (selector) => selector.file)].sort(([a], [b]) => compareText(a, b))) {
     const nodes = store.symbolsInFiles([file]);
     if (nodes.length === 0) {
-      unheld.push(file);
+      if (snapshot.holds(file)) {
+        unheld.push(file);
+        continue;
+      }
+      const named = asked.filter((selector) => "symbol" in selector);
+      for (const selector of named) unknown.push({ file, symbol: selector.symbol, candidates: [] });
+      if (named.length < asked.length) unheld.push(file);
       continue;
     }
     const tree = containmentTree(store, nodes);
