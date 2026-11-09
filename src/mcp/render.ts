@@ -2,7 +2,7 @@ import { dependencyDiagnosticText, effectText, unresolvedLabel } from "./present
 import { canSelect, categoryRecovery, literalSelection, sharedLookup } from "./presentation-guidance.ts";
 import type { ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
-import { renderFactHeader as headerLines, renderFactStatus as statusLines, evidenceText, cutsByKind } from "./presentation-context.ts";
+import { renderFactHeader as headerLines, renderFactStatus as statusLines, evidenceText, cutsByKind, cutCounts, cutReasonText, cutRowLabel, completeText, undecidedOf, type StatusContext } from "./presentation-context.ts";
 import type { ResponseMode, RenderContext } from "./presentation.ts";
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
@@ -65,6 +65,14 @@ function cutsOf(fact: Fact<unknown>): readonly Cut[] {
   return fact.status === "partial" ? fact.cuts : [];
 }
 
+/** The reason of the repository section a name holds when that section is unknown. */
+function unknownSectionIn(sections: Readonly<Record<string, Fact<unknown>>>): NonNullable<StatusContext["unknownSection"]> {
+  return (name) => {
+    const section = Object.hasOwn(sections, name) ? sections[name] : undefined;
+    return section?.status === "unknown" ? section.reason : undefined;
+  };
+}
+
 /** The first `:<line>` followed by a space or the end closes the path, as `placeAt` builds the place; the rest is its reason. */
 const PLACE = /^(.*?):(\d+)(?: (.*))?$/s;
 
@@ -101,12 +109,13 @@ function groupedPlaces(places: readonly string[]): string[] {
   return [...byFile].map(([head, lines]) => (lines.length === 0 ? head : lines.length === 1 ? `${head}:${lines[0]}` : `${head}: ${lines.join(", ")}`));
 }
 
-function cutLine(cut: Cut): string {
-  return `  ${cut.kind} at ${cutPlaces(cut)}${cut.limit === undefined ? "" : ` (limit ${cut.limit})`}`;
+/** One cut row; details name why the cut exists. */
+function cutLine(cut: Cut, detail: ResponseMode): string {
+  return `  ${detail === "details" ? cutRowLabel(cut) : cut.kind} at ${cutPlaces(cut)}${cut.limit === undefined ? "" : ` (limit ${cut.limit})`}`;
 }
 
 /** The single-path cuts of one kind on one line: their limit only when all of them share it. */
-function singlePathLine(kind: Cut["kind"], cuts: readonly Cut[]): string {
+function singlePathLine(kind: string, cuts: readonly Cut[]): string {
   const sorted = [...cuts].toSorted((a, b) => compareText(a.at[0] ?? "", b.at[0] ?? "") || (a.limit ?? 0) - (b.limit ?? 0));
   const limits = new Set(cuts.map((cut) => cut.limit));
   const [shared] = limits;
@@ -192,7 +201,8 @@ function cutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
     if (kind === "unresolved-link" && detail !== "details") return unresolvedDeclarations(ofKind);
     const single = ofKind.filter((cut) => cut.at.length === 1);
     const rest = ofKind.filter((cut) => cut.at.length > 1).toSorted((a, b) => compareText(a.at.join("\0"), b.at.join("\0")));
-    return [...(single.length === 0 ? [] : [singlePathLine(kind, single)]), ...rest.map(cutLine)];
+    const singles = detail === "details" ? [...Map.groupBy(single, cutRowLabel)].toSorted(([a], [b]) => compareText(a, b)) : single.length === 0 ? [] : [[kind, single] as const];
+    return [...singles.map(([label, cuts]) => singlePathLine(label, cuts)), ...rest.map((cut) => cutLine(cut, detail))];
   });
 }
 
@@ -423,10 +433,11 @@ export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: ResponseM
       ? "Check value.entrypoints.status, reason and evidence; this section has no value."
       : `${context?.recovery?.status === "unavailable" ? `Recovery unavailable (${context.recovery.reason}); recorded coordinates` : "Selection lookup"}: findingIndex is the zero-based position in value.entrypoints.value. Check value.entrypoints.status and value.entrypoints.value; match each complete finding in value.entrypoints.value[].value by kind/name and handler or component coordinates. Inspect basePath status and evidence for HTTP routes; unknown findings carry reason and evidence, and partial sections carry cuts.${section.value.some((item) => item.status === "complete" && item.value.kind === "ui-route") ? " For UI routes, match kind and name, then inspect value.entrypoints.value[].value.guards; these are each route's own guards, not inherited or runtime restrictions." : ""}`;
   }
-  const lines = headerLines(fact);
+  const undecided = fact.status === "unknown" || fact.value.entrypoints.status === "unknown" ? 0 : undecidedOf(fact.value.entrypoints.value);
+  const lines = headerLines(fact, { undecided });
   if (fact.status === "unknown") return lines.join("\n");
   const section = fact.value.entrypoints;
-  lines.push("entrypoints:", ...statusLines(section, "  "));
+  lines.push("entrypoints:", ...statusLines(section, "  ", { undecided }));
   if (section.status !== "unknown") {
     const known = section.value.filter((item) => item.status === "complete").length;
     const unknown = section.value.length - known;
@@ -841,7 +852,8 @@ function impactCuts(cuts: readonly Cut[], detail: ResponseMode): string[] {
         const places = records.reduce((total, cut) => total + Math.max(0, cut.at.length - 1), 0);
         const reasons = anchor.includes("::") ? [] : [...new Set(records.flatMap(placeReasons))].sort(compareText);
         const limits = [...new Set(records.flatMap((cut) => cut.limit === undefined ? [] : [cut.limit]))].toSorted((a, b) => a - b);
-        return `      ${name}: ${records.length} ${records.length === 1 ? "cut" : "cuts"}, ${places} reference ${places === 1 ? "place" : "places"}${limits.length === 0 ? "" : `; limits ${limits.join(", ")}`}${reasons.length === 0 ? "" : `; ${reasons.join(", ")}`}`;
+        const why = [...new Set(records.map(cutReasonText))].sort(compareText).join(", ");
+        return `      ${name}: ${records.length} ${records.length === 1 ? "cut" : "cuts"} (${why}), ${places} reference ${places === 1 ? "place" : "places"}${limits.length === 0 ? "" : `; limits ${limits.join(", ")}`}${reasons.length === 0 ? "" : `; ${reasons.join(", ")}`}`;
       }),
     ])];
   }), ...referencePlacesNote(cuts)];
@@ -883,9 +895,9 @@ function impactCutLayout(cuts: readonly Cut[], detail: ResponseMode, owner: CutO
       if (previous?.kind !== cut.kind || previous.at[0] !== cut.at[0]) shared.push(`    anchor ${JSON.stringify(cut.at[0])}:`);
       const places = Math.max(0, cut.at.length - 1);
       const reasons = placeReasons(cut);
-      shared.push(`      ${coordinate}; ${places} reference ${places === 1 ? "place" : "places"}${cut.limit === undefined ? "" : `; limit ${cut.limit}`}${reasons.length === 0 ? "" : `; reasons ${JSON.stringify(reasons)}`}`);
+      shared.push(`      ${coordinate}; ${cutReasonText(cut)}; ${places} reference ${places === 1 ? "place" : "places"}${cut.limit === undefined ? "" : `; limit ${cut.limit}`}${reasons.length === 0 ? "" : `; reasons ${JSON.stringify(reasons)}`}`);
     } else {
-      shared.push(`    ${coordinate}; ${cutPlaces(cut)}${cut.limit === undefined ? "" : ` (limit ${cut.limit})`}`);
+      shared.push(`    ${coordinate}; ${cutRowLabel(cut) === cut.kind ? "" : `${cutReasonText(cut)}; `}${cutPlaces(cut)}${cut.limit === undefined ? "" : ` (limit ${cut.limit})`}`);
     }
     previous = cut;
   }
@@ -1208,11 +1220,11 @@ function traceTreeLines(steps: readonly TraceStep[]): string[] {
   });
 }
 
-/** An unresolved call of a trace: the place and spelling leading the cut, then its candidates. */
-function tracePlaceOf(cut: Cut): { file: string; line: string; spelling: string; candidates: readonly string[] } {
+/** An unresolved call of a trace: why it is cut, the place and spelling leading the cut, then its candidates. */
+function tracePlaceOf(cut: Cut): { why: string; file: string; line: string; spelling: string; candidates: readonly string[] } {
   const [place = "", ...candidates] = cut.at;
   const { file, line, reason } = placeOf(place);
-  return { file, line, spelling: reason, candidates };
+  return { why: cutReasonText(cut), file, line, spelling: reason, candidates };
 }
 
 type TracePlace = ReturnType<typeof tracePlaceOf>;
@@ -1226,7 +1238,7 @@ function trailingName(spelling: string): string {
 
 /** Each unresolved call with every candidate. */
 function tracePlaceLine(place: TracePlace): string {
-  return `    ${place.file}:${place.line} ${place.spelling}${place.candidates.length === 0 ? "" : ` (${place.candidates.join(", ")})`}`;
+  return `    ${place.why}: ${place.file}:${place.line} ${place.spelling}${place.candidates.length === 0 ? "" : ` (${place.candidates.join(", ")})`}`;
 }
 
 /** A candidate without its file: `src/a.ts::Store.get` reads `Store.get`. */
@@ -1236,20 +1248,20 @@ function candidatePath(candidate: string): string {
 }
 
 /**
- * One line per trailing name and candidate set, most calls first, then by name: its calls, its files and its candidates
- * by containment path, counted when that is shorter or when two candidates share a path.
+ * One line per reason, trailing name and candidate set, most calls first, then by name: why they are cut, its calls, its
+ * files and its candidates by containment path, counted when that is shorter or when two candidates share a path.
  */
 function traceCallGroupLines(places: readonly TracePlace[]): string[] {
-  const groups = [...Map.groupBy(places, (place) => JSON.stringify([trailingName(place.spelling), place.candidates.toSorted(compareText)]))]
-    .map(([key, inGroup]) => ({ key, name: trailingName(inGroup[0]!.spelling), candidates: inGroup[0]!.candidates.toSorted(compareText), calls: inGroup.length, files: new Set(inGroup.map(({ file }) => file)).size }))
+  const groups = [...Map.groupBy(places, (place) => JSON.stringify([place.why, trailingName(place.spelling), place.candidates.toSorted(compareText)]))]
+    .map(([key, inGroup]) => ({ key, why: inGroup[0]!.why, name: trailingName(inGroup[0]!.spelling), candidates: inGroup[0]!.candidates.toSorted(compareText), calls: inGroup.length, files: new Set(inGroup.map(({ file }) => file)).size }))
     .sort((a, b) => b.calls - a.calls || compareText(a.name, b.name) || compareText(a.key, b.key));
-  return groups.map(({ name, candidates, calls, files }) => {
+  return groups.map(({ why, name, candidates, calls, files }) => {
     const shown = [...new Set(candidates.map(candidatePath))].sort(compareText);
     const listed = shown.join(", ");
     const counted = `${candidates.length} ${candidates.length === 1 ? "candidate" : "candidates"}`;
     const listable = shown.length === candidates.length && preferShorterText(listed, counted) === listed;
     const could = candidates.length === 0 ? "" : listable ? ` → could be: ${listed}` : ` → ${counted}`;
-    return `    ${name} ×${calls} in ${files} ${files === 1 ? "file" : "files"}${could}`;
+    return `    ${why}: ${name} ×${calls} in ${files} ${files === 1 ? "file" : "files"}${could}`;
   });
 }
 
@@ -1326,7 +1338,7 @@ function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Respon
 
 export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: ResponseMode = "summary", context?: RenderContext): string {
   if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide(fact, detail, context) : workspaceImpactGuide(fact, context)).join("\n");
-  const lines = headerLines(fact);
+  const lines = headerLines(fact, fact.status === "unknown" ? {} : { unknownSection: unknownSectionIn(fact.value.sections) });
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide(fact, detail, context)].join("\n");
   const { value } = fact;
   const trigger = value.sections[value.trigger.repo];
@@ -1484,7 +1496,10 @@ function unresolvedBlock(value: Omit<WorkspaceValue, "repositories">, detail: Re
 
 export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>, detail: ResponseMode = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Match value.sections by repository and check each section status, reason and cuts; value.repositorySnapshots identifies each revision. Inspect value.candidates by name and repo for basis and evidence, value.unserved for unmatched names, value.links for the links between repositories and value.unlinked for the call sites without one.";
-  const lines = headerLines(fact);
+  const lines = headerLines(fact, fact.status === "unknown" ? {} : {
+    undecided: Object.values(fact.value.sections).reduce((total, section) => total + (section.status === "unknown" ? 0 : section.value.unresolved.length), 0),
+    unknownSection: unknownSectionIn(fact.value.sections),
+  });
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
   const served = new Set(value.candidates.map((candidate) => candidate.name));
@@ -1686,7 +1701,7 @@ function findingLine(finding: ConsequenceFinding<UseConsequence | ProducerConseq
 function answerLines(answer: HypothesisAnswer, index: number, detail: ResponseMode): string[] {
   const head = `  ${index + 1}. ${hypothesisText(answer.hypothesis)}`;
   if (answer.status === "unknown") return [`${head}: unknown (${answer.reason}): ${answer.detail}`];
-  const status = answer.status === "partial" ? `partial (cuts: ${cutsByKind(answer.cuts).map(([kind, cuts]) => `${cuts.length} ${kind}`).join(", ")})` : "complete";
+  const status = answer.status === "partial" ? `partial (cuts: ${cutCounts(answer.cuts)})` : completeText(undecidedOf(answer.findings));
   const open = `${head}: ${status}${answer.silent === undefined ? "" : `; ${answer.silent} silent uses`}`;
   const listing = [open, ...(answer.findings.length === 0 ? ["    (no findings)"] : answer.findings.map(findingLine))];
   const counts = [`${open}; ${answer.findings.length === 0 ? "no findings" : `${answer.findings.length} findings: ${countedBy(answer.findings.map(findingKind))}`}${answer.findings.length === 0 ? "" : `; ${categoryRecovery({ details: "lists each with its place", full: "retains the chains and witnesses" })}`}`];
@@ -1716,10 +1731,20 @@ function derivationLines(value: NonNullable<ConsequencesValue["change"]>, detail
   return lines;
 }
 
+/** The undecided findings of every answer, and the reason of the answer or derivation section a section cut names. */
+function consequencesStatus(value: ConsequencesValue): StatusContext {
+  const sections = new Map<string, { status: string; reason?: string }>(value.answers.map((answer, index) => [`answers.${index}`, answer]));
+  if (value.change !== undefined) sections.set("change.derivation", value.change.derivation);
+  return {
+    undecided: value.answers.reduce((total, answer) => total + (answer.status === "unknown" ? 0 : undecidedOf(answer.findings)), 0),
+    unknownSection: (name) => { const section = sections.get(name); return section?.status === "unknown" ? section.reason : undefined; },
+  };
+}
+
 /** One composite answer: the hypotheses (or the change) of one workspace read, each with its verdicts and the places it could not follow. */
 export function renderContractConsequences(fact: Fact<ConsequencesValue>, detail: ResponseMode = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : CONSEQUENCES_FULL_GUIDE;
-  const lines = headerLines(fact);
+  const lines = headerLines(fact, fact.status === "unknown" ? {} : consequencesStatus(fact.value));
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
   lines.push(counted("repositories", value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));

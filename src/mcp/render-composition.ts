@@ -1,4 +1,5 @@
 import { dependencyDiagnosticText, effectText, unresolvedLabel } from "./presentation.ts";
+import { cutLabel } from "./presentation-context.ts";
 /**
  * Deterministic text of a composition. Summary and details are self-sufficient: every subject they
  * cite is declared once in a local legend (S sources, V snapshots, N subjects, L relations, C connections), the first
@@ -774,11 +775,11 @@ class CompactView {
   }
 
   private cuts(cuts: readonly Cut[], located = this.details): string {
-    return [...Map.groupBy(cuts, (cut) => cut.kind)].map(([kind, ofKind]) => {
-      const places = ofKind.flatMap((cut) => cut.at);
-      const dependencies = ofKind.flatMap((cut) => cut.dependency === undefined ? [] : [dependencyDiagnosticText(cut.dependency)]);
-      const limits = unique(ofKind.flatMap((cut) => (cut.limit === undefined ? [] : [cut.limit])));
-      return `${kind} cut ×${ofKind.length}, ${places.length} places${limits.length === 0 ? "" : `, limit ${limits.join("/")}`}${located ? `: ${places.join(", ")}` : ""}${dependencies.length === 0 ? "" : `; ${dependencies.join("; ")}`}`;
+    return [...Map.groupBy(cuts, cutLabel)].map(([label, ofLabel]) => {
+      const places = ofLabel.flatMap((cut) => cut.at);
+      const dependencies = ofLabel.flatMap((cut) => cut.dependency === undefined ? [] : [dependencyDiagnosticText(cut.dependency)]);
+      const limits = unique(ofLabel.flatMap((cut) => (cut.limit === undefined ? [] : [cut.limit])));
+      return `${label} cut ×${ofLabel.length}, ${places.length} places${limits.length === 0 ? "" : `, limit ${limits.join("/")}`}${located ? `: ${places.join(", ")}` : ""}${dependencies.length === 0 ? "" : `; ${dependencies.join("; ")}`}`;
     }).join("; ");
   }
 

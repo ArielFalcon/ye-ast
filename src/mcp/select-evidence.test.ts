@@ -231,3 +231,12 @@ test("cut projections keep the typed reason and dependency diagnostic that disco
   strictEqual(result.kind === "cut-places" && result.context.reason, "dependency-unresolved");
   deepStrictEqual(result.kind === "cut-places" && result.context.dependency, source.cuts[0].dependency);
 });
+
+test("a cut's context carries its reason and, where it has one, its sub-reason", () => {
+  const cut = (subReason?: "capability-absent") => ({ kind: "unresolved-link", at: ["src/flow.ts:2 save", "src/a.ts::A.save"], reason: "dispatch", ...(subReason === undefined ? {} : { subReason }), reach: { kind: "anything" } }) as const;
+  for (const subReason of ["capability-absent", undefined] as const) {
+    const result = selectEvidence({ kind: "local", fact: { ...base, status: "partial", value: fact.value, cuts: [cut(subReason)] } }, { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 });
+    const context = result.ok && result.value.availability === "available" && result.value.kind === "cut-places" ? result.value.context : undefined;
+    deepStrictEqual({ reason: context?.reason, subReason: context?.subReason, has: context !== undefined && "subReason" in context }, { reason: "dispatch", subReason, has: subReason !== undefined });
+  }
+});

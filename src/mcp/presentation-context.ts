@@ -21,19 +21,58 @@ export function cutsByKind(cuts: readonly Cut[]): (readonly [Cut["kind"], readon
   return [...Map.groupBy(cuts, (cut) => cut.kind)].toSorted(([a, ofA], [b, ofB]) => ofB.length - ofA.length || compareText(a, b));
 }
 
-/** The cuts of one kind, counted: the status line keeps the fact's size down to what the caller can act on. A section
- * cut names the section, so the status line already says which one degraded. */
-function cutCounts(cuts: readonly Cut[]): string {
-  return cutsByKind(cuts)
-    .map(([kind, ofKind]) => `${ofKind.length} ${kind}${kind === "section" ? `: ${ofKind.flatMap((cut) => cut.at).join(", ")}` : ""}`)
+/** A cut's kind and reason, the reason omitted where it only repeats the kind (a bound). */
+export function cutLabel(cut: Cut): string {
+  return cut.reason === cut.kind ? cut.kind : `${cut.kind} ${cut.reason}`;
+}
+
+/** Why a cut exists: its reason, with its sub-reason where it has one. */
+export function cutReasonText(cut: Cut): string {
+  return cut.subReason === undefined ? cut.reason : `${cut.reason} (${cut.subReason})`;
+}
+
+/** A cut row's label: its kind and why it exists, the reason omitted where it only repeats the kind. */
+export function cutRowLabel(cut: Cut): string {
+  return cut.reason === cut.kind && cut.subReason === undefined ? cut.kind : `${cut.kind} ${cutReasonText(cut)}`;
+}
+
+/** The cuts counted by kind and reason, most first (ADR-0042 decision 8). A section cut names the section, so the status
+ * line already says which one degraded. */
+export function cutCounts(cuts: readonly Cut[]): string {
+  return [...Map.groupBy(cuts, cutLabel)]
+    .toSorted(([a, ofA], [b, ofB]) => ofB.length - ofA.length || compareText(a, b))
+    .map(([label, ofLabel]) => `${ofLabel.length} ${label}${ofLabel[0]!.kind === "section" ? `: ${ofLabel.flatMap((cut) => cut.at).join(", ")}` : ""}`)
     .join(", ");
 }
 
-/** The completeness of a fact: its status, the cut count per kind, and where an unknown one cannot tell. */
-export function renderFactStatus(fact: Fact<unknown>, indent = ""): string[] {
-  if (fact.status === "complete") return [`${indent}status: complete`];
+/** A complete status, with the count of the asserted items it holds as `unknown` when there are any. */
+export function completeText(undecided: number): string {
+  return undecided === 0 ? "complete" : `complete (${undecided} undecided)`;
+}
+
+/** How many items of a collection are `unknown`. */
+export function undecidedOf(items: readonly { status: string }[]): number {
+  return items.filter((item) => item.status === "unknown").length;
+}
+
+/**
+ * What a status line needs beyond the fact: how many items the family asserts are `unknown`, and the unknown reason of a
+ * section a section cut names.
+ */
+export interface StatusContext {
+  undecided?: number;
+  unknownSection?: (name: string) => string | undefined;
+}
+
+/** The completeness of a fact: its status, the cut count per kind and reason, and where an unknown one cannot tell. A
+ * complete collection with unknown items says how many (ADR-0042 decision 7); a composite whose one cut is an unknown
+ * section prints that section's status. */
+export function renderFactStatus(fact: Fact<unknown>, indent = "", { undecided = 0, unknownSection }: StatusContext = {}): string[] {
+  if (fact.status === "complete") return [`${indent}status: ${completeText(undecided)}`];
   if (fact.status === "unknown") return [`${indent}status: unknown (${fact.reason})`, ...fact.evidence.map((evidence) => `${indent}  evidence: ${evidenceText(evidence)}`)];
-  return [`${indent}status: partial (cuts: ${cutCounts(fact.cuts)})`];
+  const [only, ...rest] = fact.cuts;
+  const reason = rest.length === 0 && only.kind === "section" && only.at.length === 1 ? unknownSection?.(only.at[0]!) : undefined;
+  return [`${indent}status: partial (${reason === undefined ? `cuts: ${cutCounts(fact.cuts)}` : `section ${only.at[0]}: unknown (${reason})`})`];
 }
 
 /** The paths the caller narrowed the answer to, when it did: what they select is read, and so is the configuration that
@@ -64,8 +103,8 @@ function changedLines(fact: Fact<unknown>): string[] {
 }
 
 /** What every answer opens with: its completeness, what that completeness covers, and the snapshot it read. */
-export function renderFactHeader(fact: Fact<unknown>): string[] {
-  return [...renderFactStatus(fact), ...declaredScopeLines(fact), ...scopeLines(fact), ...changedLines(fact), ...buildOutputLines(fact), snapshotLine(contextOf(fact).snapshot)];
+export function renderFactHeader(fact: Fact<unknown>, status?: StatusContext): string[] {
+  return [...renderFactStatus(fact, "", status), ...declaredScopeLines(fact), ...scopeLines(fact), ...changedLines(fact), ...buildOutputLines(fact), snapshotLine(contextOf(fact).snapshot)];
 }
 
 /** Each build output the fact read (ADR-0037), and whether the snapshot's lockfile verified it. */

@@ -177,7 +177,8 @@ function traceFact(cuts: readonly unknown[] = []): Fact<TraceValue> {
     readingPlan: { ranges: [{ file: "src/order.ts", start: 1, end: 30, steps: [0, 1, 3] }, { file: "src/tax.ts", start: 4, end: 9, steps: [2] }, { file: "src/order.ts", start: 40, end: 40, steps: [1] }], lines: 37 },
     cost: { expanded: 3 },
   };
-  return { ...base, status: cuts.length === 0 ? "complete" : "partial", cuts, value } as unknown as Fact<TraceValue>;
+  const reasoned = cuts.map((cut) => ({ reason: "callee-unknown", reach: { kind: "anything" }, ...(cut as object) }));
+  return { ...base, status: cuts.length === 0 ? "complete" : "partial", cuts: reasoned, value } as unknown as Fact<TraceValue>;
 }
 
 test("a trace summary shows a selected class root as a class and the reading plan as one line per file, in first appearance, with its lines and the total", () => {
@@ -190,7 +191,7 @@ test("a trace summary shows a selected class root as a class and the reading pla
 test("a trace in details keeps one reading range per line in plan order and one unresolved call per line, without the omission line", () => {
   const text = renderTrace(traceFact([{ kind: "unresolved-link", at: ["src/order.ts:15 this.handler.handle", "src/a.ts:handle"] }]), "details");
   assert.ok(text.includes("reading plan (3 ranges, 37 lines):\n  src/order.ts:1-30\n  src/tax.ts:4-9\n  src/order.ts:40\n"), text);
-  assert.ok(text.includes("  unresolved-link (1 call):\n    src/order.ts:15 this.handler.handle (src/a.ts:handle)"), text);
+  assert.ok(text.includes("  unresolved-link (1 call):\n    callee-unknown: src/order.ts:15 this.handler.handle (src/a.ts:handle)"), text);
   assert.ok(!text.includes("places omitted"), text);
 });
 
@@ -229,7 +230,7 @@ test("an unresolved trace call names its place and spelling with its candidates,
   const candidates = ["src/a.ts:handle", "src/b.ts:handle", "src/c.ts:handle"];
   const fact = traceFact([{ kind: "unresolved-link", at: ["src/order.ts:15 this.handler.handle", ...candidates] }]);
   assert.ok(renderTrace(fact, "details").includes(`src/order.ts:15 this.handler.handle (${candidates.join(", ")})`), renderTrace(fact, "details"));
-  assert.ok(renderTrace(fact).includes("    handle ×1 in 1 file → 3 candidates"), renderTrace(fact));
+  assert.ok(renderTrace(fact).includes("    callee-unknown: handle ×1 in 1 file → 3 candidates"), renderTrace(fact));
 });
 
 test("a trace summary groups unresolved calls by trailing name and sorted candidate set, most calls first, then by name", () => {
@@ -240,7 +241,7 @@ test("a trace summary groups unresolved calls by trailing name and sorted candid
     { kind: "unresolved-link", at: ["src/b.ts:7 cache.get", "A", "B"] },
   ]);
   const text = renderTrace(fact);
-  assert.ok(text.includes("  unresolved-link (4 calls):\n    get ×2 in 2 files → could be: A, B\n    get ×1 in 1 file → could be: C\n    run ×1 in 1 file\n"), text);
+  assert.ok(text.includes("  unresolved-link (4 calls):\n    callee-unknown: get ×2 in 2 files → could be: A, B\n    callee-unknown: get ×1 in 1 file → could be: C\n    callee-unknown: run ×1 in 1 file\n"), text);
 });
 
 test("a trace summary lists candidates by their containment path when shorter than their count, and counts them when longer or when two share a path", () => {
@@ -249,9 +250,9 @@ test("a trace summary lists candidates by their containment path when shorter th
     { kind: "unresolved-link", at: ["src/a.ts:5 y.put", "src/cache.ts::LocalCache.put", "src/store.ts::Store.put"] },
     { kind: "unresolved-link", at: ["src/a.ts:7 z.run", "src/a.ts::A.run", "src/b.ts::A.run"] },
   ]));
-  assert.ok(text.includes("    get ×1 in 1 file → could be: Store.get\n"), text);
-  assert.ok(text.includes("    put ×1 in 1 file → 2 candidates\n"), text);
-  assert.ok(text.includes("    run ×1 in 1 file → 2 candidates\n"), text);
+  assert.ok(text.includes("    callee-unknown: get ×1 in 1 file → could be: Store.get\n"), text);
+  assert.ok(text.includes("    callee-unknown: put ×1 in 1 file → 2 candidates\n"), text);
+  assert.ok(text.includes("    callee-unknown: run ×1 in 1 file → 2 candidates\n"), text);
 });
 
 test("a trace summary that groups unresolved calls ends the cut block by naming the modes that list each place", () => {
@@ -261,8 +262,8 @@ test("a trace summary that groups unresolved calls ends the cut block by naming 
 
 test("an unresolved trace call keeps its whole place when the path and the spelling hold spaces", () => {
   const fact = traceFact([{ kind: "unresolved-link", at: ["src/my dir/a.ts:15 (async (x) => x)().run", "src/b.ts:run"] }]);
-  assert.ok(renderTrace(fact, "details").includes("    src/my dir/a.ts:15 (async (x) => x)().run (src/b.ts:run)"), renderTrace(fact, "details"));
-  assert.ok(renderTrace(fact).includes("    run ×1 in 1 file → 1 candidate"), renderTrace(fact));
+  assert.ok(renderTrace(fact, "details").includes("    callee-unknown: src/my dir/a.ts:15 (async (x) => x)().run (src/b.ts:run)"), renderTrace(fact, "details"));
+  assert.ok(renderTrace(fact).includes("    callee-unknown: run ×1 in 1 file → 1 candidate"), renderTrace(fact));
 });
 
 const HYPOTHESIS = { method: "GET", path: "/owners/{id}", target: "response", property: "name", change: "nullable" };
@@ -271,7 +272,7 @@ const useAt = (n: number, verdict: object) => ({ status: "complete", value: { re
 
 /** Every hypothesis unknown but one, a change with no derived hypothesis for it, and a derivation cut: nothing here may read as safe. */
 function consequences(findings: object[]): Fact<ConsequencesValue> {
-  const derivation = { ...base, status: "partial", cuts: [{ kind: "deadline", at: ["src/Gone.java"] }], value: { differences: [
+  const derivation = { ...base, status: "partial", cuts: [{ kind: "deadline", at: ["src/Gone.java"], reason: "deadline", reach: { kind: "anything" } }], value: { differences: [
     { rule: "operation-added", level: "compatible", target: "operation", operation: "GET /new", delta: "added", places: { head: { repo: "api", path: "openapi.yaml", line: 30 } } },
     { rule: "response-property-became-nullable", level: "breaking", target: "response", operation: "GET /pets", property: "name", delta: "introduced-null", places: { base: { repo: "api", path: "openapi.yaml", line: 12 }, head: { repo: "api", path: "openapi.yaml", line: 12 } } },
     { rule: "response-property-constraint-narrowed", level: "compatible", target: "response", operation: "GET /pets", property: "name", delta: "constraint-narrowed", subject: "maxLength", base: 9, head: 3, places: { base: { repo: "api", path: "openapi.yaml", line: 12 }, head: { repo: "api", path: "openapi.yaml", line: 14 } } },
@@ -288,7 +289,7 @@ function consequences(findings: object[]): Fact<ConsequencesValue> {
     ],
     change: { base: "main", head: "feature", snapshots: { base: "b".repeat(40), head: "c".repeat(40) }, derivation },
   };
-  return { ...base, status: "partial", cuts: [{ kind: "section", at: ["change.derivation"] }], value } as unknown as Fact<ConsequencesValue>;
+  return { ...base, status: "partial", cuts: [{ kind: "section", at: ["change.derivation"], reason: "section-partial", reach: { kind: "anything" } }], value } as unknown as Fact<ConsequencesValue>;
 }
 
 test("a contract consequences summary counts each answer's verdicts and keeps its unknown reasons, derivation cuts and frontier counts, while details lists every finding with its place", () => {
@@ -306,7 +307,7 @@ test("a contract consequences summary counts each answer's verdicts and keeps it
     assert.match(text, /status: partial \(cuts: 1 deadline\)/);
     assert.match(text, /unserved-operation \(unresolved\)/);
     assert.match(text, /unreadable-contract \(source-unreadable\)/);
-    assert.match(text, /status: partial \(cuts: 1 section: change.derivation\)/);
+    assert.match(text, /status: partial \(cuts: 1 section section-partial: change.derivation\)/);
   }
   assert.match(summary, /13 findings: 4 admits, 4 incompatible, 4 review, 1 unknown \(source-unreadable\)/);
   assert.doesNotMatch(summary, /src\/use-1\.ts/);

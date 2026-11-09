@@ -80,6 +80,7 @@ test('concrete categories and receipts validate in runtime and draft-7 schema', 
     {select:{kind:'handler-origins',owner:{kind:'local'},handler:{path:'a',symbol:'h',line:3}},context:{owner:{kind:'local'},snapshot:snap,handler:h,matchedEntrypointCount:1,interpretation:'recorded-origin-union'},item:{seedIndex:1,seed:{file:'a',symbol:'x',line:1,basis:'requested'}}},
     {select:{kind:'module-origins',owner:{kind:'local'},module:{file:'a',snapshot:'base'}},context:{owner:{kind:'local'},snapshot:snap,module:{file:'a',snapshot:'base',depth:1},originCount:1},item:{originIndex:2,origin:{file:'a',change:'deleted'}}},
     {select:{kind:'cut-places',owner:{kind:'fact'},cutIndex:0},context:{owner:{kind:'fact'},snapshot:snap,analysis,cutIndex:0,kind:'unresolved-link',reason:'dependency-unresolved',dependency:{name:'com.acme:clients',reason:'ambiguous',candidates:['one','two']},anchor:'a'},item:{atIndex:1,place:'b'}},
+    {select:{kind:'cut-places',owner:{kind:'fact'},cutIndex:0},context:{owner:{kind:'fact'},snapshot:snap,analysis,cutIndex:0,kind:'unresolved-link',reason:'dispatch',subReason:'capability-absent',anchor:'a'},item:{atIndex:1,place:'b'}},
     {select:{kind:'workspace-link-evidence',linkId:'id'},context:{link,direction:'upstream',reachCount:1,endpoints:{from:{snapshot:snap,analysis},to:{snapshot:snap,analysis}}},item:{position:0,linkId:'lost',unavailable:true}},
   ];
   for (const c of cases) {

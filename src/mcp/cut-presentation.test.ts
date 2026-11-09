@@ -66,6 +66,6 @@ test("a place's path ends at its line, so a path or a reason holding spaces keep
   const importers: Fact<ImportersValue> = { ...base, status: "partial", cuts, value: { files: [] } };
 
   assert.match(renderImporters(importers, "summary"), /^ {6}Service\.read: src\/my app\/a\.ts$/m);
-  assert.match(renderImporters(importers, "details"), /^ {2}unresolved-link at src\/svc\.ts::Service\.read: src\/my app\/a\.ts \(this\.svc\.read\): 12, 30$/m);
-  assert.match(renderImpact({ ...base, status: "partial", cuts, value }, "details"), /^ {6}cutIndex 1; 1 reference place; reasons \["import outside module traversal \(offset 9\)"\]$/m);
+  assert.match(renderImporters(importers, "details"), /^ {2}unresolved-link hidden-caller at src\/svc\.ts::Service\.read: src\/my app\/a\.ts \(this\.svc\.read\): 12, 30$/m);
+  assert.match(renderImpact({ ...base, status: "partial", cuts, value }, "details"), /^ {6}cutIndex 1; callee-unknown; 1 reference place; reasons \["import outside module traversal \(offset 9\)"\]$/m);
 });

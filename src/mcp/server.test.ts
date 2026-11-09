@@ -1589,7 +1589,7 @@ test("an impact summary counts every cut kind and keeps its bound regardless of 
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: deep }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(text, /^status: partial \(cuts: 8 depth, 1 hub, 1 no-extractor, 1 unresolved-link\)$/m);
+  assert.match(text, /^status: partial \(cuts: 8 depth, 1 hub, 1 no-extractor not-indexed, 1 unresolved-link hidden-caller\)$/m);
   assert.match(text, /depth \(8\); limit 5/);
   assert.match(text, /hub \(1\)/);
   assert.match(text, /no-extractor \(1\)/);
@@ -1619,7 +1619,7 @@ test("impact detail localizes every cut anchor while full JSON retains every ref
   const result = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" }));
   assert.deepEqual(withoutRecovery(resultFields(result)), { ...deep, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
-  assert.match(text, /anchor "src\/b\.ts::B\.user":\n\s+cutIndex 0; 2 reference places/);
+  assert.match(text, /anchor "src\/b\.ts::B\.user":\n\s+cutIndex 0; hidden-caller; 2 reference places/);
   assert.doesNotMatch(text, /src\/y\.ts/);
   assert.match(text, /depth:\n\s+cutIndex 1; src\/c\.ts::C\.top \(limit 5\)/);
   assert.doesNotMatch(text, /summarized/);
@@ -1652,7 +1652,7 @@ test("cuts that name a single path are one line per kind listing every path", as
   } as Fact<ImportersValue>;
   const { session } = await setup({ importers: async () => ({ ok: true, value: partial }) });
   const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"] }));
-  assert.equal(text.split("\n")[0], "status: partial (cuts: 3 no-extractor)");
+  assert.equal(text.split("\n")[0], "status: partial (cuts: 3 no-extractor not-indexed)");
   assert.match(text, /no-extractor \(3\): src\/A\.swift, src\/B\.swift, src\/C\.swift/);
   await session.close();
 });
@@ -1664,7 +1664,7 @@ test("with detail full, an unresolved-link cut renders the places in its anchor'
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
   const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], mode: "details" }));
-  assert.match(text, /unresolved-link at src\/a\.ts::A\.f: lines 18, 123 \(no-extractor\), src\/b\.ts:7/);
+  assert.match(text, /unresolved-link hidden-caller at src\/a\.ts::A\.f: lines 18, 123 \(no-extractor\), src\/b\.ts:7/);
   await session.close();
 });
 
@@ -1673,7 +1673,7 @@ test("with detail full, the places of a cut are grouped under their file, every 
   const partial = impactFact({ status: "partial", cuts: [{ kind: "unresolved-link", at: places, reason: "callee-unknown", reach: { kind: "anything" } }] } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
   const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], mode: "details" }));
-  assert.match(text, /unresolved-link at src\/a\.ts::A\.f: src\/x\.ts: 10, 11, 12, 40, src\/y\.ts: 7, 9, src\/z\.ts \(no-extractor\):3$/m);
+  assert.match(text, /unresolved-link callee-unknown at src\/a\.ts::A\.f: src\/x\.ts: 10, 11, 12, 40, src\/y\.ts: 7, 9, src\/z\.ts \(no-extractor\):3$/m);
   assert.equal(text.split("src/x.ts").length - 1, 1, "the path of a grouped file is printed once");
   for (const line of ["10", "11", "12", "40"]) assert.match(text, new RegExp(`\\b${line}\\b`), `line ${line} survives the grouping`);
   await session.close();
@@ -1709,7 +1709,7 @@ test("a summary names the references of a cut the file leads, so the reader sett
   assert.match(text, /^ {4}src\/z\.ts: Promise\.resolve, req\.context\.get$/m);
   assert.doesNotMatch(text, /the file itself/);
   const full = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], mode: "details" }));
-  assert.match(full, /unresolved-link at src\/z\.ts: lines 4 \(Promise\.resolve\), 9 \(req\.context\.get\)/);
+  assert.match(full, /unresolved-link callee-unknown at src\/z\.ts: lines 4 \(Promise\.resolve\), 9 \(req\.context\.get\)/);
   await session.close();
 });
 
@@ -1961,8 +1961,8 @@ test("entrypoints closes with the cut list of the map and of its section", async
   const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
   const text = textOf(await session.callTool("ye_ast_entrypoints", {}));
   const lines = text.split("\n");
-  assert.equal(lines[0], "status: partial (cuts: 1 section: entrypoints)");
-  assert.match(text, / {2}status: partial \(cuts: 1 no-extractor\)/);
+  assert.equal(lines[0], "status: partial (cuts: 1 section section-partial: entrypoints)");
+  assert.match(text, / {2}status: partial \(cuts: 1 no-extractor not-indexed\)/);
   assert.match(text, /\ncuts:\n {2}no-extractor \(1\): src\/scripts\/build\.js\n {2}section \(1\): entrypoints\n(?: {2}lookup example: [^\n]+\n)+Recovery recipe and resultIdentity: recovery in the result JSON\.\nrepository root: shop -> \/work\/shop$/);
   await session.close();
 });
@@ -2808,7 +2808,7 @@ test("workspace impact text presents every repository's consequences before any 
     assert.equal(seeds.length, 3);
     assert.ok(Math.max(...consequences) < Math.min(...seeds), text);
     assert.ok(text.indexOf("per repository:") < Math.min(...seeds));
-    assert.ok(text.lastIndexOf("no-extractor (") > Math.max(...seeds));
+    assert.ok(text.lastIndexOf("no-extractor ") > Math.max(...seeds));
     assert.match(text, /shop-mobile/);
     assert.match(text, /shop-web/);
   }

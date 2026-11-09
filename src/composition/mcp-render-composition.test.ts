@@ -149,7 +149,7 @@ test("partial, unknown, cuts and unknown findings are explicit in every compact 
     const text = renderComposition(all, mode);
     assert.match(text, /S2 = impact\/local[^\n]*partial/);
     assert.match(text, /depth cut[^\n]*limit 2/);
-    assert.match(text, /no-extractor cut/);
+    assert.match(text, /no-extractor not-indexed cut/);
     assert.match(text, /unknown \(revision-unavailable\)/);
     assert.match(text, /unknown entrypoint finding \(unresolved\)/);
     assert.match(text, /component unknown/);
@@ -207,7 +207,7 @@ test("deliberate overlap: details is smaller than the concatenated original deta
     renderImpact(facts[3] as Parameters<typeof renderImpact>[0], "details"),
   ].join("\n");
   assert.ok(blockBytes(lines(details)) < blockBytes(lines(originals)), `${blockBytes(lines(details))} >= ${blockBytes(lines(originals))}`);
-  for (const required of ["GET /orders", "POST /orders v2", "kafka orders", "OrderService.find", "DELETE /orders", "src/gone.ts", "partial", "depth cut", "no-extractor cut", "basePath unknown (unresolved)", "src/Missing.java"]) {
+  for (const required of ["GET /orders", "POST /orders v2", "kafka orders", "OrderService.find", "DELETE /orders", "src/gone.ts", "partial", "depth cut", "no-extractor not-indexed cut", "basePath unknown (unresolved)", "src/Missing.java"]) {
     assert.ok(details.includes(required), required);
   }
 });
@@ -386,7 +386,7 @@ test("summary names the handler of a reached entrypoint wherever the reach is ci
 test("summary lists the cut places of an importers read and counts those of other families", () => {
   const importers = sourceFixture("importers", { fact: factOf(importersValue(), { cuts: [{ kind: "unresolved-link", at: ["src/dyn.ts"], reason: "callee-unknown", reach: { kind: "anything" } }] }) });
   const text = renderComposition(resultOf([importers, sourceFixture("impact-local")]), "summary");
-  assert.match(text, /unresolved-link cut ×1, 1 places: src\/dyn\.ts/);
+  assert.match(text, /unresolved-link callee-unknown cut ×1, 1 places: src\/dyn\.ts/);
   assert.match(text, /depth cut ×1, 2 places, limit 2(?!:)/);
 });
 
