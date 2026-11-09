@@ -9,7 +9,7 @@ import type { ModuleDependenciesReader } from "../../ports/module-dependencies.p
 import type { RevisionSources } from "../../ports/revision-sources.port.ts";
 import type { TypeBindings, TypeTarget } from "../../ports/type-bindings.port.ts";
 import { createDeclarationUses, unresolvedOncePerFile, type DeclarationUses, type UnresolvedIn } from "../navigation/declaration-uses.ts";
-import { createEdgeTargets, NOTHING_DECLARED, type EdgeTargets } from "../navigation/edge-targets.ts";
+import { createEdgeTargets, edgeKey, NOTHING_DECLARED, type EdgeTargets } from "../navigation/edge-targets.ts";
 import { createGraphNavigation } from "../navigation/graph-navigation.ts";
 import { callsThroughOrigins, createOriginCalls, type OriginCalls } from "../navigation/origin-calls.ts";
 import { typedCallsOf } from "../navigation/proven-calls.ts";
@@ -80,6 +80,15 @@ export interface ReadingNarrowing {
   inScope?: ((path: string) => boolean) | undefined;
 }
 
+/** A call record the source of its place proves writes no call, with the target the index held. */
+export interface ContradictedCall {
+  record: GraphUnresolvedReference;
+  target: GraphSymbol;
+}
+
+/** The call edges of `sources` the reconciliation contradicts, by the key of the edge the index holds (ADR-0041 U6). */
+export type ContradictedCalls = (sources: readonly GraphSymbol[]) => Promise<ReadonlyMap<string, ContradictedCall>>;
+
 /**
  * The assembled reading of one snapshot read (ADR-0045 decision 1): every stage a family consumes, built the first time it
  * is asked and shared by every consumer of the read.
@@ -105,6 +114,8 @@ export interface BaseReading {
   edgeTargets(typed?: ReadonlyMap<string, TypeTarget>): EdgeTargets | undefined;
   /** B9: each declaration's calls, the index's and the syntax's aligned; absent without syntax. */
   reconciledCalls(targets: EdgeTargets, uses: DeclarationUses): ReconciledCalls | undefined;
+  /** B9's contradiction policy: the call records whose source writes no call at their place; absent without syntax or origins. */
+  contradictedCalls(targets: EdgeTargets): ContradictedCalls | undefined;
   /** The uses of declarations over `unresolvedIn`. */
   declarationUses(): DeclarationUses;
   /** B10: the written calls the index does not record into reached declarations; absent without bindings or syntax. */
@@ -120,6 +131,10 @@ export interface BaseReadings {
 function once<T>(produce: () => T): () => T {
   let held: { value: T } | undefined;
   return () => (held ??= { value: produce() }).value;
+}
+
+function contradictionKey({ record, target }: ContradictedCall): string {
+  return edgeKey({ source: record.from, target: target.id, kind: record.kind, line: record.line, column: record.column, confidence: null, provenance: null, synthesizedBy: null, resolvedFrom: null });
 }
 
 export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
@@ -189,8 +204,12 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
         const memberProofs = memberProofContextOf(deps.relations, tree, declaredScope(request.scope));
         return prepared.retained(canonicalJson({ output: "origin-calls", index: source.digest, memberProofs }), produce, request.signal);
       });
-      const reconciledCalls = (targets: EdgeTargets, uses: DeclarationUses): ReconciledCalls | undefined =>
-        syntaxOf === undefined ? undefined : createReconciledCalls({ store, uses, syntaxOf, lineOf, importedDeclarations: targets.importedDeclarations });
+      let reconciled: { targets: EdgeTargets; calls: ReconciledCalls } | undefined;
+      const reconciledCalls = (targets: EdgeTargets, uses: DeclarationUses): ReconciledCalls | undefined => {
+        if (syntaxOf === undefined) return undefined;
+        if (reconciled?.targets !== targets) reconciled = { targets, calls: createReconciledCalls({ store, uses, syntaxOf, lineOf, importedDeclarations: targets.importedDeclarations }) };
+        return reconciled.calls;
+      };
 
       return {
         syntaxOf,
@@ -207,6 +226,19 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
           return createEdgeTargets({ origins: read, store, modules: deps.modules === undefined ? undefined : { reader: deps.modules, sources: tree.sources }, syntaxOf, proofs: relations, typed, inScope: narrowing.inScope });
         },
         reconciledCalls,
+        contradictedCalls(targets) {
+          const calls = reconciledCalls(targets, declarationUses());
+          if (calls === undefined) return undefined;
+          return async (sources) => {
+            const found = new Map<string, ContradictedCall>();
+            for (const source of sources) {
+              for (const entry of (await calls.callsOf(source)).contradicted) {
+                if (entry.target !== undefined) found.set(contradictionKey({ record: entry.record, target: entry.target }), { record: entry.record, target: entry.target });
+              }
+            }
+            return found;
+          };
+        },
         declarationUses,
         originCalls: (targets) => (targets.bindings === undefined ? undefined : createOriginCalls(targets.bindings, throughOrigins)),
         reverseCalls(targets) {

@@ -738,6 +738,16 @@ test("a call the index resolved into an edge of another kind is still a referenc
   assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/A.ts", "src/A.ts:7 this.router.navigate"], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/B.ts::navigate"] } }]);
 });
 
+test("a call record the source contradicts proves no caller: it is dropped and cut at its place", async () => {
+  const caller = "src/B.ts";
+  const nodes = [fakeNode("f", "function", "src/A.ts", 1, 3), fakeNode("g", "function", caller, 1, 3)];
+  const edges: FakeEdge[] = [{ from: "g", to: "f", kind: "calls", line: 2, column: 4 }];
+  const exports: Options["exports"] = { [HEAD]: { files: [{ path: "src/A.ts", blob: "1", written: true }, { path: caller, blob: "2", written: true }], skipped: [] } };
+  const answer = callersFact(await setup({ nodes, edges, exports, sources: [{ path: caller, content: "export function g(): void {\n  return;\n}\n" }], importOrigins: origins(() => undefined), syntax: true }).callers({ targets: [{ file: "src/A.ts", symbol: "f" }] }));
+  assert.deepEqual(answer.status === "partial" && answer.value.symbols.map(({ symbol }) => symbol), ["f"]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: [`${caller}:2 f`, "src/A.ts::f"], reason: "contradicted", reach: { kind: "call-at", place: `${caller}:2 f` } }]);
+});
+
 test("a reached symbol names locations of the selected evidence category", async () => {
   const nodes = [fakeNode("f", "function", "src/A.java", 1, 3), fakeNode("g", "function", "src/B.java", 10, 40)];
   const edges = [
