@@ -111,7 +111,7 @@ export async function answerOn(workspace: PreparedWorkspace, base: FactBase, hyp
   if (!selected.ok) return unknown("unresolved", selected.fault);
   const followed = hypothesis.target === "response" ? consequencesOf(session.value, selected.value, hypothesis) : await producersOf(session.value, selected.value, hypothesis);
   const body: AnswerBody = { ...stated, ...followed };
-  const remaining = [...workspace.cuts.flatMap((cut) => (cut.reason === "section-partial" ? workspace.sectionCuts[cut.at[0]!] ?? [cut] : [cut])), ...session.value.cuts];
+  const remaining = [...workspace.cuts.flatMap((cut) => (cut.reason === "section-partial" ? workspace.sectionCuts[cut.at[0]!] ?? [cut] : [cut])), ...session.value.cutsAfterWalk()];
   const sealed = withCuts(base, body, remaining, { kind: "operation", transport: "http", excludes: session.value.excludes });
   return { answer: sealed.status === "partial" ? { ...body, status: "partial", cuts: sealed.cuts } : { ...body, status: "complete" }, sites: selected.value.sites.toSorted(compareEvidence) };
 }

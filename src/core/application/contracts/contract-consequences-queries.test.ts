@@ -84,7 +84,7 @@ function setup(options: Setup = {}) {
   const session: ConsumerSession = {
     links: options.links ?? [link()],
     serving: options.serving ?? [{ repo: "api", handler: { path: "Owners.java", symbol: "get", line: 5 } }],
-    cuts: options.sessionCuts ?? [],
+    cutsAfterWalk: () => options.sessionCuts ?? [],
     unresolvedCalls: options.unresolvedCalls ?? [],
     ambiguousCalls: options.ambiguousCalls ?? [],
     callers: (declaration) => (asked.push(declaration.symbol), options.callers?.[declaration.symbol] ?? { kind: "found", callers: [] }),

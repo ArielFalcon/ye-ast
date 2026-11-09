@@ -339,7 +339,7 @@ function setup(files: Record<string, readonly SourceFile[]>, refs: Record<string
     resolve: async (_, revision) => (files[shaOf(revision)] === undefined ? { ok: false, fault: { kind: "unknown-revision", detail: revision } } : { ok: true, value: shaOf(revision) }),
     filesAt: async (request, sha) => (events.push(`read ${sha} at ${request.repo.revision}`), options.unreadable?.includes(sha) === true ? { ok: false, fault: { kind: "git-failed", detail: sha } } : { ok: true, value: { files: files[sha]!, cuts: cuts[sha] ?? [] } }),
   };
-  const session = { serving: options.served === true ? [{ repo: "api", handler: { path: "Pets.java", symbol: "list", line: 3 } }] : [], links: [], cuts: [], unresolvedCalls: [], ambiguousCalls: [] } as unknown as ConsumerSession;
+  const session = { serving: options.served === true ? [{ repo: "api", handler: { path: "Pets.java", symbol: "list", line: 3 } }] : [], links: [], cutsAfterWalk: () => [], unresolvedCalls: [], ambiguousCalls: [] } as unknown as ConsumerSession;
   const sources: ConsumerSources = {
     withWorkspace: async (request, run) => {
       events.push("open");
