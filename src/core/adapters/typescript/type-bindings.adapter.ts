@@ -66,8 +66,10 @@ class DerivationFault extends Error {
  * or from the one of its references, transitively, that does; sources whose owners state equal options share a program.
  * With a query's `facts`, the answer is kept by the snapshot's content, the declarations and their install records, and a kept
  * answer is used only while every declared path it asked about answers the same; requests for one key share one pass.
+ * A shared pass runs under `shutdown` alone (ADR-0045 decision 6): a requester's abort ends only its own wait, and every
+ * waiter receives the pass's outcome.
  */
-export function createTypeBindings({ trees, digest }: { trees: DeclaredTrees; digest: Digest }): TypeBindings {
+export function createTypeBindings({ trees, digest, shutdown }: { trees: DeclaredTrees; digest: Digest; shutdown?: AbortSignal | undefined }): TypeBindings {
   const running = new Map<string, Promise<Derivation>>();
   const tagOf = (entry: DeclaredEntry): string => {
     if (entry.kind === "file") return `file:${entry.path}:${digest.of(entry.content)}`;
@@ -135,13 +137,13 @@ export function createTypeBindings({ trees, digest }: { trees: DeclaredTrees; di
       }),
     };
     const key = facts.fingerprint(inputs);
+    signal?.throwIfAborted();
     let fresh = false;
     let pass = running.get(key);
-    const shared = pass !== undefined;
     if (pass === undefined) {
       pass = facts.ofInputs(SLOT, inputs, async () => {
         fresh = true;
-        return derive(sources, outputs, signal);
+        return derive(sources, outputs, shutdown);
       });
       running.set(key, pass);
       void pass.then(
@@ -149,13 +151,19 @@ export function createTypeBindings({ trees, digest }: { trees: DeclaredTrees; di
         () => running.delete(key),
       );
     }
-    const kept = await pass.catch((error: unknown) => {
-      if (!shared || signal?.aborted) throw error;
-      fresh = true;
-      return derive(sources, outputs, signal);
-    });
+    const kept = await waitFor(pass, signal);
     return fresh || unchanged(outputs, kept.asked) ? kept.answer : derive(sources, outputs, signal).answer;
   }
+}
+
+/** `pass`'s outcome, or `signal`'s reason as soon as it aborts; the abort never reaches `pass`. */
+function waitFor<T>(pass: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (signal === undefined) return pass;
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    pass.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
 }
 
 /** Throws the fault of every declared path among `reads` the file system would not give, by output, in path order. */

@@ -192,6 +192,61 @@ test("requests for one key share one derivation", async () => {
   assert.equal(facts.derivations, 1);
 });
 
+/** `facts` whose derivations start only once `open` is called, so a test can act while a pass is in flight. */
+function gated(facts: DerivedFacts & { derivations: number }): DerivedFacts & { derivations: number; open(): void } {
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => (open = resolve));
+  return Object.assign(facts, {
+    open,
+    ofInputs: ((ofInputs) => <T>(slot: string, inputs: object, derive: () => Promise<T>) => ofInputs(slot, inputs, async () => (await gate, derive())))(facts.ofInputs.bind(facts)),
+  });
+}
+
+test("the requester that started a shared pass aborting cuts neither the pass nor its other waiters, and the pass is kept once", async () => {
+  const facts = gated(memo());
+  const bindings = withFacts(createTypeBindings({ digest: DIGEST, trees: declared(KIT) }), facts);
+  const snapshot = sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") });
+  const first = new AbortController();
+  const started = bindings.of(snapshot, [OUTPUT], first.signal);
+  const waiting = bindings.of(snapshot, [OUTPUT], new AbortController().signal);
+  first.abort();
+  facts.open();
+  await assert.rejects(started, { name: "AbortError" });
+  assert.equal(bound(await waiting).bindings.filter(({ name }) => name === "make").length, 1);
+  await bindings.of(snapshot, [OUTPUT]);
+  assert.equal(facts.derivations, 1);
+});
+
+test("a waiter's abort ends its own wait while the pass it shares is still running", async () => {
+  const facts = gated(memo());
+  const bindings = withFacts(createTypeBindings({ digest: DIGEST, trees: declared(KIT) }), facts);
+  const snapshot = sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") });
+  const started = bindings.of(snapshot, [OUTPUT], new AbortController().signal);
+  const waiter = new AbortController();
+  const settled: string[] = [];
+  const waiting = bindings.of(snapshot, [OUTPUT], waiter.signal).finally(() => settled.push("waiter"));
+  void started.finally(() => settled.push("pass"));
+  waiter.abort();
+  facts.open();
+  await assert.rejects(waiting, { name: "AbortError" });
+  assert.equal(bound(await started).bindings.filter(({ name }) => name === "make").length, 1);
+  assert.deepEqual(settled, ["waiter", "pass"]);
+  assert.equal(facts.derivations, 1);
+});
+
+test("shutdown aborts a shared pass: every waiter rejects and nothing is kept", async () => {
+  const facts = gated(memo());
+  const shutdown = new AbortController();
+  const bindings = withFacts(createTypeBindings({ digest: DIGEST, trees: declared(KIT), shutdown: shutdown.signal }), facts);
+  const snapshot = sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") });
+  const waiting = [bindings.of(snapshot, [OUTPUT], new AbortController().signal), bindings.of(snapshot, [OUTPUT], new AbortController().signal)];
+  shutdown.abort();
+  facts.open();
+  for (const each of waiting) await assert.rejects(each, { name: "AbortError" });
+  bound(await withFacts(createTypeBindings({ digest: DIGEST, trees: declared(KIT) }), facts).of(snapshot, [OUTPUT]));
+  assert.equal(facts.derivations, 2);
+});
+
 test("a derivation whose deadline passed rejects instead of answering what it had bound", async () => {
   const signal = AbortSignal.abort();
   await assert.rejects(withFacts(createTypeBindings({ digest: DIGEST, trees: declared(KIT) }), memo()).of(sources({ ...USE_KIT, "package-lock.json": lock("2.0.0") }), [OUTPUT], signal), { name: "AbortError" });
