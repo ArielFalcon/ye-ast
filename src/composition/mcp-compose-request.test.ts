@@ -303,15 +303,22 @@ test("cancellation during a blocked query aborts the batch, skips later queries 
 });
 
 test("the batch deadline aborts a blocked query, and its timer is always cleared", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const setTimer = t.mock.method(globalThis, "setTimeout");
   const clearTimer = t.mock.method(globalThis, "clearTimeout");
+  const deadlineMs = 60_000;
   let seen: AbortSignal | undefined;
-  const { calls, ctx } = spies({ outline: (signal) => { seen = signal; return new Promise(() => undefined); } });
-  const result = fault(await runComposition({ queries: [Q.outline, Q.workspace], deadlineMs: 10 }, ctx()));
+  let reached!: () => void;
+  const blocked = new Promise<void>((resolve) => (reached = resolve));
+  const { calls, ctx } = spies({ outline: (signal) => { seen = signal; reached(); return new Promise(() => undefined); } });
+  const running = runComposition({ queries: [Q.outline, Q.workspace], deadlineMs }, ctx());
+  await blocked;
+  t.mock.timers.tick(deadlineMs);
+  const result = fault(await running);
   assert.equal(result.kind, "deadline");
   assert.deepEqual(calls, ["outline"]);
   assert.equal(seen?.aborted, true, "the port's signal is linked to the deadline");
-  const handles = setTimer.mock.calls.filter((call) => call.arguments[1] === 10).map((call) => call.result);
+  const handles = setTimer.mock.calls.filter((call) => call.arguments[1] === deadlineMs).map((call) => call.result);
   assert.equal(handles.length, 1);
   assert.ok(clearTimer.mock.calls.some((call) => call.arguments[0] === handles[0]));
 
