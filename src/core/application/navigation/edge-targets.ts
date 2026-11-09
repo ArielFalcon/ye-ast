@@ -1,5 +1,6 @@
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
-import { CALL_EDGE_KINDS, FIELD_KINDS, EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, holdsValue, type EdgeVerdict, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
+import { CALL_EDGE_KINDS, FIELD_KINDS, EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, holdsValue, type EdgeVerdict, type ReceiverSettlement, type RootOrigin } from "../../domain/impact/edge-policy.ts";
+import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import { hasTyping } from "../../domain/languages/profiles.ts";
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
@@ -21,8 +22,10 @@ export { SYNTAX_ONLY, type ReceiverProofs } from "./call-binder.ts";
 /**
  * What the edges the graph resolved really reach, read from the root of the name each spells at its position through
  * the source file's own bindings (`ImportOrigins.rootOrigins`) and, for a root an import binds, the declaration the
- * module statements and the graph's `imports` edges join it to (`importBindings`). An edge whose root proof reads past
- * its root (`RootOrigin.pastRoot`) is kept: the root says where the chain starts, not what the call runs. A kept edge of a
+ * module statements and the graph's `imports` edges join it to (`importBindings`). A root spelled alone that a declaration
+ * of its file's own scope binds at the edge's place (a local, a destructured, caught or iterated binding, a local class, a
+ * type parameter) reaches that declaration, never the one an outer binding of the name names (`lexicalVerdictsOf`). An
+ * edge whose root proof reads past its root (`RootOrigin.pastRoot`) is kept: the root says where the chain starts, not what the call runs. A kept edge of a
  * TypeScript source into a member of a class or interface whose receiver is a value names that receiver (`EdgeTarget.receiver`): the
  * index matched such a call by name, and the language types structurally, so another object may stand there (ADR-0029
  * decision 11). The one owner of that decision for every family that reads graph edges as dependences.
@@ -104,7 +107,13 @@ export type EdgeTarget =
   | Exclude<EdgeVerdict<GraphSymbol>, { kind: "keep" | "drop" | "redirect" }>
   | { kind: "keep"; receiver?: string; derivation?: ReceiverSettlement }
   | { kind: "redirect"; to: GraphSymbol; derivation?: "typed"; receiver?: string }
-  | { kind: "drop"; root: ImportOrigin };
+  | { kind: "drop"; root: ImportOrigin | LexicalRoot };
+
+/** A root spelled alone that a declaration of its own file's scope binds, and the graph places no declaration of. */
+export interface LexicalRoot {
+  kind: "lexical";
+  name: string;
+}
 
 const KEEP: EdgeTarget = { kind: "keep" };
 const TYPED: EdgeTarget = { kind: "keep", derivation: "typed" };
@@ -157,10 +166,16 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
     }
     if (fresh.length > 0) {
       const roots = await origins.rootOrigins(fresh.map(({ edge, source, target }) => ({ file: source.file, line: edge.line!, column: edge.column! + 1, kind: edge.kind, name: target.name })), signal);
+      const lexical = await lexicalVerdictsOf(fresh, roots, signal);
       const kept: FollowedEdge[] = [];
       for (const [index, followed] of fresh.entries()) {
         const { edge, source, target } = followed;
         const root = roots[index];
+        const shadowed = lexical.get(index);
+        if (shadowed !== undefined) {
+          verdicts.set(edgeKey(edge), shadowed);
+          continue;
+        }
         const proven = root === undefined || root.pastRoot === true || root.status !== "complete" || root.value.kind !== "repository" || root.bare !== true ? undefined : root.value.declared !== undefined ? declarationAt(store, root.value.file, root.value.declared) : (await bindingsOf(source.file)).get(target.name);
         const verdict = root === undefined || root.pastRoot === true ? undefined : edgeVerdict<GraphNodeId>(root, proven?.id, target);
         if (verdict?.kind === "redirect") verdicts.set(edgeKey(edge), { kind: "redirect", to: proven! });
@@ -179,6 +194,27 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
       }
     }
     return edges.map(({ edge }) => verdicts.get(edgeKey(edge)) ?? KEEP);
+  }
+
+  /**
+   * Per edge whose root is spelled alone and no origin proves, what the declaration of the file's own scope that binds the
+   * root at the edge's place reaches: the edge stays when its target is that declaration, moves to the one the graph
+   * places there otherwise, and reaches nothing the graph holds when the graph places none or several. An import of the
+   * name, or any binding but a declaration, leaves the edge to the root's verdict.
+   */
+  async function lexicalVerdictsOf(edges: readonly FollowedEdge[], roots: readonly (RootOrigin | undefined)[], signal?: AbortSignal): Promise<ReadonlyMap<number, EdgeTarget>> {
+    const asked = edges.flatMap((followed, index) => (roots[index]?.bare === true && roots[index].status !== "complete" ? [{ ...followed, index }] : []));
+    if (asked.length === 0) return new Map();
+    const bindings = await origins.rootBindings(asked.map(({ edge, source, target }): UseSite => ({ file: source.file, line: edge.line!, column: edge.column! + 1, spelled: target.name, owner: { name: source.name, line: source.startLine, endLine: source.endLine } })), signal);
+    const found = new Map<number, EdgeTarget>();
+    for (const [k, { source, target, index }] of asked.entries()) {
+      const binding = bindings[k];
+      if (binding?.kind !== "local" && binding?.kind !== "declared") continue;
+      const declared = navigation.symbolsInFile(source.file).filter((symbol) => symbol.name === binding.root && !NOT_DECLARED_KINDS.includes(symbol.kind) && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine));
+      if (declared.some((symbol) => symbol.id === target.id)) continue;
+      found.set(index, declared.length === 1 ? { kind: "redirect", to: declared[0]! } : { kind: "drop", root: { kind: "lexical", name: binding.root } });
+    }
+    return found;
   }
 
   /**

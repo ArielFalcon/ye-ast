@@ -534,7 +534,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         }
         if (receiver !== undefined && receiver.kind !== "unknown" && proven === undefined) cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique([candidateOf(target), ...declarationsNamed(target.name, node.file).map(candidateOf)])] });
         else children.push(value ? childAt(reached, edge.line, edge.column, target.name, "reference", true) : childAt(reached, edge.line, edge.column, target.name, "call"));
-      } else if (verdict.root.kind === "local-parameter") {
+      } else if (verdict.root.kind === "local-parameter" || verdict.root.kind === "lexical") {
         cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name, node.file).map(candidateOf))] });
       } else {
         const dropped = verdict.root;

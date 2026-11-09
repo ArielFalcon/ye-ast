@@ -55,7 +55,8 @@ export interface ReceiverBinding {
  * the line of its name. `annotated`: the type the declaration states, at the place it is written (through parentheses,
  * `readonly` and a union with `null` or `undefined`): `type` is the first name of a type reference (`Map` for
  * `Map<K, V>`, `ng` for `ng.Router`), a primitive keyword (`string`), or `Array` for an array type; where the type is
- * declared decides what the call runs (ADR-0029 decision 9).
+ * declared decides what the call runs (ADR-0029 decision 9). `scoped`: a type parameter or a type an inner scope declares
+ * binds `type` where it is written, so neither an import nor a top-level declaration of the file names it.
  */
 export type ReceiverValue =
   | { kind: "literal"; type: "RegExp" | "Array" | "String" }
@@ -65,7 +66,7 @@ export type ReceiverValue =
   | { kind: "computed" }
   | { kind: "constructed"; name: string; line: number; column: number }
   | { kind: "declared"; name: string; line: number }
-  | { kind: "annotated"; type: string; line: number; column: number };
+  | { kind: "annotated"; type: string; line: number; column: number; scoped?: true };
 
 /**
  * A member call `r.m(...)` or `this.r.m(...)` whose receiver `r` the source binds to a function value: `this.r` to a

@@ -52,7 +52,7 @@ test("a type a single import names under a platform package is external, named a
 
 test("a local the owner's syntax declares is local, and a field is a member of this", async () => {
   assert.deepEqual(await bindings([at(12, "local"), at(10, "repository")]), [
-    { kind: "local", root: "local" },
+    { kind: "local", root: "local", lines: [9] },
     { kind: "this", member: "repository" },
   ]);
 });
@@ -87,7 +87,7 @@ test("a class a method declares before the use shadows a member type its class i
   const derived = { path: "src/main/java/app/shadow/Derived.java", content: "package app.shadow;\npublic class Derived extends Base {\n  Object load() {\n    class User {}\n    return new User();\n  }\n}\n" };
   const site = { file: derived.path, line: 5, column: 12, spelled: "User", owner: { name: "load", line: 3, endLine: 6 } };
 
-  assert.deepEqual(await createJavaRootBindings(createJavaParser(), [base, derived])([site]), [{ kind: "local", root: "User" }]);
+  assert.deepEqual(await createJavaRootBindings(createJavaParser(), [base, derived])([site]), [{ kind: "local", root: "User", lines: [4] }]);
 });
 
 test("super binds to the superclass of the class around it, and to nothing inside an anonymous class's body", async () => {

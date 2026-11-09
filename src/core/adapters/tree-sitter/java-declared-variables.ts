@@ -61,3 +61,13 @@ function declaredVariables(scope: Node): DeclaredVariables {
   }
   return { fields, locals, localPlaces };
 }
+
+/** The type parameter of the innermost declaration around `name` that declares one spelled `spelling`. */
+export function typeVariableAround(name: Node, spelling = name.text): Node | undefined {
+  for (let scope = name.parent; scope !== null; scope = scope.parent) {
+    const parameters = scope.childForFieldName("type_parameters");
+    const found = parameters?.namedChildren.find((parameter) => parameter?.namedChildren[0]?.text === spelling);
+    if (found !== undefined && found !== null) return found;
+  }
+  return undefined;
+}

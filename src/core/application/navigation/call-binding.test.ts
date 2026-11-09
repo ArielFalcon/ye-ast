@@ -66,7 +66,7 @@ test("a bare call binds the import of its name only where its occurrence reads t
   const nodes = [fakeNode("run", "function", USE, 5, 9), fakeNode("load", "function", API, 1, 3)];
   const call = [{ name: "load", line: 6, kind: "calls" }];
   const shadowing: readonly RootBinding[] = [
-    { kind: "local", root: "load" },
+    { kind: "local", root: "load", lines: [5] },
     { kind: "declared", root: "load", lines: [2], captured: true },
     { kind: "unknown" },
   ];

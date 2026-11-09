@@ -4,7 +4,8 @@ import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-ori
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, thisType, withJavaSources } from "./java-project.ts";
-import { createJavaProject, qualifiedTypeName, typeVariableAround, type JavaFile, type JavaProject } from "./java-symbols.ts";
+import { createJavaProject, qualifiedTypeName, type JavaFile, type JavaProject } from "./java-symbols.ts";
+import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 
 const UNKNOWN: RootBinding = { kind: "unknown" };
 /** Links of a chain whose first name is the root: a member access, a call on a receiver, a qualified name. */
@@ -60,9 +61,10 @@ function bindingAt(site: UseSite, file: JavaFile, project: JavaProject): RootBin
 /** `local` when the declaration lies inside the syntax of the declaration whose body writes the use, otherwise declared by the line its name is written on. */
 function declaredBinding(root: Node, declaration: Node, owner: UseSite["owner"]): RootBinding {
   const around = ownerAround(root, owner);
-  if (around !== undefined && declaration.id !== around.id && around.startIndex <= declaration.startIndex && declaration.endIndex <= around.endIndex) return { kind: "local", root: root.text };
+  const lines = [(nameOf(declaration) ?? declaration).startPosition.row + 1];
+  if (around !== undefined && declaration.id !== around.id && around.startIndex <= declaration.startIndex && declaration.endIndex <= around.endIndex) return { kind: "local", root: root.text, lines };
   /** `localBinding` stops at the type body, so a local it finds outside the owner is never one a function around the owner captures. */
-  return { kind: "declared", root: root.text, lines: [(nameOf(declaration) ?? declaration).startPosition.row + 1], captured: false };
+  return { kind: "declared", root: root.text, lines, captured: false };
 }
 
 /** The innermost declaration around `node` that is `owner`: its name is the owner's, written on a line the owner spans. */

@@ -2,6 +2,7 @@ import { LIBRARY_ROOT } from "../../domain/topology/library-source.ts";
 import type { Node } from "web-tree-sitter";
 import { charLiteralValue, integerLiteralValue, stringLiteralValue, type LiteralValue } from "./java-literals.ts";
 import { localBinding } from "../tree-sitter/java-function-value-calls.ts";
+import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
 
 export function isLibraryPath(path: string): boolean {
@@ -966,12 +967,4 @@ function dimensionsOf(node: Node): number {
   return (dimensions?.text.match(/\[/g) ?? []).length;
 }
 
-export function typeVariableAround(name: Node, spelling = name.text): Node | undefined {
-  for (let scope = name.parent; scope !== null; scope = scope.parent) {
-    const parameters = scope.childForFieldName("type_parameters");
-    const found = parameters?.namedChildren.find((parameter) => parameter?.namedChildren[0]?.text === spelling);
-    if (found !== undefined && found !== null) return found;
-  }
-  return undefined;
-}
 

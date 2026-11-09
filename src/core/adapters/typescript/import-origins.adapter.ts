@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { matchesReferenceKind, syntaxName } from "./reference-occurrence.ts";
-import { declarationCounts, declaredNames, scriptGlobalNames } from "./syntax-names.ts";
+import { declarationCounts, declaredNames, scriptGlobalNames, typeDeclarationName, typeScopeOf } from "./syntax-names.ts";
 import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
 import { bindFile, type BoundFile, type LexicalBinding } from "./lexical-bindings.ts";
@@ -361,7 +361,7 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
     const parsed = indexOf(file);
     if (parsed === undefined) return undefined;
     const declarations = parsed.index.source.statements.flatMap((statement): ts.Node[] =>
-      ts.isVariableStatement(statement) ? statement.declarationList.declarations.filter((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === name) : declaredName(statement) === name ? [statement] : []);
+      ts.isVariableStatement(statement) ? statement.declarationList.declarations.filter((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === name) : typeDeclarationName(statement) === name ? [statement] : []);
     return declarationsOf(file, declarations, boundOf, depth);
   }
 
@@ -585,15 +585,15 @@ function isImportDeclaration(declaration: ts.Declaration): boolean {
 }
 
 /**
- * A root `declarations` bind: `local` when every one lies inside the syntax of the declaration whose body writes the use,
- * otherwise declared, by the 1-based lines their names are written on.
+ * A root `declarations` bind, by the 1-based lines their names are written on: `local` when every one lies inside the
+ * syntax of the declaration whose body writes the use, otherwise declared.
  */
 function declaredBinding(source: ts.SourceFile, root: ts.Identifier, declarations: readonly ts.Node[], owner: UseSite["owner"]): RootBinding {
   const around = ownerAround(source, root, owner);
-  if (around !== undefined && declarations.every((declaration) => isInside(declaration, around))) return { kind: "local", root: root.text };
-  const lines = declarations.map((declaration) => lineOf(source, nameOf(declaration) ?? declaration));
+  const lines = [...new Set(declarations.map((declaration) => lineOf(source, nameOf(declaration) ?? declaration)))].sort((a, b) => a - b);
+  if (around !== undefined && declarations.every((declaration) => isInside(declaration, around))) return { kind: "local", root: root.text, lines };
   const captured = declarations.length > 0 && declarations.every((declaration) => isValueBinding(declaration) && inFunction(declaration));
-  return { kind: "declared", root: root.text, lines: [...new Set(lines)].sort((a, b) => a - b), captured };
+  return { kind: "declared", root: root.text, lines, captured };
 }
 
 /** A parameter, a variable or a catch binding, destructured or not: a value, never a function, class or type declaration. */
@@ -630,36 +630,6 @@ function isInside(node: ts.Node, around: ts.Node): boolean {
 
 function lineOf(source: ts.SourceFile, node: ts.Node): number {
   return source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
-}
-
-/**
- * The declarations of the innermost type scope around a type name that declares it: a type parameter, an `infer` of the
- * conditional whose true branch holds the name, a mapped type's key, or a declaration among the statements of an
- * enclosing block, namespace or the file. None when no scope declares it, so the file's imports and the globals answer.
- */
-function typeScopeOf(name: ts.Identifier): ts.Node[] | undefined {
-  let inner: ts.Node = name;
-  for (let scope = name.parent; scope !== undefined; inner = scope, scope = scope.parent) {
-    const declared: ts.Node[] = [];
-    if ("typeParameters" in scope) for (const parameter of (scope.typeParameters as ts.NodeArray<ts.TypeParameterDeclaration> | undefined) ?? []) if (parameter.name.text === name.text) declared.push(parameter);
-    if (ts.isMappedTypeNode(scope) && scope.typeParameter.name.text === name.text) declared.push(scope.typeParameter);
-    if (ts.isConditionalTypeNode(scope) && inner === scope.trueType) declared.push(...inferredIn(scope.extendsType, name.text));
-    if (ts.isBlock(scope) || ts.isModuleBlock(scope) || ts.isSourceFile(scope)) declared.push(...scope.statements.filter((statement) => declaredName(statement) === name.text));
-    if (declared.length > 0) return declared;
-  }
-  return undefined;
-}
-
-function inferredIn(node: ts.Node, name: string): ts.TypeParameterDeclaration[] {
-  if (ts.isInferTypeNode(node)) return node.typeParameter.name.text === name ? [node.typeParameter] : [];
-  return node.getChildren().flatMap((child) => inferredIn(child, name));
-}
-
-function declaredName(statement: ts.Statement): string | undefined {
-  if (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement) || ts.isEnumDeclaration(statement)) return statement.name.text;
-  if ((ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) && statement.name !== undefined) return statement.name.text;
-  if (ts.isModuleDeclaration(statement) && ts.isIdentifier(statement.name)) return statement.name.text;
-  return undefined;
 }
 
 type SiteSyntax = "valid" | "local" | "this-member";

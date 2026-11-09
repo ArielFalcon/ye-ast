@@ -1,6 +1,6 @@
 import type { Node } from "web-tree-sitter";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
-import { declaredVariablesOnce, declaresLocal } from "./java-declared-variables.ts";
+import { declaredVariablesOnce, declaresLocal, typeVariableAround } from "./java-declared-variables.ts";
 import { enclosingBody, fieldsOf, localBinding, thisField } from "./java-function-value-calls.ts";
 
 /** Types a declaration may state that name a class or an interface. */
@@ -74,7 +74,8 @@ export function javaReceiverBindings(root: Node, { includeUnproven = false, decl
     }
     const head = type === undefined ? undefined : headOf(type);
     if (receiver === undefined || member === undefined || head === undefined) return [];
-    return [{ line: invocation.startPosition.row + 1, column: invocation.startPosition.column + 1, receiver, member, ...(unproven ? { unproven: true } : {}), holds: { kind: "annotated", type: head.text, line: head.startPosition.row + 1, column: head.startPosition.column + 1 } }];
+    const scoped = typeVariableAround(head) !== undefined;
+    return [{ line: invocation.startPosition.row + 1, column: invocation.startPosition.column + 1, receiver, member, ...(unproven ? { unproven: true } : {}), holds: { kind: "annotated", type: head.text, line: head.startPosition.row + 1, column: head.startPosition.column + 1, ...(scoped ? { scoped: true } : {}) } }];
   });
 }
 

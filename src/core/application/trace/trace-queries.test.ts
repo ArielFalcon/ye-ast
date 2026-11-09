@@ -1030,7 +1030,7 @@ const resolvedOnParameter = (holds?: ReceiverBinding["holds"]): Options => ({
   nodes: [SVC, RUN, REPO, REPO_SAVE, fakeNode("Twin", "class", A, 22, 28), fakeNode("Twin.save", "method", A, 24, 26, "save")],
   edges: [...CONTAINS, { from: "Repo", to: "Repo.save", kind: "contains" }, { from: "Twin", to: "Twin.save", kind: "contains" }, call("run", "Repo.save", 9, 4)],
   unresolved: [OUTWARD_CALL("Repo.save", B, 4), OUTWARD_CALL("Twin.save", A, 25)],
-  receiverRoots: { save: { kind: "local", root: "store" } },
+  receiverRoots: { save: { kind: "local", root: "store", lines: [5] } },
   receiverBindings: holds === undefined ? {} : { [A]: [{ line: 9, column: 5, receiver: "store", member: "save", holds }] },
   sources: [{ path: A, content: "" }],
 });
@@ -1064,7 +1064,7 @@ test("a call the index resolved on a variable into an interface keeps its dispat
   const nodes = [SVC, RUN, fakeNode("Port", "interface", B, 1, 3), fakeNode("Port.send", "method", B, 2, 2, "send")];
   const edges: FakeEdge[] = [...CONTAINS, { from: "Port", to: "Port.send", kind: "contains" }, call("run", "Port.send", 8, 4)];
 
-  const fact = await factOf({ nodes, edges, receiverRoots: { send: { kind: "local", root: "port" } } });
+  const fact = await factOf({ nodes, edges, receiverRoots: { send: { kind: "local", root: "port", lines: [5] } } });
 
   assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/b.ts:2 send"]]]);
 });
@@ -1185,7 +1185,7 @@ test("a call the index resolved on a call result is a step only when the call's 
 });
 
 test("a call result proves nothing when its call is itself unproven, or when two calls under the member's name start at its place", async () => {
-  const unprovenHead = await factOf({ ...resultCall(MADE, "Repo"), receiverRoots: { save: { kind: "this", member: "make" }, make: { kind: "local", root: "factory" } } });
+  const unprovenHead = await factOf({ ...resultCall(MADE, "Repo"), receiverRoots: { save: { kind: "this", member: "make" }, make: { kind: "local", root: "factory", lines: [5] } } });
   const twice = await factOf({ ...resultCall(MADE, "Repo"), receiverBindings: { [A]: [{ line: 9, column: 5, receiver: "", member: "save", holds: MADE }, { line: 9, column: 5, receiver: "", member: "save", holds: MADE }] } });
 
   for (const fact of [unprovenHead, twice]) assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol).filter((symbol) => symbol === "save"), []);

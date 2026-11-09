@@ -55,4 +55,33 @@ export function scriptGlobalNames(tree: ts.SourceFile): ReadonlySet<string> {
   return names;
 }
 
+/**
+ * The declarations of the innermost type scope around a type name that declares it: a type parameter, an `infer` of the
+ * conditional whose true branch holds the name, a mapped type's key, or a declaration among the statements of an
+ * enclosing block, namespace or the file. None when no scope declares it, so the file's imports and the globals answer.
+ */
+export function typeScopeOf(name: ts.Identifier): ts.Node[] | undefined {
+  let inner: ts.Node = name;
+  for (let scope = name.parent; scope !== undefined; inner = scope, scope = scope.parent) {
+    const declared: ts.Node[] = [];
+    if ("typeParameters" in scope) for (const parameter of (scope.typeParameters as ts.NodeArray<ts.TypeParameterDeclaration> | undefined) ?? []) if (parameter.name.text === name.text) declared.push(parameter);
+    if (ts.isMappedTypeNode(scope) && scope.typeParameter.name.text === name.text) declared.push(scope.typeParameter);
+    if (ts.isConditionalTypeNode(scope) && inner === scope.trueType) declared.push(...inferredIn(scope.extendsType, name.text));
+    if (ts.isBlock(scope) || ts.isModuleBlock(scope) || ts.isSourceFile(scope)) declared.push(...scope.statements.filter((statement) => typeDeclarationName(statement) === name.text));
+    if (declared.length > 0) return declared;
+  }
+  return undefined;
+}
 
+function inferredIn(node: ts.Node, name: string): ts.TypeParameterDeclaration[] {
+  if (ts.isInferTypeNode(node)) return node.typeParameter.name.text === name ? [node.typeParameter] : [];
+  return node.getChildren().flatMap((child) => inferredIn(child, name));
+}
+
+/** The name a statement declares a type, function or namespace under. */
+export function typeDeclarationName(statement: ts.Statement): string | undefined {
+  if (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement) || ts.isEnumDeclaration(statement)) return statement.name.text;
+  if ((ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) && statement.name !== undefined) return statement.name.text;
+  if (ts.isModuleDeclaration(statement) && ts.isIdentifier(statement.name)) return statement.name.text;
+  return undefined;
+}

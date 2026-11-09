@@ -115,7 +115,7 @@ export function createCallBinder({ store, navigation, syntaxIn, proofs, imported
 
   async function typeOf(file: string, holds: ReceiverBinding["holds"]): Promise<GraphSymbol | undefined> {
     if (holds.kind === "declared") return navigation.declarationAt({ path: file, line: holds.line, symbol: holds.name }, TYPE_KINDS);
-    if (holds.kind === "annotated") return typeNamed(file, holds.type);
+    if (holds.kind === "annotated") return holds.scoped === true ? undefined : typeNamed(file, holds.type);
     if (holds.kind === "constructed") return typeNamed(file, holds.name);
     return undefined;
   }

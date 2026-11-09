@@ -3,7 +3,8 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredType, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, withJavaSources } from "./java-project.ts";
-import { createJavaProject, isTypeDeclaration, qualifiedTypeName, typeVariableAround, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, isTypeDeclaration, qualifiedTypeName, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 
 const UNKNOWN: DeclaredType = { kind: "unknown" };
 /** Values whose class is one no declaration names: an implementation of an interface the sources do not state. */

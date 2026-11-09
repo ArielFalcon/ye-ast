@@ -168,6 +168,13 @@ test("a member call on a parameter, a local, a typed lambda parameter or a priva
   ]);
 });
 
+test("a receiver whose stated type a type variable of its class or of its method binds is held by a scoped annotation, which no class of the name types", async () => {
+  const lines = ["package app;", "class Gen<Repo extends Other> {", "  void put(Repo r) { r.save(); }", "  <T extends Other> void each(T t) { t.save(); }", "}"];
+  const scoped = (call: string, receiver: string, type: string, declared: string) => ({ ...placeOf(lines, call), receiver, member: "save", holds: { kind: "annotated", type, ...placeOf(lines, declared), scoped: true } });
+
+  assert.deepEqual((await read(lines)).receiverBindings, [scoped("r.save", "r", "Repo", "Repo r"), scoped("t.save", "t", "T", "T t")]);
+});
+
 test("a call on a var, varargs, untyped lambda, pattern or resource variable, or on a field that is not private, is declared twice, is named through another receiver or reflection, or is shadowed, is held by no annotation", async () => {
   const header = ["package app;", "import java.util.Map;", "import org.springframework.web.client.RestTemplate;"];
   for (const body of [

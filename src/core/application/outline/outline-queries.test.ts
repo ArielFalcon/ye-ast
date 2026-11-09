@@ -332,9 +332,9 @@ const USES_INDEX: Options = {
   roots: { "17:11": { status: "complete", value: { kind: "external", module: "typescript" }, evidence: [] } },
   bindings: {
     "12:5 z": { kind: "import", root: "z", member: "object", origin: { kind: "external", module: "zod" } },
-    "13:5 seen": { kind: "local", root: "seen" },
+    "13:5 seen": { kind: "local", root: "seen", lines: [11] },
     "14:5 top": { kind: "declared", root: "top", lines: [2], captured: false },
-    "14:21 inner": { kind: "local", root: "inner" },
+    "14:21 inner": { kind: "local", root: "inner", lines: [12] },
     "15:11 Map": { kind: "ambient", root: "Map" },
     "19:3 helperAlias": { kind: "import", root: "helperAlias", origin: { kind: "repository", file: LIB } },
     "32:5 this": { kind: "this", member: "load" },

@@ -180,7 +180,8 @@ export type RootBinding =
   | { kind: "import"; root: string; member?: string; origin: Extract<ImportOrigin, { kind: "repository" | "external" }> }
   /** `captured`: every declaration is a value (a parameter, a variable or a catch binding) of a function around the use. */
   | { kind: "declared"; root: string; lines: readonly number[]; captured: boolean }
-  | { kind: "local"; root: string }
+  /** The body's own binding: every declaration lies inside the declaration whose body writes the use; `lines` as `declared`. */
+  | { kind: "local"; root: string; lines: readonly number[] }
   | { kind: "located"; root: string; file: string; path: string }
   | { kind: "ambient"; root: string }
   /** The sources name more than one declaration the root could be, or only a wildcard import could supply it. */

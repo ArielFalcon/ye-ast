@@ -2,6 +2,7 @@ import ts from "typescript";
 import type { FunctionValueCall, ReceiverBinding, ReceiverValue } from "../../ports/declared-member-names.port.ts";
 import { bindFile, type BoundFile, isDirectEval, type LexicalBinding } from "./lexical-bindings.ts";
 import { hasModifier, isStatic, lineOf, thisClass, unwrapped } from "./syntax.ts";
+import { typeScopeOf } from "./syntax-names.ts";
 
 const LOGICAL_OPERATORS: readonly ts.SyntaxKind[] = [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken];
 /** Operators that store their right operand, or may: `a ??= f` leaves `a` holding `f` when it held nothing. */
@@ -407,7 +408,8 @@ export function annotated(type: ts.TypeNode | undefined, tree: ts.SourceFile): E
   if (!ts.isTypeReferenceNode(inner)) return undefined;
   let head: ts.EntityName = inner.typeName;
   while (ts.isQualifiedName(head)) head = head.left;
-  return placed(head, head.text);
+  const scoped = typeScopeOf(head)?.some((declaration) => !ts.isSourceFile(declaration.parent)) === true;
+  return { ...placed(head, head.text), ...(scoped ? { scoped: true as const } : {}) };
 }
 
 /**
