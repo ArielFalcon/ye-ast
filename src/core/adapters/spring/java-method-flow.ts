@@ -9,15 +9,15 @@ import type { CallSiteDiagnostic, StatedRequest } from "../../domain/topology/ca
 import type { Finding } from "../../domain/shared/fact.ts";
 import { reachedDiagnostic } from "../../domain/topology/evaluated.ts";
 import { spanOf, unknown } from "./findings.ts";
-import { stagedSelections } from "./java-call-site-owner.ts";
+import { stagedSelections, type CallSiteProof, NO_PROOF } from "./java-call-site-owner.ts";
 
 export interface MethodSelection {
   method: MethodDecl;
   receiver: TypeDecl;
 }
 
-export function methodsOf(call: Invocation, project: JavaProject, text: FieldLookup, concrete = call.type): MethodSelection[] {
-  return stagedSelections(call, project, text, concrete).map(({ method, receiver }) => ({ method, receiver }));
+export function methodsOf(call: Invocation, project: JavaProject, text: FieldLookup, concrete = call.type, proof: CallSiteProof = NO_PROOF): MethodSelection[] {
+  return stagedSelections(call, project, text, concrete, proof).map(({ method, receiver }) => ({ method, receiver }));
 }
 
 /** The one value every alternative agrees on; undefined when alternatives disagree. */
@@ -73,13 +73,13 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
   private readonly called = new Set<number>();
   private readonly roots = new Set<number>();
 
-  constructor(private readonly project: JavaProject, private readonly text: FieldLookup, leafOf: (call: Invocation) => T | undefined) {
+  constructor(private readonly project: JavaProject, private readonly text: FieldLookup, leafOf: (call: Invocation) => T | undefined, private readonly proof: CallSiteProof = NO_PROOF) {
     this.invocations = project.types.flatMap(invocationsOf);
     for (const call of this.invocations) {
       const leaf = leafOf(call);
       if (leaf !== undefined && call.member !== undefined) this.leaves.set(call.member.id, [...(this.leaves.get(call.member.id) ?? []), leaf]);
       if (call.member === undefined) continue;
-      const selections = methodsOf(call, project, text);
+      const selections = methodsOf(call, project, text, call.type, this.proof);
       this.edges.set(call.member.id, [...(this.edges.get(call.member.id) ?? []), { call, selections }]);
     }
     for (const [method, leaves] of this.leaves) this.reachable.set(method, new Set(leaves));
@@ -140,7 +140,7 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
           ? present.map(({ leaf, scope, bodies }) => ({ leaf, bodies, scope: { ...scope, undecided: scope.undecided ?? "dispatch-disagreement" } })) : present;
       });
     };
-    const selections = methodsOf(call, this.project, this.text, scope.receiver ?? scope.type);
+    const selections = methodsOf(call, this.project, this.text, scope.receiver ?? scope.type, this.proof);
     if (!selections.some(({ method }) => (this.reachable.get(method.node.id)?.size ?? 0) > 0)) return undefined;
     const roots: Group[][] = [];
     const pending: (() => void)[] = [];
@@ -162,7 +162,7 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
         });
         const next = new Set(active).add(method);
         for (const { call } of this.edges.get(method) ?? []) {
-          const targets = methodsOf(call, this.project, this.text, bound.receiver ?? bound.type);
+          const targets = methodsOf(call, this.project, this.text, bound.receiver ?? bound.type, this.proof);
           if (!targets.some((target) => (this.reachable.get(target.method.node.id)?.size ?? 0) > 0)) continue;
           const branches: Group[][] = [];
           frame.edges.push(branches);

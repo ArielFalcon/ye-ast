@@ -11,15 +11,16 @@ import { configurationsOf, type Configuration } from "./application-config.ts";
 import { JavaEventReader } from "./event-call-sites.adapter.ts";
 import { JavaHttpReader } from "./http-call-sites.adapter.ts";
 import { createJavaProject, type JavaFile, type JavaProject } from "./java-symbols.ts";
+import type { CallSiteProof } from "./java-call-site-owner.ts";
 
 /** A reader of one kind of call site, over a project the snapshot was parsed into once. */
 export interface JavaSiteReader {
   transport: CallSite["transport"];
-  read(project: JavaProject, configuration: (file: JavaFile) => Configuration, owned: ReadonlySet<JavaFile>, repo: string, includeNested?: boolean): CallSite[];
+  read(project: JavaProject, configuration: (file: JavaFile) => Configuration, owned: ReadonlySet<JavaFile>, repo: string, includeNested: boolean | undefined, proof: CallSiteProof): CallSite[];
 }
 
-const httpSites: JavaSiteReader = { transport: "http", read: (project, configuration, owned, repo, includeNested) => new JavaHttpReader(project, configuration, owned).sites(repo, includeNested) };
-const eventSites: JavaSiteReader = { transport: "event", read: (project, configuration, owned, repo, includeNested) => new JavaEventReader(project, configuration, owned).sites(repo, includeNested) };
+const httpSites: JavaSiteReader = { transport: "http", read: (project, configuration, owned, repo, includeNested, proof) => new JavaHttpReader(project, configuration, owned, proof).sites(repo, includeNested) };
+const eventSites: JavaSiteReader = { transport: "event", read: (project, configuration, owned, repo, includeNested, proof) => new JavaEventReader(project, configuration, owned, proof).sites(repo, includeNested) };
 
 /**
  * The call sites of one repository's Java sources: each source is parsed once, and every reader walks the one project
@@ -37,7 +38,8 @@ function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[], libra
     const held = new Set(owned);
     const transport = readers[0]?.transport;
     const unread = transport === undefined ? [] : unreadable.map((at): CallSite => ({ repo, file: at.path, line: at.line, symbol: basename(at.path, ".java"), transport, target: { status: "unknown", reason: "source-unreadable", evidence: [at] } }));
-    const sites = readers.flatMap((reader) => reader.read(project, configuration, held, repo, includeNested));
+    const proof: CallSiteProof = { unparsed: unreadable, unreadJvm: false };
+    const sites = readers.flatMap((reader) => reader.read(project, configuration, held, repo, includeNested, proof));
     for (const site of sites) if (site.diagnostic?.source === "not-read" && unreadableLibraries.length > 0) {
       site.diagnostic = { ...site.diagnostic, unreadableSources: unreadableLibraries };
     }

@@ -6,12 +6,14 @@
  */
 import type { JavaFile, JavaProject, MethodDecl, TypeDecl } from "./java-symbols.ts";
 import { scopeOf } from "./java-symbols.ts";
+import type { DispatchTargets } from "../../ports/import-origins.port.ts";
 import type { FieldLookup, Invocation } from "./java-invocations.ts";
 import { receiverOf } from "./java-invocations.ts";
 import { argumentsOf, descendants, typeNameOf } from "./java-members.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
-import { callKey, createResolver, type ReceiverSource } from "./java-receiver-methods.ts";
-import { closureOf, hierarchyOf, type Hierarchy } from "./java-dispatch-targets.ts";
+import { callKey, createResolver, provesBinding, type ReceiverSource } from "./java-receiver-methods.ts";
+import { dispatchReadingOf, type DispatchReading } from "./java-dispatch-targets.ts";
+import type { UnparsedSource } from "./java-project.ts";
 import { annotationUses, isAnnotation } from "./request-mapping.ts";
 import { BEAN, NAMED_COMPONENTS, PRIMARY, QUALIFIER } from "./java-value-vocabulary.ts";
 
@@ -27,20 +29,28 @@ export interface StagedSelection {
   proven: boolean;
 }
 
+/** The read's own inputs the owner's proof needs beyond the project: what it left unparsed and whether a JVM source no extractor reads is in its universe. */
+export interface CallSiteProof {
+  unparsed: readonly UnparsedSource[];
+  unreadJvm: boolean;
+}
+
+/** The proof of a read that handed the flow only its parsed sources. */
+export const NO_PROOF: CallSiteProof = { unparsed: [], unreadJvm: false };
+
 interface ProjectReading {
   resolver: ReturnType<typeof createResolver>;
-  hierarchy: Hierarchy | undefined;
+  files: readonly JavaFile[];
   sources: Map<string, ReceiverSource>;
 }
 
 const readings = new WeakMap<JavaProject, ProjectReading>();
 
-/** The owner's one resolver, its declared hierarchy and its receiver bindings, read once per project. */
+/** The owner's one resolver, its files and its receiver bindings, read once per project. */
 function readingOf(project: JavaProject): ProjectReading {
   let reading = readings.get(project);
   if (reading === undefined) {
-    const files = [...new Set(project.types.map((type) => type.file))];
-    reading = { resolver: createResolver(project), hierarchy: hierarchyOf(files, project), sources: new Map() };
+    reading = { resolver: createResolver(project), files: [...new Set(project.types.map((type) => type.file))], sources: new Map() };
     readings.set(project, reading);
   }
   return reading;
@@ -55,19 +65,54 @@ function sourceOf(file: JavaFile, reading: ProjectReading): ReceiverSource {
   return source;
 }
 
-export function stagedSelections(call: Invocation, project: JavaProject, text: FieldLookup, concrete: TypeDecl = call.type): StagedSelection[] {
-  const proven = provenMethods(call, project);
-  return lenientSelections(call, project, text, concrete).map(({ method, receiver }) => ({ method, receiver, proven: proven?.has(method.node.id) ?? false }));
+export function stagedSelections(call: Invocation, project: JavaProject, text: FieldLookup, concrete: TypeDecl = call.type, proof: CallSiteProof = NO_PROOF): StagedSelection[] {
+  const proven = provenBodies(call, project, proof);
+  return lenientSelections(call, project, text, concrete).map(({ method, receiver }) => ({ method, receiver, proven: proven.has(`${method.owner.file.path}:${method.node.startPosition.row + 1}`) }));
 }
 
-/** The bodies the owner proves for the call: its strict binding's closed closure, when it proves one. */
-function provenMethods(call: Invocation, project: JavaProject): Set<number> | undefined {
-  if (call.node.type !== "method_invocation") return undefined;
+/**
+ * The bodies the owner proves for the call, read through the port's own derivation: the strict binding's conditions,
+ * the strict resolver, and the dispatch answer at the declaration — every veto, the advice of an aspect included.
+ * The proof is read once per project and read, and each declaration's dispatch answer once.
+ */
+function provenBodies(call: Invocation, project: JavaProject, proof: CallSiteProof): Set<string> {
+  if (call.node.type !== "method_invocation") return new Set();
+  const held = ownerProofOf(project, proof);
+  if (!held.proves) return new Set();
   const reading = readingOf(project);
   const named = reading.resolver.methodOf(call.node, sourceOf(call.type.file, reading));
-  if (named === undefined || named.bound || reading.hierarchy === undefined) return undefined;
-  const closure = closureOf(named.method, reading.hierarchy);
-  return closure.kind === "closed" ? new Set(closure.candidates.map(({ method }) => method.node.id)) : undefined;
+  if (named === undefined || named.bound) return new Set();
+  let answer = held.answers.get(named.method.node.id);
+  if (answer === undefined) {
+    const [site] = held.dispatch?.of([{ file: named.method.owner.file.path, line: named.method.node.startPosition.row + 1, name: named.method.name }]) ?? [];
+    answer = site ?? { kind: "unknown" };
+    held.answers.set(named.method.node.id, answer);
+  }
+  return answer.kind === "bodies" ? new Set(answer.bodies.map(({ file, start }) => `${file}:${start}`)) : new Set();
+}
+
+interface OwnerProof {
+  proves: boolean;
+  dispatch: DispatchReading | undefined;
+  answers: Map<number, DispatchTargets>;
+}
+
+const ownerProofs = new WeakMap<JavaProject, WeakMap<CallSiteProof, OwnerProof>>();
+
+function ownerProofOf(project: JavaProject, proof: CallSiteProof): OwnerProof {
+  let byProof = ownerProofs.get(project);
+  if (byProof === undefined) {
+    byProof = new WeakMap();
+    ownerProofs.set(project, byProof);
+  }
+  let held = byProof.get(proof);
+  if (held === undefined) {
+    const files = readingOf(project).files;
+    const proves = provesBinding(files, project, proof.unparsed, proof.unreadJvm);
+    held = { proves, dispatch: proves ? dispatchReadingOf(files, project, proof.unparsed, proof.unreadJvm) : undefined, answers: new Map() };
+    byProof.set(proof, held);
+  }
+  return held;
 }
 
 interface DispatchIndex {

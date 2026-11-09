@@ -20,6 +20,7 @@ import type { RelationExtraction, RelationExtractor } from "../relations/relatio
 import { memberProofContextOf, retainedRelations } from "../relations/retained-relations.ts";
 import { declaredScope } from "../../domain/map/entrypoint-map.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
+import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { CommitExtraction, PreparedCommit } from "./read-snapshot.ts";
 
 /** What the type checker contributes to one answer: its bindings by call place, the declarations it read, and its cuts. */
@@ -66,6 +67,8 @@ export interface ReadingRequest {
 export interface ReadingSource {
   tree: Pick<CommitExtraction, "export" | "sources">;
   prepared: PreparedCommit | undefined;
+  /** The read's open parse hold, which owns the trees of the sources it kept; absent where nothing is held. */
+  hold?: ParseHold | undefined;
   store: CodeGraphReader;
   /** The digest of the index, when the index cache keeps it by content. */
   digest?: string | undefined;
@@ -192,7 +195,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       const lineOf = linesOncePerFile(sources);
       const unresolvedIn = unresolvedOncePerFile(store);
       const navigation = once(() => createGraphNavigation(store, () => false));
-      const origins = once(() => deps.importOrigins?.(tree.sources, narrowing.originPaths, facts));
+      const origins = once(() => deps.importOrigins?.(tree.sources, narrowing.originPaths, facts, source.hold));
       const unresolved = once(() => unresolvedOf(store, tree));
       const relations = once(() => retainedRelations(deps.relations, prepared, tree, request));
       const declarationUses = once(() => createDeclarationUses(store, navigation(), unresolvedIn));

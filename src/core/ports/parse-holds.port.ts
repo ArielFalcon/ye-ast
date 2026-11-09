@@ -11,6 +11,8 @@ export interface ParseHolds {
 export interface ParseHold {
   /** The sources as this hold's own copies: the objects readers parse once while the hold is open. */
   keep(sources: readonly SourceFile[]): SourceFile[];
+  /** Whether the hold is still open: `release` closes it, and a closed hold owns no tree. */
+  open(): boolean;
   /** Frees every tree parsed for the hold; a source it kept parses as one no hold kept from then on. */
   release(): void;
 }

@@ -101,7 +101,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             const reading = indexed === "unavailable"
               ? undefined
               : line.of(
-                  { tree: loaded.value, prepared: prepared.value, store: indexed.store, digest: indexed.digest, snapshot: { repo: plan.at.repoId, kind: "sha", sha: plan.at.revision }, request: { repo: plan.at.source, scope: context.scope, ...(context.signal === undefined ? {} : { signal: context.signal }) } },
+                  { tree: loaded.value, prepared: prepared.value, hold: readScope.hold, store: indexed.store, digest: indexed.digest, snapshot: { repo: plan.at.repoId, kind: "sha", sha: plan.at.revision }, request: { repo: plan.at.source, scope: context.scope, ...(context.signal === undefined ? {} : { signal: context.signal }) } },
                 );
             const origins = await reading?.relations();
             const proofs = await reading?.referenceProofs();

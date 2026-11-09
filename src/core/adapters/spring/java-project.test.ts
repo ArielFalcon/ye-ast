@@ -61,7 +61,6 @@ async function heldParser(holds: ReturnType<typeof createJavaTreeHolds>): Promis
         parses++;
         return real.parse(source);
       },
-      holdOf: (source) => real.holdOf?.(source),
     },
     parses: () => parses,
   };
@@ -103,4 +102,35 @@ test("a declared source is a declaration the project holds and never one the rea
   assert.equal(held.owns("generated/Gen.java"), false);
   assert.ok(held.project.types.some((type) => type.name === "Gen"), "the declaration is part of the project");
   hold.release();
+});
+
+test("the held project's identity is each source's path and content and the declared files, never the list", async () => {
+  const holds = createJavaTreeHolds();
+  const { parser } = await heldParser(holds);
+  const hold = holds.open();
+  const sources = hold.keep([A]);
+
+  const first = await heldJavaProject(hold, () => Promise.resolve(parser), sources);
+  assert.deepEqual(first.project.types.map((type) => type.name), ["A"]);
+  sources[0] = { path: "B.java", content: "package app; class B {}" };
+  const changed = await heldJavaProject(hold, () => Promise.resolve(parser), sources);
+  assert.notEqual(changed.project, first.project, "a changed source is another project");
+  assert.deepEqual(changed.project.types.map((type) => type.name), ["B"]);
+
+  const withGen = await heldJavaProject(hold, () => Promise.resolve(parser), sources, [{ path: "generated/Gen.java", content: "package app; class Gen {}" }]);
+  assert.notEqual(withGen.project, changed.project, "declared files are an input of the project too");
+  assert.deepEqual(withGen.project.types.map((type) => type.name), ["B", "Gen"]);
+  hold.release();
+});
+
+test("a released hold never serves the project it built", async () => {
+  const holds = createJavaTreeHolds();
+  const { parser } = await heldParser(holds);
+  const hold = holds.open();
+  const sources = hold.keep([A]);
+  await heldJavaProject(hold, () => Promise.resolve(parser), sources);
+
+  hold.release();
+  assert.equal(hold.open(), false);
+  await assert.rejects(() => heldJavaProject(hold, () => Promise.resolve(parser), sources), TypeError);
 });

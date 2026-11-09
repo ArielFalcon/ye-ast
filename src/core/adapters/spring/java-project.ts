@@ -43,30 +43,32 @@ export interface HeldJavaProject {
   owns(path: string): boolean;
 }
 
-const heldProjects = new WeakMap<ParseHold, WeakMap<readonly SourceFile[], Promise<HeldJavaProject>>>();
+const heldProjects = new WeakMap<ParseHold, Map<string, Promise<HeldJavaProject>>>();
 
 /**
  * The project a read's hold builds once over `sources` and its declared files, shared by every reader of the read; the
  * hold owns every tree from `keep` on, so the block that parses never disposes one, and `release` ends the project.
+ * The identity is every input the project reads — each source's path and content, on each side of the owned/declared
+ * split — never the list that carries them, so a changed source or a declared file is another project.
  */
 export function heldJavaProject(hold: ParseHold, parser: () => Promise<JavaParser>, sources: readonly SourceFile[], declared: readonly SourceFile[] = []): Promise<HeldJavaProject> {
-  let bySources = heldProjects.get(hold);
-  if (bySources === undefined) {
-    bySources = new WeakMap();
-    heldProjects.set(hold, bySources);
+  if (!hold.open()) return Promise.reject(new TypeError("the parse hold was released"));
+  let byKey = heldProjects.get(hold);
+  if (byKey === undefined) {
+    byKey = new Map();
+    heldProjects.set(hold, byKey);
   }
-  let held = bySources.get(sources);
+  const key = projectKey(sources, declared);
+  let held = byKey.get(key);
   if (held === undefined) {
     held = buildHeldJavaProject(hold, parser, sources, declared);
-    bySources.set(sources, held);
+    byKey.set(key, held);
   }
   return held;
 }
 
-/** The read's held project when its parser reads sources a hold kept, so a reader below the port shares the one project. */
-export async function heldJavaProjectOf(parser: JavaParser, sources: readonly SourceFile[], declared: readonly SourceFile[] = []): Promise<HeldJavaProject | undefined> {
-  const hold = sources.map((source) => parser.holdOf?.(source)).find((found) => found !== undefined);
-  return hold === undefined ? undefined : heldJavaProject(hold, () => Promise.resolve(parser), sources, declared);
+function projectKey(sources: readonly SourceFile[], declared: readonly SourceFile[]): string {
+  return JSON.stringify([sources.map(({ path, content }) => [path, content]), declared.map(({ path, content }) => [path, content])]);
 }
 
 async function buildHeldJavaProject(hold: ParseHold, parser: () => Promise<JavaParser>, sources: readonly SourceFile[], declared: readonly SourceFile[]): Promise<HeldJavaProject> {

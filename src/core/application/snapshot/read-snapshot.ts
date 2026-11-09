@@ -9,7 +9,7 @@ import type { Digest } from "../../ports/digest.port.ts";
 import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { LiveFault } from "../../ports/live-queries.port.ts";
 import type { ScratchDirectory } from "../../ports/scratch-directory.port.ts";
-import type { ParseHolds } from "../../ports/parse-holds.port.ts";
+import type { ParseHold, ParseHolds } from "../../ports/parse-holds.port.ts";
 import type { SourceReader } from "../../ports/source-reader.port.ts";
 import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
 import type { CommitExport, ExportBudget, Vcs, VcsFault } from "../../ports/vcs.port.ts";
@@ -113,6 +113,8 @@ export interface ReadScope {
   directory(): Promise<string>;
   /** The sources as the read's own, each parsed at most once until the read ends (ADR-0040). */
   keep(sources: readonly SourceFile[]): SourceFile[];
+  /** The read's open parse hold, which owns every tree the read kept until `release`; absent where nothing is held. */
+  hold?: ParseHold;
 }
 
 /** Runs `use` in a read scope, then frees the trees it held and removes every directory it made, newest first, whether `use` answers or throws. */
@@ -127,6 +129,7 @@ export async function withScratch<T>(deps: Pick<SnapshotReaderDeps, "scratch" | 
         return created;
       },
       keep: (sources) => hold?.keep(sources) ?? [...sources],
+      ...(hold === undefined ? {} : { hold }),
     });
   } finally {
     hold?.release();

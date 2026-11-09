@@ -3,6 +3,7 @@ import type { ImportOrigin } from "../domain/relations/resolved-reference.ts";
 import type { CAPABILITY_ABSENT, DispatchUnknownReason, Finding } from "../domain/shared/fact.ts";
 import type { DerivedFacts } from "./derived-facts.port.ts";
 import type { SourceFile } from "./entrypoint-extractor.port.ts";
+import type { ParseHold } from "./parse-holds.port.ts";
 
 /** One place a file uses a name, as the index reports it: repository-relative and 1-based. */
 export interface ImportOriginSite {
@@ -199,4 +200,4 @@ export type RootBinding =
  * of the snapshot's scope, files no reader parses included; the sources' own paths when not given.
  */
 /** `facts` keeps what the reader derives from one file or from named inputs between requests (ADR-0035). */
-export type ImportOriginsReader = (sources: readonly SourceFile[], paths?: readonly string[], facts?: DerivedFacts) => ImportOrigins;
+export type ImportOriginsReader = (sources: readonly SourceFile[], paths?: readonly string[], facts?: DerivedFacts, hold?: ParseHold) => ImportOrigins;

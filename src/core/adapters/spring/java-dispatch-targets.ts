@@ -1,9 +1,10 @@
 import type { Node } from "web-tree-sitter";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { DispatchTargets, ImportOrigins } from "../../ports/import-origins.port.ts";
+import type { DispatchSite, DispatchTargets, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { DispatchUnknownReason } from "../../domain/shared/fact.ts";
+import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { enclosingType, heldJavaProjectOf, withJavaSources, type UnparsedSource } from "./java-project.ts";
+import { enclosingType, heldJavaProject, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import { createJavaProject, isTypeDeclaration, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
@@ -51,33 +52,67 @@ export interface Hierarchy {
  * functional interface; an enum below it; or a class whose chain reaches no single body of the method's signature.
  * The candidates and the closure verdict are read apart (`closureOf`), and the port's answer is derived from them.
  */
-export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[]): ImportOrigins["dispatchTargets"] {
+export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold): ImportOrigins["dispatchTargets"] {
   const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
   return async (sites, signal) => {
-    const results: DispatchTargets[] = sites.map(() => UNKNOWN);
-    if (unreadJvm || sites.length === 0) return results;
-    const analyze = (files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): DispatchTargets[] => {
-      if (unparsed.length > 0) return results;
-      if (project.unreadable.length > 0) return results;
-      const veto = globalVeto(files, project);
-      if ("reason" in veto) return sites.map(() => ({ kind: "unknown", reason: veto.reason }));
-      const hierarchy = readHierarchy(files, project);
+    if (sites.length === 0) return [];
+    const read = await parser();
+    const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources);
+    if (held !== undefined) return dispatchAnswersOf(sites, held.files.map(({ file }) => file), held.project, held.unparsed, unreadJvm, signal);
+    return withJavaSources(read, (parse) => {
+      const { files, unparsed } = parse(sources);
+      return dispatchAnswersOf(sites, files, createJavaProject(files), unparsed, unreadJvm, signal);
+    });
+  };
+}
+
+/**
+ * What the port answers for one read's parsed files, every veto it applies included; the call-site flow reads this same
+ * derivation for the proof of the body it would select, so the advice of an aspect and the closure cannot disagree.
+ */
+export function dispatchAnswersOf(sites: readonly DispatchSite[], files: readonly JavaFile[], project: JavaProject, unparsed: readonly UnparsedSource[], unreadJvm: boolean, signal?: AbortSignal): DispatchTargets[] {
+  return dispatchReadingOf(files, project, unparsed, unreadJvm).of(sites, signal);
+}
+
+/** The port's answer over one read's parsed files, with the vetoes and hierarchy it reads once. */
+export interface DispatchReading {
+  of(sites: readonly DispatchSite[], signal?: AbortSignal): DispatchTargets[];
+}
+
+interface PreparedDispatch {
+  reason?: NonNullable<Extract<DispatchTargets, { kind: "unknown" }>["reason"]>;
+  advice?: readonly JoinPoints[];
+  hierarchy?: Hierarchy;
+}
+
+export function dispatchReadingOf(files: readonly JavaFile[], project: JavaProject, unparsed: readonly UnparsedSource[], unreadJvm: boolean): DispatchReading {
+  const unread = (): boolean => unreadJvm || unparsed.length > 0 || project.unreadable.length > 0;
+  let reading: PreparedDispatch | undefined;
+  const read = (): PreparedDispatch => {
+    if (reading !== undefined) return reading;
+    const veto = globalVeto(files, project);
+    const held: PreparedDispatch = "reason" in veto ? { reason: veto.reason } : { advice: veto.advice, hierarchy: readHierarchy(files, project) };
+    reading = held;
+    return held;
+  };
+  return {
+    of(sites, signal) {
+      const results: DispatchTargets[] = sites.map(() => UNKNOWN);
+      if (unread() || sites.length === 0) return results;
+      const held = read();
+      const reason = held.reason;
+      if (reason !== undefined) return sites.map(() => ({ kind: "unknown", reason }));
+      const hierarchy = held.hierarchy!;
+      const advice = held.advice!;
       for (const [index, site] of sites.entries()) {
         if (signal?.aborted) break;
         const method = project.types.flatMap((type) => (type.file.path === site.file ? type.methods : [])).find((candidate) => candidate.name === site.name && !candidate.hasBody && spansLine(candidate.node, site.line));
         if (method === undefined) continue;
         const targets = targetsOf(method, hierarchy);
-        results[index] = targets.kind === "bodies" && advised(method, hierarchy, veto.advice) ? ASPECT : targets;
+        results[index] = targets.kind === "bodies" && advised(method, hierarchy, advice) ? ASPECT : targets;
       }
       return results;
-    };
-    const read = await parser();
-    const held = await heldJavaProjectOf(read, sources);
-    if (held !== undefined) return analyze(held.files.map(({ file }) => file), held.unparsed, held.project);
-    return withJavaSources(read, (parse) => {
-      const { files, unparsed } = parse(sources);
-      return analyze(files, unparsed, createJavaProject(files));
-    });
+    },
   };
 }
 

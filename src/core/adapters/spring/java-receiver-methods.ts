@@ -1,12 +1,13 @@
 import type { Node } from "web-tree-sitter";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { ImportOrigins, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { enclosingType, heldJavaProjectOf, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
+import { enclosingType, heldJavaProject, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import { createJavaProject, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
@@ -55,14 +56,13 @@ interface ReadFile extends ReceiverSource {
  * runtime dispatch are separate obligations. An unproven value receiver or declared repository member remains a cut;
  * no name-only index target proves it. Non-Java and non-invocation sites remain unknown.
  */
-export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts): ImportOrigins["receiverMethods"] {
+export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts, hold?: ParseHold): ImportOrigins["receiverMethods"] {
   const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
   let layout: string | undefined;
   const resolved = async (sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ReceiverMethod[]> => {
     const results: ReceiverMethod[] = sites.map(() => UNKNOWN);
     const analyze = (files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly ReceiverMethod[] => {
-      const falsified = unparsed.length > 0 || unreadJvm || project.unreadable.length > 0 || files.some((file) => namesAnyDynamicImplementation(file, project));
-      const proves = !falsified && !files.some(({ root }) => rewritesCalls(root));
+      const proves = provesBinding(files, project, unparsed, unreadJvm);
       const byPath = new Map(files.map((file) => [file.path, file]));
       const readFiles = new Map<string, ReadFile>();
       const readFile = (path: string): ReadFile | undefined => {
@@ -94,7 +94,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
       return results;
     };
     const read = await parser();
-    const held = await heldJavaProjectOf(read, sources);
+    const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources);
     if (held !== undefined) return analyze(held.files.map(({ file }) => file), held.unparsed, held.project);
     return withJavaSources(read, (parse) => {
       const { files, unparsed } = parse(sources);
@@ -123,6 +123,15 @@ class DeadlineCut extends Error {
   constructor(readonly results: readonly ReceiverMethod[]) {
     super("deadline");
   }
+}
+
+/**
+ * Whether the strict binding may prove anything over these files: the port's own conditions. A source the read left
+ * unparsed, a JVM source no extractor reads, a declaration the project could not read, a dynamic implementation or a
+ * call-rewriting annotation anywhere leaves every binding unproven.
+ */
+export function provesBinding(files: readonly JavaFile[], project: JavaProject, unparsed: readonly UnparsedSource[], unreadJvm: boolean): boolean {
+  return unparsed.length === 0 && !unreadJvm && project.unreadable.length === 0 && !files.some((file) => namesAnyDynamicImplementation(file, project)) && !files.some(({ root }) => rewritesCalls(root));
 }
 
 export function createResolver(project: JavaProject) {

@@ -2,6 +2,7 @@ import type { Node } from "web-tree-sitter";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import { readsPastRoot, type RootOrigin } from "../../domain/impact/edge-policy.ts";
 import type { ImportOrigins, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import { createJavaRootBindings } from "./java-root-bindings.ts";
@@ -32,13 +33,13 @@ interface Spelled {
  * outside the snapshot may declare, two on-demand imports that may both offer the name, a variable that obscures a
  * type, a class the reader does not place) is `unknown`. Nothing comes from the graph.
  */
-export function createJavaNameBindings(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[] = sources.map(({ path }) => path), facts?: DerivedFacts): ImportOrigins {
+export function createJavaNameBindings(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[] = sources.map(({ path }) => path), facts?: DerivedFacts, hold?: ParseHold): ImportOrigins {
   return {
     origins: async (sites) => sites.map((site) => unresolved(site)),
     rootBindings: (sites, signal) => createJavaRootBindings(parser(), sources)(sites, signal),
     declaredTypes: createJavaDeclaredTypes(parser, sources, paths),
-    dispatchTargets: createJavaDispatchTargets(parser, sources, paths),
-    receiverMethods: createJavaReceiverMethods(parser, sources, paths, facts),
+    dispatchTargets: createJavaDispatchTargets(parser, sources, paths, hold),
+    receiverMethods: createJavaReceiverMethods(parser, sources, paths, facts, hold),
     replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),
     rootOrigins: async (sites, signal) => {
       const results: RootOrigin[] = sites.map((site) => unresolved(site));

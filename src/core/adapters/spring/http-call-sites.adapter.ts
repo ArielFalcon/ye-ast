@@ -26,6 +26,7 @@ import { isAnnotation, annotationUses, createSpringAnnotations, pathExpressions,
 import { JavaValueEvaluator } from "./java-value-evaluator.ts";
 import { callUrl, joinedCallUrl, RUN_TIME_HOLE, urlText } from "../../domain/topology/path-template.ts";
 import { undecided, undecidedTarget, type Evaluated, type Undecided } from "../../domain/topology/evaluated.ts";
+import { NO_PROOF, type CallSiteProof } from "./java-call-site-owner.ts";
 
 /** The base URL a client declares: undefined when it declares none. */
 type Declared = Evaluated<string> | undefined;
@@ -51,14 +52,15 @@ export class JavaHttpReader {
     private readonly project: JavaProject,
     configuration: (file: JavaFile) => Configuration,
     private readonly owned: ReadonlySet<JavaFile>,
+    private readonly proof: CallSiteProof = NO_PROOF,
   ) {
     this.annotations = createSpringAnnotations(project);
-    this.text = new JavaValueEvaluator(project, configuration);
+    this.text = new JavaValueEvaluator(project, configuration, proof);
   }
 
   sites(repo: string, includeNested = false): CallSite[] {
     const found: CallSite[] = [];
-    const flow = new JavaMethodFlow<Request>(this.project, this.text, (call) => this.requestOf(call));
+    const flow = new JavaMethodFlow<Request>(this.project, this.text, (call) => this.requestOf(call), this.proof);
     for (const invocation of flow.invocations.filter((call) => this.owned.has(call.type.file))) {
       if (!includeNested && flow.nested(invocation)) continue;
       const scope = this.scopeOf(invocation, new Map());

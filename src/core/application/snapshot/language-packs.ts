@@ -78,9 +78,9 @@ export function routedReaders(packs: readonly LanguagePack[]): RoutedReaders {
         };
       },
     },
-    importOrigins(sources, paths, facts) {
+    importOrigins(sources, paths, facts, hold) {
       const universe = paths ?? sources.map(({ path }) => path);
-      const readers = new Map(packs.map((pack) => [pack, pack.origins(sourcesOf(pack, sources), universe, facts)]));
+      const readers = new Map(packs.map((pack) => [pack, pack.origins(sourcesOf(pack, sources), universe, facts, hold)]));
       return {
         origins: (sites, signal) => routed(sites, readers, (reader, asked) => reader.origins(asked, signal), unresolved),
         rootOrigins: (sites, signal) => routed(sites, readers, (reader, asked) => reader.rootOrigins(asked, signal), unresolved),

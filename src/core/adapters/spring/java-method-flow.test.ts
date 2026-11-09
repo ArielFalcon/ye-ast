@@ -53,6 +53,17 @@ class Owner {}`;
   assert.deepEqual(await staged(source, "find"), [["Impl.find(String)", false], ["Impl.find(Long)", false]]);
 });
 
+test("an advice that may replace the selected body leaves the staging selection unproven", async () => {
+  const source = (hooks: string) => `package app;
+class Controller { private Port port; void run() { port.send("x"); } }
+interface Port { void send(String s); }
+class Sender implements Port { public void send(String s) {} }
+${hooks}`;
+
+  assert.deepEqual(await staged(source(""), "send"), [["Sender.send(String)", true]], "no advice, so the owner proves the body");
+  assert.deepEqual(await staged(source('@Aspect class Hooks { @Around("execution(* app.Sender.send(..))") Object a() { return null; } }'), "send"), [["Sender.send(String)", false]], "the advice may replace the body");
+});
+
 test("independent dispatch edges retain linear leaf evaluations", async () => {
   const count = 12;
   const source = Array.from({ length: count }, (_, i) => `interface G${i} { void send(String p); }

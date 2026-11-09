@@ -13,6 +13,6 @@ import type { ModuleDependenciesReader } from "../core/ports/module-dependencies
 export function composeLanguagePacks(javaParser: () => Promise<JavaParser>, modules: { typescript: ModuleDependenciesReader; java: ModuleDependenciesReader }): readonly LanguagePack[] {
   return [
     { profile: TYPESCRIPT_PROFILE, readsProjectFiles: true, absent: ["dispatchTargets", "receiverMethods"], memberNames: createTypeScriptMemberNames(), origins: (sources, _paths, facts) => createImportOrigins(sources, facts === undefined ? {} : { facts }), modules: modules.typescript, trivia: createTypeScriptTrivia() },
-    { profile: JAVA_PROFILE, memberNames: createJavaMemberNames(javaParser), origins: (sources, paths, facts) => createJavaNameBindings(javaParser, sources, paths, facts), modules: modules.java, trivia: createJavaTrivia(javaParser) },
+    { profile: JAVA_PROFILE, memberNames: createJavaMemberNames(javaParser), origins: (sources, paths, facts, hold) => createJavaNameBindings(javaParser, sources, paths, facts, hold), modules: modules.java, trivia: createJavaTrivia(javaParser) },
   ];
 }

@@ -489,6 +489,7 @@ function countingHolds(): { holds: ParseHolds; log: { opened: number; released: 
             log.kept.push(...own);
             return own;
           },
+          open: () => open,
           release: () => {
             assert.ok(open, "a hold is released once");
             open = false;

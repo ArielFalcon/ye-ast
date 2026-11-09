@@ -13,6 +13,7 @@ import { JavaValueEvaluator } from "./java-value-evaluator.ts";
 import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 import { undecidedTarget } from "../../domain/topology/evaluated.ts";
 import { statesDestination } from "../../domain/topology/event-destination.ts";
+import { NO_PROOF, type CallSiteProof } from "./java-call-site-owner.ts";
 
 /** One publish call: where it is written, the client that publishes, the argument that names the destination and the one that names the exchange. */
 interface Publish {
@@ -33,13 +34,14 @@ export class JavaEventReader {
     private readonly project: JavaProject,
     configuration: (file: JavaFile) => Configuration,
     private readonly owned: ReadonlySet<JavaFile>,
+    private readonly proof: CallSiteProof = NO_PROOF,
   ) {
-    this.text = new JavaValueEvaluator(project, configuration);
+    this.text = new JavaValueEvaluator(project, configuration, proof);
   }
 
   sites(repo: string, includeNested = false): CallSite[] {
     const found: CallSite[] = [];
-    const flow = new JavaMethodFlow<Publish>(this.project, this.text, (call) => this.publishOf(call));
+    const flow = new JavaMethodFlow<Publish>(this.project, this.text, (call) => this.publishOf(call), this.proof);
     for (const invocation of flow.invocations.filter((call) => this.owned.has(call.type.file))) {
       if (!includeNested && flow.nested(invocation)) continue;
       const scope = this.scopeOf(invocation, new Map());

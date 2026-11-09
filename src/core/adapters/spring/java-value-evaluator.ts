@@ -5,6 +5,7 @@ import type { Closure, ObjectValue, UrlScope } from "./java-values.ts";
 import { known, prevailingCause, undecided, type Evaluated, type UndecidedCause } from "../../domain/topology/evaluated.ts";
 import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 import { bindMethod, methodsOf } from "./java-method-flow.ts";
+import { NO_PROOF, type CallSiteProof } from "./java-call-site-owner.ts";
 import type { Node } from "web-tree-sitter";
 import type { Configuration } from "./application-config.ts";
 import { argumentsOf, assignmentsOf, descendants, fieldBindings, localBindings, memberNodes, typeNameOf, type Binding } from "./java-members.ts";
@@ -92,6 +93,7 @@ export class JavaValueEvaluator {
   constructor(
     private readonly project: JavaProject,
     private readonly configurationOf: (file: JavaFile) => Configuration,
+    private readonly proof: CallSiteProof = NO_PROOF,
   ) {}
 
   of(node: Node, scope: UrlScope, trail: ReadonlySet<number> = new Set()): string | undefined {
@@ -269,7 +271,7 @@ export class JavaValueEvaluator {
       }
     }
     const invocation = { node: call, type: scope.type, member: undefined, locals: scope.locals };
-    const selections = methodsOf(invocation, this.project, this, receiver?.kind === "record" ? receiver.type : scope.receiver ?? scope.type);
+    const selections = methodsOf(invocation, this.project, this, receiver?.kind === "record" ? receiver.type : scope.receiver ?? scope.type, this.proof);
     const arity = argumentsOf(call).length;
     const declared = (type: TypeDecl) => type.methods.filter((method) => method.name === name && method.parameterTypes.length === arity && method.hasBody);
     const sourceOwner = receiver?.kind === "record" ? this.project.classChain(receiver.type).find((type) => declared(type).length > 0) : undefined;
@@ -334,7 +336,7 @@ export class JavaValueEvaluator {
       if (parent?.type === "argument_list" && parent.parent?.type === "method_invocation") {
         const call = parent.parent;
         const index = argumentsOf(call).findIndex((argument) => argument.id === use.id);
-        const targets = methodsOf({ node: call, type: scope.type, member, locals: scope.locals }, this.project, this);
+        const targets = methodsOf({ node: call, type: scope.type, member, locals: scope.locals }, this.project, this, scope.type, this.proof);
         return targets.length === 0 || !this.readOnlyParameters(targets.map(({ method }) => ({ method, index })), value.type);
       }
       if (parent?.type !== "method_invocation" || parent.childForFieldName("object")?.id !== use.id) return true;
@@ -359,7 +361,7 @@ export class JavaValueEvaluator {
         if (access?.type === "argument_list" && access.parent?.type === "method_invocation") {
           const call = access.parent;
           const slot = argumentsOf(call).findIndex((argument) => argument.id === reference.id);
-          const targets = methodsOf({ node: call, type: method.owner, member: method.node, locals: localBindings(method.node) }, this.project, this);
+          const targets = methodsOf({ node: call, type: method.owner, member: method.node, locals: localBindings(method.node) }, this.project, this, method.owner, this.proof);
           if (targets.length === 0) return false;
           pending.push(...targets.map(({ method }) => ({ method, index: slot })));
           continue;

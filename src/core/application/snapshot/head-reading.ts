@@ -6,6 +6,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import { exportSelection, pathSelection, type PathSelection, type ScopeRequest } from "../../domain/shared/scope.ts";
 import type { CodeGraph, CodeGraphFault, CodeGraphReader, IndexSummary } from "../../ports/code-graph.port.ts";
 import type { IndexCache } from "../../ports/index-cache.port.ts";
+import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { LiveFault, LiveSelector } from "../../ports/live-queries.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import type { CommitExport, Vcs, VcsFault } from "../../ports/vcs.port.ts";
@@ -37,6 +38,8 @@ export interface HeldLive {
   readonly head: string;
   readonly tree: LiveTree;
   readonly deps: Pick<HeadReaderDeps, "vcs" | "reader" | "extractor" | "graph" | "matcher" | "live">;
+  /** The capture's open parse hold, which owns the trees of the sources it kept. */
+  readonly hold?: ParseHold;
   sources(signal?: AbortSignal): Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>>;
   extract(signal?: AbortSignal): Promise<Result<CommitExtraction, VcsFault>>;
   retained?: PreparedCommit["retained"];
@@ -44,12 +47,12 @@ export interface HeldLive {
 }
 
 /** Consumers of a capture share one operation signal; independent operations create their own capture. */
-export function createHeldLive(input: { repo: string; repoId: string; scope: DeclaredScope; head: string; tree: LiveTree; trust: "trusted"; deps: HeadReaderDeps; keep?: ReadScope["keep"] }): HeldLive {
-  const { keep, ...held } = input;
+export function createHeldLive(input: { repo: string; repoId: string; scope: DeclaredScope; head: string; tree: LiveTree; trust: "trusted"; deps: HeadReaderDeps; hold?: ParseHold }): HeldLive {
+  const { hold, ...held } = input;
   const { vcs, reader, extractor, graph, matcher, live } = held.deps;
   const captureDeps = { vcs, reader, extractor, graph, matcher, ...(live === undefined ? {} : { live }) };
-  const readers = liveSnapshotReaders(held.deps, { repo: held.repo, scope: held.scope, trust: held.trust, root: held.tree.root, export: held.tree.export }, keep);
-  return { ...held, deps: captureDeps, kind: "live", ...readers };
+  const readers = liveSnapshotReaders(held.deps, { repo: held.repo, scope: held.scope, trust: held.trust, root: held.tree.root, export: held.tree.export }, hold?.keep.bind(hold));
+  return { ...held, ...(hold === undefined ? {} : { hold }), deps: captureDeps, kind: "live", ...readers };
 }
 
 /** The held capture as the readers of a snapshot take it: nothing to write, since the mirror already holds the files. */
@@ -98,7 +101,7 @@ export async function withLiveCaptures<T>(deps: HeadReaderDeps, selections: read
         if (signal?.aborted) return { ok: false, fault: { repoId: selection.repoId, cause: { kind: "aborted", detail: "live query aborted" } } };
         if (!head.ok) return { ok: false, fault: { repoId: selection.repoId, cause: head.fault } };
         if (head.value !== selection.head) return { ok: false, fault: { repoId: selection.repoId, cause: { kind: "live-mirror-failed", detail: "repository HEAD changed during live capture" } } };
-        captures.set(selection.repoId, createHeldLive({ ...selection, tree, deps, ...(hold === undefined ? {} : { keep: hold.keep }) }));
+        captures.set(selection.repoId, createHeldLive({ ...selection, tree, deps, ...(hold === undefined ? {} : { hold }) }));
         return acquire(index + 1);
       });
       if (opened.ok) return opened.value;
@@ -190,6 +193,8 @@ function exportFailure(fault: VcsFault): "aborted" | { fault: VcsFault } {
 export interface HeadReading<Tree extends Pick<CommitExtraction, "export"> = CommitExtraction> {
   tree: Tree;
   prepared?: PreparedCommit;
+  /** The read's open parse hold, which owns the trees of the sources it kept; absent where nothing is held. */
+  hold?: ParseHold | undefined;
   selected: PathSelection;
   /** The fact base for `content`; `store` is true for a fact that read the index, which records where it came from. */
   base(content: string, store?: boolean): FactBase;
@@ -264,10 +269,11 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
     return opened.ok ? { store: opened.value, summary: notHeldInExport(indexed.value.filesNotIndexed, tree.export) } : "unavailable";
   };
 
-  const liveReading = <Tree extends Pick<CommitExtraction, "export">>(tree: LiveTree, extraction: Tree, trust: TrustMode, scope: DeclaredScope, selected: PathSelection, head: string, repoId: string, spec: FactSpec): HeadReading<Tree> => {
+  const liveReading = <Tree extends Pick<CommitExtraction, "export">>(tree: LiveTree, extraction: Tree, trust: TrustMode, scope: DeclaredScope, selected: PathSelection, head: string, repoId: string, spec: FactSpec, hold?: ParseHold): HeadReading<Tree> => {
     const snapshot: SnapshotRef = { repo: repoId, kind: "live", head, stateId: tree.stateId };
     return {
       tree: extraction,
+      ...(hold === undefined ? {} : { hold }),
       selected,
       base: (content, store = false) => factBase(trust, snapshot, content, spec, scope, store ? tree.origin : undefined),
       open: async () => {
@@ -290,7 +296,7 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
         const { tree, scope, head } = held;
         const selected = pathSelection(scope, deps.matcher.matches);
         const prepared = preparedLive(held);
-        return read({ ...liveReading(tree, prepared.tree, "trusted", scope, selected, head, repoId, spec), prepared }, tree.root);
+        return read({ ...liveReading(tree, prepared.tree, "trusted", scope, selected, head, repoId, spec, held.hold), prepared }, tree.root);
       }, unavailable: async ({ head, scope }) => ({ ok: true, value: unavailableLive("trusted", scope, head, repoId, spec) }) });
     }
 
@@ -309,6 +315,7 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
       return read({
         tree: headTree,
         prepared: prepared.value,
+        hold: readScope.hold,
         selected,
         base: (content, store = false) => factBase(trust, snapshot, content, spec, scope, store ? { kind: "full" } : undefined),
         open: () => indexHead(prepared.value, readScope.directory, signal),
