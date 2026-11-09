@@ -42,7 +42,6 @@ const LANGUAGE_CHECK_LINES: Readonly<Record<string, number>> = {
  * outside `nameTail`'s file, by file.
  */
 const RAW_BODY_EDGE_SITES: Readonly<Record<string, number>> = {
-  "core/application/trace/trace-effects.ts": 1,
   "core/application/trace/trace-walk.ts": 3,
 };
 const NAME_TAIL_OWNER = "core/domain/shared/call-place.ts";

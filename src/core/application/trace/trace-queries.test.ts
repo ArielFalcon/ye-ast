@@ -1310,6 +1310,14 @@ test("a call site in an expanded body at no call place the index records is a cu
   assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/a.ts:15 http effect"]]]);
 });
 
+test("a call site at a call the body writes that the index records nothing of is an effect of that step", async () => {
+  const written: SyntaxCall[] = [8, 9, 15].map((line) => ({ kind: "calls", line, column: 5, name: line === 15 ? "http.post" : line === 8 ? "helper" : "publish", owners: [] }));
+
+  const fact = await factOf({ ...EFFECTS_BODY, syntaxCalls: { [A]: written }, placedSites: [{ site: site(15), column: 4 }] });
+
+  assert.deepEqual(valueOf(fact).steps[0]!.effects?.map((effect) => effect.line), [15]);
+});
+
 test("an effect is carried once, by the step that expanded its body, never by a seen occurrence", async () => {
   const nodes = [SVC, RUN, callee("helper"), callee("wrap", A, 34)];
   const edges = [...CONTAINS, call("run", "wrap", 8, 4), call("run", "wrap", 9, 4), call("wrap", "helper", 35, 4)];
@@ -1329,7 +1337,9 @@ test("a body whose only record at a call site is an edge the walk does not follo
   const nodes = [SVC, RUN, callee("helper")];
   const edges = [...CONTAINS, call("run", "helper", 8, 4), { from: "helper", to: "Svc", kind: "references", line: 31, column: 2 }];
 
-  const fact = await factOf({ nodes, edges, sources: HELD_A, callSites: [site(31, { symbol: "helper" })] });
+  const written: SyntaxCall[] = [{ kind: "calls", line: 8, column: 5, name: "helper", callee: "helper", owners: [] }, { kind: "calls", line: 31, column: 1, name: "http.post", callee: "post", owners: [] }];
+
+  const fact = await factOf({ nodes, edges, sources: HELD_A, syntaxCalls: { [A]: written }, callSites: [site(31, { symbol: "helper" })] });
 
   assert.deepEqual(valueOf(fact).steps.map((step) => [step.symbol, step.effects?.map((effect) => effect.line)]), [["run", undefined], ["helper", [31]]]);
 });

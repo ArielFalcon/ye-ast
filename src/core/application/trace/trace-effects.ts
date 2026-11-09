@@ -8,14 +8,12 @@ import { effectOf, unplacedEffect } from "../../domain/trace/trace-effects.ts";
 import { declarationSpan, executesInBody, owningBody, type SourceSpan } from "../../domain/shared/owning-body.ts";
 import type { WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { CodeGraphReader, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
-import type { UnresolvedIn } from "../navigation/declaration-uses.ts";
-
-/** Edges that state where a declaration sits or what it extends, never a call its body makes. */
-const STRUCTURAL_KINDS: readonly string[] = ["contains", "extends", "implements"];
+import type { BodyCalls } from "../navigation/reconciled-calls.ts";
 
 export interface TraceEffectsInput {
   store: CodeGraphReader;
-  unresolvedIn: UnresolvedIn;
+  /** What each body calls, the index's records and the written calls aligned (B9). */
+  callsOf: (body: GraphSymbol) => Promise<BodyCalls>;
   /** The snapshot's call sites with their places. */
   sites: () => Promise<readonly (PlacedCallSite | PlacedDataEffect)[]>;
   /** A line of a source as the snapshot holds it; undefined when the snapshot does not hold the file. */
@@ -28,16 +26,16 @@ type Body = SourceSpan & { symbol: GraphSymbol };
 
 /**
  * Joins the call sites to the walked steps (R12). A site belongs to the declaration of the index that owns its exact
- * place (`owningBody`); it is an effect of a step only when that declaration is the body the step expanded and the index
- * records a call of that body on the site's line (or the site is the client method the declaration states), and a cut
- * when the extraction does not decide its target. A site in the expanded body that the index records no call at is a cut
+ * place (`owningBody`); it is an effect of a step only when that declaration is the body the step expanded and B9 places
+ * a call that body runs on the site's line (or the site is the client method the declaration states), and a cut
+ * when the extraction does not decide its target. A site in the expanded body that B9 places no call at is a cut
  * at the site, never dropped; a site another declaration owns (a nested function the walk did not expand, a sibling on
  * the same line) is not this step's, and one inside a function value the index declares no body for is a cut, since
  * the walk proves no run of such a value. Where the place cannot be told (no column, or a line on which parsers may count
  * columns apart), a site that some expanded body may own is a cut, never an effect. Sets `effects` and `unsettled` on the
  * steps and returns the cuts.
  */
-export async function placeEffects(roots: readonly WalkedStep[], { store, unresolvedIn, sites, lineOf, functionValuesOf }: TraceEffectsInput): Promise<Cut[]> {
+export async function placeEffects(roots: readonly WalkedStep[], { store, callsOf, sites, lineOf, functionValuesOf }: TraceEffectsInput): Promise<Cut[]> {
   const expanded = expandedSteps(roots);
   if (expanded.size === 0) return [];
   const files = new Set([...expanded.values()].map((step) => step.declaration.file));
@@ -56,8 +54,8 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
   for (const [file, inFile] of byFile) {
     const bodies = bodiesOf(file);
     const values = await functionValuesOf(file);
-    const lines = new Map<GraphNodeId, ReadonlySet<number>>();
-    const callLinesOf = (symbol: GraphSymbol) => lines.get(symbol.id) ?? lines.set(symbol.id, callLines(store, unresolvedIn, symbol)).get(symbol.id)!;
+    const lines = new Map<GraphNodeId, Promise<ReadonlySet<number>>>();
+    const callLinesOf = (symbol: GraphSymbol) => lines.get(symbol.id) ?? lines.set(symbol.id, callLines(callsOf, symbol)).get(symbol.id)!;
     for (const placed of inFile) {
       const { site } = placed;
       const told = placed.column !== undefined && countedAlike(placed.column, lineOf(file, site.line) ?? "");
@@ -70,7 +68,7 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
       const owner = owningBody(bodies, at);
       const step = owner === undefined ? undefined : expanded.get(owner.symbol.id);
       if (owner === undefined || step === undefined) continue;
-      if (!("declaration" in placed && placed.declaration === true) && (!callLinesOf(owner.symbol).has(site.line) || (values === undefined || !executesInBody(owner, values, at)))) {
+      if (!("declaration" in placed && placed.declaration === true) && (!(await callLinesOf(owner.symbol)).has(site.line) || (values === undefined || !executesInBody(owner, values, at)))) {
         markCut(step, unplacedEffect(site), cuts);
         continue;
       }
@@ -142,10 +140,8 @@ function expandedSteps(roots: readonly WalkedStep[]): Map<GraphNodeId, WalkedSte
   return found;
 }
 
-/** The lines at which the index records something the declaration's own body does: an edge leaving it or a reference it left unresolved. */
-function callLines(store: CodeGraphReader, unresolvedIn: UnresolvedIn, symbol: GraphSymbol): ReadonlySet<number> {
-  const lines = new Set<number>();
-  for (const edge of store.outgoingEdges([symbol.id])) if (edge.line !== null && !STRUCTURAL_KINDS.includes(edge.kind)) lines.add(edge.line);
-  for (const reference of unresolvedIn(symbol.file)) if (reference.from === symbol.id) lines.add(reference.line);
-  return lines;
+/** The lines of the calls the declaration's own body runs: the index's call records B9 keeps there and the calls it writes that no record matches. */
+async function callLines(callsOf: (body: GraphSymbol) => Promise<BodyCalls>, symbol: GraphSymbol): Promise<ReadonlySet<number>> {
+  const { edges, references, writtenOnly } = await callsOf(symbol);
+  return new Set([...edges.flatMap(({ edge }) => (edge.line === null ? [] : [edge.line])), ...references.map(({ line }) => line), ...writtenOnly.map(({ line }) => line)]);
 }

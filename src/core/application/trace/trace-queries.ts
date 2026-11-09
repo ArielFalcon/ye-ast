@@ -167,7 +167,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           if (walk === "aborted") return ABORTED;
           const dataEffects = () => deps.dataEffects?.placed(head.tree.sources) ?? Promise.resolve([]);
           const dataSites = () => head.prepared?.facts === undefined ? dataEffects() : head.prepared.facts.ofInputs("trace-data-effects", { sources: head.tree.sources }, dataEffects);
-          const effectCuts = await placeEffects(walk.roots, { store, unresolvedIn, sites: async () => [...(await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources)), ...(await dataSites())].sort(comparePlacement).filter(({ site }) => head.selected(site.file)), lineOf, functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined) });
+          const effectCuts = await placeEffects(walk.roots, { store, callsOf: (body) => reconciled.callsOf(body), sites: async () => [...(await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources)), ...(await dataSites())].sort(comparePlacement).filter(({ site }) => head.selected(site.file)), lineOf, functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined) });
 
           const { steps, ids } = traceSteps(walk.roots);
           const rootIds = new Map(roots.map((root, index) => [root.id, ids.get(walk.roots[index]!)!]));
