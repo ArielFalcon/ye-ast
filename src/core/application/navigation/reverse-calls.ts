@@ -9,7 +9,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { CallBindings, SettledBinding, UnboundCall } from "./call-binding.ts";
 import type { FollowedEdge } from "./edge-targets.ts";
 import type { GraphNavigation } from "./graph-navigation.ts";
-import type { ReconciledCalls } from "./reconciled-calls.ts";
+import type { BodyCalls, ReconciledCalls } from "./reconciled-calls.ts";
 
 /** A recovered call nothing binds that is attributed to a reached declaration (ADR-0041 decision 8): a cut at the call. */
 export interface AttributedCall {
@@ -54,6 +54,11 @@ function lookupName(file: string, name: string): string | undefined {
 interface LookupKey {
   name: string;
   files?: ReadonlySet<string>;
+}
+
+/** The calls a body writes that no index record matches, `deferred` ones included, in written order. */
+export function unmatchedCalls({ writtenOnly, deferredOnly }: Pick<BodyCalls, "writtenOnly" | "deferredOnly">): GraphUnresolvedReference[] {
+  return [...writtenOnly, ...deferredOnly];
 }
 
 export function createReverseCalls({ store, navigation, reconciled, bindings, importedDeclarations, sources, constructs, retained }: ReverseCallsDeps): ReverseCalls {
@@ -108,7 +113,7 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, im
   /** A source's written calls alignment leaves unmatched, `deferred` ones included, by body in the index's order. */
   async function unboundIn(file: SourceFile): Promise<readonly GraphUnresolvedReference[]> {
     const calls = await Promise.all(store.symbolsInFiles([file.path]).map((body) => reconciled.callsOf(body)));
-    return calls.flatMap(({ writtenOnly, deferredOnly }) => [...writtenOnly, ...deferredOnly]);
+    return calls.flatMap(unmatchedCalls);
   }
 
   function bodiesOf(references: readonly GraphUnresolvedReference[]): ReadonlyMap<GraphNodeId, GraphSymbol> {

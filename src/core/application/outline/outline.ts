@@ -13,6 +13,7 @@ import type { UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
 import type { OutlineSelector, TopLevelLineFault } from "../../ports/outline-queries.port.ts";
 import { outlineUses, unprovedUseCuts } from "../../domain/outline/outline-uses.ts";
 import { usesOf } from "../navigation/declaration-uses.ts";
+import { unmatchedCalls } from "../navigation/reverse-calls.ts";
 import type { BaseReading } from "../snapshot/base-reading.ts";
 import type { TypeTarget } from "../../ports/type-bindings.port.ts";
 import { createGraphNavigation } from "../navigation/graph-navigation.ts";
@@ -140,10 +141,7 @@ export async function focusWithUses(store: CodeGraphReader, read: FocusRead, rea
   if (origins === undefined || targets === undefined) throw new Error("a focus binds its uses through the line's import origins");
   const uses = reading.declarationUses();
   const reconciled = reading.reconciledCalls(targets, uses);
-  const writtenCalls = reconciled === undefined ? undefined : async (body: GraphSymbol) => {
-    const { writtenOnly, deferredOnly } = await reconciled.callsOf(body);
-    return [...writtenOnly, ...deferredOnly];
-  };
+  const writtenCalls = reconciled === undefined ? undefined : async (body: GraphSymbol) => unmatchedCalls(await reconciled.callsOf(body));
   const input = { store, navigation: createGraphNavigation(store, () => false), uses, targets, origins, writtenCalls, ...(signal === undefined ? {} : { signal }) };
   const settled = new Map<GraphSymbol["id"], { uses: readonly OutlineUse[]; cuts: Cut[] }>();
   const focus: OutlineFocus[] = [];
