@@ -23,3 +23,17 @@ test("an indexed JSON file is not claimed unless the module reader certifies it 
   assert.deepEqual(result.files, []);
   assert.deepEqual(result.unheld, ["src/data.json"]);
 });
+
+test("a call the base binds into the file makes its file a user, and one it only attributes to the file a namer", async () => {
+  const store = fakeCodeGraph([fakeNode("load", "function", "src/target.ts", 1, 3), fakeNode("bound", "function", "src/bound.ts", 1, 3), fakeNode("guess", "function", "src/guess.ts", 1, 3)], [], []);
+  const [bound, guess, load] = store.symbolsInFiles(["src/bound.ts", "src/guess.ts", "src/target.ts"]);
+  const reference = (body: typeof guess) => ({ from: body!.id, name: "load", kind: "calls", file: body!.file, line: 2, column: 2, candidates: [] });
+  const into = async () => ({
+    edges: [{ edge: { source: bound!.id, target: load!.id, kind: "calls", line: 2, column: 2, confidence: null }, source: bound!, target: load! }],
+    attributed: [{ node: load!, call: { body: guess!, reference: reference(guess) } }],
+  });
+
+  const result = await readImporters(store, ["src/target.ts"], [], undefined, undefined, into as never);
+
+  assert.deepEqual(result.files.map(({ users, unresolvedNamers }) => ({ users, unresolvedNamers })), [{ users: ["src/bound.ts"], unresolvedNamers: ["src/guess.ts"] }]);
+});

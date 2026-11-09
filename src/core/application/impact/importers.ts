@@ -3,7 +3,8 @@ import { NOT_DECLARED_KINDS, sortedUnique, unresolvedNamersOf, type ImportedFile
 import type { UnresolvedUse } from "../../domain/impact/impact-cuts.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
-import type { EdgeTargets } from "../navigation/edge-targets.ts";
+import type { EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
+import type { AttributedCall } from "../navigation/reverse-calls.ts";
 
 export interface ImportersRead {
   /** One entry per requested file the index holds, in path order. */
@@ -17,10 +18,16 @@ const CONTAINMENT = "contains";
 const IMPORT = "imports";
 
 /**
+ * What the base binds into declarations beyond the index's edges into them (ADR-0041 U5): the edges it moves there and
+ * the written calls the index does not record, bound or attributed to them.
+ */
+export type BoundInto = (nodes: readonly GraphSymbol[], signal?: AbortSignal) => Promise<{ edges: readonly FollowedEdge[]; attributed: readonly AttributedCall[] }>;
+
+/**
  * With `targets`, an edge they judge to reach another declaration than the file's, or none, makes no user, and a file
  * whose only edges into the file are name matches is one of its `unresolvedNamers`.
  */
-export async function readImporters(store: CodeGraphReader, requested: readonly string[], references: readonly UnresolvedUse[], modules?: ModuleDependencies, targets?: EdgeTargets, signal?: AbortSignal): Promise<ImportersRead> {
+export async function readImporters(store: CodeGraphReader, requested: readonly string[], references: readonly UnresolvedUse[], modules?: ModuleDependencies, targets?: EdgeTargets, into?: BoundInto, signal?: AbortSignal): Promise<ImportersRead> {
   const files: ImportedFile[] = [];
   const unheld: string[] = [];
   const parsed = new Set(modules?.files.map(({ file }) => file));
@@ -54,8 +61,10 @@ export async function readImporters(store: CodeGraphReader, requested: readonly 
     const reexports = consumers?.reexports ?? new Set<string>();
     const dynamic = consumers?.dynamic ?? new Set<string>();
     const types = consumers?.types ?? new Set<string>();
-    const users = sortedUnique([...from((edge) => edge.kind !== CONTAINMENT && !matched.has(edge)), ...imports, ...reexports, ...dynamic, ...types].filter((source) => source !== file));
-    const matchers = from((edge) => matched.has(edge)).filter((source) => !users.includes(source));
+    const bound = into === undefined ? { edges: [], attributed: [] } : await into(nodes, signal);
+    const boundUsers = bound.edges.flatMap(({ source, target }) => (target.file === file ? [source.file] : []));
+    const users = sortedUnique([...from((edge) => edge.kind !== CONTAINMENT && !matched.has(edge)), ...boundUsers, ...imports, ...reexports, ...dynamic, ...types].filter((source) => source !== file));
+    const matchers = [...from((edge) => matched.has(edge)), ...bound.attributed.map(({ call }) => call.reference.file)].filter((source) => source !== file && !users.includes(source));
     files.push({
       file,
       importers: sortedUnique([...from((edge) => edge.kind === IMPORT).filter((source) => !(reexports.has(source) || dynamic.has(source) || types.has(source)) || imports.has(source)), ...imports].filter((source) => source !== file)),

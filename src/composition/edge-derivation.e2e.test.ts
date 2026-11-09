@@ -211,3 +211,15 @@ test("a caller the index matched by name alone is an ambiguous caller of a consu
     ["ambiguous-caller@src/app/report.ts", "incompatible@src/app/order-page.ts", "incompatible@src/app/order-view.ts"],
   );
 });
+
+test("importers reads the line's proofs: a call through an inject() field of a subclass that inherits the method makes its file a user, not a namer", async () => {
+  const web = join(root, "web-importers");
+  await commitFiles(web, WEB);
+
+  const result = await composeQueries({ scratchRoot }).impact.importers({ repo: web, repoId: "web", revision: "HEAD", files: ["src/app/order.service.ts"] });
+
+  assert.ok(result.ok && result.value.status !== "unknown", JSON.stringify(result));
+  assert.deepEqual(result.value.value.files.map(({ users, unresolvedNamers }) => ({ users, unresolvedNamers })), [
+    { users: ["src/app/order-page.ts", "src/app/order-view.ts", "src/app/special-orders.ts"], unresolvedNamers: ["src/app/report.ts"] },
+  ]);
+});

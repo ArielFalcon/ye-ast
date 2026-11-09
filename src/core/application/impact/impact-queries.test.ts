@@ -2011,9 +2011,8 @@ test("a cancelled module dependencies read publishes no output", async () => {
   assert.equal(counter.calls, 2);
 });
 
-test("importers judge only the edges from other files, with the module statements the query already read", async () => {
+test("importers judge only the edges from other files", async () => {
   const judged: string[] = [];
-  let extractions = 0;
   const importOrigins: ImportOriginsReader = () => ({
     origins: async (sites) => sites.map((site) => originFinding(site, undefined)),
     replacedRoots: async () => NOTHING_REPLACED,
@@ -2023,7 +2022,7 @@ test("importers judge only the edges from other files, with the module statement
     },
     rootBindings: NO_BINDINGS, declaredTypes: NO_DECLARED_TYPES, dispatchTargets: NO_DISPATCH_TARGETS, receiverMethods: NO_RECEIVER_METHODS,
   });
-  const moduleDependencies: ModuleDependenciesReader = { extract: async () => { extractions++; return { files: [], dependencies: [], unread: [] }; } };
+  const moduleDependencies: ModuleDependenciesReader = { extract: async () => ({ files: [], dependencies: [], unread: [] }) };
   const { importers } = setup({
     nodes: SHOP_NODES,
     edges: [
@@ -2040,7 +2039,6 @@ test("importers judge only the edges from other files, with the module statement
 
   assert.deepEqual(answer.status !== "unknown" && answer.value.files.map(({ users }) => users), [["src/Svc.java"]]);
   assert.deepEqual(judged, ["src/Svc.java"]);
-  assert.equal(extractions, 1);
 });
 
 test("a graph edge whose bare root Java places in another file leaves the graph's target: dropped when that declaration has no node, moved to it when the containment path finds one", async () => {
@@ -2114,6 +2112,17 @@ test("a call the type checker binds to another repository declaration moves ther
   for (const outside of [{ kind: "external", module: "router-kit", name: "get" }, { kind: "ambient", name: "get" }] as const) {
     assert.equal(viaOf(await typedCallers({ file: "src/store.ts", symbol: "get" }, checker(boundTo(outside))), "id"), undefined, outside.kind);
   }
+});
+
+test("importers read the type checker's bindings: a call it moves to another file's declaration makes no user, and the fact records what it read", async () => {
+  const importersOf = async (typeBindings?: TypedOption) => importersFact(await setup({ nodes: TYPED_NODES, edges: TYPED_EDGES, importOrigins: origins(() => undefined), ...(typeBindings && { typeBindings }) }).importers({ files: ["src/store.ts"] }));
+  const namesOf = (answer: Fact<ImportersValue>) => answer.status !== "unknown" && answer.value.files.map(({ users, unresolvedNamers }) => ({ users, unresolvedNamers }));
+
+  const moved = await importersOf(checker(boundTo({ kind: "repository", file: "src/other.ts", line: 1, name: "get" })));
+
+  assert.deepEqual(namesOf(await importersOf()), [{ users: ["src/reader.ts"], unresolvedNamers: [] }]);
+  assert.deepEqual(namesOf(moved), [{ users: [], unresolvedNamers: [] }]);
+  assert.deepEqual(moved.inputs.buildOutputs, USED);
 });
 
 test("without a declared build output every answer is the one given before", async () => {

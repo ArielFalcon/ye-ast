@@ -44,7 +44,7 @@ import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
 import { ABORTED, factBaseOf, trustOf, withScratch, type CommitExtraction, type PreparedCommit } from "../snapshot/read-snapshot.ts";
 import { createHeadReader, preparedLive, withLiveCapture, type FactSpec, type HeadIndex, type HeadReaderDeps, type HeadReading, type Revisioned } from "../snapshot/head-reading.ts";
-import { readImporters } from "./importers.ts";
+import { readImporters, type BoundInto } from "./importers.ts";
 import { createOriginCalls, inboundEdgesOf, type OriginCalls } from "./inbound-origins.ts";
 import type { EdgeCorrections, InboundEdges } from "./inbound-edges.ts";
 import { typedReferencesOf, type ReferenceProofs } from "../navigation/reference-origins.ts";
@@ -53,7 +53,7 @@ import { walkImpact, type Walk } from "./walk.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
-import { createEdgeTargets, edgeKey, SYNTAX_ONLY, syntaxOfSources, type EdgeTargets, type FollowedEdge } from "../navigation/edge-targets.ts";
+import { edgeKey, type EdgeTargets, type FollowedEdge } from "../navigation/edge-targets.ts";
 import type { AttributedCall, ReverseCalls } from "../navigation/reverse-calls.ts";
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
@@ -154,7 +154,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   const importerSource = (file: string): boolean => moduleSource(file) || isTypeScriptFile(file) || isJavaSource(file);
   const importerReader = createHeadReader({ ...deps, sourceSelection: importerSource });
   const readings = createBaseReadings({ ...deps, checkerInputs: deps.typeBindings === undefined ? undefined : createRevisionSources({ ...deps, sourceSelection: isTypeCheckerInput }) });
-  const readingOf = (head: HeadReading, index: HeadIndex, snapshot: SnapshotRef, request: ReadingRequest): BaseReading =>
+  const readingOf = (head: HeadReading<Pick<CommitExtraction, "export" | "sources">>, index: HeadIndex, snapshot: SnapshotRef, request: ReadingRequest): BaseReading =>
     readings.of({ tree: head.tree, prepared: head.prepared, store: index.store, digest: index.digest, snapshot, request }, { modules: bindingModules });
 
   return {
@@ -246,14 +246,19 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           const references = unresolvedReferencesIn(store, written);
           const modules = deps.moduleDependencies === undefined ? undefined : await moduleDependenciesOf(deps.moduleDependencies, head.prepared, headTree, request.signal);
           if (request.signal?.aborted) return ABORTED;
-          const origins = deps.importOrigins?.(headTree.sources, undefined, head.prepared?.facts);
-          const read = await readImporters(store, covered, references, modules, origins === undefined ? undefined : createEdgeTargets({ origins, store, modules, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources, head.prepared?.facts), proofs: async () => SYNTAX_ONLY }), request.signal);
+          const reading = readingOf(head, index, head.base(content).snapshot, request);
+          const typed = await reading.typed();
+          if (typed === "aborted") return ABORTED;
+          const targets = reading.edgeTargets(typed.typed);
+          const read = await readImporters(store, covered, references, modules, targets, targets === undefined ? undefined : await boundInto(store, reading, targets), request.signal);
           if (request.signal?.aborted) return ABORTED;
           const moduleOnly = new Set(modules?.files.filter((file) => file.moduleOnly).map((file) => file.file));
           const loadPlaces = await deps.dynamicLoads.extract(headTree.sources);
           if (request.signal?.aborted) return ABORTED;
           const cuts = [
             ...fixed,
+            ...typed.inputsLeftOut,
+            ...buildOutputCuts(typed.buildOutputs),
             ...unresolvedLinkCuts(
               references.filter((reference) => kindOfChangedFile(reference.file) !== "test"),
               [],
@@ -264,7 +269,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
             ...(modules?.unread.map(({ file }) => fileCut("no-extractor", file, "module-unread")) ?? []),
             ...unresolvedSpecifierCuts(modules?.dependencies.filter((edge) => edge.target.kind === "unresolved") ?? []),
           ];
-          return { ok: true, value: impactFact(head.base(content, true), { files: read.files }, cuts, { kind: "dependents", files }) };
+          return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), { files: read.files }, cuts, { kind: "dependents", files }) };
         } finally {
           store.close();
         }
@@ -655,6 +660,22 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
     }
     if (!changed) return { inbound, walk, attributed };
   }
+}
+
+/**
+ * What the base binds into declarations an importers answer asks about (ADR-0041 U5), the one level of `walkInside`: the
+ * edges an import proves reach them, the member calls through a field's or an `inject()` local's origin, and the written
+ * calls the index does not record, bound or attributed.
+ */
+async function boundInto(store: CodeGraphReader, reading: BaseReading, targets: EdgeTargets): Promise<BoundInto> {
+  const reverse = reading.reverseCalls(targets);
+  const originCalls = targets.bindings === undefined ? undefined : createOriginCalls(store, targets.bindings, await reading.relations());
+  return async (nodes, signal) => {
+    const redirected = await targets.redirectedInto(nodes, signal);
+    const throughOrigins = (await originCalls?.into(nodes, signal)) ?? [];
+    const recovered = (await reverse?.into(nodes, signal)) ?? { edges: [], attributed: [] };
+    return { edges: [...redirected, ...throughOrigins, ...recovered.edges], attributed: recovered.attributed };
+  };
 }
 
 function templateOwners(componentsByResource: ReadonlyMap<string, readonly ComponentRef[]>): Map<string, string[]> {
