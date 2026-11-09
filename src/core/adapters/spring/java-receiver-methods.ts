@@ -10,7 +10,7 @@ import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, heldJavaProject, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
-import { createJavaProject, readArgumentSignature, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, readArgumentSignature, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type Signature, type TypeDecl } from "./java-symbols.ts";
 
 const SLOT = "java-receiver-methods";
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
@@ -27,6 +27,9 @@ const NOT_ARGUMENTS: ReadonlySet<string> = new Set(["line_comment", "block_comme
 const CALL_REWRITING_ANNOTATIONS: ReadonlySet<string> = new Set(["Delegate", "ExtensionMethod"]);
 /** Platform interfaces that declare no members, so a type below one inherits no method from it. */
 const MEMBERLESS_PLATFORM_INTERFACES: ReadonlySet<string> = new Set(["java.io.Serializable", "java.lang.Cloneable", "java.util.RandomAccess", "java.util.EventListener"]);
+const PRIMITIVES: ReadonlySet<string> = new Set(["boolean", "byte", "char", "short", "int", "long", "float", "double"]);
+/** Platform classes a signature names that declare no type parameter, so a value of one is never raw. */
+const PLAIN_PLATFORM_TYPES: ReadonlySet<string> = new Set(["java.lang.Object", "java.lang.String"]);
 
 /** One Java source as the resolver reads it: its description, and its receiver bindings by the call's place, member and receiver. */
 export interface ReceiverSource {
@@ -53,7 +56,8 @@ interface ReadFile extends ReceiverSource {
  * members of the name, its own and inherited, offer no single signature for the call — a member whose stated parameter
  * types equal the arguments' settled signature binds it, since an exact match is the most specific applicable method
  * (JLS 15.12.2.5), and otherwise every member of the call's arity must state the same signature, with no varargs and no
- * inaccessible private declaration — or the name is one of `Object`'s methods; when the call sits in an
+ * inaccessible private declaration, a `protected` member of another package withholds the selection (JLS 6.6), and a
+ * static call names no instance method — or the name is one of `Object`'s methods; when the call sits in an
  * anonymous or a local class; when a source holds an annotation by which a processor adds overloads or rewrites calls
  * (`CALL_REWRITING_ANNOTATIONS`); or when the declared hierarchy does not settle the member. Declaration selection and
  * runtime dispatch are separate obligations. An unproven value receiver or declared repository member remains a cut;
@@ -163,10 +167,11 @@ export function createResolver(project: JavaProject) {
   /**
    * The repository type the receiver of an invocation is declared to hold; none when nothing proves one. `bound` when a
    * type variable types the receiver, or a receiver up its chain: the type is the variable's one bound (JLS 4.4).
+   * `typeName` when the receiver is a name that denotes the type itself, so the call must name a static method.
    */
-  const receiverOf = (invocation: Node, source: ReceiverSource): { type: TypeDecl; bound: boolean } | undefined => {
+  const receiverOf = (invocation: Node, source: ReceiverSource): { type: TypeDecl; bound: boolean; typeName: boolean } | undefined => {
     const object = invocation.childForFieldName("object");
-    const declared = (type: TypeDecl | undefined, bound = false) => (type === undefined ? undefined : { type, bound });
+    const declared = (type: TypeDecl | undefined, bound = false, typeName = false) => (type === undefined ? undefined : { type, bound, typeName });
     if (object === null || object.type === "this") return declared(thisType(invocation, source.file, project));
     if (object.type === "method_invocation") {
       const called = methodNamed(object, source);
@@ -175,7 +180,7 @@ export function createResolver(project: JavaProject) {
     const binding = source.bindings.get(callKey(invocation.startPosition.row + 1, invocation.startPosition.column + 1, invocation.childForFieldName("name")?.text ?? ""));
     const receiver = object.type === "identifier" ? object.text : object.type === "field_access" ? object.childForFieldName("field")?.text : undefined;
     if (binding === undefined || binding.receiver !== receiver || binding.holds.kind !== "annotated") {
-      return object.type === "identifier" && localBinding(object) === undefined && !fieldAround(object, source.file, project) ? declared(repositoryType(object, source.file, object)) : undefined;
+      return object.type === "identifier" && localBinding(object) === undefined && !fieldAround(object, source.file, project) ? declared(repositoryType(object, source.file, object), false, true) : undefined;
     }
     const name = annotationAt(source.file.root, binding.holds.line, binding.holds.column, binding.holds.type);
     if (name === undefined) return undefined;
@@ -189,8 +194,10 @@ export function createResolver(project: JavaProject) {
   const methodNamed = (invocation: Node, source: ReceiverSource): { method: MethodDecl; bound: boolean } | undefined => {
     const held = receiverOf(invocation, source);
     const name = invocation.childForFieldName("name")?.text;
-    const method = held === undefined || name === undefined ? undefined : memberOf(held.type, name, invocation, enclosingType(invocation, source.file, project));
-    return method === undefined ? undefined : { method, bound: held!.bound };
+    if (held === undefined || name === undefined) return undefined;
+    const method = memberOf(held.type, name, invocation, source.file, enclosingType(invocation, source.file, project));
+    if (method === undefined || (held.typeName && !method.modifiers.includes("static"))) return undefined;
+    return { method, bound: held.bound };
   };
 
   /** The repository type a method declares it returns: none for a type variable, an array, a primitive or a type outside the repository. */
@@ -205,44 +212,58 @@ export function createResolver(project: JavaProject) {
   };
 
   /**
-   * The declaration a call of `name` with `invocation`'s arguments on a value of `type` is resolved to: the member whose
-   * stated parameter types equal the arguments' settled signature (JLS 15.12.2.5), else the members of the name, declared
-   * and inherited, must be one signature at the call's arity, so overload resolution has one candidate; the type's own,
-   * else the nearest up its class chain, else the only one.
+   * The declaration a call of `name` with `invocation`'s arguments on a value of `type` is resolved to, among the members
+   * the call's file reaches: the member whose stated parameter types equal the arguments' settled signature (JLS
+   * 15.12.2.5), else the reachable members of the name, declared and inherited, must be one signature at the call's
+   * arity, so overload resolution has one candidate; the type's own, else the nearest up its class chain, else the only
+   * one. A member whose reach is unknown withholds the selection.
    */
-  const memberOf = (type: TypeDecl, name: string, invocation: Node, caller: TypeDecl | undefined): MethodDecl | undefined => {
+  const memberOf = (type: TypeDecl, name: string, invocation: Node, file: JavaFile, caller: TypeDecl | undefined): MethodDecl | undefined => {
     if (OBJECT_METHODS.has(name)) return undefined;
     const above = declaredHierarchy(type);
     if (above.gaps.some((gap) => !memberless.has(clauseKey(gap.file, gap.node)))) return undefined;
     const named = above.types.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
     if (named.some(hasVarargs)) return undefined;
     const candidates = named.filter((method) => method.parameterTypes.length === argumentCount(invocation));
-    const [first] = candidates;
-    if (first === undefined) return undefined;
     if (candidates.some((method) => method.modifiers.includes("private") && (method.owner !== type || method.owner !== caller))) return undefined;
-    const exact = caller === undefined ? undefined : exactCandidate(candidates, invocation, caller);
+    const reach = candidates.map((method) => reachability(method, file));
+    if (reach.includes("unknown")) return undefined;
+    const reachable = candidates.filter((_, index) => reach[index] === "reachable");
+    const [first] = reachable;
+    if (first === undefined) return undefined;
+    const exact = caller === undefined ? undefined : exactCandidate(reachable, invocation, caller);
     if (exact !== undefined) return exact;
-    if (candidates.some((method) => method !== first && !sameStatedSignature(method, first))) return undefined;
+    if (reachable.some((method) => method !== first && !sameStatedSignature(method, first))) return undefined;
     for (const current of project.classChain(type)) {
-      const own = candidates.find((method) => method.owner === current);
+      const own = reachable.find((method) => method.owner === current);
       if (own !== undefined) return own;
     }
-    return candidates.length === 1 ? first : undefined;
+    return reachable.length === 1 ? first : undefined;
   };
 
   /**
    * The one member whose stated parameter types equal the arguments' settled signature, the most specific applicable
    * method (JLS 15.12.2.5); none when the arguments or every candidate's signature are not settled, or no single member
-   * matches.
+   * matches. The erasure a signature keeps drops type arguments, and a raw argument is applicable to a parameterized
+   * parameter by unchecked conversion, so when a candidate states type arguments every argument must be plain.
    */
   const exactCandidate = (candidates: readonly MethodDecl[], invocation: Node, caller: TypeDecl): MethodDecl | undefined => {
     const signature = readArgumentSignature(invocation, { file: caller.file, type: caller, at: invocation }, project);
     if (signature === undefined) return undefined;
+    if (candidates.some(statesTypeArguments) && !signature.every(isPlainArgument)) return undefined;
     const matching = candidates.filter((candidate) => {
       const stated = signatureOf(candidate);
       return stated !== undefined && sameSignature(stated, signature);
     });
     return matching.length === 1 ? matching[0] : undefined;
+  };
+
+  /** Whether an argument's type is certainly not generic: a primitive, a platform type that is not generic, or a repository type with no type variable around it. */
+  const isPlainArgument = (argument: Signature[number]): boolean => {
+    if ("variable" in argument) return false;
+    if (PRIMITIVES.has(argument.name) || PLAIN_PLATFORM_TYPES.has(argument.name)) return true;
+    const declared = project.types.find((type) => type.fqn === argument.name);
+    return declared !== undefined && !hasTypeVariables(declared);
   };
 
   /** Whether two members certainly state the same parameter types, each as the strict reading settles them. */
@@ -349,6 +370,26 @@ function constructorArity(constructor: MethodDecl): number {
 
 function recordComponents(record: Node): number {
   return (record.childForFieldName("parameters")?.namedChildren ?? []).filter((component) => component?.type === "formal_parameter").length;
+}
+
+/** How a file reaches a method (JLS 6.6): `unknown` when a protected member of another package depends on the receiver's type. */
+type Reach = "reachable" | "hidden" | "unknown";
+
+function reachability(method: MethodDecl, file: JavaFile): Reach {
+  if (method.modifiers.some((modifier) => modifier === "public" || modifier === "private") || method.owner.kind === "interface" || method.owner.kind === "annotation") return "reachable";
+  if (method.owner.file.packageName === file.packageName) return "reachable";
+  return method.modifiers.includes("protected") ? "unknown" : "hidden";
+}
+
+/** Whether a method's parameters state type arguments, which the erasure its signature keeps drops. */
+function statesTypeArguments(method: MethodDecl): boolean {
+  return (method.node.childForFieldName("parameters")?.descendantsOfType("type_arguments") ?? []).length > 0;
+}
+
+/** Whether a type or a type around it declares a type variable, so its raw use is possible. */
+function hasTypeVariables(type: TypeDecl): boolean {
+  for (let current: TypeDecl | undefined = type; current !== undefined; current = current.outer) if (current.typeVariables.size > 0) return true;
+  return false;
 }
 
 /** A method the index places by its file and the lines from its first token to its name (a compact constructor's first line). */

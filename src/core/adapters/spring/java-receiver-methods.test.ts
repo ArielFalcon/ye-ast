@@ -6,8 +6,12 @@ import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ReceiverMethod } from "../../ports/import-origins.port.ts";
 
+function javaIn(directory: string, path: string, lines: readonly string[]): SourceFile {
+  return { path: `src/main/java/${directory}/${path}`, content: `${lines.join("\n")}\n` };
+}
+
 function java(path: string, lines: readonly string[]): SourceFile {
-  return { path: `src/main/java/app/${path}`, content: `${lines.join("\n")}\n` };
+  return javaIn("app", path, lines);
 }
 
 const STORE = java("Store.java", ["package app;", "", "public interface Store {", "  void save(String value);", "  Store find();", "}"]);
@@ -193,6 +197,41 @@ test("two overloads of an argument's settled type bind the exact match, never bo
   assert.deepEqual(await methodAt([owner, port, use("port.find(\"7\")", [], "Port port")], "find"), method(port, 4));
   assert.deepEqual(await methodAt([owner, port, use("port.find(value)", [], "Port port, Object value")], "find"), { kind: "unproven" });
   assert.deepEqual(await methodAt([owner, both, use("both.find(\"7\")", [], "Both both")], "find"), { kind: "unproven" });
+});
+
+test("an exact match binds among public overloads of one package, the caller's own", async () => {
+  const overloads = java("C.java", ["package app;", "", "public class C {", "  public void f(String x) {}", "  public void f(Object x) {}", "}"]);
+
+  assert.deepEqual(await methodAt([overloads, use("c.f(\"x\")", [], "C c")], "f"), method(overloads, 4));
+});
+
+test("a call binds only an overload the caller can reach: a package-private one of another package is no candidate, so the public overload it hides binds", async () => {
+  const library = javaIn("a", "C.java", ["package a;", "", "public class C {", "  void f(String x) {}", "  public void f(Object x) {}", "}"]);
+  const caller = javaIn("b", "Use.java", ["package b;", "", "class Use {", "  void run(a.C c) { c.f(\"x\"); }", "}"]);
+
+  assert.deepEqual(await methodAt([library, caller], "f"), method(library, 5));
+});
+
+test("generic overloads prove no exact match, since a raw argument is applicable to each by unchecked conversion and javac finds the call ambiguous", async () => {
+  const generic = java("C.java", ["package app;", "", "class C {", "  void f(java.util.List<String> x) {}", "  void f(java.util.Collection<Integer> x) {}", "}"]);
+
+  assert.deepEqual(await methodAt([generic, use("c.f(raw)", [], "C c, java.util.List raw")], "f"), { kind: "unproven" });
+});
+
+test("a plain argument still binds its exact overload beside a generic one, since no unchecked conversion makes the call ambiguous", async () => {
+  const plain = java("C.java", ["package app;", "", "class C {", "  void f(String x) {}", "  void f(java.util.List<String> x) {}", "}"]);
+  const protectedSame = java("Base.java", ["package app;", "", "public class Base {", "  protected void f(String x) {}", "  public void f(Object x) {}", "}"]);
+
+  assert.deepEqual(await methodAt([plain, use("c.f(s)", [], "C c, String s")], "f"), method(plain, 4));
+  assert.deepEqual(await methodAt([protectedSame, use("base.f(\"x\")", [], "Base base")], "f"), method(protectedSame, 4));
+});
+
+test("a call on a type name binds only a static method: the instance overload the arguments select is no fallback, while a static one binds", async () => {
+  const mixed = java("C.java", ["package app;", "", "class C {", "  static void f(Object x) {}", "  void f(String x) {}", "}"]);
+  const statically = java("C.java", ["package app;", "", "class C {", "  static void f(String x) {}", "  void f(Object x) {}", "}"]);
+
+  assert.deepEqual(await methodAt([mixed, use("C.f(\"x\")", [], "")], "f"), { kind: "unproven" });
+  assert.deepEqual(await methodAt([statically, use("C.f(\"x\")", [], "")], "f"), method(statically, 4));
 });
 
 test("given derived facts, a second reader over the same sources answers the same sites without parsing them again", async () => {

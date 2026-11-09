@@ -922,10 +922,15 @@ This adds no public call-site fields and changes no stored schema.
 ### Java call signature selection (2026-11-07)
 
 Receiver-method resolution filters the declared hierarchy's named members by argument count before comparing their
-parameter identities with the shared `readSignature` / `sameSignature` reading. An argument whose static type a
-candidate's parameter type states exactly binds that member, the most specific applicable method (JLS 15.12.2.5); an
-argument the reading does not settle keeps the arity rule. Different arities do not create an ambiguity; with no exact
-match, distinct or unsettled signatures at the same arity, and varargs, retain a call-site cut listing candidates.
+parameter identities with the shared `readSignature` / `sameSignature` reading. Only the members the call's file can
+reach (JLS 6.6) are candidates: a package-private member of another package, and a `protected` one of another package
+while the call's file is not a subclass, are not, and a `protected` member of another package withholds the selection.
+An argument whose static type a candidate's parameter type states exactly binds that member, the most specific
+applicable method (JLS 15.12.2.5); an argument the reading does not settle keeps the arity rule. A raw or generic
+argument, or a candidate with type arguments in its parameters, never binds exactly: the erasure drops the arguments,
+and javac finds such a call ambiguous. A call on a type name binds only a static method. Different arities do not
+create an ambiguity; with no exact match, distinct or unsettled signatures at the same arity, and varargs, retain a
+call-site cut listing candidates.
 A known repository receiver whose signature cannot be selected never falls back to the index's guessed target.
 Selecting a declared method and proving its runtime implementation are separate obligations: R7/R10 still decide
 whether the selected declaration's body may expand.
