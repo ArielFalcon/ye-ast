@@ -1,10 +1,9 @@
-import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { CALL_EDGE_KINDS, FIELD_KINDS, EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, holdsValue, type EdgeVerdict, type ReceiverSettlement, type RootOrigin } from "../../domain/impact/edge-policy.ts";
 import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import { hasTyping } from "../../domain/languages/profiles.ts";
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
-import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredMemberNames } from "../../ports/declared-member-names.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
@@ -73,16 +72,6 @@ export interface EdgeTargetsDeps {
 
 /** The syntax of a source no reader parses: it states nothing. */
 export const NOTHING_DECLARED: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
-
-/** What each of `sources` states in its syntax, kept between requests in `facts` where the reader can; nothing without a reader. */
-export function syntaxOfSources(reader: DeclaredMemberNamesReader | undefined, sources: readonly SourceFile[], facts?: DerivedFacts): EdgeTargetsDeps["syntaxOf"] {
-  if (reader === undefined) return undefined;
-  const byPath = new Map(sources.map((file) => [file.path, file]));
-  return async (path) => {
-    const file = byPath.get(path);
-    return file === undefined ? NOTHING_DECLARED : reader.memberNames(file, facts);
-  };
-}
 
 /** A graph edge with both of its ends. */
 export interface FollowedEdge {

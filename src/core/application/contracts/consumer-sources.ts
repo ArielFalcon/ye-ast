@@ -20,9 +20,7 @@ import type { Digest } from "../../ports/digest.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import { inboundEdgesOf, receiverCorrectionsOf } from "../impact/inbound-origins.ts";
-import { createEdgeTargets, syntaxOfSources } from "../navigation/edge-targets.ts";
-import { referenceProofsOf } from "../navigation/reference-origins.ts";
-import { memberProofContextOf } from "../relations/retained-relations.ts";
+import { createBaseReadings } from "../snapshot/base-reading.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
@@ -54,7 +52,7 @@ export interface ConsumerSourcesDeps {
   importOrigins?: ImportOriginsReader;
   /** What a source's syntax states; without it no call on a value receiver is settled, and each stays as the graph resolved it. */
   memberNames?: DeclaredMemberNamesReader;
-  /** The TypeScript module statements that bind a receiver's declared type to its declaration. */
+  /** The module statements of every language that bind a receiver's declared type to its declaration. */
   modules?: ModuleDependenciesReader;
 }
 
@@ -75,6 +73,7 @@ interface Reading {
  */
 export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSources {
   const heads = createHeadReader(deps.heads);
+  const line = createBaseReadings(deps);
   return {
     async withWorkspace(request, use) {
       const answered = await deps.operation.withRead(request, async (read, context) => {
@@ -99,12 +98,16 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             if (indexed === "aborted") return ABORTED;
             if (indexed !== "unavailable" && "fault" in indexed) return { ok: false, fault: indexed.fault };
             if (indexed !== "unavailable") stores.push(indexed.store);
-            const origins = indexed === "unavailable" ? undefined : await deps.relations.extract(sources, { memberProofs: memberProofContextOf(deps.relations, loaded.value, context.scope) });
-            const importOrigins = deps.importOrigins?.(sources, undefined, prepared.value.facts);
-            const proofs = indexed === "unavailable" ? undefined : await referenceProofsOf(importOrigins, indexed.store, loaded.value, context.signal);
-            const corrections = indexed === "unavailable" || origins === undefined || importOrigins === undefined
+            const reading = indexed === "unavailable"
               ? undefined
-              : await receiverCorrectionsOf(indexed.store, createEdgeTargets({ origins: importOrigins, store: indexed.store, modules: deps.modules === undefined ? undefined : { reader: deps.modules, sources }, syntaxOf: syntaxOfSources(deps.memberNames, sources, prepared.value.facts), proofs: async () => origins }), origins, sources.map((file) => file.path), context.signal);
+              : line.of(
+                  { tree: loaded.value, prepared: prepared.value, store: indexed.store, digest: indexed.digest, snapshot: { repo: plan.at.repoId, kind: "sha", sha: plan.at.revision }, request: { repo: plan.at.source, scope: context.scope, ...(context.signal === undefined ? {} : { signal: context.signal }) } },
+                  { modules: deps.modules },
+                );
+            const origins = await reading?.relations();
+            const proofs = await reading?.referenceProofs();
+            const targets = reading?.edgeTargets();
+            const corrections = indexed === "unavailable" || origins === undefined || targets === undefined ? undefined : await receiverCorrectionsOf(indexed.store, targets, origins, sources.map((file) => file.path), context.signal);
             if (context.signal?.aborted) return ABORTED;
             return {
               ok: true,
