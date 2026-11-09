@@ -36,6 +36,26 @@ const LANGUAGE_CHECK_LINES: Readonly<Record<string, number>> = {
   "core/domain/snapshot/live-export.ts": 1,
 };
 
+/**
+ * The one-owner audit's frozen sites (ADR-0045, the paragraph after the Migration table): a declaration's call edges read
+ * straight from the index outside `navigation`, which owns what a body calls, and a callee's last name cut at its last dot
+ * outside `nameTail`'s file, by file.
+ */
+const RAW_BODY_EDGE_SITES: Readonly<Record<string, number>> = {
+  "core/application/trace/trace-effects.ts": 1,
+  "core/application/trace/trace-walk.ts": 3,
+};
+const NAME_TAIL_OWNER = "core/domain/shared/call-place.ts";
+const DOT_TAIL_SITES: Readonly<Record<string, number>> = {
+  "core/adapters/spring/event-call-sites.adapter.ts": 1,
+  "core/adapters/spring/java-symbols.ts": 2,
+  "core/application/composition/compose-evidence.ts": 1,
+  "core/application/navigation/proven-calls.ts": 1,
+  "core/application/navigation/reference-origins.ts": 1,
+  "core/domain/impact/changed-contracts.ts": 1,
+  "core/domain/shared/code-node.ts": 1,
+};
+
 const FAMILIES = ["composition", "contracts", "decisions", "entrypoints", "impact", "outline", "topology", "trace"];
 
 /** The imports from one query family into another, tests included, that `.dependency-cruiser.cjs` exempts. */
@@ -78,6 +98,20 @@ for (const [constructor, frozen] of Object.entries(STAGE_CONSTRUCTOR_SITES)) {
     assert.deepEqual(sites, counted(Object.entries(frozen)));
   });
 }
+
+test("a declaration's edges are read straight from the index outside navigation only at their frozen sites", () => {
+  const raw = /outgoingEdges\(\[\w+\.id\]/g;
+  const sites = counted(files(SOURCE, false).filter((file) => !file.startsWith("core/application/navigation/")).map((file) => [file, read(file).match(raw)?.length ?? 0] as const));
+
+  assert.deepEqual(sites, counted(Object.entries(RAW_BODY_EDGE_SITES)));
+});
+
+test("a name's last segment is cut at its last dot outside nameTail's file only at its frozen sites", () => {
+  const tail = /lastIndexOf\("\."\) \+ 1/g;
+  const sites = counted(files(SOURCE, false).filter((file) => file !== NAME_TAIL_OWNER).map((file) => [file, read(file).match(tail)?.length ?? 0] as const));
+
+  assert.deepEqual(sites, counted(Object.entries(DOT_TAIL_SITES)));
+});
 
 test("language checks outside core/domain/languages stay at their frozen lines", () => {
   const check = new RegExp(`\\b(${LANGUAGE_CHECKS.join("|")})\\b`);
