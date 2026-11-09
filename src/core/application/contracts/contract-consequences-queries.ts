@@ -9,9 +9,9 @@ import { decideProducer, type Origin, type SettledOrigin } from "../../domain/co
 import { decideUse } from "../../domain/contracts/verdict.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import { type Evidence, type Fact, type FactBase, type UnknownReason } from "../../domain/shared/fact.ts";
+import { type CallSiteReach, type Evidence, type Fact, type FactBase, type UnknownReason } from "../../domain/shared/fact.ts";
 import type { Link, LinkBasis } from "../../domain/topology/link.ts";
-import type { PlacedCallSite } from "../../domain/topology/call-site.ts";
+import { httpTargetOf, type PlacedCallSite } from "../../domain/topology/call-site.ts";
 import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
 import type { ContractConsequencesQueries } from "../../ports/contract-consequences-queries.port.ts";
 import type { ConsumerPlacedSites, ConsumerSession, ConsumerSources, PreparedWorkspace } from "../../ports/consumer-sources.port.ts";
@@ -161,7 +161,12 @@ function selectCalls(session: ConsumerSession, operation: string): Result<CallSe
 async function consequencesOf(session: ConsumerSession, selected: CallSelection, hypothesis: ResponseHypothesis): Promise<Pick<AnswerBody, "findings" | "silent">> {
   const { findings } = selected;
   const placed = await placedSitesOf(session, selected.qualified);
-  const queue: Pending[] = selected.qualified.map((link) => startOf(link, hypothesis, placed));
+  const queue: Pending[] = [];
+  for (const link of selected.qualified) {
+    const start = startOf(link, hypothesis, placed, session.excludes);
+    if (start.kind === "ambiguous") findings.push(start.finding);
+    else queue.push(start.pending);
+  }
   let silent = 0;
 
   const seen = new Map<string, AccessPath>();
@@ -223,47 +228,66 @@ async function placedSitesOf(session: ConsumerSession, links: readonly Link[]): 
   return new Map(await Promise.all(repos.map(async (repo) => [repo, await session.placedSites(repo)] as const)));
 }
 
+/** Where a qualified link's value is followed from: one boundary, or an ambiguity frontier when several issuing calls hold it. */
+type Start = { kind: "start"; pending: Pending } | { kind: "ambiguous"; finding: ConsequenceFinding<UseConsequence> };
+
 /**
- * The boundary a link's value is followed from (ADR-0044 decision 7): a propagated link starts at its issuing owned call,
- * with the call it was reached from as the second step of the chain, and a direct site starts where the join reported it.
+ * The boundary a link's value is followed from (ADR-0044 decision 7): a propagated link starts at its one issuing owned
+ * call, with the call it was reached from as the second step of the chain, and a direct site starts where the join reported
+ * it. Several issuing calls are not one of them: none is picked, and every one is evidence of an ambiguity frontier.
  */
-function startOf(link: Link, hypothesis: ResponseHypothesis, placed: ReadonlyMap<string, ConsumerPlacedSites>): Pending {
+function startOf(link: Link, hypothesis: ResponseHypothesis, placed: ReadonlyMap<string, ConsumerPlacedSites>, excludes: ConsumerSession["excludes"]): Start {
   const { from } = link;
   const read = placed.get(from.repo);
-  const reported = read === undefined ? undefined : siteAt(from, read.sites);
-  const issuing = read === undefined || reported === undefined ? undefined : issuingCallOf(reported, read.sites, read.owned);
-  if (issuing === undefined) {
-    return { carrier: { site: { kind: "call-site", ...from }, path: hypothesis.property }, chain: [{ step: "http-call", evidence: { path: from.file, line: from.line, via: `basis:${link.basis}` } }], link, entries: [] };
+  const reported = read === undefined ? undefined : siteAt(from, read.sites, excludes);
+  const issuing = read === undefined || reported === undefined ? [] : issuingCallsOf(reported, read.sites, read.owned);
+  if (issuing.length > 1) {
+    const places = issuing.map((call): Evidence => ({ path: call.file, line: call.line }));
+    const hops = places.slice(0, -1).map((evidence): Hop => ({ step: "http-call", evidence }));
+    return { kind: "ambiguous", finding: frontierItem({ at: places.at(-1)!, cause: "ambiguous-caller", reason: "unresolved", hops }, [], from.repo) };
+  }
+  const [only] = issuing;
+  if (only === undefined) {
+    return { kind: "start", pending: { carrier: { site: { kind: "call-site", ...from }, path: hypothesis.property }, chain: [{ step: "http-call", evidence: { path: from.file, line: from.line, via: `basis:${link.basis}` } }], link, entries: [] } };
   }
   return {
-    carrier: { site: { kind: "call-site", repo: from.repo, file: issuing.file, line: issuing.line, symbol: issuing.symbol }, path: hypothesis.property },
-    chain: [
-      { step: "http-call", evidence: { path: issuing.file, line: issuing.line } },
-      { step: "caller", evidence: { path: from.file, line: from.line } },
-    ],
-    link,
-    entries: [],
+    kind: "start",
+    pending: {
+      carrier: { site: { kind: "call-site", repo: from.repo, file: only.file, line: only.line, symbol: only.symbol }, path: hypothesis.property },
+      chain: [
+        { step: "http-call", evidence: { path: only.file, line: only.line } },
+        { step: "caller", evidence: { path: from.file, line: from.line } },
+      ],
+      link,
+      entries: [],
+    },
   };
 }
 
-/** The placed site the join reported for a link: the same file, line and enclosing symbol, and the same column when the link states one. */
-function siteAt(from: Link["from"], sites: readonly PlacedCallSite[]): PlacedCallSite | undefined {
+/**
+ * The placed site the join reported for a link: the same file, line and enclosing symbol, the same column when the link
+ * states one, and the operation the link reaches. Several operations can be written at one place, so the operation is
+ * decided by the session's own matcher, never by the first site found; no site that reaches the operation is no site.
+ */
+function siteAt(from: Link["from"], sites: readonly PlacedCallSite[], excludes: ConsumerSession["excludes"]): PlacedCallSite | undefined {
   const here = sites.filter(({ site }) => site.file === from.file && site.line === from.line && site.symbol === from.symbol);
-  if (from.column === undefined) return here[0];
-  return here.find(({ column }) => column !== undefined && column + 1 === from.column);
+  const at = from.column === undefined ? here : here.filter(({ column }) => column !== undefined && column + 1 === from.column);
+  return at.find(({ site }) => !excludes(reachOf(site)));
 }
 
-/**
- * The owned call whose expansion reaches the leaf without passing through another owned body (ADR-0044 decision 7): the
- * extraction writes the bodies a propagated site passed through and then the leaf invocation, so the last owned origin is
- * the issuing call, and the placed site at its place names the declaration that writes it.
- */
-function issuingCallOf(site: PlacedCallSite, placed: readonly PlacedCallSite[], owned: ReadonlySet<string>): { file: string; line: number; symbol: string } | undefined {
-  const leaf = site.origins?.filter((origin) => owned.has(origin.file)).at(-1);
-  if (leaf === undefined) return undefined;
-  const at = placed.find((candidate) => candidate.site.file === leaf.file && candidate.site.line === leaf.line && candidate.column === leaf.column);
-  if (at === undefined) return undefined;
-  return { file: at.site.file, line: at.site.line, symbol: at.site.symbol };
+/** The request a call site writes, as the matcher's reach states it; a site with no method or template is never excluded. */
+const reachOf = (site: PlacedCallSite["site"]): CallSiteReach => {
+  const target = httpTargetOf(site);
+  return { kind: "call-site", transport: site.transport, ...(target === undefined ? {} : { method: target.method, template: target.path }) };
+};
+
+/** The owned calls that issue a propagated site: each owned origin that is a placed call of its own, once, in file then line order. */
+function issuingCallsOf(site: PlacedCallSite, placed: readonly PlacedCallSite[], owned: ReadonlySet<string>): { file: string; line: number; symbol: string }[] {
+  const issuing = (site.origins ?? []).filter((origin) => owned.has(origin.file)).flatMap((leaf) => {
+    const at = placed.find((candidate) => candidate.site.file === leaf.file && candidate.site.line === leaf.line && candidate.column === leaf.column);
+    return at === undefined ? [] : [{ file: at.site.file, line: at.site.line, symbol: at.site.symbol }];
+  });
+  return [...new Map(issuing.map((call) => [canonicalJson(call), call])).values()].sort((a, b) => compareText(a.file, b.file) || a.line - b.line);
 }
 
 const linkOf = (link: Link): UseConsequence["link"] => ({ id: link.id, basis: link.basis, call: { file: link.from.file, line: link.from.line, symbol: link.from.symbol }, handler: { repo: link.to.repo, ...link.to.handler } });
