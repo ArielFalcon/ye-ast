@@ -895,7 +895,7 @@ function impactCutLayout(cuts: readonly Cut[], detail: ResponseMode, owner: CutO
       if (previous?.kind !== cut.kind || previous.at[0] !== cut.at[0]) shared.push(`    anchor ${JSON.stringify(cut.at[0])}:`);
       const places = Math.max(0, cut.at.length - 1);
       const reasons = placeReasons(cut);
-      shared.push(`      ${coordinate}; ${cutReasonText(cut)}; ${places} reference ${places === 1 ? "place" : "places"}${cut.limit === undefined ? "" : `; limit ${cut.limit}`}${reasons.length === 0 ? "" : `; reasons ${JSON.stringify(reasons)}`}`);
+      shared.push(`      ${coordinate}; ${cutReasonText(cut)}; ${places} reference ${places === 1 ? "place" : "places"}${cut.limit === undefined ? "" : `; limit ${cut.limit}`}${reasons.length === 0 ? "" : `; spellings ${JSON.stringify(reasons)}`}`);
     } else {
       shared.push(`    ${coordinate}; ${cutRowLabel(cut) === cut.kind ? "" : `${cutReasonText(cut)}; `}${cutPlaces(cut)}${cut.limit === undefined ? "" : ` (limit ${cut.limit})`}`);
     }
