@@ -4,6 +4,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { ImportOrigins, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
+import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, thisType, withJavaSources } from "./java-project.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
@@ -40,8 +41,10 @@ interface ReadFile {
  * then decides the body (RFC-0013 R7). The receiver's type is the repository type a parameter, a local or a private field
  * states, as the receiver bindings read it (ADR-0029 decision 9), or the declared return type of the repository method
  * that a receiver call names in the same way, the enclosing class's for `f()` and `this.f()` (R5): an overriding method
- * may only return a subtype, which dispatch covers. No method, beyond what `dispatchTargets` refuses, when the type is a
- * type variable, an enum or an annotation type; when a type at or above it is outside the repository, whose members the
+ * may only return a subtype, which dispatch covers. A type variable with one bound the repository declares as a class or
+ * an interface types the receiver as that bound (JLS 4.4): the method is its bound's, marked `bound`, a dependence whose
+ * execution any type below the bound may replace. No method, beyond what `dispatchTargets` refuses, when the type is a
+ * type variable with no bound or several, an enum or an annotation type; when a type at or above it is outside the repository, whose members the
  * sources do not state, unless it is a platform interface that declares none (`MEMBERLESS_PLATFORM_INTERFACES`); when its members of the name, its own and inherited, are not exactly one signature of the call's
  * arity with no varargs and no inaccessible private declaration, or the name is one of `Object`'s methods; when the call sits in an
  * anonymous or a local class; when a source holds an annotation by which a processor adds overloads or rewrites calls
@@ -84,8 +87,8 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
           results[index] = chained === undefined ? UNKNOWN : chained === "unproven" || !proves ? UNPROVEN : placedAt(chained);
           continue;
         }
-        const method = proves ? resolver.methodOf(invocation, source) : undefined;
-        if (method !== undefined) results[index] = placedAt(method);
+        const named = proves ? resolver.methodOf(invocation, source) : undefined;
+        if (named !== undefined) results[index] = { ...placedAt(named.method), ...(named.bound ? { bound: true as const } : {}) };
         else if (resolver.hasDeclaredReceiver(invocation, source) || resolver.holdsValue(invocation, source.file)) results[index] = UNPROVEN;
       }
       return results;
@@ -138,28 +141,37 @@ function createResolver(project: JavaProject) {
     return signatures.get(method);
   };
 
-  /** The repository type the receiver of an invocation is declared to hold; none when nothing proves one. */
-  const receiverOf = (invocation: Node, source: ReadFile): TypeDecl | undefined => {
+  /**
+   * The repository type the receiver of an invocation is declared to hold; none when nothing proves one. `bound` when a
+   * type variable types the receiver, or a receiver up its chain: the type is the variable's one bound (JLS 4.4).
+   */
+  const receiverOf = (invocation: Node, source: ReadFile): { type: TypeDecl; bound: boolean } | undefined => {
     const object = invocation.childForFieldName("object");
-    if (object === null || object.type === "this") return thisType(invocation, source.file, project);
+    const declared = (type: TypeDecl | undefined, bound = false) => (type === undefined ? undefined : { type, bound });
+    if (object === null || object.type === "this") return declared(thisType(invocation, source.file, project));
     if (object.type === "method_invocation") {
       const called = methodNamed(object, source);
-      return called === undefined ? undefined : returnTypeOf(called);
+      return called === undefined ? undefined : declared(returnTypeOf(called.method), called.bound);
     }
     const binding = source.bindings.get(callKey(invocation.startPosition.row + 1, invocation.startPosition.column + 1, invocation.childForFieldName("name")?.text ?? ""));
     const receiver = object.type === "identifier" ? object.text : object.type === "field_access" ? object.childForFieldName("field")?.text : undefined;
     if (binding === undefined || binding.receiver !== receiver || binding.holds.kind !== "annotated") {
-      return object.type === "identifier" && localBinding(object) === undefined && !fieldAround(object, source.file, project) ? repositoryType(object, source.file, object) : undefined;
+      return object.type === "identifier" && localBinding(object) === undefined && !fieldAround(object, source.file, project) ? declared(repositoryType(object, source.file, object)) : undefined;
     }
     const name = annotationAt(source.file.root, binding.holds.line, binding.holds.column, binding.holds.type);
-    return name === undefined ? undefined : repositoryType(name, source.file, name);
+    if (name === undefined) return undefined;
+    const variable = typeVariableAround(name);
+    if (variable === undefined) return declared(repositoryType(name, source.file, name));
+    const bounds = variable.namedChildren.find((child) => child?.type === "type_bound")?.namedChildren ?? [];
+    return bounds.length === 1 ? declared(repositoryType(bounds[0]!, source.file, bounds[0]!), true) : undefined;
   };
 
   /** The one method of the name that the receiver's declared type offers for the call's arity. */
-  const methodNamed = (invocation: Node, source: ReadFile): MethodDecl | undefined => {
-    const type = receiverOf(invocation, source);
+  const methodNamed = (invocation: Node, source: ReadFile): { method: MethodDecl; bound: boolean } | undefined => {
+    const held = receiverOf(invocation, source);
     const name = invocation.childForFieldName("name")?.text;
-    return type === undefined || name === undefined ? undefined : memberOf(type, name, argumentCount(invocation), enclosingType(invocation, source.file, project));
+    const method = held === undefined || name === undefined ? undefined : memberOf(held.type, name, argumentCount(invocation), enclosingType(invocation, source.file, project));
+    return method === undefined ? undefined : { method, bound: held!.bound };
   };
 
   /** The repository type a method declares it returns: none for a type variable, an array, a primitive or a type outside the repository. */

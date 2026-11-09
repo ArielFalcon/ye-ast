@@ -151,9 +151,10 @@ export interface ReceiverCallSite {
 /**
  * The method declaration a call names, by its file and the 1-based lines from its first token to its name; `unproven`
  * when its value or declared repository receiver has no settled member, so no index edge proves a step; `unknown`
- * when this reader establishes no receiver obligation.
+ * when this reader establishes no receiver obligation. `bound`: a type variable types a receiver of the chain, so the
+ * method is its bound's: the call depends on it, and what runs is not proven.
  */
-export type ReceiverMethod = { kind: "method"; file: string; start: number; nameLine: number } | { kind: "unproven" } | { kind: "unknown" };
+export type ReceiverMethod = { kind: "method"; file: string; start: number; nameLine: number; bound?: true } | { kind: "unproven" } | { kind: "unknown" };
 
 /** A place a declaration uses a name, where the index places the use: repository-relative and 1-based. */
 export interface UseSite {

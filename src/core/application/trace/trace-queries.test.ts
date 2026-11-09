@@ -293,6 +293,18 @@ test("a call the receiver's declared type names steps at that method, whatever m
   ]);
 });
 
+test("a method a type variable's bound names proves no step, for a resolved call or an unsettled member call, which stay cuts as an unproven receiver's", async () => {
+  const nodes = [SVC, RUN, fakeNode("Repo.save", "method", B, 3, 5, "save"), fakeNode("Repo.find", "method", B, 11, 13, "find")];
+  const unresolved: FakeUnresolved[] = [{ from: "run", name: "this.repo.find", kind: "calls", file: A, line: 10, column: 4 }];
+  const options = { nodes, edges: [...CONTAINS, call("run", "Repo.save", 9, 4)], unresolved, sources: [{ path: B, content: "" }] };
+
+  const bound = await factOf({ ...options, receivers: { save: { kind: "method", file: B, start: 3, nameLine: 3, bound: true }, find: { kind: "method", file: B, start: 11, nameLine: 11, bound: true } } });
+  const unproven = await factOf({ ...options, receivers: { save: { kind: "unproven" }, find: { kind: "unproven" } } });
+
+  assert.deepEqual(valueOf(bound).steps.map((step) => [step.symbol, step.leaves]), [["run", undefined]]);
+  assert.deepEqual(cutsOf(bound), cutsOf(unproven));
+});
+
 test("a body reads its receivers' declared types once, for its resolved calls and its unsettled member calls together", async () => {
   const reads: (readonly string[])[] = [];
   const nodes = [SVC, RUN, fakeNode("Repo.save", "method", B, 3, 5, "save"), fakeNode("Repo.find", "method", B, 11, 13, "find")];

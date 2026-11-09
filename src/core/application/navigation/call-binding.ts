@@ -21,7 +21,9 @@ type Outside = Extract<ImportOrigin, { kind: "external" | "ambient" }>;
  * Which declaration a call the index left without a target binds to at compile time (ADR-0041 decision 4), by the first
  * link of one chain:
  * - `declaration`: the body's own member (`this.m`), the constructor `super(...)` or `this(...)` chains to, the
- *   declaration a bare name's import or the file's own scope binds, or the method a Java receiver's declared type names;
+ *   declaration a bare name's import or the file's own scope binds, or the method a Java receiver's declared type names
+ *   (`bound-receiver` when a type variable types the receiver: the method its bound names, which any type below the
+ *   bound may replace when the call runs);
  * - `receiver`: a member call whose receiver a proof decides, with the declaration the proof binds it to, if any;
  * - `outside`: a bare name or a plain chain rooted at a package or the language's libraries;
  * - `unbound`: nothing binds it, with the declarations of its name the language rule admits (`candidates`) and those
@@ -30,7 +32,7 @@ type Outside = Extract<ImportOrigin, { kind: "external" | "ambient" }>;
  * `form` tells how the call spells its callee, for a family that settles each form its own way.
  */
 export type CallBinding =
-  | { kind: "declaration"; target: GraphSymbol; link: "own-member" | "chain" | "import" | "file" | "declared-receiver" }
+  | { kind: "declaration"; target: GraphSymbol; link: "own-member" | "chain" | "import" | "file" | "declared-receiver" | "bound-receiver" }
   | { kind: "receiver"; proof: ReceiverProof; target?: GraphSymbol; outside?: true; candidates: readonly GraphSymbol[]; attributed: readonly GraphSymbol[] }
   | { kind: "outside"; form: "bare" | "chain"; origin: Outside }
   | { kind: "unbound"; form: "own" | "computed" | "bare" | "member" | "chain"; candidates: readonly GraphSymbol[]; attributed: readonly GraphSymbol[] }
@@ -219,7 +221,7 @@ export function createCallBindings({ store, navigation, origins, binder, importe
   /** What the method a `declared` binding's receiver reading names settles it to. */
   function settleDeclared({ member, form, call }: DeclaredBinding, method: ReceiverMethod | undefined): SettledBinding {
     const target = method?.kind === "method" ? placed(method.file, method.start, method.nameLine) : undefined;
-    if (target !== undefined) return { kind: "declaration", target, link: form === "chain" ? "chain" : "declared-receiver" };
+    if (target !== undefined) return { kind: "declaration", target, link: form === "chain" ? "chain" : method?.kind === "method" && method.bound === true ? "bound-receiver" : "declared-receiver" };
     if (form === "chain") {
       const constructors = chainedConstructors(call.body, member);
       return method?.kind === "unproven" ? { kind: "unbound", form, candidates: constructors, attributed: constructors } : implicitConstructor(call.body, member) ?? { kind: "unbound", form, candidates: [], attributed: [] };

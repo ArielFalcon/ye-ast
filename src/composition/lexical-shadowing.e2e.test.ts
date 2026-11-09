@@ -14,6 +14,8 @@ import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
  * A name the occurrence's own scope binds never reaches the repository declaration an outer binding of that name would:
  * codegraph resolves a call, a type or a receiver's annotation by name, and the base reads the occurrence's binding.
  */
+const java = (path: string, lines: readonly string[]): [string, string] => [`src/main/java/${path}`, `${lines.join("\n")}\n`];
+
 const FILES: Record<string, string> = Object.fromEntries([
   ["package.json", JSON.stringify({ name: "fixture" })],
   ["src/fmt.ts", "export function load(): string {\n  return 'f';\n}\n"],
@@ -51,6 +53,10 @@ const FILES: Record<string, string> = Object.fromEntries([
   ],
   ["src/box.ts", "export class Box {\n  open(): void {}\n}\n"],
   ["src/made.ts", 'import { Box } from "./box";\n\nexport function made(): void {\n  class Box {}\n  new Box();\n}\n\nexport function real(): void {\n  new Box();\n}\n'],
+  java("p/Repo.java", ["package p;", "", "public class Repo {", "    public void save() {", '        System.out.println("s");', "    }", "}"]),
+  java("p/Other.java", ["package p;", "", "public class Other {", "    public void save() {", '        System.out.println("o");', "    }", "}"]),
+  java("p/Service.java", ["package p;", "", "public class Service {", "    private Repo repo = new Repo();", "", "    public void field() {", "        repo.save();", "    }", "}"]),
+  java("p/Gen.java", ["package p;", "", "public class Gen<Repo extends Other> {", "    public void put(Repo r) {", "        r.save();", "    }", "}"]),
   ["src/store.ts", "export class Store {\n  save(x: string): void {\n    console.log(x);\n  }\n}\n\nexport class Holder<Store extends { save(x: string): void }> {\n  put(store: Store): void {\n    store.save('h');\n  }\n}\n"],
 ]);
 
@@ -110,4 +116,16 @@ test("trace runs the local binding a shadowed call names, and expands no importe
 
 test("callers of a class's method list a call on a receiver whose annotation names a type parameter that shadows the class only as a name match, never proven", async () => {
   assert.deepEqual(dependents(await callersOf("src/store.ts", "Store.save")), ["src/store.ts:put L9 name-match"]);
+});
+
+test("callers of a Java method never list a call on a receiver a type variable that shadows its class types, which depends on its bound's method instead", async () => {
+  assert.deepEqual(dependents(await callersOf("src/main/java/p/Repo.java", "Repo.save")), ["src/main/java/p/Service.java:field L7 resolved"]);
+  assert.deepEqual(dependents(await callersOf("src/main/java/p/Other.java", "Other.save")), ["src/main/java/p/Gen.java:put L5 proven"]);
+});
+
+test("trace never runs the bound's method a type variable's receiver depends on, and keeps the call as a cut", async () => {
+  const value = await trace("src/main/java/p/Gen.java:Gen.put");
+
+  assert.deepEqual(value.steps.map((step) => step.symbol), ["put"]);
+  assert.deepEqual(leavesOf(value), []);
 });

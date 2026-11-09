@@ -278,6 +278,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
    * The one declaration of `kinds` the index places between a declaration's first token and its name. The index holds a
    * record's methods as functions of no container, so a proof of the method a call names accepts either kind.
    */
+  /** A method a type variable's bound names proves the dependence, never what runs: trace holds it unproven (RFC-0013 R5). */
+  const executed = (method: ReceiverMethod): ReceiverMethod => (method.kind === "method" && method.bound === true ? { kind: "unproven" } : method);
   const placedMethod = ({ file, start, nameLine }: Omit<Extract<ReceiverMethod, { kind: "method" }>, "kind">, kinds: readonly string[] = ["method"]): GraphSymbol | undefined => {
     const placed = store.symbolsInFiles([file]).filter((symbol) => kinds.includes(symbol.kind) && start <= symbol.startLine && symbol.startLine <= nameLine);
     return placed.length === 1 ? placed[0] : undefined;
@@ -478,7 +480,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const later = await bindings.boundCalls(deferredOnly.map((reference) => ({ body: node, reference })), signal);
     for (const [index, reference] of deferredOnly.entries()) {
       const binding = later[index]!;
-      const target = binding.kind === "declaration" || binding.kind === "receiver" ? binding.target : undefined;
+      const target = (binding.kind === "declaration" && binding.link !== "bound-receiver") || binding.kind === "receiver" ? binding.target : undefined;
       if (target !== undefined && !(reference.kind === "instantiates" && isClassKind(target.kind))) children.push(childAt(target, reference.line, reference.column, reference.name, binding.kind === "declaration" && binding.link === "own-member" ? "own-member" : "call", true));
     }
     if (constructed.length > 0) {
@@ -513,7 +515,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       ...placedCalls.map(({ edge, target }) => ({ file: node.file, line: edge.line!, column: edge.column! + 1, member: target.name })),
       ...typed.map(({ reference, name }) => ({ file: reference.file, line: reference.line, column: reference.column + 1, member: name })),
     ];
-    const found = receiverSites.length === 0 ? [] : await origins.receiverMethods(receiverSites, signal);
+    const found = receiverSites.length === 0 ? [] : (await origins.receiverMethods(receiverSites, signal)).map(executed);
     const receivers = new Map(placedCalls.map((followed, index): [FollowedEdge, ReceiverMethod] => [followed, found[index] ?? { kind: "unknown" }]));
     for (const [index, followed] of [...called, ...passed].entries()) {
       if (valueRoots.has(index)) continue;

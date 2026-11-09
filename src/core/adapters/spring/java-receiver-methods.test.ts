@@ -98,6 +98,18 @@ test("members whose parameter types the strict reading settles to different type
   assert.deepEqual(await methodAt([value, homonym, base, override, call]), method(override, 6));
 });
 
+test("a call on a receiver a type variable types names, as a dependence only, the method of the variable's one bound the repository declares; no bound, an intersection or a bound outside the repository names none", async () => {
+  const named = java("Named.java", ["package app;", "", "public interface Named {", "  String name();", "}"]);
+  const typed = (parameters: string, call = "item.save(\"x\")") => java("Use.java", ["package app;", "", `class Use${parameters} {`, `  void run(T item) { ${call}; }`, "}"]);
+  const generic = java("Use.java", ["package app;", "", "class Use {", "  <T extends Store> void run(T item) { item.save(\"x\"); }", "}"]);
+
+  assert.deepEqual(await methodAt([STORE, JDBC, typed("<T extends Store>")]), { ...method(STORE, 4), bound: true });
+  assert.deepEqual(await methodAt([STORE, JDBC, generic]), { ...method(STORE, 4), bound: true });
+  assert.deepEqual(await methodAt([STORE, JDBC, named, typed("<T extends Store & Named>")]), { kind: "unproven" });
+  assert.deepEqual(await methodAt([STORE, JDBC, typed("<T>")]), { kind: "unproven" });
+  assert.deepEqual(await methodAt([STORE, JDBC, typed("<T extends Runnable>", "item.run()")], "run"), { kind: "unproven" });
+});
+
 test("an enum names no method, since a constant may declare its own body", async () => {
   const kinds = java("Kinds.java", ["package app;", "", "enum Kinds {", "  ONE;", "  void save(String value) {}", "}"]);
 
