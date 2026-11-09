@@ -3,13 +3,18 @@ import { compareText } from "./code-node.ts";
 /** What a call's spelling says about its callee. */
 export type Callee = { form: "bare"; name: string } | { form: "member"; name: string } | { form: "computed" };
 
-const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+const IDENTIFIER = /^#?[A-Za-z_$][\w$]*$/;
 const NOT_ASCII = /[^\x00-\x7F]/;
 const QUOTES = ["'", '"', "`"];
 
-/** What follows a name's last separator: `save` of `x.save`, `b` of `a::b`. */
+/**
+ * What follows a name's last separator: `save` of `x.save`, `b` of `a::b`. A `#` that starts the last segment is part
+ * of the name (`#save` of `x.#save`); one inside it separates a module from its name (`name` of `module#name`).
+ */
 export function nameTail(name: string): string {
-  return name.slice(Math.max(name.lastIndexOf("."), name.lastIndexOf(":"), name.lastIndexOf("#")) + 1);
+  const dotOrColon = Math.max(name.lastIndexOf("."), name.lastIndexOf(":"));
+  const hash = name.lastIndexOf("#");
+  return name.slice((hash > dotOrColon + 1 ? hash : dotOrColon) + 1);
 }
 
 /** A call's spelling without whitespace, as a source writes it across lines: `a\n  .b(x)` is `a.b(x)`. */

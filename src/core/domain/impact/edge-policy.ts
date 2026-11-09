@@ -81,12 +81,7 @@ export function followsRelation({ kind, sourceKind, targetKind }: PolicyEdge): b
   return (kinds as readonly string[]).includes(kind) && (from as readonly string[]).includes(sourceKind) && (to as readonly string[]).includes(targetKind);
 }
 
-/**
- * The edges that count towards a symbol's fan-in and the hub bound: a call or an instantiation says the symbol is used
- * by that caller, where a reference or a hierarchy edge only says the two are related. Bridges, importers and Angular
- * relations count towards neither.
- */
-export const CALL_EDGE_KINDS: readonly string[] = ["calls", "instantiates"];
+export { CALL_EDGE_KINDS } from "./call-kinds.ts";
 
 /** The declarations a relation ends at, and the only ones that can own a local an `inject()` call initializes. */
 export const LOCAL_OWNER_KINDS: readonly string[] = [...EDGE_POLICY.relations.from, "function"];

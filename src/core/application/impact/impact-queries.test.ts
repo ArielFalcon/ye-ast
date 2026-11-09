@@ -486,6 +486,18 @@ test("a call that never resolved to a walked name cuts the answer, and the head'
   ]);
 });
 
+test("a declaration in a configuration file the runtime never runs is no candidate of an unresolved call", async () => {
+  const nodes = [fakeNode("routes", "function", "src/app/routes.ts", 1, 3), fakeNode("generate", "function", "build.gradle.kts", 1, 3)];
+  const unresolved = [{ from: "routes", name: "steps.generate", kind: "calls", file: "src/app/routes.ts", line: 7, column: 0, candidates: ["build.gradle.kts::generate"] }];
+  const exports: Options["exports"] = {
+    [HEAD]: { files: [{ path: "src/app/routes.ts", blob: "1", written: true }, { path: "build.gradle.kts", blob: "2", written: true }], skipped: [] },
+  };
+
+  const answer = callersFact(await setup({ nodes, unresolved, exports }).callers({ targets: [{ file: "build.gradle.kts", symbol: "generate" }] }));
+
+  assert.equal(answer.status, "complete");
+});
+
 test("a reference whose rooted name the file imports from outside the repository stops being a cut, without any type root", async () => {
   const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/A.ts", { added: [{ start: 2, end: 2 }] })] };
   const nodes = [fakeNode("tap", "function", "src/A.ts", 1, 3)];

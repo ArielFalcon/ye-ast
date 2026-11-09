@@ -43,14 +43,18 @@ const LANGUAGE_CHECK_LINES: Readonly<Record<string, number>> = {
  */
 const RAW_BODY_EDGE_SITES: Readonly<Record<string, number>> = {};
 const NAME_TAIL_OWNER = "core/domain/shared/call-place.ts";
+/**
+ * Where a declaration's name is cut at its last dot: `nameTail` tails the spelling a callee is written with, while these
+ * read the name a declaration already carries, in a fact, in a host's anchor or in a Java FQN.
+ */
 const DOT_TAIL_SITES: Readonly<Record<string, number>> = {
+  // A Java FQN: the tail of a package path, never a callee's name.
   "core/adapters/spring/event-call-sites.adapter.ts": 1,
   "core/adapters/spring/java-symbols.ts": 2,
+  // A declaration name a host's anchor carries.
   "core/application/composition/compose-evidence.ts": 1,
-  "core/application/navigation/proven-calls.ts": 1,
-  "core/application/navigation/reference-origins.ts": 1,
+  // A declaration name a fact or a user's target writes.
   "core/application/navigation/snapshot-files.ts": 1,
-  "core/domain/impact/changed-contracts.ts": 1,
   "core/domain/shared/code-node.ts": 1,
 };
 
