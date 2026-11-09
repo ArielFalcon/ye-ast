@@ -489,3 +489,106 @@ test("a document operation is named as the handler that serves it names it: a co
   assert.deepEqual(change.derived.map(({ operation, property }) => [operation, property]), [["GET /orders/{id}", "customer"]]);
   assert.notEqual(change.derived[0]!.answer.status, "unknown");
 });
+
+// A Java consumer whose request is propagated through its own bodies (ADR-0044 fixture 16).
+
+const LISTENER_FILE = "src/main/java/shop/OrderCreatedListener.java";
+const USE_CASE_FILE = "src/main/java/shop/CreateOrderUseCase.java";
+const ADAPTER_FILE = "src/main/java/shop/RecipientRestRepositoryAdapter.java";
+
+const LISTENER = `package shop;
+
+import org.springframework.context.event.EventListener;
+
+class OrderCreatedListener {
+  private final CreateOrder useCase;
+
+  OrderCreatedListener(CreateOrder useCase) {
+    this.useCase = useCase;
+  }
+
+  @EventListener
+  void on(OrderCreated event) {
+    useCase.create(event.id());
+  }
+}
+`;
+
+const USE_CASE = `package shop;
+
+class CreateOrderUseCase implements CreateOrder {
+  private final OrderPort port;
+
+  CreateOrderUseCase(OrderPort port) {
+    this.port = port;
+  }
+
+  public String create(long id) {
+    return port.find(id);
+  }
+}
+`;
+
+const CREATE_ORDER = `package shop;
+
+interface CreateOrder {
+  String create(long id);
+}
+`;
+
+const ORDER_PORT = `package shop;
+
+interface OrderPort {
+  String find(long id);
+}
+`;
+
+const ADAPTER = `package shop;
+
+import org.springframework.web.client.RestTemplate;
+
+class RecipientRestRepositoryAdapter implements OrderPort {
+  private final RestTemplate rest;
+
+  RecipientRestRepositoryAdapter(RestTemplate rest) {
+    this.rest = rest;
+  }
+
+  public String find(long id) {
+    return rest.getForObject("/api/orders/" + id, String.class);
+  }
+}
+`;
+
+const ORDER_CREATED = `package shop;
+
+class OrderCreated {
+  long id() {
+    return 1;
+  }
+}
+`;
+
+const CONSUMER = {
+  [LISTENER_FILE]: LISTENER,
+  [USE_CASE_FILE]: USE_CASE,
+  "src/main/java/shop/CreateOrder.java": CREATE_ORDER,
+  "src/main/java/shop/OrderPort.java": ORDER_PORT,
+  [ADAPTER_FILE]: ADAPTER,
+  "src/main/java/shop/OrderCreated.java": ORDER_CREATED,
+};
+
+test("a propagated response property's frontier starts at the adapter's client call, with the listener's call in the chain", async () => {
+  commit("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER });
+  commit("web", CONSUMER);
+
+  const fact = await consequences("nullable");
+
+  assert.equal(fact.value.findings.length, 1);
+  const [item] = fact.value.findings;
+  assert.ok(item?.status === "unknown", JSON.stringify(fact.value.findings));
+  assert.deepEqual(item.evidence.map(({ path, line }) => [path, line]), [
+    [LISTENER_FILE, lineOf(LISTENER, "useCase.create(")],
+    [ADAPTER_FILE, lineOf(ADAPTER, "rest.getForObject(")],
+  ]);
+});

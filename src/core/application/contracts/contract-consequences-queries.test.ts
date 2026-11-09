@@ -8,7 +8,7 @@ import type { TestedGuard, UseOperation } from "../../domain/contracts/verdict.t
 import type { Cut, FactBase } from "../../domain/shared/fact.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import type { HypothesesRequest, ContractConsequencesQueries } from "../../ports/contract-consequences-queries.port.ts";
-import type { ConsumerCaller, ConsumerCallers, ConsumerMemberOccurrences, ConsumerSession, ServingWorkspace } from "../../ports/consumer-sources.port.ts";
+import type { ConsumerCaller, ConsumerCallers, ConsumerMemberOccurrences, ConsumerPlacedSites, ConsumerSession, ServingWorkspace } from "../../ports/consumer-sources.port.ts";
 import type { Origin } from "../../domain/contracts/request-origin.ts";
 import type { ArgumentOrigins, RequestOriginReader } from "../../ports/request-origins.port.ts";
 import { createContractConsequencesQueries } from "./contract-consequences-queries.ts";
@@ -73,6 +73,8 @@ interface Setup {
   excluded?: readonly string[];
   /** The workspace cannot prepare a session for the hypothesis. */
   sessionFault?: string;
+  /** The placed sites of each repository, as the reader that states propagated origins reports them; none by default. */
+  placed?: Record<string, ConsumerPlacedSites>;
 }
 
 function setup(options: Setup = {}) {
@@ -91,6 +93,7 @@ function setup(options: Setup = {}) {
     memberOccurrences: ({ member }) => options.members?.[member] ?? { kind: "found", occurrences: [] },
     flow: { follow: (carrier) => (followed.push(carrier), options.flow?.[carrierKey(carrier.site)] ?? NO_FLOW) },
     templates: { follow: (carrier) => (templated.push(carrier), options.templates?.[carrierKey(carrier.site)] ?? NO_FLOW) },
+    placedSites: async (repo) => options.placed?.[repo] ?? { sites: [], owned: new Set<string>() },
     requestOrigins: (repo) => options.origins?.[repo],
     excludes: (site) => site.template !== undefined && (options.excluded ?? []).includes(site.template),
   };
