@@ -139,7 +139,12 @@ export async function focusWithUses(store: CodeGraphReader, read: FocusRead, rea
   const targets = reading.edgeTargets(typed);
   if (origins === undefined || targets === undefined) throw new Error("a focus binds its uses through the line's import origins");
   const uses = reading.declarationUses();
-  const input = { store, navigation: createGraphNavigation(store, () => false), uses, targets, origins, reconciled: reading.reconciledCalls(targets, uses), ...(signal === undefined ? {} : { signal }) };
+  const reconciled = reading.reconciledCalls(targets, uses);
+  const writtenCalls = reconciled === undefined ? undefined : async (body: GraphSymbol) => {
+    const { writtenOnly, deferredOnly } = await reconciled.callsOf(body);
+    return [...writtenOnly, ...deferredOnly];
+  };
+  const input = { store, navigation: createGraphNavigation(store, () => false), uses, targets, origins, writtenCalls, ...(signal === undefined ? {} : { signal }) };
   const settled = new Map<GraphSymbol["id"], { uses: readonly OutlineUse[]; cuts: Cut[] }>();
   const focus: OutlineFocus[] = [];
   for (const [index, entry] of read.value.focus.entries()) {

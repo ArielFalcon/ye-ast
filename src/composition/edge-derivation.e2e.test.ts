@@ -213,7 +213,7 @@ test("a caller the index matched by name alone is an ambiguous caller of a consu
 });
 
 let webRepo: Promise<string> | undefined;
-/** `WEB` committed once, apart from the repositories of the contract test. */
+/** The repository of `WEB`, committed once. */
 function web(): Promise<string> {
   return (webRepo ??= (async () => {
     const at = join(root, "web-line");
