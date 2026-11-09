@@ -90,7 +90,7 @@ test("decision evidence and free text sharing keeps each option and policy assoc
     { id: "repository:two", kind: "repository", subject: "two", evidence, options: [{ value: "second", evidence: [], recommended: false }], allowsFreeText: false, required: false },
     { id: "repository:three", kind: "repository", subject: "three", evidence, options: [], allowsFreeText: true, required: false },
   ];
-  const text = renderDecisions({ ...base, status: "complete", value: { repositories: [], source: "request", decisions } } as never, "details");
+  const text = renderDecisions({ ...base, status: "complete", value: { repositories: [], source: "request", decisions, unresolved: [] } } as never, "details");
   assert.equal(text.split(evidence[0]!.path).length - 1, 1);
   assert.match(text, /one[\s\S]*first \(exact-name, recommended\)[\s\S]*two[\s\S]*second[\s\S]*three/);
   assert.match(text, /one[\s\S]*free text/);
@@ -100,7 +100,7 @@ test("decision evidence and free text sharing keeps each option and policy assoc
 test("repeated free-text policy applies only to decisions that allow it", async () => {
   const { renderDecisions } = await import("./render.ts");
   const decisions = Array.from({ length: 8 }, (_, i) => ({ id: `gateway:${i}`, kind: "gateway", subject: `subject-${i}`, evidence: [], options: [], allowsFreeText: i !== 3, required: i === 0 }));
-  const text = renderDecisions({ ...base, status: "complete", value: { repositories: [], source: "request", decisions } } as never, "details");
+  const text = renderDecisions({ ...base, status: "complete", value: { repositories: [], source: "request", decisions, unresolved: [] } } as never, "details");
   assert.equal((text.match(/an answer no fact states is accepted/g) ?? []).length, 1);
   assert.equal((text.match(/^      free text allowed$/gm) ?? []).length, 7);
   assert.doesNotMatch(text, /subject-3\n\s+free text allowed/);

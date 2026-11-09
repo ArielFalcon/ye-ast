@@ -61,7 +61,7 @@ function workspaceRead(repo: string): FactRead<WorkspaceValue> {
   const value: WorkspaceValue = { workspace: { repos: [repo], gateways: [], source: "request" }, repositorySnapshots: [{ repo, snapshot: base(repo).snapshot }], sections: {}, candidates: [], unserved: [], links: [], unlinked: [], repositories: [{ repo, snapshot: base(repo).snapshot, entrypoints: [], callSites: [] }] };
   return { fact: { ...base(repo), status: "complete", value }, repositoryRoots: [{ repo, path: `/work/${repo}` }], repositorySources: [{ repo, path: "/private/source" }] };
 }
-const decisionRead = (repo: string): FactRead<DecisionValue> => ({ fact: { ...base(repo), status: "complete", value: { decisions: [], repositories: [{ repo, snapshot: base(repo).snapshot }], source: "request" } }, repositorySources: [{ repo, path: "/private/source" }] });
+const decisionRead = (repo: string): FactRead<DecisionValue> => ({ fact: { ...base(repo), status: "complete", value: { unresolved: [], decisions: [], repositories: [{ repo, snapshot: base(repo).snapshot }], source: "request" } }, repositorySources: [{ repo, path: "/private/source" }] });
 
 type Calls = { [K in "map" | "ofChange" | "callers" | "importers" | "outline" | "outwardNames" | "decisions" | "workspaceCallers" | "workspaceOfChange"]: unknown[] };
 type Overrides = Partial<{

@@ -533,7 +533,7 @@ test("every repository read is listed with its own snapshot, sorted by repositor
   assert.equal(result.value.fact.snapshot.repo, "shop-web");
 });
 
-test("a path prefix and a host a call site names are outward names, and an undecided call site cuts the section", async () => {
+test("a path prefix and a host a call site names are outward names, and an undecided call site is one unknown item of its section, never also a cut (ADR-0042 fixture 5)", async () => {
   const callSites: CallSiteReader = {
     of: async (_files, repo) =>
       repo !== "shop-web"
@@ -548,16 +548,11 @@ test("a path prefix and a host a call site names are outward names, and an undec
 
   const result = await queries.outwardNames({ repo: { path: "/work/shop-web" } });
 
+  assert.equal(result.ok && result.value.fact.status, "complete");
   const value = valueOf(result);
-  assert.deepEqual(value.sections["shop-web"]?.status, "partial");
-  assert.deepEqual(
-    value.sections["shop-web"]?.status === "partial" ? value.sections["shop-web"].cuts.map((cut) => `${cut.kind} ${cut.at.join(" ")}`) : [],
-    ["unresolved-link src/app/core/auth/auth.service.ts src/app/core/auth/auth.service.ts:48"],
-  );
   const section = value.sections["shop-web"];
-  assert.ok(section !== undefined);
+  assert.ok(section?.status === "complete");
   assert.deepEqual(section.value.names.map((name) => `${name.kind} ${name.name}`), ["http-host https://maps.example.com/geo", "path-prefix orders-api"]);
-  assert.equal(section.status === "partial" && section.cuts[0]?.reason, "call-site-unresolved");
   assert.deepEqual(section.value.unresolved, [{ path: "src/app/core/auth/auth.service.ts", line: 48, symbol: "AuthService.refresh", transport: "http", reason: "unresolved", evidence: [{ path: "src/app/core/auth/auth.service.ts", line: 48 }] }]);
 });
 

@@ -12,7 +12,7 @@ import { entrypointsOf, joinWorkspace, linkMapOf } from "./workspace-join.ts";
 import { hostOf, prefixOf } from "../../domain/topology/link-match.ts";
 import type { HeadReaderDeps, HeldLive } from "../snapshot/head-reading.ts";
 import type { WorkspaceReadOperation } from "./workspace-operation.ts";
-import { callSiteEvidence, unresolvedCallSite, unresolvedCallSiteCut, unsettledCallSiteCut, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
+import { callSiteEvidence, unresolvedCallSite, unsettledCallSiteCut, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
 import { nameCandidates, dependencyClosures, repositoryNameOf, type RepositoryIdentity } from "../../domain/topology/repository-identity.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
@@ -200,11 +200,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
           const unresolved = undecided.map(unresolvedCallSite);
           const unsettled = join.joined.filter(({ site, joined }) => site.repo === entry.repository.repo && (joined.ambiguous !== undefined || joined.undecided !== undefined)).map(({ site }) => site);
           const section: FactBase & { evidence: readonly { path: string; line: number }[] } = { ...(entry.base as FactBase), evidence: sortEvidence(names.flatMap((name) => name.evidence)) };
-          const cuts = [
-            ...entry.cuts,
-            ...undecided.map(unresolvedCallSiteCut),
-            ...unsettled.map(unsettledCallSiteCut),
-          ];
+          const cuts = [...entry.cuts, ...unsettled.map(unsettledCallSiteCut)];
           sections[entry.repository.repo] = withCuts(section, { names, unresolved }, cuts);
           for (const name of names) {
             const served = [...nameCandidates(name, identities, entry.repository.repo), ...(name.kind === "destination" ? listened.get(`${entry.repository.repo}\0${name.name}`) ?? [] : [])];

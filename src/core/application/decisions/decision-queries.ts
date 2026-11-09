@@ -6,6 +6,7 @@ import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { OutwardName } from "../../domain/topology/outward-name.ts";
+import { compareUnresolvedCallSites } from "../../domain/topology/call-site.ts";
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import { isRemoteAddress, type WorkspaceRepositoryDeclaration } from "../../domain/topology/workspace-manifest.ts";
 import type { DecisionsRequest, DecisionValue } from "../../ports/decision-queries.port.ts";
@@ -81,7 +82,7 @@ async function buildDecisions(read: WorkspaceRead, request: Omit<WorkspacePlanni
   const decisions = decisionsOf(input).decisions;
   const declared = { confirmed: (input.confirmed ?? []).toSorted(compareText), origins: origins.value, resolutions: read.refresh?.resolution ?? [] };
   const base = compositeBase(baseOf(fact), [{ kind: "workspace", fact: provenanceOf(fact) }], declared, (text) => digest.of(text));
-  const answer = decisionFact({ ...fact, ...base }, { decisions, repositories: value.repositorySnapshots, source: value.workspace.source });
+  const answer = decisionFact({ ...fact, ...base }, { decisions, repositories: value.repositorySnapshots, source: value.workspace.source, unresolved: unresolvedOf(value) });
   return { ok: true, value: { fact: answer, ...(read.refresh === undefined ? {} : { refresh: read.refresh }), ...(read.repositoryRoots === undefined ? {} : { repositoryRoots: read.repositoryRoots }) } };
 }
 
@@ -124,6 +125,13 @@ function decisionRepositoryOf(repository: WorkspaceRepository, workspace: Worksp
     entrypoints: entrypointsOf(repository),
     ...(repository.declaredTrust === undefined ? {} : { trust: repository.declaredTrust }),
   };
+}
+
+/** The undecided call sites of every section the read produced, by repository then place. */
+function unresolvedOf(workspace: WorkspaceValue): DecisionValue["unresolved"] {
+  return Object.entries(workspace.sections)
+    .toSorted(([a], [b]) => compareText(a, b))
+    .flatMap(([repo, section]) => (section.status === "unknown" ? [] : section.value.unresolved.toSorted(compareUnresolvedCallSites).map((site) => ({ repo, ...site }))));
 }
 
 /** The names a section states; a section the read did not produce states none. */

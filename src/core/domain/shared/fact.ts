@@ -162,7 +162,7 @@ export const CUT_REASONS = [
   "hidden-caller", "dynamic-load", "name-only", "specifier", "removed-declaration", "relation-unread", "use-unproven",
   "receiver-unproven", "callee-unknown", "constructor-unsettled", "contradicted", "unowned", "dispatch", "function-value",
   "page-unplanned", "handler-unplaced", "effect-unplaced",
-  "dependency-unresolved", "call-site-unresolved", "join-unsettled", "operation-unserved",
+  "dependency-unresolved", "join-unsettled", "operation-unserved",
   "section-partial", "section-unknown",
 ] as const;
 export type CutReason = (typeof CUT_REASONS)[number];

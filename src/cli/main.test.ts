@@ -213,7 +213,7 @@ function setupWorkspace(answer?: Result<FactRead<WorkspaceValue>, WorkspaceFault
   return { ...base, requests, deps: { ...base.deps, workspace } };
 }
 
-const DECISIONS_VALUE: DecisionValue = { decisions: [], repositories: [], source: "none" };
+const DECISIONS_VALUE: DecisionValue = { decisions: [], repositories: [], source: "none", unresolved: [] };
 
 const DECISIONS_READ: FactRead<DecisionValue> = { fact: { ...BASE, status: "complete", value: DECISIONS_VALUE } };
 

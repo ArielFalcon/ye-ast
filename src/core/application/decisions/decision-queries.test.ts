@@ -224,6 +224,19 @@ test("a workspace read that answers nothing is a git-failed fault, never an empt
   assert.equal(result.fault.kind, "git-failed");
 });
 
+test("the call sites a workspace section lists as undecided are items of the decision set, each under its repository, so a complete set still states them", async () => {
+  const site = (path: string, line: number) => ({ path, line, symbol: "Api.call", transport: "http" as const, reason: "unresolved" as const, evidence: [{ path, line }] });
+  const value = workspaceValue();
+  const unresolved = { ...value, sections: { ...value.sections, billing: { ...section("billing", []), value: { names: [], unresolved: [site("src/b.ts", 9)] } }, "shop-web": { ...section("shop-web", [outward("shared-api")]), value: { names: [outward("shared-api")], unresolved: [site("src/z.ts", 2), site("src/a.ts", 4)] } } } };
+  const { queries } = setup({ ok: true, value: base(unresolved) });
+
+  const result = await queries.decisions(REQUEST);
+
+  assert.ok(result.ok);
+  assert.equal(result.value.fact.status, "complete");
+  assert.deepEqual(result.value.fact.value.unresolved.map(({ repo, path, line }) => `${repo} ${path}:${line}`), ["billing src/b.ts:9", "shop-web src/a.ts:4", "shop-web src/z.ts:2"]);
+});
+
 test("a partial workspace read keeps its cuts on the decision fact", async () => {
   const cuts = [{ kind: "section", at: ["shop-web"], reason: "section-partial", reach: { kind: "anything" } }] as const;
   const partial: Fact<WorkspaceValue> = { ...base(workspaceValue()), status: "partial", cuts } as PartialFact<WorkspaceValue>;

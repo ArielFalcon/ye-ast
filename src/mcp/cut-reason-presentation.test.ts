@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderContractConsequences, renderEntrypointMap, renderImpact, renderImporters, renderTrace, renderWorkspace, renderWorkspaceImpact } from "./render.ts";
+import { renderContractConsequences, renderDecisions, renderEntrypointMap, renderImpact, renderImporters, renderTrace, renderWorkspace, renderWorkspaceImpact } from "./render.ts";
 import { renderFactHeader } from "./presentation-context.ts";
 import { ANYTHING, CAPABILITY_ABSENT, SCHEMA, type Cut, type Fact, type FactBase } from "../core/domain/shared/fact.ts";
 import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
@@ -33,6 +33,10 @@ test("a complete collection with unknown items states how many are undecided, an
   const workspace = (unresolved: readonly unknown[]) => complete({ workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [], sections: { a: complete({ names: [], unresolved }) }, candidates: [], links: [], unlinked: [], unserved: [] }) as never;
   assert.equal(renderWorkspace(workspace([site]), "summary").split("\n")[0], "status: complete (1 undecided)");
   assert.equal(renderWorkspace(workspace([]), "summary").split("\n")[0], "status: complete");
+
+  const decisions = (unresolved: readonly unknown[]) => complete({ decisions: [], repositories: [], source: "request", unresolved }) as never;
+  assert.equal(renderDecisions(decisions([{ repo: "a", ...site }]), "summary").split("\n")[0], "status: complete (1 undecided)");
+  assert.equal(renderDecisions(decisions([]), "summary").split("\n")[0], "status: complete");
 
   const consequences = renderContractConsequences(complete<ConsequencesValue>({ repositorySnapshots: [], answers: [answer([unknownFinding])] }), "details").split("\n");
   assert.equal(consequences[0], "status: complete (1 undecided)");

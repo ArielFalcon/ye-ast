@@ -250,7 +250,8 @@ export type PartPayload =
   | { kind: "outward-name"; origin: EvidenceOrigin; name: string; kindName: OutwardKind; evidence: readonly EvidenceId[]; disposition: "stated" | "unserved" }
   | { kind: "name-candidate"; context: ReadId; name: string; repo: string; basis: NameCandidate["basis"]; evidence: readonly EvidenceId[] }
   | { kind: "call-site"; site: CallSiteData; disposition: "matched" | "unmatched" | "external" }
-  | { kind: "unresolved-call-site"; site: UnresolvedCallSite }
+  /** `repo` names the repository where the owner is no repository section (a decision set). */
+  | { kind: "unresolved-call-site"; site: UnresolvedCallSite; repo?: string }
   | { kind: "workspace-link"; link: LinkData; direction?: ImpactedLink["direction"]; reach?: readonly LinkReference[]; operations?: ImpactedLink["operations"] }
   | { kind: "unlinked-call-site"; site: UnlinkedCallSiteData }
   | { kind: "workspace-context"; context: WorkspaceContextData }

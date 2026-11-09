@@ -281,6 +281,7 @@ export function workspaceValue(): PublicWorkspaceValue {
 
 export function decisionsValue(): DecisionValue {
   return {
+    unresolved: [{ repo: "web", path: "src/api.ts", line: 9, symbol: "Api.load", transport: "http", reason: "unresolved", evidence: [{ path: "src/api.ts", line: 9 }] }],
     decisions: [
       {
         id: "membership:name:api", kind: "membership", subject: "api",

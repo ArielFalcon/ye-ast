@@ -1649,8 +1649,8 @@ function decisionsBlock(decisions: readonly Decision[], detail: ResponseMode): s
 }
 
 export function renderDecisions(fact: Fact<DecisionValue>, detail: ResponseMode = "summary"): string {
-  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.decisions by kind and subject; inspect evidence, options[].basis and options[].recommended. Match evidence repositories to value.repositories snapshots.";
-  const lines = headerLines(fact);
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.decisions by kind and subject; inspect evidence, options[].basis and options[].recommended. Match evidence repositories to value.repositories snapshots. value.unresolved lists the undecided call sites by repository.";
+  const lines = headerLines(fact, fact.status === "unknown" ? {} : { undecided: fact.value.unresolved.length });
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
   lines.push(counted("repositories", value.repositories.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));

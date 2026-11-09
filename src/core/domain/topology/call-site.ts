@@ -151,12 +151,6 @@ export function unsettledCallSiteCut(site: CallSite): Cut {
   return { kind: "unresolved-link", at: [site.file, `${site.file}:${site.line}`], reason: "join-unsettled", reach: callSiteReach(site) };
 }
 
-/** A call site the snapshot cannot decide, as the cut of its repository's section: its file, its place, the library it goes through. */
-export function unresolvedCallSiteCut(site: CallSite): Cut {
-  const via = site.target.status === "unknown" ? site.target.evidence[0]?.via : undefined;
-  return { kind: "unresolved-link", at: [site.file, `${site.file}:${site.line}`, ...(via === undefined ? [] : [`library ${via}`])], reason: "call-site-unresolved", reach: callSiteReach(site) };
-}
-
 /** What a call site could reach, as the extractor read it: its transport, and its method and path when the snapshot states them. */
 function callSiteReach(site: CallSite): CutReach {
   const request = httpTargetOf(site) ?? site.stated;

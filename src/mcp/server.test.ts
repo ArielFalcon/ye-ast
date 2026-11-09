@@ -128,6 +128,7 @@ function workspaceImpactFact(): Fact<WorkspaceImpactValue> {
 const WORKSPACE = { repos: [{ path: "/work/shop-web", id: "shop-web" }], gateways: [{ prefix: "edge", repo: "shop" }] };
 
 const DECISIONS: DecisionValue = {
+  unresolved: [],
   repositories: [{ repo: "shop", snapshot: { repo: "shop", kind: "sha", sha: "a".repeat(40) } }],
   source: "request",
   decisions: [
@@ -2534,7 +2535,7 @@ test("the decisions tool asks the decision family with the repositories and gate
 test("the decisions tool reads the bound repository alone when no clones are passed, and a workspace with no gap says none", async () => {
   const { session, calls } = await setup({ decisions: async (request) => {
     calls.decisions.push(request);
-    return { ok: true, value: { fact: decisionFact({ decisions: [], repositories: [], source: "none" }) } };
+    return { ok: true, value: { fact: decisionFact({ decisions: [], repositories: [], source: "none", unresolved: [] }) } };
   } });
 
   const result = await session.callTool("ye_ast_decisions", {});

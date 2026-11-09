@@ -269,6 +269,7 @@ test("a call site whose URL no read can evaluate is listed beside the missing li
 
   const fact = await consequences("nullable");
 
+  assert.deepEqual([fact.status, fact.value.status], ["complete", "complete"]);
   assert.equal(fact.value.findings.length, 1);
   const [item] = fact.value.findings;
   assert.ok(item?.status === "unknown");
@@ -276,6 +277,26 @@ test("a call site whose URL no read can evaluate is listed beside the missing li
     [SERVICE_FILE, lineOf(dynamic, "this.http.get"), "unresolved-call-site", "web"],
     ["src/main/java/shop/OrdersController.java", lineOf(CONTROLLER, "@GetMapping("), "no-call-site", "api"],
   ]);
+});
+
+test("a publish whose destination no read can decide cannot carry an HTTP operation: the answer stays complete and lists no item for it (ADR-0042 fixture 6)", async () => {
+  const events = `package shop;
+
+import org.springframework.kafka.core.KafkaTemplate;
+
+class Events {
+  private final KafkaTemplate<String, String> kafka;
+  Events(KafkaTemplate<String, String> kafka) { this.kafka = kafka; }
+  void publish(String topic) { kafka.send(topic, "v"); }
+}
+`;
+  commit("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER, "src/main/java/shop/Events.java": events });
+  commit("web", WEB);
+
+  const fact = await consequences("nullable");
+
+  assert.deepEqual([fact.status, fact.value.status], ["complete", "complete"]);
+  assert.equal(fact.value.findings.some((finding) => finding.evidence.some((place) => place.path === "src/main/java/shop/Events.java")), false);
 });
 
 // A change between two revisions.
