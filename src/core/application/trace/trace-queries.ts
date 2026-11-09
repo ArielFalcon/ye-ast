@@ -2,7 +2,7 @@ import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { WorkspaceReadOperation } from "../topology/workspace-operation.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
-import { callsByOwner, linesOncePerFile } from "../navigation/reconciled-calls.ts";
+import { callsByOwner } from "../navigation/reconciled-calls.ts";
 import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
@@ -27,8 +27,7 @@ import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { EntrypointTarget, TraceFault, TraceQueries, TraceTarget, UnknownEntrypointFault } from "../../ports/trace-queries.port.ts";
 import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, triviaOncePerFile, type RootSelection } from "../navigation/root-selection.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
-import { createEdgeTargets, NOTHING_DECLARED } from "../navigation/edge-targets.ts";
-import { retainedRelations } from "../relations/retained-relations.ts";
+import { NOTHING_DECLARED } from "../navigation/edge-targets.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps, type HeadReading } from "../snapshot/head-reading.ts";
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
@@ -37,7 +36,7 @@ import { placeEffects } from "./trace-effects.ts";
 import { comparePlacement, type DataEffectReader } from "../../domain/trace/data-effect-site.ts";
 import type { PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
 import { pagePlans } from "./page-plans.ts";
-import { unresolvedOncePerFile } from "../navigation/declaration-uses.ts";
+import { createBaseReadings } from "../snapshot/base-reading.ts";
 
 export interface TraceQueriesDeps extends HeadReaderDeps {
   workspace?: WorkspaceReadOperation;
@@ -63,6 +62,7 @@ const NO_COMPONENTS: ReadonlyMap<string, readonly ComponentRef[]> = new Map();
 
 export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
   const headReader = createHeadReader(deps);
+  const readings = createBaseReadings(deps);
   const engines = sortedEngines(deps.engines);
 
   return {
@@ -122,15 +122,15 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         const { store, summary } = index;
         try {
           const trivia = triviaOncePerFile(deps.sourceTrivia);
-          const unresolvedIn = unresolvedOncePerFile(store);
-          const declaredIn = declarationsOncePerFile(deps.memberNames, head.prepared?.facts);
-          const sources = new Map(head.tree.sources.map((file) => [file.path, file]));
+          const reading = readings.of(
+            { tree: head.tree, prepared: head.prepared, store, digest: index.digest, snapshot: head.base(content).snapshot, request },
+            { originPaths: head.tree.export.files.map(({ path }) => path).filter(head.selected), modules: deps.moduleDependencies, inScope: head.selected },
+          );
+          const { unresolvedIn, lineOf } = reading;
+          const syntaxOf = reading.syntaxOf ?? (async (): Promise<DeclaredMemberNames> => NOTHING_DECLARED);
+          const sources = new Set(head.tree.sources.map((file) => file.path));
           let declared: Promise<ReadonlyMap<string, readonly string[]>> | undefined;
-          const memberDeclarations = () => (declared ??= declaringFiles(head.tree.sources.filter((file) => head.selected(file.path)), declaredIn));
-          const syntaxOf = async (path: string): Promise<DeclaredMemberNames> => {
-            const file = sources.get(path);
-            return file === undefined ? NOTHING_DECLARED : declaredIn(file);
-          };
+          const memberDeclarations = () => (declared ??= declaringFiles(head.tree.sources.filter((file) => head.selected(file.path)), (file) => syntaxOf(file.path)));
           const rootFiles = [...new Set(declarations.map((target) => target.file))];
           const syntaxCalls = new Set<GraphNodeId>();
           for (const file of rootFiles) {
@@ -153,14 +153,13 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           if (missing.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${missing.map(unknownTargetKey).join(", ")}`, entries: missing } };
 
           const roots = [...new Map(selections.flatMap(({ selection }) => selection.seeds.map(({ symbol }): [GraphNodeId, GraphSymbol] => [symbol.id, symbol]))).values()].sort(comparePosition);
-          const origins = deps.importOrigins(head.tree.sources, head.tree.export.files.map(({ path }) => path).filter(head.selected), head.prepared?.facts);
-          let proven: ReturnType<typeof retainedRelations> | undefined;
-          const memberProofs = () => (proven ??= retainedRelations(deps.relations, head.prepared, head.tree, request));
-          const edgeTargets = createEdgeTargets({ origins, store, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: head.tree.sources }, syntaxOf, proofs: memberProofs, inScope: head.selected });
+          const origins = reading.origins();
+          const edgeTargets = reading.edgeTargets();
+          const reconciled = edgeTargets === undefined ? undefined : reading.reconciledCalls(edgeTargets, reading.declarationUses());
+          if (origins === undefined || edgeTargets?.bindings === undefined || reconciled === undefined) throw new Error("a trace binds calls through the base binder, which needs the syntax and the relations' proofs");
           const pageRoots = new Set(selections.flatMap(({ target, selection }) => (isEntrypointTarget(target) ? selection.seeds.map(({ symbol }) => symbol.id) : [])));
-          const pages = pageRoots.size === 0 ? {} : { pages: { roots: pageRoots, of: pagePlans(store, memberProofs) } };
-          const lineOf = linesOncePerFile(sources);
-          const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, lineOf, budget, ...pages, ...(signal === undefined ? {} : { signal }) });
+          const pages = pageRoots.size === 0 ? {} : { pages: { roots: pageRoots, of: pagePlans(store, reading.relations) } };
+          const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, bindings: edgeTargets.bindings, uses: reading.declarationUses(), reconciled, inScope: head.selected, memberDeclarations, syntaxOf, budget, ...pages, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
           const dataEffects = () => deps.dataEffects?.placed(head.tree.sources) ?? Promise.resolve([]);
           const dataSites = () => head.prepared?.facts === undefined ? dataEffects() : head.prepared.facts.ofInputs("trace-data-effects", { sources: head.tree.sources }, dataEffects);
@@ -255,19 +254,6 @@ function unplacedHandlers(handlers: readonly HandlerPlace[], selection: Pick<Roo
 }
 
 /** Reads each source once for the life of one query, for its member names and its callables alike. */
-function declarationsOncePerFile(reader: DeclaredMemberNamesReader, facts: DerivedFacts | undefined): (file: SourceFile) => Promise<DeclaredMemberNames> {
-  const read = new Map<string, Promise<DeclaredMemberNames>>();
-  return (file) => {
-    let declared = read.get(file.path);
-    if (declared === undefined) {
-      declared = reader.memberNames(file, facts);
-      read.set(file.path, declared);
-    }
-    return declared;
-  };
-}
-
-
 /** Each member name with the sources that declare it, sorted. */
 async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file: SourceFile) => Promise<DeclaredMemberNames>): Promise<ReadonlyMap<string, readonly string[]>> {
   const byName = new Map<string, string[]>();

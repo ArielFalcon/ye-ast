@@ -21,7 +21,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import { inboundEdgesOf, receiverCorrectionsOf } from "../impact/inbound-origins.ts";
 import { createEdgeTargets, syntaxOfSources } from "../navigation/edge-targets.ts";
-import { referenceProofsOf } from "../impact/reference-origins.ts";
+import { referenceProofsOf } from "../navigation/reference-origins.ts";
 import { memberProofContextOf } from "../relations/retained-relations.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";

@@ -6,9 +6,9 @@ import { CALL_EDGE_KINDS, readsPastRoot } from "../../domain/impact/edge-policy.
 import type { CodeGraphReader, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
-import { unresolvedReferencesIn } from "../navigation/declaration-uses.ts";
-import type { FollowedEdge } from "../navigation/edge-targets.ts";
-import { provenKey, typedDeclaration } from "../navigation/proven-calls.ts";
+import { unresolvedReferencesIn } from "./declaration-uses.ts";
+import type { FollowedEdge } from "./edge-targets.ts";
+import { provenKey, typedDeclaration } from "./proven-calls.ts";
 import type { TypeTarget } from "../../ports/type-bindings.port.ts";
 
 /** The head's sources the walk reads: written, in scope, and of a kind an extractor covers. */

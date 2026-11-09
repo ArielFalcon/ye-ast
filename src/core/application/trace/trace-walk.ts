@@ -1,6 +1,5 @@
 import { isSeedable } from "../../domain/change/seeds.ts";
 import { mayRunDeclarationOf } from "../../domain/languages/call-targets.ts";
-import { isJavaSource } from "../../domain/languages/java.ts";
 import { CALL_EDGE_KINDS, EDGE_POLICY, FIELD_KINDS, isClassKind } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor, placeAt } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique } from "../../domain/impact/importers-fact.ts";
@@ -18,9 +17,9 @@ import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navi
 import { containmentTree } from "../navigation/containment-tree.ts";
 import type { EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
 import type { ReceiverProof } from "../navigation/call-binder.ts";
-import { createDeclarationUses, unsettledBy, type UnresolvedIn } from "../navigation/declaration-uses.ts";
-import { callEdgesOf, createReconciledCalls } from "../navigation/reconciled-calls.ts";
-import type { CallBinding, DeclaredBinding } from "../navigation/call-binding.ts";
+import { unsettledBy, type DeclarationUses, type UnresolvedIn } from "../navigation/declaration-uses.ts";
+import { callEdgesOf, type ReconciledCalls } from "../navigation/reconciled-calls.ts";
+import type { CallBinding, CallBindings, DeclaredBinding } from "../navigation/call-binding.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
 const DEFERRED_KINDS: readonly string[] = ["function", "method"];
@@ -47,6 +46,12 @@ export interface TraceWalkInput {
   origins: ImportOrigins;
   /** Where each resolved edge really points, judged by the one owner of that decision. */
   targets: EdgeTargets;
+  /** What the calls the index left without a target bind to, through the targets' binder. */
+  bindings: CallBindings;
+  /** The uses of each declaration the walk reads. */
+  uses: DeclarationUses;
+  /** Each declaration's calls, the index's and the syntax's aligned. */
+  reconciled: ReconciledCalls;
   /** Whether a path is inside the declared scope: a declaration outside it cannot make a call repository code. */
   inScope: (path: string) => boolean;
   /**
@@ -60,8 +65,6 @@ export interface TraceWalkInput {
    * calls whose receiver it binds to a function value, for a member call R6 reaches.
    */
   syntaxOf: (file: string) => Promise<DeclaredMemberNames>;
-  /** A line of a source, as the reconciliation of the index's calls with the written ones reads it. */
-  lineOf: (file: string, line: number) => string | undefined;
   budget: TraceBudget;
   /** The roots an entrypoint starts at, of which a class (a UI route's component) runs as a page (R9), and what a component runs as one; absent without such a root. */
   pages?: { roots: ReadonlySet<GraphNodeId>; of: (component: GraphSymbol) => Promise<PagePlan | undefined> };
@@ -144,15 +147,11 @@ interface Body {
  * cut that leaves it free to expand at a later, shallower one. Every read is cached for this walk only.
  */
 export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkInput): Promise<TraceWalk | "aborted"> {
-  const { store, unresolvedIn, origins, targets, inScope, memberDeclarations, syntaxOf, lineOf, budget, pages, signal } = input;
+  const { store, unresolvedIn, origins, targets, bindings, uses, reconciled, inScope, memberDeclarations, syntaxOf, budget, pages, signal } = input;
   const binder = targets.binder;
   const navigation = createGraphNavigation(store, () => false);
-  const uses = createDeclarationUses(store, navigation, unresolvedIn);
   const callsFrom = (node: GraphSymbol): readonly GraphUnresolvedReference[] => uses.referencesFrom(node, CALL_EDGE_KINDS);
-  const reconciled = createReconciledCalls({ store, uses, syntaxOf, lineOf, importedDeclarations: targets.importedDeclarations });
 
-  if (targets.bindings === undefined) throw new Error("a trace binds calls through the base binder, which needs the syntax and the relations' proofs");
-  const bindings = targets.bindings;
   /** The declarations of a name a call written in `from` may run. */
   const declarationsNamed = (name: string, from: string): readonly GraphSymbol[] => bindings.namedDeclarations(name, from);
   /** What `x.<name>` written in `from` can run: any declaration of that name a value can be, so only type-only kinds leave it out. */

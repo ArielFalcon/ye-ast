@@ -8,7 +8,7 @@ import type { Relation } from "../../domain/relations/relation.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { CodeGraphReader, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import { createInboundEdges, type EdgeCorrections, type InboundEdges, type InboundOccurrences } from "./inbound-edges.ts";
-import type { ReferenceProofs } from "./reference-origins.ts";
+import type { ReferenceProofs } from "../navigation/reference-origins.ts";
 import { edgeKey, type EdgeTargets, type FollowedEdge } from "../navigation/edge-targets.ts";
 import type { CallBindings, UnboundCall } from "../navigation/call-binding.ts";
 import { createGraphNavigation } from "../navigation/graph-navigation.ts";

@@ -13,15 +13,15 @@ const BASE_READING = "core/application/snapshot/base-reading.ts";
 
 /** The calls of each stage constructor of decision 1 outside `BASE_READING`, by file. */
 const STAGE_CONSTRUCTOR_SITES: Readonly<Record<string, Readonly<Record<string, number>>>> = {
-  createEdgeTargets: { "core/application/contracts/consumer-sources.ts": 1, "core/application/impact/impact-queries.ts": 2, "core/application/outline/outline.ts": 1, "core/application/trace/trace-queries.ts": 1 },
+  createEdgeTargets: { "core/application/contracts/consumer-sources.ts": 1, "core/application/impact/impact-queries.ts": 1, "core/application/outline/outline.ts": 1 },
   createCallBinder: { "core/application/navigation/edge-targets.ts": 1 },
   createCallBindings: { "core/application/navigation/edge-targets.ts": 1 },
-  createReconciledCalls: { "core/application/impact/impact-queries.ts": 1, "core/application/trace/trace-walk.ts": 1 },
-  createReverseCalls: { "core/application/impact/impact-queries.ts": 1 },
-  createDeclarationUses: { "core/application/impact/impact-queries.ts": 1, "core/application/outline/outline.ts": 1, "core/application/trace/trace-walk.ts": 1 },
-  retainedRelations: { "core/application/impact/impact-queries.ts": 1, "core/application/trace/trace-queries.ts": 1 },
-  referenceProofsOf: { "core/application/contracts/consumer-sources.ts": 1, "core/application/impact/impact-queries.ts": 2 },
-  syntaxOfSources: { "core/application/contracts/consumer-sources.ts": 1, "core/application/impact/impact-queries.ts": 3, "core/application/outline/outline-queries.ts": 1 },
+  createReconciledCalls: {},
+  createReverseCalls: {},
+  createDeclarationUses: { "core/application/outline/outline.ts": 1 },
+  retainedRelations: {},
+  referenceProofsOf: { "core/application/contracts/consumer-sources.ts": 1 },
+  syntaxOfSources: { "core/application/contracts/consumer-sources.ts": 1, "core/application/impact/impact-queries.ts": 1, "core/application/outline/outline-queries.ts": 1 },
 };
 
 /** The language checks of decision 12. */
@@ -29,13 +29,14 @@ const LANGUAGE_CHECKS = ["isJavaSource", "isTypeScriptSource", "isTypeScriptFile
 
 /** Lines outside `core/domain/languages/` that call a language check, by file, in `core/application` and `core/domain`. */
 const LANGUAGE_CHECK_LINES: Readonly<Record<string, number>> = {
-  "core/application/impact/impact-queries.ts": 8,
+  "core/application/impact/impact-queries.ts": 7,
   "core/application/impact/importers.ts": 1,
   "core/application/impact/inbound-origins.ts": 1,
   "core/application/navigation/call-binding.ts": 2,
   "core/application/navigation/edge-targets.ts": 2,
   "core/application/navigation/reverse-calls.ts": 3,
   "core/application/relations/retained-relations.ts": 1,
+  "core/application/snapshot/base-reading.ts": 1,
   "core/domain/change/changed-file.ts": 2,
   "core/domain/impact/module-impact.ts": 5,
   "core/domain/map/entrypoint-map.ts": 2,
@@ -50,7 +51,6 @@ const CROSS_FAMILY_IMPORTS: readonly string[] = [
   "contracts/consumer-callers.ts → impact/inbound-edges.ts",
   "contracts/consumer-sources.ts → impact/inbound-edges.ts",
   "contracts/consumer-sources.ts → impact/inbound-origins.ts",
-  "contracts/consumer-sources.ts → impact/reference-origins.ts",
   "contracts/consumer-sources.ts → topology/workspace-join.ts",
   "contracts/consumer-sources.ts → topology/workspace-operation.ts",
   "contracts/consumer-sources.ts → topology/workspace-snapshots.ts",
