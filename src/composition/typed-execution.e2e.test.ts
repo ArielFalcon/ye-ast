@@ -11,8 +11,8 @@ import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 
 /**
  * ADR-0045 decision 5's mandatory fixtures, with a declared build output: the type checker's binding of a call on a
- * structural parameter, or on what a replaceable provider injects, proves the dependence `callers` lists, never a body
- * trace runs.
+ * structural parameter, on what a replaceable provider injects, or on a private member of the class it names, proves
+ * the dependence `callers` lists, never a body trace runs.
  */
 const FILES: Record<string, string> = {
   "package.json": JSON.stringify({ name: "fixture", dependencies: { "@angular/core": "20.0.0" } }),
@@ -20,6 +20,7 @@ const FILES: Record<string, string> = {
   "src/service.ts": "export class Service {\n  execute(): string {\n    return 'service';\n  }\n}\n\nexport class Other extends Service {\n  override execute(): string {\n    return 'other';\n  }\n}\n",
   "src/run.ts": "import { Service } from './service';\n\nexport function run(x: Service): string {\n  return x.execute();\n}\n",
   "src/panel.ts": "import { Component, inject } from '@angular/core';\nimport { Other, Service } from './service';\n\n@Component({ selector: 'app-panel', template: '', providers: [{ provide: Service, useClass: Other }] })\nexport class Panel {\n  show(): string {\n    return inject(Service).execute();\n  }\n}\n",
+  "src/ledger.ts": "export class Ledger {\n  #save(value: string): void {\n    console.log(value);\n  }\n\n  run(other: Ledger): void {\n    other.#save('a');\n  }\n}\n",
 };
 
 /** The declarations the fixture imports from `@angular/core`, as an install would leave them. */
@@ -93,4 +94,10 @@ test("a call on what a replaceable provider injects that the type checker binds 
 
   assert.ok(dependents(callers).includes("src/panel.ts:show typed"), dependents(callers).join("\n"));
   assert.ok(!stepsOf(trace).includes("src/service.ts:Service.execute"), stepsOf(trace).join("\n"));
+});
+
+test("a typed binding of a private member keeps its `#`, so the call on it is a typed caller", async () => {
+  const callers = await callersOf("src/ledger.ts", "#save");
+
+  assert.ok(dependents(callers).includes("src/ledger.ts:run typed"), dependents(callers).join("\n"));
 });

@@ -1,6 +1,7 @@
 import type { ContractOperation } from "../contracts/contract-operation.ts";
 import type { Entrypoint } from "../entrypoints/entrypoint.ts";
 import type { Handler, HttpMethod } from "../entrypoints/http-route.ts";
+import { nameTail } from "../shared/call-place.ts";
 import { compareText } from "../shared/code-node.ts";
 import { ANYTHING, type Cut, type Finding } from "../shared/fact.ts";
 import { unresolvedPlaceCuts } from "./impact-cuts.ts";
@@ -76,7 +77,7 @@ export function changedContracts(base: readonly Finding<ContractOperation>[], he
 export function servedContracts(changes: readonly ChangedContract[], base: readonly Finding<Entrypoint>[], head: readonly Finding<Entrypoint>[]): ChangedContract[] {
   return changes.map((change) => {
     if (change.change === "added" || change.operationId === undefined) return change;
-    const overrides = (symbol: string): boolean => symbol.slice(symbol.lastIndexOf(".") + 1) === change.operationId;
+    const overrides = (symbol: string): boolean => nameTail(symbol) === change.operationId;
     const handlers = (change.change === "removed" ? base : head).flatMap((finding) =>
       finding.status === "complete" && finding.value.kind === "http-route" && finding.value.method === change.method && overrides(finding.value.handler.symbol) && finding.evidence.some(({ path, line }) => path === change.document && line === change.line) ? [finding.value.handler] : [],
     );
