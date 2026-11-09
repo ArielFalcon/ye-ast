@@ -8,13 +8,32 @@ function resolverOver(files: Record<string, string>, dependencies: string[] = []
   return createModuleResolver(async (file) => files[file], { dependencies: new Set(dependencies), declared: new Set() });
 }
 
-test("a relative specifier names a TypeScript file as written, with an extension, or its index file; anything else is unresolved", async () => {
-  const resolver = resolverOver({ "src/a.ts": "", "src/b/index.ts": "", "src/c.d.ts": "", "src/d.js": "" });
+test("a relative specifier names the file TypeScript resolves it to under the governing configuration, or else one with a TypeScript extension or its index file", async () => {
+  const resolver = resolverOver({
+    "src/a.ts": "",
+    "src/b/index.ts": "",
+    "src/c.d.ts": "",
+    "src/d.js": "",
+    "src/e.mts": "",
+    "src/f/index.mts": "",
+    "src/lib/package.json": JSON.stringify({ types: "src/main.ts" }),
+    "src/lib/src/main.ts": "",
+    "src/Comp.tsx": "",
+    "src/Comp/index.ts": "",
+    "roots/tsconfig.json": JSON.stringify({ compilerOptions: { rootDirs: ["src", "generated"] } }),
+    "roots/generated/thing.ts": "",
+  });
 
   assert.deepEqual(await resolver.resolve("src/app.ts", "./a"), { file: "src/a.ts" });
   assert.deepEqual(await resolver.resolve("src/app.ts", "./b"), { file: "src/b/index.ts" });
   assert.deepEqual(await resolver.resolve("src/x/app.ts", "../a.ts"), { file: "src/a.ts" });
-  for (const specifier of ["./missing", "./c.d.ts", "./d.js", "../../../escape", "/abs/a"]) {
+  assert.deepEqual(await resolver.resolve("src/app.ts", "./a.js"), { file: "src/a.ts" });
+  assert.deepEqual(await resolver.resolve("src/app.ts", "./e.mjs"), { file: "src/e.mts" });
+  assert.deepEqual(await resolver.resolve("src/app.ts", "./e"), { file: "src/e.mts" });
+  assert.deepEqual(await resolver.resolve("src/app.ts", "./f"), { file: "src/f/index.mts" });
+  assert.deepEqual(await resolver.resolve("src/app.ts", "./lib"), { file: "src/lib/src/main.ts" });
+  assert.deepEqual(await resolver.resolve("roots/src/app.ts", "./thing"), { file: "roots/generated/thing.ts" });
+  for (const specifier of ["./Comp", "./missing", "./c.d.ts", "./d.js", "../../../escape", "/abs/a"]) {
     assert.ok("unresolved" in (await resolver.resolve("src/app.ts", specifier)), specifier);
   }
 });
@@ -39,7 +58,7 @@ test("an unresolved specifier names no file only when no listed file could be it
 
   assert.deepEqual(await proofs([["src/app.ts", "./missing"], ["src/app.ts", "../../escape"], ["src/app.ts", "node:nothing"], ["web/src/app.ts", "@app/missing"]]), [true, true, true, true]);
   assert.deepEqual(
-    await proofs([["src/app.ts", "./c"], ["src/app.ts", "./d.js"], ["src/app.ts", "./foo.js"], ["src/app.ts", "./Comp"], ["web/src/app.ts", "@app/env/environment"], ["roots/src/app.ts", "./missing"], ["src/app.ts", "./linked/x"], ["src/app.ts", "/abs/a"], ["src/app.ts", "@app/missing"]]),
+    await proofs([["src/app.ts", "./c"], ["src/app.ts", "./d.js"], ["src/app.ts", "./foo.jsx"], ["src/app.ts", "./Comp"], ["web/src/app.ts", "@app/env/environment"], ["roots/src/app.ts", "./missing"], ["src/app.ts", "./linked/x"], ["src/app.ts", "/abs/a"], ["src/app.ts", "@app/missing"]]),
     [false, false, false, false, false, false, false, false, false],
   );
   assert.equal("namesNoFile" in (await createModuleResolver(async (file) => files[file], NO_PACKAGES).resolve("src/app.ts", "./missing")), false);
