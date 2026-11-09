@@ -164,23 +164,25 @@ test("detailed evidence of a member target shows its nearest dependent, never on
   assert.doesNotMatch(evidence, /OwnerService \[class\]|VisitService\.book/);
 });
 
-test("detailed evidence shows a dependent a free dispatch hop reached at depth 0", () => {
+test("detailed evidence of an implementation target shows the callers of its dispatch counterpart, never only the counterpart", () => {
   const value: ImpactValue = {
     ...impact,
-    seeds: [{ file: "src/orders/order.gateway.ts", line: 12, symbol: "OrderGateway.place", basis: "requested" }],
+    seeds: [{ file: "src/service/ClinicServiceImpl.java", line: 77, endLine: 81, symbol: "ClinicServiceImpl.deletePet", basis: "requested" }],
     symbols: [
-      { file: "src/orders/order.gateway.ts", symbol: "OrderGateway", kind: "class", line: 5, endLine: 30, depth: 0, confidence: 1, fanIn: 0, via: { file: "src/orders/order.gateway.ts", symbol: "OrderGateway.place", lines: [], basis: "contains" } },
-      { file: "src/orders/order.stripe-gateway.ts", symbol: "OrderStripeGateway.place", kind: "method", line: 21, endLine: 27, depth: 0, confidence: 1, fanIn: 1, via: { file: "src/orders/order.gateway.ts", symbol: "OrderGateway.place", lines: [14], basis: "dispatch" } },
-      { file: "src/checkout/checkout.service.ts", symbol: "CheckoutService.submit", kind: "method", line: 33, endLine: 40, depth: 1, confidence: 1, fanIn: 1, via: { file: "src/orders/order.stripe-gateway.ts", symbol: "OrderStripeGateway.place", lines: [24], basis: "call" } },
-      { file: "src/checkout/checkout.controller.ts", symbol: "CheckoutController.create", kind: "method", line: 18, endLine: 25, depth: 2, confidence: 1, fanIn: 1, via: { file: "src/checkout/checkout.service.ts", symbol: "CheckoutService.submit", lines: [35], basis: "call" } },
-      { file: "src/checkout/checkout.job.ts", symbol: "CheckoutJob.expire", kind: "method", line: 11, endLine: 17, depth: 3, confidence: 1, fanIn: 0, via: { file: "src/checkout/checkout.service.ts", symbol: "CheckoutService.submit", lines: [38], basis: "call" } },
+      { file: "src/service/ClinicService.java", symbol: "ClinicService", kind: "interface", line: 38, endLine: 74, depth: 0, confidence: 0.9, fanIn: 0, via: { file: "src/service/ClinicService.java", symbol: "ClinicService.deletePet", lines: [], basis: "contains" } },
+      { file: "src/service/ClinicService.java", symbol: "ClinicService.deletePet", kind: "method", line: 44, depth: 0, confidence: 0.9, fanIn: 1, via: { file: "src/service/ClinicServiceImpl.java", symbol: "ClinicServiceImpl.deletePet", lines: [], basis: "dispatch" } },
+      { file: "src/rest/PetRestController.java", symbol: "PetRestController", kind: "class", line: 38, endLine: 98, depth: 1, confidence: 0.9, fanIn: 0, via: { file: "src/rest/PetRestController.java", symbol: "PetRestController.deletePet", lines: [], basis: "contains" } },
+      { file: "src/rest/PetRestController.java", symbol: "PetRestController.deletePet", kind: "method", line: 88, endLine: 96, depth: 1, confidence: 0.9, fanIn: 0, via: { file: "src/service/ClinicService.java", symbol: "ClinicService.deletePet", lines: [94], basis: "call" } },
+      { file: "src/rest/PetRestControllerV2.java", symbol: "PetRestControllerV2.remove", kind: "method", line: 20, endLine: 26, depth: 2, confidence: 0.9, fanIn: 0, via: { file: "src/rest/PetRestController.java", symbol: "PetRestController.deletePet", lines: [24], basis: "call" } },
     ],
     entrypoints: [],
-    cost: { expansionsUsed: 2 },
+    cost: { expansionsUsed: 3 },
   };
   const evidence = renderImpact({ ...base, status: "complete", value }, "details").split("impacted symbols")[1]!.split("seeds (")[0]!;
-  assert.match(evidence, /21-27 OrderStripeGateway\.place \[method\][^\n]*via src\/orders\/order\.gateway\.ts:OrderGateway\.place at 14 \(dispatch\)/);
-  assert.doesNotMatch(evidence, /OrderGateway \[class\]/);
+  assert.match(evidence, /nearest dependent depth 1/);
+  assert.match(evidence, /88-96 PetRestController\.deletePet \[method\][^\n]*via src\/service\/ClinicService\.java:ClinicService\.deletePet at 94/);
+  assert.match(evidence, /44 ClinicService\.deletePet \[method\][^\n]*\(dispatch\)/);
+  assert.doesNotMatch(evidence, /PetRestControllerV2/);
 });
 
 test("a top-level function target keeps its nearest dependent level in detailed evidence", () => {
@@ -232,7 +234,7 @@ test("detailed evidence states that a target reaches only containment", () => {
     cost: { expansionsUsed: 0 },
   };
   const text = renderImpact({ ...base, status: "complete", value }, "details");
-  assert.match(text, /evidence view: no dependent recorded; 1 containment row[^\n]*mode: "full"/);
+  assert.match(text, /evidence view: no dependent recorded; 1 containment or dispatch row[^\n]*mode: "full"/);
   assert.doesNotMatch(text, /OwnerService \[class\]/);
 });
 
