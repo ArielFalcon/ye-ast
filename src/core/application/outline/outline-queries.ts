@@ -21,6 +21,7 @@ import type { DeclaredMemberNamesReader } from "../../ports/declared-member-name
 import { buildOutputCuts } from "../../domain/shared/build-outputs.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import { createBaseReadings, withOutputs, type BaseReadingDeps } from "../snapshot/base-reading.ts";
+import { snapshotFiles } from "../navigation/snapshot-files.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 
 export interface OutlineQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, "typeBindings" | "checkerInputs" | "declaredOutputs"> {
@@ -70,8 +71,10 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
         const { store, summary } = index;
         try {
           const held = new Set(headTree.export.files.map((file) => file.path));
-          const focused = focus === undefined ? undefined : readFocus(store, focus.filter(({ file }) => isReadableFile(file)));
-          if (focused !== undefined && focused.unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${focused.unknown.map(unknownTargetKey).join(", ")}${unmodelledNote(focused.unknown, unmodelled)}`, entries: focused.unknown } };
+          const snapshot = snapshotFiles(store, [...held]);
+          const focused = focus === undefined ? undefined : readFocus(store, focus.filter(({ file }) => isReadableFile(file)), snapshot);
+          const unknown = focused === undefined ? [] : snapshot.describe(focused.unknown);
+          if (unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${unknown.map(unknownTargetKey).join(", ")}${unmodelledNote(unknown, unmodelled)}`, entries: unknown } };
           if (focused !== undefined && focused.topLevel.length > 0) return { ok: false, fault: { kind: "top-level-line", detail: `no declaration holds ${focused.topLevel.map(({ file, line }) => `${file}:${line}`).join(", ")}; the line is at the top level of its file`, entries: focused.topLevel } };
           const listed = focused === undefined ? readOutline(store, covered, await deps.moduleReader.extract(sources, { files: covered })) : undefined;
           if (request.signal?.aborted) return ABORTED;

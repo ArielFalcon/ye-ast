@@ -73,23 +73,30 @@ interface ImpactImportersBase {
 
 /**
  * A requested symbol that names no node at the revision, or a requested line range that selects no declaration (past
- * the end of its file, or only blank and comment lines outside every declaration); `entries` lists every such target.
+ * the end of its file, or only blank and comment lines outside every declaration), or a target whose file the snapshot
+ * does not hold; `entries` lists every such target.
  */
 export interface UnknownSymbolFault {
   kind: "unknown-symbol";
   detail: string;
-  entries: readonly (({ symbol: string } | { start: number; end: number }) & {
-    file: string;
-    /**
-     * What the file declares that could be asked instead, sorted and once each, as dotted containment paths: of the
-     * seedable declarations for `callers`, of every declaration for an outline focus; empty when it declares none or is not indexed.
-     */
-    candidates: readonly string[];
-  })[];
+  entries: readonly UnknownSymbolEntry[];
 }
 
+export type UnknownSymbolEntry = ({ symbol: string } | { start: number; end: number }) & {
+  file: string;
+  /** Whether the snapshot holds no file at `file` at all. */
+  absent: boolean;
+  /**
+   * What could be asked instead, sorted and once each: when `absent`, repository-relative paths of the snapshot (the
+   * files declaring a symbol of that name, or the files of that basename for a line range); otherwise dotted
+   * containment paths (of the seedable declarations for `callers`, of every declaration for an outline focus). Empty
+   * when nothing in the snapshot could be asked instead.
+   */
+  candidates: readonly string[];
+};
+
 /** How a fault entry names its target: `file:symbol`, or `file:start-end` for a line range. */
-export function unknownTargetKey(entry: UnknownSymbolFault["entries"][number]): string {
+export function unknownTargetKey(entry: UnknownSymbolEntry): string {
   return "symbol" in entry ? `${entry.file}:${entry.symbol}` : `${entry.file}:${entry.start}-${entry.end}`;
 }
 

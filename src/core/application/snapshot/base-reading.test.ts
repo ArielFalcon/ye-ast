@@ -10,6 +10,7 @@ import type { RevisionSources } from "../../ports/revision-sources.port.ts";
 import type { TypeBindingsAnswer } from "../../ports/type-bindings.port.ts";
 import type { WorkspaceFault } from "../../ports/workspace-repos.port.ts";
 import { createBaseReadings } from "./base-reading.ts";
+import type { EdgeTargets } from "../navigation/edge-targets.ts";
 
 const SHA: SnapshotRef = { repo: "shop", kind: "sha", sha: "a".repeat(40) };
 const LIVE: SnapshotRef = { repo: "shop", kind: "live", head: "h", stateId: "s" };
@@ -58,4 +59,27 @@ test("every reading redirects an edge by the module statements composition hands
   const [verdict] = await readings.of({ tree, prepared: undefined, store, snapshot: SHA, request: { repo: "/work/shop" } }).edgeTargets()!.verdictsOf([{ edge: edge!, source: run!, target: store.symbolsByIds([edge!.target])[0]! }]);
 
   assert.deepEqual(verdict?.kind === "redirect" && verdict.to.file, "src/b.ts");
+});
+
+test("the calls through origins are derived once per index and relations' scope, and again for another index", async () => {
+  const file = "src/cmp.ts";
+  const graph = fakeCodeGraph([fakeNode("Owner", "class", file, 1, 20), fakeNode("caller", "method", file, 5, 9), fakeNode("list", "method", "src/svc.ts", 2, 4)], [{ from: "Owner", to: "caller", kind: "contains" }], [{ from: "caller", name: "this.svc.list", kind: "calls", file, line: 7, column: 4 }]);
+  let reads = 0;
+  const store: CodeGraphReader = { ...graph, unresolvedReferences: (files) => (reads++, graph.unresolvedReferences(files)) };
+  const relations = { language: { reads: () => true }, extract: async () => ({ relations: [], fields: [{ owner: { path: file, symbol: "Owner", line: 1 }, field: "svc", holds: { class: { path: "src/svc.ts", symbol: "Svc", line: 1 } } }], locals: [], memberUses: [] }) } as unknown as RelationExtractor;
+  const kept = new Map<string, unknown>();
+  const retained = async <T>(slot: string, produce: () => Promise<T>): Promise<T> => (kept.has(slot) ? (kept.get(slot) as T) : (kept.set(slot, JSON.parse(JSON.stringify(await produce()))), kept.get(slot) as T));
+  const asked: string[][] = [];
+  const targets = { bindings: { boundCalls: async (calls: readonly { reference: { name: string } }[]) => (asked.push(calls.map(({ reference }) => reference.name)), calls.map(() => ({ kind: "unbound", form: "member", candidates: [], attributed: [] }))) } } as unknown as EdgeTargets;
+  const readings = createBaseReadings({ relations });
+  const [list] = store.symbolsInFiles(["src/svc.ts"]);
+  const into = (digest: string, scope?: { exclude: string[] }) => readings.of({ tree: { export: { files: [], skipped: [] }, sources: [] }, prepared: { retained } as never, store, digest, snapshot: SHA, request: { repo: "/work/shop", ...(scope && { scope }) } }, {}).originCalls(targets)!.into([list!]);
+
+  await into("index-1");
+  await into("index-1");
+  assert.equal(reads, 1);
+  await into("index-2");
+  await into("index-1", { exclude: ["gen/"] });
+  assert.equal(reads, 3);
+  assert.deepEqual(asked, [["this.svc.list"], ["this.svc.list"], ["this.svc.list"], ["this.svc.list"]]);
 });

@@ -626,7 +626,7 @@ test("a line range that selects no declaration, past the end of its file or only
     const { answer } = await trace({ nodes, sources: [{ path: B, content }], trivia: { [B]: [4, 8, 10] } }, [{ file: B, start, end }]);
     assert.ok(!answer.ok, `${start}-${end}`);
     assert.equal(answer.fault.kind, "unknown-symbol");
-    assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: B, start, end, candidates: ["f", "g", "h"] }]);
+    assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: B, start, end, absent: false, candidates: ["f", "g", "h"] }]);
   }
 });
 
@@ -647,7 +647,13 @@ test("a symbol that names no declaration is an unknown-symbol fault with what th
   const { answer } = await trace({ nodes: [SVC, RUN] }, [{ file: A, symbol: "missing" }]);
   assert.ok(!answer.ok);
   assert.equal(answer.fault.kind, "unknown-symbol");
-  assert.deepEqual(answer.fault.kind === "unknown-symbol" ? answer.fault.entries : [], [{ file: A, symbol: "missing", candidates: ["Svc", "run"] }]);
+  assert.deepEqual(answer.fault.kind === "unknown-symbol" ? answer.fault.entries : [], [{ file: A, symbol: "missing", absent: false, candidates: ["Svc", "run"] }]);
+});
+
+test("a symbol target on a path the snapshot does not hold is absent, with the snapshot files that declare that name", async () => {
+  const { answer } = await trace({ nodes: [fakeNode("save", "function", A, 3, 5, "save")] }, [{ file: "src/gone.ts", symbol: "save" }]);
+  assert.ok(!answer.ok);
+  assert.deepEqual(answer.fault.kind === "unknown-symbol" ? answer.fault.entries : [], [{ file: "src/gone.ts", symbol: "save", absent: true, candidates: [A] }]);
 });
 
 test("a target outside the declared scope is unknown with its evidence", async () => {

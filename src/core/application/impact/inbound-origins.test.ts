@@ -6,7 +6,8 @@ import type { ImportOrigins } from "../../ports/import-origins.port.ts";
 import { createEdgeTargets, NOTHING_DECLARED, type FollowedEdge } from "../navigation/edge-targets.ts";
 import { fakeCodeGraph, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
 import type { CallBindings } from "../navigation/call-binding.ts";
-import { createOriginCalls, originCallsOf } from "./inbound-origins.ts";
+import { originCallsOf } from "./inbound-origins.ts";
+import { callsThroughOrigins, createOriginCalls } from "../navigation/origin-calls.ts";
 
 const SVC = "src/svc.ts";
 const CMP = "src/cmp.ts";
@@ -78,7 +79,7 @@ test("the holder file of several origins is read once", async () => {
 test("calls through origins are bound once each, and only when a declaration of the name they call is reached", async () => {
   const use: FakeUnresolved[] = [{ from: "caller", name: "this.svc.list", kind: "calls", file: CMP, line: 7, column: 4 }, { from: "caller", name: "this.svc.save", kind: "calls", file: CMP, line: 8, column: 4 }];
   const { store, bindings, origins } = world(FIELD_OWNER, use, { fields: [{ owner: { path: CMP, symbol: "Owner", line: 1 }, field: "svc", holds: HOLDS }] });
-  const calls = createOriginCalls(store, bindings, origins);
+  const calls = createOriginCalls(bindings, async () => callsThroughOrigins(store, origins));
   const [list] = store.symbolsByIds(["Base.list" as GraphNodeId]);
   const [lone] = store.symbolsByIds(["Lone" as GraphNodeId]);
 

@@ -145,6 +145,99 @@ test("detailed impact retains the nearest dependency frontier and reached handle
   assert.doesNotMatch(summary, /deeper|handler\b[^\n]*depth 3/i);
 });
 
+test("detailed evidence of a member target shows its nearest dependent, never only its own containment", () => {
+  const value: ImpactValue = {
+    ...impact,
+    seeds: [{ file: "src/owners/owner.service.ts", line: 40, endLine: 47, symbol: "OwnerService.searchOwners", basis: "requested" }],
+    symbols: [
+      { file: "src/owners/owner.service.ts", symbol: "OwnerService", kind: "class", line: 12, endLine: 60, depth: 0, confidence: 1, fanIn: 0, via: { file: "src/owners/owner.service.ts", symbol: "OwnerService.searchOwners", lines: [], basis: "contains" } },
+      { file: "src/owners/owner-list.component.ts", symbol: "OwnerListComponent", kind: "class", line: 9, endLine: 90, depth: 1, confidence: 1, fanIn: 0, via: { file: "src/owners/owner-list.component.ts", symbol: "OwnerListComponent.findOwners", lines: [], basis: "contains" } },
+      { file: "src/owners/owner-list.component.ts", symbol: "OwnerListComponent.findOwners", kind: "method", line: 44, endLine: 47, depth: 1, confidence: 1, fanIn: 1, via: { file: "src/owners/owner.service.ts", symbol: "OwnerService.searchOwners", lines: [48], basis: "call" } },
+      { file: "src/visits/visit.service.ts", symbol: "VisitService.book", kind: "method", line: 30, endLine: 36, depth: 2, confidence: 1, fanIn: 0, via: { file: "src/owners/owner-list.component.ts", symbol: "OwnerListComponent.findOwners", lines: [51], basis: "call" } },
+    ],
+    entrypoints: [],
+    cost: { expansionsUsed: 3 },
+  };
+  const evidence = renderImpact({ ...base, status: "complete", value }, "details").split("impacted symbols")[1]!.split("seeds (")[0]!;
+  assert.match(evidence, /src\/owners\/owner-list\.component\.ts\n {4}9-90 OwnerListComponent \[class\] \(depth 1, via OwnerListComponent\.findOwners \(contains\)\)\n {4}44-47 OwnerListComponent\.findOwners \[method\][^\n]*via src\/owners\/owner\.service\.ts:OwnerService\.searchOwners at 48/);
+  assert.match(evidence, /2 other symbol[^\n]*mode: "full"/);
+  assert.doesNotMatch(evidence, /OwnerService \[class\]|VisitService\.book/);
+});
+
+test("detailed evidence of an implementation target shows the callers of its dispatch counterpart, never only the counterpart", () => {
+  const value: ImpactValue = {
+    ...impact,
+    seeds: [{ file: "src/service/ClinicServiceImpl.java", line: 77, endLine: 81, symbol: "ClinicServiceImpl.deletePet", basis: "requested" }],
+    symbols: [
+      { file: "src/service/ClinicService.java", symbol: "ClinicService", kind: "interface", line: 38, endLine: 74, depth: 0, confidence: 0.9, fanIn: 0, via: { file: "src/service/ClinicService.java", symbol: "ClinicService.deletePet", lines: [], basis: "contains" } },
+      { file: "src/service/ClinicService.java", symbol: "ClinicService.deletePet", kind: "method", line: 44, depth: 0, confidence: 0.9, fanIn: 1, via: { file: "src/service/ClinicServiceImpl.java", symbol: "ClinicServiceImpl.deletePet", lines: [], basis: "dispatch" } },
+      { file: "src/rest/PetRestController.java", symbol: "PetRestController", kind: "class", line: 38, endLine: 98, depth: 1, confidence: 0.9, fanIn: 0, via: { file: "src/rest/PetRestController.java", symbol: "PetRestController.deletePet", lines: [], basis: "contains" } },
+      { file: "src/rest/PetRestController.java", symbol: "PetRestController.deletePet", kind: "method", line: 88, endLine: 96, depth: 1, confidence: 0.9, fanIn: 0, via: { file: "src/service/ClinicService.java", symbol: "ClinicService.deletePet", lines: [94], basis: "call" } },
+      { file: "src/rest/PetRestControllerV2.java", symbol: "PetRestControllerV2.remove", kind: "method", line: 20, endLine: 26, depth: 2, confidence: 0.9, fanIn: 0, via: { file: "src/rest/PetRestController.java", symbol: "PetRestController.deletePet", lines: [24], basis: "call" } },
+    ],
+    entrypoints: [],
+    cost: { expansionsUsed: 3 },
+  };
+  const evidence = renderImpact({ ...base, status: "complete", value }, "details").split("impacted symbols")[1]!.split("seeds (")[0]!;
+  assert.match(evidence, /nearest dependent depth 1/);
+  assert.match(evidence, /88-96 PetRestController\.deletePet \[method\][^\n]*via src\/service\/ClinicService\.java:ClinicService\.deletePet at 94/);
+  assert.match(evidence, /44 ClinicService\.deletePet \[method\][^\n]*\(dispatch\)/);
+  assert.doesNotMatch(evidence, /PetRestControllerV2/);
+});
+
+test("a top-level function target keeps its nearest dependent level in detailed evidence", () => {
+  const value: ImpactValue = {
+    ...impact,
+    seeds: [{ file: "src/lib/format.ts", line: 3, symbol: "formatAmount", basis: "requested" }],
+    symbols: [
+      { file: "src/app/invoice.ts", symbol: "renderInvoice", kind: "function", line: 12, endLine: 19, depth: 1, confidence: 1, fanIn: 1, via: { file: "src/lib/format.ts", symbol: "formatAmount", lines: [14], basis: "call" } },
+      { file: "src/app/report.ts", symbol: "renderReport", kind: "function", line: 20, endLine: 26, depth: 2, confidence: 1, fanIn: 0, via: { file: "src/app/invoice.ts", symbol: "renderInvoice", lines: [16], basis: "call" } },
+    ],
+    entrypoints: [],
+    cost: { expansionsUsed: 2 },
+  };
+  const evidence = renderImpact({ ...base, status: "complete", value }, "details").split("impacted symbols")[1]!.split("seeds (")[0]!;
+  assert.match(evidence, /12-19 renderInvoice \[function\][^\n]*via src\/lib\/format\.ts:formatAmount at 14/);
+  assert.match(evidence, /1 other symbol[^\n]*mode: "full"/);
+  assert.doesNotMatch(evidence, /renderReport/);
+});
+
+test("detailed evidence keeps a change-origin seed a shown dependent depends on", () => {
+  const value: ImpactValue = {
+    ...impact,
+    seeds: [
+      { file: "src/owners/owner.service.ts", line: 40, endLine: 47, symbol: "OwnerService.searchOwners", basis: "lines" },
+      { file: "src/visits/visit.service.ts", line: 12, endLine: 18, symbol: "VisitService.book", basis: "lines" },
+      { file: "src/vets/vet.service.ts", line: 24, endLine: 30, symbol: "VetService.list", basis: "lines" },
+      { file: "src/pets/pet.service.ts", line: 8, endLine: 14, symbol: "PetService.find", basis: "lines" },
+    ],
+    symbols: [
+      { file: "src/owners/owner.service.ts", symbol: "OwnerService", kind: "class", line: 12, endLine: 60, depth: 0, confidence: 1, fanIn: 0, via: { file: "src/owners/owner.service.ts", symbol: "OwnerService.searchOwners", lines: [], basis: "contains" } },
+      { file: "src/owners/owner-list.component.ts", symbol: "OwnerListComponent.findOwners", kind: "method", line: 44, endLine: 47, depth: 1, confidence: 1, fanIn: 1, via: { file: "src/owners/owner.service.ts", symbol: "OwnerService.searchOwners", lines: [48], basis: "call" } },
+      { file: "src/menu/menu.component.ts", symbol: "MenuComponent.showVisits", kind: "method", line: 20, endLine: 26, depth: 1, confidence: 1, fanIn: 0, via: { file: "src/visits/visit.service.ts", symbol: "VisitService.book", lines: [22], basis: "call" } },
+    ],
+    entrypoints: [],
+    cost: { expansionsUsed: 2 },
+  };
+  const seeds = renderImpact({ ...base, status: "complete", value }, "details").split("seeds (4):")[1]!.split("Investigation guide:")[0]!;
+  assert.match(seeds, /src\/owners\/owner\.service\.ts \(lines\)\n {4}40-47 OwnerService\.searchOwners/);
+  assert.match(seeds, /src\/visits\/visit\.service\.ts \(lines\)\n {4}12-18 VisitService\.book/);
+  assert.match(seeds, /change origins: 2 declarations across 2 files/);
+});
+
+test("detailed evidence states that a target reaches only containment", () => {
+  const value: ImpactValue = {
+    ...impact,
+    seeds: [{ file: "src/owners/owner.service.ts", line: 40, endLine: 47, symbol: "OwnerService.searchOwners", basis: "requested" }],
+    symbols: [{ file: "src/owners/owner.service.ts", symbol: "OwnerService", kind: "class", line: 12, endLine: 60, depth: 0, confidence: 1, fanIn: 0, via: { file: "src/owners/owner.service.ts", symbol: "OwnerService.searchOwners", lines: [], basis: "contains" } }],
+    entrypoints: [],
+    cost: { expansionsUsed: 0 },
+  };
+  const text = renderImpact({ ...base, status: "complete", value }, "details");
+  assert.match(text, /evidence view: no dependent recorded; 1 containment or dispatch row[^\n]*mode: "full"/);
+  assert.doesNotMatch(text, /OwnerService \[class\]/);
+});
+
 test("impact detail localizes cut anchors and limits while counting their reference places", () => {
   const partial: Fact<ImpactValue> = { ...base, status: "partial", value: impact, cuts: [
     { kind: "unresolved-link", at: ["service.ts::Service.read", "consumer-a.ts:12", "consumer-b.ts:91"], reason: "hidden-caller", reach: { kind: "anything" } },

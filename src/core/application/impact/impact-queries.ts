@@ -45,7 +45,8 @@ import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.po
 import { ABORTED, factBaseOf, trustOf, withScratch, type CommitExtraction, type PreparedCommit } from "../snapshot/read-snapshot.ts";
 import { createHeadReader, preparedLive, withLiveCapture, type FactSpec, type HeadIndex, type HeadReaderDeps, type HeadReading, type Revisioned } from "../snapshot/head-reading.ts";
 import { readImporters, type BoundInto } from "./importers.ts";
-import { createOriginCalls, inboundEdgesOf, type OriginCalls } from "./inbound-origins.ts";
+import { inboundEdgesOf } from "./inbound-origins.ts";
+import type { OriginCalls } from "../navigation/origin-calls.ts";
 import type { EdgeCorrections, InboundEdges } from "./inbound-edges.ts";
 import { typedReferencesOf, type ReferenceProofs } from "../navigation/reference-origins.ts";
 import { unresolvedReferencesIn } from "../navigation/declaration-uses.ts";
@@ -58,6 +59,7 @@ import type { AttributedCall, ReverseCalls } from "../navigation/reverse-calls.t
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, targetKey } from "../navigation/root-selection.ts";
+import { snapshotFiles } from "../navigation/snapshot-files.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
@@ -171,13 +173,15 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const declarations = await deps.angular.read(headTree.sources);
         if (signal?.aborted) return ABORTED;
         const componentsByResource = resourceOwners(declarations);
+        const listing = headTree.export.files.map(({ path }) => path);
+        const listed = new Set(listing);
         const fixed = [
           ...exportCuts(headTree.export),
           ...changes.filter((file) => kindOfChangedFile(file.path) !== "source" && !componentsByResource.has(file.path)).map((file) => fileCut("no-extractor", file.path, "not-source")),
         ];
         const value: ImpactValue = { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
 
-        const needsGraph = requested.length > 0 || changes.some((file) => kindOfChangedFile(file.path) === "source" || componentsByResource.has(file.path));
+        const needsGraph = requested.length > 0 || targets.some(({ file }) => !listed.has(file)) || changes.some((file) => kindOfChangedFile(file.path) === "source" || componentsByResource.has(file.path));
         if (!needsGraph) return { ok: true, value: impactFact(head.base(content), value, fixed, impactWalk(targets.map(({ file }) => file), value)) };
 
         const index = await head.open();
@@ -186,10 +190,11 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         if ("fault" in index) return { ok: false, fault: index.fault };
         const { store, summary } = index;
         try {
+          const snapshot = snapshotFiles(store, listing);
           const unknown = missingTargets(store, requested);
-          const ranges = await requestedRanges(store, changes, headTree.sources, deps.sourceTrivia ?? NO_TRIVIA);
+          const ranges = await requestedRanges(store, changes, headTree.sources, deps.sourceTrivia ?? NO_TRIVIA, snapshot);
           if (signal?.aborted) return ABORTED;
-          const missing = [...unknown, ...ranges.uncovered];
+          const missing = snapshot.describe([...unknown, ...ranges.uncovered]);
           if (missing.length > 0) {
             const names = missing.map(unknownTargetKey).join(", ");
             const unmodelled = await unmodelledIn(deps, headTree, unknown.map(({ file }) => file));
@@ -244,7 +249,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           const typed = await reading.typed();
           if (typed === "aborted") return ABORTED;
           const targets = reading.edgeTargets(typed.typed);
-          const read = await readImporters(store, covered, references, modules, targets, targets === undefined ? undefined : await boundInto(store, reading, targets), request.signal);
+          const read = await readImporters(store, covered, references, modules, targets, targets === undefined ? undefined : boundInto(reading, targets), request.signal);
           if (request.signal?.aborted) return ABORTED;
           const moduleOnly = new Set(modules?.files.filter((file) => file.moduleOnly).map((file) => file.file));
           const loadPlaces = await deps.dynamicLoads.extract(headTree.sources);
@@ -532,7 +537,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const build = (corrections: EdgeCorrections): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, corrections);
   const targets = input.reading.edgeTargets(input.typed);
   const typedReferences = input.typed === undefined ? undefined : typedReferencesOf(store, unresolved, input.typed);
-  const originCalls = targets?.bindings === undefined ? undefined : createOriginCalls(store, targets.bindings, { fields, locals });
+  const originCalls = targets === undefined ? undefined : input.reading.originCalls(targets);
   const { inbound, walk, attributed } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls);
 
   const walked = walk.reached.map(({ symbol }) => symbol);
@@ -661,9 +666,9 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
  * edges an import proves reach them, the member calls through a field's or an `inject()` local's origin, and the written
  * calls the index does not record, bound or attributed.
  */
-async function boundInto(store: CodeGraphReader, reading: BaseReading, targets: EdgeTargets): Promise<BoundInto> {
+function boundInto(reading: BaseReading, targets: EdgeTargets): BoundInto {
   const reverse = reading.reverseCalls(targets);
-  const originCalls = targets.bindings === undefined ? undefined : createOriginCalls(store, targets.bindings, await reading.relations());
+  const originCalls = reading.originCalls(targets);
   return async (nodes, signal) => {
     const redirected = await targets.redirectedInto(nodes, signal);
     const throughOrigins = (await originCalls?.into(nodes, signal)) ?? [];

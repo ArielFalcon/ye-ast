@@ -219,7 +219,7 @@ test("the matches of several selectors come in line order, whatever order the re
 test("a focus symbol that matches no declaration is an unknown-symbol fault whose candidates are the file's dotted paths", async () => {
   const answer = await focusOf([{ file: API, symbol: "B.n" }]);
   assert.ok(!answer.ok);
-  assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: API, symbol: "B.n", candidates: ["A", "A.m", "A.m.inner", "A.n", "Aardvark", "B", "B.m"] }]);
+  assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: API, symbol: "B.n", absent: false, candidates: ["A", "A.m", "A.m.inner", "A.n", "Aardvark", "B", "B.m"] }]);
 });
 
 test("a focus line outside every declaration is a top-level-line fault with the file's dotted paths", async () => {
@@ -228,11 +228,17 @@ test("a focus line outside every declaration is a top-level-line fault with the 
   assert.deepEqual(answer.fault.kind === "top-level-line" && answer.fault.entries, [{ file: API, line: 27, candidates: ["A", "A.m", "A.m.inner", "A.n", "Aardvark", "B", "B.m"] }]);
 });
 
-test("a focus on a file the index holds nothing of leaves it unheld with its cut instead of a fault", async () => {
+test("a focus symbol on a path the snapshot does not hold is an absent entry naming the files that declare it", async () => {
   const answer = await setup(TWO_CLASSES).queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: "src/gone.ts", symbol: "A" }] });
+  assert.ok(!answer.ok);
+  assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/gone.ts", symbol: "A", absent: true, candidates: [API] }]);
+});
+
+test("a focus on a file the index holds nothing of leaves it unheld with its cut instead of a fault", async () => {
+  const answer = await setup({ ...TWO_CLASSES, written: [...TWO_CLASSES.written, "src/gone.ts"] }).queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: "src/gone.ts", symbol: "A" }] });
   assert.ok(answer.ok && answer.value.status === "partial");
   assert.deepEqual(answer.value.value, { focus: [], unheld: ["src/gone.ts"] });
-  assert.deepEqual(answer.value.cuts.map((cut) => cut.kind), ["not-exported"]);
+  assert.deepEqual(answer.value.cuts.map((cut) => cut.kind), ["no-extractor"]);
 });
 
 test("a focused fact records its selectors once each in a fixed order, in place of files", async () => {

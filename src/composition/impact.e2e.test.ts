@@ -226,13 +226,13 @@ test("module coverage keeps computed same-line references and reports unresolved
   commit({
     "src/service.ts": "export class Service {}\n",
     "src/index.ts": "export { Service } from './service';\n",
-    "src/consumer.ts": "import('./index'); import(name); import('./service.js');\n",
+    "src/consumer.ts": "import('./index'); import(name); import('./service.cjs');\n",
   }, "base");
   commit({ "src/index.ts": "export { Service as PublicService } from './service';\n" });
   const answer = await impact("--base", "HEAD~1", "--changed", "src/index.ts");
   assert.equal(answer.fact.status, "partial", answer.stdout);
   const moduleCuts = answer.fact.cuts?.filter((cut) => cut.at[0]?.startsWith("module:")) ?? [];
-  assert.equal(moduleCuts.filter((cut) => cut.at.some((place) => place.includes("./service.js"))).length, 2);
+  assert.equal(moduleCuts.filter((cut) => cut.at.some((place) => place.includes("./service.cjs"))).length, 2);
   assert.equal(moduleCuts.filter((cut) => cut.at.some((place) => place.includes("outside module traversal"))).length, 2);
 });
 

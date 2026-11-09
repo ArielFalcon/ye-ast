@@ -66,7 +66,7 @@ test("a focused declaration with no proven use but an unproved one never reads a
 });
 
 test("compose names the failed queries once and corrects only at the cause, for the cause's tool", async () => {
-  const fault: ImpactFault = { kind: "unknown-symbol", detail: "no such symbol", entries: [{ file: "src/a.ts", symbol: "gone", candidates: ["a"] }] };
+  const fault: ImpactFault = { kind: "unknown-symbol", detail: "no such symbol", entries: [{ file: "src/a.ts", symbol: "gone", absent: false, candidates: ["a"] }] };
   const { session } = await setup(async () => ({ ok: false, fault }));
   try {
     const outline = { name: "ye_ast_outline", arguments: { focus: [{ file: "src/a.ts", symbol: "gone" }] } };

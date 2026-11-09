@@ -11,12 +11,15 @@ import type { TypeBindings, TypeTarget } from "../../ports/type-bindings.port.ts
 import { createDeclarationUses, unresolvedOncePerFile, type DeclarationUses, type UnresolvedIn } from "../navigation/declaration-uses.ts";
 import { createEdgeTargets, NOTHING_DECLARED, type EdgeTargets } from "../navigation/edge-targets.ts";
 import { createGraphNavigation } from "../navigation/graph-navigation.ts";
+import { callsThroughOrigins, createOriginCalls, type OriginCalls } from "../navigation/origin-calls.ts";
 import { typedCallsOf } from "../navigation/proven-calls.ts";
 import { createReconciledCalls, linesOncePerFile, type ReconciledCalls } from "../navigation/reconciled-calls.ts";
 import { referenceProofsOf, unresolvedOf, type ReferenceProofs } from "../navigation/reference-origins.ts";
 import { createReverseCalls, type ReverseCalls } from "../navigation/reverse-calls.ts";
 import type { RelationExtraction, RelationExtractor } from "../relations/relation-extractor.ts";
-import { retainedRelations } from "../relations/retained-relations.ts";
+import { memberProofContextOf, retainedRelations } from "../relations/retained-relations.ts";
+import { declaredScope } from "../../domain/map/entrypoint-map.ts";
+import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import type { CommitExtraction, PreparedCommit } from "./read-snapshot.ts";
 
 /** What the type checker contributes to one answer: its bindings by call place, the declarations it read, and its cuts. */
@@ -106,6 +109,8 @@ export interface BaseReading {
   declarationUses(): DeclarationUses;
   /** B10: the written calls the index does not record into reached declarations; absent without bindings or syntax. */
   reverseCalls(targets: EdgeTargets): ReverseCalls | undefined;
+  /** The member calls through the relations' field and `inject()` local origins into reached declarations; absent without bindings. */
+  originCalls(targets: EdgeTargets): OriginCalls | undefined;
 }
 
 export interface BaseReadings {
@@ -176,6 +181,14 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       const relations = once(() => retainedRelations(deps.relations, prepared, tree, request));
       const declarationUses = once(() => createDeclarationUses(store, navigation(), unresolvedIn));
       const retained = facts === undefined || source.digest === undefined ? undefined : { facts, index: source.digest };
+      /** Kept between requests under the index it read and the relations its origins come from. */
+      const throughOrigins = once(async () => {
+        const origins = await relations();
+        const produce = async () => callsThroughOrigins(store, origins);
+        if (prepared?.retained === undefined || source.digest === undefined) return produce();
+        const memberProofs = memberProofContextOf(deps.relations, tree, declaredScope(request.scope));
+        return prepared.retained(canonicalJson({ output: "origin-calls", index: source.digest, memberProofs }), produce, request.signal);
+      });
       const reconciledCalls = (targets: EdgeTargets, uses: DeclarationUses): ReconciledCalls | undefined =>
         syntaxOf === undefined ? undefined : createReconciledCalls({ store, uses, syntaxOf, lineOf, importedDeclarations: targets.importedDeclarations });
 
@@ -195,6 +208,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
         },
         reconciledCalls,
         declarationUses,
+        originCalls: (targets) => (targets.bindings === undefined ? undefined : createOriginCalls(targets.bindings, throughOrigins)),
         reverseCalls(targets) {
           const reconciled = reconciledCalls(targets, declarationUses());
           if (targets.bindings === undefined || reconciled === undefined || syntaxOf === undefined) return undefined;

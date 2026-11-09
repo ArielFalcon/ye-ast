@@ -82,21 +82,25 @@ test("a specifier no module configuration governs could be resolved to the asked
   assert.deepEqual(reasons(ungoverned), ["scripts/seed.ts specifier"]);
 });
 
-test("a relative specifier TypeScript may resolve to a file the engine's own lookup misses stays a cut of that file's importers", async () => {
+test("a relative specifier reaches the file TypeScript resolves it to, and the importer joins that file's importers", async () => {
   commit({
     "src/foo.ts": "export const foo = 1;\n",
     "src/a.ts": `import { foo } from "./foo.js";\nexport const a = foo;\n`,
     "src/bar.mts": "export const bar = 1;\n",
     "src/b.ts": `import { bar } from "./bar.mjs";\nexport const b = bar;\n`,
+    "src/lib/package.json": JSON.stringify({ types: "src/main.ts" }),
+    "src/lib/src/main.ts": "export const main = 1;\n",
+    "src/c.ts": `import { main } from "./lib";\nexport const c = main;\n`,
   });
 
   const foo = await importers("src/foo.ts");
   const bar = await importers("src/bar.mts");
+  const main = await importers("src/lib/src/main.ts");
 
-  assert.equal(foo.status, "partial");
-  assert.ok(reasons(foo).includes("src/a.ts specifier"), JSON.stringify(foo.cuts));
-  assert.equal(bar.status, "partial");
-  assert.ok(reasons(bar).includes("src/b.ts specifier"), JSON.stringify(bar.cuts));
+  for (const [fact, importer] of [[foo, "src/a.ts"], [bar, "src/b.ts"], [main, "src/c.ts"]] as const) {
+    assert.equal(fact.status, "complete", JSON.stringify(fact));
+    assert.ok(JSON.stringify(fact).includes(importer), JSON.stringify(fact));
+  }
 });
 
 test("a path mapping TypeScript cannot follow may still name a file a build replaces in, so the specifier stays a cut", async () => {
