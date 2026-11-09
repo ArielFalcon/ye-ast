@@ -1,11 +1,10 @@
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import { FOLLOWED_EDGE_KINDS, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
-import { contradictedCallCuts } from "../../domain/impact/impact-cuts.ts";
 import { hasTyping } from "../../domain/languages/profiles.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { Relation } from "../../domain/relations/relation.ts";
-import type { Cut, Finding } from "../../domain/shared/fact.ts";
+import type { Finding } from "../../domain/shared/fact.ts";
 import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
 import { createInboundEdges, type EdgeCorrections, type InboundEdges, type InboundOccurrences } from "./inbound-edges.ts";
 import type { ReferenceProofs } from "../navigation/reference-origins.ts";
@@ -32,18 +31,18 @@ export function inboundEdgesOf(store: CodeGraphReader, origins: RelationOrigins,
   return createInboundEdges(store, isTest, origins.relations.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])), proofs?.validOccurrences ?? new Set(), origins.memberUses, proofs?.thisMemberCalls, corrections);
 }
 
-/** What settling the consumer edges of a read changed, with the cuts its contradiction policy states. */
+/** What settling the consumer edges of a read changed, with the records its contradiction policy refused. */
 export interface ReceiverCorrections extends EdgeCorrections {
-  /** One cut per contradicted record: the index placed a call where its source writes none (ADR-0041 U6). */
-  readonly cuts: readonly Cut[];
+  /** One record per contradiction: the index placed a call where its source writes none (ADR-0041 U6). */
+  readonly contradictions: readonly ContradictedCall[];
 }
 
 /**
  * How each graph edge out of the TypeScript sources among `files` whose receiver is a value is known, settled at once for
  * a reading whose callers are asked without waiting (ADR-0036): kept with its settlement, dropped where the base drops
  * it, or moved to the declaration the base binds it to (ADR-0041 decision 4), with the member calls through the origins
- * the base binds (`originCallsOf`). The records `contradictions` names are dropped in every language, and each is a cut:
- * its source writes no call at its place (ADR-0041 U6).
+ * the base binds (`originCallsOf`). The records `contradictions` names are dropped in every language; the family that
+ * reads them states a cut only where the refused record could stand on its own frontier (ADR-0041 U6).
  */
 export async function receiverCorrectionsOf(store: CodeGraphReader, targets: EdgeTargets, origins: Pick<RelationOrigins, "fields" | "locals">, files: readonly string[], signal?: AbortSignal, contradictions?: ContradictedCalls): Promise<ReceiverCorrections> {
   const readable = [...new Map(store.symbolsInFiles(files).map((symbol) => [symbol.id, symbol])).values()].filter((symbol) => kindOfChangedFile(symbol.file) !== "test");
@@ -76,7 +75,7 @@ export async function receiverCorrectionsOf(store: CodeGraphReader, targets: Edg
     }
   }
   const throughOrigins = targets.bindings === undefined ? [] : await originCallsOf(store, targets.bindings, origins, signal);
-  return { dropped, into: Map.groupBy([...moved, ...throughOrigins], ({ target }) => target.id), settled, cuts: contradictedCallCuts([...contradicted.values()]) };
+  return { dropped, into: Map.groupBy([...moved, ...throughOrigins], ({ target }) => target.id), settled, contradictions: [...contradicted.values()] };
 }
 
 /**

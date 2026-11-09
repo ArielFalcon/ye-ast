@@ -4,6 +4,7 @@ import { provenanceOf, sortedEngines, type BuildOutputInput, type Cut } from "..
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { nameTail } from "../../domain/shared/call-place.ts";
+import { contradictedCallCuts } from "../../domain/impact/impact-cuts.ts";
 import { followedEdge } from "../../domain/impact/edge-policy.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { callPlaceOf, compareCallPlaces, httpTargetOf } from "../../domain/topology/call-site.ts";
@@ -26,7 +27,7 @@ import type { Digest } from "../../ports/digest.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import { inboundEdgesOf, receiverCorrectionsOf } from "../impact/inbound-origins.ts";
-import { createBaseReadings, withOutputs, type BaseReading } from "../snapshot/base-reading.ts";
+import { createBaseReadings, withOutputs, type BaseReading, type ContradictedCall } from "../snapshot/base-reading.ts";
 import type { EdgeTargets } from "../navigation/edge-targets.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
@@ -80,6 +81,45 @@ interface Reading {
   reading: BaseReading | undefined;
   targets: EdgeTargets | undefined;
   cuts: readonly Cut[];
+  contradictions: readonly ContradictedCall[];
+}
+
+/** The declarations of one operation a contradicted record may name to stand on its frontier: its call sites, and the callers walked from them. */
+interface Frontier {
+  files: Set<string>;
+  symbols: Set<string>;
+  targets: Set<string>;
+}
+
+function frontierOf(operation: string, links: readonly Link[], reached: ReadonlyMap<string, Reading>): Frontier {
+  const frontier: Frontier = { files: new Set(), symbols: new Set(), targets: new Set() };
+  for (const link of links.filter((candidate) => isCallOf(candidate, operation))) {
+    frontier.files.add(link.from.file);
+    frontier.symbols.add(nameTail(link.from.symbol));
+    for (const node of declarationOf(reached.get(link.from.repo)?.graph, link.from)) {
+      frontier.files.add(node.file);
+      frontier.symbols.add(node.name);
+      frontier.targets.add(node.id);
+    }
+  }
+  return frontier;
+}
+
+function askFrontier(frontier: Frontier, graph: CodeGraphReader | undefined, declaration: { file: string; symbol: string; line: number }): void {
+  frontier.files.add(declaration.file);
+  frontier.symbols.add(nameTail(declaration.symbol));
+  for (const node of declarationOf(graph, declaration)) {
+    frontier.files.add(node.file);
+    frontier.symbols.add(node.name);
+    frontier.targets.add(node.id);
+  }
+}
+
+function onFrontier({ record, target }: ContradictedCall, reading: Reading, frontier: Frontier): boolean {
+  if (frontier.files.has(record.file) || frontier.symbols.has(nameTail(record.name))) return true;
+  if (frontier.targets.has(target.id) || frontier.files.has(target.file) || frontier.symbols.has(target.name)) return true;
+  const body = reading.graph?.symbolsByIds([record.from])[0];
+  return body !== undefined && (frontier.files.has(body.file) || frontier.symbols.has(body.name));
 }
 
 /**
@@ -140,7 +180,8 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
                 inbound: indexed === "unavailable" || origins === undefined ? undefined : inboundEdgesOf(indexed.store, origins, proofs, corrections),
                 reading,
                 targets,
-                cuts: [...(corrections?.cuts ?? []), ...typedCuts],
+                cuts: typedCuts,
+                contradictions: corrections?.contradictions ?? [],
               },
             };
           };
@@ -193,6 +234,8 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             }
 
             const recovered = await recoveredInto(reached, join.links.filter((link) => isCallOf(link, operation)));
+            const frontier = frontierOf(operation, join.links, reached);
+            const cuts = (): readonly Cut[] => [...contradictedCallCuts([...reached].flatMap(([repo, reading]) => reading.contradictions.filter((call) => onFrontier(call, reading, frontier)))), ...[...reached.values()].flatMap((reading) => reading.cuts)];
             const inboundOf = (repo: string, reading: Reading | undefined): InboundOccurrences | undefined => {
               if (reading?.inbound === undefined) return undefined;
               const inbound = reading.inbound;
@@ -214,15 +257,23 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
               value: {
                 links: join.links,
                 serving: join.serving.get(operation) ?? [],
-                cuts: [...reached.values()].flatMap((reading) => reading.cuts),
+                get cuts() {
+                  return cuts();
+                },
                 unresolvedCalls: join.unresolvedCalls,
                 ambiguousCalls: join.ambiguousCalls.filter((call) => call.reaching.has(operation)).map(({ from, repos }) => ({ from, repos })),
                 callers: ({ repo, ...declaration }) => {
                   const reading = reached.get(repo);
-                  return callersOfFunction(reading?.graph, inboundOf(repo, reading), declaration);
+                  askFrontier(frontier, reading?.graph, declaration);
+                  const answer = callersOfFunction(reading?.graph, inboundOf(repo, reading), declaration);
+                  if (answer.kind === "found") for (const caller of answer.callers) frontier.files.add(caller.file);
+                  return answer;
                 },
                 memberOccurrences: ({ repo, ...member }) => {
                   const reading = reached.get(repo);
+                  frontier.files.add(member.file);
+                  frontier.symbols.add(member.owner);
+                  frontier.symbols.add(member.member);
                   return occurrencesOfMember(reading?.graph, inboundOf(repo, reading), member);
                 },
                 flow: { follow: (carrier) => reached.get(carrier.site.repo)?.flow.follow(carrier) ?? sourceUnreadable(carrier.site) },

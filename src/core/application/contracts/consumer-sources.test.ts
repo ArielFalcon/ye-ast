@@ -236,6 +236,7 @@ interface ReadingLayout {
   edges?: readonly FakeEdge[];
   syntax: Readonly<Record<string, DeclaredMemberNames>>;
   calls: Record<string, CallSite[]>;
+  routes?: Record<string, Entrypoint[]>;
   sources?: Readonly<Record<string, string>>;
   /** The source paths each repository exports; every source by default. */
   repos?: Readonly<Record<string, readonly string[]>>;
@@ -246,7 +247,7 @@ interface ReadingLayout {
 
 /** A workspace read that reaches a real line over a fake index: the sources, their syntax and the graph it holds. */
 function readingWorkbench(layout: ReadingLayout): { withWorkspace: Workbench["withWorkspace"]; sources: ConsumerSources } {
-  const routes: Record<string, Entrypoint[]> = { web: [route("GET /orders", "/orders")] };
+  const routes: Record<string, Entrypoint[]> = layout.routes ?? { web: [route("GET /orders", "/orders"), route("GET /items", "/items")] };
   const repos = [...new Set([...Object.keys(routes), ...Object.keys(layout.calls)])].sort();
   const repositories = repos.map((repo) => ({
     repo,
@@ -444,4 +445,39 @@ test("a recovered occurrence keeps the order of the index's occurrences", async 
   });
 
   assert.deepEqual(found(await consumerCallers(bench)).map(({ file }) => file), [STORE_FILE, "src/z.ts"]);
+});
+
+test("a contradicted record the operation's walk never reaches is no cut", async () => {
+  const features = Array.from({ length: 24 }, (_, index) => `src/features/feature${index}.ts`);
+  const nodes = [...GRAPH, fakeNode("helper", "function", STORE_FILE, 1, 1), ...features.map((path, index) => fakeNode(`feature${index}`, "function", path, 1, 1))];
+  const edges = [...CONTAINS, ...features.map((_, index) => ({ from: `feature${index}`, to: "helper", kind: "calls", line: 1, column: 0 }))];
+  const syntax = { [STORE_FILE]: { ...NOTHING_DECLARED, calls: [WRITTEN_CALL] }, ...Object.fromEntries(features.map((path) => [path, { ...NOTHING_DECLARED, calls: [] }])) };
+  const sources = { [API_FILE]: API_SOURCE, [STORE_FILE]: STORE_SOURCE, ...Object.fromEntries(features.map((path) => [path, "export function feature() { return 1; }\n"])) };
+  const bench = readingWorkbench({ nodes, edges, syntax, sources, calls: { web: [CALL_SITE] } });
+
+  const fact = await consequencesOf(bench);
+
+  assert.equal(fact.status, "complete");
+  assert.equal(cutsOf(fact.value.answers[0]), undefined);
+});
+
+test("a contradicted record of a repository the operation does not reach is no cut for it", async () => {
+  const otherFile = "src/other.ts";
+  const bench = readingWorkbench({
+    nodes: [...GRAPH, fakeNode("otherFeature", "function", otherFile, 1, 1)],
+    edges: [...CONTAINS, { from: "otherFeature", to: "Api.getArticle", kind: "calls", line: 1, column: 0 }],
+    syntax: { [STORE_FILE]: { ...NOTHING_DECLARED, calls: [WRITTEN_CALL] }, [otherFile]: { ...NOTHING_DECLARED, calls: [] } },
+    sources: { [API_FILE]: API_SOURCE, [STORE_FILE]: STORE_SOURCE, [otherFile]: "export function otherFeature() { return 1; }\n" },
+    repos: { web: [API_FILE, STORE_FILE], mobile: [API_FILE, otherFile] },
+    calls: { web: [CALL_SITE], mobile: [{ ...CALL_SITE, repo: "mobile", target: { status: "complete", value: { method: "GET", path: "/items" }, evidence: [] } }] },
+  });
+
+  const answer = await bench.withWorkspace(async (workspace) => {
+    const items = await settled(workspace.session(hypothesis("/items")));
+    const orders = await settled(workspace.session(hypothesis("/orders")));
+    return { items: items.cuts, orders: orders.cuts };
+  });
+
+  assert.deepEqual(answer.items.map(({ reason }) => reason), ["contradicted"]);
+  assert.deepEqual(answer.orders, []);
 });
