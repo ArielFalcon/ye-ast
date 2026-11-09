@@ -1,5 +1,5 @@
 import { sharesRuntime } from "../languages/call-targets.ts";
-import { factOfCuts, type CompleteFact, type Cut, type FactBase, type PartialFact } from "./fact.ts";
+import { factOfCuts, type CallSiteReach, type CompleteFact, type Cut, type FactBase, type PartialFact } from "./fact.ts";
 
 /** What an answer asserts, built by its family from the request (ADR-0042 decision 3). */
 export type Asserted =
@@ -9,6 +9,8 @@ export type Asserted =
   | { kind: "dependents"; files: readonly string[] }
   /** What a walk reached from the asked files: every file it walked, asked, declaring a walked declaration or a reached module. */
   | { kind: "walk"; files: readonly string[] }
+  /** Consumers and producers of one operation: `excludes` is the topology matcher's answer that a call site cannot reach it. */
+  | { kind: "operation"; transport: string; excludes: (site: CallSiteReach) => boolean }
   /** The whole snapshot: every cut is in question. */
   | { kind: "everything" };
 
@@ -32,6 +34,7 @@ function fileOf(entry: string): string {
 export function inQuestion(cut: Cut, asserted: Asserted): boolean {
   if (asserted.kind === "everything" || BOUNDS.has(cut.kind)) return true;
   const { reach } = cut;
+  if (asserted.kind === "operation") return reach.kind !== "call-site" || (reach.transport === asserted.transport && !asserted.excludes(reach));
   if ((reach.kind === "anything" && reach.runtime === undefined) || reach.kind === "call-site") return true;
   const places = reach.kind === "module" ? [reach.importer] : cut.at.map(fileOf);
   if (asserted.kind === "local") return places.some((place) => asserted.files.includes(place));

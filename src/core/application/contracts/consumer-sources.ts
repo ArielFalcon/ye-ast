@@ -6,7 +6,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import { callPlaceOf, compareCallPlaces, httpTargetOf } from "../../domain/topology/call-site.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { Link } from "../../domain/topology/link.ts";
-import { matchCallSite, matchDeclaredOperation, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
+import { excludedFrom, matchCallSite, matchDeclaredOperation, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import type { AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
 import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
 import type { InboundOccurrences } from "../impact/inbound-edges.ts";
@@ -161,6 +161,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
                 flow: { follow: (carrier) => reached.get(carrier.site.repo)?.flow.follow(carrier) ?? sourceUnreadable(carrier.site) },
                 templates: { follow: (carrier) => reached.get(carrier.site.repo)?.templates.follow(carrier) ?? sourceUnreadable(carrier.site) },
                 requestOrigins: (repo) => reached.get(repo)?.origins,
+                excludes: excludedFrom(operation, entrypointsOfWorkspace(), fact.value.workspace.gateways),
               },
             };
           };
@@ -176,7 +177,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             return { ...composite, inputs: { ...composite.inputs, engines: sortedEngines({ ...composite.inputs.engines, ...deps.engines }) } };
           };
           try {
-            return { ok: true, value: await use({ base, repositorySnapshots: fact.value.repositorySnapshots, cuts: fact.status === "partial" ? fact.cuts : [], session, serving: (declared) => servingOperation(declared, entrypointsOfWorkspace()) }) };
+            return { ok: true, value: await use({ base, repositorySnapshots: fact.value.repositorySnapshots, cuts: fact.status === "partial" ? fact.cuts : [], sectionCuts: Object.fromEntries(Object.entries(fact.value.sections).flatMap(([repo, section]) => (section.status === "partial" ? [[repo, section.cuts]] : []))), session, serving: (declared) => servingOperation(declared, entrypointsOfWorkspace()) }) };
           } finally {
             for (const store of stores) store.close();
           }

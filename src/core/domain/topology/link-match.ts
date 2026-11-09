@@ -1,6 +1,7 @@
 import type { Entrypoint, Listener } from "../entrypoints/entrypoint.ts";
-import type { HttpRoute } from "../entrypoints/http-route.ts";
+import type { HttpMethod, HttpRoute } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
+import type { CallSiteReach } from "../shared/fact.ts";
 import { callPlaceOf, type CallSite, type EventTarget, type HttpTarget } from "./call-site.ts";
 import { consumption, delivers } from "./event-destination.ts";
 import { linkIdentity, type Link, type LinkBasis } from "./link.ts";
@@ -251,6 +252,28 @@ export function matchDeclaredOperation(target: HttpTarget, repositories: readonl
  * the service's drift.
  */
 export function matchCallSite(site: CallSite, target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): JoinResult {
+  return ladder(target, repositories, gateways, (repo, match) => ({ links: [linkTo(site, repo, match)] }));
+}
+
+/**
+ * Whether the ladder could link a call with this target to one of the routes: a link, a tie or a `could` on any rung.
+ * A call it finds no route for, or one that names another host, cannot reach them (ADR-0042 decision 4).
+ */
+export function mayLink(target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): boolean {
+  const joined = ladder(target, repositories, gateways, () => ({ links: [] }));
+  return joined.unmatched === undefined && joined.external !== true;
+}
+
+/**
+ * The call sites the ladder cannot link to one operation, over that operation's routes and the gateways: a site whose
+ * reach states no method or no template is never excluded.
+ */
+export function excludedFrom(operation: string, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): (site: CallSiteReach) => boolean {
+  const routes = repositories.map((repository) => ({ ...repository, entrypoints: repository.entrypoints.filter((entrypoint) => entrypoint.kind === "http-route" && entrypoint.name === operation) }));
+  return (site) => site.method !== undefined && site.template !== undefined && !mayLink({ method: site.method as HttpMethod, path: site.template }, routes, gateways);
+}
+
+function ladder(target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[], linked: (repo: string, match: Match) => JoinResult): JoinResult {
   const call = callTemplate(target);
   const prefix = prefixOf(target);
   let could = false;
@@ -259,7 +282,7 @@ export function matchCallSite(site: CallSite, target: HttpTarget, repositories: 
     if (landed === undefined || landed === "could") return undefined;
     if (could) return { undecided: target.path };
     if ("ambiguous" in landed) return { ambiguous: { key: prefix ?? target.path, repos: landed.ambiguous, routes: landed.routes } };
-    return { links: [linkTo(site, landed.repo, basis === undefined ? landed.match : { ...landed.match, basis })] };
+    return linked(landed.repo, basis === undefined ? landed.match : { ...landed.match, basis });
   };
   const missed = (): JoinResult => (could ? { undecided: target.path } : { unmatched: target.path });
   const exact = settled(atRung(exactRung, call, target.method, repositories));

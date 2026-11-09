@@ -59,6 +59,18 @@ test("a walk keeps every cut at a place sharing a walked file's runtime and drop
   assert.equal(inQuestion(at("no-extractor", "module-unread", ts("src/Z.java"), "module:head:src/Z.java"), javaWalk), true);
 });
 
+test("a call site is out of an operation only when its transport differs or the topology matcher excludes it; every other cut stays (ADR-0042 fixture 7)", () => {
+  const excluded: string[] = [];
+  const operation: Asserted = { kind: "operation", transport: "http", excludes: (site) => (excluded.push(site.template ?? ""), site.template === "invoices/latest") };
+  const site = (transport: string, template?: string): Cut => at("unresolved-link", "join-unsettled", { kind: "call-site", transport, method: "GET", ...(template === undefined ? {} : { template }) }, "src/b.ts", "src/b.ts:4");
+  assert.equal(inQuestion(site("http", "invoices/latest"), operation), false);
+  assert.equal(inQuestion(site("http", "orders-api/orders"), operation), true);
+  assert.equal(inQuestion(site("message", "orders"), operation), false);
+  assert.equal(inQuestion(at("no-extractor", "language", ts("src/b.ts"), "src/b.ts"), operation), true);
+  assert.equal(inQuestion(at("unresolved-link", "specifier", { kind: "module", importer: "src/b.ts", specifiers: [{ specifier: "x", namesNoFile: true }] }, "src/b.ts"), operation), true);
+  assert.deepEqual(excluded, ["invoices/latest", "orders-api/orders"]);
+});
+
 test("a call site reach stays in question for the files' own content and for what depends on them", () => {
   const site = at("unresolved-link", "join-unsettled", { kind: "call-site", transport: "http" }, "src/b.ts", "src/b.ts:4");
   assert.deepEqual([inQuestion(site, LOCAL), inQuestion(site, DEPENDENTS)], [true, true]);

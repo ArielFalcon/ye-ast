@@ -389,12 +389,15 @@ This ADR amends RFC-0002 explicitly, without superseding it:
 
 A family's use case builds its asserted value next to the walk it already runs, and passes it to `withCuts`:
 
+As built (`core/domain/shared/question.ts`, beside `inQuestion`; `fact.ts` cannot import the runtime rule without a
+cycle through `domain/languages`):
+
 ```ts
-// core/domain/shared/fact.ts
+// core/domain/shared/question.ts
 type Asserted =
   | { kind: "local"; files: readonly string[] }        // outline: what the asked files themselves hold
   | { kind: "dependents"; files: readonly string[] }   // importers: what could import or use the asked files
-  | { kind: "walk"; declarations: readonly string[]; files: readonly string[]; modules: readonly string[] } // callers, impact, trace
+  | { kind: "walk"; files: readonly string[] }         // callers, impact, trace: every file the walk reached
   | { kind: "operation"; transport: string; excludes: (site: CallSiteReach) => boolean } // contract consequences
   | { kind: "everything" };                              // map, workspace, decisions
 
@@ -405,6 +408,15 @@ The emitter fills `reach`; the family supplies data (`asserted`), never a rule; 
 rule. The one exception is `operation.excludes`, which contract consequences build from `matchCallSite` with the
 workspace's gateways, so the path rule keeps its one owner in the topology domain and `inQuestion` only reads its
 answer. A family that cannot yet state what it asserts passes `everything`, which keeps today's behavior.
+
+`walk` holds files only: the asked files, the files of the seeds, of the reached symbols and their `via` dependences, of
+the reached entrypoints' handlers and of the module walk's origins and reached modules (`impactWalk`,
+`core/domain/impact/impact-fact.ts`), or trace's targets and steps. The sketch's `declarations` and `modules` were left
+out because no rule reads them apart: a frontier inside the walk stays a cut by the runtime of its place, and a reached
+module is a file. `operation.excludes` is `excludedFrom` (`core/domain/topology/link-match.ts`): the ladder over the
+operation's own routes and the workspace's gateways, so a call it could take to another route still counts against this
+one. Contract consequences read a partial workspace section through its own cuts (`PreparedWorkspace.sectionCuts`); a
+`section-unknown` cut and every cut whose reach is not a call site stay in question.
 
 ## Migration
 

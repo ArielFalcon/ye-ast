@@ -4,7 +4,7 @@ import type { Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { CallSite, EventTarget, HttpTarget } from "../../domain/topology/call-site.ts";
 import type { RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
-import { inferGateways, matchCallSite, matchDeclaredOperation, matchEventCallSite, prefixOf } from "../../domain/topology/link-match.ts";
+import { excludedFrom, inferGateways, matchCallSite, matchDeclaredOperation, matchEventCallSite, mayLink, prefixOf } from "../../domain/topology/link-match.ts";
 
 function route(method: HttpRoute["method"], path: string, handler = { path: "src/main/java/app/Orders.java", symbol: "Orders.orders", line: 10 }, basePath = {}): HttpRoute {
   return { kind: "http-route", name: `${method} ${path}`, method, path, handler, basePath: { status: "complete", value: { default: basePath, profiles: {} }, evidence: [] } };
@@ -423,4 +423,24 @@ test("a segment the call fills partly that some route text could hold is undecid
 
   assert.deepEqual(matchCallSite(call, targetOf(call), admin, []), { undecided: "/api/user-{}" });
   assert.deepEqual(matchCallSite(call, targetOf(call), [...admin, ...repositories([route("GET", "/user-{id}")], "users")], []), { undecided: "/api/user-{}" });
+});
+
+test("a call may reach an operation through a gateway prefix, a configured base path or a suffix, and through no rung once its template matches nothing (ADR-0042 fixture 7)", () => {
+  const gateway = [{ prefix: "orders-api", repo: "orders", basis: "gateway-prefix" as const }];
+  assert.equal(mayLink({ method: "POST", path: "orders-api/orders" }, repositories([route("POST", "/orders")]), gateway), true);
+  assert.equal(mayLink({ method: "GET", path: "billing/orders" }, repositories([route("GET", "/orders", undefined, { contextPath: "/billing" })]), []), true);
+  assert.equal(mayLink({ method: "GET", path: "restaurants/daily-menus" }, repositories([route("GET", "/daily-menus")]), []), true);
+  assert.equal(mayLink({ method: "GET", path: "orders/{id}" }, repositories([route("GET", "/orders/{orderId}")]), []), true);
+  assert.equal(mayLink({ method: "GET", path: "invoices/latest" }, repositories([route("GET", "/orders")]), []), false);
+  assert.equal(mayLink({ method: "POST", path: "/orders" }, repositories([route("GET", "/orders")]), []), false);
+  assert.equal(mayLink({ method: "GET", path: "https://pay.example.test/orders/x" }, repositories([route("GET", "/orders")], "shop"), []), false);
+});
+
+test("a call site is excluded from an operation only by that operation's routes, and never without a method and a template", () => {
+  const routes = repositories([route("GET", "/orders"), route("GET", "/invoices")]);
+  const excludes = excludedFrom("GET /orders", routes, []);
+  assert.equal(excludes({ kind: "call-site", transport: "http", method: "GET", template: "/invoices" }), true);
+  assert.equal(excludes({ kind: "call-site", transport: "http", method: "GET", template: "/orders" }), false);
+  assert.equal(excludes({ kind: "call-site", transport: "http", method: "GET" }), false);
+  assert.equal(excludes({ kind: "call-site", transport: "http", template: "/invoices" }), false);
 });

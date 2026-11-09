@@ -348,6 +348,7 @@ function setup(files: Record<string, readonly SourceFile[]>, refs: Record<string
         base: (declared) => ({ ...BASE, inputs: { ...BASE.inputs, declaredConfig: declared } }),
         repositorySnapshots: SNAPSHOTS,
         cuts: options.workspaceCuts ?? [],
+        sectionCuts: {},
         serving: asWritten,
         session: async (hypothesis) => (events.push(`session ${hypothesis.method} ${hypothesis.path} ${hypothesis.property.join(".")}`), { ok: true, value: session }),
       });

@@ -65,6 +65,10 @@ interface Setup {
   path?: string;
   origins?: Record<string, RequestOriginReader>;
   cuts?: readonly Cut[];
+  /** The cuts of each partial section of the workspace read; none by default. */
+  sectionCuts?: Readonly<Record<string, readonly Cut[]>>;
+  /** The call templates the topology matcher excludes from the operation; none by default. */
+  excluded?: readonly string[];
   /** The workspace cannot prepare a session for the hypothesis. */
   sessionFault?: string;
 }
@@ -85,11 +89,13 @@ function setup(options: Setup = {}) {
     flow: { follow: (carrier) => (followed.push(carrier), options.flow?.[carrierKey(carrier.site)] ?? NO_FLOW) },
     templates: { follow: (carrier) => (templated.push(carrier), options.templates?.[carrierKey(carrier.site)] ?? NO_FLOW) },
     requestOrigins: (repo) => options.origins?.[repo],
+    excludes: (site) => site.template !== undefined && (options.excluded ?? []).includes(site.template),
   };
   const workspace: ServingWorkspace = {
     base: (declared) => ({ ...BASE, inputs: { ...BASE.inputs, declaredConfig: declared } }),
     repositorySnapshots: SNAPSHOTS,
     cuts: options.cuts ?? [],
+    sectionCuts: options.sectionCuts ?? {},
     session: async (hypothesis) => {
       opened.push(hypothesis.property.join("."));
       return options.sessionFault === undefined ? { ok: true, value: session } : { ok: false, fault: { kind: "git-failed", detail: options.sessionFault } };
@@ -863,6 +869,19 @@ test("each answer that is not complete is one section cut of the composite, and 
 
   assert.deepEqual(fact.value.answers.map((answer) => answer.status === "partial" && answer.cuts), [[cut], [cut]]);
   assert.deepEqual(fact.status === "partial" && fact.cuts, [{ kind: "section", at: ["answers.0"], reason: "section-partial", reach: { kind: "anything" } }, { kind: "section", at: ["answers.1"], reason: "section-partial", reach: { kind: "anything" } }]);
+});
+
+test("a partial section of the workspace reaches an answer through its own cuts, and a call site the matcher excludes from the operation is dropped (ADR-0042 fixture 7)", async () => {
+  const site = (template: string, transport = "http"): Cut => ({ kind: "unresolved-link", at: ["src/a.ts", `src/a.ts:${template.length}`], reason: "join-unsettled", reach: { kind: "call-site", transport, method: "GET", template } });
+  const section = (repo: string): Cut => ({ kind: "section", at: [repo], reason: "section-partial", reach: { kind: "anything" } });
+  const exportCut: Cut = { kind: "not-exported", at: ["big.ts"], reason: "unwritten", reach: { kind: "anything" } };
+  const unknown: Cut = { kind: "section", at: ["gone"], reason: "section-unknown", reach: { kind: "anything" } };
+
+  const excluded = await setup({ cuts: [section("web")], sectionCuts: { web: [site("invoices/latest"), site("orders", "message")] }, excluded: ["invoices/latest"] }).ask();
+  const kept = await setup({ cuts: [section("web"), section("pay"), unknown], sectionCuts: { web: [site("invoices/latest"), site("orders-api/owners/{id}")], pay: [exportCut] }, excluded: ["invoices/latest"] }).ask();
+
+  assert.equal(excluded.value.status, "complete");
+  assert.deepEqual(kept.value.status === "partial" && kept.value.cuts, [site("orders-api/owners/{id}"), exportCut, unknown]);
 });
 
 test("every hop and finding of an answer carries the repository it happened in", async () => {

@@ -1,4 +1,4 @@
-import { EVERYTHING, withCuts } from "../../domain/shared/question.ts";
+import { withCuts } from "../../domain/shared/question.ts";
 import { formatAccessPath, relatePaths, type AccessPath } from "../../domain/contracts/access-path.ts";
 import { consequencesFact, OLD_ACCEPTANCE, OLD_GUARANTEE, type AnswerBody, type ConsequenceFinding, type ConsequencesValue, type HypothesisAnswer, type LocatedHop, type ProducerConsequence, type UseConsequence } from "../../domain/contracts/consequence-fact.ts";
 import { writtenChange } from "../../domain/contracts/change.ts";
@@ -110,7 +110,8 @@ export async function answerOn(workspace: PreparedWorkspace, base: FactBase, hyp
   if (!selected.ok) return unknown("unresolved", selected.fault);
   const followed = hypothesis.target === "response" ? consequencesOf(session.value, selected.value, hypothesis) : await producersOf(session.value, selected.value, hypothesis);
   const body: AnswerBody = { ...stated, ...followed };
-  const sealed = withCuts(base, body, workspace.cuts, EVERYTHING);
+  const remaining = workspace.cuts.flatMap((cut) => (cut.reason === "section-partial" ? workspace.sectionCuts[cut.at[0]!] ?? [cut] : [cut]));
+  const sealed = withCuts(base, body, remaining, { kind: "operation", transport: "http", excludes: session.value.excludes });
   return { answer: sealed.status === "partial" ? { ...body, status: "partial", cuts: sealed.cuts } : { ...body, status: "complete" }, sites: selected.value.sites.toSorted(compareEvidence) };
 }
 

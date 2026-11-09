@@ -141,6 +141,42 @@ async function consequences(change: string, repos: readonly string[] = ["web"], 
   return { status: result.value.status, inputs: result.value.inputs, snapshots: result.value.value.repositorySnapshots, value: answer };
 }
 
+const INVOICES = `package shop;
+
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+class InvoicesController {
+  @GetMapping("/api/invoices") public String all() { return ""; }
+}
+`;
+
+const INVOICE_CLIENT = `import { HttpClient } from "@angular/common/http";
+import { Injectable, inject } from "@angular/core";
+
+@Injectable({ providedIn: "root" })
+export class InvoiceService {
+  private http = inject(HttpClient);
+
+  all() {
+    return this.http.get("/api/invoices");
+  }
+}
+`;
+
+test("a consumer call two repositories serve equally cuts only the answers whose operation the matcher cannot exclude it from (ADR-0042 fixture 7)", async () => {
+  commit("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER, "src/main/java/shop/InvoicesController.java": INVOICES });
+  commit("billing", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/InvoicesController.java": INVOICES });
+  commit("web", { ...WEB, "src/app/invoice.service.ts": INVOICE_CLIENT });
+
+  const orders = await consequences("nullable", ["web", "billing"]);
+  const invoices = await consequences("nullable", ["web", "billing"], "/api/invoices");
+
+  assert.equal(orders.value.status, "complete");
+  assert.deepEqual(invoices.value.status === "partial" && invoices.value.cuts.map(({ at, reason }) => [at[0], reason]), [["src/app/invoice.service.ts", "join-unsettled"]]);
+});
+
 const used = (value: HypothesisAnswer, line: number) => {
   const found = value.findings.find((finding) => finding.status === "complete" && finding.evidence[0]?.line === line);
   return found?.status === "complete" ? found.value : undefined;

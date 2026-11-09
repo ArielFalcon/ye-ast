@@ -1,6 +1,6 @@
 import type { Handler, HttpMethod } from "../domain/entrypoints/http-route.ts";
 import type { Hypothesis } from "../domain/contracts/hypothesis.ts";
-import type { Cut, DeclaredConfig, FactBase, SnapshotRef } from "../domain/shared/fact.ts";
+import type { CallSiteReach, Cut, DeclaredConfig, FactBase, SnapshotRef } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { Link } from "../domain/topology/link.ts";
 import type { ConsumerFlowReader } from "./consumer-flow.port.ts";
@@ -57,6 +57,11 @@ export interface ConsumerSession {
   unresolvedCalls: readonly { repo: string; file: string; line: number; symbol: string }[];
   /** The HTTP call sites that reach a route of the operation in more than one repository, which the join does not pick between. */
   ambiguousCalls: readonly { from: Link["from"]; repos: readonly string[] }[];
+  /**
+   * Whether the join's ladder, over the routes of the operation asked about and the workspace's gateways, links no call
+   * with that reach to it; a reach without a method or a template is never excluded.
+   */
+  excludes(site: CallSiteReach): boolean;
   /** The callers of a function of a repository: the code graph's, with the calls made through injected fields and locals. */
   callers(declaration: { repo: string; file: string; symbol: string; line: number }): ConsumerCallers;
   /** The places a member of a class of a repository is read, with the receiver each goes through. */
@@ -78,6 +83,8 @@ export interface PreparedWorkspace {
   repositorySnapshots: readonly { repo: string; snapshot: SnapshotRef }[];
   /** What the reading of the snapshots already cut, such as an export budget. */
   cuts: readonly Cut[];
+  /** The cuts of each partial section of the read, by repository: what its `section-partial` cut in `cuts` stands for. */
+  sectionCuts: Readonly<Record<string, readonly Cut[]>>;
   /** The session of one hypothesis on this workspace; it stays valid until the holder of the workspace releases it. */
   session(hypothesis: Hypothesis): Promise<Result<ConsumerSession, WorkspaceFault>>;
 }

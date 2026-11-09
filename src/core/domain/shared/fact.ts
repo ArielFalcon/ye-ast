@@ -185,8 +185,10 @@ export type CutReach =
    * not; `namesNoFile` when the resolver applied its rules over the snapshot and they name no file of it.
    */
   | { kind: "module"; importer: string; specifiers: readonly { specifier: string; package?: boolean; namesNoFile?: true }[] }
-  /** A call site as the topology extractor read it. */
-  | { kind: "call-site"; transport: string; method?: string; template?: string };
+  | CallSiteReach;
+
+/** What a call site could reach, as the topology extractor read it. */
+export type CallSiteReach = { kind: "call-site"; transport: string; method?: string; template?: string };
 
 export interface Cut {
   kind:
