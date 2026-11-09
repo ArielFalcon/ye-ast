@@ -9,9 +9,20 @@ import type { ManifestPackages } from "./module-resolver.ts";
 import { sourceTree } from "./source-tree.ts";
 import ts from "typescript";
 import { readAngularRouteFile } from "./angular-router.extractor.ts";
-import { loadRouteTables, type RouteEntry, type RouteTable, type UnresolvedReference } from "./route-table.loader.ts";
+import { readAngularMetadataFile, type RawAngularFile } from "./angular-metadata.extractor.ts";
+import { ANGULAR_CORE } from "./angular-injection.ts";
+import { createModuleResolver, type ModuleResolver } from "./module-resolver.ts";
+import { loadRouteTables, type AngularModuleReading, type RouteEntry, type RouteFileReading, type RouteTable, type UnresolvedReference } from "./route-table.loader.ts";
 
 const ANGULAR_ROUTER = "@angular/router";
+
+/** The module reading the route graph needs, projected from the one Angular metadata reading of a file, never re-derived. */
+export function modulesOf(angular: RawAngularFile): AngularModuleReading {
+  return {
+    modules: angular.classes.flatMap((c) => (c.kind === "module" ? [{ name: c.name, line: c.line, imports: c.imports }] : [])),
+    arrays: angular.arrays,
+  };
+}
 
 /**
  * The Angular router's routes: each project (the directory of a `package.json` that names `@angular/router`) has its
@@ -32,10 +43,18 @@ async function extractRoutes(files: readonly SourceFile[]): Promise<readonly Fin
 }
 
 async function extractProject(sources: readonly string[], packages: ManifestPackages, contents: ReadonlyMap<string, SourceFile>): Promise<Finding<Entrypoint>[]> {
-  const loaded = await loadRouteTables(sources, async (path) => contents.get(path)?.content, packages, (path) => {
-    const file = contents.get(path);
-    return file === undefined ? undefined : readAngularRouteFile(sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS));
-  });
+  const read = async (path: string): Promise<string | undefined> => contents.get(path)?.content;
+  const resolver = createModuleResolver(read, packages);
+  const readings = new Map<string, Promise<RouteFileReading | undefined>>();
+  const reading = (path: string): Promise<RouteFileReading | undefined> => {
+    let held = readings.get(path);
+    if (held === undefined) {
+      held = readOne(path, contents.get(path), resolver);
+      readings.set(path, held);
+    }
+    return held;
+  };
+  const loaded = await loadRouteTables({ candidates: sources, read, packages, reading });
   const { roots, unparsed, unresolvedReferences } = loaded;
   const walk: Walk = { findings: [], blockers: loaded.declared ? [] : unresolvedReferences };
   for (const root of roots) routesOf(root, enter(root, { segments: [], conditional: false, above: new Set() }), walk);
@@ -44,6 +63,20 @@ async function extractProject(sources: readonly string[], packages: ManifestPack
   for (const table of loaded.unreached) unreachedRoutesOf(table.entries, unresolvedReferences, walk.findings, noRoot);
   for (const path of unparsed) walk.findings.push(unknown("source-unreadable", { path, line: 1 }));
   return walk.findings;
+}
+
+/**
+ * One file read once: its route reading and the Angular metadata reading of the same syntax tree. The core-external flag
+ * is computed as `angular-metadata.adapter.ts` computes it, so both readings of a file agree.
+ */
+async function readOne(path: string, file: SourceFile | undefined, resolver: ModuleResolver): Promise<RouteFileReading | undefined> {
+  if (file === undefined) return undefined;
+  const sf = sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
+  const routes = readAngularRouteFile(sf);
+  if (routes === undefined) return undefined;
+  const usesCore = [...routes.imports.values()].some((binding) => binding.module === ANGULAR_CORE);
+  const coreExternal = usesCore && "external" in (await resolver.resolve(path, ANGULAR_CORE));
+  return { routes, modules: modulesOf(readAngularMetadataFile(sf, routes, false, coreExternal)) };
 }
 
 interface Walk {

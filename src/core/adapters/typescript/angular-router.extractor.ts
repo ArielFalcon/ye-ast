@@ -70,10 +70,21 @@ export interface RawRouterConfig {
   ref?: RawChildRef;
 }
 
+/** A class a `bootstrapModule(...)` call boots: the identifier it names, and the import it comes from when it is one. */
+export interface RawBootstrap {
+  className: string;
+  module?: string;
+  imported?: string;
+  line: number;
+  endLine: number;
+}
+
 export interface RawRouteFile extends ModuleShape {
   /** The route arrays not nested as another entry's children, by the variable that holds them (`""` for an anonymous one), in source order. */
   tables: RawTable[];
   routerConfigs: RawRouterConfig[];
+  /** The classes the file boots, in source order; empty when it boots none. */
+  bootstraps: RawBootstrap[];
   /** The route object constants this file declares at its top level, by name. */
   entryConstants: Map<string, RawEntry>;
   /** The arrays of guards this file declares at its top level, by name. */
@@ -357,6 +368,22 @@ export function readAngularRouteFile(sf: ts.SourceFile): RawRouteFile | undefine
     if (bound?.module !== "@angular/router" || bound.imported !== "RouterModule") return undefined;
     return callee.name.text === "forRoot" ? "root" : callee.name.text === "forChild" ? "child" : undefined;
   };
+  const bootstraps: RawBootstrap[] = [];
+  /* `bootstrapModuleFactory(...)` is not matched: its argument is a factory, not a class. */
+  const bootstrapOf = (call: ts.CallExpression): RawBootstrap | undefined => {
+    const callee = unwrapped(call.expression);
+    const arg = call.arguments[0];
+    if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== "bootstrapModule" || arg === undefined) return undefined;
+    const named = unwrapped(arg);
+    if (!ts.isIdentifier(named)) return undefined;
+    const bound = imports.get(named.text);
+    return {
+      className: named.text,
+      ...(bound !== undefined ? { module: bound.module, imported: bound.imported } : {}),
+      line: line(call.getStart(sf)),
+      endLine: line(call.end),
+    };
+  };
   const findConfigs = (node: ts.Node, owner: string | undefined): void => {
     const inside = ts.isClassDeclaration(node) && node.name ? node.name.text : owner;
     const kind = ts.isCallExpression(node) ? routerKind(node) : undefined;
@@ -367,8 +394,12 @@ export function readAngularRouteFile(sf: ts.SourceFile): RawRouteFile | undefine
       const target = table !== undefined ? { table } : { ref: ts.isArrayLiteralExpression(b) ? { unresolved: true as const } : refOf(b) };
       routerConfigs.push({ kind, line: line(node.getStart(sf)), endLine: line(node.end), ...(inside !== undefined ? { owner: inside } : {}), ...target });
     }
+    if (ts.isCallExpression(node)) {
+      const boot = bootstrapOf(node);
+      if (boot !== undefined) bootstraps.push(boot);
+    }
     ts.forEachChild(node, (child) => findConfigs(child, inside));
   };
   findConfigs(sf, undefined);
-  return { ...module, tables, routerConfigs, entryConstants, guardLists, constants };
+  return { ...module, tables, routerConfigs, bootstraps, entryConstants, guardLists, constants };
 }

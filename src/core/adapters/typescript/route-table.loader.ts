@@ -2,9 +2,34 @@ import type { Handler } from "../../domain/entrypoints/http-route.ts";
 import type { RouteGuard } from "../../domain/entrypoints/ui-route.ts";
 import { declarationSpan } from "../../domain/shared/fact.ts";
 import type { UnknownReason } from "../../domain/shared/fact.ts";
-import { parseAngularRouteFile, type RawChildRef, type RawComponent, type RawEntry, type RawGuard, type RawRouteFile, type RawTable, type RawValue } from "./angular-router.extractor.ts";
+import type { RawChildRef, RawComponent, RawEntry, RawGuard, RawRouteFile, RawTable, RawValue } from "./angular-router.extractor.ts";
+import type { RawOperand } from "./angular-metadata.extractor.ts";
 import { createDeclarationLookup, type Declaration } from "./declaration-lookup.ts";
 import { createModuleResolver, type ManifestPackages, type SourceReader } from "./module-resolver.ts";
+
+/** What the Angular metadata reading states about one file, projected to what the route graph needs. */
+export interface AngularModuleReading {
+  /** Its `@NgModule` classes, in source order, with the operands of each decorator's `imports` list. */
+  modules: readonly { name: string; line: number; imports: readonly RawOperand[] }[];
+  /** Its top-level arrays, by name: what a spread in an `imports` list names. */
+  arrays: ReadonlyMap<string, readonly RawOperand[]>;
+}
+
+/** One file, parsed once: its route reading and its Angular module reading. */
+export interface RouteFileReading {
+  routes: RawRouteFile;
+  modules: AngularModuleReading;
+}
+
+/** What the route loader reads: the files that seed the walk, and the one reading of a file the caller memoizes. */
+export interface RouteTableInputs {
+  /** The files that seed the walk. `read` and `reading` may reach any path the export holds: a legacy string, a barrel and a lazily loaded module need not be candidates. */
+  candidates: readonly string[];
+  read: SourceReader;
+  packages: ManifestPackages;
+  /** The one reading of a file, memoized by the caller; `undefined` when the file does not parse. */
+  reading(file: string): Promise<RouteFileReading | undefined>;
+}
 
 /** A route entry with everything that can be followed across files followed; what cannot is marked, never guessed. */
 export interface RouteEntry {
@@ -80,13 +105,14 @@ type ChildTable = { file: string; raw: RawRouteFile; table: RawTable };
  * down to exactly one declaration is unresolved. Each table is built once and shared by the entries that load it.
  * Returns the root tables, the candidates that do not parse and the unresolved child references.
  */
-export async function loadRouteTables(candidates: readonly string[], read: SourceReader, packages: ManifestPackages, parseSource?: (file: string) => RawRouteFile | undefined): Promise<LoadedRouteTables> {
+export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedRouteTables> {
+  const { candidates, read, packages, reading } = inputs;
   const resolver = createModuleResolver(read, packages);
   const parsed = new Map<string, Promise<RawRouteFile | undefined>>();
   const parse = (file: string): Promise<RawRouteFile | undefined> => {
     let held = parsed.get(file);
     if (held === undefined) {
-      held = read(file).then((source) => (source === undefined ? undefined : parseSource === undefined ? parseAngularRouteFile(file, source) : parseSource(file)));
+      held = reading(file).then((one) => one?.routes);
       parsed.set(file, held);
     }
     return held;
