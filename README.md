@@ -162,7 +162,8 @@ A registration may also declare the launch repository's installed dependencies w
 `--node-modules [<at>=]<path>`: a `node_modules` directory your own install produced, standing for `<at>/node_modules`
 in the repository (the root's without `<at>=`). `ye-ast init --node-modules ...` prints a registration that carries it.
 ye-ast reads it as data, never runs it, checks it against the commit's lockfile, and uses it at a revision only, never on
-the live tree. `callers` and `impact` then settle TypeScript calls by the type checker (`via.derivation: "typed"`);
+the live tree. `callers`, `impact`, `importers`, an `outline` focus and `trace` then settle TypeScript calls by the type
+checker (`via.derivation: "typed"`), and trace runs a typed declaration only where the receiver proves its class;
 each answer that used a declaration lists it in `inputs.buildOutputs` and says whether the lockfile verified it, and a
 declaration it could not use is a `build-output` cut. Without one every answer is unchanged
 ([ADR-0037](docs/architecture/adr/0037-host-declared-build-outputs.md)).
