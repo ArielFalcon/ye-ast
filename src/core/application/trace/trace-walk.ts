@@ -18,7 +18,7 @@ import { containmentTree } from "../navigation/containment-tree.ts";
 import type { EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
 import type { ReceiverProof } from "../navigation/call-binder.ts";
 import { unsettledBy, type DeclarationUses, type UnresolvedIn } from "../navigation/declaration-uses.ts";
-import { callEdgesOf, type ReconciledCalls } from "../navigation/reconciled-calls.ts";
+import { callEdgesOf, valueEdgesOf, type ReconciledCalls } from "../navigation/reconciled-calls.ts";
 import type { CallBinding, CallBindings, DeclaredBinding } from "../navigation/call-binding.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
@@ -206,8 +206,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
    * unresolved, which names every type declaration of its raw name.
    */
   const supertypesOf = memoizedBy((type: GraphSymbol) => type.id, (type): readonly GraphSymbol[] => {
-    const edges = store.outgoingEdges([type.id], SUPERTYPE_EDGES);
-    navigation.load(edges.map((edge) => edge.target));
+    const edges = navigation.supertypeEdgesOf(type);
     const parameterized = unresolvedIn(type.file)
       .filter((reference) => reference.from === type.id && SUPERTYPE_EDGES.includes(reference.kind) && reference.name.includes("<"))
       .flatMap((reference) => store.declarationsNamed([rawTypeName(reference.name)]).filter((declared) => TYPE_KINDS.includes(declared.kind)));
@@ -240,7 +239,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     [type, ...[...ancestorsOf(type)].flatMap((id) => navigation.symbolOf(id) ?? [])].every(
       (above) =>
         !unresolvedIn(above.file).some((reference) => reference.from === above.id && SUPERTYPE_EDGES.includes(reference.kind) && !reference.name.includes("<")) &&
-        store.outgoingEdges([above.id], SUPERTYPE_EDGES).every((edge) => TYPE_KINDS.includes(navigation.symbolOf(edge.target)?.kind ?? "")),
+        navigation.supertypeEdgesOf(above).every((edge) => TYPE_KINDS.includes(navigation.symbolOf(edge.target)?.kind ?? "")),
     );
   /**
    * The method named `member` an instance of the nominal class `type` runs, unless a subclass replaces it (the step's
@@ -338,7 +337,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   };
 
   async function bodyOf(node: GraphSymbol, root: boolean): Promise<Body> {
-    const values = store.outgoingEdges([node.id], ["references"]);
+    const values = valueEdgesOf(store, node);
     const syntax = await syntaxOf(node.file);
     const { edges: called, references: indexed, contradicted, writtenOnly: missing, ambiguous, deferredOnly } = await reconciled.callsOf(node);
     const passed = uses.followed(node, values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));

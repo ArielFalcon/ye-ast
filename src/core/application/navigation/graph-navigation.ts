@@ -2,7 +2,7 @@ import { EDGE_POLICY, edgeConfidence, LOCAL_OWNER_KINDS } from "../../domain/imp
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import { joinsFact } from "../../domain/shared/code-node.ts";
-import type { CodeGraphReader, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
+import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 
 export const SUPERTYPE_EDGES = ["extends", "implements"];
 
@@ -20,6 +20,8 @@ export interface GraphNavigation {
   /** The non-test types above (`up`) or below (`down`) a type, each with the weakest confidence on its way. */
   typesAround(type: GraphSymbol, direction: "up" | "down"): { type: GraphSymbol; confidence: number }[];
   methodsOf(type: GraphSymbol): GraphSymbol[];
+  /** The edges by which `type` extends or implements another, test files included, each target loaded. */
+  supertypeEdgesOf(type: GraphSymbol): readonly GraphEdge[];
   /** The declarations a contains edge places directly inside `type`, in the store's order. */
   membersOf(type: GraphSymbol): readonly GraphSymbol[];
   symbolsInFile(path: string): readonly GraphSymbol[];
@@ -104,6 +106,17 @@ export function createGraphNavigation(reader: CodeGraphReader, isTestFile: (path
   }
   const methodsOf = (type: GraphSymbol): GraphSymbol[] => membersOf(type).filter((symbol) => symbol.kind === "method");
 
+  const supertypesCache = new Map<GraphNodeId, readonly GraphEdge[]>();
+  function supertypeEdgesOf(type: GraphSymbol): readonly GraphEdge[] {
+    let edges = supertypesCache.get(type.id);
+    if (edges === undefined) {
+      edges = reader.outgoingEdges([type.id], SUPERTYPE_EDGES);
+      load(edges.map((edge) => edge.target));
+      supertypesCache.set(type.id, edges);
+    }
+    return edges;
+  }
+
   const symbolsCache = new Map<string, readonly GraphSymbol[]>();
   function symbolsInFile(path: string): readonly GraphSymbol[] {
     let inFile = symbolsCache.get(path);
@@ -139,5 +152,5 @@ export function createGraphNavigation(reader: CodeGraphReader, isTestFile: (path
   const fieldOriginAt = (user: GraphSymbol, field: string, fields: readonly FieldOrigin[]) => enclosingOrigin(user, fields.filter((origin) => origin.field === field), EDGE_POLICY.relations.from);
   const localOriginAt = (user: GraphSymbol, local: string, locals: readonly LocalOrigin[]) => enclosingOrigin(user, locals.filter((origin) => origin.local === local), LOCAL_OWNER_KINDS);
 
-  return { load, symbolOf, ownersOf, typesAround, methodsOf, membersOf, symbolsInFile, declarationAt, referencesThrough, fieldOriginAt, localOriginAt };
+  return { load, symbolOf, ownersOf, typesAround, methodsOf, supertypeEdgesOf, membersOf, symbolsInFile, declarationAt, referencesThrough, fieldOriginAt, localOriginAt };
 }

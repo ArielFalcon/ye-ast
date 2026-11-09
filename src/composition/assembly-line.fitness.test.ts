@@ -41,9 +41,7 @@ const LANGUAGE_CHECK_LINES: Readonly<Record<string, number>> = {
  * straight from the index outside `navigation`, which owns what a body calls, and a callee's last name cut at its last dot
  * outside `nameTail`'s file, by file.
  */
-const RAW_BODY_EDGE_SITES: Readonly<Record<string, number>> = {
-  "core/application/trace/trace-walk.ts": 3,
-};
+const RAW_BODY_EDGE_SITES: Readonly<Record<string, number>> = {};
 const NAME_TAIL_OWNER = "core/domain/shared/call-place.ts";
 const DOT_TAIL_SITES: Readonly<Record<string, number>> = {
   "core/adapters/spring/event-call-sites.adapter.ts": 1,

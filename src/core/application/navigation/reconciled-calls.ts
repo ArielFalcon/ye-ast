@@ -144,6 +144,11 @@ export function callEdgesOf(store: CodeGraphReader, symbol: GraphSymbol): GraphE
   return store.outgoingEdges([symbol.id], CALL_EDGE_KINDS).filter((edge) => !isIgnoredEdge(edge));
 }
 
+/** The `references` edges of `symbol`: the declarations its body names as values, which it may pass to run later. */
+export function valueEdgesOf(store: CodeGraphReader, symbol: GraphSymbol): readonly GraphEdge[] {
+  return store.outgoingEdges([symbol.id], ["references"]);
+}
+
 const NO_CALLS: BodyCalls = { edges: [], references: [], contradicted: [], writtenOnly: [], ambiguous: [], deferredOnly: [] };
 
 export function createReconciledCalls({ store, uses, syntaxOf, lineOf, importedDeclarations }: ReconciledCallsInput): ReconciledCalls {
