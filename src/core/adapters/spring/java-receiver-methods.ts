@@ -10,7 +10,7 @@ import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, heldJavaProject, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
-import { createJavaProject, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, readArgumentSignature, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
 const SLOT = "java-receiver-methods";
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
@@ -49,8 +49,11 @@ interface ReadFile extends ReceiverSource {
  * an interface types the receiver as that bound (JLS 4.4): the method is its bound's, marked `bound`, a dependence whose
  * execution any type below the bound may replace. No method, beyond what `dispatchTargets` refuses, when the type is a
  * type variable with no bound or several, an enum or an annotation type; when a type at or above it is outside the repository, whose members the
- * sources do not state, unless it is a platform interface that declares none (`MEMBERLESS_PLATFORM_INTERFACES`); when its members of the name, its own and inherited, are not exactly one signature of the call's
- * arity with no varargs and no inaccessible private declaration, or the name is one of `Object`'s methods; when the call sits in an
+ * sources do not state, unless it is a platform interface that declares none (`MEMBERLESS_PLATFORM_INTERFACES`); when its
+ * members of the name, its own and inherited, offer no single signature for the call — a member whose stated parameter
+ * types equal the arguments' settled signature binds it, since an exact match is the most specific applicable method
+ * (JLS 15.12.2.5), and otherwise every member of the call's arity must state the same signature, with no varargs and no
+ * inaccessible private declaration — or the name is one of `Object`'s methods; when the call sits in an
  * anonymous or a local class; when a source holds an annotation by which a processor adds overloads or rewrites calls
  * (`CALL_REWRITING_ANNOTATIONS`); or when the declared hierarchy does not settle the member. Declaration selection and
  * runtime dispatch are separate obligations. An unproven value receiver or declared repository member remains a cut;
@@ -182,11 +185,11 @@ export function createResolver(project: JavaProject) {
     return bounds.length === 1 ? declared(repositoryType(bounds[0]!, source.file, bounds[0]!), true) : undefined;
   };
 
-  /** The one method of the name that the receiver's declared type offers for the call's arity. */
+  /** The one method of the name that the receiver's declared type offers for the call's arguments. */
   const methodNamed = (invocation: Node, source: ReceiverSource): { method: MethodDecl; bound: boolean } | undefined => {
     const held = receiverOf(invocation, source);
     const name = invocation.childForFieldName("name")?.text;
-    const method = held === undefined || name === undefined ? undefined : memberOf(held.type, name, argumentCount(invocation), enclosingType(invocation, source.file, project));
+    const method = held === undefined || name === undefined ? undefined : memberOf(held.type, name, invocation, enclosingType(invocation, source.file, project));
     return method === undefined ? undefined : { method, bound: held!.bound };
   };
 
@@ -202,25 +205,44 @@ export function createResolver(project: JavaProject) {
   };
 
   /**
-   * The declaration a call of `name` with `arity` arguments on a value of `type` is resolved to: the members of the name,
-   * declared and inherited, must be one signature, so overload resolution has one candidate; the type's own, else the
-   * nearest up its class chain, else the only one.
+   * The declaration a call of `name` with `invocation`'s arguments on a value of `type` is resolved to: the member whose
+   * stated parameter types equal the arguments' settled signature (JLS 15.12.2.5), else the members of the name, declared
+   * and inherited, must be one signature at the call's arity, so overload resolution has one candidate; the type's own,
+   * else the nearest up its class chain, else the only one.
    */
-  const memberOf = (type: TypeDecl, name: string, arity: number, caller: TypeDecl | undefined): MethodDecl | undefined => {
+  const memberOf = (type: TypeDecl, name: string, invocation: Node, caller: TypeDecl | undefined): MethodDecl | undefined => {
     if (OBJECT_METHODS.has(name)) return undefined;
     const above = declaredHierarchy(type);
     if (above.gaps.some((gap) => !memberless.has(clauseKey(gap.file, gap.node)))) return undefined;
     const named = above.types.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
     if (named.some(hasVarargs)) return undefined;
-    const candidates = named.filter((method) => method.parameterTypes.length === arity);
+    const candidates = named.filter((method) => method.parameterTypes.length === argumentCount(invocation));
     const [first] = candidates;
     if (first === undefined) return undefined;
-    if (candidates.some((method) => (method.modifiers.includes("private") && (method.owner !== type || method.owner !== caller)) || (method !== first && !sameStatedSignature(method, first)))) return undefined;
+    if (candidates.some((method) => method.modifiers.includes("private") && (method.owner !== type || method.owner !== caller))) return undefined;
+    const exact = caller === undefined ? undefined : exactCandidate(candidates, invocation, caller);
+    if (exact !== undefined) return exact;
+    if (candidates.some((method) => method !== first && !sameStatedSignature(method, first))) return undefined;
     for (const current of project.classChain(type)) {
       const own = candidates.find((method) => method.owner === current);
       if (own !== undefined) return own;
     }
     return candidates.length === 1 ? first : undefined;
+  };
+
+  /**
+   * The one member whose stated parameter types equal the arguments' settled signature, the most specific applicable
+   * method (JLS 15.12.2.5); none when the arguments or every candidate's signature are not settled, or no single member
+   * matches.
+   */
+  const exactCandidate = (candidates: readonly MethodDecl[], invocation: Node, caller: TypeDecl): MethodDecl | undefined => {
+    const signature = readArgumentSignature(invocation, { file: caller.file, type: caller, at: invocation }, project);
+    if (signature === undefined) return undefined;
+    const matching = candidates.filter((candidate) => {
+      const stated = signatureOf(candidate);
+      return stated !== undefined && sameSignature(stated, signature);
+    });
+    return matching.length === 1 ? matching[0] : undefined;
   };
 
   /** Whether two members certainly state the same parameter types, each as the strict reading settles them. */

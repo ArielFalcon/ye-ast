@@ -73,20 +73,18 @@ test("a platform interface that declares no members leaves the receiver's method
   assert.deepEqual(await select(entity("implements Serializable", ["import com.vendor.Serializable;"])), { kind: "unproven" });
 });
 
-test("unsettled signatures, varargs, inaccessible private members and Object methods retain an unproven call", async () => {
-  const overloaded = java("Store.java", ["package app;", "", "public interface Store {", "  void save(String value);", "  void save(Integer value);", "  Store find();", "}"]);
+test("a call at an arity no member takes, varargs, inaccessible private members and Object methods retain an unproven call", async () => {
   const varargs = java("Store.java", ["package app;", "", "public interface Store {", "  void save(String... value);", "  Store find();", "}"]);
   const hidden = java("Plain.java", ["package app;", "", "class Plain {", "  private void save(String value) {}", "}"]);
   const named = java("Plain.java", ["package app;", "", "class Plain {", "  public String toString() { return \"\"; }", "}"]);
 
-  assert.deepEqual(await methodAt([overloaded, use("store.save(\"x\")")]), { kind: "unproven" });
   assert.deepEqual(await methodAt([STORE, JDBC, use("store.save(\"x\", \"y\")")]), { kind: "unproven" });
   assert.deepEqual(await methodAt([varargs, use("store.save(\"x\")")]), { kind: "unproven" });
   assert.deepEqual(await methodAt([hidden, use("plain.save(\"x\")", [], "Plain plain")]), { kind: "unproven" });
   assert.deepEqual(await methodAt([named, use("plain.toString()", [], "Plain plain")], "toString"), { kind: "unproven" });
 });
 
-test("members whose parameter types the strict reading settles to different types are overloads, and the same type however it is spelled is one signature", async () => {
+test("members whose parameter types settle to different types are distinct overloads, and the same type however spelled is one signature", async () => {
   const value = java("Value.java", ["package app;", "", "public class Value {}"]);
   const homonym = java("other/Value.java", ["package app.other;", "", "public class Value {}"]);
   const base = java("Base.java", ["package app;", "", "public class Base {", "  public void save(Value value) {}", "}"]);
@@ -94,7 +92,7 @@ test("members whose parameter types the strict reading settles to different type
   const override = java("other/Sub.java", ["package app.other;", "", "import app.Value;", "", "public class Sub extends app.Base {", "  public void save(Value value) {}", "}"]);
   const call = java("Use.java", ["package app;", "", "class Use {", "  void run(app.other.Sub sub, Value value) { sub.save(value); }", "}"]);
 
-  assert.deepEqual(await methodAt([value, homonym, base, overload, call]), { kind: "unproven" });
+  assert.deepEqual(await methodAt([value, homonym, base, overload, call]), method(base, 4));
   assert.deepEqual(await methodAt([value, homonym, base, override, call]), method(override, 6));
 });
 
@@ -185,6 +183,16 @@ test("this(...) in a record names its declared constructor of the call's arity, 
   assert.deepEqual(await chainedAt([compact], compact, 4, "this"), method(compact, 6));
   assert.deepEqual(await chainedAt([compact], compact, 5, "this"), method(compact, 4));
   assert.deepEqual(await chainedAt([implicit], implicit, 4, "this"), { kind: "unknown" });
+});
+
+test("two overloads of an argument's settled type bind the exact match, never both and never by arity", async () => {
+  const owner = java("Owner.java", ["package app;", "", "public class Owner {}"]);
+  const port = java("Port.java", ["package app;", "", "interface Port {", "  Owner find(String id);", "  Owner find(Long id);", "}"]);
+  const both = java("Both.java", ["package app;", "", "interface Left { Owner find(String id); }", "interface Right { Owner find(String id); }", "interface Both extends Left, Right {}"]);
+
+  assert.deepEqual(await methodAt([owner, port, use("port.find(\"7\")", [], "Port port")], "find"), method(port, 4));
+  assert.deepEqual(await methodAt([owner, port, use("port.find(value)", [], "Port port, Object value")], "find"), { kind: "unproven" });
+  assert.deepEqual(await methodAt([owner, both, use("both.find(\"7\")", [], "Both both")], "find"), { kind: "unproven" });
 });
 
 test("given derived facts, a second reader over the same sources answers the same sites without parsing them again", async () => {
