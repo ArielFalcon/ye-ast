@@ -22,6 +22,7 @@ import { createImpactQueries, type ImpactQueriesDeps } from "./impact-queries.ts
 import type { ImportOrigins, ImportOriginsReader, ImportOriginSite, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 import { NOTHING_DECLARED } from "../navigation/edge-targets.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { ModuleDependency } from "../../domain/impact/module-dependency.ts";
@@ -97,6 +98,8 @@ interface Options {
   sources?: SourceFile[];
   /** The trivia lines a tokenizer reads in each source, by path. */
   trivia?: Readonly<Record<string, readonly number[]>>;
+  /** The tokens stage, when a test needs readings the trivia option cannot state. */
+  sourceTokens?: SourceTokens;
   /** Reads the imports of those sources, as composition wires it. */
   importOrigins?: ImportOriginsReader;
   moduleDependencies?: ModuleDependenciesReader;
@@ -199,6 +202,7 @@ function setup(options: Options = {}) {
     ...(options.declarationEvidence && { declarationEvidence: options.declarationEvidence }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
     ...(options.trivia && { tokens: { tokensOf: async (file: SourceFile) => tokenReading(file, options.trivia!) } }),
+    ...(options.sourceTokens && { tokens: options.sourceTokens }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
     ...(options.typeBindings && { typeBindings: options.typeBindings.bindings, declaredOutputs: () => options.typeBindings!.outputs }),
@@ -2310,4 +2314,42 @@ test("the reverse lookup keeps each source's alignment only for an index the ind
 
   assert.deepEqual(await kept(true), ["reverse-looked-up-names", "reverse-looked-up-names", "reverse-unbound-calls"]);
   assert.deepEqual(await kept(false), []);
+});
+
+const COMMENT_FILE = "src/A.java";
+const COMMENT_BASE = ["class A {", "  /* one */", "}"].join("\n");
+const COMMENT_HEAD = ["class A {", "  /* two */", "}"].join("\n");
+const COMMENT_HUNK = { base: { start: 2, end: 2 }, head: { start: 2, end: 2 }, removedNames: [] };
+const COMMENT_READING = { status: "read" as const, language: "java" as const, tokens: [], imports: [], importOrder: "insignificant" as const };
+
+function commentSetup(tokens: SourceTokens) {
+  return setup({
+    changes: { ok: true, value: [change(COMMENT_FILE, { added: [{ start: 2, end: 2 }], hunks: [COMMENT_HUNK] })] },
+    nodes: [fakeNode("A", "class", COMMENT_FILE, 1, 3)],
+    sources: [{ path: COMMENT_FILE, content: COMMENT_HEAD }],
+    snapshotSources: { [HEAD]: [{ path: COMMENT_FILE, content: COMMENT_HEAD }], [FORK]: [{ path: COMMENT_FILE, content: COMMENT_BASE }] },
+    exports: listingOf([COMMENT_FILE]),
+    sourceTokens: tokens,
+  });
+}
+
+test("impact answers settled and drops the seeds of a comment-only hunk", async () => {
+  const answer = fact(await commentSetup({ tokensOf: async () => COMMENT_READING }).ask());
+  const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
+
+  assert.deepEqual(value.settled, [{ basis: "hunk", file: COMMENT_FILE, base: { start: 2, end: 2 }, head: { start: 2, end: 2 }, reason: "no-token-change" }]);
+  assert.deepEqual(value.seeds, []);
+  assert.equal(answer.status, "complete");
+  assert.equal("cuts" in answer, false);
+});
+
+test("a Java doc comment is a token, so a hunk that edits it still seeds", async () => {
+  const tokens: SourceTokens = {
+    tokensOf: async (file) => ({ ...COMMENT_READING, tokens: [{ start: 2, end: 2, text: file.content.includes("one") ? "/** one */" : "/** two */" }] }),
+  };
+  const answer = fact(await commentSetup(tokens).ask());
+  const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
+
+  assert.equal(value.settled, undefined);
+  assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["A"]);
 });

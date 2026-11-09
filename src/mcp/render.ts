@@ -806,6 +806,17 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: Impa
   ];
 }
 
+/** The hunks a change set aside (ADR-0043 decision 5): one summary count, or one line per hunk with both sides. */
+function impactSettled(value: ImpactValue, detail: ResponseMode): string[] {
+  const settled = value.settled ?? [];
+  if (settled.length === 0) return [];
+  if (detail === "summary") return [`${settled.length} changed hunks alter no token`];
+  return settled.map((change) => {
+    const sides = [change.base === undefined ? undefined : `base ${spanText(change.base.start, change.base.end)}`, change.head === undefined ? undefined : `head ${spanText(change.head.start, change.head.end)}`].filter((side) => side !== undefined);
+    return `  ${change.file} ${sides.join(" -> ")} (${change.reason})`;
+  });
+}
+
 function impactSeeds(value: ImpactValue, detail: ResponseMode): string[] {
   if (detail === "summary") return [`seeds (${value.seeds.length}):`, ...groupedSeeds(value.seeds)];
   const dependencies = new Set(investigationSymbols(value).flatMap((symbol) => symbol.via === undefined ? [] : [`${symbol.via.file}\0${symbol.via.symbol}`]));
@@ -1068,7 +1079,7 @@ export function renderImpact(fact: Fact<ImpactValue>, detail: ResponseMode = "su
   const lines = headerLines(fact);
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide(fact, detail, context)].join("\n");
   const hasOmissions = fact.status === "partial" || fact.value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) || consequenceSymbols(fact.value).length > investigationSymbols(fact.value).length || fact.value.modules !== undefined;
-  lines.push(...impactBody(fact.value, detail, { kind: "local" }, context), ...impactSeeds(fact.value, detail), ...impactCutBlock(cutsOf(fact), detail, { kind: "fact" }, context, fact.inputs.declaredConfig.walk), ...(hasOmissions ? textModeGuide(localQueryCoordinates(fact, context, detail)) : []));
+  lines.push(...impactBody(fact.value, detail, { kind: "local" }, context), ...impactSeeds(fact.value, detail), ...impactSettled(fact.value, detail), ...impactCutBlock(cutsOf(fact), detail, { kind: "fact" }, context, fact.inputs.declaredConfig.walk), ...(hasOmissions ? textModeGuide(localQueryCoordinates(fact, context, detail)) : []));
   return lines.join("\n");
 }
 

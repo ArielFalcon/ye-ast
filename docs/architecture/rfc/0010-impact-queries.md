@@ -68,6 +68,17 @@ replaces `head` or `revision` under `trusted` only ([Live head](#live-head-slice
 | in a file declaring a Java `record`, which codegraph gives no node and whose methods it places under the package | the symbols the graph holds, as above, and a `no-extractor` cut at the file, found by ye-ast's own Java grammar over the changed and targeted files; a `callers` target it cannot name stays an `unknown-symbol` fault whose detail says the file declares a record |
 | in `templateUrl` or `styleUrl(s)` of a component | that component, read from decorator metadata ([ADR-0014](../adr/0014-angular-and-spring-from-own-extractors.md) decision 2) |
 | removed with its symbol | none at `head`: its former callers changed too in a consistent commit and are seeds themselves; a caller left behind shows as an unresolved reference naming it. The same holds for a declaration removed from a symbol that survives (a method of a class): the holder seeds, and every name the removed lines declared, in any hunk, that no added line of the file declares again (a rename loses its name, an edited signature keeps it) also leads an `unresolved-link` cut at the references that still name it |
+| in a hunk whose tokens did not change | no seed; one `settled` entry |
+
+### Settled hunks
+
+A changed hunk is compared by tokens (ADR-0043 decision 1): the tokens of its base lines and of its head lines, a token that spans
+the hunk's edge counting whole, and a file's import declarations compared as a multiset where the language's profile states
+their order carries no meaning. Equal tokens mean the hunk seeds nothing, drops the names its removed lines declared, and is
+reported as one `settled` entry — `{basis: "hunk", file, base?, head?, reason: "no-token-change" | "import-order"}` — sorted by
+file and position. A file no pack tokenizes, a side that does not parse, a deleted or added file and a binary file keep the line
+rules and report nothing. A change whose every hunk settles answers `complete` with no seeds and the settled entries as its
+evidence (ADR-0043 decision 5).
 
 `Seed.basis` is `lines`, `top-level` or `resource`, or `requested` for a symbol `impact.callers` was asked for by name.
 A requested line range seeds through the rows above, as the added lines of a file, except that a line of the range no

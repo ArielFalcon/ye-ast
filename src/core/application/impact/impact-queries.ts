@@ -6,7 +6,9 @@ import { blastRadius, type BlastRadius } from "../../domain/change/blast-radius.
 import { isReadableFile, kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import { selectChange } from "../../domain/change/change-selection.ts";
 import { resourceImpact, resourceOwners } from "../../domain/change/resource-impact.ts";
-import type { FileChange } from "../../domain/change/diff-reader.ts";
+import type { FileChange, Hunk } from "../../domain/change/diff-reader.ts";
+import { settledOf } from "../../domain/change/hunk-settling.ts";
+import type { SettledHunkChange } from "../../domain/impact/impact-fact.ts";
 import type { ComponentRef } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
@@ -376,6 +378,8 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     }
     const changes = selection.files;
     const headTree = head.tree;
+    const { changes: settledChanges, settled } = await settledHunks(readings, changes, headTree.sources, baseTree.sources, head.prepared, input.basePrepared);
+    if (signal?.aborted) return ABORTED;
     const declarations = await deps.angular.read(headTree.sources);
     if (signal?.aborted) return ABORTED;
     const before = !sameTree && changes.some((file) => file.deleted && !isReadableFile(file.path)) ? await deps.angular.read(baseTree.sources) : [];
@@ -395,7 +399,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const changedPaths = new Set(radius.files.map((file) => file.path));
     const contracts = changedContracts(deps.contracts.operations(baseTree.sources), deps.contracts.operations(headTree.sources), (path) => changedPaths.has(path) && entrypointSelected(path));
     fixed.push(...contracts.cuts);
-    const value: ImpactValue = { mergeBase: radius.mergeBase, seeds: [], changedEntrypoints: entrypointChanges, ...(contracts.changes.length === 0 ? {} : { changedContracts: servedContracts(contracts.changes, baseTree.findings, headTree.findings) }), symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
+    const value: ImpactValue = { mergeBase: radius.mergeBase, seeds: [], changedEntrypoints: entrypointChanges, ...(contracts.changes.length === 0 ? {} : { changedContracts: servedContracts(contracts.changes, baseTree.findings, headTree.findings) }), ...(settled.length === 0 ? {} : { settled }), symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
 
     let moduleRead: ReturnType<typeof moduleImpact> | undefined;
     const moduleReader = deps.moduleDependencies;
@@ -443,14 +447,14 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (request.signal?.aborted) return ABORTED;
       const baseSources = new Map(baseTree.sources.map((source) => [source.path, source.content]));
       const headSources = new Map(headTree.sources.map((source) => [source.path, source.content]));
-      const byPath = Map.groupBy(changes.filter((file) => file.removedNames.length > 0), (file) => file.path);
+      const byPath = Map.groupBy(settledChanges.filter((file) => file.removedNames.length > 0), (file) => file.path);
       const validated = new Map<string, ReadonlySet<string>>();
       for (const [path, files] of byPath) {
         if (deps.declarationEvidence === undefined || signal?.aborted || files.some((file) => file.deleted !== files[0]!.deleted)) continue;
         const names = [...new Set(files.flatMap((file) => file.removedNames))];
         validated.set(path, new Set(deps.declarationEvidence.validate({ path, base: baseSources.get(path), head: headSources.get(path), deleted: files[0]!.deleted, names })));
       }
-      const validatedChanges = changes.map((file) => {
+      const validatedChanges = settledChanges.map((file) => {
         const retained = validated.get(file.path);
         return retained === undefined ? file : { ...file, removedNames: file.removedNames.filter((name) => retained.has(name)) };
       });
@@ -466,6 +470,74 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       store.close();
     }
   }
+}
+
+/** The hunks of the selected source files whose tokens did not change, and the change with each settled hunk removed (ADR-0043 decisions 1 and 5). */
+async function settledHunks(
+  readings: ReturnType<typeof createBaseReadings>,
+  files: readonly FileChange[],
+  headSources: readonly { path: string; content: string }[],
+  baseSources: readonly { path: string; content: string }[],
+  headPrepared: PreparedCommit | undefined,
+  basePrepared: PreparedCommit | undefined,
+): Promise<{ changes: FileChange[]; settled: SettledHunkChange[] }> {
+  const baseByPath = new Map(baseSources.map((source) => [source.path, source]));
+  const headByPath = new Map(headSources.map((source) => [source.path, source]));
+  const settled: SettledHunkChange[] = [];
+  const changes: FileChange[] = [];
+  for (const file of files) {
+    if (kindOfChangedFile(file.path) !== "source" || file.deleted || file.binary) {
+      changes.push(file);
+      continue;
+    }
+    const baseSource = baseByPath.get(file.path);
+    const headSource = headByPath.get(file.path);
+    if (baseSource === undefined || headSource === undefined) {
+      changes.push(file);
+      continue;
+    }
+    const base = await readings.tokensOf(baseSource, basePrepared);
+    const head = await readings.tokensOf(headSource, headPrepared);
+    const left = new Set<Hunk>();
+    for (const hunk of file.hunks) {
+      const outcome = settledOf(base, head, hunk);
+      if (outcome.settled === undefined) continue;
+      left.add(hunk);
+      settled.push({
+        basis: "hunk",
+        file: file.path,
+        ...(hunk.base === undefined ? {} : { base: hunk.base }),
+        ...(hunk.head === undefined ? {} : { head: hunk.head }),
+        reason: outcome.settled,
+      });
+    }
+    changes.push(left.size === 0 ? file : settleFile(file, left));
+  }
+  settled.sort((a, b) => compareText(a.file, b.file) || firstLine(a) - firstLine(b));
+  return { changes, settled };
+}
+
+/** `file` without the settled hunks' head lines, removals and removed names; the line ranges stay owned by `hunks`. */
+function settleFile(file: FileChange, left: ReadonlySet<Hunk>): FileChange {
+  const removedNames = new Set([...left].flatMap((hunk) => hunk.removedNames));
+  let removal = 0;
+  const removals: { after: number }[] = [];
+  for (const hunk of file.hunks) {
+    if (hunk.head !== undefined) continue;
+    const place = file.removals[removal];
+    removal += 1;
+    if (!left.has(hunk) && place !== undefined) removals.push(place);
+  }
+  return {
+    ...file,
+    added: file.hunks.flatMap((hunk) => (left.has(hunk) || hunk.head === undefined ? [] : [hunk.head])),
+    removals,
+    removedNames: removedNames.size === 0 ? file.removedNames : file.removedNames.filter((name) => !removedNames.has(name)),
+  };
+}
+
+function firstLine(change: SettledHunkChange): number {
+  return change.base?.start ?? change.head?.start ?? 0;
 }
 
 function moduleCoverage(read: ModuleDependencies, tree: CommitExtraction, changes: readonly FileChange[]): ModuleDependencies {
