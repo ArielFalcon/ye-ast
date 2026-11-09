@@ -82,6 +82,36 @@ test("a specifier no module configuration governs could be resolved to the asked
   assert.deepEqual(reasons(ungoverned), ["scripts/seed.ts specifier"]);
 });
 
+test("a relative specifier TypeScript may resolve to a file the engine's own lookup misses stays a cut of that file's importers", async () => {
+  commit({
+    "src/foo.ts": "export const foo = 1;\n",
+    "src/a.ts": `import { foo } from "./foo.js";\nexport const a = foo;\n`,
+    "src/bar.mts": "export const bar = 1;\n",
+    "src/b.ts": `import { bar } from "./bar.mjs";\nexport const b = bar;\n`,
+  });
+
+  const foo = await importers("src/foo.ts");
+  const bar = await importers("src/bar.mts");
+
+  assert.equal(foo.status, "partial");
+  assert.ok(reasons(foo).includes("src/a.ts specifier"), JSON.stringify(foo.cuts));
+  assert.equal(bar.status, "partial");
+  assert.ok(reasons(bar).includes("src/b.ts specifier"), JSON.stringify(bar.cuts));
+});
+
+test("a path mapping TypeScript cannot follow may still name a file a build replaces in, so the specifier stays a cut", async () => {
+  commit({
+    "tsconfig.json": TSCONFIG,
+    "src/app/environments/environment.prod.ts": "export const environment = {};\n",
+    "src/app/auth.service.ts": `import { environment } from "@app/environments/environment";\nexport const auth = environment;\n`,
+  });
+
+  const fact = await importers("src/app/environments/environment.prod.ts");
+
+  assert.equal(fact.status, "partial");
+  assert.deepEqual(reasons(fact), ["src/app/auth.service.ts specifier"]);
+});
+
 test("a non-literal dynamic import in the asked file's runtime keeps its importers partial (ADR-0042 fixture 3)", async () => {
   commit({
     "src/a.ts": "export const a = 1;\n",

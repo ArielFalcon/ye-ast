@@ -19,21 +19,30 @@ test("a relative specifier names a TypeScript file as written, with an extension
   }
 });
 
-test("an unresolved specifier names no file only where the resolver applied its rules over the snapshot and they reach no file of it", async () => {
-  const resolver = resolverOver({ "src/c.d.ts": "", "src/d.js": "", "web/tsconfig.json": JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@app/*": ["src/*"] } } }) });
+test("an unresolved specifier names no file only when no listed file could be its target under any resolution TypeScript or a build might apply", async () => {
+  const files: Record<string, string> = {
+    "src/c.d.ts": "",
+    "src/d.js": "",
+    "src/Comp.tsx": "",
+    "src/foo.ts": "",
+    "src/linked": "",
+    "web/tsconfig.json": JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@app/*": ["src/*"] } } }),
+    "web/src/env/environment.prod.ts": "",
+    "roots/tsconfig.json": JSON.stringify({ compilerOptions: { rootDirs: ["src", "generated"] } }),
+  };
+  const resolver = createModuleResolver(async (file) => files[file], NO_PACKAGES, { listing: Object.keys(files) });
   const proof = async (from: string, specifier: string) => {
     const resolution = await resolver.resolve(from, specifier);
     return "unresolved" in resolution && resolution.namesNoFile === true;
   };
+  const proofs = (cases: string[][]) => Promise.all(cases.map(([from, specifier]) => proof(from!, specifier!)));
 
+  assert.deepEqual(await proofs([["src/app.ts", "./missing"], ["src/app.ts", "../../escape"], ["src/app.ts", "node:nothing"], ["web/src/app.ts", "@app/missing"]]), [true, true, true, true]);
   assert.deepEqual(
-    await Promise.all([["src/app.ts", "./missing"], ["src/app.ts", "../../escape"], ["src/app.ts", "node:nothing"], ["web/src/app.ts", "@app/missing"]].map(([from, specifier]) => proof(from!, specifier!))),
-    [true, true, true, true],
+    await proofs([["src/app.ts", "./c"], ["src/app.ts", "./d.js"], ["src/app.ts", "./foo.js"], ["src/app.ts", "./Comp"], ["web/src/app.ts", "@app/env/environment"], ["roots/src/app.ts", "./missing"], ["src/app.ts", "./linked/x"], ["src/app.ts", "/abs/a"], ["src/app.ts", "@app/missing"]]),
+    [false, false, false, false, false, false, false, false, false],
   );
-  assert.deepEqual(
-    await Promise.all([["src/app.ts", "./c.d.ts"], ["src/app.ts", "./d.js"], ["src/app.ts", "/abs/a"], ["src/app.ts", "@app/missing"]].map(([from, specifier]) => proof(from!, specifier!))),
-    [false, false, false, false],
-  );
+  assert.equal("namesNoFile" in (await createModuleResolver(async (file) => files[file], NO_PACKAGES).resolve("src/app.ts", "./missing")), false);
 });
 
 test("a specifier resolves through the paths of the nearest configuration, however long its extends chain is", async () => {

@@ -131,8 +131,13 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   };
   const retainedOf = <T>(prepared: PreparedCommit | undefined, slot: string, produce: () => Promise<T>, signal: AbortSignal | undefined): Promise<T> =>
     prepared?.retained === undefined ? produce() : prepared.retained(slot, produce, signal);
-  const moduleDependenciesOf = (reader: ModuleDependenciesReader, prepared: PreparedCommit | undefined, tree: Pick<CommitExtraction, "sources">, signal: AbortSignal | undefined) =>
-    retainedOf(prepared, canonicalJson({ output: "module-dependencies" }), () => reader.extract(tree.sources), signal);
+  /** Every path of the snapshot, written or not, skipped entries included; none once a budget stopped the export. */
+  const listingOf = ({ export: listed }: Pick<CommitExtraction, "export">): readonly string[] | undefined => listed.stopped === undefined ? [...listed.files, ...listed.skipped].map(({ path }) => path) : undefined;
+  const moduleDependenciesOf = (reader: ModuleDependenciesReader, prepared: PreparedCommit | undefined, tree: Pick<CommitExtraction, "export" | "sources">, signal: AbortSignal | undefined) =>
+    retainedOf(prepared, canonicalJson({ output: "module-dependencies" }), () => {
+      const listing = listingOf(tree);
+      return reader.extract(tree.sources, listing === undefined ? undefined : { listing });
+    }, signal);
   const headReader = createHeadReader(deps);
   const bindingModules = deps.moduleReader ?? deps.moduleDependencies;
   const moduleSource = deps.moduleDependencies === undefined ? isInMapScope : isWritten;
