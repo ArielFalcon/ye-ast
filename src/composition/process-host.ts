@@ -31,6 +31,7 @@ export function processHost(options: { signal: AbortSignal; indexCache?: string;
     err,
     queries: ({ trustRecord = false, buildOutputs } = {}) =>
       composeQueries({
+        signal: options.signal,
         measure: err,
         ...(buildOutputs !== undefined && { buildOutputs }),
         ...(options.indexCache !== undefined && { indexCache: options.indexCache }),

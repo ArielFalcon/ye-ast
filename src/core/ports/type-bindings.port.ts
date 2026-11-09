@@ -58,6 +58,6 @@ export type TypeBindingsAnswer =
   | { status: "fault"; fault: TypeBindingsFault };
 
 export interface TypeBindings {
-  /** With `facts`, the snapshot's derived facts (ADR-0035), the answer is kept between requests and shared by concurrent ones. */
+  /** With `facts`, the snapshot's derived facts (ADR-0035), the answer is kept between requests and shared by concurrent ones; `signal` then ends only this request's wait. */
   of(sources: readonly SourceFile[], outputs: readonly DeclaredBuildOutput[], signal?: AbortSignal, facts?: DerivedFacts): Promise<TypeBindingsAnswer>;
 }
