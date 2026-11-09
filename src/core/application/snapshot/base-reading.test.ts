@@ -111,7 +111,7 @@ function derivedFacts(): DerivedFacts {
 
 test("the tokens stage reads one file once per read and a second read retains it", async () => {
   let calls = 0;
-  const reading: SourceReading = { status: "read", language: "typescript", tokens: [{ start: 1, end: 1, text: "const" }], imports: [], importOrder: "significant" };
+  const reading: SourceReading = { status: "read", language: "typescript", tokens: [{ start: 1, end: 1, text: "const", startOffset: 0, endOffset: 0 }], imports: [], importOrder: "significant" };
   const tokens: SourceTokens = { tokensOf: async () => (calls++, reading) };
   const facts = derivedFacts();
   const readings = createBaseReadings({ relations: {} as RelationExtractor, tokens });

@@ -22,10 +22,10 @@ export function createJavaTokens(createParser: () => Promise<JavaParser>): Sourc
       if (!parsed.ok) return { status: "unread", reason: "unparsed" };
       const tokens: Token[] = [];
       const imports: { start: number; end: number }[] = [];
-      const tokenOf = (text: string, first: Node, last: Node): Token => ({ start: first.startPosition.row + 1, end: last.endPosition.row + 1, text });
+      const tokenOf = (text: string, first: Node, last: Node): Token => ({ start: first.startPosition.row + 1, end: last.endPosition.row + 1, text, startOffset: first.startIndex, endOffset: last.endIndex });
       const sourceText = (first: Node, last: Node): string => file.content.slice(first.startIndex, last.endIndex);
       const visit = (node: Node): void => {
-        if (node.type === IMPORT_DECLARATION) imports.push({ start: node.startPosition.row + 1, end: node.endPosition.row + 1 });
+        if (node.type === IMPORT_DECLARATION) imports.push({ start: node.startIndex, end: node.endIndex });
         if (node.childCount === 0) {
           tokens.push(tokenOf(sourceText(node, node), node, node));
           return;

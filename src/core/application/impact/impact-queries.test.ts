@@ -56,7 +56,7 @@ function tokenReading(file: SourceFile, trivia: Readonly<Record<string, readonly
   return {
     status: "read" as const,
     language: "java" as const,
-    tokens: Array.from({ length: lines }, (_, index) => index + 1).filter((line) => !quiet.has(line)).map((line) => ({ start: line, end: line, text: `t${line}` })),
+    tokens: Array.from({ length: lines }, (_, index) => index + 1).filter((line) => !quiet.has(line)).map((line) => ({ start: line, end: line, text: `t${line}`, startOffset: 0, endOffset: 0 })),
     imports: [],
     importOrder: "insignificant" as const,
   };
@@ -2394,11 +2394,57 @@ test("impact answers settled and drops the seeds of a comment-only hunk", async 
 
 test("a Java doc comment is a token, so a hunk that edits it still seeds", async () => {
   const tokens: SourceTokens = {
-    tokensOf: async (file) => ({ ...COMMENT_READING, tokens: [{ start: 2, end: 2, text: file.content.includes("one") ? "/** one */" : "/** two */" }] }),
+    tokensOf: async (file) => ({ ...COMMENT_READING, tokens: [{ start: 2, end: 2, text: file.content.includes("one") ? "/** one */" : "/** two */", startOffset: 0, endOffset: 0 }] }),
   };
   const answer = fact(await commentSetup(tokens).ask());
   const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
 
   assert.equal(value.settled, undefined);
   assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["A"]);
+});
+
+/** A reading whose token per line is the line's own text, with the given lines trivia. */
+function lineReading(file: { path: string; content: string }, quietLines: readonly number[]) {
+  const lines = file.content.split("\n");
+  const quiet = new Set(quietLines);
+  return {
+    status: "read" as const,
+    language: file.path.endsWith(".ts") ? ("typescript" as const) : ("java" as const),
+    tokens: lines.flatMap((text, index) => (quiet.has(index + 1) || text === "" ? [] : [{ start: index + 1, end: index + 1, text, startOffset: 0, endOffset: 0 }])),
+    imports: [],
+    importOrder: file.path.endsWith(".ts") ? ("significant" as const) : ("insignificant" as const),
+  };
+}
+
+function mixedChange(file: string, base: string, head: string, nodes: FakeNode[], quietLines: readonly number[]) {
+  return setup({
+    changes: { ok: true, value: [change(file, { added: [{ start: 2, end: 3 }], hunks: [{ base: { start: 2, end: 3 }, head: { start: 2, end: 3 }, removedNames: [] }] })] },
+    nodes,
+    sources: [{ path: file, content: head }],
+    snapshotSources: { [HEAD]: [{ path: file, content: head }], [FORK]: [{ path: file, content: base }] },
+    exports: listingOf([file]),
+    sourceTokens: { tokensOf: async (source) => lineReading(source, quietLines) },
+  });
+}
+
+test("a comment change between members and a body change in one hunk select only the changed method", async () => {
+  const file = "src/C.java";
+  const base = ["class C {", "  // old", "  int f(){return 1;}", "  int g(){return 9;}", "}"].join("\n");
+  const head = ["class C {", "  // new", "  int f(){return 2;}", "  int g(){return 9;}", "}"].join("\n");
+  const nodes = [fakeNode("C", "class", file, 1, 5), fakeNode("f", "method", file, 3, 3), fakeNode("g", "method", file, 4, 4)];
+  const answer = fact(await mixedChange(file, base, head, nodes, [2]).ask());
+  const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
+
+  assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["f"]);
+});
+
+test("a JSDoc change inside a class and a body change in one hunk select only the changed method", async () => {
+  const file = "src/a.ts";
+  const base = ["class A {", "  /** old */", "  f(){ return 1; }", "  g(){ return 9; }", "}"].join("\n");
+  const head = ["class A {", "  /** new */", "  f(){ return 2; }", "  g(){ return 9; }", "}"].join("\n");
+  const nodes = [fakeNode("A", "class", file, 1, 5), fakeNode("f", "method", file, 3, 3), fakeNode("g", "method", file, 4, 4)];
+  const answer = fact(await mixedChange(file, base, head, nodes, [2]).ask());
+  const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
+
+  assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["f"]);
 });

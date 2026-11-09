@@ -17,7 +17,7 @@ function tokens(quiet: Readonly<Record<string, readonly number[]>>): SourceToken
     tokensOf: async (file): Promise<SourceReading> => {
       const lines = file.content.split("\n").length;
       const quietLines = new Set(quiet[file.path] ?? []);
-      return { status: "read", language: file.path.endsWith(".ts") ? "typescript" : "java", tokens: Array.from({ length: lines }, (_, index) => index + 1).filter((line) => !quietLines.has(line)).map((line) => ({ start: line, end: line, text: `t${line}` })), imports: [], importOrder: file.path.endsWith(".ts") ? "significant" : "insignificant" };
+      return { status: "read", language: file.path.endsWith(".ts") ? "typescript" : "java", tokens: Array.from({ length: lines }, (_, index) => index + 1).filter((line) => !quietLines.has(line)).map((line) => ({ start: line, end: line, text: `t${line}`, startOffset: 0, endOffset: 0 })), imports: [], importOrder: file.path.endsWith(".ts") ? "significant" : "insignificant" };
     },
   };
 }

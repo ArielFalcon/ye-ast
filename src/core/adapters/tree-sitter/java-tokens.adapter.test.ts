@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { importTokensOf, tokenMultiset, tokenTexts } from "../../domain/change/token-lines.ts";
+import { importDeclarationMultiset, tokenTexts, tokensOutsideImports } from "../../domain/change/token-lines.ts";
 import type { SourceReading, TokenReading } from "../../domain/change/source-tokens.ts";
 import { createJavaParser } from "./java-parser.adapter.ts";
 import { createJavaTokens } from "./java-tokens.adapter.ts";
@@ -47,8 +47,15 @@ test("two swapped imports keep the file's import multiset while their sequence d
   const base = await reading(["import a.B;", "import a.C;", "class A {}"]);
   const head = await reading(["import a.C;", "import a.B;", "class A {}"]);
   assert.notDeepEqual(tokenTexts(head.tokens), tokenTexts(base.tokens));
-  assert.deepEqual(tokenMultiset(importTokensOf(head)), tokenMultiset(importTokensOf(base)));
-  assert.deepEqual(head.imports, [{ start: 1, end: 1 }, { start: 2, end: 2 }]);
+  assert.deepEqual(importDeclarationMultiset(head), importDeclarationMultiset(base));
+  assert.deepEqual(head.imports.map(({ start, end }) => ["import a.C;", "import a.B;", "class A {}"].join("\n").slice(start, end)), ["import a.C;", "import a.B;"]);
+});
+
+test("an import declaration's span ends before code that shares its line", async () => {
+  const content = "import java.util.List; class C { int x=1; }";
+  const held = await reading([content]);
+  assert.deepEqual(held.imports.map(({ start, end }) => content.slice(start, end)), ["import java.util.List;"]);
+  assert.deepEqual(tokensOutsideImports(held, { start: 1, end: 1 }).map(({ text }) => text), ["class", "C", "{", "int", "x", "=", "1", ";", "}"]);
 });
 
 test("a token after an astral character keeps its own spelling", async () => {

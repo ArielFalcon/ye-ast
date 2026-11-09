@@ -6,8 +6,10 @@ import { blastRadius, type BlastRadius } from "../../domain/change/blast-radius.
 import { isReadableFile, kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import { selectChange } from "../../domain/change/change-selection.ts";
 import { resourceImpact, resourceOwners } from "../../domain/change/resource-impact.ts";
-import type { FileChange, Hunk } from "../../domain/change/diff-reader.ts";
+import type { FileChange, Hunk, LineRange } from "../../domain/change/diff-reader.ts";
 import { settledOf } from "../../domain/change/hunk-settling.ts";
+import type { TokenReading } from "../../domain/change/source-tokens.ts";
+import { triviaLinesOf } from "../../domain/change/token-lines.ts";
 import type { SettledHunkChange } from "../../domain/impact/impact-fact.ts";
 import type { ComponentRef } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
@@ -500,6 +502,10 @@ async function settledHunks(
     }
     const base = await readings.tokensOf(baseSource, basePrepared);
     const head = await readings.tokensOf(headSource, headPrepared);
+    if (head.status !== "read") {
+      changes.push(file);
+      continue;
+    }
     const left = new Set<Hunk>();
     for (const hunk of file.hunks) {
       const outcome = settledOf(base, head, hunk);
@@ -513,29 +519,52 @@ async function settledHunks(
         reason: outcome.settled,
       });
     }
-    changes.push(left.size === 0 ? file : settleFile(file, left));
+    changes.push(settleFile(file, left, head, headSource.content));
   }
   settled.sort((a, b) => compareText(a.file, b.file) || firstLine(a) - firstLine(b));
   return { changes, settled };
 }
 
-/** `file` without the settled hunks' head lines, removals and removed names; the line ranges stay owned by `hunks`. */
-function settleFile(file: FileChange, left: ReadonlySet<Hunk>): FileChange {
+/**
+ * `file` without the settled hunks and without the lines of an unsettled hunk that hold no token (ADR-0043 decisions 1
+ * and 3); a hunk left with no such line seeds as a removal at its place, and the removal rule keeps the base side.
+ */
+function settleFile(file: FileChange, left: ReadonlySet<Hunk>, head: TokenReading, content: string): FileChange {
+  const quiet = triviaLinesOf(head, content.split("\n").length);
   const removedNames = new Set([...left].flatMap((hunk) => hunk.removedNames));
-  let removal = 0;
+  const added: LineRange[] = [];
   const removals: { after: number }[] = [];
+  let removal = 0;
   for (const hunk of file.hunks) {
-    if (hunk.head !== undefined) continue;
-    const place = file.removals[removal];
-    removal += 1;
-    if (!left.has(hunk) && place !== undefined) removals.push(place);
+    const place = hunk.head === undefined ? file.removals[removal] : undefined;
+    if (hunk.head === undefined) removal += 1;
+    if (left.has(hunk)) continue;
+    if (hunk.head === undefined) {
+      if (place !== undefined) removals.push(place);
+      continue;
+    }
+    const ranges = tokenLinesIn(hunk.head, quiet);
+    if (ranges.length === 0) removals.push({ after: hunk.head.start - 1 });
+    else added.push(...ranges);
   }
   return {
     ...file,
-    added: file.hunks.flatMap((hunk) => (left.has(hunk) || hunk.head === undefined ? [] : [hunk.head])),
+    added,
     removals,
     removedNames: removedNames.size === 0 ? file.removedNames : file.removedNames.filter((name) => !removedNames.has(name)),
   };
+}
+
+/** The runs of `range` whose lines hold a token. */
+function tokenLinesIn(range: LineRange, quiet: ReadonlySet<number>): LineRange[] {
+  const runs: LineRange[] = [];
+  for (let line = range.start; line <= range.end; line += 1) {
+    if (quiet.has(line)) continue;
+    const last = runs.at(-1);
+    if (last !== undefined && last.end === line - 1) last.end = line;
+    else runs.push({ start: line, end: line });
+  }
+  return runs;
 }
 
 function firstLine(change: SettledHunkChange): number {
