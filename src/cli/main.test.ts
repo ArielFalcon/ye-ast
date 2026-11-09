@@ -492,6 +492,13 @@ test("callers answers an unknown symbol with the query code, one line per entry 
   ]);
 });
 
+test("trace answers an entrypoint the map does not hold with the names of that kind on stderr, the one shared sentence", async () => {
+  const { io, deps } = setupTrace({ ok: false, fault: { kind: "unknown-entrypoint", detail: "no entrypoint", entries: [{ kind: "http-route", name: "POST /orders", candidates: ["GET /orders"] }, { kind: "ui-route", name: "/x", candidates: [] }] } });
+  assert.equal(await run(["trace", ".", "--entrypoint", "http-route:POST /orders"], io, deps), EXIT_CODE.queryFailed);
+  assert.deepEqual(io.stdout, []);
+  assert.deepEqual(io.stderr.slice(1), ["  - http-route:POST /orders: the map's http-route names: GET /orders", "  - ui-route:/x: the map holds no ui-route"]);
+});
+
 test("trace asks for symbols and line ranges with the depth and expansions bounds and prints the fact", async () => {
   const { io, deps, requests, signal } = setupTrace();
   assert.equal(await run(["trace", "--revision", "v1", "--depth", "2", "--expansions", "9", "some/checkout", "src/A.java:run", "src/B.java:4-8"], io, deps), EXIT_CODE.ok);
