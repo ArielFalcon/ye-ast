@@ -48,6 +48,18 @@ function change(path: string, overrides: Partial<FileChange> = {}): FileChange {
   return { ...change, hunks: change.hunks.length === 0 ? change.added.map((range) => ({ head: range, removedNames: [] })) : change.hunks };
 }
 
+function tokenReading(file: SourceFile, trivia: Readonly<Record<string, readonly number[]>>) {
+  const quiet = new Set(trivia[file.path] ?? []);
+  const lines = file.content.split("\n").length;
+  return {
+    status: "read" as const,
+    language: "java" as const,
+    tokens: Array.from({ length: lines }, (_, index) => index + 1).filter((line) => !quiet.has(line)).map((line) => ({ start: line, end: line, text: `t${line}` })),
+    imports: [],
+    importOrder: "insignificant" as const,
+  };
+}
+
 /** The head's snapshot listing, holding exactly `paths`, so a target names a file the snapshot has. */
 function listingOf(paths: readonly string[]): NonNullable<Options["exports"]> {
   return { [HEAD]: { files: paths.map((path) => ({ path, blob: "1", written: true })), skipped: [] } };
@@ -186,7 +198,7 @@ function setup(options: Options = {}) {
     ...(options.live && { live: options.live.deps }),
     ...(options.declarationEvidence && { declarationEvidence: options.declarationEvidence }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
-    ...(options.trivia && { sourceTrivia: { triviaLines: async (file: SourceFile) => new Set(options.trivia?.[file.path] ?? []) } }),
+    ...(options.trivia && { sourceTokens: { tokensOf: async (file: SourceFile) => tokenReading(file, options.trivia!) } }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
     ...(options.typeBindings && { typeBindings: options.typeBindings.bindings, declaredOutputs: () => options.typeBindings!.outputs }),

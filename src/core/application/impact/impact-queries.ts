@@ -1,6 +1,6 @@
 import { compareText } from "../../domain/shared/code-node.ts";
 import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
-import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
+import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 import type { DeclarationEvidenceReader } from "../../ports/declaration-evidence.port.ts";
 import { blastRadius, type BlastRadius } from "../../domain/change/blast-radius.ts";
 import { isReadableFile, kindOfChangedFile } from "../../domain/change/changed-file.ts";
@@ -91,7 +91,7 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
    */
   memberNames?: DeclaredMemberNamesReader;
   /** Tells the trivia lines of a requested range apart; without it every line of a range is code. */
-  sourceTrivia?: SourceTrivia;
+  sourceTokens?: SourceTokens;
   moduleDependencies?: ModuleDependenciesReader;
   /**
    * The reader of every language's module statements, whose bindings prove the declaration a graph edge's root reaches
@@ -112,7 +112,7 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
 
 type Answer = Result<Fact<ImpactValue>, OfChangeFault>;
 
-const NO_TRIVIA: SourceTrivia = { triviaLines: async () => new Set() };
+const NO_TOKENS: SourceTokens = { tokensOf: async () => ({ status: "unread", reason: "capability-absent" }) };
 
 
 export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
@@ -192,7 +192,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         try {
           const snapshot = snapshotFiles(store, listing);
           const unknown = missingTargets(store, requested);
-          const ranges = await requestedRanges(store, changes, headTree.sources, deps.sourceTrivia ?? NO_TRIVIA, snapshot);
+          const ranges = await requestedRanges(store, changes, headTree.sources, deps.sourceTokens ?? NO_TOKENS, snapshot);
           if (signal?.aborted) return ABORTED;
           const missing = snapshot.describe([...unknown, ...ranges.uncovered]);
           if (missing.length > 0) {

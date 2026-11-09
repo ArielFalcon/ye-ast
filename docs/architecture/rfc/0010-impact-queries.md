@@ -72,7 +72,8 @@ replaces `head` or `revision` under `trusted` only ([Live head](#live-head-slice
 `Seed.basis` is `lines`, `top-level` or `resource`, or `requested` for a symbol `impact.callers` was asked for by name.
 A requested line range seeds through the rows above, as the added lines of a file, except that a line of the range no
 symbol holds and no code is on (blank, a comment) selects nothing: a range across the gap between two declarations
-seeds those two, not the file's top-level symbols. A range left with no line at all (wholly past the end of its file,
+seeds those two, not the file's top-level symbols. The trivia set comes from the B11 tokens stage of the read
+([ADR-0043](../adr/0043-a-change-seeds-only-where-its-tokens-differ.md) decision 6), not from a per-family reader. A range left with no line at all (wholly past the end of its file,
 or only such lines) selects no declaration and is the `unknown-symbol` fault below, never an empty answer. A requested symbol seeds every
 seedable node of its file whose dotted path in the file's `contains` tree ends with it at whole names (a bare name at
 any depth, `A.m` only an `m` that `A` contains directly), so overloads all seed; a symbol that is both requested

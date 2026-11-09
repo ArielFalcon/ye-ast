@@ -25,6 +25,18 @@ type Origin = Finding<ImportOrigin> & { occurrence?: true };
 
 const written = (...paths: string[][]): ReplacedRoots => ({ paths, globalObjects: new Set(["globalThis", "window"]), packages: new Set() });
 
+function tokenReading(file: { path: string; content: string }, trivia: Readonly<Record<string, readonly number[]>>) {
+  const quiet = new Set(trivia[file.path] ?? []);
+  const lines = file.content.split("\n").length;
+  return {
+    status: "read" as const,
+    language: "typescript" as const,
+    tokens: Array.from({ length: lines }, (_, index) => index + 1).filter((line) => !quiet.has(line)).map((line) => ({ start: line, end: line, text: `t${line}` })),
+    imports: [],
+    importOrder: "significant" as const,
+  };
+}
+
 interface Options {
   workspace?: TraceQueriesDeps["workspace"];
   /** Files the export holds and the index did not; none by default. */
@@ -120,7 +132,7 @@ function setup(options: Options) {
       index: async () => (options.indexFails ? { ok: false, fault: { kind: "index-failed", detail: "broken" } } : { ok: true, value: { ...SUMMARY, filesNotIndexed: options.notIndexed ?? [] } }),
       open: () => ({ ok: true, value: store }),
     },
-    sourceTrivia: { triviaLines: async (file: { path: string }) => (options.onTrivia?.(file.path), new Set(options.trivia?.[file.path] ?? [])) },
+    sourceTokens: { tokensOf: async (file: { path: string; content: string }) => (options.onTrivia?.(file.path), tokenReading(file, options.trivia ?? {})) },
     memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: options.callables?.[file.path] ?? [], receiverBindings: options.receiverBindings?.[file.path] ?? [], ...(options.syntaxCalls?.[file.path] === undefined ? {} : { calls: options.syntaxCalls[file.path] }), functionValues: options.functionValues?.[file.path] ?? [] }) },
     importOrigins: () => ({
       replacedRoots: async () => options.replaced ?? written(),

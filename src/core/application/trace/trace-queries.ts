@@ -7,7 +7,8 @@ import { callsByOwner } from "../navigation/reconciled-calls.ts";
 import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
-import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
+import type { SourceReading } from "../../domain/change/source-tokens.ts";
+import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 import type { ComponentRef } from "../../domain/change/seeds.ts";
 import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
@@ -26,7 +27,7 @@ import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { EntrypointTarget, TraceFault, TraceQueries, TraceTarget, UnknownEntrypointFault } from "../../ports/trace-queries.port.ts";
-import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, triviaOncePerFile, type RootSelection } from "../navigation/root-selection.ts";
+import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, type RootSelection } from "../navigation/root-selection.ts";
 import { snapshotFiles, type SnapshotFiles } from "../navigation/snapshot-files.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
 import { NOTHING_DECLARED } from "../navigation/edge-targets.ts";
@@ -56,7 +57,7 @@ export interface TraceQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, 
   callSites: PlacedCallSiteReader;
   dataEffects?: DataEffectReader;
   /** Tells the trivia lines of a requested range apart, so they select nothing. */
-  sourceTrivia: SourceTrivia;
+  sourceTokens: SourceTokens;
   /** Version of each engine every operation runs on, by package name. */
   engines: Readonly<Record<string, string>>;
 }
@@ -125,7 +126,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         const { store, summary } = index;
         try {
           const snapshot = snapshotFiles(store, head.tree.export.files.map(({ path }) => path));
-          const trivia = triviaOncePerFile(deps.sourceTrivia);
+          const tokens = tokensOncePerFile(deps.sourceTokens);
           const reading = readings.of(
             { tree: head.tree, prepared: head.prepared, store, digest: index.digest, snapshot: head.base(content).snapshot, request },
             { originPaths: head.tree.export.files.map(({ path }) => path).filter(head.selected), inScope: head.selected },
@@ -150,7 +151,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             selection: isEntrypointTarget(target)
               ? handlerRoots(store, handlers.byTarget.get(traceTargetKey(target)) ?? [], isRoot)
               : "start" in target
-                ? await rangeRoots(store, rangeChanges([target]), head.tree.sources, trivia, snapshot, isRoot)
+                ? await rangeRoots(store, rangeChanges([target]), head.tree.sources, tokens, snapshot, isRoot)
                 : selectRoots(store, [], [target], NO_COMPONENTS, [], isRoot),
           })));
           const missing = snapshot.describe(selections.flatMap(({ selection }) => selection.missing));
@@ -276,7 +277,22 @@ async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file:
   return new Map([...byName].map(([name, files]) => [name, files.sort(compareText)]));
 }
 
-async function rangeRoots(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], trivia: SourceTrivia, snapshot: SnapshotFiles, isRoot: (symbol: GraphSymbol) => boolean): Promise<RootSelection> {
-  const ranges = await requestedRanges(store, changes, sources, trivia, snapshot);
+async function rangeRoots(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], tokens: SourceTokens, snapshot: SnapshotFiles, isRoot: (symbol: GraphSymbol) => boolean): Promise<RootSelection> {
+  const ranges = await requestedRanges(store, changes, sources, tokens, snapshot);
   return selectRoots(store, ranges.changes, [], NO_COMPONENTS, ranges.uncovered, isRoot);
+}
+
+/** Asks for each file's tokens once, for the life of one query. */
+function tokensOncePerFile(tokens: SourceTokens): SourceTokens {
+  const read = new Map<string, Promise<SourceReading>>();
+  return {
+    tokensOf: (file) => {
+      let reading = read.get(file.path);
+      if (reading === undefined) {
+        reading = tokens.tokensOf(file);
+        read.set(file.path, reading);
+      }
+      return reading;
+    },
+  };
 }

@@ -207,7 +207,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   let javaImportsReader: Promise<ModuleDependenciesReader> | undefined;
   const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => (await (javaImportsReader ??= javaParser().then(createJavaImportsReader))).extract(sources, options) }, { extract: "java-imports" });
   const merged = routedReaders(composeLanguagePacks(javaParser, { typescript: moduleDependencies, java: javaImports }));
-  const { sourceTrivia, modules: moduleReader } = merged;
+  const { sourceTokens, modules: moduleReader } = merged;
   const memberNames = measurement === undefined ? merged.memberNames : measuredTalliedStages(merged.memberNames, { memberNames: "member-names" }, measurement);
   const importOrigins = (sources: readonly SourceFile[], paths?: readonly string[], facts?: DerivedFacts) => {
     const reader = merged.importOrigins(sources, paths, facts);
@@ -237,7 +237,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     ...trust,
     importOrigins,
     memberNames,
-    sourceTrivia,
+    sourceTokens,
     moduleDependencies,
     moduleReader,
     declarationEvidence: createDeclarationEvidenceReader(),
@@ -330,7 +330,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     ...trust,
     importOrigins,
     moduleReader,
-    sourceTrivia,
+    sourceTokens,
     memberNames,
     relations: impactDeps.relations,
     callSites: placedCallSites,

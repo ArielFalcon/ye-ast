@@ -2,7 +2,7 @@ import type { LanguageProfile } from "../domain/languages/profiles.ts";
 import type { DeclaredMemberNamesReader } from "./declared-member-names.port.ts";
 import type { ImportOriginsReader } from "./import-origins.port.ts";
 import type { ModuleDependenciesReader } from "./module-dependencies.port.ts";
-import type { SourceTrivia } from "./source-trivia.port.ts";
+import type { SourceTokens } from "./source-tokens.port.ts";
 
 /**
  * One language's readers of the stage contracts two languages implement (ADR-0045 decision 12), built by composition from
@@ -10,7 +10,7 @@ import type { SourceTrivia } from "./source-trivia.port.ts";
  * so a reader never tells its language's files apart itself.
  */
 /** The stage contracts a pack may declare it cannot implement: the line answers each site `capability-absent` for it. */
-export type AbsentCapability = "dispatchTargets" | "receiverMethods";
+export type AbsentCapability = "dispatchTargets" | "receiverMethods" | "tokens";
 
 export interface LanguagePack {
   profile: LanguageProfile;
@@ -22,5 +22,6 @@ export interface LanguagePack {
   /** Over the pack's sources, with every path of the snapshot, which its proofs may read. */
   origins: ImportOriginsReader;
   modules: ModuleDependenciesReader;
-  trivia: SourceTrivia;
+  /** The B11 tokens of its sources; absent where the pack cannot tokenize them (ADR-0043 decision 9). */
+  tokens?: SourceTokens;
 }
