@@ -2,25 +2,31 @@ import { sourceUnreadable } from "../../domain/contracts/consumer-flow.ts";
 import type { Hypothesis } from "../../domain/contracts/hypothesis.ts";
 import { provenanceOf, sortedEngines } from "../../domain/shared/fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
+import { nameTail } from "../../domain/shared/call-place.ts";
+import { followedEdge } from "../../domain/impact/edge-policy.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { callPlaceOf, compareCallPlaces, httpTargetOf } from "../../domain/topology/call-site.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import { excludedFrom, matchCallSite, matchDeclaredOperation, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import type { AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
-import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
-import type { InboundOccurrences } from "../impact/inbound-edges.ts";
+import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
+import type { DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
+import type { InboundOccurrence, InboundOccurrences } from "../impact/inbound-edges.ts";
 import type { ConsumerFlowReader } from "../../ports/consumer-flow.port.ts";
 import type { RequestOriginReader } from "../../ports/request-origins.port.ts";
 import type { ConsumerSession, ConsumerSources, PreparedWorkspace, ServingOperation } from "../../ports/consumer-sources.port.ts";
 import type { ConsumerTemplateReader } from "../../ports/consumer-template.port.ts";
 import type { TemplateFlowReader } from "../../ports/consumer-template-flow.port.ts";
+import type { RevisionSources } from "../../ports/revision-sources.port.ts";
+import type { TypeBindings } from "../../ports/type-bindings.port.ts";
 import type { WorkspaceFault, WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import { inboundEdgesOf, receiverCorrectionsOf } from "../impact/inbound-origins.ts";
-import { createBaseReadings } from "../snapshot/base-reading.ts";
+import { createBaseReadings, type BaseReading } from "../snapshot/base-reading.ts";
+import type { EdgeTargets } from "../navigation/edge-targets.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
@@ -54,6 +60,12 @@ export interface ConsumerSourcesDeps {
   memberNames?: DeclaredMemberNamesReader;
   /** The module statements of every language that bind a receiver's declared type to its declaration. */
   modules?: ModuleDependenciesReader;
+  /** What the type checker binds over the declared build outputs; without it no call on a value receiver is typed. */
+  typeBindings?: TypeBindings;
+  /** The lockfiles and declaration files a commit's typed pass reads beside its sources. */
+  checkerInputs?: RevisionSources;
+  /** The build outputs a host declared for a repository at a root. */
+  declaredOutputs?: (repo: string) => readonly DeclaredBuildOutput[] | undefined;
 }
 
 type ReadPlan = Extract<WorkspaceSnapshotContext["plans"][number], { kind: "read" }>;
@@ -64,6 +76,8 @@ interface Reading {
   templates: ConsumerTemplateReader;
   graph: CodeGraphReader | undefined;
   inbound: InboundOccurrences | undefined;
+  reading: BaseReading | undefined;
+  targets: EdgeTargets | undefined;
 }
 
 /**
@@ -103,10 +117,13 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
               : line.of(
                   { tree: loaded.value, prepared: prepared.value, store: indexed.store, digest: indexed.digest, snapshot: { repo: plan.at.repoId, kind: "sha", sha: plan.at.revision }, request: { repo: plan.at.source, scope: context.scope, ...(context.signal === undefined ? {} : { signal: context.signal }) } },
                 );
+            const typed = await reading?.typed();
+            if (typed === "aborted") return ABORTED;
             const origins = await reading?.relations();
             const proofs = await reading?.referenceProofs();
-            const targets = reading?.edgeTargets();
-            const corrections = indexed === "unavailable" || origins === undefined || targets === undefined ? undefined : await receiverCorrectionsOf(indexed.store, targets, origins, sources.map((file) => file.path), context.signal);
+            const targets = reading?.edgeTargets(typed?.typed);
+            const contradictions = reading === undefined || targets === undefined ? undefined : reading.contradictedCalls(targets);
+            const corrections = indexed === "unavailable" || origins === undefined || targets === undefined ? undefined : await receiverCorrectionsOf(indexed.store, targets, origins, sources.map((file) => file.path), context.signal, contradictions);
             if (context.signal?.aborted) return ABORTED;
             return {
               ok: true,
@@ -116,6 +133,8 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
                 templates: await createConsumerTemplateReader({ metadata: deps.metadata, flow: deps.templateFlow }, sources),
                 graph: indexed === "unavailable" ? undefined : indexed.store,
                 inbound: indexed === "unavailable" || origins === undefined ? undefined : inboundEdgesOf(indexed.store, origins, proofs, corrections),
+                reading,
+                targets,
               },
             };
           };
@@ -132,6 +151,26 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             return reading;
           };
 
+          /**
+           * The written calls the index records nothing of that reach the declarations the join's links write in, one pass
+           * over the repositories the hypothesis reached (ADR-0045 L2): a contract answer is a frontier, not a transitive
+           * walk.
+           */
+          const recoveredInto = async (reached: ReadonlyMap<string, Reading>, links: readonly Link[]): Promise<ReadonlyMap<string, readonly InboundOccurrence[]>> => {
+            const found = new Map<string, InboundOccurrence[]>();
+            for (const [repo, reading] of reached) {
+              const reverse = reading.reading === undefined || reading.targets === undefined ? undefined : reading.reading.reverseCalls(reading.targets);
+              if (reverse === undefined) continue;
+              const nodes = [...new Map(links.filter((link) => link.from.repo === repo).flatMap((link) => declarationOf(reading.graph, link.from)).map((node) => [node.id, node])).values()];
+              if (nodes.length === 0) continue;
+              for (const { edge, source, target } of (await reverse.into(nodes)).edges) {
+                const occurrence: InboundOccurrence = { from: source, basis: "call", ...followedEdge(edge, "proven"), provenance: edge.provenance, ...(edge.line === null ? {} : { line: edge.line }) };
+                found.set(target.id, [...(found.get(target.id) ?? []), occurrence]);
+              }
+            }
+            return found;
+          };
+
           const session = async (hypothesis: Hypothesis): Promise<Result<ConsumerSession, WorkspaceFault>> => {
             const operation = httpRouteName({ method: hypothesis.method, path: hypothesis.path });
             const join = (workspaceJoin ??= joinHttpCalls(fact.value.repositories, entrypointsOfWorkspace(), fact.value.workspace.gateways));
@@ -145,6 +184,13 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
               reached.set(plan.at.repoId, reading.value);
             }
 
+            const recovered = await recoveredInto(reached, join.links.filter((link) => isCallOf(link, operation)));
+            const inboundOf = (reading: Reading | undefined): InboundOccurrences | undefined => {
+              if (reading?.inbound === undefined) return undefined;
+              const inbound = reading.inbound;
+              return { occurrencesOf: (node) => [...inbound.occurrencesOf(node), ...(recovered.get(node.id) ?? [])] };
+            };
+
             return {
               ok: true,
               value: {
@@ -154,11 +200,11 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
                 ambiguousCalls: join.ambiguousCalls.filter((call) => call.reaching.has(operation)).map(({ from, repos }) => ({ from, repos })),
                 callers: ({ repo, ...declaration }) => {
                   const reading = reached.get(repo);
-                  return callersOfFunction(reading?.graph, reading?.inbound, declaration);
+                  return callersOfFunction(reading?.graph, inboundOf(reading), declaration);
                 },
                 memberOccurrences: ({ repo, ...member }) => {
                   const reading = reached.get(repo);
-                  return occurrencesOfMember(reading?.graph, reading?.inbound, member);
+                  return occurrencesOfMember(reading?.graph, inboundOf(reading), member);
                 },
                 flow: { follow: (carrier) => reached.get(carrier.site.repo)?.flow.follow(carrier) ?? sourceUnreadable(carrier.site) },
                 templates: { follow: (carrier) => reached.get(carrier.site.repo)?.templates.follow(carrier) ?? sourceUnreadable(carrier.site) },
@@ -243,6 +289,16 @@ function servingOperation(declared: { method: HttpMethod; path: string }, entryp
   if (matched === undefined) return { kind: "unserved" };
   if ("ambiguous" in matched) return { kind: "ambiguous", repos: matched.ambiguous };
   return { kind: "served", method: matched.route.method, path: matched.route.path };
+}
+
+/** The declaration a call place encloses, as the graph places it: its simple name at its line. */
+function declarationOf(graph: CodeGraphReader | undefined, from: Pick<Link["from"], "file" | "line" | "symbol">): GraphSymbol[] {
+  if (graph === undefined) return [];
+  const found = graph
+    .symbolsInFiles([from.file])
+    .filter((symbol) => symbol.name === nameTail(from.symbol) && symbol.startLine <= from.line && from.line <= symbol.endLine)
+    .sort((a, b) => a.endLine - a.startLine - (b.endLine - b.startLine));
+  return found.length === 0 ? [] : [found[0]!];
 }
 
 function reachedRouteName(link: Link): string | undefined {
