@@ -1,3 +1,4 @@
+import { EVERYTHING } from "../core/domain/shared/question.ts";
 import { test } from "node:test";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
@@ -33,7 +34,7 @@ const BASE: FactBase = {
 };
 
 /** A complete impact fact: the MCP surface renders what the others serialize, so the fake must be a real fact. */
-const FACT = impactFact(BASE, { mergeBase: "b".repeat(40), seeds: [], changedEntrypoints: [], symbols: [], entrypoints: [] }, []);
+const FACT = impactFact(BASE, { mergeBase: "b".repeat(40), seeds: [], changedEntrypoints: [], symbols: [], entrypoints: [] }, [], EVERYTHING);
 
 const redaction: Redaction = {
   redact: (text) => text,

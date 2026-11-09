@@ -5,7 +5,8 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
 import type { Evidence, Fact } from "../../domain/shared/fact.ts";
 import { fileCut, unheldCut } from "../../domain/impact/impact-cuts.ts";
-import { sortedEngines, withCuts } from "../../domain/shared/fact.ts";
+import { sortedEngines } from "../../domain/shared/fact.ts";
+import { withCuts, type Asserted } from "../../domain/shared/question.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { OutlineValue } from "../../domain/outline/outline-fact.ts";
 import type { OutlineFault, OutlineQueries, OutlineSelector } from "../../ports/outline-queries.port.ts";
@@ -49,9 +50,10 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
         const content = contentFingerprint(headTree.export);
         const outside = files.filter((file) => !head.selected(file));
         if (outside.length > 0) return { ok: true, value: { ...head.base(content), evidence: outside.map((path): Evidence => ({ path, line: 1 })), status: "unknown", reason: "out-of-scope" } };
+        const asserted: Asserted = { kind: "local", files };
         const fixed = [...exportCuts(headTree.export), ...files.filter((file) => !isReadableFile(file)).map((file) => fileCut("no-extractor", file, "language"))];
         const covered = files.filter(isReadableFile);
-        if (covered.length === 0) return { ok: true, value: withCuts(head.base(content), focus === undefined ? { files: [], unheld: [] } : { focus: [], unheld: [] }, fixed) };
+        if (covered.length === 0) return { ok: true, value: withCuts(head.base(content), focus === undefined ? { files: [], unheld: [] } : { focus: [], unheld: [] }, fixed, asserted) };
 
         const coveredFiles = new Set(covered);
         const unmodelled = (await deps.unmodelled?.extract(sources.filter(({ path }) => coveredFiles.has(path)))) ?? [];
@@ -79,7 +81,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
             ...read.unheld.map((file) => unheldCut(file, held)),
             ...unmodelled.map((file) => fileCut("no-extractor", file, "unmodelled")),
           ];
-          return { ok: true, value: withCuts(head.base(content, true), read, cuts) };
+          return { ok: true, value: withCuts(head.base(content, true), read, cuts, asserted) };
         } finally {
           store.close();
         }

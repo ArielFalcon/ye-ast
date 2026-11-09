@@ -180,8 +180,11 @@ export type CutReach =
   | { kind: "callers-of"; declarations: readonly string[] }
   /** A call at this place inside a walked body. */
   | { kind: "call-at"; place: string }
-  /** Edges from an importing file through these specifiers; `package` when the resolver classified one, absent when it did not. */
-  | { kind: "module"; importer: string; specifiers: readonly { specifier: string; package?: boolean }[] }
+  /**
+   * Edges from an importing file through these specifiers; `package` when the resolver classified one, absent when it did
+   * not; `namesNoFile` when the resolver applied its rules over the snapshot and they name no file of it.
+   */
+  | { kind: "module"; importer: string; specifiers: readonly { specifier: string; package?: boolean; namesNoFile?: true }[] }
   /** A call site as the topology extractor read it. */
   | { kind: "call-site"; transport: string; method?: string; template?: string };
 
@@ -332,7 +335,7 @@ function standsOver(a: Cut, b: Cut): boolean {
  * situations cut the same place, the one that could hide more stands, so no order of emission narrows what a place could
  * hide; between equal reaches, the reason and then the sub-reason that come first in their closed order.
  */
-export function withCuts<T>(base: FactBase, value: T, cuts: readonly Cut[]): CompleteFact<T> | PartialFact<T> {
+export function factOfCuts<T>(base: FactBase, value: T, cuts: readonly Cut[]): CompleteFact<T> | PartialFact<T> {
   const byPlace = new Map<string, Cut>();
   for (const cut of cuts) {
     const key = placeKey(cut);

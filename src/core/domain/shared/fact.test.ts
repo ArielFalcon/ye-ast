@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { composeSections, SCHEMA, withCuts, type Cut, type Fact, type FactBase } from "./fact.ts";
+import { composeSections, factOfCuts, SCHEMA, type Cut, type Fact, type FactBase } from "./fact.ts";
 
 function buildBase(): FactBase {
   return {
@@ -58,11 +58,11 @@ test("two cuts at one place leave the one with the wider reach, whatever order t
   const wide: Cut = { ...narrow, reason: "relation-unread", reach: { kind: "anything" } };
 
   for (const cuts of [[narrow, file, wide], [wide, file, narrow], [file, narrow, wide]]) {
-    const fact = withCuts(buildBase(), [], cuts);
+    const fact = factOfCuts(buildBase(), [], cuts);
     assert.deepEqual(fact.status === "partial" && fact.cuts, [wide]);
   }
   for (const cuts of [[narrow, file], [file, narrow]]) {
-    const fact = withCuts(buildBase(), [], cuts);
+    const fact = factOfCuts(buildBase(), [], cuts);
     assert.deepEqual(fact.status === "partial" && fact.cuts, [file]);
   }
 });
@@ -75,11 +75,11 @@ test("two cuts at one place with reaches of equal width leave the one whose reas
   const absent: Cut = { ...unproven, subReason: "capability-absent" };
 
   for (const cuts of [[noSymbols, elsewhere, unmodelled], [unmodelled, elsewhere, noSymbols]]) {
-    const fact = withCuts(buildBase(), [], cuts);
+    const fact = factOfCuts(buildBase(), [], cuts);
     assert.deepEqual(fact.status === "partial" && fact.cuts, [noSymbols, elsewhere]);
   }
   for (const cuts of [[unproven, absent], [absent, unproven]]) {
-    const fact = withCuts(buildBase(), [], cuts);
+    const fact = factOfCuts(buildBase(), [], cuts);
     assert.deepEqual(fact.status === "partial" && fact.cuts, [unproven]);
   }
 });

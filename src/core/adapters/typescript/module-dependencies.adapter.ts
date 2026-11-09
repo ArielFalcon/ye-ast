@@ -109,20 +109,21 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
         if (unsupported) unread.push({ file, reason: "no-extractor" });
       }
 
-      const resolutions = new Map<string, Promise<ModuleTarget>>();
-      const resolve = (from: string, specifier: string): Promise<ModuleTarget> => {
+      const resolutions = new Map<string, Promise<{ target: ModuleTarget; namesNoFile?: true }>>();
+      const resolved = (from: string, specifier: string): Promise<{ target: ModuleTarget; namesNoFile?: true }> => {
         const key = JSON.stringify([from, specifier]);
         let resolution = resolutions.get(key);
         if (resolution === undefined) {
-          resolution = resolver.resolve(from, specifier).then((result): ModuleTarget => {
-            if ("file" in result) return { kind: "repository", file: result.file };
-            if ("external" in result) return { kind: "external", module: packageOf(specifier) ?? specifier };
-            return { kind: "unresolved", reason: result.unresolved };
+          resolution = resolver.resolve(from, specifier).then((result) => {
+            if ("file" in result) return { target: { kind: "repository", file: result.file } };
+            if ("external" in result) return { target: { kind: "external", module: packageOf(specifier) ?? specifier } };
+            return { target: { kind: "unresolved", reason: result.unresolved }, ...(result.namesNoFile === undefined ? {} : { namesNoFile: result.namesNoFile }) };
           });
           resolutions.set(key, resolution);
         }
         return resolution;
       };
+      const resolve = async (from: string, specifier: string): Promise<ModuleTarget> => (await resolved(from, specifier)).target;
       const defaults = new Map<string, string | undefined>();
       const defaultOf = (file: string): string | undefined => {
         if (!defaults.has(file)) {
@@ -131,7 +132,8 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
         return defaults.get(file);
       };
       const dependencies = await Promise.all(pending.map(async (dependency): Promise<ModuleDependency> => {
-        const target = await resolve(dependency.file, dependency.specifier);
+        const { target, namesNoFile } = await resolved(dependency.file, dependency.specifier);
+        if (namesNoFile !== undefined) return { ...dependency, target, namesNoFile };
         if (target.kind !== "repository" || !dependency.bindings.some(({ imported }) => imported === "default")) return { ...dependency, target };
         const exportedAs = defaultOf(target.file);
         return { ...dependency, target, bindings: dependency.bindings.map((binding) => binding.imported === "default" && exportedAs !== undefined ? { ...binding, exportedAs } : binding) };

@@ -1,8 +1,9 @@
+import { EVERYTHING, withCuts } from "../../domain/shared/question.ts";
 import type { ChangedEntrypoint } from "../../domain/impact/changed-entrypoints.ts";
 import type { ImpactValue, Seed } from "../../domain/impact/impact-fact.ts";
 import { parseHttpRouteName, type HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { Cut, Fact, FactBase, SnapshotRef } from "../../domain/shared/fact.ts";
-import { ANYTHING, incompleteSectionCuts, provenanceOf, withCuts } from "../../domain/shared/fact.ts";
+import { ANYTHING, incompleteSectionCuts, provenanceOf } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
@@ -434,7 +435,7 @@ function sectionOf(section: Fact<{ unresolved: readonly unknown[] }>, value: Rep
   ];
   const triggerWalk = value.reads.find(({ kind }) => kind === "trigger")?.fact;
   const base = compositeBase({ ...baseOf(section), evidence: section.evidence }, value.reads, {}, (text) => digest.of(text), triggerWalk?.inputs.declaredConfig ?? section.inputs.declaredConfig);
-  return withCuts(base, value, cuts);
+  return withCuts(base, value, cuts, EVERYTHING);
 }
 
 /** Complete only when every section is. */

@@ -35,6 +35,8 @@ interface Options {
   bindings?: Readonly<Record<string, RootBinding>>;
   /** The module statements the TypeScript reader answers. */
   dependencies?: readonly ModuleDependency[];
+  /** The written files the index could not hold. */
+  notIndexed?: readonly string[];
 }
 
 function setup(options: Options = {}) {
@@ -56,7 +58,7 @@ function setup(options: Options = {}) {
     digest: { of: (value: string) => `digest:${value}` },
     producer: { name: "ye-ast", version: "0.0.0" },
     matcher: { matches: options.matches ?? (() => true) },
-    graph: { index: async () => ({ ok: true, value: SUMMARY }), open: () => ({ ok: true, value: store }) },
+    graph: { index: async () => ({ ok: true, value: { ...SUMMARY, filesNotIndexed: options.notIndexed ?? [] } }), open: () => ({ ok: true, value: store }) },
     engines: {},
     moduleReader: { extract: async (_sources: unknown, read?: { files?: readonly string[] }) => { log.moduleReads.push(read?.files); return { files: written.map((file) => ({ file, statements: [], moduleOnly: true })), dependencies: options.dependencies ?? [], unread: [] }; } },
     importOrigins: () => ({
@@ -95,6 +97,14 @@ test("a file the index holds nothing of is a cut, and says which reason, so an e
     ["no-extractor", ["src/Held.ts"]],
     ["not-exported", ["src/Never.ts"]],
   ]);
+});
+
+test("a file of the same runtime the index did not hold cannot change the declarations of an asked file, so its outline stays complete (ADR-0042 fixture 4)", async () => {
+  const { queries } = setup({ written: ["src/A.ts", "src/B.ts"], notIndexed: ["src/B.ts"], nodes: [fakeNode("A.ts", "file", "src/A.ts", 1, 9), fakeNode("A.run", "function", "src/A.ts", 2, 4, "run")] });
+
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: ["src/A.ts"] });
+
+  assert.equal(answer.ok && answer.value.status, "complete");
 });
 
 test("a file the index holds answers its declarations and closes the store", async () => {

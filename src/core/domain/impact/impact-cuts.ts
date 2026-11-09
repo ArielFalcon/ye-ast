@@ -120,9 +120,14 @@ function placeCuts(places: readonly { file: string; line: number; reason: string
     .map(([file, here]) => unresolvedLinkAt(file, new Set(here.map((place) => placeAt(place.file, place.line, place.reason))), reason, reach(file, here)));
 }
 
-/** The module specifiers no resolver rule placed, one cut per importing file. */
-export function unresolvedSpecifierCuts(specifiers: readonly { file: string; line: number; specifier: string }[]): Cut[] {
-  return placeCuts(specifiers.map(({ file, line, specifier }) => ({ file, line, reason: specifier })), "specifier", (importer, here) => ({ kind: "module", importer, specifiers: [...new Set(here.map(({ reason }) => reason))].sort().map((specifier) => ({ specifier })) }));
+/** The module specifiers no resolver rule placed, one cut per importing file; a specifier names no file only when every statement of it in the file does. */
+export function unresolvedSpecifierCuts(specifiers: readonly { file: string; line: number; specifier: string; namesNoFile?: true }[]): Cut[] {
+  const named = new Set(specifiers.filter((edge) => edge.namesNoFile !== true).map(({ file, specifier }) => `${file}\0${specifier}`));
+  return placeCuts(specifiers.map(({ file, line, specifier }) => ({ file, line, reason: specifier })), "specifier", (importer, here) => ({
+    kind: "module",
+    importer,
+    specifiers: [...new Set(here.map(({ reason }) => reason))].sort().map((specifier) => (named.has(`${importer}\0${specifier}`) ? { specifier } : { specifier, namesNoFile: true })),
+  }));
 }
 
 /** Places whose data a reader could not follow, for `reason`, one cut per file: what they would bind is anything. */

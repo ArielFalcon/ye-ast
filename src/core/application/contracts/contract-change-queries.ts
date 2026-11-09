@@ -1,3 +1,4 @@
+import { EVERYTHING, withCuts } from "../../domain/shared/question.ts";
 import { formatAccessPath } from "../../domain/contracts/access-path.ts";
 import type { ChangeFrontier, ClassifiedDifference, ConsequencesValue, DerivationValue } from "../../domain/contracts/consequence-fact.ts";
 import type { Hypothesis } from "../../domain/contracts/hypothesis.ts";
@@ -6,7 +7,7 @@ import { NOTHING, type ExchangeDigests, type OperationRequest, type OperationSha
 import { deriveChanges, LISTING, REQUEST_READING, type Derivation, type DerivationFrontier } from "../../domain/contracts/shape-derivation.ts";
 import { httpRouteName, type HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import { withCuts, type Evidence, type UnknownReason } from "../../domain/shared/fact.ts";
+import { type Evidence, type UnknownReason } from "../../domain/shared/fact.ts";
 import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { ConsequencesFault, ContractConsequencesQueries } from "../../ports/contract-consequences-queries.port.ts";
@@ -61,7 +62,7 @@ export function createContractChange({ sources, revisions, shapes }: ContractCha
           })),
           frontiers: plan.frontiers.map(({ evidence, reason, ...frontier }): ChangeFrontier => ({ status: "unknown", reason: reason ?? defaultReason(frontier.kind), ...frontier, evidence: evidence.map(place) })),
         };
-        derivation = withCuts(derivationBase, value, [...prepared.cuts, ...before.value.cuts, ...after.value.cuts]);
+        derivation = withCuts(derivationBase, value, [...prepared.cuts, ...before.value.cuts, ...after.value.cuts], EVERYTHING);
       }
       return assemble(prepared, factBase, answered, { base, head, snapshots: { base: baseSha.value, head: headSha.value }, derivation });
     });

@@ -1,3 +1,4 @@
+import { EVERYTHING, withCuts } from "../../domain/shared/question.ts";
 import { formatAccessPath, relatePaths, type AccessPath } from "../../domain/contracts/access-path.ts";
 import { consequencesFact, OLD_ACCEPTANCE, OLD_GUARANTEE, type AnswerBody, type ConsequenceFinding, type ConsequencesValue, type HypothesisAnswer, type LocatedHop, type ProducerConsequence, type UseConsequence } from "../../domain/contracts/consequence-fact.ts";
 import { writtenChange } from "../../domain/contracts/change.ts";
@@ -8,7 +9,7 @@ import { decideProducer, type Origin, type SettledOrigin } from "../../domain/co
 import { decideUse } from "../../domain/contracts/verdict.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import { withCuts, type Evidence, type Fact, type FactBase, type UnknownReason } from "../../domain/shared/fact.ts";
+import { type Evidence, type Fact, type FactBase, type UnknownReason } from "../../domain/shared/fact.ts";
 import type { Link, LinkBasis } from "../../domain/topology/link.ts";
 import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
 import type { ContractConsequencesQueries } from "../../ports/contract-consequences-queries.port.ts";
@@ -109,7 +110,7 @@ export async function answerOn(workspace: PreparedWorkspace, base: FactBase, hyp
   if (!selected.ok) return unknown("unresolved", selected.fault);
   const followed = hypothesis.target === "response" ? consequencesOf(session.value, selected.value, hypothesis) : await producersOf(session.value, selected.value, hypothesis);
   const body: AnswerBody = { ...stated, ...followed };
-  const sealed = withCuts(base, body, workspace.cuts);
+  const sealed = withCuts(base, body, workspace.cuts, EVERYTHING);
   return { answer: sealed.status === "partial" ? { ...body, status: "partial", cuts: sealed.cuts } : { ...body, status: "complete" }, sites: selected.value.sites.toSorted(compareEvidence) };
 }
 

@@ -8,7 +8,8 @@ import { compareText } from "../../domain/shared/code-node.ts";
 
 export type SourceReader = (file: string) => Promise<string | undefined>;
 
-export type ModuleResolution = { file: string } | { external: true } | { unresolved: string };
+/** `namesNoFile` when the resolver applied its rules over the snapshot and they name no file of it. */
+export type ModuleResolution = { file: string } | { external: true } | { unresolved: string; namesNoFile?: true };
 
 export interface ModuleResolver {
   resolve(from: string, specifier: string): Promise<ModuleResolution>;
@@ -89,13 +90,14 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
   };
   const relative = async (from: string, specifier: string): Promise<ModuleResolution> => {
     const base = posix.join(posix.dirname(from), specifier);
-    if (base.startsWith("..")) return { unresolved: `${specifier} leaves the repository` };
+    if (base.startsWith("..")) return { unresolved: `${specifier} leaves the repository`, namesNoFile: true };
     if (options?.jsonModules && specifier.endsWith(".json")) {
-      return await present(base) ? { file: base } : { unresolved: `${specifier} names no file` };
+      return await present(base) ? { file: base } : { unresolved: `${specifier} names no file`, namesNoFile: true };
     }
     const tried = [base, ...EXTENSIONS.map((ext) => `${base}.${ext}`), ...EXTENSIONS.map((ext) => `${base}/index.${ext}`)];
     for (const file of tried) if (isTypeScriptFile(file) && (await present(file))) return { file };
-    return { unresolved: `${specifier} names no file` };
+    const named = await Promise.all(tried.map(present));
+    return named.includes(true) ? { unresolved: `${specifier} names no file` } : { unresolved: `${specifier} names no file`, namesNoFile: true };
   };
 
   const known = new Map<string, string | undefined>();
@@ -166,7 +168,7 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
       resolutions.set(key, held);
     }
     const resolved = await held;
-    if (resolved === undefined) return external ? { external: true } : { unresolved: declared ? ownPackage : `${specifier} matches no \`paths\` or \`baseUrl\` entry of ${config.file}` };
+    if (resolved === undefined) return external ? { external: true } : declared ? { unresolved: ownPackage } : { unresolved: `${specifier} matches no \`paths\` or \`baseUrl\` entry of ${config.file}`, namesNoFile: true };
     if (resolved.isExternalLibraryImport === true) return declared ? { unresolved: ownPackage } : { external: true };
     const file = resolved.resolvedFileName.replace(/^\//, "");
     return (explicitJson ? file.endsWith(".json") : isTypeScriptFile(file)) ? { file } : { unresolved: `${specifier} resolves to ${file}, which is no TypeScript source` };
@@ -174,7 +176,7 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
 
   return {
     resolve(from, specifier) {
-      if (specifier.startsWith("node:")) return Promise.resolve(isBuiltin(specifier) ? { external: true } : { unresolved: `${specifier} is not a Node builtin` });
+      if (specifier.startsWith("node:")) return Promise.resolve(isBuiltin(specifier) ? { external: true } : { unresolved: `${specifier} is not a Node builtin`, namesNoFile: true });
       if (specifier.startsWith(".")) return relative(from, specifier);
       if (specifier.startsWith("/")) return Promise.resolve({ unresolved: `${specifier} is an absolute path` });
       return aliased(from, specifier);

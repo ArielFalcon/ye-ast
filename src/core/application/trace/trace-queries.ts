@@ -1,3 +1,4 @@
+import { EVERYTHING, withCuts } from "../../domain/shared/question.ts";
 import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { WorkspaceReadOperation } from "../topology/workspace-operation.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
@@ -13,7 +14,7 @@ import { comparePosition, compareText, joinsFact } from "../../domain/shared/cod
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { fileCut, placeAt } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique } from "../../domain/impact/importers-fact.ts";
-import { ANYTHING, sortedEngines, withCuts, type Cut, type Fact, type Finding } from "../../domain/shared/fact.ts";
+import { ANYTHING, sortedEngines, type Cut, type Fact, type Finding } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { readingPlan } from "../../domain/trace/reading-plan.ts";
 import type { TraceValue } from "../../domain/trace/trace-fact.ts";
@@ -182,7 +183,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             ...walk.cuts,
             ...effectCuts,
           ];
-          return { ok: true, value: withCuts(head.base(content, true), value, cuts) };
+          return { ok: true, value: withCuts(head.base(content, true), value, cuts, EVERYTHING) };
         } finally {
           store.close();
         }

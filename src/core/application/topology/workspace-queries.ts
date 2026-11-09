@@ -1,6 +1,7 @@
+import { EVERYTHING, withCuts } from "../../domain/shared/question.ts";
 import { type LibrarySource, libraryPath } from "../../domain/topology/library-source.ts";
 import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
-import { ANYTHING, incompleteSectionCuts, provenanceOf, withCuts, type Cut, type DeclaredScope, type Fact, type Finding, type FactBase, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
+import { ANYTHING, incompleteSectionCuts, provenanceOf, type Cut, type DeclaredScope, type Fact, type Finding, type FactBase, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Result } from "../../domain/shared/result.ts";
@@ -201,7 +202,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
           const unsettled = join.joined.filter(({ site, joined }) => site.repo === entry.repository.repo && (joined.ambiguous !== undefined || joined.undecided !== undefined)).map(({ site }) => site);
           const section: FactBase & { evidence: readonly { path: string; line: number }[] } = { ...(entry.base as FactBase), evidence: sortEvidence(names.flatMap((name) => name.evidence)) };
           const cuts = [...entry.cuts, ...unsettled.map(unsettledCallSiteCut)];
-          sections[entry.repository.repo] = withCuts(section, { names, unresolved }, cuts);
+          sections[entry.repository.repo] = withCuts(section, { names, unresolved }, cuts, EVERYTHING);
           for (const name of names) {
             const served = [...nameCandidates(name, identities, entry.repository.repo), ...(name.kind === "destination" ? listened.get(`${entry.repository.repo}\0${name.name}`) ?? [] : [])];
             if (served.length === 0 && !linked.has(nameKey(entry.repository.repo, name))) unserved.push({ ...name, evidence: name.evidence.map((place) => ({ ...place, repo: entry.repository.repo })) });

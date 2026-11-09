@@ -956,6 +956,18 @@ test("importers reads a call the index resolved into an edge of another kind as 
   assert.deepEqual(answer.status !== "unknown" && answer.value.files.map((entry) => entry.unresolvedNamers), [["src/A.ts"]]);
 });
 
+test("a file the index did not hold cuts the importers of an asked file only when it shares the file's runtime (ADR-0042 fixtures 1, 4)", async () => {
+  const exports: Options["exports"] = { [HEAD]: { files: ["src/A.ts", "src/B.ts", "src/X.java"].map((path) => ({ path, blob: path, written: true })), skipped: [] } };
+  const nodes = [fakeNode("A.ts", "file", "src/A.ts", 1, 9), fakeNode("Order.java", "file", "src/Order.java", 1, 9)];
+  const { importers } = setup({ nodes, exports, index: { ok: true, value: { ...SUMMARY, filesNotIndexed: ["src/B.ts"] } } });
+
+  const typescript = importersFact(await importers({ files: ["src/A.ts"] }));
+  const java = importersFact(await importers({ files: ["src/Order.java"] }));
+
+  assert.deepEqual(typescript.status === "partial" && typescript.cuts.map(({ at, reason }) => `${at[0]} ${reason}`), ["src/B.ts not-indexed"]);
+  assert.equal(java.status, "complete");
+});
+
 test("importers answers the files in path order whatever order they were asked in", async () => {
   const { importers } = setup({ nodes: SHOP_NODES, exports: { [HEAD]: SHOP_EXPORT } });
   const answer = importersFact(await importers({ files: ["src/Order.java", "src/Cart.java"] }));
@@ -1603,7 +1615,7 @@ test("importers cut each file's unresolved module statements once, anchored at t
   };
   const { importers } = setup({ nodes: SHOP_NODES, exports: { [HEAD]: SHOP_EXPORT }, moduleDependencies });
 
-  const answer = importersFact(await importers({ files: ["src/Order.java"] }));
+  const answer = importersFact(await importers({ files: ["src/c.ts"] }));
 
   assert.deepEqual(answer.status === "partial" && answer.cuts.filter((cut) => cut.kind === "unresolved-link"), [
     { kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:4 @/env"], reason: "specifier", reach: { kind: "module", importer: "src/a.ts", specifiers: [{ specifier: "@/env" }] } },

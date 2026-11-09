@@ -19,6 +19,23 @@ test("a relative specifier names a TypeScript file as written, with an extension
   }
 });
 
+test("an unresolved specifier names no file only where the resolver applied its rules over the snapshot and they reach no file of it", async () => {
+  const resolver = resolverOver({ "src/c.d.ts": "", "src/d.js": "", "web/tsconfig.json": JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@app/*": ["src/*"] } } }) });
+  const proof = async (from: string, specifier: string) => {
+    const resolution = await resolver.resolve(from, specifier);
+    return "unresolved" in resolution && resolution.namesNoFile === true;
+  };
+
+  assert.deepEqual(
+    await Promise.all([["src/app.ts", "./missing"], ["src/app.ts", "../../escape"], ["src/app.ts", "node:nothing"], ["web/src/app.ts", "@app/missing"]].map(([from, specifier]) => proof(from!, specifier!))),
+    [true, true, true, true],
+  );
+  assert.deepEqual(
+    await Promise.all([["src/app.ts", "./c.d.ts"], ["src/app.ts", "./d.js"], ["src/app.ts", "/abs/a"], ["src/app.ts", "@app/missing"]].map(([from, specifier]) => proof(from!, specifier!))),
+    [false, false, false, false],
+  );
+});
+
 test("a specifier resolves through the paths of the nearest configuration, however long its extends chain is", async () => {
   const hops = 9;
   const chain = Object.fromEntries(Array.from({ length: hops }, (_, hop) => [`tsconfig.${hop}.json`, `{ "extends": "./tsconfig.${hop + 1}.json" }`]));

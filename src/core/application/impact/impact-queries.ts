@@ -1,3 +1,4 @@
+import { EVERYTHING } from "../../domain/shared/question.ts";
 import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
 import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
 import type { DeclarationEvidenceReader } from "../../ports/declaration-evidence.port.ts";
@@ -170,7 +171,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const value: ImpactValue = { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
 
         const needsGraph = requested.length > 0 || changes.some((file) => kindOfChangedFile(file.path) === "source" || componentsByResource.has(file.path));
-        if (!needsGraph) return { ok: true, value: impactFact(head.base(content), value, fixed) };
+        if (!needsGraph) return { ok: true, value: impactFact(head.base(content), value, fixed, EVERYTHING) };
 
         const index = await head.open();
         if (index === "aborted") return ABORTED;
@@ -201,7 +202,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (typed === "aborted") return ABORTED;
           const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
           if (signal?.aborted) return ABORTED;
-          return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), read.value, [...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts]) };
+          return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), read.value, [...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts], EVERYTHING) };
         } finally {
           store.close();
         }
@@ -219,7 +220,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         if (outside.length > 0) return { ok: true, value: { ...head.base(content), evidence: outside.map((path): Evidence => ({ path, line: 1 })), status: "unknown", reason: "out-of-scope" } };
         const fixed = [...exportCuts(headTree.export), ...headTree.export.files.filter((file) => importerSource(file.path) && (isReadableFile(file.path) || isJsonModuleResource(file.path)) && !file.written).map((file) => fileCut("not-exported", file.path, "unwritten")), ...files.filter((file) => !(isReadableFile(file) || (deps.moduleDependencies !== undefined && isJsonModuleResource(file)))).map((file) => fileCut("no-extractor", file, "language"))];
         const covered = files.filter((file) => isReadableFile(file) || (deps.moduleDependencies !== undefined && isJsonModuleResource(file)));
-        if (covered.length === 0) return { ok: true, value: impactFact(head.base(content), { files: [] }, fixed) };
+        if (covered.length === 0) return { ok: true, value: impactFact(head.base(content), { files: [] }, fixed, { kind: "dependents", files }) };
 
         const index = await head.open();
         if (index === "aborted") return ABORTED;
@@ -250,7 +251,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
             ...(modules?.unread.map(({ file }) => fileCut("no-extractor", file, "module-unread")) ?? []),
             ...unresolvedSpecifierCuts(modules?.dependencies.filter((edge) => edge.target.kind === "unresolved") ?? []),
           ];
-          return { ok: true, value: impactFact(head.base(content, true), { files: read.files }, cuts) };
+          return { ok: true, value: impactFact(head.base(content, true), { files: read.files }, cuts, { kind: "dependents", files }) };
         } finally {
           store.close();
         }
@@ -409,7 +410,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const needsGraph = changes.some(
       (file) => (kindOfChangedFile(file.path) === "source" && (!file.deleted || file.removedNames.length > 0) && !moduleRead?.covered.has(file.path)) || componentsByResource.has(file.path),
     );
-    if (!needsGraph) return { ok: true, value: impactFact(head.base(content), value, [...unaccounted(fixed), ...moduleCuts]) };
+    if (!needsGraph) return { ok: true, value: impactFact(head.base(content), value, [...unaccounted(fixed), ...moduleCuts], EVERYTHING) };
 
     const index = await head.open();
     if (index === "aborted") return ABORTED;
@@ -444,7 +445,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (typed === "aborted") return ABORTED;
       const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
       if (signal?.aborted) return ABORTED;
-      return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), { ...value, ...read.value }, [...unaccounted([...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts]), ...moduleCuts]) };
+      return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), { ...value, ...read.value }, [...unaccounted([...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts]), ...moduleCuts], EVERYTHING) };
     } finally {
       store.close();
     }

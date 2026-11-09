@@ -1,3 +1,4 @@
+import { EVERYTHING } from "../shared/question.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SCHEMA, type Cut, type FactBase } from "../shared/fact.ts";
@@ -13,7 +14,7 @@ const BASE: FactBase = {
 const VALUE: ImpactValue = { mergeBase: "b".repeat(40), seeds: [], changedEntrypoints: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
 
 test("a fact with no cut is complete", () => {
-  assert.equal(impactFact(BASE, VALUE, []).status, "complete");
+  assert.equal(impactFact(BASE, VALUE, [], EVERYTHING).status, "complete");
 });
 
 test("a fact with a cut is partial and lists the cuts by kind then place, each once", () => {
@@ -27,7 +28,7 @@ test("a fact with a cut is partial and lists the cuts by kind then place, each o
     { kind: "hub", at: ["h"], limit: 1, reason: "hub", reach: { kind: "anything" } },
     { kind: "caller-budget", at: ["c"], limit: 3, reason: "caller-budget", reach: { kind: "anything" } },
   ];
-  const fact = impactFact(BASE, VALUE, cuts);
+  const fact = impactFact(BASE, VALUE, cuts, EVERYTHING);
   assert.equal(fact.status, "partial");
   assert.deepEqual(fact.status === "partial" && fact.cuts.map((cut) => `${cut.kind} ${cut.at.join(",")}`), [
     "depth x",
@@ -43,7 +44,7 @@ test("a fact with a cut is partial and lists the cuts by kind then place, each o
 test("every kind of cut has a place in the order, bounds first, whatever order the cuts arrive in", () => {
   const kinds: Cut["kind"][] = ["section", "deadline", "not-exported", "no-extractor", "unresolved-link", "node-cap", "caller-budget", "hub", "depth"];
   const order = (input: readonly Cut["kind"][]): string[] => {
-    const fact = impactFact(BASE, VALUE, input.map((kind): Cut => ({ kind, at: ["p"], reason: kind === "section" ? "section-partial" : kind === "not-exported" ? "unwritten" : kind === "no-extractor" ? "not-indexed" : kind === "unresolved-link" ? "callee-unknown" : kind === "build-output" ? "live-tree" : kind, reach: { kind: "anything" } })));
+    const fact = impactFact(BASE, VALUE, input.map((kind): Cut => ({ kind, at: ["p"], reason: kind === "section" ? "section-partial" : kind === "not-exported" ? "unwritten" : kind === "no-extractor" ? "not-indexed" : kind === "unresolved-link" ? "callee-unknown" : kind === "build-output" ? "live-tree" : kind, reach: { kind: "anything" } })), EVERYTHING);
     return fact.status === "partial" ? fact.cuts.map((cut) => cut.kind) : [];
   };
   const expected = ["depth", "hub", "caller-budget", "node-cap", "deadline", "unresolved-link", "no-extractor", "not-exported", "section"];

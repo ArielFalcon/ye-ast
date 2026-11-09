@@ -85,4 +85,4 @@ export interface ImpactValue {
   cost: { expansionsUsed: number };
 }
 
-export { withCuts as impactFact } from "../shared/fact.ts";
+export { withCuts as impactFact } from "../shared/question.ts";
