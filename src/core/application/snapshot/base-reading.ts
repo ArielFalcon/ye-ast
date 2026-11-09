@@ -13,7 +13,7 @@ import { createEdgeTargets, edgeKey, NOTHING_DECLARED, type EdgeTargets } from "
 import { createGraphNavigation } from "../navigation/graph-navigation.ts";
 import { callsThroughOrigins, createOriginCalls, type OriginCalls } from "../navigation/origin-calls.ts";
 import { typedCallsOf } from "../navigation/proven-calls.ts";
-import { createReconciledCalls, linesOncePerFile, type ReconciledCalls } from "../navigation/reconciled-calls.ts";
+import { createReconciledCalls, linesOncePerFile, type ContradictedRecord, type ReconciledCalls } from "../navigation/reconciled-calls.ts";
 import { referenceProofsOf, unresolvedOf, type ReferenceProofs } from "../navigation/reference-origins.ts";
 import { createReverseCalls, type ReverseCalls } from "../navigation/reverse-calls.ts";
 import type { RelationExtraction, RelationExtractor } from "../relations/relation-extractor.ts";
@@ -34,6 +34,7 @@ export interface TypedReading {
 }
 
 const NOT_TYPED: TypedReading = { inputsLeftOut: [] };
+const CONTRADICTED_CALLS = "contradicted-calls";
 
 /** A fact base that records the declared build outputs its answer read, if any. */
 export function withOutputs(base: FactBase, outputs: readonly BuildOutputInput[] | undefined): FactBase {
@@ -229,11 +230,22 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
         contradictedCalls(targets) {
           const calls = reconciledCalls(targets, declarationUses());
           if (calls === undefined) return undefined;
-          return async (sources) => {
+          const contents = new Map<string, string>();
+          const recordsIn = (file: string): Promise<readonly ContradictedRecord[]> => {
+            const written = sources.get(file);
+            if (retained === undefined || written === undefined) return calls.contradictedIn(file);
+            let content = contents.get(file);
+            if (content === undefined) {
+              content = retained.facts.fingerprint({ content: written.content });
+              contents.set(file, content);
+            }
+            return retained.facts.ofInputs(CONTRADICTED_CALLS, { index: retained.index, path: file, content }, () => calls.contradictedIn(file));
+          };
+          return async (bodies) => {
             const found = new Map<string, ContradictedCall>();
-            for (const source of sources) {
-              for (const entry of (await calls.callsOf(source)).contradicted) {
-                if (entry.target !== undefined) found.set(contradictionKey({ record: entry.record, target: entry.target }), { record: entry.record, target: entry.target });
+            for (const file of new Set(bodies.map((body) => body.file))) {
+              for (const { record, target } of await recordsIn(file)) {
+                if (target !== undefined) found.set(contradictionKey({ record, target }), { record, target });
               }
             }
             return found;

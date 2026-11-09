@@ -610,11 +610,13 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
   const into = new Map<GraphNodeId, Map<string, FollowedEdge>>();
   const checked = new Set<string>();
   const probed = new Set<GraphNodeId>();
-  /** Drops the edge a record the source contradicts would be, once: it proves no dependence there (ADR-0041 U6). */
-  const contradict = (followed: FollowedEdge): boolean => {
-    const key = edgeKey(followed.edge);
-    const call = contradictedByEdge.get(key);
+  /** The record an edge would be when the source of its place proves it writes no call (ADR-0041 U6). */
+  const contradicts = (followed: FollowedEdge): ContradictedCall | undefined => contradictedByEdge.get(edgeKey(followed.edge));
+  /** Drops a contradicted edge's cut once; the edge itself is rejected every time the walk asks for it. */
+  const dropContradicted = (followed: FollowedEdge): boolean => {
+    const call = contradicts(followed);
     if (call === undefined) return false;
+    const key = edgeKey(followed.edge);
     dropped.add(key);
     if (cutKeys.has(key)) return false;
     cutKeys.add(key);
@@ -650,8 +652,8 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
     let changed = false;
     await readContradictions(fresh);
     const judged = fresh.filter((followed) => {
-      if (!contradict(followed)) return true;
-      changed = true;
+      if (contradicts(followed) === undefined) return true;
+      changed = dropContradicted(followed) || changed;
       return false;
     });
     const verdicts = await targets.verdictsOf(judged, signal);
@@ -674,8 +676,8 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
     const moved = await targets.redirectedInto(reached, signal);
     await readContradictions(moved);
     const relocated = moved.filter((followed) => {
-      if (!contradict(followed)) return true;
-      changed = true;
+      if (contradicts(followed) === undefined) return true;
+      changed = dropContradicted(followed) || changed;
       return false;
     });
     const movedVerdicts = await targets.verdictsOf(relocated, signal);

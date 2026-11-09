@@ -101,11 +101,18 @@ function agreeingCalls(at: readonly SyntaxCall[], { name, aliases }: CallRecord)
   return named.length > 0 ? named : at.filter((call) => call.callee !== undefined && aliases().includes(call.callee));
 }
 
+/** A call record the file's source contradicts, with the target the index held for an edge. */
+export interface ContradictedRecord {
+  record: GraphUnresolvedReference;
+  target?: GraphSymbol;
+}
+
 /**
  * A body's call-bearing records aligned with the calls its file writes (ADR-0041 decision 3). A record keeps the index's
  * place when its source is unread, its edge is synthesized, it matches a deferred call, it names the receiver a written
- * call starts from, or more than one written call agrees with it; it is contradicted when it has a column and no written
- * call of its file at its place agrees with it; otherwise it is at its written call, in the body the index gives it.
+ * call starts from, or more than one written call agrees with it; it is contradicted when it names a line and a column and
+ * no written call of its file at its place agrees with it; otherwise it is at its written call, in the body the index
+ * gives it.
  */
 export interface BodyCalls {
   /** The body's call edges whose target the store holds and no policy ignores, in the store's order. */
@@ -113,7 +120,7 @@ export interface BodyCalls {
   /** The body's unresolved call references, in the store's order. */
   references: readonly GraphUnresolvedReference[];
   /** Records placed where the file writes no call they name, with the edge's target: edges first, then references. */
-  contradicted: readonly { record: GraphUnresolvedReference; target?: GraphSymbol }[];
+  contradicted: readonly ContradictedRecord[];
   /** Calls the body writes and runs that no record matches, in written order. */
   writtenOnly: readonly GraphUnresolvedReference[];
   /** Calls written where no single index body owns them and no record matches, in written order. */
@@ -125,6 +132,8 @@ export interface BodyCalls {
 /** The one owner of what a body calls: the index's call-bearing records aligned with the written calls, per snapshot read. */
 export interface ReconciledCalls {
   callsOf(body: GraphSymbol): Promise<BodyCalls>;
+  /** Every call record of `file` the source contradicts, in the store's order. */
+  contradictedIn(file: string): Promise<readonly ContradictedRecord[]>;
   /** The written calls of `file` by the index body that owns them. */
   ownedIn(file: string): Promise<ReadonlyMap<GraphNodeId, readonly OwnedCall[]>>;
 }
@@ -208,6 +217,9 @@ export function createReconciledCalls({ store, uses, syntaxOf, lineOf, importedD
   });
   return {
     ownedIn,
+    async contradictedIn(file) {
+      return [...(await alignedIn(file)).values()].flatMap(({ contradicted }) => contradicted);
+    },
     async callsOf(node) {
       return (await alignedIn(node.file)).get(node.id) ?? NO_CALLS;
     },
@@ -237,9 +249,14 @@ function alignRecords(records: readonly CallRecord[], syntax: DeclaredMemberName
       return { kind: "matched", call, body, deferred: own !== undefined ? own.deferred === true : !executesInBody(declarationSpan(body), syntax.functionValues, { line: call.line, column: call.column - 1 }) };
     }
     const receiver = at.some((written) => receiverRootOf(written.name) === record.name);
-    return agreeing.length > 1 || receiver || record.column === null ? { kind: "kept" } : { kind: "contradicted" };
+    return agreeing.length > 1 || receiver || !alignable(record) ? { kind: "kept" } : { kind: "contradicted" };
   });
   return { alignments, accounted };
+}
+
+/** Whether a record names a place that can contradict a written call: a line and a column, both in range. */
+function alignable({ line, column }: Pick<CallRecord, "line" | "column">): boolean {
+  return line !== null && Number.isInteger(line) && line >= 1 && column !== null && Number.isInteger(column) && column >= 0;
 }
 
 function oncePerFile<V>(derive: (file: string) => Promise<V>): (file: string) => Promise<V> {
