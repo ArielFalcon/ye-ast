@@ -65,6 +65,8 @@ interface Setup {
   path?: string;
   origins?: Record<string, RequestOriginReader>;
   cuts?: readonly Cut[];
+  /** The cuts the session of the hypothesis states; none by default. */
+  sessionCuts?: readonly Cut[];
   /** The cuts of each partial section of the workspace read; none by default. */
   sectionCuts?: Readonly<Record<string, readonly Cut[]>>;
   /** The call templates the topology matcher excludes from the operation; none by default. */
@@ -82,6 +84,7 @@ function setup(options: Setup = {}) {
   const session: ConsumerSession = {
     links: options.links ?? [link()],
     serving: options.serving ?? [{ repo: "api", handler: { path: "Owners.java", symbol: "get", line: 5 } }],
+    cuts: options.sessionCuts ?? [],
     unresolvedCalls: options.unresolvedCalls ?? [],
     ambiguousCalls: options.ambiguousCalls ?? [],
     callers: (declaration) => (asked.push(declaration.symbol), options.callers?.[declaration.symbol] ?? { kind: "found", callers: [] }),

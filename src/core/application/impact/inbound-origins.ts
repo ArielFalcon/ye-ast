@@ -1,17 +1,18 @@
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import { FOLLOWED_EDGE_KINDS, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
+import { contradictedCallCuts } from "../../domain/impact/impact-cuts.ts";
 import { hasTyping } from "../../domain/languages/profiles.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { Relation } from "../../domain/relations/relation.ts";
-import type { Finding } from "../../domain/shared/fact.ts";
+import type { Cut, Finding } from "../../domain/shared/fact.ts";
 import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
 import { createInboundEdges, type EdgeCorrections, type InboundEdges, type InboundOccurrences } from "./inbound-edges.ts";
 import type { ReferenceProofs } from "../navigation/reference-origins.ts";
 import { edgeKey, type EdgeTargets, type FollowedEdge } from "../navigation/edge-targets.ts";
 import type { CallBindings } from "../navigation/call-binding.ts";
 import { boundThroughOrigins, callsThroughOrigins } from "../navigation/origin-calls.ts";
-import type { ContradictedCalls } from "../snapshot/base-reading.ts";
+import type { ContradictedCall, ContradictedCalls } from "../snapshot/base-reading.ts";
 
 /** What the Angular relation extractor read from the sources of one snapshot. */
 export interface RelationOrigins {
@@ -31,32 +32,51 @@ export function inboundEdgesOf(store: CodeGraphReader, origins: RelationOrigins,
   return createInboundEdges(store, isTest, origins.relations.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])), proofs?.validOccurrences ?? new Set(), origins.memberUses, proofs?.thisMemberCalls, corrections);
 }
 
+/** What settling the consumer edges of a read changed, with the cuts its contradiction policy states. */
+export interface ReceiverCorrections extends EdgeCorrections {
+  /** One cut per contradicted record: the index placed a call where its source writes none (ADR-0041 U6). */
+  readonly cuts: readonly Cut[];
+}
+
 /**
  * How each graph edge out of the TypeScript sources among `files` whose receiver is a value is known, settled at once for
- * a reading whose callers are asked without waiting (ADR-0036): kept with its settlement, or moved to the declaration the
- * base binds it to (ADR-0041 decision 4), with the member calls through the origins the base binds (`originCallsOf`).
- * A record `contradictions` names is dropped, never moved: its source writes no call at its place (ADR-0041 U6).
+ * a reading whose callers are asked without waiting (ADR-0036): kept with its settlement, dropped where the base drops
+ * it, or moved to the declaration the base binds it to (ADR-0041 decision 4), with the member calls through the origins
+ * the base binds (`originCallsOf`). The records `contradictions` names are dropped in every language, and each is a cut:
+ * its source writes no call at its place (ADR-0041 U6).
  */
-export async function receiverCorrectionsOf(store: CodeGraphReader, targets: EdgeTargets, origins: Pick<RelationOrigins, "fields" | "locals">, files: readonly string[], signal?: AbortSignal, contradictions?: ContradictedCalls): Promise<EdgeCorrections> {
-  const sources = new Map(store.symbolsInFiles(files.filter((file) => hasTyping(file, "structural") && kindOfChangedFile(file) !== "test")).map((symbol) => [symbol.id, symbol]));
-  const edges = store.outgoingEdges([...sources.keys()], FOLLOWED_EDGE_KINDS);
+export async function receiverCorrectionsOf(store: CodeGraphReader, targets: EdgeTargets, origins: Pick<RelationOrigins, "fields" | "locals">, files: readonly string[], signal?: AbortSignal, contradictions?: ContradictedCalls): Promise<ReceiverCorrections> {
+  const readable = [...new Map(store.symbolsInFiles(files).map((symbol) => [symbol.id, symbol])).values()].filter((symbol) => kindOfChangedFile(symbol.file) !== "test");
+  const edges = store.outgoingEdges(readable.map((symbol) => symbol.id), FOLLOWED_EDGE_KINDS);
+  const calling = new Set(edges.map((edge) => edge.source));
+  const contradicted = contradictions === undefined || calling.size === 0 ? new Map<string, ContradictedCall>() : await contradictions(readable.filter((symbol) => calling.has(symbol.id)));
+  const typed = new Map(readable.filter((symbol) => hasTyping(symbol.file, "structural")).map((symbol) => [symbol.id, symbol]));
   const reached = new Map(store.symbolsByIds([...new Set(edges.map((edge) => edge.target))]).map((symbol) => [symbol.id, symbol]));
   const followed = edges.flatMap((edge): FollowedEdge[] => {
-    const source = sources.get(edge.source);
+    const source = typed.get(edge.source);
     const target = reached.get(edge.target);
     return source === undefined || target === undefined ? [] : [{ edge, source, target }];
   });
-  const contradicted = contradictions === undefined || followed.length === 0 ? new Set<string>() : new Set((await contradictions([...sources.values()])).keys());
   const kept = contradicted.size === 0 ? followed : followed.filter(({ edge }) => !contradicted.has(edgeKey(edge)));
   const verdicts = await targets.verdictsOf(kept, signal);
   const settled = new Map<string, ReceiverSettlement>();
-  const moved = kept.flatMap((edge, index) => {
+  const dropped = new Set(contradicted.keys());
+  const moved: FollowedEdge[] = [];
+  for (const [index, followed] of kept.entries()) {
     const verdict = verdicts[index]!;
-    if (verdict.kind === "keep" && verdict.derivation !== undefined) settled.set(edgeKey(edge.edge), verdict.derivation);
-    return verdict.kind === "redirect" && verdict.receiver !== undefined ? [{ ...edge, target: verdict.to }] : [];
-  });
+    const key = edgeKey(followed.edge);
+    if (verdict.kind === "keep") {
+      if (verdict.derivation !== undefined) settled.set(key, verdict.derivation);
+      continue;
+    }
+    dropped.add(key);
+    if (verdict.kind === "redirect") {
+      moved.push({ ...followed, target: verdict.to });
+      if (verdict.derivation !== undefined) settled.set(key, verdict.derivation);
+    }
+  }
   const throughOrigins = targets.bindings === undefined ? [] : await originCallsOf(store, targets.bindings, origins, signal);
-  return { dropped: new Set([...contradicted, ...moved.map(({ edge }) => edgeKey(edge))]), into: Map.groupBy([...moved, ...throughOrigins], ({ target }) => target.id), settled };
+  return { dropped, into: Map.groupBy([...moved, ...throughOrigins], ({ target }) => target.id), settled, cuts: contradictedCallCuts([...contradicted.values()]) };
 }
 
 /**

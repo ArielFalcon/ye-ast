@@ -1,6 +1,7 @@
 import { sourceUnreadable } from "../../domain/contracts/consumer-flow.ts";
 import type { Hypothesis } from "../../domain/contracts/hypothesis.ts";
-import { provenanceOf, sortedEngines } from "../../domain/shared/fact.ts";
+import { provenanceOf, sortedEngines, type BuildOutputInput, type Cut } from "../../domain/shared/fact.ts";
+import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { nameTail } from "../../domain/shared/call-place.ts";
 import { followedEdge } from "../../domain/impact/edge-policy.ts";
@@ -11,8 +12,8 @@ import type { Link } from "../../domain/topology/link.ts";
 import { excludedFrom, matchCallSite, matchDeclaredOperation, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import type { AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
-import type { DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
-import type { InboundOccurrence, InboundOccurrences } from "../impact/inbound-edges.ts";
+import { buildOutputCuts, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
+import { compareOccurrences, occurrenceKey, type InboundOccurrence, type InboundOccurrences } from "../impact/inbound-edges.ts";
 import type { ConsumerFlowReader } from "../../ports/consumer-flow.port.ts";
 import type { RequestOriginReader } from "../../ports/request-origins.port.ts";
 import type { ConsumerSession, ConsumerSources, PreparedWorkspace, ServingOperation } from "../../ports/consumer-sources.port.ts";
@@ -25,7 +26,7 @@ import type { Digest } from "../../ports/digest.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import { inboundEdgesOf, receiverCorrectionsOf } from "../impact/inbound-origins.ts";
-import { createBaseReadings, type BaseReading } from "../snapshot/base-reading.ts";
+import { createBaseReadings, withOutputs, type BaseReading } from "../snapshot/base-reading.ts";
 import type { EdgeTargets } from "../navigation/edge-targets.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
@@ -78,6 +79,7 @@ interface Reading {
   inbound: InboundOccurrences | undefined;
   reading: BaseReading | undefined;
   targets: EdgeTargets | undefined;
+  cuts: readonly Cut[];
 }
 
 /**
@@ -96,6 +98,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
 
         return withScratch(deps.heads, async (readScope) => {
           const readings = new Map<string, Promise<Result<Reading, WorkspaceFault>>>();
+          const buildOutputs = new Map<string, BuildOutputInput>();
           const stores: CodeGraphReader[] = [];
           let workspaceJoin: WorkspaceHttpJoin | undefined;
           let routes: RepositoryEntrypoints[] | undefined;
@@ -125,6 +128,8 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             const contradictions = reading === undefined || targets === undefined ? undefined : reading.contradictedCalls(targets);
             const corrections = indexed === "unavailable" || origins === undefined || targets === undefined ? undefined : await receiverCorrectionsOf(indexed.store, targets, origins, sources.map((file) => file.path), context.signal, contradictions);
             if (context.signal?.aborted) return ABORTED;
+            const typedCuts = typed === undefined ? [] : [...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs)];
+            if (typed !== undefined) for (const output of typed.outputs ?? []) buildOutputs.set(canonicalJson(output), output);
             return {
               ok: true,
               value: {
@@ -135,6 +140,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
                 inbound: indexed === "unavailable" || origins === undefined ? undefined : inboundEdgesOf(indexed.store, origins, proofs, corrections),
                 reading,
                 targets,
+                cuts: [...(corrections?.cuts ?? []), ...typedCuts],
               },
             };
           };
@@ -154,19 +160,21 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
           /**
            * The written calls the index records nothing of that reach the declarations the join's links write in, one pass
            * over the repositories the hypothesis reached (ADR-0045 L2): a contract answer is a frontier, not a transitive
-           * walk.
+           * walk, and each repository's occurrences stay its own.
            */
-          const recoveredInto = async (reached: ReadonlyMap<string, Reading>, links: readonly Link[]): Promise<ReadonlyMap<string, readonly InboundOccurrence[]>> => {
-            const found = new Map<string, InboundOccurrence[]>();
+          const recoveredInto = async (reached: ReadonlyMap<string, Reading>, links: readonly Link[]): Promise<ReadonlyMap<string, ReadonlyMap<string, readonly InboundOccurrence[]>>> => {
+            const found = new Map<string, Map<string, InboundOccurrence[]>>();
             for (const [repo, reading] of reached) {
               const reverse = reading.reading === undefined || reading.targets === undefined ? undefined : reading.reading.reverseCalls(reading.targets);
               if (reverse === undefined) continue;
               const nodes = [...new Map(links.filter((link) => link.from.repo === repo).flatMap((link) => declarationOf(reading.graph, link.from)).map((node) => [node.id, node])).values()];
               if (nodes.length === 0) continue;
+              const into = new Map<string, InboundOccurrence[]>();
               for (const { edge, source, target } of (await reverse.into(nodes)).edges) {
                 const occurrence: InboundOccurrence = { from: source, basis: "call", ...followedEdge(edge, "proven"), provenance: edge.provenance, ...(edge.line === null ? {} : { line: edge.line }) };
-                found.set(target.id, [...(found.get(target.id) ?? []), occurrence]);
+                into.set(target.id, [...(into.get(target.id) ?? []), occurrence]);
               }
+              found.set(repo, into);
             }
             return found;
           };
@@ -185,10 +193,20 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             }
 
             const recovered = await recoveredInto(reached, join.links.filter((link) => isCallOf(link, operation)));
-            const inboundOf = (reading: Reading | undefined): InboundOccurrences | undefined => {
+            const inboundOf = (repo: string, reading: Reading | undefined): InboundOccurrences | undefined => {
               if (reading?.inbound === undefined) return undefined;
               const inbound = reading.inbound;
-              return { occurrencesOf: (node) => [...inbound.occurrencesOf(node), ...(recovered.get(node.id) ?? [])] };
+              const recoveredHere = recovered.get(repo);
+              return {
+                occurrencesOf: (node) => {
+                  const merged = new Map<string, InboundOccurrence>();
+                  for (const occurrence of [...inbound.occurrencesOf(node), ...(recoveredHere?.get(node.id) ?? [])]) {
+                    const key = occurrenceKey(occurrence);
+                    if (!merged.has(key)) merged.set(key, occurrence);
+                  }
+                  return [...merged.values()].sort(compareOccurrences);
+                },
+              };
             };
 
             return {
@@ -196,15 +214,16 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
               value: {
                 links: join.links,
                 serving: join.serving.get(operation) ?? [],
+                cuts: [...reached.values()].flatMap((reading) => reading.cuts),
                 unresolvedCalls: join.unresolvedCalls,
                 ambiguousCalls: join.ambiguousCalls.filter((call) => call.reaching.has(operation)).map(({ from, repos }) => ({ from, repos })),
                 callers: ({ repo, ...declaration }) => {
                   const reading = reached.get(repo);
-                  return callersOfFunction(reading?.graph, inboundOf(reading), declaration);
+                  return callersOfFunction(reading?.graph, inboundOf(repo, reading), declaration);
                 },
                 memberOccurrences: ({ repo, ...member }) => {
                   const reading = reached.get(repo);
-                  return occurrencesOfMember(reading?.graph, inboundOf(reading), member);
+                  return occurrencesOfMember(reading?.graph, inboundOf(repo, reading), member);
                 },
                 flow: { follow: (carrier) => reached.get(carrier.site.repo)?.flow.follow(carrier) ?? sourceUnreadable(carrier.site) },
                 templates: { follow: (carrier) => reached.get(carrier.site.repo)?.templates.follow(carrier) ?? sourceUnreadable(carrier.site) },
@@ -222,7 +241,8 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
               (text) => deps.digest.of(text),
               { ...inputs.declaredConfig, ...asked },
             );
-            return { ...composite, inputs: { ...composite.inputs, engines: sortedEngines({ ...composite.inputs.engines, ...deps.engines }) } };
+            const read = buildOutputs.size === 0 ? composite : withOutputs(composite, [...buildOutputs.values()]);
+            return { ...read, inputs: { ...read.inputs, engines: sortedEngines({ ...read.inputs.engines, ...deps.engines }) } };
           };
           try {
             return { ok: true, value: await use({ base, repositorySnapshots: fact.value.repositorySnapshots, cuts: fact.status === "partial" ? fact.cuts : [], sectionCuts: Object.fromEntries(Object.entries(fact.value.sections).flatMap(([repo, section]) => (section.status === "partial" ? [[repo, section.cuts]] : []))), session, serving: (declared) => servingOperation(declared, entrypointsOfWorkspace()) }) };
