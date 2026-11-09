@@ -379,11 +379,16 @@ retention silently becomes a per-call cost.
       verbatim: "Lo que si no se distingue tan fácil es el procesado cuando hayan varios framework de un lenguaje,
       porque la extensión puede ser la misma. Como se conectan en este diseño los plugins al lenguaje, soporta la
       extensión a futuro a otros plugin?"). Packs partition paths; frameworks do not. Each framework plugin declares
-      the languages it reads and its applicability signal, read from the snapshot as data: a manifest dependency of
-      the nearest project (Angular: a `package.json` naming `@angular/core`, RFC-0007 row A1), or the code's own
-      references (Spring: annotations and types of `org.springframework`). The signal is a stage input like any other,
-      so its key names it (decision 10). Two frameworks may read the same file: each contributes its own facts through
-      its stages, contributions to one collection (entrypoints, call sites, relations) are a union sorted by the
+      the languages it reads and its applicability signal, read from the snapshot as data, on two levels: the project
+      level decides whether the plugin applies at all (a dependency in the nearest manifest: a `package.json` naming
+      `@angular/core`, RFC-0007 row A1; a `pom.xml` or Gradle script naming the framework's artifacts), and the file
+      level decides which files it inspects (the file's own references to the framework: its imports, annotations and
+      types, such as `org.springframework`). A manifest alone is too coarse (a monorepo mixes projects, and a
+      dependency does not mean every file uses it); references alone cannot tell a project that lacks the dependency.
+      A framework reads the pack's already parsed reading (the one hold of ADR-0040), never parses a file again. The signal is a stage input like any other,
+      so its key names it (decision 10). Two frameworks may read the same file, because one file can hold facts of several (today the Spring
+      reader takes HTTP routes and NATS listeners from the same classes, `spring-routes.adapter.ts:121`; a NestJS
+      service holds routes and TypeORM data access): each contributes its own facts through its stages, contributions to one collection (entrypoints, call sites, relations) are a union sorted by the
       collection's own order, and two frameworks asserting different values of one fact for the same site yield an
       explicit `unknown` with both as evidence, never a choice by registration order. A second framework of a
       language enters as one plugin with its signal, its stages and its conformance fixtures, including one where it
