@@ -42,10 +42,10 @@ function commit(files: Readonly<Record<string, string>>): void {
   execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: repo, env: GIT_ENV });
 }
 
-async function importers(file: string): Promise<{ status: string; cuts?: Cut[] }> {
+async function importers(file: string, ...options: string[]): Promise<{ status: string; cuts?: Cut[] }> {
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const code = await composeCli({ scratchRoot: join(workspace, "scratch"), indexCache: join(workspace, "cache") })(["importers", repo, file], { out: (line) => stdout.push(line), err: (line) => stderr.push(line) });
+  const code = await composeCli({ scratchRoot: join(workspace, "scratch"), indexCache: join(workspace, "cache") })(["importers", repo, ...options, file], { out: (line) => stdout.push(line), err: (line) => stderr.push(line) });
   assert.equal(code, EXIT_CODE.ok, stderr.join("\n"));
   return JSON.parse(stdout.join("\n"));
 }
@@ -110,6 +110,25 @@ test("a path mapping TypeScript cannot follow may still name a file a build repl
 
   assert.equal(fact.status, "partial");
   assert.deepEqual(reasons(fact), ["src/app/auth.service.ts specifier"]);
+});
+
+test("a configuration whose extends chain is not read proves no specifier names no file, for its paths or its rootDirs", async () => {
+  commit({
+    "tsconfig.json": JSON.stringify({ extends: "./config/base.json" }),
+    "config/base.json": JSON.stringify({ compilerOptions: { baseUrl: "..", paths: { "@app/thing": ["shared/foo.ts"] }, rootDirs: ["../src", "../generated"] } }),
+    "src/a.ts": `import "@app/thing";\nexport const a = 1;\n`,
+    "src/b.ts": `import { thing } from "./thing";\nexport const b = thing;\n`,
+    "shared/foo.ts": "export const foo = 1;\n",
+    "generated/thing.ts": "export const thing = 1;\n",
+  });
+
+  const mapped = await importers("shared/foo.ts", "--exclude", "config/**");
+  const rooted = await importers("generated/thing.ts", "--exclude", "config/**");
+
+  assert.equal(mapped.status, "partial");
+  assert.ok(reasons(mapped).includes("src/a.ts specifier"), JSON.stringify(mapped.cuts));
+  assert.equal(rooted.status, "partial");
+  assert.ok(reasons(rooted).includes("src/b.ts specifier"), JSON.stringify(rooted.cuts));
 });
 
 test("a non-literal dynamic import in the asked file's runtime keeps its importers partial (ADR-0042 fixture 3)", async () => {

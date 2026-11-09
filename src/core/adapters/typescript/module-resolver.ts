@@ -32,13 +32,18 @@ function namesNoFile(listing: ReadonlySet<string> | undefined, candidates: reado
   return true;
 }
 
+/** "No inputs were found": the host lists no directory, so every configuration reports it. */
+const NO_INPUTS = 18003;
+
 /**
- * The options one configuration text declares, with its `extends` chain read through `host`.
+ * The options one configuration text declares, with its `extends` chain read through `host`; `complete` only when the
+ * parse reported nothing, such as an `extends` target it could not read.
  */
-function configOptions(text: string, file: string, host: ts.ParseConfigHost): ts.CompilerOptions | undefined {
+function configOptions(text: string, file: string, host: ts.ParseConfigHost): { options: ts.CompilerOptions; complete: boolean } | undefined {
   const json = ts.parseConfigFileTextToJson(file, text);
   if (json.error !== undefined || json.config === undefined) return undefined;
-  return ts.parseJsonConfigFileContent(json.config, host, posix.dirname(file), undefined, file).options;
+  const parsed = ts.parseJsonConfigFileContent(json.config, host, posix.dirname(file), undefined, file);
+  return { options: parsed.options, complete: parsed.errors.every(({ code }) => code === NO_INPUTS) };
 }
 
 export function packageOf(specifier: string): string | undefined {
@@ -108,7 +113,7 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
     if (base.startsWith("..")) return { unresolved: `${specifier} leaves the repository`, namesNoFile: true };
     const unresolved = async (): Promise<ModuleResolution> => {
       const config = await configOf(posix.dirname(from));
-      const proven = config !== "unreadable" && config?.options.rootDirs === undefined && namesNoFile(listing, [base]);
+      const proven = config !== "unreadable" && config?.complete !== false && config?.options.rootDirs === undefined && namesNoFile(listing, [base]);
       return proven ? { unresolved: `${specifier} names no file`, namesNoFile: true } : { unresolved: `${specifier} names no file` };
     };
     if (options?.jsonModules && specifier.endsWith(".json")) {
@@ -145,7 +150,7 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
     }
   };
 
-  type Config = { file: string; options: ts.CompilerOptions } | "unreadable" | undefined;
+  type Config = { file: string; options: ts.CompilerOptions; complete: boolean } | "unreadable" | undefined;
   const configs = new Map<string, Promise<Config>>();
   const configOf = (dir: string): Promise<Config> => {
     let held = configs.get(dir);
@@ -155,8 +160,8 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
           const file = dir === "." ? name : `${dir}/${name}`;
           const text = await read(file);
           if (text === undefined) continue;
-          const options = await settle((host) => configOptions(text, absolute(file), host));
-          return options === undefined ? "unreadable" : { file, options };
+          const parsed = await settle((host) => configOptions(text, absolute(file), host));
+          return parsed === undefined ? "unreadable" : { file, ...parsed };
         }
         return dir === "." ? undefined : configOf(posix.dirname(dir));
       })();
@@ -199,7 +204,7 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
       if (declared) return { unresolved: ownPackage };
       const unmatched = `${specifier} matches no \`paths\` or \`baseUrl\` entry of ${config.file}`;
       const candidates = probed.filter((file) => !file.endsWith("/package.json")).map((file) => file.slice(1));
-      return namesNoFile(listing, candidates) ? { unresolved: unmatched, namesNoFile: true } : { unresolved: unmatched };
+      return config.complete && namesNoFile(listing, candidates) ? { unresolved: unmatched, namesNoFile: true } : { unresolved: unmatched };
     }
     if (resolved.isExternalLibraryImport === true) return declared ? { unresolved: ownPackage } : { external: true };
     const file = resolved.resolvedFileName.replace(/^\//, "");
