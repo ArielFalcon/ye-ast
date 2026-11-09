@@ -4,6 +4,9 @@ import { createJavaParser, createJavaTreeHolds } from "../tree-sitter/java-parse
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchTargets } from "../../ports/import-origins.port.ts";
+import { closureOf, hierarchyOf } from "./java-dispatch-targets.ts";
+import { withJavaSources } from "./java-project.ts";
+import { createJavaProject } from "./java-symbols.ts";
 
 function java(path: string, lines: readonly string[]): SourceFile {
   return { path: `src/main/java/app/${path}`, content: `${lines.join("\n")}\n` };
@@ -209,8 +212,49 @@ test("an annotation type in the sources is read like any type declaration: a cla
   assert.deepEqual(element, { kind: "unknown", reason: "dispatch not proven" });
 });
 
-test("two files of one text at two paths are two implementations, read with or without a parse hold", async () => {
-  const impl = (module: string): SourceFile => ({ path: `${module}/src/main/java/app/Sender.java`, content: SENDER.content });
+/** Reads `owner.method` over `sources` with the syntax trees alive for `use`. */
+async function reading<T>(sources: readonly SourceFile[], owner: string, method: string, use: (read: { project: ReturnType<typeof createJavaProject>; hierarchy: NonNullable<ReturnType<typeof hierarchyOf>>; type: any; method: any }) => T): Promise<T> {
+  const parser = await createJavaParser();
+  return withJavaSources(parser, (parse) => {
+    const { files } = parse(sources);
+    const project = createJavaProject(files);
+    const hierarchy = hierarchyOf(files, project);
+    if (hierarchy === undefined) throw new Error("hierarchy vetoed");
+    const type = project.types.find((candidate) => candidate.name === owner)!;
+    return use({ project, hierarchy, type, method: type.methods.find((candidate) => candidate.name === method)! });
+  });
+}
+
+test("the owner states the candidate bodies of a vetoed closure and the port still answers unknown", async () => {
+  const port = java("Port.java", ["package app;", "", "public interface Port {", "  void send(String m);", "}"]);
+  const sender = java("Sender.java", ["package app;", "", "public class Sender implements Port {", "  public void send(String m) {}", "}"]);
+  const lambda = java("Tasks.java", ["package app;", "", "class Tasks {", "  Runnable task = () -> {};", "}"]);
+
+  assert.deepEqual(await targetsOf([sender, lambda], port), { kind: "unknown", reason: "dispatch not proven" });
+  await reading([port, sender, lambda], "Port", "send", ({ project, hierarchy, method }) => {
+    const impl = project.types.find((candidate) => candidate.name === "Sender")!;
+    const closure = closureOf(method, hierarchy);
+    assert.equal(closure.kind, "vetoed");
+    assert.equal(closure.kind === "vetoed" ? closure.reason : undefined, "dispatch not proven");
+    assert.equal(closure.candidates.length, 1, "the candidate a veto hides is the body the port refuses to state");
+    assert.equal(closure.candidates[0]!.receiver, impl);
+    assert.equal(closure.candidates[0]!.method, impl.methods[0]);
+  });
+});
+
+test("a closed owner keeps both candidate bodies in file and line order, and the port answers them unchanged", async () => {
+  const loud = java("Loud.java", ["package app;", "", "public class Loud extends Sender {", "  @Override", "  public void send(String message) {}", "}"]);
+  const quiet = java("Quiet.java", ["package app;", "", "public class Quiet extends Sender {}"]);
+
+  assert.deepEqual(await targetsOf([SENDER, loud, quiet]), { kind: "bodies", bodies: [{ file: loud.path, start: 4, nameLine: 5 }, body(SENDER, 4)] });
+  await reading([PORT, SENDER, loud, quiet], "Port", "send", ({ hierarchy, method }) => {
+    const closure = closureOf(method, hierarchy);
+    assert.equal(closure.kind, "closed");
+    assert.deepEqual(closure.candidates.map(({ method: body, receiver }) => `${receiver.name}.${body.owner.name}`), ["Loud.Loud", "Quiet.Sender", "Sender.Sender"]);
+  });
+});
+
+test("two files of one text at two paths are two implementations, read with or without a parse hold", async () => {  const impl = (module: string): SourceFile => ({ path: `${module}/src/main/java/app/Sender.java`, content: SENDER.content });
   const twins = [impl("m1"), impl("m2")];
   const holds = createJavaTreeHolds();
   const hold = holds.open();

@@ -1,6 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchTargets, ImportOrigins } from "../../ports/import-origins.port.ts";
+import type { DispatchUnknownReason } from "../../domain/shared/fact.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, withJavaSources } from "./java-project.ts";
 import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
@@ -48,6 +49,7 @@ export interface Hierarchy {
  * hierarchy reaches a type outside the repository; a supertype the strict reading leaves unsettled under the name of
  * the owner or a type below it; an anonymous or local class below it; a lambda or method reference while the owner is a
  * functional interface; an enum below it; or a class whose chain reaches no single body of the method's signature.
+ * The candidates and the closure verdict are read apart (`closureOf`), and the port's answer is derived from them.
  */
 export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[]): ImportOrigins["dispatchTargets"] {
   const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
@@ -75,29 +77,96 @@ export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sou
   };
 }
 
-/** The bodies a call of `method` runs on a value of `owner`, the method's own owner unless a declared type below it states the value. */
-export function targetsOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl = method.owner): DispatchTargets {
-  if (isAnnotated(owner.node) || isAnnotated(method.node)) return { kind: "unknown", reason: "generated implementation" };
-  if (ancestorsOf(owner, hierarchy).some((type) => hierarchy.outside.has(type))) return { kind: "unknown", reason: "generated implementation" };
-  const below = belowOf(owner, hierarchy);
-  const names = new Set([owner, ...below].map((type) => type.name));
-  if ([...hierarchy.unsettled].some((name) => names.has(name))) return UNKNOWN;
-  if (hierarchy.unplaced.some(({ types, names: unsettled }) => types.some((type) => type === owner || below.has(type)) || unsettled.some((name) => names.has(name)))) return UNKNOWN;
-  if (hierarchy.functionValues && [owner, ...below].some((type) => type.kind === "interface" && isFunctional(type, hierarchy))) return UNKNOWN;
-  if ([...below].some((type) => type.kind === "other")) return UNKNOWN;
-  const bodies = new Map<Node, MethodDecl>();
-  for (const type of [owner, ...below]) {
+/** One body a value of the owner may run, and the class whose value runs it. */
+export interface DispatchCandidate {
+  method: MethodDecl;
+  receiver: TypeDecl;
+}
+
+/**
+ * The bodies a call of `method` may run, before and after every veto (ADR-0044 decision 1). `candidates` is every
+ * concrete class of the owner and below it, sorted by file then first line; `veto` names the first veto that fired,
+ * in the order `targetsOf` applies them today.
+ */
+export type DispatchClosure =
+  | { kind: "closed"; candidates: readonly DispatchCandidate[] }
+  | { kind: "vetoed"; candidates: readonly DispatchCandidate[]; reason: DispatchUnknownReason };
+
+/**
+ * The closure a call of `method` on a value of `owner` has, as ADR-0044 decision 1 reads it: `closed` when every
+ * concrete class below the owner runs one body of the method's signature, `vetoed` with the first veto otherwise.
+ * The candidates are stated apart from the verdict so a reader below the port can name a body a veto hides.
+ */
+export function closureOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl = method.owner): DispatchClosure {
+  const veto = vetoOf(method, hierarchy, owner);
+  if (veto !== undefined) return { kind: "vetoed", candidates: candidatesOf(method, hierarchy, owner), reason: veto };
+  const closed: DispatchCandidate[] = [];
+  for (const type of [owner, ...belowOf(owner, hierarchy)]) {
     if (type.kind !== "class" || type.isAbstract) continue;
     const body = bodyIn(type, method, hierarchy);
-    if (body === undefined) return UNKNOWN;
-    bodies.set(body.node, body);
+    if (body === undefined) return { kind: "vetoed", candidates: candidatesOf(method, hierarchy, owner), reason: "dispatch not proven" };
+    closed.push({ method: body, receiver: type });
   }
-  return {
-    kind: "bodies",
-    bodies: [...bodies.values()]
-      .map((body) => ({ file: body.owner.file.path, start: body.node.startPosition.row + 1, nameLine: (body.node.childForFieldName("name") ?? body.node).startPosition.row + 1 }))
-      .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.start - b.start)),
-  };
+  return { kind: "closed", candidates: sortCandidates(closed) };
+}
+
+/** The first veto `targetsOf` applies, in its order; none means every concrete class below the owner may be walked for a body. */
+function vetoOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl): DispatchUnknownReason | undefined {
+  if (isAnnotated(owner.node) || isAnnotated(method.node)) return "generated implementation";
+  if (ancestorsOf(owner, hierarchy).some((type) => hierarchy.outside.has(type))) return "generated implementation";
+  const below = belowOf(owner, hierarchy);
+  const names = new Set([owner, ...below].map((type) => type.name));
+  if ([...hierarchy.unsettled].some((name) => names.has(name))) return "dispatch not proven";
+  if (hierarchy.unplaced.some(({ types, names: unsettled }) => types.some((type) => type === owner || below.has(type)) || unsettled.some((name) => names.has(name)))) return "dispatch not proven";
+  if (hierarchy.functionValues && [owner, ...below].some((type) => type.kind === "interface" && isFunctional(type, hierarchy))) return "dispatch not proven";
+  if ([...below].some((type) => type.kind === "other")) return "dispatch not proven";
+  return undefined;
+}
+
+/** The bodies a call of `method` runs on a value of `owner`, the method's own owner unless a declared type below it states the value. */
+export function targetsOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl = method.owner): DispatchTargets {
+  const closure = closureOf(method, hierarchy, owner);
+  if (closure.kind === "vetoed") return { kind: "unknown", reason: closure.reason };
+  return { kind: "bodies", bodies: bodiesOf(closure.candidates) };
+}
+
+/** One candidate per concrete class of the owner and below it, resolved by the nearest declaration of the name and arity, without proving a body. */
+function candidatesOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl): DispatchCandidate[] {
+  const candidates: DispatchCandidate[] = [];
+  for (const type of [owner, ...belowOf(owner, hierarchy)]) {
+    if (type.kind !== "class" || type.isAbstract) continue;
+    const declaration = declarationIn(type, method, hierarchy);
+    if (declaration !== undefined) candidates.push({ method: declaration, receiver: type });
+  }
+  return sortCandidates(candidates);
+}
+
+function sortCandidates(candidates: readonly DispatchCandidate[]): DispatchCandidate[] {
+  return [...candidates].sort((a, b) => comparePlaces(a.method, b.method) || comparePlaces(a.receiver, b.receiver));
+}
+
+function comparePlaces(a: MethodDecl | TypeDecl, b: MethodDecl | TypeDecl): number {
+  const ownerOf = (value: MethodDecl | TypeDecl): TypeDecl => ("owner" in value ? value.owner : value);
+  const fileOf = (value: MethodDecl | TypeDecl): string => ownerOf(value).file.path;
+  return fileOf(a) < fileOf(b) ? -1 : fileOf(a) > fileOf(b) ? 1 : a.node.startPosition.row - b.node.startPosition.row;
+}
+
+/** The bodies a set of candidates runs, each body once, in file then first-line order: the port's answer. */
+function bodiesOf(candidates: readonly DispatchCandidate[]): { file: string; start: number; nameLine: number }[] {
+  const bodies = new Map<Node, MethodDecl>();
+  for (const { method } of candidates) bodies.set(method.node, method);
+  return [...bodies.values()]
+    .map((body) => ({ file: body.owner.file.path, start: body.node.startPosition.row + 1, nameLine: (body.node.childForFieldName("name") ?? body.node).startPosition.row + 1 }))
+    .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.start - b.start));
+}
+
+/** The nearest declaration of the method's name and arity up `type`'s class chain, which a vetoed closure states without proving a body. */
+function declarationIn(type: TypeDecl, method: MethodDecl, hierarchy: Hierarchy): MethodDecl | undefined {
+  for (let current: Superclass = type; typeof current === "object"; current = hierarchy.superclasses.get(current) ?? "outside") {
+    const declared = current.methods.filter((candidate) => candidate.name === method.name && candidate.parameterTypes.length === method.parameterTypes.length);
+    if (declared.length > 0) return declared.length === 1 ? declared[0] : undefined;
+  }
+  return undefined;
 }
 
 /** The body a value of `type` runs for `method`: the nearest class up its chain that declares a method of that name and arity, when it declares exactly one with a body and the same signature. */
