@@ -148,7 +148,7 @@ export interface ComposedQueries {
   warmLive(repo: string, signal?: AbortSignal): Promise<string | null>;
 }
 
-export function composeQueries(options: Omit<CompositionOptions, "signal"> = {}): ComposedQueries {
+export function composeQueries(options: CompositionOptions = {}): ComposedQueries {
   const version = ownVersion();
   const redaction = createPatternRedaction();
   const measurement = options.measure === undefined ? undefined : { sink: options.measure, redaction, tallies: stageTallies() };
@@ -241,7 +241,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     declarationEvidence: createDeclarationEvidenceReader(),
     unmodelled,
     sourceSelection: isWritten,
-    typeBindings: createTypeBindings({ trees: createDeclaredTrees(), digest }),
+    typeBindings: createTypeBindings({ trees: createDeclaredTrees(), digest, shutdown: options.signal }),
     ...(options.buildOutputs === undefined ? {} : { declaredOutputs: options.buildOutputs }),
   };
   const bareImpact = createImpactQueries(impactDeps);
