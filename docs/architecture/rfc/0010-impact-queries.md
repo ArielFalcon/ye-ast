@@ -68,12 +68,27 @@ replaces `head` or `revision` under `trusted` only ([Live head](#live-head-slice
 | in a file declaring a Java `record`, which codegraph gives no node and whose methods it places under the package | the symbols the graph holds, as above, and a `no-extractor` cut at the file, found by ye-ast's own Java grammar over the changed and targeted files; a `callers` target it cannot name stays an `unknown-symbol` fault whose detail says the file declares a record |
 | in `templateUrl` or `styleUrl(s)` of a component | that component, read from decorator metadata ([ADR-0014](../adr/0014-angular-and-spring-from-own-extractors.md) decision 2) |
 | removed with its symbol | none at `head`: its former callers changed too in a consistent commit and are seeds themselves; a caller left behind shows as an unresolved reference naming it. The same holds for a declaration removed from a symbol that survives (a method of a class): the holder seeds, and every name the removed lines declared, in any hunk, that no added line of the file declares again (a rename loses its name, an edited signature keeps it) also leads an `unresolved-link` cut at the references that still name it |
+| in a hunk whose tokens did not change | no seed; one `settled` entry |
+
+### Settled hunks
+
+A changed hunk is compared by tokens (ADR-0043 decision 1): the tokens of its base lines and of its head lines, a token that spans
+the hunk's edge counting whole, and a file's import declarations compared as a multiset where the language's profile states
+their order carries no meaning. Equal tokens mean the hunk seeds nothing, drops the names its removed lines declared, and is
+reported as one `settled` entry — `{basis: "hunk", file, base?, head?, reason: "no-token-change" | "import-order"}` — sorted by
+file and position. A file no pack tokenizes, a side that does not parse, a deleted or added file and a binary file keep the line
+rules and report nothing. A change whose every hunk settles answers `complete` with no seeds and the settled entries as its
+evidence (ADR-0043 decision 5).
 
 `Seed.basis` is `lines`, `top-level` or `resource`, or `requested` for a symbol `impact.callers` was asked for by name.
 A requested line range seeds through the rows above, as the added lines of a file, except that a line of the range no
-symbol holds and no code is on (blank, a comment) selects nothing: a range across the gap between two declarations
-seeds those two, not the file's top-level symbols. A range left with no line at all (wholly past the end of its file,
-or only such lines) selects no declaration and is the `unknown-symbol` fault below, never an empty answer. A requested symbol seeds every
+token holds (blank, a comment, a JSDoc) selects nothing, wherever it lies: a range across the gap between two
+declarations seeds those two, not the file's top-level symbols. The trivia set comes from the B11 tokens stage of the
+read ([ADR-0043](../adr/0043-a-change-seeds-only-where-its-tokens-differ.md) decision 6), not from a per-family reader.
+A range whose every line holds no token is not a fault: it selects no declaration and answers `ok` with one `settled`
+entry (`{basis: "range", file, start, end, reason: "no-token", candidates}`), the file's candidate declarations as the
+fault lists them, and `complete` when every requested range settles and nothing else is requested. Only a range wholly
+past the end of its file keeps the `unknown-symbol` fault below. A requested symbol seeds every
 seedable node of its file whose dotted path in the file's `contains` tree ends with it at whole names (a bare name at
 any depth, `A.m` only an `m` that `A` contains directly), so overloads all seed; a symbol that is both requested
 and inside a requested range is one seed, `requested`.
@@ -325,11 +340,12 @@ per cause:
 
 `unknown` when no answer is possible: the index cannot be built or opened (`index-unavailable`) or the diff cannot be
 read (`source-unreadable`); an unresolvable revision is a typed fault, as for `map`. A symbol `impact.callers` was asked
-for that names no node at the revision, or a line range that selects no declaration, is the typed fault
+for that names no node at the revision, or a line range wholly past the end of its file, is the typed fault
 `unknown-symbol`, listing every such entry (`{file, symbol}` or `{file, start, end}`) with the dotted containment
 paths of the seedable declarations of its file (sorted, once each, empty when the file declares none or is not indexed), so the caller sees
 what it could have asked for; the CLI exits as
-for an unresolvable revision. A requested line range in a file that is not a covered source (a test, an uncovered
+for an unresolvable revision. A range whose lines hold no token does not fault: it answers `ok` with a `settled` entry
+(`no-token`), as [Seeds](#seeds) states. A requested line range in a file that is not a covered source (a test, an uncovered
 language, a template no component names) is a `no-extractor` cut at that file, never an empty answer.
 
 `impact.importers` is `complete` unless a cut applies: a requested file outside the declared scope or that the index

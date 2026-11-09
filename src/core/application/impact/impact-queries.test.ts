@@ -22,6 +22,7 @@ import { createImpactQueries, type ImpactQueriesDeps } from "./impact-queries.ts
 import type { ImportOrigins, ImportOriginsReader, ImportOriginSite, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 import type { SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import { NOTHING_DECLARED } from "../navigation/edge-targets.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
@@ -45,7 +46,20 @@ const FORK = "c".repeat(40);
 const SUMMARY: IndexSummary = { filesIndexed: 1, filesSkipped: 0, filesErrored: 0, filesNotIndexed: [], versions: { codegraph: "x", schema: 0, extraction: 0 } };
 
 function change(path: string, overrides: Partial<FileChange> = {}): FileChange {
-  return { path, deleted: false, binary: false, added: [{ start: 1, end: 1 }], removals: [], removedNames: [], ...overrides };
+  const change: FileChange = { path, deleted: false, binary: false, added: [{ start: 1, end: 1 }], removals: [], removedNames: [], hunks: [], ...overrides };
+  return { ...change, hunks: change.hunks.length === 0 ? change.added.map((range) => ({ head: range, removedNames: [] })) : change.hunks };
+}
+
+function tokenReading(file: SourceFile, trivia: Readonly<Record<string, readonly number[]>>) {
+  const quiet = new Set(trivia[file.path] ?? []);
+  const lines = file.content.split("\n").length;
+  return {
+    status: "read" as const,
+    language: "java" as const,
+    tokens: Array.from({ length: lines }, (_, index) => index + 1).filter((line) => !quiet.has(line)).map((line) => ({ start: line, end: line, text: `t${line}`, startOffset: 0, endOffset: 0 })),
+    imports: [],
+    importOrder: "insignificant" as const,
+  };
 }
 
 /** The head's snapshot listing, holding exactly `paths`, so a target names a file the snapshot has. */
@@ -85,6 +99,8 @@ interface Options {
   sources?: SourceFile[];
   /** The trivia lines a tokenizer reads in each source, by path. */
   trivia?: Readonly<Record<string, readonly number[]>>;
+  /** The tokens stage, when a test needs readings the trivia option cannot state. */
+  sourceTokens?: SourceTokens;
   /** Reads the imports of those sources, as composition wires it. */
   importOrigins?: ImportOriginsReader;
   moduleDependencies?: ModuleDependenciesReader;
@@ -188,7 +204,8 @@ function setup(options: Options = {}) {
     ...(options.live && { live: options.live.deps }),
     ...(options.declarationEvidence && { declarationEvidence: options.declarationEvidence }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
-    ...(options.trivia && { sourceTrivia: { triviaLines: async (file: SourceFile) => new Set(options.trivia?.[file.path] ?? []) } }),
+    ...(options.trivia && { tokens: { tokensOf: async (file: SourceFile) => tokenReading(file, options.trivia!) } }),
+    ...(options.sourceTokens && { tokens: options.sourceTokens }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
     ...(options.typeBindings && { typeBindings: options.typeBindings.bindings, declaredOutputs: () => options.typeBindings!.outputs }),
@@ -889,24 +906,30 @@ function rangeFile(between: readonly string[]): SourceFile {
 }
 const RANGE_NODES = [fakeNode("f", "function", "src/A.ts", 1, 3), fakeNode("h", "function", "src/A.ts", 10, 14), fakeNode("g", "function", "src/A.ts", 20, 20)];
 
-test("a requested range selects the declarations it intersects, and its blank and comment lines between them select nothing", async () => {
+test("a requested range selects the declarations it intersects, and a range of trivia inside one selects nothing", async () => {
   const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "// note", "/* block", "   still */", "", ""])], trivia: { "src/A.ts": [4, 5, 6, 7, 8, 9, 12, 13, 15, 16, 17, 18, 19, 21] } });
   const seeds = async (start: number, end: number) => {
     const answer = callersFact(await callers({ targets: [{ file: "src/A.ts", start, end }] }));
     return answer.status === "unknown" ? [] : answer.value.seeds.map((seed) => [seed.symbol, seed.basis]);
   };
   assert.deepEqual(await seeds(2, 11), [["f", "lines"], ["h", "lines"]]);
-  assert.deepEqual(await seeds(12, 13), [["h", "lines"]]);
+
+  const trivia = callersFact(await callers({ targets: [{ file: "src/A.ts", start: 12, end: 13 }] }));
+  assert.equal(trivia.status, "complete");
+  assert.deepEqual(trivia.value.seeds, []);
+  assert.deepEqual(trivia.value.settled, [{ basis: "range", file: "src/A.ts", start: 12, end: 13, reason: "no-token", candidates: ["f", "g", "h"] }]);
 });
 
-test("a requested range that selects no declaration, past the end of its file or only over trivia between declarations, is an unknown-symbol fault with what the file declares", async () => {
+test("a range wholly past the end stays the unknown-symbol fault, and a trivia range answers ok with settled", async () => {
   const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "// note", "/* block", "   still */", "", ""])], trivia: { "src/A.ts": [4, 5, 6, 7, 8, 9, 12, 13, 15, 16, 17, 18, 19, 21] }, exports: listingOf(["src/A.ts"]) });
-  for (const [start, end] of [[30, 35], [5, 7]] as const) {
-    const answer = await callers({ targets: [{ file: "src/A.ts", start, end }, { file: "src/A.ts", start: 2, end: 2 }] });
-    assert.ok(!answer.ok, `${start}-${end}`);
-    assert.equal(answer.fault.kind, "unknown-symbol");
-    assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/A.ts", start, end, absent: false, candidates: ["f", "g", "h"] }]);
-  }
+  const past = await callers({ targets: [{ file: "src/A.ts", start: 30, end: 35 }, { file: "src/A.ts", start: 2, end: 2 }] });
+  assert.ok(!past.ok);
+  assert.equal(past.fault.kind, "unknown-symbol");
+  assert.deepEqual(past.fault.kind === "unknown-symbol" && past.fault.entries, [{ file: "src/A.ts", start: 30, end: 35, absent: false, candidates: ["f", "g", "h"] }]);
+
+  const trivia = callersFact(await callers({ targets: [{ file: "src/A.ts", start: 5, end: 7 }, { file: "src/A.ts", start: 2, end: 2 }] }));
+  assert.deepEqual(trivia.status === "unknown" ? [] : trivia.value.seeds.map((seed) => [seed.symbol, seed.basis]), [["f", "lines"]]);
+  assert.deepEqual(trivia.status === "unknown" ? [] : trivia.value.settled, [{ basis: "range", file: "src/A.ts", start: 5, end: 7, reason: "no-token", candidates: ["f", "g", "h"] }]);
 });
 
 test("a requested range over a top-level statement still selects every top-level declaration of its file", async () => {
@@ -2340,4 +2363,133 @@ test("the reverse lookup keeps each source's alignment only for an index the ind
 
   assert.deepEqual(await kept(true), ["reverse-looked-up-names", "reverse-looked-up-names", "reverse-unbound-calls"]);
   assert.deepEqual(await kept(false), []);
+});
+
+const COMMENT_FILE = "src/A.java";
+const COMMENT_BASE = ["class A {", "  /* one */", "}"].join("\n");
+const COMMENT_HEAD = ["class A {", "  /* two */", "}"].join("\n");
+const COMMENT_HUNK = { base: { start: 2, end: 2 }, head: { start: 2, end: 2 }, removedNames: [] };
+const COMMENT_READING = { status: "read" as const, language: "java" as const, tokens: [], imports: [], importOrder: "insignificant" as const };
+
+function commentSetup(tokens: SourceTokens) {
+  return setup({
+    changes: { ok: true, value: [change(COMMENT_FILE, { added: [{ start: 2, end: 2 }], hunks: [COMMENT_HUNK] })] },
+    nodes: [fakeNode("A", "class", COMMENT_FILE, 1, 3)],
+    sources: [{ path: COMMENT_FILE, content: COMMENT_HEAD }],
+    snapshotSources: { [HEAD]: [{ path: COMMENT_FILE, content: COMMENT_HEAD }], [FORK]: [{ path: COMMENT_FILE, content: COMMENT_BASE }] },
+    exports: listingOf([COMMENT_FILE]),
+    sourceTokens: tokens,
+  });
+}
+
+test("impact answers settled and drops the seeds of a comment-only hunk", async () => {
+  const answer = fact(await commentSetup({ tokensOf: async () => COMMENT_READING }).ask());
+  const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
+
+  assert.deepEqual(value.settled, [{ basis: "hunk", file: COMMENT_FILE, base: { start: 2, end: 2 }, head: { start: 2, end: 2 }, reason: "no-token-change" }]);
+  assert.deepEqual(value.seeds, []);
+  assert.equal(answer.status, "complete");
+  assert.equal("cuts" in answer, false);
+});
+
+test("a Java doc comment is a token, so a hunk that edits it still seeds", async () => {
+  const tokens: SourceTokens = {
+    tokensOf: async (file) => ({ ...COMMENT_READING, tokens: [{ start: 2, end: 2, text: file.content.includes("one") ? "/** one */" : "/** two */", startOffset: 0, endOffset: 0 }] }),
+  };
+  const answer = fact(await commentSetup(tokens).ask());
+  const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
+
+  assert.equal(value.settled, undefined);
+  assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["A"]);
+});
+
+/** A reading whose token per line is the line's own text, with the given lines trivia. */
+function lineReading(file: { path: string; content: string }, quietLines: readonly number[]) {
+  const lines = file.content.split("\n");
+  const quiet = new Set(quietLines);
+  return {
+    status: "read" as const,
+    language: file.path.endsWith(".ts") ? ("typescript" as const) : ("java" as const),
+    tokens: lines.flatMap((text, index) => (quiet.has(index + 1) || text === "" ? [] : [{ start: index + 1, end: index + 1, text, startOffset: 0, endOffset: 0 }])),
+    imports: [],
+    importOrder: file.path.endsWith(".ts") ? ("significant" as const) : ("insignificant" as const),
+  };
+}
+
+function mixedChange(file: string, base: string, head: string, nodes: FakeNode[], quietLines: readonly number[]) {
+  return setup({
+    changes: { ok: true, value: [change(file, { added: [{ start: 2, end: 3 }], hunks: [{ base: { start: 2, end: 3 }, head: { start: 2, end: 3 }, removedNames: [] }] })] },
+    nodes,
+    sources: [{ path: file, content: head }],
+    snapshotSources: { [HEAD]: [{ path: file, content: head }], [FORK]: [{ path: file, content: base }] },
+    exports: listingOf([file]),
+    sourceTokens: { tokensOf: async (source) => lineReading(source, quietLines) },
+  });
+}
+
+test("a comment change between members and a body change in one hunk select only the changed method", async () => {
+  const file = "src/C.java";
+  const base = ["class C {", "  // old", "  int f(){return 1;}", "  int g(){return 9;}", "}"].join("\n");
+  const head = ["class C {", "  // new", "  int f(){return 2;}", "  int g(){return 9;}", "}"].join("\n");
+  const nodes = [fakeNode("C", "class", file, 1, 5), fakeNode("f", "method", file, 3, 3), fakeNode("g", "method", file, 4, 4)];
+  const answer = fact(await mixedChange(file, base, head, nodes, [2]).ask());
+  const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
+
+  assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["f"]);
+});
+
+test("a JSDoc change inside a class and a body change in one hunk select only the changed method", async () => {
+  const file = "src/a.ts";
+  const base = ["class A {", "  /** old */", "  f(){ return 1; }", "  g(){ return 9; }", "}"].join("\n");
+  const head = ["class A {", "  /** new */", "  f(){ return 2; }", "  g(){ return 9; }", "}"].join("\n");
+  const nodes = [fakeNode("A", "class", file, 1, 5), fakeNode("f", "method", file, 3, 3), fakeNode("g", "method", file, 4, 4)];
+  const answer = fact(await mixedChange(file, base, head, nodes, [2]).ask());
+  const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
+
+  assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["f"]);
+});
+
+function topLevelChange(file: string, base: string, head: string, nodes: FakeNode[], edited: FileChange) {
+  const commentLines = (content: string): number[] => content.split("\n").flatMap((text, index) => (text.trim().startsWith("//") ? [index + 1] : []));
+  return setup({
+    changes: { ok: true, value: [edited] },
+    nodes,
+    sources: [{ path: file, content: head }],
+    snapshotSources: { [HEAD]: [{ path: file, content: head }], [FORK]: [{ path: file, content: base }] },
+    exports: listingOf([file]),
+    sourceTokens: { tokensOf: async (source) => lineReading(source, commentLines(source.content)) },
+  });
+}
+
+test("a top-level statement replaced by a comment seeds the declaration beside it", async () => {
+  const file = "src/a.ts";
+  const base = ["export const x=1;", "console.log(x);"].join("\n");
+  const head = ["export const x=1;", "// gone"].join("\n");
+  const edited = change(file, { added: [{ start: 2, end: 2 }], hunks: [{ base: { start: 2, end: 2 }, head: { start: 2, end: 2 }, removedNames: [] }] });
+  const answer = fact(await topLevelChange(file, base, head, [fakeNode("x", "variable", file, 1, 1)], edited).ask());
+  const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
+
+  assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["x"]);
+});
+
+test("a call at the start of the file replaced by a comment seeds the declaration below it", async () => {
+  const file = "src/a.ts";
+  const base = ["console.log(1);", "export function f(){return 1;}"].join("\n");
+  const head = ["// gone", "export function f(){return 1;}"].join("\n");
+  const edited = change(file, { added: [{ start: 1, end: 1 }], hunks: [{ base: { start: 1, end: 1 }, head: { start: 1, end: 1 }, removedNames: [] }] });
+  const answer = fact(await topLevelChange(file, base, head, [fakeNode("f", "function", file, 2, 2)], edited).ask());
+  const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
+
+  assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["f"]);
+});
+
+test("a plain top-level deletion with no trivia seeds the declaration beside it", async () => {
+  const file = "src/a.ts";
+  const base = ["export const x=1;", "console.log(x);"].join("\n");
+  const head = ["export const x=1;"].join("\n");
+  const edited = change(file, { added: [], removals: [{ after: 1 }], hunks: [{ base: { start: 2, end: 2 }, removedNames: [] }] });
+  const answer = fact(await topLevelChange(file, base, head, [fakeNode("x", "variable", file, 1, 1)], edited).ask());
+  const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
+
+  assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["x"]);
 });

@@ -1,3 +1,4 @@
+import type { ImportOrder } from "../change/source-tokens.ts";
 import { isJavaSource } from "./java.ts";
 import { isTypeScriptFile, isTypeScriptSource } from "./typescript.ts";
 
@@ -13,13 +14,15 @@ export interface LanguageProfile {
   reads(path: string): boolean;
   /** `structural`: a value's type is what it holds, so a call binds by the receiver's proofs; `nominal`: by its declared type. */
   typing: "structural" | "nominal";
+  /** Whether the order of the language's import declarations carries meaning; read by the change rules, never by a path check. */
+  importOrder: ImportOrder;
   /** The keywords a constructor calls its superclass's and its own class's constructors with; none where the language has no such call. */
   chaining?: { inherited: string; own: string };
 }
 
-export const TYPESCRIPT_PROFILE: LanguageProfile = { language: "typescript", writes: isTypeScriptFile, reads: isTypeScriptSource, typing: "structural" };
+export const TYPESCRIPT_PROFILE: LanguageProfile = { language: "typescript", writes: isTypeScriptFile, reads: isTypeScriptSource, typing: "structural", importOrder: "significant" };
 
-export const JAVA_PROFILE: LanguageProfile = { language: "java", writes: isJavaSource, reads: isJavaSource, typing: "nominal", chaining: { inherited: "super", own: "this" } };
+export const JAVA_PROFILE: LanguageProfile = { language: "java", writes: isJavaSource, reads: isJavaSource, typing: "nominal", importOrder: "insignificant", chaining: { inherited: "super", own: "this" } };
 
 export const LANGUAGE_PROFILES: readonly LanguageProfile[] = [TYPESCRIPT_PROFILE, JAVA_PROFILE];
 

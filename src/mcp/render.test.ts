@@ -367,3 +367,10 @@ test("data effects render access and operation with optional proven targets in s
     assert.ok(!text.includes("undefined"));
   }
 });
+
+test("a trace whose requested ranges held no token says so in one line", () => {
+  const fact = traceFact();
+  const value = { ...fact.status === "unknown" ? {} : fact.value, settled: [{ basis: "range", file: "src/order.ts", start: 8, end: 9, reason: "no-token", candidates: ["Order"] }] };
+  const text = renderTrace({ ...fact, value } as unknown as Fact<TraceValue>);
+  assert.ok(text.includes("1 requested ranges hold no token"), text);
+});

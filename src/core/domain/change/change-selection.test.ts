@@ -6,7 +6,7 @@ import type { FileChange } from "./diff-reader.ts";
 const matches = (path: string, glob: string): boolean => path.startsWith(glob.replace(/\*\*$/, ""));
 
 function change(path: string): FileChange {
-  return { path, deleted: false, binary: false, added: [{ start: 1, end: 1 }], removals: [], removedNames: [] };
+  return { path, deleted: false, binary: false, added: [{ start: 1, end: 1 }], removals: [], removedNames: [], hunks: [{ head: { start: 1, end: 1 }, removedNames: [] }] };
 }
 
 test("selectChange keeps only the changed paths a glob selects", () => {

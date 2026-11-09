@@ -1,6 +1,7 @@
 import type { Entrypoint } from "../entrypoints/entrypoint.ts";
 import type { Handler } from "../entrypoints/http-route.ts";
 import type { SeedBasis } from "../change/seeds.ts";
+import type { SettledReason } from "../change/hunk-settling.ts";
 import type { WalkBounds } from "../shared/fact.ts";
 import type { Asserted } from "../shared/question.ts";
 import type { ChangedContract } from "./changed-contracts.ts";
@@ -79,12 +80,42 @@ export interface ImpactValue {
   changedEntrypoints?: readonly ChangedEntrypoint[];
   /** Present only when the change added, removed or altered an operation a contract declares. */
   changedContracts?: readonly ChangedContract[];
+  /**
+   * The hunks that changed no token, each with why (ADR-0043 decisions 1 and 5): present when not empty, sorted by file
+   * and by the hunk's first line. `basis: "hunk"` separates them from a settled requested range (`basis: "range"`).
+   */
+  settled?: readonly SettledChange[];
   symbols: readonly ImpactedSymbol[];
   entrypoints: readonly ReachedEntrypoint[];
   modules?: ModuleImpactValue;
   /** The symbols whose callers the walk followed; `0` when the answer needed no walk. */
   cost: { expansionsUsed: number };
 }
+
+/** A hunk a change set aside because no token of it changed (ADR-0043 decision 5). */
+export interface SettledHunkChange {
+  basis: "hunk";
+  file: string;
+  /** The hunk's base-side lines; absent where it only added lines. */
+  base?: { start: number; end: number };
+  /** The hunk's head-side lines; absent where it only removed lines. */
+  head?: { start: number; end: number };
+  reason: SettledReason;
+}
+
+/** A requested range every line of which holds no token (ADR-0043 decision 3). */
+export interface SettledRangeChange {
+  basis: "range";
+  file: string;
+  start: number;
+  end: number;
+  reason: "no-token";
+  /** The file's candidate declarations, as the `unknown-symbol` fault lists them today. */
+  candidates: readonly string[];
+}
+
+/** One shape the field takes; a settled changed hunk is the other (ADR-0043 decision 5, U3). */
+export type SettledChange = SettledHunkChange | SettledRangeChange;
 
 export { withCuts as impactFact } from "../shared/question.ts";
 

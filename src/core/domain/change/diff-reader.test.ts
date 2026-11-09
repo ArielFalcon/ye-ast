@@ -26,7 +26,21 @@ const MODIFIED = [
 
 test("the added lines of a hunk are the new-side range its header names, a missing count being one line", () => {
   assert.deepEqual(read(MODIFIED), [
-    { path: "src/a.ts", deleted: false, binary: false, added: [{ start: 3, end: 5 }, { start: 21, end: 21 }], removals: [], removedNames: [] },
+    {
+      path: "src/a.ts",
+      deleted: false,
+      binary: false,
+      added: [
+        { start: 3, end: 5 },
+        { start: 21, end: 21 },
+      ],
+      removals: [],
+      removedNames: [],
+      hunks: [
+        { base: { start: 3, end: 4 }, head: { start: 3, end: 5 }, removedNames: [] },
+        { base: { start: 20, end: 20 }, head: { start: 21, end: 21 }, removedNames: [] },
+      ],
+    },
   ]);
 });
 
@@ -62,14 +76,79 @@ test("the names removed lines declared are carried, a pure deletion or a replace
   assert.deepEqual(changes[0]?.added, [{ start: 5, end: 5 }]);
 });
 
+test("a hunk records the base lines it took and the head lines it left", () => {
+  const changes = read(
+    [
+      "diff --git a/src/A.java b/src/A.java",
+      "--- a/src/A.java",
+      "+++ b/src/A.java",
+      "@@ -4,2 +4,3 @@",
+      "-one();",
+      "-two();",
+      "+one();",
+      "+two();",
+      "+three();",
+    ].join("\n"),
+  );
+  assert.deepEqual(changes[0]?.hunks, [{ base: { start: 4, end: 5 }, head: { start: 4, end: 6 }, removedNames: [] }]);
+});
+
+test("a hunk keeps only the names its own removed lines declare", () => {
+  const changes = read(
+    [
+      "diff --git a/src/A.java b/src/A.java",
+      "--- a/src/A.java",
+      "+++ b/src/A.java",
+      "@@ -10,1 +10,1 @@",
+      "-public void one() {",
+      "+public void one(int a) {",
+      "@@ -40,1 +40,0 @@",
+      "-public void gone() {",
+    ].join("\n"),
+  );
+  assert.deepEqual(changes[0]?.hunks.map((hunk) => hunk.removedNames), [[], ["gone"]]);
+  assert.deepEqual(changes[0]?.removedNames, ["gone"]);
+});
+
+test("a pure addition has no base side and a pure deletion has no head side", () => {
+  const changes = read(
+    [
+      "diff --git a/src/A.java b/src/A.java",
+      "--- a/src/A.java",
+      "+++ b/src/A.java",
+      "@@ -7,0 +8,2 @@",
+      "+one();",
+      "+two();",
+      "@@ -20,1 +21,0 @@",
+      "-gone();",
+    ].join("\n"),
+  );
+  assert.deepEqual(changes[0]?.hunks, [
+    { head: { start: 8, end: 9 }, removedNames: [] },
+    { base: { start: 20, end: 20 }, removedNames: [] },
+  ]);
+  assert.deepEqual(changes[0]?.added, [{ start: 8, end: 9 }]);
+  assert.deepEqual(changes[0]?.removals, [{ after: 21 }]);
+});
+
 test("a deleted file is flagged and has no new side", () => {
   const changes = read(["diff --git a/gone.ts b/gone.ts", "deleted file mode 100644", "--- a/gone.ts", "+++ /dev/null", "@@ -1,2 +0,0 @@", "-a", "-b"].join("\n"));
-  assert.deepEqual(changes, [{ path: "gone.ts", deleted: true, binary: false, added: [], removals: [{ after: 0 }], removedNames: [] }]);
+  assert.deepEqual(changes, [
+    {
+      path: "gone.ts",
+      deleted: true,
+      binary: false,
+      added: [],
+      removals: [{ after: 0 }],
+      removedNames: [],
+      hunks: [{ base: { start: 1, end: 2 }, removedNames: [] }],
+    },
+  ]);
 });
 
 test("a file git reports as binary is flagged and carries no ranges", () => {
   const changes = read(["diff --git a/x.ts b/x.ts", "index 1..2 100644", "Binary files a/x.ts and b/x.ts differ"].join("\n"));
-  assert.deepEqual(changes, [{ path: "x.ts", deleted: false, binary: true, added: [], removals: [], removedNames: [] }]);
+  assert.deepEqual(changes, [{ path: "x.ts", deleted: false, binary: true, added: [], removals: [], removedNames: [], hunks: [] }]);
 });
 
 test("a body line that looks like a header neither starts a file nor a hunk", () => {

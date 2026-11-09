@@ -22,10 +22,13 @@ import type { ContractRoutes } from "../core/ports/contract-routes.port.ts";
 import type { ImportOriginsReader } from "../core/ports/import-origins.port.ts";
 import type { DeclaredMemberNamesReader } from "../core/ports/declared-member-names.port.ts";
 import type { ModuleDependenciesReader } from "../core/ports/module-dependencies.port.ts";
+import type { RevisionSources } from "../core/ports/revision-sources.port.ts";
+import type { TypeBindings } from "../core/ports/type-bindings.port.ts";
+import type { DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
 
 /** The workspace read of consequences queries over the workspace read, the TypeScript flow and request origin readers and the Angular template reader. */
-export function composeConsumerSources(deps: { operation: WorkspaceReadOperation; heads: HeadReaderDeps; digest: Digest; importOrigins: ImportOriginsReader; memberNames: DeclaredMemberNamesReader; modules: ModuleDependenciesReader; engines: Readonly<Record<string, string>> }): ConsumerSources {
+export function composeConsumerSources(deps: { operation: WorkspaceReadOperation; heads: HeadReaderDeps; digest: Digest; importOrigins: ImportOriginsReader; memberNames: DeclaredMemberNamesReader; modules: ModuleDependenciesReader; engines: Readonly<Record<string, string>>; typeBindings?: TypeBindings; checkerInputs?: RevisionSources; declaredOutputs?: (repo: string) => readonly DeclaredBuildOutput[] | undefined }): ConsumerSources {
   return createConsumerSources({ ...deps, flow: createConsumerFlowReader, origins: createRequestOriginReader, metadata: createAngularMetadataReader(), templateFlow: createTemplateFlowReader(), relations: composeAngularRelations() });
 }
 

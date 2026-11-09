@@ -806,6 +806,22 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: Impa
   ];
 }
 
+/** The ranges and hunks a query set aside (ADR-0043 decisions 3 and 5): one summary count per basis, or one line per entry. */
+function impactSettled(value: ImpactValue, detail: ResponseMode): string[] {
+  const settled = value.settled ?? [];
+  if (settled.length === 0) return [];
+  if (detail === "summary") {
+    const hunks = settled.filter((change) => change.basis === "hunk").length;
+    const ranges = settled.length - hunks;
+    return [...(hunks === 0 ? [] : [`${hunks} changed hunks alter no token`]), ...(ranges === 0 ? [] : [`${ranges} requested ranges hold no token`])];
+  }
+  return settled.map((change) => {
+    if (change.basis === "range") return `  ${change.file} ${spanText(change.start, change.end)} (${change.reason})`;
+    const sides = [change.base === undefined ? undefined : `base ${spanText(change.base.start, change.base.end)}`, change.head === undefined ? undefined : `head ${spanText(change.head.start, change.head.end)}`].filter((side) => side !== undefined);
+    return `  ${change.file} ${sides.join(" -> ")} (${change.reason})`;
+  });
+}
+
 function impactSeeds(value: ImpactValue, detail: ResponseMode): string[] {
   if (detail === "summary") return [`seeds (${value.seeds.length}):`, ...groupedSeeds(value.seeds)];
   const dependencies = new Set(investigationSymbols(value).flatMap((symbol) => symbol.via === undefined ? [] : [`${symbol.via.file}\0${symbol.via.symbol}`]));
@@ -1068,7 +1084,7 @@ export function renderImpact(fact: Fact<ImpactValue>, detail: ResponseMode = "su
   const lines = headerLines(fact);
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide(fact, detail, context)].join("\n");
   const hasOmissions = fact.status === "partial" || fact.value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) || consequenceSymbols(fact.value).length > investigationSymbols(fact.value).length || fact.value.modules !== undefined;
-  lines.push(...impactBody(fact.value, detail, { kind: "local" }, context), ...impactSeeds(fact.value, detail), ...impactCutBlock(cutsOf(fact), detail, { kind: "fact" }, context, fact.inputs.declaredConfig.walk), ...(hasOmissions ? textModeGuide(localQueryCoordinates(fact, context, detail)) : []));
+  lines.push(...impactBody(fact.value, detail, { kind: "local" }, context), ...impactSeeds(fact.value, detail), ...impactSettled(fact.value, detail), ...impactCutBlock(cutsOf(fact), detail, { kind: "fact" }, context, fact.inputs.declaredConfig.walk), ...(hasOmissions ? textModeGuide(localQueryCoordinates(fact, context, detail)) : []));
   return lines.join("\n");
 }
 
@@ -1304,10 +1320,15 @@ export function renderTrace(fact: Fact<TraceValue>, detail: ResponseMode = "summ
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : TRACE_FULL_GUIDE;
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
-  lines.push(...traceRootLines(fact.value), ...effectLines(fact.value.steps), TRACE_BRANCHES, ...readingPlanLines(fact.value, detail));
+  lines.push(...traceRootLines(fact.value), ...traceSettledLine(fact.value), ...effectLines(fact.value.steps), TRACE_BRANCHES, ...readingPlanLines(fact.value, detail));
   if (detail === "details") lines.push("steps:", ...traceTreeLines(fact.value.steps));
   lines.push(...traceCutLines(cutsOf(fact), detail));
   return lines.join("\n");
+}
+
+/** One line when requested ranges held no token (ADR-0043 decision 3). */
+function traceSettledLine(value: TraceValue): string[] {
+  return value.settled === undefined ? [] : [`${value.settled.length} requested ranges hold no token`];
 }
 
 /** One link as every answer lists it: its number, both ends, the basis and what the answer adds about how it was reached. */

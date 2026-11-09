@@ -34,7 +34,7 @@ function recordingPack(profile: LanguageProfile, received: string[], readsProjec
     memberNames: { memberNames: async (file) => (received.push(file.path), { names: [tag], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] }) },
     origins: (sources, paths) => (received.push(...sources.map(({ path }) => path)), universe.push(...(paths ?? [])), origins),
     modules: { extract: async (sources) => (received.push(...sources.map(({ path }) => path)), { files: [], dependencies: [], unread: sources.map(({ path }) => ({ file: path, reason: "unresolved" as const })), untraversed: [] }) },
-    trivia: { triviaLines: async (file) => (received.push(file.path), new Set([tag.length])) },
+    tokens: { tokensOf: async (file) => (received.push(file.path), { status: "read", language: tag, tokens: [], imports: [], importOrder: profile.importOrder }) },
   };
 }
 
@@ -56,7 +56,7 @@ test("a site, a file or a source of one language reaches only its pack, and a si
   ];
   for (const file of SOURCES) {
     await readers.memberNames.memberNames(file);
-    await readers.sourceTrivia.triviaLines(file);
+    await readers.sourceTokens.tokensOf(file);
   }
   await readers.modules.extract(SOURCES);
 
@@ -83,6 +83,13 @@ test("a stage a pack declares absent answers each of its sites capability-absent
   assert.deepEqual(dispatch, [{ kind: "unknown", reason: "capability-absent" }, { kind: "unknown", reason: "aspect may replace the body" }]);
   assert.deepEqual(receivers, [{ kind: "unknown", reason: "capability-absent" }, { kind: "unproven" }]);
   assert.deepEqual(typescript, []);
+});
+
+test("a path no pack owns is unread no-language, and a pack that declares tokens absent answers capability-absent for its own files", async () => {
+  const readers = routedReaders([recordingPack(TYPESCRIPT_PROFILE, [], true), { ...recordingPack(JAVA_PROFILE, []), absent: ["tokens"] }]);
+
+  assert.deepEqual(await readers.sourceTokens.tokensOf({ path: "src/main/kotlin/B.kt", content: "" }), { status: "unread", reason: "no-language" });
+  assert.deepEqual(await readers.sourceTokens.tokensOf({ path: JAVA, content: "" }), { status: "unread", reason: "capability-absent" });
 });
 
 test("one list of sources reaches a pack as one list, however many times it is read", async () => {

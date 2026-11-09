@@ -25,6 +25,18 @@ type Origin = Finding<ImportOrigin> & { occurrence?: true };
 
 const written = (...paths: string[][]): ReplacedRoots => ({ paths, globalObjects: new Set(["globalThis", "window"]), packages: new Set() });
 
+function tokenReading(file: { path: string; content: string }, trivia: Readonly<Record<string, readonly number[]>>) {
+  const quiet = new Set(trivia[file.path] ?? []);
+  const lines = file.content.split("\n").length;
+  return {
+    status: "read" as const,
+    language: "typescript" as const,
+    tokens: Array.from({ length: lines }, (_, index) => index + 1).filter((line) => !quiet.has(line)).map((line) => ({ start: line, end: line, text: `t${line}` })),
+    imports: [],
+    importOrder: "significant" as const,
+  };
+}
+
 interface Options {
   workspace?: TraceQueriesDeps["workspace"];
   /** Files the export holds and the index did not; none by default. */
@@ -120,7 +132,7 @@ function setup(options: Options) {
       index: async () => (options.indexFails ? { ok: false, fault: { kind: "index-failed", detail: "broken" } } : { ok: true, value: { ...SUMMARY, filesNotIndexed: options.notIndexed ?? [] } }),
       open: () => ({ ok: true, value: store }),
     },
-    sourceTrivia: { triviaLines: async (file: { path: string }) => (options.onTrivia?.(file.path), new Set(options.trivia?.[file.path] ?? [])) },
+    tokens: { tokensOf: async (file: { path: string; content: string }) => (options.onTrivia?.(file.path), tokenReading(file, options.trivia ?? {})) },
     memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: options.callables?.[file.path] ?? [], receiverBindings: options.receiverBindings?.[file.path] ?? [], ...(options.syntaxCalls?.[file.path] === undefined ? {} : { calls: options.syntaxCalls[file.path] }), functionValues: options.functionValues?.[file.path] ?? [] }) },
     importOrigins: () => ({
       replacedRoots: async () => options.replaced ?? written(),
@@ -619,15 +631,19 @@ test("a line range selects the declarations it intersects, never the file's othe
   assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["f", "g"]);
 });
 
-test("a line range that selects no declaration, past the end of its file or only over trivia between declarations, is an unknown-symbol fault", async () => {
+test("a line range wholly past the end of its file is an unknown-symbol fault, and one over trivia settles", async () => {
   const content = ["function f() {", "  return 1;", "}", "", "function g() {", "  return 2;", "}", "", "function h() {}", ""].join("\n");
   const nodes = [fakeNode("f", "function", B, 1, 3), fakeNode("g", "function", B, 5, 7), fakeNode("h", "function", B, 9, 9)];
-  for (const [start, end] of [[20, 25], [4, 4]] as const) {
-    const { answer } = await trace({ nodes, sources: [{ path: B, content }], trivia: { [B]: [4, 8, 10] } }, [{ file: B, start, end }]);
-    assert.ok(!answer.ok, `${start}-${end}`);
-    assert.equal(answer.fault.kind, "unknown-symbol");
-    assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: B, start, end, absent: false, candidates: ["f", "g", "h"] }]);
-  }
+  const past = await trace({ nodes, sources: [{ path: B, content }], trivia: { [B]: [4, 8, 10] } }, [{ file: B, start: 20, end: 25 }]);
+  assert.ok(!past.answer.ok);
+  assert.equal(past.answer.fault.kind, "unknown-symbol");
+  assert.deepEqual(past.answer.fault.kind === "unknown-symbol" && past.answer.fault.entries, [{ file: B, start: 20, end: 25, absent: false, candidates: ["f", "g", "h"] }]);
+
+  const trivia = await trace({ nodes, sources: [{ path: B, content }], trivia: { [B]: [4, 8, 10] } }, [{ file: B, start: 4, end: 4 }]);
+  assert.ok(trivia.answer.ok);
+  if (!trivia.answer.ok || trivia.answer.value.status === "unknown") assert.fail("expected a trace fact");
+  assert.deepEqual(trivia.answer.value.value.settled, [{ basis: "range", file: B, start: 4, end: 4, reason: "no-token", candidates: ["f", "g", "h"] }]);
+  assert.deepEqual(trivia.answer.value.value.roots, [{ target: "src/b.ts:4-4", steps: [] }]);
 });
 
 test("a trace reads a file's trivia lines once, however many of its ranges it is asked", async () => {

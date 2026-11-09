@@ -687,3 +687,26 @@ test("workspace follow-up guidance appears only where its condition holds", () =
   assert.doesNotMatch(renderWorkspaceImpact(workspace({ a: section(impact) }), "full"), /recorded owner/);
   assert.match(renderWorkspaceImpact(workspace({ a: section(impact), b: section(impact) }), "full"), /recorded owner/);
 });
+
+test("a settled change is one summary line and one detail line per hunk", () => {
+  const value: ImpactValue = {
+    seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 },
+    settled: [
+      { basis: "hunk", file: "src/A.java", base: { start: 4, end: 4 }, head: { start: 4, end: 4 }, reason: "no-token-change" },
+      { basis: "hunk", file: "src/B.ts", head: { start: 7, end: 7 }, reason: "import-order" },
+      { basis: "hunk", file: "src/C.java", base: { start: 9, end: 9 }, reason: "no-token-change" },
+    ],
+  };
+  const summary = renderImpact({ ...base, status: "complete", value });
+
+  assert.match(summary, /3 changed hunks alter no token/);
+  const detail = renderImpact({ ...base, status: "complete", value }, "details");
+  assert.match(detail, /src\/A\.java base 4-4 -> head 4-4 \(no-token-change\)/);
+  assert.match(detail, /src\/B\.ts head 7-7 \(import-order\)/);
+  assert.match(detail, /src\/C\.java base 9-9 \(no-token-change\)/);
+});
+
+test("a callers answer with a settled range says how many ranges held no token", () => {
+  const value: ImpactValue = { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 }, settled: [{ basis: "range", file: "src/A.java", start: 2, end: 2, reason: "no-token", candidates: ["A"] }] };
+  assert.match(renderImpact({ ...base, status: "complete", value }), /1 requested ranges hold no token/);
+});

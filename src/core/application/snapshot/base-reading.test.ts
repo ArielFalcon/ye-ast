@@ -11,7 +11,10 @@ import type { TypeBindingsAnswer } from "../../ports/type-bindings.port.ts";
 import type { WorkspaceFault } from "../../ports/workspace-repos.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { createBaseReadings } from "./base-reading.ts";
-import { NOTHING_DECLARED, type EdgeTargets } from "../navigation/edge-targets.ts";
+import type { EdgeTargets } from "../navigation/edge-targets.ts";
+import { NOTHING_DECLARED } from "../navigation/edge-targets.ts";
+import type { SourceReading } from "../../domain/change/source-tokens.ts";
+import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 
 const SHA: SnapshotRef = { repo: "shop", kind: "sha", sha: "a".repeat(40) };
 const LIVE: SnapshotRef = { repo: "shop", kind: "live", head: "h", stateId: "s" };
@@ -83,6 +86,62 @@ test("the calls through origins are derived once per index and relations' scope,
   await into("index-1", { exclude: ["gen/"] });
   assert.equal(reads, 3);
   assert.deepEqual(asked, [["this.svc.list"], ["this.svc.list"], ["this.svc.list"], ["this.svc.list"]]);
+});
+
+const EMPTY_TREE = { export: { files: [], skipped: [] }, sources: [] };
+
+/** The content-keyed retention of one snapshot read, shared by two reads of the same source. */
+function derivedFacts(): DerivedFacts {
+  const kept = new Map<string, unknown>();
+  return {
+    ofFile: <T>(slot: string, file: { path: string; content: string }, derive: () => T): T => {
+      const key = `${slot}:${file.path}:${file.content}`;
+      if (!kept.has(key)) kept.set(key, derive());
+      return kept.get(key) as T;
+    },
+    ofInputs: async <T>(slot: string, inputs: object, derive: () => Promise<T>): Promise<T> => {
+      const key = `${slot}:${JSON.stringify(inputs)}`;
+      if (!kept.has(key)) kept.set(key, await derive());
+      return kept.get(key) as T;
+    },
+    fingerprint: () => "fingerprint",
+    drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
+  } as DerivedFacts;
+}
+
+test("the tokens stage reads one file once per read and a second read retains it", async () => {
+  let calls = 0;
+  const reading: SourceReading = { status: "read", language: "typescript", tokens: [{ start: 1, end: 1, text: "const", startOffset: 0, endOffset: 0 }], imports: [], importOrder: "significant" };
+  const tokens: SourceTokens = { tokensOf: async () => (calls++, reading) };
+  const facts = derivedFacts();
+  const readings = createBaseReadings({ relations: {} as RelationExtractor, tokens });
+  const file = { path: "src/a.ts", content: "const a = 1;\n" };
+  const prepared = { facts } as never;
+  const source = { tree: EMPTY_TREE, prepared, store: {} as CodeGraphReader, snapshot: SHA, request: { repo: "/work/shop" } };
+
+  const first = readings.of(source);
+  assert.deepEqual(await first.tokensOf(file), reading);
+  assert.deepEqual(await first.tokensOf(file), reading);
+  assert.equal(calls, 1);
+
+  const second = readings.of(source);
+  assert.deepEqual(await second.tokensOf(file), reading);
+  assert.deepEqual(await readings.tokensOf(file, prepared), reading);
+  assert.equal(calls, 1);
+
+  assert.deepEqual(await readings.tokensOf({ path: "src/b.ts", content: "const b = 2;\n" }, prepared), reading);
+  assert.deepEqual(await readings.tokensOf(file, prepared), reading);
+  assert.equal(calls, 2);
+});
+
+test("a file no pack tokenizes answers unread through both entry points", async () => {
+  const tokens: SourceTokens = { tokensOf: async () => ({ status: "unread", reason: "no-language" }) };
+  const readings = createBaseReadings({ relations: {} as RelationExtractor, tokens });
+  const file = { path: "src/A.kt", content: "fun main() {}" };
+  const prepared = { facts: derivedFacts() } as never;
+
+  assert.deepEqual(await readings.tokensOf(file, prepared), { status: "unread", reason: "no-language" });
+  assert.deepEqual(await readings.of({ tree: EMPTY_TREE, prepared, store: {} as CodeGraphReader, snapshot: SHA, request: { repo: "/work/shop" } }).tokensOf(file), { status: "unread", reason: "no-language" });
 });
 
 function rememberingFacts(): DerivedFacts {

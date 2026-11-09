@@ -64,7 +64,7 @@ export function createContractChange({ sources, revisions, shapes }: ContractCha
         };
         derivation = withCuts(derivationBase, value, [...prepared.cuts, ...before.value.cuts, ...after.value.cuts], EVERYTHING);
       }
-      return assemble(prepared, factBase, answered, { base, head, snapshots: { base: baseSha.value, head: headSha.value }, derivation });
+      return assemble(prepared, prepared.base({ base, head }), answered, { base, head, snapshots: { base: baseSha.value, head: headSha.value }, derivation });
     });
   };
 }

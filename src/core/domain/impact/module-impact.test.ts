@@ -5,7 +5,7 @@ import type { ModuleDependencies, ModuleDependency, ModuleSource } from "./modul
 import { moduleImpact } from "./module-impact.ts";
 
 const source = (file: string, statements: string[] = [], moduleOnly = true): ModuleSource => ({ file, statements, moduleOnly });
-const change = (path: string, deleted = false): FileChange => ({ path, deleted, binary: false, added: [], removals: [], removedNames: [] });
+const change = (path: string, deleted = false): FileChange => ({ path, deleted, binary: false, added: [], removals: [], removedNames: [], hunks: [] });
 const edge = (file: string, target: string, overrides: Partial<ModuleDependency> = {}): ModuleDependency => ({ file, line: 7, endLine: 7, specifier: "@alias/target", kind: "import", typeOnly: false, target: { kind: "repository", file: target }, bindings: [], ...overrides });
 
 test("referenced JSON content changes and deletions reach consumers without declaration origins", () => {

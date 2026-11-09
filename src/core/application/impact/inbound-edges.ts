@@ -349,12 +349,12 @@ export function createInboundEdges(
           ...(edge.bridge === undefined ? {} : { bridge: edge.bridge }),
           ...(edge.substitutes === undefined ? {} : { substitutes: edge.substitutes }),
         };
-        const key = JSON.stringify([edge.from.id, line ?? null, edge.resource ?? null, edge.basis, edge.bridge ?? null, edge.substitutes !== undefined]);
+        const key = occurrenceKey(occurrence);
         const held = kept.get(key);
         if (held === undefined || (held.provenance === "heuristic" && occurrence.provenance !== "heuristic") || (held.provenance === occurrence.provenance && occurrence.confidence > held.confidence)) kept.set(key, occurrence);
       }
     }
-    return [...kept.values()].sort((a, b) => comparePosition(a.from, b.from) || (a.line ?? Infinity) - (b.line ?? Infinity) || compareText(a.basis, b.basis));
+    return [...kept.values()].sort(compareOccurrences);
   }
 
   return {
@@ -370,6 +370,16 @@ export function createInboundEdges(
     }),
     followed: () => followed,
   };
+}
+
+/** The one place an occurrence is counted: its source, line, resource, basis and the settlement that changes what it proves. */
+export function occurrenceKey(occurrence: InboundOccurrence): string {
+  return JSON.stringify([occurrence.from.id, occurrence.line ?? null, occurrence.resource ?? null, occurrence.basis, occurrence.bridge ?? null, occurrence.substitutes !== undefined]);
+}
+
+/** The order every list of a symbol's occurrences keeps: by source, then the place, then the basis. */
+export function compareOccurrences(a: InboundOccurrence, b: InboundOccurrence): number {
+  return comparePosition(a.from, b.from) || (a.line ?? Infinity) - (b.line ?? Infinity) || compareText(a.basis, b.basis);
 }
 
 function strongestPerSymbol(edges: readonly InboundEdge[]): InboundEdge[] {

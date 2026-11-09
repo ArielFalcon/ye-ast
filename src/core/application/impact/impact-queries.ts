@@ -1,12 +1,16 @@
 import { compareText } from "../../domain/shared/code-node.ts";
 import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
-import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
+import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 import type { DeclarationEvidenceReader } from "../../ports/declaration-evidence.port.ts";
 import { blastRadius, type BlastRadius } from "../../domain/change/blast-radius.ts";
 import { isReadableFile, kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import { selectChange } from "../../domain/change/change-selection.ts";
 import { resourceImpact, resourceOwners } from "../../domain/change/resource-impact.ts";
-import type { FileChange } from "../../domain/change/diff-reader.ts";
+import type { FileChange, Hunk, LineRange } from "../../domain/change/diff-reader.ts";
+import { settledOf } from "../../domain/change/hunk-settling.ts";
+import type { TokenReading } from "../../domain/change/source-tokens.ts";
+import { triviaLinesOf } from "../../domain/change/token-lines.ts";
+import type { SettledHunkChange } from "../../domain/impact/impact-fact.ts";
 import type { ComponentRef } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
@@ -58,7 +62,7 @@ import { edgeKey, type EdgeTargets, type FollowedEdge } from "../navigation/edge
 import type { AttributedCall, ReverseCalls } from "../navigation/reverse-calls.ts";
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
-import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, targetKey } from "../navigation/root-selection.ts";
+import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey } from "../navigation/root-selection.ts";
 import { snapshotFiles } from "../navigation/snapshot-files.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
@@ -91,7 +95,7 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
    */
   memberNames?: DeclaredMemberNamesReader;
   /** Tells the trivia lines of a requested range apart; without it every line of a range is code. */
-  sourceTrivia?: SourceTrivia;
+  tokens?: SourceTokens;
   moduleDependencies?: ModuleDependenciesReader;
   /**
    * The reader of every language's module statements, whose bindings prove the declaration a graph edge's root reaches
@@ -111,8 +115,6 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
 }
 
 type Answer = Result<Fact<ImpactValue>, OfChangeFault>;
-
-const NO_TRIVIA: SourceTrivia = { triviaLines: async () => new Set() };
 
 
 export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
@@ -192,7 +194,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         try {
           const snapshot = snapshotFiles(store, listing);
           const unknown = missingTargets(store, requested);
-          const ranges = await requestedRanges(store, changes, headTree.sources, deps.sourceTrivia ?? NO_TRIVIA, snapshot);
+          const ranges = await requestedRanges(store, changes, headTree.sources, { tokensOf: (file) => readings.tokensOf(file, head.prepared) }, snapshot);
           if (signal?.aborted) return ABORTED;
           const missing = snapshot.describe([...unknown, ...ranges.uncovered]);
           if (missing.length > 0) {
@@ -214,7 +216,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (typed === "aborted") return ABORTED;
           const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
           if (signal?.aborted) return ABORTED;
-          return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), read.value, [...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts], impactWalk(targets.map(({ file }) => file), read.value)) };
+          const settled = settledRangeChanges(ranges.settled);
+          const value = settled.length === 0 ? read.value : { ...read.value, settled };
+          return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), value, [...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts], impactWalk(targets.map(({ file }) => file), value)) };
         } finally {
           store.close();
         }
@@ -378,6 +382,8 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     }
     const changes = selection.files;
     const headTree = head.tree;
+    const { changes: settledChanges, settled } = await settledHunks(readings, changes, headTree.sources, baseTree.sources, head.prepared, input.basePrepared);
+    if (signal?.aborted) return ABORTED;
     const declarations = await deps.angular.read(headTree.sources);
     if (signal?.aborted) return ABORTED;
     const before = !sameTree && changes.some((file) => file.deleted && !isReadableFile(file.path)) ? await deps.angular.read(baseTree.sources) : [];
@@ -397,7 +403,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const changedPaths = new Set(radius.files.map((file) => file.path));
     const contracts = changedContracts(deps.contracts.operations(baseTree.sources), deps.contracts.operations(headTree.sources), (path) => changedPaths.has(path) && entrypointSelected(path));
     fixed.push(...contracts.cuts);
-    const value: ImpactValue = { mergeBase: radius.mergeBase, seeds: [], changedEntrypoints: entrypointChanges, ...(contracts.changes.length === 0 ? {} : { changedContracts: servedContracts(contracts.changes, baseTree.findings, headTree.findings) }), symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
+    const value: ImpactValue = { mergeBase: radius.mergeBase, seeds: [], changedEntrypoints: entrypointChanges, ...(contracts.changes.length === 0 ? {} : { changedContracts: servedContracts(contracts.changes, baseTree.findings, headTree.findings) }), ...(settled.length === 0 ? {} : { settled }), symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
 
     let moduleRead: ReturnType<typeof moduleImpact> | undefined;
     const moduleReader = deps.moduleDependencies;
@@ -445,14 +451,14 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (request.signal?.aborted) return ABORTED;
       const baseSources = new Map(baseTree.sources.map((source) => [source.path, source.content]));
       const headSources = new Map(headTree.sources.map((source) => [source.path, source.content]));
-      const byPath = Map.groupBy(changes.filter((file) => file.removedNames.length > 0), (file) => file.path);
+      const byPath = Map.groupBy(settledChanges.filter((file) => file.removedNames.length > 0), (file) => file.path);
       const validated = new Map<string, ReadonlySet<string>>();
       for (const [path, files] of byPath) {
         if (deps.declarationEvidence === undefined || signal?.aborted || files.some((file) => file.deleted !== files[0]!.deleted)) continue;
         const names = [...new Set(files.flatMap((file) => file.removedNames))];
         validated.set(path, new Set(deps.declarationEvidence.validate({ path, base: baseSources.get(path), head: headSources.get(path), deleted: files[0]!.deleted, names })));
       }
-      const validatedChanges = changes.map((file) => {
+      const validatedChanges = settledChanges.map((file) => {
         const retained = validated.get(file.path);
         return retained === undefined ? file : { ...file, removedNames: file.removedNames.filter((name) => retained.has(name)) };
       });
@@ -468,6 +474,101 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       store.close();
     }
   }
+}
+
+/** The hunks of the selected source files whose tokens did not change, and the change with each settled hunk removed (ADR-0043 decisions 1 and 5). */
+async function settledHunks(
+  readings: ReturnType<typeof createBaseReadings>,
+  files: readonly FileChange[],
+  headSources: readonly { path: string; content: string }[],
+  baseSources: readonly { path: string; content: string }[],
+  headPrepared: PreparedCommit | undefined,
+  basePrepared: PreparedCommit | undefined,
+): Promise<{ changes: FileChange[]; settled: SettledHunkChange[] }> {
+  const baseByPath = new Map(baseSources.map((source) => [source.path, source]));
+  const headByPath = new Map(headSources.map((source) => [source.path, source]));
+  const settled: SettledHunkChange[] = [];
+  const changes: FileChange[] = [];
+  for (const file of files) {
+    if (kindOfChangedFile(file.path) !== "source" || file.deleted || file.binary) {
+      changes.push(file);
+      continue;
+    }
+    const baseSource = baseByPath.get(file.path);
+    const headSource = headByPath.get(file.path);
+    if (baseSource === undefined || headSource === undefined) {
+      changes.push(file);
+      continue;
+    }
+    const base = await readings.tokensOf(baseSource, basePrepared);
+    const head = await readings.tokensOf(headSource, headPrepared);
+    if (head.status !== "read") {
+      changes.push(file);
+      continue;
+    }
+    const left = new Set<Hunk>();
+    for (const hunk of file.hunks) {
+      const outcome = settledOf(base, head, hunk);
+      if (outcome.settled === undefined) continue;
+      left.add(hunk);
+      settled.push({
+        basis: "hunk",
+        file: file.path,
+        ...(hunk.base === undefined ? {} : { base: hunk.base }),
+        ...(hunk.head === undefined ? {} : { head: hunk.head }),
+        reason: outcome.settled,
+      });
+    }
+    changes.push(settleFile(file, left, head, headSource.content));
+  }
+  settled.sort((a, b) => compareText(a.file, b.file) || firstLine(a) - firstLine(b));
+  return { changes, settled };
+}
+
+/**
+ * `file` without the settled hunks and without the lines of an unsettled hunk that hold no token (ADR-0043 decisions 1
+ * and 3); a hunk left with no such line seeds as a removal at its place, and the removal rule keeps the base side.
+ */
+function settleFile(file: FileChange, left: ReadonlySet<Hunk>, head: TokenReading, content: string): FileChange {
+  const quiet = triviaLinesOf(head, content.split("\n").length);
+  const removedNames = new Set([...left].flatMap((hunk) => hunk.removedNames));
+  const added: LineRange[] = [];
+  const removals: { after: number }[] = [];
+  let removal = 0;
+  for (const hunk of file.hunks) {
+    const place = hunk.head === undefined ? file.removals[removal] : undefined;
+    if (hunk.head === undefined) removal += 1;
+    if (left.has(hunk)) continue;
+    if (hunk.head === undefined) {
+      if (place !== undefined) removals.push(place);
+      continue;
+    }
+    const ranges = tokenLinesIn(hunk.head, quiet);
+    if (ranges.length === 0) removals.push({ after: hunk.head.start - 1 });
+    else added.push(...ranges);
+  }
+  return {
+    ...file,
+    added,
+    removals,
+    removedNames: removedNames.size === 0 ? file.removedNames : file.removedNames.filter((name) => !removedNames.has(name)),
+  };
+}
+
+/** The runs of `range` whose lines hold a token. */
+function tokenLinesIn(range: LineRange, quiet: ReadonlySet<number>): LineRange[] {
+  const runs: LineRange[] = [];
+  for (let line = range.start; line <= range.end; line += 1) {
+    if (quiet.has(line)) continue;
+    const last = runs.at(-1);
+    if (last !== undefined && last.end === line - 1) last.end = line;
+    else runs.push({ start: line, end: line });
+  }
+  return runs;
+}
+
+function firstLine(change: SettledHunkChange): number {
+  return change.base?.start ?? change.head?.start ?? 0;
 }
 
 function moduleCoverage(read: ModuleDependencies, tree: CommitExtraction, changes: readonly FileChange[]): ModuleDependencies {

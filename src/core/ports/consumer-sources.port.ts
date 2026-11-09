@@ -51,6 +51,8 @@ export type ConsumerMemberOccurrences = { kind: "unavailable" } | { kind: "unres
 export interface ConsumerSession {
   /** The links of the HTTP call sites that one repository serves alone, matched over every repository of the workspace including their own. */
   links: readonly Link[];
+  /** The cuts of the frontier walked so far: contradicted records the walk could reach, and the reading's own typed cuts. */
+  cutsAfterWalk(): readonly Cut[];
   /** The repositories that serve the operation asked about, with the handler that does. */
   serving: readonly { repo: string; handler: Handler }[];
   /** The HTTP call sites of the workspace whose target no read could evaluate: any of them may call the operation. */

@@ -19,6 +19,18 @@ export interface FileChange {
    * order: an edited signature keeps its name, a rename or a deletion loses it.
    */
   removedNames: readonly string[];
+  /** The hunks the diff spells out for the file, in diff order; they own the line ranges `added` and `removals` union. */
+  hunks: readonly Hunk[];
+}
+
+/** One hunk of a `--unified=0` diff: what it took from the base side and what it left on the head side. */
+export interface Hunk {
+  /** The base-side lines the hunk removed or replaced, inclusive; absent when the hunk only added lines. */
+  base?: LineRange;
+  /** The head-side lines the hunk added or replaced, inclusive; absent when the hunk only removed lines. */
+  head?: LineRange;
+  /** The names this hunk's removed lines declare (see `declaredIdentifier`) that none of its added lines declares again, without duplicates. */
+  removedNames: readonly string[];
 }
 
 export interface Removal {
@@ -44,14 +56,16 @@ interface Building {
   path: string;
   deleted: boolean;
   binary: boolean;
-  added: LineRange[];
-  removals: Removal[];
   removedNames: string[];
   addedNames: Set<string>;
+  hunks: GrowingHunk[];
+  hunk?: GrowingHunk;
 }
 
+type GrowingHunk = { base?: LineRange; head?: LineRange; headStart: number; removedNames: string[]; addedNames: Set<string> };
+
 const DIFF_HEADER = "diff --git ";
-const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
+const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 
 export function createDiffReader(): DiffReader {
   const files: Building[] = [];
@@ -61,7 +75,7 @@ export function createDiffReader(): DiffReader {
     if (line.startsWith(DIFF_HEADER)) {
       const path = diffGitHeaderPath(line);
       if (path === undefined) throw new UnreadableDiff(line);
-      current = { path, deleted: false, binary: false, added: [], removals: [], removedNames: [], addedNames: new Set() };
+      current = { path, deleted: false, binary: false, removedNames: [], addedNames: new Set(), hunks: [] };
       files.push(current);
       return;
     }
@@ -69,17 +83,22 @@ export function createDiffReader(): DiffReader {
     if (line.startsWith("-") || line.startsWith("+")) {
       const name = declaredIdentifier(line.slice(1));
       if (name !== undefined) {
-        if (line.startsWith("-")) current.removedNames.push(name);
-        else current.addedNames.add(name);
+        if (line.startsWith("-")) {
+          current.removedNames.push(name);
+          current.hunk?.removedNames.push(name);
+        } else {
+          current.addedNames.add(name);
+          current.hunk?.addedNames.add(name);
+        }
       }
       return;
     }
     const hunk = HUNK_HEADER.exec(line);
     if (hunk !== null) {
-      const start = Number(hunk[1]);
-      const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
-      if (count === 0) current.removals.push({ after: start });
-      else current.added.push({ start, end: start + count - 1 });
+      const base = rangeOf(Number(hunk[1]), hunk[2]);
+      const head = rangeOf(Number(hunk[3]), hunk[4]);
+      current.hunk = { ...(base === undefined ? {} : { base }), ...(head === undefined ? {} : { head }), headStart: Number(hunk[3]), removedNames: [], addedNames: new Set() };
+      current.hunks.push(current.hunk);
       return;
     }
     if (line.startsWith("deleted file mode")) current.deleted = true;
@@ -89,15 +108,21 @@ export function createDiffReader(): DiffReader {
   return {
     push,
     finish: () =>
-      files.map(({ path, deleted, binary, added, removals, removedNames, addedNames }): FileChange => ({
+      files.map(({ path, deleted, binary, removedNames, addedNames, hunks }): FileChange => ({
         path,
         deleted,
         binary,
-        added,
-        removals,
+        added: hunks.flatMap((hunk) => (hunk.head === undefined ? [] : [hunk.head])),
+        removals: hunks.flatMap((hunk) => (hunk.head === undefined ? [{ after: hunk.headStart }] : [])),
         removedNames: [...new Set(removedNames)].filter((name) => !addedNames.has(name)),
+        hunks: hunks.map((hunk): Hunk => ({ ...(hunk.base === undefined ? {} : { base: hunk.base }), ...(hunk.head === undefined ? {} : { head: hunk.head }), removedNames: [...new Set(hunk.removedNames)].filter((name) => !hunk.addedNames.has(name)) })),
       })),
   };
+}
+
+function rangeOf(start: number, count: string | undefined): LineRange | undefined {
+  const lines = count === undefined ? 1 : Number(count);
+  return lines === 0 ? undefined : { start, end: start + lines - 1 };
 }
 
 /** The b-side path of a `diff --git` header (the a-side for a deletion), read as git quotes it. */

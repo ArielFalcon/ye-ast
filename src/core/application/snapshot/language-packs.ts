@@ -7,14 +7,15 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { AbsentCapability, LanguagePack } from "../../ports/language-pack.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
-import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
+import type { SourceReading } from "../../domain/change/source-tokens.ts";
+import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 
 /** The readers the families read, each sending a site, a file or a source only to the pack that owns its path (ADR-0045 decision 12). */
 export interface RoutedReaders {
   memberNames: DeclaredMemberNamesReader;
   importOrigins: ImportOriginsReader;
   modules: ModuleDependenciesReader;
-  sourceTrivia: SourceTrivia;
+  sourceTokens: SourceTokens;
 }
 
 /** What a source no pack reads states: nothing. */
@@ -64,8 +65,13 @@ export function routedReaders(packs: readonly LanguagePack[]): RoutedReaders {
     memberNames: {
       memberNames: (file, facts) => ownerOf(file.path)?.memberNames.memberNames(file, facts) ?? Promise.resolve(NOTHING_DECLARED),
     },
-    sourceTrivia: {
-      triviaLines: (file) => ownerOf(file.path)?.trivia.triviaLines(file) ?? Promise.resolve(new Set()),
+    sourceTokens: {
+      tokensOf: (file): Promise<SourceReading> => {
+        const owner = ownerOf(file.path);
+        if (owner === undefined) return Promise.resolve({ status: "unread", reason: "no-language" });
+        if (owner.tokens === undefined || owner.absent?.includes("tokens") === true) return Promise.resolve({ status: "unread", reason: "capability-absent" });
+        return owner.tokens.tokensOf(file);
+      },
     },
     modules: {
       async extract(sources, options): Promise<ModuleDependencies> {

@@ -7,7 +7,7 @@ import { callsByOwner } from "../navigation/reconciled-calls.ts";
 import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
-import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
+import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 import type { ComponentRef } from "../../domain/change/seeds.ts";
 import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
@@ -26,7 +26,7 @@ import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { EntrypointTarget, TraceFault, TraceQueries, TraceTarget, UnknownEntrypointFault } from "../../ports/trace-queries.port.ts";
-import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, triviaOncePerFile, type RootSelection } from "../navigation/root-selection.ts";
+import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey, type RootSelection } from "../navigation/root-selection.ts";
 import { snapshotFiles, type SnapshotFiles } from "../navigation/snapshot-files.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
 import { NOTHING_DECLARED } from "../navigation/edge-targets.ts";
@@ -56,7 +56,7 @@ export interface TraceQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, 
   callSites: PlacedCallSiteReader;
   dataEffects?: DataEffectReader;
   /** Tells the trivia lines of a requested range apart, so they select nothing. */
-  sourceTrivia: SourceTrivia;
+  tokens?: SourceTokens;
   /** Version of each engine every operation runs on, by package name. */
   engines: Readonly<Record<string, string>>;
 }
@@ -125,11 +125,11 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         const { store, summary } = index;
         try {
           const snapshot = snapshotFiles(store, head.tree.export.files.map(({ path }) => path));
-          const trivia = triviaOncePerFile(deps.sourceTrivia);
           const reading = readings.of(
             { tree: head.tree, prepared: head.prepared, hold: head.hold, store, digest: index.digest, snapshot: head.base(content).snapshot, request },
             { originPaths: head.tree.export.files.map(({ path }) => path).filter(head.selected), inScope: head.selected },
           );
+          const tokens = { tokensOf: (file: SourceFile) => reading.tokensOf(file) };
           const { unresolvedIn, lineOf } = reading;
           const syntaxOf = reading.syntaxOf ?? (async (): Promise<DeclaredMemberNames> => NOTHING_DECLARED);
           const sources = new Set(head.tree.sources.map((file) => file.path));
@@ -145,12 +145,12 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             }
           }
           const isRoot = isTraceRoot(store, unresolvedIn, syntaxCalls);
-          const selections = await Promise.all(targets.map(async (target): Promise<{ target: TraceTarget; selection: Pick<RootSelection, "seeds" | "missing" | "withoutSymbols"> }> => ({
+          const selections = await Promise.all(targets.map(async (target): Promise<{ target: TraceTarget; selection: Pick<RootSelection, "seeds" | "missing" | "withoutSymbols" | "settled"> }> => ({
             target,
             selection: isEntrypointTarget(target)
               ? handlerRoots(store, handlers.byTarget.get(traceTargetKey(target)) ?? [], isRoot)
               : "start" in target
-                ? await rangeRoots(store, rangeChanges([target]), head.tree.sources, trivia, snapshot, isRoot)
+                ? await rangeRoots(store, rangeChanges([target]), head.tree.sources, tokens, snapshot, isRoot)
                 : selectRoots(store, [], [target], NO_COMPONENTS, [], isRoot),
           })));
           const missing = snapshot.describe(selections.flatMap(({ selection }) => selection.missing));
@@ -173,8 +173,10 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
 
           const { steps, ids } = traceSteps(walk.roots);
           const rootIds = new Map(roots.map((root, index) => [root.id, ids.get(walk.roots[index]!)!]));
+          const settled = settledRangeChanges(selections.flatMap(({ selection }) => selection.settled));
           const value: TraceValue = {
             roots: selections.map(({ target, selection }) => ({ target: traceTargetKey(target), steps: selection.seeds.map(({ symbol }) => rootIds.get(symbol.id)!).sort((a, b) => a - b) })),
+            ...(settled.length === 0 ? {} : { settled }),
             steps,
             readingPlan: readingPlan(steps),
             cost: { expanded: walk.expanded },
@@ -249,10 +251,10 @@ function entrypointHandlers(findings: readonly Finding<Entrypoint>[], targets: r
 }
 
 /** The declarations of the index the handlers name: the one join of a map fact and a node (file, line in span, name). */
-function handlerRoots(store: CodeGraphReader, handlers: readonly HandlerPlace[], isRoot: (symbol: GraphSymbol) => boolean): Pick<RootSelection, "seeds" | "missing" | "withoutSymbols"> {
+function handlerRoots(store: CodeGraphReader, handlers: readonly HandlerPlace[], isRoot: (symbol: GraphSymbol) => boolean): Pick<RootSelection, "seeds" | "missing" | "withoutSymbols" | "settled"> {
   const symbols = store.symbolsInFiles(sortedUnique(handlers.map(({ path }) => path)));
   const joined = symbols.filter((symbol) => isRoot(symbol) && handlers.some((handler) => joinsFact(symbol, handler)));
-  return { seeds: joined.sort(comparePosition).map((symbol) => ({ symbol, basis: "requested" })), missing: [], withoutSymbols: [] };
+  return { seeds: joined.sort(comparePosition).map((symbol) => ({ symbol, basis: "requested" })), missing: [], withoutSymbols: [], settled: [] };
 }
 
 /** A handler no declaration of the index joins is a cut at the handler, never a root silently missing. */
@@ -276,7 +278,7 @@ async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file:
   return new Map([...byName].map(([name, files]) => [name, files.sort(compareText)]));
 }
 
-async function rangeRoots(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], trivia: SourceTrivia, snapshot: SnapshotFiles, isRoot: (symbol: GraphSymbol) => boolean): Promise<RootSelection> {
-  const ranges = await requestedRanges(store, changes, sources, trivia, snapshot);
-  return selectRoots(store, ranges.changes, [], NO_COMPONENTS, ranges.uncovered, isRoot);
+async function rangeRoots(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], tokens: SourceTokens, snapshot: SnapshotFiles, isRoot: (symbol: GraphSymbol) => boolean): Promise<RootSelection> {
+  const ranges = await requestedRanges(store, changes, sources, tokens, snapshot);
+  return selectRoots(store, ranges.changes, [], NO_COMPONENTS, ranges.uncovered, isRoot, ranges.settled);
 }

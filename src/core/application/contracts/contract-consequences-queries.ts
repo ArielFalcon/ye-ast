@@ -60,10 +60,11 @@ export function createContractConsequencesQueries({ sources, ofChange }: Contrac
         parsed.push(hypothesis.value);
       }
       return sources.withWorkspace(workspace, async (prepared) => {
-        const base = prepared.base({ hypotheses: parsed.map(formatHypothesis) });
+        const asked = { hypotheses: parsed.map(formatHypothesis) };
+        const base = prepared.base(asked);
         const answered: Answered[] = [];
         for (const hypothesis of parsed) answered.push(await answerOn(prepared, base, hypothesis));
-        return assemble(prepared, base, answered);
+        return assemble(prepared, prepared.base(asked), answered);
       });
     },
     ofChange,
@@ -110,7 +111,7 @@ export async function answerOn(workspace: PreparedWorkspace, base: FactBase, hyp
   if (!selected.ok) return unknown("unresolved", selected.fault);
   const followed = hypothesis.target === "response" ? consequencesOf(session.value, selected.value, hypothesis) : await producersOf(session.value, selected.value, hypothesis);
   const body: AnswerBody = { ...stated, ...followed };
-  const remaining = workspace.cuts.flatMap((cut) => (cut.reason === "section-partial" ? workspace.sectionCuts[cut.at[0]!] ?? [cut] : [cut]));
+  const remaining = [...workspace.cuts.flatMap((cut) => (cut.reason === "section-partial" ? workspace.sectionCuts[cut.at[0]!] ?? [cut] : [cut])), ...session.value.cutsAfterWalk()];
   const sealed = withCuts(base, body, remaining, { kind: "operation", transport: "http", excludes: session.value.excludes });
   return { answer: sealed.status === "partial" ? { ...body, status: "partial", cuts: sealed.cuts } : { ...body, status: "complete" }, sites: selected.value.sites.toSorted(compareEvidence) };
 }
