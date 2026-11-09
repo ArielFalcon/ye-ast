@@ -45,7 +45,7 @@ export function moduleImpact(changes: readonly FileChange[], base: ModuleDepende
     for (const dependency of snapshot.dependencies) {
       if (!isTypeScriptSource(dependency.file)) continue;
       if (dependency.target.kind === "unresolved") {
-        cuts.push({ kind: "unresolved-link", at: [`module:${name}:${dependency.file}`, `${dependency.file}:${dependency.line} ${dependency.specifier}`], reason: "specifier", reach: { kind: "module", importer: dependency.file, specifiers: [{ specifier: dependency.specifier }] } });
+        cuts.push({ kind: "unresolved-link", at: [`module:${name}:${dependency.file}`, `${dependency.file}:${dependency.line} ${dependency.specifier}`], reason: "specifier", reach: { kind: "module", importer: dependency.file, specifiers: [{ specifier: dependency.specifier, ...(dependency.namesNoFile === true ? { namesNoFile: true } : {}) }] } });
       } else if (dependency.target.kind === "repository") {
         const entries = adjacency.get(dependency.target.file) ?? [];
         entries.push(dependency);

@@ -46,6 +46,19 @@ test("a specifier is out of what depends on the asked files only when its import
   assert.equal(inQuestion(module({ specifier: "@/x", namesNoFile: true }, { specifier: "@/y" }), DEPENDENTS), true);
 });
 
+test("a walk keeps every cut at a place sharing a walked file's runtime and drops a specifier that names no file (ADR-0042 fixtures 8, 12)", () => {
+  const walk: Asserted = { kind: "walk", files: ["src/flow.ts", "src/a.ts"] };
+  const javaWalk: Asserted = { kind: "walk", files: ["src/Flow.java"] };
+  const dispatch = at("unresolved-link", "dispatch", { kind: "call-at", place: "src/flow.ts:2 save" }, "src/flow.ts:2 save", "src/a.ts::A.save");
+  const frontier = at("unresolved-link", "hidden-caller", { kind: "callers-of", declarations: ["src/a.ts::A.save"] }, "src/a.ts::A.save", "src/c.ts:4 save");
+  const unread = at("no-extractor", "module-unread", ts("src/z.ts"), "module:head:src/z.ts");
+  const specifier = (namesNoFile?: true): Cut => at("unresolved-link", "specifier", { kind: "module", importer: "src/map.ts", specifiers: [{ specifier: "geojson", ...(namesNoFile ? { namesNoFile } : {}) }] }, "module:head:src/map.ts", "src/map.ts:1 geojson");
+  assert.deepEqual([dispatch, frontier, unread, specifier()].map((cut) => inQuestion(cut, walk)), [true, true, true, true]);
+  assert.equal(inQuestion(specifier(true), walk), false);
+  assert.deepEqual([unread, specifier()].map((cut) => inQuestion(cut, javaWalk)), [false, false]);
+  assert.equal(inQuestion(at("no-extractor", "module-unread", ts("src/Z.java"), "module:head:src/Z.java"), javaWalk), true);
+});
+
 test("a call site reach stays in question for the files' own content and for what depends on them", () => {
   const site = at("unresolved-link", "join-unsettled", { kind: "call-site", transport: "http" }, "src/b.ts", "src/b.ts:4");
   assert.deepEqual([inQuestion(site, LOCAL), inQuestion(site, DEPENDENTS)], [true, true]);

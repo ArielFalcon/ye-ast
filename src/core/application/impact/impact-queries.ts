@@ -1,4 +1,4 @@
-import { EVERYTHING } from "../../domain/shared/question.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
 import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
 import type { DeclarationEvidenceReader } from "../../ports/declaration-evidence.port.ts";
@@ -12,7 +12,7 @@ import { changedContracts, servedContracts } from "../../domain/impact/changed-c
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
 import { attributedCallCuts, fileCut, removedDeclarationCuts, unheldCut, unreadRelationCuts, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
-import { impactFact, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
+import { impactFact, impactWalk, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
 import type { Relation } from "../../domain/relations/relation.ts";
 import type { ExternalMemberUseOrigin, MemberUseOrigin } from "../../domain/relations/member-use.ts";
@@ -133,11 +133,19 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     prepared?.retained === undefined ? produce() : prepared.retained(slot, produce, signal);
   /** Every path of the snapshot, written or not, skipped entries included; none once a budget stopped the export. */
   const listingOf = ({ export: listed }: Pick<CommitExtraction, "export">): readonly string[] | undefined => listed.stopped === undefined ? [...listed.files, ...listed.skipped].map(({ path }) => path) : undefined;
-  const moduleDependenciesOf = (reader: ModuleDependenciesReader, prepared: PreparedCommit | undefined, tree: Pick<CommitExtraction, "export" | "sources">, signal: AbortSignal | undefined) =>
-    retainedOf(prepared, canonicalJson({ output: "module-dependencies" }), () => {
-      const listing = listingOf(tree);
-      return reader.extract(tree.sources, listing === undefined ? undefined : { listing });
-    }, signal);
+  /**
+   * The module statements of a tree. With `across`, the other snapshot of a change, a specifier names no file only when no
+   * path of either snapshot could be its target: one the change deleted or added is still a module the walk reaches.
+   */
+  const moduleDependenciesOf = (reader: ModuleDependenciesReader, prepared: PreparedCommit | undefined, tree: Pick<CommitExtraction, "export" | "sources">, signal: AbortSignal | undefined, across?: Pick<CommitExtraction, "export">) => {
+    const own = listingOf(tree);
+    const other = across === undefined ? [] : listingOf(across);
+    const held = new Set(own);
+    const alsoListed = other?.filter((path) => !held.has(path)).toSorted(compareText);
+    const listing = own === undefined || alsoListed === undefined ? undefined : [...own, ...alsoListed];
+    const slot = canonicalJson(alsoListed === undefined || alsoListed.length === 0 ? { output: "module-dependencies" } : { output: "module-dependencies", alsoListed });
+    return retainedOf(prepared, slot, () => reader.extract(tree.sources, listing === undefined ? undefined : { listing }), signal);
+  };
   const headReader = createHeadReader(deps);
   const bindingModules = deps.moduleReader ?? deps.moduleDependencies;
   const moduleSource = deps.moduleDependencies === undefined ? isInMapScope : isWritten;
@@ -176,7 +184,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const value: ImpactValue = { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
 
         const needsGraph = requested.length > 0 || changes.some((file) => kindOfChangedFile(file.path) === "source" || componentsByResource.has(file.path));
-        if (!needsGraph) return { ok: true, value: impactFact(head.base(content), value, fixed, EVERYTHING) };
+        if (!needsGraph) return { ok: true, value: impactFact(head.base(content), value, fixed, impactWalk(targets.map(({ file }) => file), value)) };
 
         const index = await head.open();
         if (index === "aborted") return ABORTED;
@@ -207,7 +215,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (typed === "aborted") return ABORTED;
           const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
           if (signal?.aborted) return ABORTED;
-          return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), read.value, [...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts], EVERYTHING) };
+          return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), read.value, [...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts], impactWalk(targets.map(({ file }) => file), read.value)) };
         } finally {
           store.close();
         }
@@ -390,17 +398,17 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     let moduleRead: ReturnType<typeof moduleImpact> | undefined;
     const moduleReader = deps.moduleDependencies;
     if (moduleReader !== undefined && changes.some((file) => isTypeScriptSource(file.path) || isJsonModuleResource(file.path))) {
-      const readSnapshot = async (tree: CommitExtraction, prepared: PreparedCommit | undefined, selectedChanges: readonly FileChange[]): Promise<ModuleDependencies | undefined> => {
-        const read = moduleCoverage(await moduleDependenciesOf(moduleReader, prepared, tree, signal), tree, selectedChanges);
+      const readSnapshot = async (tree: CommitExtraction, prepared: PreparedCommit | undefined, selectedChanges: readonly FileChange[], across: CommitExtraction): Promise<ModuleDependencies | undefined> => {
+        const read = moduleCoverage(await moduleDependenciesOf(moduleReader, prepared, tree, signal, across), tree, selectedChanges);
         if (signal?.aborted) return undefined;
         if (read.untraversed !== undefined) return read;
         const loads = await deps.dynamicLoads.extract(tree.sources);
         if (signal?.aborted) return undefined;
         return { ...read, untraversed: loads.map(({ file, line }) => ({ file, line, offset: 0, form: "dynamic-import" as const })) };
       };
-      const base = await readSnapshot(baseTree, input.basePrepared, changes);
+      const base = await readSnapshot(baseTree, input.basePrepared, changes, headTree);
       if (base === undefined) return ABORTED;
-      const current = sameTree ? base : await readSnapshot(headTree, head.prepared, changes.filter((file) => !file.deleted));
+      const current = sameTree ? base : await readSnapshot(headTree, head.prepared, changes.filter((file) => !file.deleted), baseTree);
       if (current === undefined) return ABORTED;
       moduleRead = moduleImpact(changes, base, current, request.budget);
     }
@@ -415,7 +423,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const needsGraph = changes.some(
       (file) => (kindOfChangedFile(file.path) === "source" && (!file.deleted || file.removedNames.length > 0) && !moduleRead?.covered.has(file.path)) || componentsByResource.has(file.path),
     );
-    if (!needsGraph) return { ok: true, value: impactFact(head.base(content), value, [...unaccounted(fixed), ...moduleCuts], EVERYTHING) };
+    if (!needsGraph) return { ok: true, value: impactFact(head.base(content), value, [...unaccounted(fixed), ...moduleCuts], impactWalk(changes.map(({ path }) => path), value)) };
 
     const index = await head.open();
     if (index === "aborted") return ABORTED;
@@ -450,7 +458,8 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (typed === "aborted") return ABORTED;
       const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
       if (signal?.aborted) return ABORTED;
-      return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), { ...value, ...read.value }, [...unaccounted([...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts]), ...moduleCuts], EVERYTHING) };
+      const reached = { ...value, ...read.value };
+      return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), reached, [...unaccounted([...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts]), ...moduleCuts], impactWalk(changes.map(({ path }) => path), reached)) };
     } finally {
       store.close();
     }

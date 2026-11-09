@@ -2,6 +2,7 @@ import type { Entrypoint } from "../entrypoints/entrypoint.ts";
 import type { Handler } from "../entrypoints/http-route.ts";
 import type { SeedBasis } from "../change/seeds.ts";
 import type { WalkBounds } from "../shared/fact.ts";
+import type { Asserted } from "../shared/question.ts";
 import type { ChangedContract } from "./changed-contracts.ts";
 import type { ChangedEntrypoint } from "./changed-entrypoints.ts";
 import type { ModuleImpactValue } from "./module-dependency.ts";
@@ -86,3 +87,14 @@ export interface ImpactValue {
 }
 
 export { withCuts as impactFact } from "../shared/question.ts";
+
+/** What an impact answer asserts: a walk over the asked files and every file its value reached (ADR-0042 decision 3). */
+export function impactWalk(asked: readonly string[], value: ImpactValue): Asserted {
+  const files = new Set(asked);
+  for (const seed of value.seeds) files.add(seed.file);
+  for (const { file, via } of value.symbols) for (const reached of [file, via?.file, via?.resource]) if (reached !== undefined) files.add(reached);
+  for (const { handler } of value.entrypoints) files.add(handler.path);
+  for (const { file } of value.modules?.origins ?? []) files.add(file);
+  for (const { file, via } of value.modules?.modules ?? []) for (const reached of [file, via?.file]) if (reached !== undefined) files.add(reached);
+  return { kind: "walk", files: [...files] };
+}

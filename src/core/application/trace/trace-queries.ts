@@ -1,4 +1,4 @@
-import { EVERYTHING, withCuts } from "../../domain/shared/question.ts";
+import { withCuts, type Asserted } from "../../domain/shared/question.ts";
 import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { WorkspaceReadOperation } from "../topology/workspace-operation.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
@@ -183,7 +183,8 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             ...walk.cuts,
             ...effectCuts,
           ];
-          return { ok: true, value: withCuts(head.base(content, true), value, cuts, EVERYTHING) };
+          const walked: Asserted = { kind: "walk", files: [...new Set([...selections.flatMap(({ target }) => (isEntrypointTarget(target) ? [] : [target.file])), ...steps.map(({ file }) => file)])] };
+          return { ok: true, value: withCuts(head.base(content, true), value, cuts, walked) };
         } finally {
           store.close();
         }

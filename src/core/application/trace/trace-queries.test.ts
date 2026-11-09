@@ -26,6 +26,8 @@ const written = (...paths: string[][]): ReplacedRoots => ({ paths, globalObjects
 
 interface Options {
   workspace?: TraceQueriesDeps["workspace"];
+  /** Files the export holds and the index did not; none by default. */
+  notIndexed?: readonly string[];
   syntaxCalls?: Readonly<Record<string, readonly SyntaxCall[]>>;
   nodes: readonly FakeNode[];
   edges?: readonly FakeEdge[];
@@ -103,7 +105,7 @@ function setup(options: Options) {
     ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
     vcs: {
       resolveCommit: async () => ({ ok: true, value: SHA }),
-      exportCommit: async () => ({ ok: true, value: { files: [A, B].map((path) => ({ path, blob: "1", written: true })), skipped: [] } }),
+      exportCommit: async () => ({ ok: true, value: { files: [A, B, ...(options.notIndexed ?? [])].map((path) => ({ path, blob: "1", written: true })), skipped: [] } }),
     },
     scratch: { create: async () => "/scratch/head", remove: async () => undefined },
     reader: { read: async () => options.sources ?? [] },
@@ -112,7 +114,7 @@ function setup(options: Options) {
     producer: { name: "ye-ast", version: "0.0.0" },
     matcher: { matches: options.matches ?? (() => true) },
     graph: {
-      index: async () => (options.indexFails ? { ok: false, fault: { kind: "index-failed", detail: "broken" } } : { ok: true, value: SUMMARY }),
+      index: async () => (options.indexFails ? { ok: false, fault: { kind: "index-failed", detail: "broken" } } : { ok: true, value: { ...SUMMARY, filesNotIndexed: options.notIndexed ?? [] } }),
       open: () => ({ ok: true, value: store }),
     },
     sourceTrivia: { triviaLines: async (file: { path: string }) => (options.onTrivia?.(file.path), new Set(options.trivia?.[file.path] ?? [])) },
@@ -180,6 +182,11 @@ test("a resolved call is a step at its call site", async () => {
   const fact = await factOf({ nodes: [SVC, RUN, callee("helper")], edges: [...CONTAINS, call("run", "helper", 8, 4)], unresolved: [OUTWARD_CALL("helper")] });
   const step = valueOf(fact).steps[1]!;
   assert.deepEqual([step.symbol, step.parent, step.at, step.via], ["helper", 0, { line: 8, column: 5 }, "call"]);
+});
+
+test("a file the index did not hold cuts a trace only when it shares the runtime of a walked file", async () => {
+  const fact = await factOf({ nodes: [SVC, RUN], edges: CONTAINS, notIndexed: ["src/Order.java", "src/c.ts"] });
+  assert.deepEqual(reasonsOf(fact), [["src/c.ts", "not-indexed"]]);
 });
 
 test("a method no source's syntax states is a dispatch cut when an interface owns it, listing the implementations below", async () => {

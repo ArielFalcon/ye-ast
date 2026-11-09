@@ -562,7 +562,7 @@ test("an unresolved call in a test file does not cut the answer", async () => {
 });
 
 test("a dynamic load whose specifier is a literal names its module, so only a computed load cuts the answer", async () => {
-  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/A.java", { added: [{ start: 2, end: 2 }] })] };
+  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/A.java", { added: [{ start: 2, end: 2 }] }), change("src/app.component.ts", { added: [{ start: 1, end: 1 }] })] };
   const unresolved = [
     { from: "g", name: "import", kind: "calls", file: "src/App.ts", line: 3 },
     { from: "g", name: "import", kind: "calls", file: "src/Routes.ts", line: 8 },
@@ -572,6 +572,7 @@ test("a dynamic load whose specifier is a literal names its module, so only a co
       { path: "src/A.java", blob: "1", written: true },
       { path: "src/App.ts", blob: "2", written: true },
       { path: "src/Routes.ts", blob: "3", written: true },
+      { path: "src/app.component.ts", blob: "4", written: true },
     ],
     skipped: [],
   };
@@ -580,7 +581,7 @@ test("a dynamic load whose specifier is a literal names its module, so only a co
     { file: "src/Routes.ts", line: 8 },
   ];
   const answer = fact(await setup({ changes, nodes: SOURCE_NODES, edges: SOURCE_EDGES, unresolved, loads, exports: { [HEAD]: tree } }).ask());
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/Routes.ts", "src/Routes.ts:8 import"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts.filter(({ reason }) => reason === "dynamic-load"), [{ kind: "unresolved-link", at: ["src/Routes.ts", "src/Routes.ts:8 import"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } }]);
 });
 
 test("a source file deleted whole that declared a name needs the index, and an unresolved reference to the name cuts the answer", async () => {

@@ -7,6 +7,8 @@ export type Asserted =
   | { kind: "local"; files: readonly string[] }
   /** What could import or use the asked files. */
   | { kind: "dependents"; files: readonly string[] }
+  /** What a walk reached from the asked files: every file it walked, asked, declaring a walked declaration or a reached module. */
+  | { kind: "walk"; files: readonly string[] }
   /** The whole snapshot: every cut is in question. */
   | { kind: "everything" };
 
