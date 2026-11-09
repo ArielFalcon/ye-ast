@@ -255,18 +255,16 @@ export function matchCallSite(site: CallSite, target: HttpTarget, repositories: 
   return ladder(target, repositories, gateways, (repo, match) => ({ links: [linkTo(site, repo, match)] }));
 }
 
-/**
- * Whether the ladder could link a call with this target to one of the routes: a link, a tie or a `could` on any rung.
- * A call it finds no route for, or one that names another host, cannot reach them (ADR-0042 decision 4).
- */
-export function mayLink(target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): boolean {
+/** Whether the ladder could link a call with this target to one of the routes: a link, a tie or a `could` on any rung. */
+function mayLink(target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): boolean {
   const joined = ladder(target, repositories, gateways, () => ({ links: [] }));
   return joined.unmatched === undefined && joined.external !== true;
 }
 
 /**
- * The call sites the ladder cannot link to one operation, over that operation's routes and the gateways: a site whose
- * reach states no method or no template is never excluded.
+ * The call sites the ladder cannot link to one operation, over that operation's routes and the gateways: one it finds no
+ * route for, or one that names another host (ADR-0042 decision 4). A site whose reach states no method or no template is
+ * never excluded.
  */
 export function excludedFrom(operation: string, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): (site: CallSiteReach) => boolean {
   const routes = repositories.map((repository) => ({ ...repository, entrypoints: repository.entrypoints.filter((entrypoint) => entrypoint.kind === "http-route" && entrypoint.name === operation) }));

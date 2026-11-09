@@ -7,7 +7,7 @@ export type Asserted =
   | { kind: "local"; files: readonly string[] }
   /** What could import or use the asked files. */
   | { kind: "dependents"; files: readonly string[] }
-  /** What a walk reached from the asked files: every file it walked, asked, declaring a walked declaration or a reached module. */
+  /** What a walk reached: the asked files and every file it reached. */
   | { kind: "walk"; files: readonly string[] }
   /** Consumers and producers of one operation: `excludes` is the topology matcher's answer that a call site cannot reach it. */
   | { kind: "operation"; transport: string; excludes: (site: CallSiteReach) => boolean }
@@ -28,8 +28,8 @@ function fileOf(entry: string): string {
 
 /**
  * Whether a cut's reach can hide something of what the answer asserts (ADR-0042 decision 4). It is out of question only
- * by positive proof: a bound, a section, a reach of anything without a runtime, a call site, or a datum the reach does not
- * state keeps it in question.
+ * by positive proof: a bound, a section, a reach of anything without a runtime, or a datum the reach does not state keeps
+ * it in question, and a call site leaves only an operation it cannot reach.
  */
 export function inQuestion(cut: Cut, asserted: Asserted): boolean {
   if (asserted.kind === "everything" || BOUNDS.has(cut.kind)) return true;

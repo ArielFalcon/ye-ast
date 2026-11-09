@@ -34,7 +34,7 @@ export interface ModuleDependency {
   /** Where the statement or reference starts in its source, so those sharing a line keep their order. */
   offset?: number;
   target: ModuleTarget;
-  /** Set on an unresolved target when the resolver applied its rules over the snapshot and they name no file of it. */
+  /** Set on an unresolved target when no path of the snapshot could be its target. */
   namesNoFile?: true;
   /** What the statement binds, in source order; empty for a side-effect import or a runtime reference. */
   bindings: readonly ModuleBinding[];

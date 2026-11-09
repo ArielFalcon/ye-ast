@@ -20,6 +20,7 @@ export interface ModuleResolver {
 }
 
 const EXTENSIONS = ["cts", "mts", "ts"] as const;
+const CONFIG_NAMES = ["tsconfig.json", "jsconfig.json"] as const;
 /** A module extension a candidate may carry, so its stem stands for every file of that name. */
 const MODULE_EXTENSION = /(\.d)?\.[cm]?[jt]sx?$|\.json$/;
 
@@ -30,7 +31,6 @@ function namesNoFile(listing: ReadonlySet<string> | undefined, candidates: reado
   for (const path of listing) if (stems.some((stem) => path === stem || path.startsWith(`${stem}.`) || path.startsWith(`${stem}/`) || stem.startsWith(`${path}/`))) return false;
   return true;
 }
-const CONFIG_NAMES = ["tsconfig.json", "jsconfig.json"] as const;
 
 /**
  * The options one configuration text declares, with its `extends` chain read through `host`.

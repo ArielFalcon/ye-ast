@@ -143,11 +143,11 @@ export type UnknownReason =
 export const DEPENDENCY_SELECTION_REASONS = ["ambiguous", "unproven-coordinates"] as const;
 
 /** Why an export left a path out; the VCS port owns the vocabulary. */
-export const EXPORT_SKIP_REASONS = ["symlink", "submodule", "unsafe-path", "collision"] as const;
+const EXPORT_SKIP_REASONS = ["symlink", "submodule", "unsafe-path", "collision"] as const;
 export type ExportSkipReason = (typeof EXPORT_SKIP_REASONS)[number];
 
 /** Why a dispatch port could not name the bodies a call runs, when it says; the dispatch port owns the vocabulary. */
-export const DISPATCH_UNKNOWN_REASONS = ["aspect may replace the body", "generated implementation", "dispatch not proven"] as const;
+const DISPATCH_UNKNOWN_REASONS = ["aspect may replace the body", "generated implementation", "dispatch not proven"] as const;
 export type DispatchUnknownReason = (typeof DISPATCH_UNKNOWN_REASONS)[number];
 
 /** A stage the language pack of the site's file declares it cannot implement (ADR-0045 decision 12). */
@@ -182,7 +182,7 @@ export type CutReach =
   | { kind: "call-at"; place: string }
   /**
    * Edges from an importing file through these specifiers; `package` when the resolver classified one, absent when it did
-   * not; `namesNoFile` when the resolver applied its rules over the snapshot and they name no file of it.
+   * not; `namesNoFile` when no path of the snapshot could be its target.
    */
   | { kind: "module"; importer: string; specifiers: readonly { specifier: string; package?: boolean; namesNoFile?: true }[] }
   | CallSiteReach;
