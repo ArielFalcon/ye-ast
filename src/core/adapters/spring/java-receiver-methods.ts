@@ -6,7 +6,7 @@ import type { ImportOrigins, ReceiverCallSite, ReceiverMethod } from "../../port
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { enclosingType, thisType, withJavaSources } from "./java-project.ts";
+import { enclosingType, heldJavaProjectOf, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import { createJavaProject, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
@@ -57,10 +57,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
   let layout: string | undefined;
   const resolved = async (sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ReceiverMethod[]> => {
     const results: ReceiverMethod[] = sites.map(() => UNKNOWN);
-    const read = await parser();
-    return withJavaSources(read, (parse) => {
-      const { files, unparsed } = parse(sources);
-      const project = createJavaProject(files);
+    const analyze = (files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly ReceiverMethod[] => {
       const falsified = unparsed.length > 0 || unreadJvm || project.unreadable.length > 0 || files.some((file) => namesAnyDynamicImplementation(file, project));
       const proves = !falsified && !files.some(({ root }) => rewritesCalls(root));
       const byPath = new Map(files.map((file) => [file.path, file]));
@@ -92,6 +89,13 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         else if (resolver.hasDeclaredReceiver(invocation, source) || resolver.holdsValue(invocation, source.file)) results[index] = UNPROVEN;
       }
       return results;
+    };
+    const read = await parser();
+    const held = await heldJavaProjectOf(read, sources);
+    if (held !== undefined) return analyze(held.files.map(({ file }) => file), held.unparsed, held.project);
+    return withJavaSources(read, (parse) => {
+      const { files, unparsed } = parse(sources);
+      return analyze(files, unparsed, createJavaProject(files));
     });
   };
   return async (sites, signal) => {

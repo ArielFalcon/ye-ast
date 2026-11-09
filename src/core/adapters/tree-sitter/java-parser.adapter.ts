@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import { Language, Parser, type Node } from "web-tree-sitter";
 import type { Result } from "../../domain/shared/result.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { ParseHolds } from "../../ports/parse-holds.port.ts";
+import type { ParseHold, ParseHolds } from "../../ports/parse-holds.port.ts";
 
 export interface JavaSyntaxTree {
   root: Node;
@@ -21,25 +21,30 @@ type Parsed = Result<JavaSyntaxTree, SyntaxFault>;
 export interface JavaParser {
   /** The tree of `source`: the one the open hold that kept it parsed once, or a new one `dispose` frees. */
   parse(source: SourceFile): Parsed;
+  /** The hold that kept `source`, while it is open; `undefined` for a source no hold kept, or one whose hold was released. */
+  holdOf?(source: SourceFile): ParseHold | undefined;
 }
 
 /** The trees of the sources open holds kept, one per file of each hold by its path and content, so a file two snapshots of one read share unchanged parses once. */
 export interface JavaTreeHolds extends ParseHolds {
   /** What `parse` answers for `source`, owned by the open hold that kept it; without one, `parse`'s own answer. */
   held(source: SourceFile, parse: () => Parsed): Parsed;
+  /** The open hold that kept `source`, for the reader that keys one project by the read it serves. */
+  holdOf(source: SourceFile): ParseHold | undefined;
 }
 
 interface Hold {
   /** Absent once released. */
   trees: Map<string, { parsed: Parsed; free(): void }> | undefined;
+  handle: ParseHold;
 }
 
 export function createJavaTreeHolds(): JavaTreeHolds {
   const keptBy = new WeakMap<SourceFile, Hold>();
   return {
     open() {
-      const hold: Hold = { trees: new Map() };
-      return {
+      const hold: Hold = { trees: new Map(), handle: { keep: () => [], release: () => {} } };
+      hold.handle = {
         keep: (sources) => sources.map((source) => {
           const own = { ...source };
           keptBy.set(own, hold);
@@ -51,6 +56,11 @@ export function createJavaTreeHolds(): JavaTreeHolds {
           for (const { free } of trees?.values() ?? []) free();
         },
       };
+      return hold.handle;
+    },
+    holdOf(source) {
+      const hold = keptBy.get(source);
+      return hold?.trees === undefined ? undefined : hold.handle;
     },
     held(source, parse) {
       const trees = keptBy.get(source)?.trees;
@@ -92,7 +102,7 @@ export async function createJavaParser(holds?: JavaTreeHolds): Promise<JavaParse
     }
     return { ok: true, value: { root, dispose: () => tree.delete() } };
   };
-  return { parse: (source) => (holds === undefined ? parse(source.content) : holds.held(source, () => parse(source.content))) };
+  return { parse: (source) => (holds === undefined ? parse(source.content) : holds.held(source, () => parse(source.content))), ...(holds === undefined ? {} : { holdOf: holds.holdOf.bind(holds) }) };
 }
 
 function firstErrorLine(root: Node): number {

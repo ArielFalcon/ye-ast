@@ -3,7 +3,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchTargets, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { DispatchUnknownReason } from "../../domain/shared/fact.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { enclosingType, withJavaSources } from "./java-project.ts";
+import { enclosingType, heldJavaProjectOf, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import { createJavaProject, isTypeDeclaration, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
@@ -56,11 +56,8 @@ export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sou
   return async (sites, signal) => {
     const results: DispatchTargets[] = sites.map(() => UNKNOWN);
     if (unreadJvm || sites.length === 0) return results;
-    const read = await parser();
-    return withJavaSources(read, (parse) => {
-      const { files, unparsed } = parse(sources);
+    const analyze = (files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): DispatchTargets[] => {
       if (unparsed.length > 0) return results;
-      const project = createJavaProject(files);
       if (project.unreadable.length > 0) return results;
       const veto = globalVeto(files, project);
       if ("reason" in veto) return sites.map(() => ({ kind: "unknown", reason: veto.reason }));
@@ -73,6 +70,13 @@ export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sou
         results[index] = targets.kind === "bodies" && advised(method, hierarchy, veto.advice) ? ASPECT : targets;
       }
       return results;
+    };
+    const read = await parser();
+    const held = await heldJavaProjectOf(read, sources);
+    if (held !== undefined) return analyze(held.files.map(({ file }) => file), held.unparsed, held.project);
+    return withJavaSources(read, (parse) => {
+      const { files, unparsed } = parse(sources);
+      return analyze(files, unparsed, createJavaProject(files));
     });
   };
 }
