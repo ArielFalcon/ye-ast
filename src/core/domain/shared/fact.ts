@@ -309,12 +309,37 @@ const CUT_RANK: Record<Cut["kind"], number> = {
   section: 9,
 };
 
+/** How much a reach could hide: anything at all, then anything of one file's runtime or module edges, then one named place. */
+function reachWidth(reach: CutReach): number {
+  if (reach.kind === "anything") return reach.runtime === undefined ? 0 : 1;
+  return reach.kind === "module" ? 1 : 2;
+}
+
+const rankIn = (order: readonly string[], value: string | undefined): number => (value === undefined ? order.length : order.indexOf(value));
+
+/** Which of two cuts at one place stands, whatever order they came in: the wider reach, then the reason and sub-reason that come first. */
+function standsOver(a: Cut, b: Cut): boolean {
+  return (
+    reachWidth(a.reach) - reachWidth(b.reach) ||
+    rankIn(CUT_REASONS, a.reason) - rankIn(CUT_REASONS, b.reason) ||
+    rankIn(CUT_SUB_REASONS, a.subReason) - rankIn(CUT_SUB_REASONS, b.subReason) ||
+    compareText(JSON.stringify(a.reach), JSON.stringify(b.reach))
+  ) < 0;
+}
+
 /**
  * Complete only when nothing cut the answer; otherwise partial with the cuts in kind order, each place once: where two
- * situations cut the same place, the cut emitted last states why.
+ * situations cut the same place, the one that could hide more stands, so no order of emission narrows what a place could
+ * hide; between equal reaches, the reason and then the sub-reason that come first in their closed order.
  */
 export function withCuts<T>(base: FactBase, value: T, cuts: readonly Cut[]): CompleteFact<T> | PartialFact<T> {
-  const [first, ...rest] = [...new Map(cuts.map((cut) => [placeKey(cut), cut])).values()].sort(
+  const byPlace = new Map<string, Cut>();
+  for (const cut of cuts) {
+    const key = placeKey(cut);
+    const held = byPlace.get(key);
+    if (held === undefined || standsOver(cut, held)) byPlace.set(key, cut);
+  }
+  const [first, ...rest] = [...byPlace.values()].sort(
     (a, b) => CUT_RANK[a.kind] - CUT_RANK[b.kind] || compareText(a.at.join("\0"), b.at.join("\0")),
   );
   return first === undefined ? { ...base, status: "complete", value } : { ...base, status: "partial", value, cuts: [first, ...rest] };

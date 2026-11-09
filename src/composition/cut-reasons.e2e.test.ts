@@ -83,6 +83,21 @@ export function run(port: A): void {
   assert.deepEqual(call?.map(({ reason, subReason, reach }) => ({ reason, subReason, reach })), [{ reason: "receiver-unproven", subReason: "capability-absent", reach: { kind: "call-at", place: "src/flow.ts:4 save" } }]);
 });
 
+test("a member call the declared-receiver binding leaves unbound names the same absence when its pack cannot read receivers", async () => {
+  commit({
+    "src/flow.ts": `export class A { save(): void {} }
+export class B { save(): void {} }
+const holder = { port: new A() };
+export function run(): void {
+  holder.port.save();
+}
+`,
+  });
+  const result = await trace("src/flow.ts:run");
+  const call = result.cuts?.filter((cut) => cut.at[0] === "src/flow.ts:5 holder.port.save");
+  assert.deepEqual(call?.map(({ reason, subReason }) => ({ reason, subReason })), [{ reason: "receiver-unproven", subReason: "capability-absent" }]);
+});
+
 test("a Java dispatch an aspect may replace keeps the reason the dispatch port gave as its sub-reason", async () => {
   commit({
     "src/Flow.java": `@org.aspectj.lang.annotation.Aspect class Advice { @org.aspectj.lang.annotation.Around("bean(worker)") Object around() { return null; } }

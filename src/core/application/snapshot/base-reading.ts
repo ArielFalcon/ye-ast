@@ -1,5 +1,5 @@
 import { isReadSource } from "../../domain/languages/profiles.ts";
-import { refusedLinkCuts, unreadOutputCuts, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
+import type { BuildOutputEvidence, DeclaredBuildOutput, UnreadOutputReason } from "../../domain/shared/build-outputs.ts";
 import type { BuildOutputInput, Cut, SnapshotRef } from "../../domain/shared/fact.ts";
 import type { ScopeRequest } from "../../domain/shared/scope.ts";
 import type { CodeGraphReader, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
@@ -20,13 +20,17 @@ import { retainedRelations } from "../relations/retained-relations.ts";
 import type { CommitExtraction, PreparedCommit } from "./read-snapshot.ts";
 
 /** What the type checker contributes to one answer: its bindings by call place, the declarations it read, and its cuts. */
+/** B7's answer: evidence only, which `buildOutputCuts` turns into cuts (ADR-0042 decision 10). */
 export interface TypedReading {
   typed?: ReadonlyMap<string, TypeTarget>;
   outputs?: readonly BuildOutputInput[];
-  cuts: readonly Cut[];
+  /** What the run states about the declared outputs; absent when none was declared. */
+  buildOutputs?: BuildOutputEvidence;
+  /** What reading the checker's inputs left out, as the revision sources answer it. */
+  inputsLeftOut: readonly Cut[];
 }
 
-const NOT_TYPED: TypedReading = { cuts: [] };
+const NOT_TYPED: TypedReading = { inputsLeftOut: [] };
 
 export interface BaseReadingDeps {
   relations: RelationExtractor;
@@ -122,9 +126,10 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
     const outputs = request.buildOutputs ?? deps.declaredOutputs?.(request.repo) ?? [];
     if (bindings === undefined || inputs === undefined || outputs.length === 0) return NOT_TYPED;
     const { signal } = request;
-    if (snapshot.kind === "live") return { cuts: unreadOutputCuts(outputs, "live-tree") };
+    const unread = (reason: UnreadOutputReason, named?: ReadonlyMap<string, readonly string[]>): BuildOutputEvidence => ({ used: false, outputs, reason, ...(named === undefined ? {} : { named }) });
+    if (snapshot.kind === "live") return { buildOutputs: unread("live-tree"), inputsLeftOut: [] };
     const read = await inputs.filesAt({ repo: { path: request.repo }, scope: { exclude: request.scope?.exclude ?? [] }, ...(signal === undefined ? {} : { signal }) }, snapshot.sha);
-    if (!read.ok) return read.fault.kind === "aborted" ? "aborted" : { cuts: unreadOutputCuts(outputs, "inputs-unreadable") };
+    if (!read.ok) return read.fault.kind === "aborted" ? "aborted" : { buildOutputs: unread("inputs-unreadable"), inputsLeftOut: [] };
     let answer;
     try {
       answer = await bindings.of([...tree.sources, ...read.value.files], outputs, signal, prepared?.facts);
@@ -132,9 +137,10 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       if (signal?.aborted) return "aborted";
       throw error;
     }
-    if (answer.status === "unused") return { cuts: [...read.value.cuts, ...unreadOutputCuts(outputs, "version-mismatch", new Map(answer.outputs.map(({ at, stale }) => [at, stale.map(({ path }) => path)])))] };
-    if (answer.status === "fault") return { cuts: [...read.value.cuts, ...(answer.fault.kind === "unreadable" ? unreadOutputCuts(outputs, "outputs-unreadable", new Map(answer.fault.outputs.map(({ at, paths }) => [at, paths]))) : unreadOutputCuts(outputs, "checker-failed"))] };
-    return { typed: typedCallsOf(answer.bindings), outputs: answer.outputs, cuts: [...read.value.cuts, ...refusedLinkCuts(answer.refused)] };
+    const inputsLeftOut = read.value.cuts;
+    if (answer.status === "unused") return { buildOutputs: unread("version-mismatch", new Map(answer.outputs.map(({ at, stale }) => [at, stale.map(({ path }) => path)]))), inputsLeftOut };
+    if (answer.status === "fault") return { buildOutputs: answer.fault.kind === "unreadable" ? unread("outputs-unreadable", new Map(answer.fault.outputs.map(({ at, paths }) => [at, paths]))) : unread("checker-failed"), inputsLeftOut };
+    return { typed: typedCallsOf(answer.bindings), outputs: answer.outputs, buildOutputs: { used: true, refused: answer.refused }, inputsLeftOut };
   }
 
   return {

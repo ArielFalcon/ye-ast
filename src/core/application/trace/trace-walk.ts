@@ -434,8 +434,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
      * A call the index left without a target, settled by what the base binds it to (ADR-0041 decision 4) and narrowed by
      * execution: a receiver proof by `settleReceiver`, a root outside the repository as a leaf unless the repository
      * replaces it, an unbound member call by its name (R6), and every other unbound call as a cut listing its candidates.
+     * `absent` names why the receiver reading that left it unbound could not answer, on the cut it leaves.
      */
-    const settleBinding = async (reference: GraphUnresolvedReference, binding: CallBinding): Promise<void> => {
+    const settleBinding = async (reference: GraphUnresolvedReference, binding: CallBinding, absent?: CutSubReason): Promise<void> => {
       const callee = calleeOf(reference.name);
       const name = callee.form === "computed" ? reference.name : callee.name;
       if (binding.kind === "declared") return void typed.push({ reference, name: binding.member, named: [], declared: binding });
@@ -452,8 +453,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         if (origin.kind === "external") return leafUnlessReplaced({ kind: "import", module: origin.module, name: reference.name }, { module: origin.module }, cut);
         return leafUnlessReplaced({ kind: "global", name: reference.name }, binding.form === "bare" ? { path: [origin.name], member: name, open: true } : { path: compactSpelling(reference.name).split("."), member: name }, cut);
       }
-      if (binding.form === "member") return settleByName(reference, name, binding.candidates);
-      cuts.push(unresolvedAt(reference, binding.candidates));
+      if (binding.form === "member") return settleByName(reference, name, binding.candidates, false, absent);
+      cuts.push(unresolvedAt(reference, binding.candidates, undefined, absent));
     };
     /**
      * A resolved call whose receiver is a value or a field the walk has not proven: settled by what the binder proves the
@@ -542,13 +543,14 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     }
     for (const [index, { reference, name, named, declared }] of typed.entries()) {
       const receiver = found[placedCalls.length + index];
+      const absent = receiver?.kind === "unknown" ? receiver.reason : undefined;
       if (declared !== undefined) {
-        await settleBinding(reference, bindings.settleDeclared(declared, receiver));
+        await settleBinding(reference, bindings.settleDeclared(declared, receiver), absent);
         continue;
       }
       const method = receiver?.kind === "method" ? placedMethod(receiver, CALLABLE_KINDS) : undefined;
       if (method !== undefined) children.push(childAt(method, reference.line, reference.column, reference.name, "call"));
-      else await settleByName(reference, name, named, false, receiver?.kind === "unknown" ? receiver.reason : undefined);
+      else await settleByName(reference, name, named, false, absent);
     }
     return { children: children.sort((a, b) => compareOccurrence(a.place, b.place)), external, cuts };
   }

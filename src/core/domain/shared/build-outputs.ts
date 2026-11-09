@@ -20,14 +20,28 @@ export function mountOf(output: Pick<DeclaredBuildOutput, "at">): string {
   return output.at === "" ? "node_modules" : `${output.at}/node_modules`;
 }
 
-/** Why an answer read none of its declared outputs, or which linked paths it refused (ADR-0042 decision 10). */
+/** Why a typed reading read none of its declared outputs. */
 export type UnreadOutputReason = "live-tree" | "inputs-unreadable" | "version-mismatch" | "outputs-unreadable" | "checker-failed";
+
+/**
+ * What a typed reading states about the declared outputs (ADR-0042 decision 10): that it read none of them, why, and
+ * the paths under each that say why (`named`, by `at`); or that it used them, with the links it refused to follow.
+ */
+export type BuildOutputEvidence =
+  | { used: false; outputs: readonly Pick<DeclaredBuildOutput, "at">[]; reason: UnreadOutputReason; named?: ReadonlyMap<string, readonly string[]> }
+  | { used: true; refused: readonly string[] };
+
+/** The one builder of `build-output` cuts, for every family that reads the typed reading: none without evidence. */
+export function buildOutputCuts(evidence: BuildOutputEvidence | undefined): Cut[] {
+  if (evidence === undefined) return [];
+  return evidence.used ? refusedLinkCuts(evidence.refused) : unreadOutputCuts(evidence.outputs, evidence.reason, evidence.named);
+}
 
 /**
  * The cuts of an answer that read none of `outputs` (ADR-0037 decision 9): every output named once, at the paths under
  * it that say why (`named`, by `at`: a stale package, a path that would not be read), or at its directory otherwise.
  */
-export function unreadOutputCuts(outputs: readonly Pick<DeclaredBuildOutput, "at">[], reason: UnreadOutputReason, named: ReadonlyMap<string, readonly string[]> = new Map()): Cut[] {
+function unreadOutputCuts(outputs: readonly Pick<DeclaredBuildOutput, "at">[], reason: UnreadOutputReason, named: ReadonlyMap<string, readonly string[]> = new Map()): Cut[] {
   return outputs.map((output) => {
     const paths = named.get(output.at) ?? [];
     return { kind: "build-output", at: paths.length === 0 ? [mountOf(output)] : paths.map((path) => (path === "" ? mountOf(output) : `${mountOf(output)}/${path}`)), reason, reach: ANYTHING };
@@ -35,7 +49,7 @@ export function unreadOutputCuts(outputs: readonly Pick<DeclaredBuildOutput, "at
 }
 
 /** The cut of the linked paths a typed reading refused to follow out of its declared outputs; none when it refused none. */
-export function refusedLinkCuts(refused: readonly string[]): Cut[] {
+function refusedLinkCuts(refused: readonly string[]): Cut[] {
   return refused.length === 0 ? [] : [{ kind: "build-output", at: refused, reason: "link-outside", reach: ANYTHING }];
 }
 

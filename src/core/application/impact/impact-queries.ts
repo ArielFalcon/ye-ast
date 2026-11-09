@@ -60,7 +60,7 @@ import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, reques
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
-import type { DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
+import { buildOutputCuts, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
 import type { BuildOutputInput } from "../../domain/shared/fact.ts";
 import type { TypeBindings, TypeTarget } from "../../ports/type-bindings.port.ts";
 import { createRevisionSources } from "../snapshot/revision-sources.ts";
@@ -201,7 +201,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (typed === "aborted") return ABORTED;
           const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
           if (signal?.aborted) return ABORTED;
-          return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), read.value, [...fixed, ...typed.cuts, ...read.cuts]) };
+          return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), read.value, [...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts]) };
         } finally {
           store.close();
         }
@@ -444,7 +444,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (typed === "aborted") return ABORTED;
       const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
       if (signal?.aborted) return ABORTED;
-      return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), { ...value, ...read.value }, [...unaccounted([...fixed, ...typed.cuts, ...read.cuts]), ...moduleCuts]) };
+      return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), { ...value, ...read.value }, [...unaccounted([...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts]), ...moduleCuts]) };
     } finally {
       store.close();
     }

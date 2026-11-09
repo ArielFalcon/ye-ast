@@ -52,12 +52,34 @@ test("a cut that does not state why it exists does not type-check", () => {
   assert.ok(reasonless);
 });
 
-test("two situations that cut one place leave one cut there, stating the later one's reason", () => {
+test("two cuts at one place leave the one with the wider reach, whatever order they were emitted in", () => {
+  const narrow: Cut = { kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:3 b"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/b.ts::b"] } };
+  const file: Cut = { ...narrow, reason: "relation-unread", reach: { kind: "anything", runtime: "typescript" } };
+  const wide: Cut = { ...narrow, reason: "relation-unread", reach: { kind: "anything" } };
+
+  for (const cuts of [[narrow, file, wide], [wide, file, narrow], [file, narrow, wide]]) {
+    const fact = withCuts(buildBase(), [], cuts);
+    assert.deepEqual(fact.status === "partial" && fact.cuts, [wide]);
+  }
+  for (const cuts of [[narrow, file], [file, narrow]]) {
+    const fact = withCuts(buildBase(), [], cuts);
+    assert.deepEqual(fact.status === "partial" && fact.cuts, [file]);
+  }
+});
+
+test("two cuts at one place with reaches of equal width leave the one whose reason, then sub-reason, comes first", () => {
   const noSymbols: Cut = { kind: "no-extractor", at: ["src/Money.java"], reason: "no-symbols", reach: { kind: "anything", runtime: "java" } };
   const unmodelled: Cut = { ...noSymbols, reason: "unmodelled" };
   const elsewhere: Cut = { ...noSymbols, at: ["src/Other.java"] };
+  const unproven: Cut = { kind: "unresolved-link", at: ["src/a.ts:2 send"], reason: "dispatch", subReason: "unproven", reach: { kind: "call-at", place: "src/a.ts:2 send" } };
+  const absent: Cut = { ...unproven, subReason: "capability-absent" };
 
-  const fact = withCuts(buildBase(), [], [noSymbols, elsewhere, unmodelled]);
-
-  assert.deepEqual(fact.status === "partial" && fact.cuts, [unmodelled, elsewhere]);
+  for (const cuts of [[noSymbols, elsewhere, unmodelled], [unmodelled, elsewhere, noSymbols]]) {
+    const fact = withCuts(buildBase(), [], cuts);
+    assert.deepEqual(fact.status === "partial" && fact.cuts, [noSymbols, elsewhere]);
+  }
+  for (const cuts of [[unproven, absent], [absent, unproven]]) {
+    const fact = withCuts(buildBase(), [], cuts);
+    assert.deepEqual(fact.status === "partial" && fact.cuts, [unproven]);
+  }
 });

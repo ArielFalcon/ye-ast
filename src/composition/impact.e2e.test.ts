@@ -611,7 +611,7 @@ test("a changed Java record, which the index gives no symbol, seeds nothing and 
 
   assert.equal(result.code, EXIT_CODE.ok, result.stderr);
   assert.deepEqual(result.fact.value.seeds, []);
-  assert.deepEqual(result.fact.cuts, [{ kind: "no-extractor", at: ["src/main/java/shop/Money.java"], reason: "unmodelled", reach: { kind: "anything", runtime: "java" } }]);
+  assert.deepEqual(result.fact.cuts, [{ kind: "no-extractor", at: ["src/main/java/shop/Money.java"], reason: "no-symbols", reach: { kind: "anything", runtime: "java" } }]);
 });
 
 test("a change to a JVM source no extractor reads is a cut at that file, and one in a language no framework reads is not", async () => {
