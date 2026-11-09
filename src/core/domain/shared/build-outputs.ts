@@ -6,18 +6,19 @@ export const LOCKFILE_NAMES = ["npm-shrinkwrap.json", "package-lock.json"] as co
 
 
 /**
- * A directory a host's own install produced, declared outside the repository (ADR-0037). `path` is a `node_modules`
- * directory on the host; it stands for `<at>/node_modules` in the snapshot, `at` being repository-relative.
+ * A directory or file tree a host declared and produced, standing for a repository directory (ADR-0037). `node-modules`
+ * is an installed `node_modules` standing for `<at>/node_modules`; `java-sources` is a directory of generated Java
+ * sources standing for `at` itself (ADR-0044 decision 13). `path` is a host path, `at` repository-relative.
  */
 export interface DeclaredBuildOutput {
-  kind: "node-modules";
+  kind: "node-modules" | "java-sources";
   at: string;
   path: string;
 }
 
-/** Where a declared `node_modules` directory stands in the snapshot. */
-export function mountOf(output: Pick<DeclaredBuildOutput, "at">): string {
-  return output.at === "" ? "node_modules" : `${output.at}/node_modules`;
+/** Where a declared output stands in the snapshot: `<at>/node_modules`, or a directory of generated sources at `at`. */
+export function mountOf(output: Pick<DeclaredBuildOutput, "kind" | "at">): string {
+  return output.kind === "java-sources" ? output.at : output.at === "" ? "node_modules" : `${output.at}/node_modules`;
 }
 
 /** Why a typed reading read none of its declared outputs. */
@@ -28,7 +29,7 @@ export type UnreadOutputReason = "live-tree" | "inputs-unreadable" | "version-mi
  * the paths under each that say why (`named`, by `at`); or that it used them, with the links it refused to follow.
  */
 export type BuildOutputEvidence =
-  | { used: false; outputs: readonly Pick<DeclaredBuildOutput, "at">[]; reason: UnreadOutputReason; named?: ReadonlyMap<string, readonly string[]> }
+  | { used: false; outputs: readonly Pick<DeclaredBuildOutput, "kind" | "at">[]; reason: UnreadOutputReason; named?: ReadonlyMap<string, readonly string[]> }
   | { used: true; refused: readonly string[] };
 
 /** The one builder of `build-output` cuts, for every family that reads the typed reading: none without evidence. */
@@ -41,7 +42,7 @@ export function buildOutputCuts(evidence: BuildOutputEvidence | undefined): Cut[
  * The cuts of an answer that read none of `outputs` (ADR-0037 decision 9): every output named once, at the paths under
  * it that say why (`named`, by `at`: a stale package, a path that would not be read), or at its directory otherwise.
  */
-function unreadOutputCuts(outputs: readonly Pick<DeclaredBuildOutput, "at">[], reason: UnreadOutputReason, named: ReadonlyMap<string, readonly string[]> = new Map()): Cut[] {
+function unreadOutputCuts(outputs: readonly Pick<DeclaredBuildOutput, "kind" | "at">[], reason: UnreadOutputReason, named: ReadonlyMap<string, readonly string[]> = new Map()): Cut[] {
   return outputs.map((output) => {
     const paths = named.get(output.at) ?? [];
     return { kind: "build-output", at: paths.length === 0 ? [mountOf(output)] : paths.map((path) => (path === "" ? mountOf(output) : `${mountOf(output)}/${path}`)), reason, reach: ANYTHING };
@@ -62,6 +63,15 @@ export function nodeModulesDeclared(spec: string): DeclaredBuildOutput | undefin
   const at = split === -1 ? "" : spec.slice(0, split);
   const path = split === -1 ? spec : spec.slice(split + 1);
   return path === "" || !isRepositoryDirectory(at) ? undefined : { kind: "node-modules", at, path };
+}
+
+/** A `java-sources` declaration, `<at>=<path>`: both parts required, and `at` names a repository directory, never the root. */
+export function javaSourcesDeclared(spec: string): DeclaredBuildOutput | undefined {
+  const split = spec.indexOf("=");
+  if (split === -1) return undefined;
+  const at = spec.slice(0, split);
+  const path = spec.slice(split + 1);
+  return at === "" || path === "" || !isRepositoryDirectory(at) ? undefined : { kind: "java-sources", at, path };
 }
 
 /** Whether `at` names a repository directory: relative, normalized, with no `.` or `..` segment; `""` is the root. */

@@ -5,7 +5,8 @@ import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import type { Result } from "../core/domain/shared/result.ts";
 import { isValidGlob, type ScopeRequest } from "../core/domain/shared/scope.ts";
-import { nodeModulesDeclared, type DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
+import { javaSourcesDeclared, nodeModulesDeclared, type DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
+import { compareText } from "../core/domain/shared/code-node.ts";
 import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactBudget } from "../core/domain/impact/impact-fact.ts";
 import { isPositiveCount } from "../core/domain/shared/count.ts";
@@ -88,7 +89,7 @@ const USAGE = [
   "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers, importers, outline, trace, workspace, decisions and contract-consequences; without --include every path is included; --exclude wins)",
   "changed: [--changed <glob>]...   (impact only: globs over the changed paths; only the change's paths they select seed the walk, while the repository is read whole, so callers outside them are known; a glob that selects no changed path is an error)",
   "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default; trace takes no --hub-fan-in, which counts callers)",
-  "outputs: [--node-modules [<at>=]<path>]...   (a node_modules directory your own install produced, standing for <at>/node_modules in the repository, the root's without <at>=; read as data, never run, checked against the commit's lockfile, and used at a revision only, never with --live; each answer that used one lists it in inputs.buildOutputs, and one it could not use is a build-output cut. Write =<path> for a path that holds =)",
+  "outputs: [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]...   (a node_modules directory your own install produced, standing for <at>/node_modules in the repository, the root's without <at>=; read as data, never run, checked against the commit's lockfile, and used at a revision only, never with --live; each answer that used one lists it in inputs.buildOutputs, and one it could not use is a build-output cut. Write =<path> for a path that holds =. --java-sources names the repository directory <at> its generated Java sources stand for, both required; no answer reads it yet and it never appears in inputs.buildOutputs)",
   "workspace: --workspace <file>   (the workspace init persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\", \"remote\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository, and a remote is the source of truth a trusted repository's queries refresh into ye-ast's own mirror)",
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
 ].join("\n");
@@ -288,8 +289,15 @@ async function readWorkspaceFile(path: string): Promise<Result<{ path: string; t
   }
 }
 
+/** The declarations a registration prints: `--node-modules` in the order given, then `--java-sources` sorted by `at`. */
+function registrationDeclarations(outputs: readonly DeclaredBuildOutput[]): string[] {
+  const nodeModules = outputs.filter(({ kind }) => kind === "node-modules");
+  const javaSources = outputs.filter(({ kind }) => kind === "java-sources").toSorted((a, b) => compareText(a.at, b.at));
+  return [...nodeModules, ...javaSources].flatMap(({ kind, at, path }) => [`--${kind}`, shellWord(kind === "node-modules" && at === "" && !path.includes("=") ? path : `${at}=${path}`)]);
+}
+
 function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo: string, mcpCommand: readonly string[], outputs: readonly DeclaredBuildOutput[]): string[] {
-  const declared = outputs.flatMap(({ at, path }) => ["--node-modules", shellWord(at === "" && !path.includes("=") ? path : `${at}=${path}`)]);
+  const declared = registrationDeclarations(outputs);
   const layerLines =
     layer.outcome === "not-written"
       ? [`fixed layer: not written (${layer.reason})`]
@@ -421,15 +429,14 @@ function atRevision(values: { revision?: string | undefined; live?: boolean | un
 const SCOPE_OPTIONS = { include: { type: "string", multiple: true }, exclude: { type: "string", multiple: true } } as const;
 
 const CHANGED_OPTION = { changed: { type: "string", multiple: true } } as const;
-const NODE_MODULES_OPTION = { "node-modules": { type: "string", multiple: true } } as const;
+const NODE_MODULES_OPTION = { "node-modules": { type: "string", multiple: true }, "java-sources": { type: "string", multiple: true } } as const;
 
-/** The `--node-modules [<at>=]<path>` declarations (ADR-0037), each path resolved; `undefined` for one that declares nothing. */
-function parseBuildOutputs(values: { "node-modules"?: string[] | undefined }): { buildOutputs?: readonly DeclaredBuildOutput[] } | undefined {
-  const specs = values["node-modules"];
-  if (specs === undefined) return {};
-  const outputs = specs.map(nodeModulesDeclared);
-  if (outputs.some((output) => output === undefined)) return undefined;
-  return { buildOutputs: outputs.map((output) => ({ ...output!, path: resolve(output!.path) })) };
+/** The `--node-modules` and `--java-sources` declarations, each path resolved; `undefined` for one that declares nothing. */
+function parseBuildOutputs(values: { "node-modules"?: string[] | undefined; "java-sources"?: string[] | undefined }): { buildOutputs?: readonly DeclaredBuildOutput[] } | undefined {
+  const declared = [...(values["node-modules"] ?? []).map(nodeModulesDeclared), ...(values["java-sources"] ?? []).map(javaSourcesDeclared)];
+  if (declared.some((output) => output === undefined)) return undefined;
+  const outputs = declared.map((output) => ({ ...output!, path: resolve(output!.path) }));
+  return outputs.length === 0 ? {} : { buildOutputs: outputs };
 }
 
 type ChangedValues = { [Name in keyof typeof CHANGED_OPTION]?: string[] | undefined };
@@ -506,7 +513,7 @@ async function parseCallersRequest(args: readonly string[], deps: RepositoryNami
       args: [...args],
       options: { revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS, ...budgetOptions, ...NODE_MODULES_OPTION },
       allowPositionals: true,
-    }) as { values: { revision?: string; live?: boolean; "repo-id"?: string; "node-modules"?: string[] } & ScopeValues & BudgetValues; positionals: string[] };
+    }) as { values: { revision?: string; live?: boolean; "repo-id"?: string; "node-modules"?: string[]; "java-sources"?: string[] } & ScopeValues & BudgetValues; positionals: string[] };
     const [path, ...specs] = positionals;
     const budget = parseBudget(values);
     const targets = specs.map(parseTarget);
