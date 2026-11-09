@@ -129,8 +129,10 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, im
   /** The names a reached declaration is looked up by (ADR-0041 decision 8): its own, its proven import aliases, and for a class or its constructor `new` and its language's constructor chaining. */
   async function keysOf(node: GraphSymbol): Promise<LookupKey[]> {
     const keys: LookupKey[] = [{ name: node.name }];
+    /** The local names other files bind the declaration to, by the resolution the binder reads: an import whose edge reaches the declaration or its file. */
     const aliases = async (target: GraphSymbol): Promise<void> => {
-      const importing = store.symbolsByIds([...new Set(store.incomingEdges([target.id], ["imports"]).map((edge) => edge.source))]);
+      const reached = [target.id, ...store.symbolsInFiles([target.file]).filter((symbol) => symbol.kind === "file").map((symbol) => symbol.id)];
+      const importing = store.symbolsByIds([...new Set(store.incomingEdges(reached, ["imports"]).map((edge) => edge.source))]);
       for (const file of new Set(importing.map((symbol) => symbol.file))) {
         for (const [local, declaration] of await importedDeclarations(file)) if (declaration.id === target.id && local !== target.name) keys.push({ name: local, files: new Set([file]) });
       }

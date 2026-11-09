@@ -117,9 +117,12 @@ export function createCallBindings({ store, navigation, origins, binder, importe
     return types.flatMap((type) => navigation.membersOf(type).filter((member) => member.kind === "method" && member.name === type.name && member.id !== body.id));
   };
 
-  /** The declaration a bare name binds in its own file: an import's, a located one, or the file's own declaration of it. */
+  /**
+   * The declaration a bare name binds in its own file: an import's where the occurrence reads that import, or the file's
+   * own declaration of it. A local binding, an own member or an unread occurrence never takes the import of its name.
+   */
   async function bareDeclaration({ body, reference }: UnboundCall, name: string, bound: Awaited<ReturnType<ImportOrigins["rootBindings"]>>[number] | undefined): Promise<CallBinding | undefined> {
-    const imported = (await importedDeclarations(reference.file)).get(name);
+    const imported = bound?.kind === "import" || bound?.kind === "located" ? (await importedDeclarations(reference.file)).get(name) : undefined;
     if (imported !== undefined) return { kind: "declaration", target: imported, link: "import" };
     if (bound?.kind !== "declared" || bound.captured) return undefined;
     const declared = navigation.symbolsInFile(reference.file).filter((symbol) => symbol.name === name && symbol.id !== body.id && !NOT_DECLARED_KINDS.includes(symbol.kind) && bound.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine));

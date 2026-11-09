@@ -53,6 +53,24 @@ test("an import alias is looked up only in the file whose import binds it, even 
   assert.deepEqual(found.map(({ source, edge }) => `${source.id}@${edge.line}`), ["a@3"]);
 });
 
+test("a default import the binder resolves by the exported name, with its imports edge at the file, is looked up by its alias", async () => {
+  const nodes = [fakeNode("apiFile", "file", "src/api.ts", 1, 3), fakeNode("original", "function", "src/api.ts", 1, 1), fakeNode("result", "constant", "src/use.ts", 2, 2)];
+  const edges: FakeEdge[] = [{ from: "result", to: "apiFile", kind: "imports", line: 1, column: 7 }];
+  const { reverse, symbol } = setup(nodes, edges, [{ body: "result", line: 2, name: "renamed" }], () => declaration(symbol("original")), { "src/use.ts": { renamed: "original" } });
+
+  const { edges: found } = await reverse.into([symbol("original")]);
+  assert.deepEqual(found.map(({ source, edge }) => `${source.id}@${edge.line}`), ["result@2"]);
+});
+
+test("a default-exported class constructed under its alias is an edge into its constructor, with the imports edge at the file", async () => {
+  const nodes = [fakeNode("widgetFile", "file", "src/widget.ts", 1, 9), fakeNode("Widget", "class", "src/widget.ts", 1, 9), fakeNode("Widget.ctor", "method", "src/widget.ts", 2, 4, "constructor"), fakeNode("make", "function", "src/use.ts", 2, 4)];
+  const edges: FakeEdge[] = [{ from: "Widget", to: "Widget.ctor", kind: "contains" }, { from: "make", to: "widgetFile", kind: "imports", line: 1, column: 7 }];
+  const { reverse, symbol } = setup(nodes, edges, [{ body: "make", line: 3, name: "Panel", kind: "instantiates" }], () => declaration(symbol("Widget")), { "src/use.ts": { Panel: "Widget" } });
+
+  const { edges: found } = await reverse.into([symbol("Widget.ctor")]);
+  assert.deepEqual(found.map(({ target, edge }) => `${target.id}@${edge.line}`), ["Widget.ctor@3"]);
+});
+
 test("new C() bound to a class is an edge into its one constructor, and an unbound call is a cut only for the declarations it is attributed to", async () => {
   const nodes = [fakeNode("C", "class", "src/c.ts", 1, 9, "C"), fakeNode("C.ctor", "method", "src/c.ts", 2, 4, "constructor"), fakeNode("C.save", "method", "src/c.ts", 5, 7, "save"), fakeNode("D.save", "method", "src/d.ts", 2, 4, "save"), fakeNode("use", "function", "src/use.ts", 1, 9)];
   const edges: FakeEdge[] = [{ from: "C", to: "C.ctor", kind: "contains" }, { from: "C", to: "C.save", kind: "contains" }];

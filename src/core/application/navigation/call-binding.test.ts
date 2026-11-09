@@ -54,12 +54,35 @@ test("a bare call binds the declaration its import proves, the one its file decl
   const world: World = {
     nodes: [fakeNode("run", "function", USE, 5, 9), fakeNode("helper", "function", USE, 1, 3), fakeNode("load", "function", API, 1, 3, "getArticle"), fakeNode("other", "function", API, 5, 7, "helper")],
     imports: { load: "load" },
-    bindings: { helper: { kind: "declared", root: "helper", lines: [1], captured: false } },
+    bindings: { load: { kind: "import", root: "load", origin: { kind: "repository", file: API } }, helper: { kind: "declared", root: "helper", lines: [1], captured: false } },
     origins: { inject: { kind: "external", module: "@angular/core" } },
   };
   const calls = [{ name: "load", line: 6, kind: "calls" }, { name: "helper", line: 7, kind: "calls" }, { name: "inject", line: 8, kind: "calls" }];
 
   assert.deepEqual((await bound(world, "run", calls)).map(summary), [["declaration", "import", "load"], ["declaration", "file", "helper"], ["outside"]]);
+});
+
+test("a bare call binds the import of its name only where its occurrence reads that import, never under a local binding", async () => {
+  const nodes = [fakeNode("run", "function", USE, 5, 9), fakeNode("load", "function", API, 1, 3)];
+  const call = [{ name: "load", line: 6, kind: "calls" }];
+  const shadowing: readonly RootBinding[] = [
+    { kind: "local", root: "load" },
+    { kind: "declared", root: "load", lines: [2], captured: true },
+    { kind: "unknown" },
+  ];
+
+  for (const binding of shadowing) {
+    const [settled] = await bound({ nodes, imports: { load: "load" }, bindings: { load: binding } }, "run", call);
+    assert.deepEqual(summary(settled!), ["unbound", "bare", ["load"], []], binding.kind);
+  }
+});
+
+test("a bare Java call to a method its class declares never binds a static import of that name", async () => {
+  const USE_JAVA = "src/main/java/app/Use.java";
+  const nodes = [fakeNode("run", "method", USE_JAVA, 5, 9), fakeNode("load", "method", "src/main/java/app/Util.java", 1, 3)];
+  const [settled] = await bound({ nodes, imports: { load: "load" }, bindings: { load: { kind: "this", member: "load" } } }, "run", [{ name: "load", line: 6, kind: "calls" }]);
+
+  assert.notDeepEqual(summary(settled!), ["declaration", "import", "load"]);
 });
 
 test("a bare call nothing binds is attributed only to the declarations of its own file, and a member call on a call result to none (fixture 10)", async () => {
