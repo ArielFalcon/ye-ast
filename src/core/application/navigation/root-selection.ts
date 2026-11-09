@@ -37,7 +37,15 @@ export function evidenceOfTarget(target: CallersTarget): Evidence {
 export function rangeChanges(targets: readonly CallersTarget[]): FileChange[] {
   const ranges = targets.flatMap((target) => ("start" in target ? [target] : []));
   return [...Map.groupBy(ranges, ({ file }) => file)]
-    .map(([path, inFile]): FileChange => ({ path, deleted: false, binary: false, added: inFile.map(({ start, end }) => ({ start, end })), removals: [], removedNames: [] }))
+    .map(([path, inFile]): FileChange => ({
+      path,
+      deleted: false,
+      binary: false,
+      added: inFile.map(({ start, end }) => ({ start, end })),
+      removals: [],
+      removedNames: [],
+      hunks: inFile.map(({ start, end }) => ({ head: { start, end }, removedNames: [] })),
+    }))
     .sort((a, b) => compareText(a.path, b.path));
 }
 

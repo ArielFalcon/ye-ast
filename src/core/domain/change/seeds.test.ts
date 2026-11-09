@@ -13,7 +13,7 @@ function symbol(id: string, kind: string, startLine: number, endLine: number, fi
 }
 
 function change(path: string, overrides: Partial<FileChange> = {}): FileChange {
-  return { path, deleted: false, binary: false, added: [], removals: [], removedNames: [], ...overrides };
+  return { path, deleted: false, binary: false, added: [], removals: [], removedNames: [], hunks: [], ...overrides };
 }
 
 function run(files: FileChange[], symbols: TestSymbol[], resources: ReadonlyMap<string, readonly ComponentRef[]> = new Map()) {

@@ -44,7 +44,8 @@ const FORK = "c".repeat(40);
 const SUMMARY: IndexSummary = { filesIndexed: 1, filesSkipped: 0, filesErrored: 0, filesNotIndexed: [], versions: { codegraph: "x", schema: 0, extraction: 0 } };
 
 function change(path: string, overrides: Partial<FileChange> = {}): FileChange {
-  return { path, deleted: false, binary: false, added: [{ start: 1, end: 1 }], removals: [], removedNames: [], ...overrides };
+  const change: FileChange = { path, deleted: false, binary: false, added: [{ start: 1, end: 1 }], removals: [], removedNames: [], hunks: [], ...overrides };
+  return { ...change, hunks: change.hunks.length === 0 ? change.added.map((range) => ({ head: range, removedNames: [] })) : change.hunks };
 }
 
 /** The head's snapshot listing, holding exactly `paths`, so a target names a file the snapshot has. */

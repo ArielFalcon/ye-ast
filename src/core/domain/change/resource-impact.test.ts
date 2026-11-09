@@ -5,7 +5,7 @@ import type { FileChange } from "./diff-reader.ts";
 
 const before: ResourceOwner = { file: "src/page.ts", name: "Page", line: 2, resources: ["src/old.html", "src/old.scss"] };
 const after: ResourceOwner = { ...before, line: 20, resources: ["src/new.html"] };
-const deleted = (path: string, removedNames: string[] = []): FileChange => ({ path, deleted: true, binary: false, added: [], removals: [], removedNames });
+const deleted = (path: string, removedNames: string[] = []): FileChange => ({ path, deleted: true, binary: false, added: [], removals: [], removedNames, hunks: [] });
 
 test("a deleted resource follows its surviving owner's current identity and line", () => {
   const result = resourceImpact([after], [before], [deleted("src/old.html"), deleted("src/old.scss")]);
