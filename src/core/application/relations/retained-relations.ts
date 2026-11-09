@@ -1,5 +1,4 @@
 import { declaredScope } from "../../domain/map/entrypoint-map.ts";
-import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { MemberProofContext } from "../../domain/relations/member-use.ts";
 import type { DeclaredScope } from "../../domain/shared/fact.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
@@ -17,13 +16,13 @@ export function retainedRelations(
   tree: Pick<CommitExtraction, "export" | "sources">,
   request: { scope?: ScopeRequest; signal?: AbortSignal },
 ): Promise<RelationExtraction> {
-  const memberProofs = memberProofContextOf(tree, declaredScope(request.scope));
+  const memberProofs = memberProofContextOf(extractor, tree, declaredScope(request.scope));
   const produce = () => extractor.extract(tree.sources, { memberProofs });
   return prepared?.retained === undefined ? produce() : prepared.retained(canonicalJson({ output: "relations", memberProofs }), produce, request.signal);
 }
 
-export function memberProofContextOf(tree: Pick<CommitExtraction, "export" | "sources">, scope: DeclaredScope): MemberProofContext {
+export function memberProofContextOf(extractor: Pick<RelationExtractor, "language">, tree: Pick<CommitExtraction, "export" | "sources">, scope: DeclaredScope): MemberProofContext {
   if (scope.include.length > 0 || scope.exclude.length > 0 || tree.export.stopped !== undefined || tree.export.skipped.length > 0) return { completeSource: false };
   const sources = new Set(tree.sources.map(({ path }) => path));
-  return { completeSource: tree.export.files.every(({ path, written }) => !isTypeScriptSource(path) || (written && sources.has(path))) };
+  return { completeSource: tree.export.files.every(({ path, written }) => !extractor.language.reads(path) || (written && sources.has(path))) };
 }

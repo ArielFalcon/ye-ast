@@ -54,20 +54,18 @@ import { createJavaMemberNames } from "../core/adapters/tree-sitter/java-member-
 import { createJavaTrivia } from "../core/adapters/tree-sitter/java-trivia.adapter.ts";
 import { createTypeScriptMemberNames } from "../core/adapters/typescript/declared-member-names.adapter.ts";
 import { createTypeScriptTrivia } from "../core/adapters/typescript/source-trivia.adapter.ts";
-import type { DeclaredMemberNamesReader } from "../core/ports/declared-member-names.port.ts";
-import type { SourceTrivia } from "../core/ports/source-trivia.port.ts";
 import { createAngularDeclarationReader } from "../core/adapters/typescript/angular-declarations.adapter.ts";
 import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
 import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loads.adapter.ts";
 import { composeAngularRelations } from "./angular-relations.ts";
 import { composeConsumerSources, composeContractConsequences } from "./consumer-queries.ts";
 import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
-import { compareText } from "../core/domain/shared/code-node.ts";
 import { compareCallPlaces, type CallSiteReader, type PlacedCallSiteReader } from "../core/domain/topology/call-site.ts";
 import type { EntrypointExtractor, SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
 import { createImportOrigins } from "../core/adapters/typescript/import-origins.adapter.ts";
 import { createJavaNameBindings } from "../core/adapters/spring/java-name-bindings.adapter.ts";
-import { importOriginsByLanguage } from "./import-origins-by-language.ts";
+import { mergedReaders } from "../core/application/snapshot/language-packs.ts";
+import type { LanguagePack } from "../core/ports/language-pack.port.ts";
 import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
 import type { DerivedFacts } from "../core/ports/derived-facts.port.ts";
@@ -174,27 +172,6 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const typescriptCallSites = createHttpCallSites();
   const typescriptTrivia = createTypeScriptTrivia();
   const javaTrivia = createJavaTrivia(javaParser);
-  const sourceTrivia: SourceTrivia = {
-    triviaLines: async (file) => new Set([...(await typescriptTrivia.triviaLines(file)), ...(await javaTrivia.triviaLines(file))]),
-  };
-  const typescriptMemberNames = createTypeScriptMemberNames();
-  const javaMemberNames = createJavaMemberNames(javaParser);
-  const memberNamesReader: DeclaredMemberNamesReader = {
-    memberNames: async (file, facts) => {
-      const [typescript, java] = [await typescriptMemberNames.memberNames(file, facts), await javaMemberNames.memberNames(file, facts)];
-      const calls = typescript.calls === undefined && java.calls === undefined ? undefined : [...typescript.calls ?? [], ...java.calls ?? []];
-      return {
-        names: [...new Set([...typescript.names, ...java.names])].sort(compareText),
-        functionValueCalls: [...typescript.functionValueCalls, ...java.functionValueCalls],
-        callables: [...typescript.callables, ...java.callables],
-        initializedFields: [...typescript.initializedFields ?? [], ...java.initializedFields ?? []],
-        receiverBindings: [...typescript.receiverBindings, ...java.receiverBindings],
-        functionValues: [...typescript.functionValues, ...java.functionValues],
-        ...(calls === undefined ? {} : { calls }),
-      };
-    },
-  };
-  const memberNames = measurement === undefined ? memberNamesReader : measuredTalliedStages(memberNamesReader, { memberNames: "member-names" }, measurement);
   const callSites = staged<CallSiteReader>({
     of: async (files, repo, libraries) => {
       const java = await createJavaCallSites(await javaParser()).of(files, repo, libraries);
@@ -235,8 +212,15 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const moduleDependencies = staged(createModuleDependenciesReader(), { extract: "module-dependencies" });
   let javaImportsReader: Promise<ModuleDependenciesReader> | undefined;
   const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => (await (javaImportsReader ??= javaParser().then(createJavaImportsReader))).extract(sources, options) }, { extract: "java-imports" });
+  const typescriptMemberNames = createTypeScriptMemberNames();
+  const javaMemberNames = createJavaMemberNames(javaParser);
+  const typescriptPack: LanguagePack = { memberNames: typescriptMemberNames, origins: (sources, _paths, facts) => createImportOrigins(sources, facts === undefined ? {} : { facts }), modules: moduleDependencies, trivia: typescriptTrivia };
+  const javaPack: LanguagePack = { memberNames: javaMemberNames, origins: (sources, paths, facts) => createJavaNameBindings(javaParser, sources, paths, facts), modules: javaImports, trivia: javaTrivia };
+  const merged = mergedReaders([typescriptPack, javaPack]);
+  const { sourceTrivia, moduleReaders } = merged;
+  const memberNames = measurement === undefined ? merged.memberNames : measuredTalliedStages(merged.memberNames, { memberNames: "member-names" }, measurement);
   const importOrigins = (sources: readonly SourceFile[], paths?: readonly string[], facts?: DerivedFacts) => {
-    const reader = importOriginsByLanguage([createImportOrigins(sources, facts === undefined ? {} : { facts }), createJavaNameBindings(javaParser, sources, paths, facts)]);
+    const reader = merged.importOrigins(sources, paths, facts);
     return staged(measurement === undefined || facts === undefined ? reader : measuredDerivedFacts(reader, facts, "import-origins", measurement), { origins: "import-origins", rootOrigins: "root-origins", rootBindings: "root-bindings", receiverMethods: "receiver-methods", declaredTypes: "declared-types" });
   };
   const unmodelled = staged<UnmodelledConstructsReader>({ extract: async (sources) => createJavaRecordsReader(await javaParser()).extract(sources) }, { extract: "java-records" });
@@ -265,7 +249,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     memberNames,
     sourceTrivia,
     moduleDependencies,
-    moduleReaders: [moduleDependencies, javaImports],
+    moduleReaders,
     declarationEvidence: createDeclarationEvidenceReader(),
     unmodelled,
     sourceSelection: isWritten,
@@ -302,7 +286,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...trust,
     sourceSelection: isWritten,
   };
-  const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders: [moduleDependencies, javaImports], unmodelled, importOrigins, memberNames });
+  const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders, unmodelled, importOrigins, memberNames });
   const outline = measurement === undefined ? bareOutline : measuredOutline(bareOutline, measurement);
   const defaults = createWorkspaceDefaults(createFixedLayerStore());
   const refresh = options.refresh ?? (options.cacheDirectory === undefined ? undefined : createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory: options.cacheDirectory, digest }));

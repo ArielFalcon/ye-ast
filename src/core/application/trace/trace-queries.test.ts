@@ -1,3 +1,4 @@
+import { TYPESCRIPT_PROFILE } from "../../domain/languages/profiles.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
@@ -130,7 +131,7 @@ function setup(options: Options) {
         return { status: "complete", value, evidence: [], ...(bare === undefined ? {} : { bare }) };
       }),
     }),
-    relations: { extract: async () => ({ relations: [], fields: [], locals: [], ...options.proofs, ...options.relations }) },
+    relations: { language: TYPESCRIPT_PROFILE, extract: async () => ({ relations: [], fields: [], locals: [], ...options.proofs, ...options.relations }) },
     ...(options.imports === undefined ? {} : { moduleDependencies: { extract: async () => ({ dependencies: Object.entries(options.imports!).flatMap(([file, bound]) => bound.map(({ local, from }, index) => ({ file, line: index + 1, endLine: index + 1, specifier: from, kind: "import", typeOnly: false, target: { kind: "repository", file: from }, bindings: [{ local, imported: local, line: index + 1, column: 10, typeOnly: false, exportedAs: local }] }))) }) } }),
     callSites: { placed: async () => (options.onCallSites?.(), options.placedSites ?? (options.callSites ?? []).map((site) => ({ site, column: 0 }))) },
     engines: {},

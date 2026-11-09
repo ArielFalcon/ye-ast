@@ -17,7 +17,7 @@ import { focusWithUses, readFocus, readOutline } from "./outline.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import { syntaxOfSources } from "../navigation/edge-targets.ts";
-import { combinedModuleReader } from "../navigation/module-readers.ts";
+import { combinedModuleReader } from "../snapshot/language-packs.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 
 export interface OutlineQueriesDeps extends HeadReaderDeps {

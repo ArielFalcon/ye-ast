@@ -1,3 +1,4 @@
+import { TYPESCRIPT_PROFILE } from "../../domain/languages/profiles.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
@@ -155,7 +156,7 @@ function setup(options: Options = {}) {
     },
     extractor: { extract: async () => { log.extractions++; return []; } },
     angular: { read: async () => options.declarations ?? [] },
-    relations: options.relationReader ?? { extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [], locals: [] }) },
+    relations: options.relationReader ?? { language: TYPESCRIPT_PROFILE, extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [], locals: [] }) },
     dynamicLoads: { extract: async () => options.loads ?? [] },
     contracts: { operations: () => [] },
     graph,
@@ -1441,7 +1442,7 @@ test("member proof context gates exact contrary-target exclusions without reachi
     edges: [{ from: "Store", to: "member", kind: "contains" }, { from: "Owner", to: "caller", kind: "contains" }],
     unresolved: [{ from: "caller", file: owner, line: 7, column: 0, name: "this.store.write", kind: "calls" }],
     importOrigins: origins(() => undefined),
-    relationReader: { extract: async (_sources, options) => {
+    relationReader: { language: TYPESCRIPT_PROFILE, extract: async (_sources, options) => {
       contexts.push(options?.memberProofs?.completeSource === true);
       return { relations: [], fields: [], locals: [], memberUses: options?.memberProofs?.completeSource ? [proof] : [] };
     } },
@@ -1473,7 +1474,7 @@ test("cancellation after member metadata stops the query and closes the graph", 
   const { callers, log } = setup({
     signal: controller.signal,
     nodes: [fakeNode("f", "function", "src/A.java", 1, 3)],
-    relationReader: { extract: async () => { controller.abort(); return { relations: [], fields: [], locals: [], memberUses: [] }; } },
+    relationReader: { language: TYPESCRIPT_PROFILE, extract: async () => { controller.abort(); return { relations: [], fields: [], locals: [], memberUses: [] }; } },
   });
   const result = await callers({ targets: [{ file: "src/A.java", symbol: "f" }] });
   assert.ok(!result.ok && result.fault.kind === "aborted");
@@ -1612,7 +1613,7 @@ test("importers cut each file's unresolved module statements once, anchored at t
 
 test("a callers target that names no declaration faults before the relations reader reads the snapshot", async () => {
   let reads = 0;
-  const relationReader: ImpactQueriesDeps["relations"] = { extract: async () => { reads++; return { relations: [], fields: [], locals: [] }; } };
+  const relationReader: ImpactQueriesDeps["relations"] = { language: TYPESCRIPT_PROFILE, extract: async () => { reads++; return { relations: [], fields: [], locals: [] }; } };
 
   const answer = await setup({ ...TWO_CLASSES, relationReader }).callers({ targets: [{ file: "src/A.ts", symbol: "gone" }] });
 
@@ -1673,7 +1674,7 @@ test("an edge the walk reads only once a dropped one frees a bound is checked as
 const RETAINED_BYTES = 1 << 20;
 
 function relationsCounted(counter: { calls: number }, relations: Finding<Relation>[] = []): ImpactQueriesDeps["relations"] {
-  return { extract: async () => { counter.calls++; return { relations, fields: [], locals: [] }; } };
+  return { language: TYPESCRIPT_PROFILE, extract: async () => { counter.calls++; return { relations, fields: [], locals: [] }; } };
 }
 
 test("a second callers request at the same snapshot and inputs reads the relations once and answers what a miss answers", async () => {
@@ -1714,7 +1715,7 @@ test("a cancelled relations extraction publishes no output", async () => {
   const counter = { calls: 0 };
   const controller = new AbortController();
   const targets = { targets: [{ file: "src/A.java", symbol: "f" }] };
-  const cancelling: ImpactQueriesDeps["relations"] = { extract: async () => { counter.calls++; controller.abort(); return { relations: [], fields: [], locals: [] }; } };
+  const cancelling: ImpactQueriesDeps["relations"] = { language: TYPESCRIPT_PROFILE, extract: async () => { counter.calls++; controller.abort(); return { relations: [], fields: [], locals: [] }; } };
   const base = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache };
   const cancelled = await setup({ ...base, relationReader: cancelling, signal: controller.signal }).callers(targets);
   assert.ok(!cancelled.ok && cancelled.fault.kind === "aborted");
@@ -1882,7 +1883,7 @@ test("a cancelled live relations extraction publishes no output", async () => {
   const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
   const counter = { calls: 0 };
   const controller = new AbortController();
-  const cancelling: ImpactQueriesDeps["relations"] = { extract: async () => { counter.calls++; controller.abort(); return { relations: [], fields: [], locals: [] }; } };
+  const cancelling: ImpactQueriesDeps["relations"] = { language: TYPESCRIPT_PROFILE, extract: async () => { counter.calls++; controller.abort(); return { relations: [], fields: [], locals: [] }; } };
   const cancelled = await liveRun(live, snapshotCache, { relationReader: cancelling, signal: controller.signal }).queries.callers({ ...LIVE_CALLERS, signal: controller.signal });
   assert.ok(!cancelled.ok && cancelled.fault.kind === "aborted");
   assert.ok((await liveRun(live, snapshotCache, { relationReader: relationsCounted(counter) }).queries.callers(LIVE_CALLERS)).ok);

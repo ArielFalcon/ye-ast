@@ -1,5 +1,4 @@
-import { isJavaSource } from "../../domain/languages/java.ts";
-import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import { isReadSource } from "../../domain/languages/profiles.ts";
 import { unreadOutputCuts, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
 import type { BuildOutputInput, Cut, SnapshotRef } from "../../domain/shared/fact.ts";
 import type { ScopeRequest } from "../../domain/shared/scope.ts";
@@ -190,7 +189,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
           const reconciled = reconciledCalls(targets, declarationUses());
           if (targets.bindings === undefined || reconciled === undefined || syntaxOf === undefined) return undefined;
           const constructs = async (node: GraphSymbol): Promise<boolean> => (await syntaxOf(node.file)).callables.some((callable) => callable.construction && callable.name === node.name && callable.start <= node.startLine && node.startLine <= callable.nameLine);
-          const readable = tree.sources.filter((file) => isTypeScriptSource(file.path) || isJavaSource(file.path));
+          const readable = tree.sources.filter((file) => isReadSource(file.path));
           return createReverseCalls({ store, navigation: navigation(), reconciled, bindings: targets.bindings, importedDeclarations: targets.importedDeclarations, sources: readable, constructs, ...(retained === undefined ? {} : { retained }) });
         },
       };

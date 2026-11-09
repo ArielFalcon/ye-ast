@@ -31,12 +31,6 @@ const LANGUAGE_CHECKS = ["isJavaSource", "isTypeScriptSource", "isTypeScriptFile
 const LANGUAGE_CHECK_LINES: Readonly<Record<string, number>> = {
   "core/application/impact/impact-queries.ts": 7,
   "core/application/impact/importers.ts": 1,
-  "core/application/impact/inbound-origins.ts": 1,
-  "core/application/navigation/call-binding.ts": 2,
-  "core/application/navigation/edge-targets.ts": 2,
-  "core/application/navigation/reverse-calls.ts": 3,
-  "core/application/relations/retained-relations.ts": 1,
-  "core/application/snapshot/base-reading.ts": 1,
   "core/domain/change/changed-file.ts": 2,
   "core/domain/impact/module-impact.ts": 5,
   "core/domain/map/entrypoint-map.ts": 2,
@@ -92,6 +86,13 @@ test("language checks outside core/domain/languages stay at their frozen lines",
   const lines = counted(scanned.map((file) => [file, read(file).split("\n").filter((line) => check.test(line) && !/^\s*import\b/.test(line)).length] as const));
 
   assert.deepEqual(lines, counted(Object.entries(LANGUAGE_CHECK_LINES)));
+});
+
+test("no rule outside core/domain/languages tells a language by its profile's name", () => {
+  const named = /\.language\s*[!=]==|[!=]==\s*"(typescript|java)"/;
+  const scanned = files(SOURCE, false).filter((file) => !file.startsWith("core/domain/languages/") && !file.startsWith("core/adapters/") && !file.startsWith("composition/"));
+
+  assert.deepEqual(scanned.filter((file) => read(file).split("\n").some((line) => named.test(line))), []);
 });
 
 test("a query family imports another only at its frozen imports", () => {

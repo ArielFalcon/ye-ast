@@ -1,7 +1,7 @@
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import { calleeOf } from "../../domain/shared/call-place.ts";
 import { EDGE_POLICY, FOLLOWED_EDGE_KINDS, LOCAL_OWNER_KINDS, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
-import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
+import { hasTyping } from "../../domain/languages/profiles.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { Relation } from "../../domain/relations/relation.ts";
@@ -37,7 +37,7 @@ export function inboundEdgesOf(store: CodeGraphReader, origins: RelationOrigins,
  * base binds it to (ADR-0041 decision 4), with the member calls through the origins the base binds (`originCallsOf`).
  */
 export async function receiverCorrectionsOf(store: CodeGraphReader, targets: EdgeTargets, origins: Pick<RelationOrigins, "fields" | "locals">, files: readonly string[], signal?: AbortSignal): Promise<EdgeCorrections> {
-  const sources = new Map(store.symbolsInFiles(files.filter((file) => isTypeScriptFile(file) && kindOfChangedFile(file) !== "test")).map((symbol) => [symbol.id, symbol]));
+  const sources = new Map(store.symbolsInFiles(files.filter((file) => hasTyping(file, "structural") && kindOfChangedFile(file) !== "test")).map((symbol) => [symbol.id, symbol]));
   const edges = store.outgoingEdges([...sources.keys()], FOLLOWED_EDGE_KINDS);
   const reached = new Map(store.symbolsByIds([...new Set(edges.map((edge) => edge.target))]).map((symbol) => [symbol.id, symbol]));
   const followed = edges.flatMap((edge): FollowedEdge[] => {

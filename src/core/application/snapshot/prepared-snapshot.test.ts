@@ -1,3 +1,4 @@
+import { TYPESCRIPT_PROFILE } from "../../domain/languages/profiles.ts";
 import { createWorkspaceQueries } from "../topology/workspace-queries.ts";
 import { createImpactQueries } from "../impact/impact-queries.ts";
 import { createWorkspaceImpactQueries } from "../topology/workspace-impact.ts";
@@ -351,7 +352,7 @@ function impactQueriesFor(deps: SnapshotReaderDeps) {
       ...deps, matcher: { matches: () => true }, engines: {},
       vcs: Object.assign(deps.vcs, { mergeBase: async () => ({ ok: true as const, value: SHA }), diffCommits: async () => ({ ok: true as const, value: [] }), diffDirectories: async () => ({ ok: true as const, value: [] }) }),
       graph: { index: async () => unavailable, open: () => unavailable, buildMirror: async () => unavailable, syncMirror: async () => unavailable },
-      angular: { read: async () => [] }, relations: { extract: async () => ({ relations: [], fields: [], locals: [] }) }, dynamicLoads: { extract: async () => [] }, contracts: { operations: () => [] }, angularEngines: {},
+      angular: { read: async () => [] }, relations: { language: TYPESCRIPT_PROFILE, extract: async () => ({ relations: [], fields: [], locals: [] }) }, dynamicLoads: { extract: async () => [] }, contracts: { operations: () => [] }, angularEngines: {},
     });
 }
 

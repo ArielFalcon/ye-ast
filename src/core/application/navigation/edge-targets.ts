@@ -1,7 +1,6 @@
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { CALL_EDGE_KINDS, FIELD_KINDS, EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, holdsValue, type EdgeVerdict, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
-import { isJavaSource } from "../../domain/languages/java.ts";
-import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
+import { hasTyping } from "../../domain/languages/profiles.ts";
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
@@ -206,7 +205,7 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
   async function receiversOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<readonly (string | undefined)[]> {
     const read = syntaxOf;
     if (read === undefined) return [];
-    const asked = edges.flatMap((followed, index) => (isTypeScriptFile(followed.source.file) && ((FIELD_KINDS as readonly string[]).includes(followed.target.kind) || navigation.ownersOf(followed.target).some((owner) => TYPE_KINDS.includes(owner.kind))) ? [{ ...followed, index }] : []));
+    const asked = edges.flatMap((followed, index) => (hasTyping(followed.source.file, "structural") && ((FIELD_KINDS as readonly string[]).includes(followed.target.kind) || navigation.ownersOf(followed.target).some((owner) => TYPE_KINDS.includes(owner.kind))) ? [{ ...followed, index }] : []));
     if (asked.length === 0) return [];
     const bindings = await origins.rootBindings(asked.map(({ edge, source, target }): UseSite => ({ file: source.file, line: edge.line!, column: edge.column! + 1, spelled: target.name, owner: { name: source.name, line: source.startLine, endLine: source.endLine } })), signal);
     /** The body's own binding, or a declaration of the file the index holds as no class, function or other non-value node. */
@@ -239,7 +238,7 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
 
   /** Per Java call edge, the method the receiver reading names at its place (ADR-0044 decision 1); none where it settles nothing. */
   async function declaredMethodsOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<ReadonlyMap<FollowedEdge, GraphSymbol>> {
-    const asked = bindings === undefined ? [] : edges.filter(({ edge, source }) => edge.kind === "calls" && isJavaSource(source.file));
+    const asked = bindings === undefined ? [] : edges.filter(({ edge, source }) => edge.kind === "calls" && hasTyping(source.file, "nominal"));
     if (bindings === undefined || asked.length === 0) return new Map();
     const found = await origins.receiverMethods(asked.map(({ edge, source, target }) => ({ file: source.file, line: edge.line!, column: edge.column! + 1, member: target.name })), signal);
     return new Map(asked.flatMap((followed, index) => {

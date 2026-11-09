@@ -1,3 +1,4 @@
+import { TYPESCRIPT_PROFILE } from "../../domain/languages/profiles.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import { classKey, type AngularClass, type Operand } from "../../domain/relations/angular-class.ts";
 import type { MemberUseOrigin, MemberProofContext } from "../../domain/relations/member-use.ts";
@@ -21,7 +22,7 @@ export interface AngularRelationsDeps {
  * template files a `templateUrl` names are read from the sources given.
  */
 export function createAngularRelationExtractor(deps: AngularRelationsDeps): RelationExtractor {
-  return { extract: (files, options) => extractRelations(deps, files, options) };
+  return { language: TYPESCRIPT_PROFILE, extract: (files, options) => extractRelations(deps, files, options) };
 }
 
 async function extractRelations(deps: AngularRelationsDeps, files: readonly SourceFile[], options?: { memberProofs?: MemberProofContext }): Promise<RelationExtraction> {

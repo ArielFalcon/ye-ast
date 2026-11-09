@@ -20,7 +20,7 @@ const RULES: readonly { concept: string; pattern: RegExp; owner: string; pending
   { concept: "the declarations that hold a value", pattern: /= \["constant", "variable"\]/, owner: "core/domain/impact/edge-policy.ts", pending: [] },
   { concept: "the repository declarations a call's name can bind", pattern: /declarationsNamed\(\[\w+\]\)\.filter\(\(symbol\) => inScope\(/, owner: "core/application/navigation/call-binding.ts", pending: [] },
   { concept: "the written calls no record matches, looked up by the name they spell", pattern: /\.\.\.writtenOnly, \.\.\.deferredOnly\]/, owner: "core/application/navigation/reverse-calls.ts", pending: [] },
-  { concept: "the names a reached declaration's calls are looked up by", pattern: /\{ name: "super", files: /, owner: "core/application/navigation/reverse-calls.ts", pending: [] },
+  { concept: "the names a reached declaration's calls are looked up by", pattern: /\{ name: chaining\.inherited, files: /, owner: "core/application/navigation/reverse-calls.ts", pending: [] },
   { concept: "the declarations that are classes", pattern: /= \["class", "component"\]/, owner: "core/domain/impact/edge-policy.ts", pending: [] },
 ];
 

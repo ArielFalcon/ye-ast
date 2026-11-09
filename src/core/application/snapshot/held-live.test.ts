@@ -1,3 +1,4 @@
+import { TYPESCRIPT_PROFILE } from "../../domain/languages/profiles.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
@@ -117,7 +118,7 @@ function setup(options: Options = {}) {
     reader: { read: async (root) => { log.reads++; return options.snapshotSources?.[log.plans.find((plan) => plan.destination === root)?.sha ?? ""] ?? options.sources ?? []; } },
     extractor: { extract: async () => { log.extractions++; return []; } },
     angular: { read: async () => options.declarations ?? [] },
-    relations: options.relationReader ?? { extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [], locals: [] }) },
+    relations: options.relationReader ?? { language: TYPESCRIPT_PROFILE, extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [], locals: [] }) },
     dynamicLoads: { extract: async () => options.loads ?? [] },
     contracts: { operations: () => [] },
     graph,

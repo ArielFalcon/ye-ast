@@ -1,6 +1,7 @@
 import type { ExternalMemberUseOrigin, MemberUseOrigin, MemberProofContext } from "../../domain/relations/member-use.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
+import type { LanguageProfile } from "../../domain/languages/profiles.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { TemplateEventCall, TemplateHandlerCall } from "../../ports/template-usage.port.ts";
@@ -10,6 +11,8 @@ import type { TemplateEventCall, TemplateHandlerCall } from "../../ports/templat
  * application module answers it: the layer table reserves a port for what an adapter implements (RFC-0001).
  */
 export interface RelationExtractor {
+  /** The language whose sources it reads; their completeness decides what its member proofs may conclude. */
+  language: LanguageProfile;
   /**
    * The injection and template relations the in-scope sources declare: TypeScript sources and the template files they
    * name. A relation is a `complete` finding; what the sources name but cannot be placed is an `unknown` finding at its

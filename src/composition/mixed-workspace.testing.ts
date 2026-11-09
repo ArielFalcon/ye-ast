@@ -23,7 +23,7 @@ import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-rout
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
 import { createJavaNameBindings } from "../core/adapters/spring/java-name-bindings.adapter.ts";
-import { importOriginsByLanguage } from "./import-origins-by-language.ts";
+import { importOriginsByLanguage } from "../core/application/snapshot/language-packs.ts";
 import { createAngularDeclarationReader } from "../core/adapters/typescript/angular-declarations.adapter.ts";
 import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
 import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loads.adapter.ts";

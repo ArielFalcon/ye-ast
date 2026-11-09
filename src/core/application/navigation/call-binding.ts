@@ -1,5 +1,5 @@
 import { mayRunDeclarationOf } from "../../domain/languages/call-targets.ts";
-import { isJavaSource } from "../../domain/languages/java.ts";
+import { hasTyping, isChaining } from "../../domain/languages/profiles.ts";
 import { isClassKind } from "../../domain/impact/edge-policy.ts";
 import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
@@ -83,7 +83,6 @@ export interface CallBindingsDeps {
 const TYPE_ONLY_KINDS: readonly string[] = ["interface", "type_alias"];
 const CALLABLE_KINDS: readonly string[] = ["method", "function"];
 const PLAIN_CHAIN = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)+$/;
-const CHAINING: readonly string[] = ["super", "this"];
 
 const isOutside = (origin: ImportOrigin | undefined): origin is Outside => origin?.kind === "external" || origin?.kind === "ambient";
 
@@ -148,12 +147,11 @@ export function createCallBindings({ store, navigation, origins, binder, importe
     const rooted: { index: number; member: string }[] = [];
     for (const [index, call] of calls.entries()) {
       const { body, reference } = call;
-      const java = isJavaSource(reference.file);
       const own = ownMemberOf(compactSpelling(reference.name));
-      const members = own === undefined || java ? [] : ownMembersOf(navigation, body, own, ["method"]);
+      const members = own === undefined || hasTyping(reference.file, "nominal") ? [] : ownMembersOf(navigation, body, own, ["method"]);
       if (members.length === 1) bindings[index] = { kind: "declaration", target: members[0]!, link: "own-member" };
       else if (members.length > 1) bindings[index] = { kind: "unbound", form: "own", candidates: members, attributed: members };
-      else if (java && CHAINING.includes(reference.name)) typed.push({ index, member: reference.name, site: call });
+      else if (isChaining(reference.file, reference.name)) typed.push({ index, member: reference.name, site: call });
       else {
         const callee = calleeOf(reference.name);
         if (callee.form === "computed") bindings[index] = { kind: "unbound", form: "computed", candidates: [], attributed: [] };
@@ -201,7 +199,7 @@ export function createCallBindings({ store, navigation, origins, binder, importe
         const { reference, name } = sites[k]!;
         const declared = await bareDeclaration(calls[index]!, name, bound[j]);
         if (declared !== undefined) bindings[index] = declared;
-        else if (isJavaSource(reference.file)) typed.push({ index, member: name, site: calls[index]! });
+        else if (hasTyping(reference.file, "nominal")) typed.push({ index, member: name, site: calls[index]! });
         else {
           const candidates = namedDeclarations(name, reference.file);
           bindings[index] = { kind: "unbound", form: "bare", candidates, attributed: candidates.filter((candidate) => candidate.file === reference.file) };
@@ -209,7 +207,7 @@ export function createCallBindings({ store, navigation, origins, binder, importe
       }
     }
     for (const { index, member, site } of typed) {
-      const chaining = CHAINING.includes(site.reference.name);
+      const chaining = isChaining(site.reference.file, site.reference.name);
       bindings[index] = { kind: "declared", member, form: chaining ? "chain" : calleeOf(site.reference.name).form === "bare" ? "bare" : "member", call: site };
     }
     return bindings.map((binding) => binding!);

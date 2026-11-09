@@ -1,5 +1,5 @@
 import { sharesRuntime } from "../../domain/languages/call-targets.ts";
-import { isJavaSource } from "../../domain/languages/java.ts";
+import { isChaining, profileOf } from "../../domain/languages/profiles.ts";
 import { isClassKind } from "../../domain/impact/edge-policy.ts";
 import { calleeOf } from "../../domain/shared/call-place.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -43,12 +43,9 @@ export interface ReverseCallsDeps {
 const REVERSE_NAMES = "reverse-looked-up-names";
 const REVERSE_UNBOUND = "reverse-unbound-calls";
 
-/** Java constructor chaining, which the Java reader spells with no callee. */
-const CHAINING: readonly string[] = ["super", "this"];
-
-/** The name a written call is looked up by: its callee, a constructed class's last name, or the chaining keyword. */
+/** The name a written call is looked up by: its callee, a constructed class's last name, or the chaining keyword, which a reader spells with no callee. */
 function lookupName(file: string, name: string): string | undefined {
-  if (isJavaSource(file) && CHAINING.includes(name)) return name;
+  if (isChaining(file, name)) return name;
   const callee = calleeOf(name.replace(/<[^]*$/, ""));
   return callee.form === "computed" ? undefined : callee.name;
 }
@@ -129,7 +126,7 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, im
     return retained.facts.ofInputs(slot, { index: retained.index, path: file.path, content }, derive);
   }
 
-  /** The names a reached declaration is looked up by (ADR-0041 decision 8): its own, its proven import aliases, and for a class or its constructor `new` and Java chaining. */
+  /** The names a reached declaration is looked up by (ADR-0041 decision 8): its own, its proven import aliases, and for a class or its constructor `new` and its language's constructor chaining. */
   async function keysOf(node: GraphSymbol): Promise<LookupKey[]> {
     const keys: LookupKey[] = [{ name: node.name }];
     const aliases = async (target: GraphSymbol): Promise<void> => {
@@ -145,11 +142,15 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, im
         keys.push({ name: type.name });
         await aliases(type);
       }
-      if (isJavaSource(type.file)) {
+      const chaining = profileOf(type.file)?.chaining;
+      if (chaining !== undefined) {
         const subclasses = store.symbolsByIds(store.incomingEdges([type.id], ["extends"]).map((edge) => edge.source));
-        keys.push({ name: "super", files: new Set(subclasses.map((subclass) => subclass.file)) }, { name: "this", files: new Set([type.file]) });
+        keys.push({ name: chaining.inherited, files: new Set(subclasses.map((subclass) => subclass.file)) }, { name: chaining.own, files: new Set([type.file]) });
       }
-    } else if (isJavaSource(node.file) && node.kind === "function" && navigation.ownersOf(node).length === 0 && (await constructs(node))) keys.push({ name: "this", files: new Set([node.file]) });
+    } else {
+      const own = profileOf(node.file)?.chaining?.own;
+      if (own !== undefined && node.kind === "function" && navigation.ownersOf(node).length === 0 && (await constructs(node))) keys.push({ name: own, files: new Set([node.file]) });
+    }
     return keys;
   }
 
