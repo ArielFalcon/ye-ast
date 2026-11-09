@@ -47,6 +47,11 @@ function change(path: string, overrides: Partial<FileChange> = {}): FileChange {
   return { path, deleted: false, binary: false, added: [{ start: 1, end: 1 }], removals: [], removedNames: [], ...overrides };
 }
 
+/** The head's snapshot listing, holding exactly `paths`, so a target names a file the snapshot has. */
+function listingOf(paths: readonly string[]): NonNullable<Options["exports"]> {
+  return { [HEAD]: { files: paths.map((path) => ({ path, blob: "1", written: true })), skipped: [] } };
+}
+
 interface Options {
   declarationEvidence?: ImpactQueriesDeps["declarationEvidence"];
   changes?: Result<readonly FileChange[], VcsFault>;
@@ -781,9 +786,29 @@ test("a dotted symbol seeds only the member its container holds, not a same-name
 });
 
 test("a missing symbol lists the dotted containment paths of its file, so a candidate selects one declaration", async () => {
-  const answer = await setup(TWO_CLASSES).callers({ targets: [{ file: "src/A.ts", symbol: "gone" }] });
+  const answer = await setup({ ...TWO_CLASSES, exports: listingOf(["src/A.ts"]) }).callers({ targets: [{ file: "src/A.ts", symbol: "gone" }] });
   assert.ok(!answer.ok);
   assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries.flatMap((entry) => entry.candidates), ["A", "A.m", "B", "B.m"]);
+});
+
+test("a symbol target on a path the snapshot does not hold is absent, with the snapshot files that declare that name", async () => {
+  const answer = await setup(TWO_CLASSES).callers({ targets: [{ file: "src/pkg/A.ts", symbol: "m" }] });
+  assert.ok(!answer.ok);
+  assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/pkg/A.ts", symbol: "m", absent: true, candidates: ["src/A.ts"] }]);
+});
+
+test("a dotted symbol target on a path the snapshot does not hold looks its candidates up by the member's own name", async () => {
+  const answer = await setup(TWO_CLASSES).callers({ targets: [{ file: "src/pkg/A.ts", symbol: "B.m" }] });
+  assert.ok(!answer.ok);
+  assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/pkg/A.ts", symbol: "B.m", absent: true, candidates: ["src/A.ts"] }]);
+});
+
+test("a requested range on a file the snapshot does not hold is a fault, never a partial answer with a no-extractor cut", async () => {
+  const files = [{ path: "src/A.ts", blob: "1", written: true }];
+  const { callers } = setup({ nodes: [fakeNode("f", "function", "src/A.ts", 1, 3)], exports: { [HEAD]: { files, skipped: [] } } });
+  const answer = await callers({ targets: [{ file: "src/pkg/A.ts", start: 4, end: 6 }] });
+  assert.ok(!answer.ok);
+  assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/pkg/A.ts", start: 4, end: 6, absent: true, candidates: ["src/A.ts"] }]);
 });
 
 test("a declaration carries its last line only when it spans more than one line", async () => {
@@ -820,12 +845,12 @@ test("a requested range selects the declarations it intersects, and its blank an
 });
 
 test("a requested range that selects no declaration, past the end of its file or only over trivia between declarations, is an unknown-symbol fault with what the file declares", async () => {
-  const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "// note", "/* block", "   still */", "", ""])], trivia: { "src/A.ts": [4, 5, 6, 7, 8, 9, 12, 13, 15, 16, 17, 18, 19, 21] } });
+  const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "// note", "/* block", "   still */", "", ""])], trivia: { "src/A.ts": [4, 5, 6, 7, 8, 9, 12, 13, 15, 16, 17, 18, 19, 21] }, exports: listingOf(["src/A.ts"]) });
   for (const [start, end] of [[30, 35], [5, 7]] as const) {
     const answer = await callers({ targets: [{ file: "src/A.ts", start, end }, { file: "src/A.ts", start: 2, end: 2 }] });
     assert.ok(!answer.ok, `${start}-${end}`);
     assert.equal(answer.fault.kind, "unknown-symbol");
-    assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/A.ts", start, end, candidates: ["f", "g", "h"] }]);
+    assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/A.ts", start, end, absent: false, candidates: ["f", "g", "h"] }]);
   }
 });
 
@@ -842,13 +867,13 @@ test("a symbol that is both requested and inside a requested range seeds once, a
 });
 
 test("a requested symbol that names no node at the revision is a typed failure naming the entries, even beside one that exists", async () => {
-  const { callers } = setup({ nodes: SOURCE_NODES });
+  const { callers } = setup({ nodes: SOURCE_NODES, exports: listingOf(["src/A.java", "src/B.java"]) });
   const answer = await callers({ targets: [{ file: "src/A.java", symbol: "f" }, { file: "src/A.java", symbol: "gone" }, { file: "src/B.java", symbol: "f" }] });
   assert.ok(!answer.ok);
   assert.equal(answer.fault.kind, "unknown-symbol");
   assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [
-    { file: "src/A.java", symbol: "gone", candidates: ["f"] },
-    { file: "src/B.java", symbol: "f", candidates: ["g"] },
+    { file: "src/A.java", symbol: "gone", absent: false, candidates: ["f"] },
+    { file: "src/B.java", symbol: "f", absent: false, candidates: ["g"] },
   ]);
 });
 
@@ -858,8 +883,8 @@ test("a missing entry names the seedable declarations of its file, sorted and on
   const answer = await callers({ targets: [{ file: "src/A.java", symbol: "gone" }, { file: "src/Elsewhere.java", symbol: "x" }] });
   assert.ok(!answer.ok);
   assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [
-    { file: "src/A.java", symbol: "gone", candidates: ["a", "z"] },
-    { file: "src/Elsewhere.java", symbol: "x", candidates: [] },
+    { file: "src/A.java", symbol: "gone", absent: false, candidates: ["a", "z"] },
+    { file: "src/Elsewhere.java", symbol: "x", absent: true, candidates: [] },
   ]);
 });
 
@@ -873,7 +898,7 @@ test("the walk budget reaches the callers fact as a cut, and the config digest c
 });
 
 test("a requested range in a file no extractor covers, and one in a file without symbols, cut the answer instead of answering empty", async () => {
-  const { callers } = setup({ nodes: SOURCE_NODES });
+  const { callers } = setup({ nodes: SOURCE_NODES, exports: listingOf(["README.md", "src/test/java/ATest.java", "src/Money.java"]) });
   const answer = callersFact(await callers({ targets: [{ file: "README.md", start: 1, end: 2 }, { file: "src/test/java/ATest.java", start: 1, end: 2 }, { file: "src/Money.java", start: 1, end: 2 }] }));
   assert.deepEqual(answer.status === "partial" && answer.cuts, [
     { kind: "no-extractor", at: ["README.md"], reason: "not-source", reach: { kind: "anything" } },
@@ -1111,7 +1136,7 @@ test("a callers request naming a target outside the scope is unknown out-of-scop
 });
 
 test("an include leaves a callers target it does not match out of scope, and a file with no extractor inside the scope stays a no-extractor cut", async () => {
-  const { callers } = setup({ nodes: SOURCE_NODES });
+  const { callers } = setup({ nodes: SOURCE_NODES, exports: listingOf(["src/A.java", "README.md"]) });
 
   const outside = callersFact(await callers({ targets: [{ file: "src/A.java", symbol: "f" }], scope: { include: ["lib/"] } }));
   const noExtractor = callersFact(await callers({ targets: [{ file: "README.md", start: 1, end: 2 }], scope: { exclude: ["gen/"] } }));
@@ -1327,7 +1352,7 @@ test("a live ofChange reports an edit made while it answered", async () => {
 });
 
 test("a callers fact declares the targets it was asked about, in a fixed order", async () => {
-  const { callers } = setup({ nodes: SOURCE_NODES, edges: SOURCE_EDGES });
+  const { callers } = setup({ nodes: SOURCE_NODES, edges: SOURCE_EDGES, exports: listingOf(["src/A.java", "src/B.java"]) });
   const answer = await callers({ targets: [{ file: "src/B.java", start: 1, end: 3 }, { file: "src/A.java", symbol: "f" }] });
   assert.ok(answer.ok, JSON.stringify(answer));
   assert.deepEqual(answer.value.inputs.declaredConfig, { targets: ["src/A.java:f", "src/B.java:1-3"] });

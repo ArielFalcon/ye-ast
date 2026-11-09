@@ -570,10 +570,22 @@ function consequenceSymbols(value: ImpactValue): readonly ImpactedSymbol[] {
   return value.symbols.filter((symbol) => symbol.depth !== 0 || !seeds.has(`${symbol.file}\0${symbol.symbol}\0${symbol.line}`));
 }
 
+/** A containment reaches the symbol that holds the seed; only another basis reaches a symbol that depends on it. */
+function isDependent(symbol: ImpactedSymbol): boolean {
+  return symbol.via?.basis !== "contains";
+}
+
+function dependentLevel(symbols: readonly ImpactedSymbol[]): number {
+  return symbols.reduce((depth, symbol) => isDependent(symbol) ? Math.min(depth, symbol.depth) : depth, Infinity);
+}
+
+/** The nearest dependents and the reached handlers; a shown dependent keeps its own containment as grouping context. */
 function investigationSymbols(value: ImpactValue): readonly ImpactedSymbol[] {
   const symbols = consequenceSymbols(value);
-  const nearest = symbols.reduce((depth, symbol) => Math.min(depth, symbol.depth), Infinity);
-  return symbols.filter((symbol) => symbol.depth === nearest || value.entrypoints.some(({ handler }) => handler.path === symbol.file && handler.line === symbol.line && handler.symbol === symbol.symbol));
+  const level = dependentLevel(symbols);
+  const selected = new Set(symbols.filter((symbol) => (isDependent(symbol) && symbol.depth === level) || value.entrypoints.some(({ handler }) => handler.path === symbol.file && handler.line === symbol.line && handler.symbol === symbol.symbol)));
+  const groupedKeys = new Set([...selected].map((symbol) => symbolKey(symbol.file, symbol.symbol)));
+  return symbols.filter((symbol) => selected.has(symbol) || (symbol.via?.basis === "contains" && groupedKeys.has(symbolKey(symbol.via.file, symbol.via.symbol))));
 }
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -679,7 +691,11 @@ function impactedSymbols(value: ImpactValue, detail: ResponseMode): string[] {
   }
   const shown = investigationSymbols(value);
   const omitted = symbols.length - shown.length;
-  const evidence = [header, `  evidence view: nearest recorded depth ${shown.reduce((depth, symbol) => Math.min(depth, symbol.depth), Infinity)} and reached handlers`, ...groupedLines(shown), ...substitutionLegend(shown), ...(omitted === 0 ? [] : [`  ${omitted} other ${omitted === 1 ? "symbol" : "symbols"}; ${categoryRecovery({ full: "includes all" })}`])];
+  const level = dependentLevel(shown);
+  const view = level === Infinity
+    ? `  evidence view: no dependent recorded${omitted === 0 ? "" : `; ${plural(omitted, "containment row")}`}; ${categoryRecovery({ full: "includes all" })}`
+    : `  evidence view: nearest dependent depth ${level} and reached handlers`;
+  const evidence = [header, view, ...groupedLines(shown), ...substitutionLegend(shown), ...(level === Infinity || omitted === 0 ? [] : [`  ${omitted} other ${omitted === 1 ? "symbol" : "symbols"}; ${categoryRecovery({ full: "includes all" })}`])];
   return omitted > 0 && size(evidence) <= size(literal) ? evidence : literal;
 }
 

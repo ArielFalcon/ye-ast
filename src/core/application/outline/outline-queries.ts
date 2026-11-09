@@ -19,6 +19,7 @@ import { focusWithUses, readFocus, readOutline } from "./outline.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import { syntaxOfSources } from "../navigation/edge-targets.ts";
+import { snapshotFiles } from "../navigation/snapshot-files.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 
 export interface OutlineQueriesDeps extends HeadReaderDeps {
@@ -65,8 +66,10 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
         const { store, summary } = index;
         try {
           const held = new Set(headTree.export.files.map((file) => file.path));
-          const focused = focus === undefined ? undefined : readFocus(store, focus.filter(({ file }) => isReadableFile(file)));
-          if (focused !== undefined && focused.unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${focused.unknown.map(unknownTargetKey).join(", ")}${unmodelledNote(focused.unknown, unmodelled)}`, entries: focused.unknown } };
+          const snapshot = snapshotFiles(store, [...held]);
+          const focused = focus === undefined ? undefined : readFocus(store, focus.filter(({ file }) => isReadableFile(file)), snapshot);
+          const unknown = focused === undefined ? [] : snapshot.describe(focused.unknown);
+          if (unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${unknown.map(unknownTargetKey).join(", ")}${unmodelledNote(unknown, unmodelled)}`, entries: unknown } };
           if (focused !== undefined && focused.topLevel.length > 0) return { ok: false, fault: { kind: "top-level-line", detail: `no declaration holds ${focused.topLevel.map(({ file, line }) => `${file}:${line}`).join(", ")}; the line is at the top level of its file`, entries: focused.topLevel } };
           const modules = await deps.moduleReader.extract(sources, { files: covered });
           if (request.signal?.aborted) return ABORTED;

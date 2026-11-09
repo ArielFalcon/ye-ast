@@ -148,8 +148,9 @@ function faultText(fault: ImpactFault | OutlineFault | WorkspaceFault | TraceFau
   return [`ye-ast: ${fault.kind}: ${redaction.redact(fault.detail.trim())}`, ...entries.map((line) => redaction.redact(line))];
 }
 
-/** What a fault entry can be told to the caller: the declarations of the file that could have been asked instead. */
-function declarationText(entry: { file: string; candidates: readonly string[] }): string {
+/** What a fault entry can be told to the caller: what could have been asked instead, or that its file is not in the snapshot. */
+function declarationText(entry: { file: string; candidates: readonly string[]; absent?: boolean }): string {
+  if (entry.absent === true) return entry.candidates.length === 0 ? `${entry.file} is not in the snapshot` : `${entry.file} is not in the snapshot; snapshot paths: ${entry.candidates.join(", ")}`;
   return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
 }
 
