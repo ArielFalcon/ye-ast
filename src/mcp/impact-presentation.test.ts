@@ -705,3 +705,8 @@ test("a settled change is one summary line and one detail line per hunk", () => 
   assert.match(detail, /src\/B\.ts head 7-7 \(import-order\)/);
   assert.match(detail, /src\/C\.java base 9-9 \(no-token-change\)/);
 });
+
+test("a callers answer with a settled range says how many ranges held no token", () => {
+  const value: ImpactValue = { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 }, settled: [{ basis: "range", file: "src/A.java", start: 2, end: 2, reason: "no-token", candidates: ["A"] }] };
+  assert.match(renderImpact({ ...base, status: "complete", value }), /1 requested ranges hold no token/);
+});

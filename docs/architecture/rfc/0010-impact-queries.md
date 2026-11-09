@@ -82,10 +82,13 @@ evidence (ADR-0043 decision 5).
 
 `Seed.basis` is `lines`, `top-level` or `resource`, or `requested` for a symbol `impact.callers` was asked for by name.
 A requested line range seeds through the rows above, as the added lines of a file, except that a line of the range no
-symbol holds and no code is on (blank, a comment) selects nothing: a range across the gap between two declarations
-seeds those two, not the file's top-level symbols. The trivia set comes from the B11 tokens stage of the read
-([ADR-0043](../adr/0043-a-change-seeds-only-where-its-tokens-differ.md) decision 6), not from a per-family reader. A range left with no line at all (wholly past the end of its file,
-or only such lines) selects no declaration and is the `unknown-symbol` fault below, never an empty answer. A requested symbol seeds every
+token holds (blank, a comment, a JSDoc) selects nothing, wherever it lies: a range across the gap between two
+declarations seeds those two, not the file's top-level symbols. The trivia set comes from the B11 tokens stage of the
+read ([ADR-0043](../adr/0043-a-change-seeds-only-where-its-tokens-differ.md) decision 6), not from a per-family reader.
+A range whose every line holds no token is not a fault: it selects no declaration and answers `ok` with one `settled`
+entry (`{basis: "range", file, start, end, reason: "no-token", candidates}`), the file's candidate declarations as the
+fault lists them, and `complete` when every requested range settles and nothing else is requested. Only a range wholly
+past the end of its file keeps the `unknown-symbol` fault below. A requested symbol seeds every
 seedable node of its file whose dotted path in the file's `contains` tree ends with it at whole names (a bare name at
 any depth, `A.m` only an `m` that `A` contains directly), so overloads all seed; a symbol that is both requested
 and inside a requested range is one seed, `requested`.
@@ -337,11 +340,12 @@ per cause:
 
 `unknown` when no answer is possible: the index cannot be built or opened (`index-unavailable`) or the diff cannot be
 read (`source-unreadable`); an unresolvable revision is a typed fault, as for `map`. A symbol `impact.callers` was asked
-for that names no node at the revision, or a line range that selects no declaration, is the typed fault
+for that names no node at the revision, or a line range wholly past the end of its file, is the typed fault
 `unknown-symbol`, listing every such entry (`{file, symbol}` or `{file, start, end}`) with the dotted containment
 paths of the seedable declarations of its file (sorted, once each, empty when the file declares none or is not indexed), so the caller sees
 what it could have asked for; the CLI exits as
-for an unresolvable revision. A requested line range in a file that is not a covered source (a test, an uncovered
+for an unresolvable revision. A range whose lines hold no token does not fault: it answers `ok` with a `settled` entry
+(`no-token`), as [Seeds](#seeds) states. A requested line range in a file that is not a covered source (a test, an uncovered
 language, a template no component names) is a `no-extractor` cut at that file, never an empty answer.
 
 `impact.importers` is `complete` unless a cut applies: a requested file outside the declared scope or that the index

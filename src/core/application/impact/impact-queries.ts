@@ -60,7 +60,7 @@ import { edgeKey, type EdgeTargets, type FollowedEdge } from "../navigation/edge
 import type { AttributedCall, ReverseCalls } from "../navigation/reverse-calls.ts";
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
-import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, targetKey } from "../navigation/root-selection.ts";
+import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey } from "../navigation/root-selection.ts";
 import { snapshotFiles } from "../navigation/snapshot-files.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
@@ -214,7 +214,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (typed === "aborted") return ABORTED;
           const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
           if (signal?.aborted) return ABORTED;
-          return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), read.value, [...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts], impactWalk(targets.map(({ file }) => file), read.value)) };
+          const settled = settledRangeChanges(ranges.settled);
+          const value = settled.length === 0 ? read.value : { ...read.value, settled };
+          return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), value, [...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts], impactWalk(targets.map(({ file }) => file), value)) };
         } finally {
           store.close();
         }

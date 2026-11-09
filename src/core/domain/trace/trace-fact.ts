@@ -1,3 +1,4 @@
+import type { SettledRangeChange } from "../impact/impact-fact.ts";
 import type { EventTarget, HttpTarget } from "../topology/call-site.ts";
 
 /**
@@ -76,6 +77,8 @@ export interface ReadingPlan {
 export interface TraceValue {
   /** Per requested target, in the request's fixed order, the root steps it selected: homonyms and ranges select several. */
   roots: readonly { target: string; steps: readonly number[] }[];
+  /** The requested ranges whose every line holds no token; present when not empty, sorted by file and position. */
+  settled?: readonly SettledRangeChange[];
   /** In pre-order: the roots in position order, each followed by its subtree. */
   steps: readonly TraceStep[];
   readingPlan: ReadingPlan;

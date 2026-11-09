@@ -103,8 +103,19 @@ export interface SettledHunkChange {
   reason: SettledReason;
 }
 
-/** One shape the field takes; a settled requested range is the other (ADR-0043 decision 3, U4). */
-export type SettledChange = SettledHunkChange;
+/** A requested range every line of which holds no token (ADR-0043 decision 3). */
+export interface SettledRangeChange {
+  basis: "range";
+  file: string;
+  start: number;
+  end: number;
+  reason: "no-token";
+  /** The file's candidate declarations, as the `unknown-symbol` fault lists them today. */
+  candidates: readonly string[];
+}
+
+/** One shape the field takes; a settled changed hunk is the other (ADR-0043 decision 5, U3). */
+export type SettledChange = SettledHunkChange | SettledRangeChange;
 
 export { withCuts as impactFact } from "../shared/question.ts";
 
