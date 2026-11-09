@@ -198,7 +198,7 @@ function setup(options: Options = {}) {
     ...(options.live && { live: options.live.deps }),
     ...(options.declarationEvidence && { declarationEvidence: options.declarationEvidence }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
-    ...(options.trivia && { sourceTokens: { tokensOf: async (file: SourceFile) => tokenReading(file, options.trivia!) } }),
+    ...(options.trivia && { tokens: { tokensOf: async (file: SourceFile) => tokenReading(file, options.trivia!) } }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
     ...(options.typeBindings && { typeBindings: options.typeBindings.bindings, declaredOutputs: () => options.typeBindings!.outputs }),

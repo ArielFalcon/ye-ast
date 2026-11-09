@@ -132,7 +132,7 @@ function setup(options: Options) {
       index: async () => (options.indexFails ? { ok: false, fault: { kind: "index-failed", detail: "broken" } } : { ok: true, value: { ...SUMMARY, filesNotIndexed: options.notIndexed ?? [] } }),
       open: () => ({ ok: true, value: store }),
     },
-    sourceTokens: { tokensOf: async (file: { path: string; content: string }) => (options.onTrivia?.(file.path), tokenReading(file, options.trivia ?? {})) },
+    tokens: { tokensOf: async (file: { path: string; content: string }) => (options.onTrivia?.(file.path), tokenReading(file, options.trivia ?? {})) },
     memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: options.callables?.[file.path] ?? [], receiverBindings: options.receiverBindings?.[file.path] ?? [], ...(options.syntaxCalls?.[file.path] === undefined ? {} : { calls: options.syntaxCalls[file.path] }), functionValues: options.functionValues?.[file.path] ?? [] }) },
     importOrigins: () => ({
       replacedRoots: async () => options.replaced ?? written(),

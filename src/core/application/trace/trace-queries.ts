@@ -7,7 +7,6 @@ import { callsByOwner } from "../navigation/reconciled-calls.ts";
 import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
-import type { SourceReading } from "../../domain/change/source-tokens.ts";
 import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 import type { ComponentRef } from "../../domain/change/seeds.ts";
 import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
@@ -57,7 +56,7 @@ export interface TraceQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, 
   callSites: PlacedCallSiteReader;
   dataEffects?: DataEffectReader;
   /** Tells the trivia lines of a requested range apart, so they select nothing. */
-  sourceTokens: SourceTokens;
+  tokens?: SourceTokens;
   /** Version of each engine every operation runs on, by package name. */
   engines: Readonly<Record<string, string>>;
 }
@@ -126,11 +125,11 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         const { store, summary } = index;
         try {
           const snapshot = snapshotFiles(store, head.tree.export.files.map(({ path }) => path));
-          const tokens = tokensOncePerFile(deps.sourceTokens);
           const reading = readings.of(
             { tree: head.tree, prepared: head.prepared, store, digest: index.digest, snapshot: head.base(content).snapshot, request },
             { originPaths: head.tree.export.files.map(({ path }) => path).filter(head.selected), inScope: head.selected },
           );
+          const tokens = { tokensOf: (file: SourceFile) => reading.tokensOf(file) };
           const { unresolvedIn, lineOf } = reading;
           const syntaxOf = reading.syntaxOf ?? (async (): Promise<DeclaredMemberNames> => NOTHING_DECLARED);
           const sources = new Set(head.tree.sources.map((file) => file.path));
@@ -280,19 +279,4 @@ async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file:
 async function rangeRoots(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], tokens: SourceTokens, snapshot: SnapshotFiles, isRoot: (symbol: GraphSymbol) => boolean): Promise<RootSelection> {
   const ranges = await requestedRanges(store, changes, sources, tokens, snapshot);
   return selectRoots(store, ranges.changes, [], NO_COMPONENTS, ranges.uncovered, isRoot);
-}
-
-/** Asks for each file's tokens once, for the life of one query. */
-function tokensOncePerFile(tokens: SourceTokens): SourceTokens {
-  const read = new Map<string, Promise<SourceReading>>();
-  return {
-    tokensOf: (file) => {
-      let reading = read.get(file.path);
-      if (reading === undefined) {
-        reading = tokens.tokensOf(file);
-        read.set(file.path, reading);
-      }
-      return reading;
-    },
-  };
 }

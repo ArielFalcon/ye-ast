@@ -91,7 +91,7 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
    */
   memberNames?: DeclaredMemberNamesReader;
   /** Tells the trivia lines of a requested range apart; without it every line of a range is code. */
-  sourceTokens?: SourceTokens;
+  tokens?: SourceTokens;
   moduleDependencies?: ModuleDependenciesReader;
   /**
    * The reader of every language's module statements, whose bindings prove the declaration a graph edge's root reaches
@@ -111,8 +111,6 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
 }
 
 type Answer = Result<Fact<ImpactValue>, OfChangeFault>;
-
-const NO_TOKENS: SourceTokens = { tokensOf: async () => ({ status: "unread", reason: "capability-absent" }) };
 
 
 export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
@@ -192,7 +190,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         try {
           const snapshot = snapshotFiles(store, listing);
           const unknown = missingTargets(store, requested);
-          const ranges = await requestedRanges(store, changes, headTree.sources, deps.sourceTokens ?? NO_TOKENS, snapshot);
+          const ranges = await requestedRanges(store, changes, headTree.sources, { tokensOf: (file) => readings.tokensOf(file, head.prepared) }, snapshot);
           if (signal?.aborted) return ABORTED;
           const missing = snapshot.describe([...unknown, ...ranges.uncovered]);
           if (missing.length > 0) {

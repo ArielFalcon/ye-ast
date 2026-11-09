@@ -7,6 +7,9 @@ import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { RevisionSources } from "../../ports/revision-sources.port.ts";
+import type { SourceReading } from "../../domain/change/source-tokens.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 import type { TypeBindings, TypeTarget } from "../../ports/type-bindings.port.ts";
 import { createDeclarationUses, unresolvedOncePerFile, type DeclarationUses, type UnresolvedIn } from "../navigation/declaration-uses.ts";
 import { createEdgeTargets, NOTHING_DECLARED, type EdgeTargets } from "../navigation/edge-targets.ts";
@@ -46,6 +49,8 @@ export interface BaseReadingDeps {
   memberNames?: DeclaredMemberNamesReader | undefined;
   /** Every language's module statements, which bind a root to a declaration; without them no edge is redirected. */
   modules?: ModuleDependenciesReader | undefined;
+  /** The B11 tokens stage: one reading per file, from the pack that owns its path (ADR-0043 decision 6). */
+  tokens?: SourceTokens | undefined;
   typeBindings?: TypeBindings | undefined;
   /** The lockfiles and declaration files a commit's typed pass reads beside its sources; without them nothing is typed. */
   checkerInputs?: RevisionSources | undefined;
@@ -87,6 +92,8 @@ export interface ReadingNarrowing {
 export interface BaseReading {
   /** B1: what a source's syntax states, read once per file; absent without a syntax reader. */
   syntaxOf: ((path: string) => Promise<DeclaredMemberNames>) | undefined;
+  /** B11: the tokens of a source, read once per read and retained per file; `unread` where no pack tokenizes it. */
+  tokensOf(file: SourceFile): Promise<SourceReading>;
   /** A line of a source, split once per file. */
   lineOf(file: string, line: number): string | undefined;
   /** The unresolved references of a file, read once per file. */
@@ -115,11 +122,24 @@ export interface BaseReading {
 
 export interface BaseReadings {
   of(source: ReadingSource, narrowing?: ReadingNarrowing): BaseReading;
+  /**
+   * B11 for one source, without an index: retained per file under `prepared`, so `impact` can settle hunks before it
+   * decides whether the graph is needed (ADR-0043 decisions 4 and 8). Never prebuilt; asked only for a changed file.
+   */
+  tokensOf(file: SourceFile, prepared: PreparedCommit | undefined): Promise<SourceReading>;
 }
 
 function once<T>(produce: () => T): () => T {
   let held: { value: T } | undefined;
   return () => (held ??= { value: produce() }).value;
+}
+
+async function tokensOfSource(deps: BaseReadingDeps, file: SourceFile, prepared: PreparedCommit | undefined): Promise<SourceReading> {
+  const holder = deps.tokens;
+  if (holder === undefined) return { status: "unread", reason: "capability-absent" };
+  const read = (): Promise<SourceReading> => holder.tokensOf(file);
+  const facts = prepared?.facts;
+  return facts === undefined ? read() : facts.ofInputs("tokens", { path: file.path, content: file.content, reading: "v1" }, read);
 }
 
 export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
@@ -154,6 +174,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
   }
 
   return {
+    tokensOf: (file, prepared) => tokensOfSource(deps, file, prepared),
     of(source, narrowing = {}) {
       const { tree, prepared, store, request } = source;
       const facts = prepared?.facts;
@@ -174,6 +195,15 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
               return read;
             };
       const lineOf = linesOncePerFile(sources);
+      const tokens = new Map<string, Promise<SourceReading>>();
+      const tokensOf = (file: SourceFile): Promise<SourceReading> => {
+        let read = tokens.get(file.path);
+        if (read === undefined) {
+          read = tokensOfSource(deps, file, prepared);
+          tokens.set(file.path, read);
+        }
+        return read;
+      };
       const unresolvedIn = unresolvedOncePerFile(store);
       const navigation = once(() => createGraphNavigation(store, () => false));
       const origins = once(() => deps.importOrigins?.(tree.sources, narrowing.originPaths, facts));
@@ -194,6 +224,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
 
       return {
         syntaxOf,
+        tokensOf,
         lineOf,
         unresolvedIn,
         unresolved,
