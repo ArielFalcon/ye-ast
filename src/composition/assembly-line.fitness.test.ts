@@ -52,6 +52,7 @@ const DOT_TAIL_SITES: Readonly<Record<string, number>> = {
   "core/application/composition/compose-evidence.ts": 1,
   "core/application/navigation/proven-calls.ts": 1,
   "core/application/navigation/reference-origins.ts": 1,
+  "core/application/navigation/snapshot-files.ts": 1,
   "core/domain/impact/changed-contracts.ts": 1,
   "core/domain/shared/code-node.ts": 1,
 };

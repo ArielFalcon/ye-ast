@@ -58,6 +58,7 @@ import type { AttributedCall, ReverseCalls } from "../navigation/reverse-calls.t
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, targetKey } from "../navigation/root-selection.ts";
+import { snapshotFiles } from "../navigation/snapshot-files.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
@@ -171,13 +172,15 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const declarations = await deps.angular.read(headTree.sources);
         if (signal?.aborted) return ABORTED;
         const componentsByResource = resourceOwners(declarations);
+        const listing = headTree.export.files.map(({ path }) => path);
+        const listed = new Set(listing);
         const fixed = [
           ...exportCuts(headTree.export),
           ...changes.filter((file) => kindOfChangedFile(file.path) !== "source" && !componentsByResource.has(file.path)).map((file) => fileCut("no-extractor", file.path, "not-source")),
         ];
         const value: ImpactValue = { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
 
-        const needsGraph = requested.length > 0 || changes.some((file) => kindOfChangedFile(file.path) === "source" || componentsByResource.has(file.path));
+        const needsGraph = requested.length > 0 || targets.some(({ file }) => !listed.has(file)) || changes.some((file) => kindOfChangedFile(file.path) === "source" || componentsByResource.has(file.path));
         if (!needsGraph) return { ok: true, value: impactFact(head.base(content), value, fixed, impactWalk(targets.map(({ file }) => file), value)) };
 
         const index = await head.open();
@@ -186,10 +189,11 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         if ("fault" in index) return { ok: false, fault: index.fault };
         const { store, summary } = index;
         try {
+          const snapshot = snapshotFiles(store, listing);
           const unknown = missingTargets(store, requested);
-          const ranges = await requestedRanges(store, changes, headTree.sources, deps.sourceTrivia ?? NO_TRIVIA);
+          const ranges = await requestedRanges(store, changes, headTree.sources, deps.sourceTrivia ?? NO_TRIVIA, snapshot);
           if (signal?.aborted) return ABORTED;
-          const missing = [...unknown, ...ranges.uncovered];
+          const missing = snapshot.describe([...unknown, ...ranges.uncovered]);
           if (missing.length > 0) {
             const names = missing.map(unknownTargetKey).join(", ");
             const unmodelled = await unmodelledIn(deps, headTree, unknown.map(({ file }) => file));
