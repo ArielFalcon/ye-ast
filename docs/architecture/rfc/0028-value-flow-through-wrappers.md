@@ -276,7 +276,7 @@ entry, and S1 needs no edit in `http-call-sites.adapter.ts` to own it.
    a fixpoint over the finite set of declaration keys, growing monotonically. A declaration met on its own substitution
    path contributes `{cause: "recursive"}` with its place and is not entered again (RFC-0021 S1, no depth cap).
 7. **Substitution.** For a shape `s` of `g` reached by the call `c` with arguments `a₁…aₙ`: evaluate each `aᵢ` in
-   `c`'s scope; replace `s`'s holes in source order with the written text (a run-time value keeps `{}`). `method`
+   `c`'s scope; replace each of `s`'s holes by the parameter it reads (`holes` gives that index), with the argument written at that parameter, never by argument order (a hole whose source is not a parameter keeps `{}`). `method`
    undefined maps from an argument that states a verb, else the shape becomes a gap `destination-undecidable`.
    `body` maps `{kind:"parameter", index:i}` to the caller's own parameter when `aᵢ` is one, else to `none`/`unknown`.
    A `when` test on parameter `i` is decided against `aᵢ` (`""`, `0`, `false`, `null`, `undefined` are falsy; a non-empty
@@ -378,7 +378,7 @@ export type DeclarationKey = string; // `file\0` + `Class.member`, or the functi
 
 /** What the rule needs from the pack's one URL evaluator: the B11 reader supplies it. `SummaryCause` is the domain's. */
 export interface SummaryResolver {
-  /** What an expression states in a declaration's scope: text with `{}` for a run-time value, or why not. */
+  /** What an expression states in a declaration's scope: its text with `{}` per run-time value, `holes` with one entry per `{}` in order (the declaration parameter index that value is, undefined when it is not a parameter), or why not. */
   evaluate(file: string, expression: ts.Expression): Promise<
     | { status: "known"; text: string }
     | { status: "undecided"; cause: SummaryCause; evidence: readonly Evidence[] }
@@ -548,7 +548,9 @@ decides the body itself, and `memberDeclaration`'s first-match behaviour is only
 `src/composition/assembly-line.fitness.test.ts` to add `REQUEST_VOCABULARY_IMPORTERS` (seeded with the two copies) and
 remove `request-origins.adapter.ts` from it. Specifically, in the call-site adapter:
 export `createRequestCallLookup` (the owner), implement `SummaryResolver` over the existing `Reader` (three small
-methods: the evaluator the adapter already has, the callee resolution it already has, and the file shape), rewrite
+methods: the evaluator the adapter already has, the callee resolution it already has, and the file shape; the evaluator
+also reports `holes`, so `Evaluation` tracks for each run-time value the declaration parameter it reads, per RFC row 5),
+rewrite
 `readPlaced`/`callSite` without the `includeForwarding` flag, and rewrite `requestBody` to read the summary's `hops`
 instead of `FORWARDING_CALLS`; the rule keeps, beside the domain `RequestShape`, an adapter-internal chain of those hops as
 `ts` nodes, which is what `RequestBody.wrappers` is filled from. A public signature changes in none of `of`, `placed`,
@@ -705,6 +707,8 @@ Owner decision 2026-11-09: every question is resolved as recommended here. No un
 | 2 | A call matched only by `suffix` because the server's context path is not in the snapshot: may the answer follow it as a candidate, or keep the cut? | **Keep the cut, and name the two ways out in the recovery.** `suffix` is 0.5 confidence and may name another operation that ends the same way; following it would trade a missing consumer for a wrong one, which ADR-0042 forbids. S2's finding text states the request the code writes and the declaration that resolves it: a declared gateway prefix (`--gateway`, the protocol's `gateways`) or a declared server configuration. No unit reads context paths from a build output; that would be a new mechanism with no measured item behind it. |
 | 3 | A wrapper whose request is inside a callback the table does not know (`fromEvent`, a custom `retryWhen`): a gap or nothing? | **Nothing.** Claiming a gap would make every function that calls an RxJS operator a summary gap, and the signal "this body issues no request" is what keeps the join quiet. The operation-level `no-call-site` finding remains the statement at the operation. The one exception is a call that matches a `ForwardingRow` but writes the carried position differently: that is a `destination-undecidable` gap at the call (S1 step 4), because the row promises a construct the code then uses otherwise. |
 | 4 | S1: how does the leaf rule type a receiver (`this.http`, an inherited field, a parameter) without a second owner of "what is a request", given that the B11 receiver reader is private to its adapter? | **Receiver typing stays with the B11 adapter's reader; the port gains `clientReceiver`; the vocabulary stays in the rule module.** `SummaryResolver.clientReceiver(file, call)` answers only whether the receiver is an `HttpClient`, using `Reader.ownerClass`/`memberType` (inject fields, typed parameters, inherited fields of a base class in another file, `http-call-sites.adapter.ts:692-721`). The rule module keeps `VERBS`, the global `fetch` and `httpResource` by import, and combines them with that answer; no other file applies `VERBS`. A call whose receiver is not an `HttpClient` (a custom service with a `get()`) is not a leaf. S1 tests use a fake that answers the question; S2 implements it on the reader. |
+| 5 | S1: how is a hole bound to the parameter it reads, when the path is read in a branch or out of order? | **Hole → parameter binding comes from the reader's `evaluate`, and S2's `Evaluation` tracks the parameter source per hole.** `evaluate` returns `holes`, one entry per `{}` in order, the declaration parameter index that value is (undefined for a run-time value that is not a parameter). Substitution fills each hole by its parameter, never by argument order. |
+| 6 | S1: what does a path that writes a brace (`'/x/{}'`) do, when the rule cannot tell it from a run-time hole? | **Conservative: no substitution through it.** A literal path text the code writes that contains `{` or `}` yields a gap at the call with the existing cause `destination-undecidable`, naming the literal in its evidence, never a substituted path. No new vocabulary. |
 
 ## Review responses
 

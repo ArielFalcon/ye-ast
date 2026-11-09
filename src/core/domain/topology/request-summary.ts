@@ -26,6 +26,8 @@ export interface RequestShape {
   /** Undefined when the verb is a value an argument fills. */
   method: HttpMethod | undefined;
   path: string;
+  /** One entry per `{}` of `path`, in order: the parameter index that hole reads, or undefined for a run-time value that is not a parameter. */
+  holes: readonly (number | undefined)[];
   body: BodySource;
   /** Present when the shape holds only under this test of the parameter; several shapes of one leaf split by a conditional. */
   when?: PathCondition;
