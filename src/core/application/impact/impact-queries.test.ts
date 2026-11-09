@@ -2114,6 +2114,16 @@ test("a call the type checker binds to another repository declaration moves ther
   }
 });
 
+test("a call on a structural parameter the type checker binds is a typed dependence: the receiver it names takes nothing from the derivation (structural parameter, ADR-0045 decision 5)", async () => {
+  const onParameter: ImportOriginsReader = (sources, paths, facts) => ({ ...origins(() => undefined)(sources, paths, facts), rootBindings: async (sites) => sites.map(() => ({ kind: "local", root: "store", lines: [7] })) });
+  const nodes = [fakeNode("Store", "class", "src/store.ts", 1, 9), ...TYPED_NODES];
+  const edges: FakeEdge[] = [{ from: "Store", to: "store-get", kind: "contains" }, ...TYPED_EDGES];
+
+  const answer = callersFact(await setup({ nodes, edges, importOrigins: onParameter, syntax: true, typeBindings: checker(boundTo(STORE_GET)) }).callers({ targets: [{ file: "src/store.ts", symbol: "get" }] }));
+
+  assert.equal(viaOf(answer, "id")?.derivation, "typed");
+});
+
 test("importers read the type checker's bindings: a call it moves to another file's declaration makes no user, and the fact records what it read", async () => {
   const importersOf = async (typeBindings?: TypedOption) => importersFact(await setup({ nodes: TYPED_NODES, edges: TYPED_EDGES, importOrigins: origins(() => undefined), ...(typeBindings && { typeBindings }) }).importers({ files: ["src/store.ts"] }));
   const namesOf = (answer: Fact<ImportersValue>) => answer.status !== "unknown" && answer.value.files.map(({ users, unresolvedNamers }) => ({ users, unresolvedNamers }));

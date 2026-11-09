@@ -90,7 +90,8 @@ export function edgeKey({ source, target, kind, line, column }: GraphEdge): stri
  * declarations. `receiver` is the value a kept call into a member of a class or interface is made on: the field's name for `this.f.m`, the parameter's or
  * variable's root for `v.m`, and empty for a call result or another expression. With the relations' proofs such an edge is
  * `proven` when a source proof binds the receiver to the class of the member it reaches, and a `name-match` otherwise. A
- * kept call the type checker binds to the edge's own target is `typed`, receiver or not, as is a call it moves to the declaration it binds.
+ * kept call the type checker binds to the edge's own target is `typed`, as is a call it moves to the declaration it binds;
+ * either still names its receiver, since a typed binding proves the dependence, never what runs (ADR-0045 decision 5).
  */
 export type EdgeTarget =
   | Exclude<EdgeVerdict<GraphSymbol>, { kind: "keep" | "drop" | "redirect" }>
@@ -148,10 +149,17 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
   async function verdictsOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<readonly EdgeTarget[]> {
     const placed = [...new Map(edges.filter(({ edge }) => edge.line !== null && edge.column !== null && !verdicts.has(edgeKey(edge))).map((followed) => [edgeKey(followed.edge), followed])).values()];
     const fresh: FollowedEdge[] = [];
+    const typedKept: { followed: FollowedEdge; verdict: Extract<EdgeTarget, { kind: "keep" | "redirect" }> }[] = [];
     for (const followed of placed) {
       const verdict = typedVerdictOf(followed);
       if (verdict === undefined) fresh.push(followed);
+      else if (verdict.kind === "keep" || verdict.kind === "redirect") typedKept.push({ followed, verdict });
       else verdicts.set(edgeKey(followed.edge), verdict);
+    }
+    const typedReceivers = typedKept.length === 0 ? [] : await receiversOf(typedKept.map(({ followed }) => followed), signal);
+    for (const [index, { followed, verdict }] of typedKept.entries()) {
+      const receiver = typedReceivers[index];
+      verdicts.set(edgeKey(followed.edge), receiver === undefined ? verdict : { ...verdict, receiver });
     }
     if (fresh.length > 0) {
       const roots = await origins.rootOrigins(fresh.map(({ edge, source, target }) => ({ file: source.file, line: edge.line!, column: edge.column! + 1, kind: edge.kind, name: target.name })), signal);

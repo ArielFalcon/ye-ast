@@ -13,6 +13,7 @@ import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
 import type { DeclaredCallable, ReceiverBinding, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import type { RelationExtraction } from "../relations/relation-extractor.ts";
+import type { TypeBindingsAnswer, TypeTarget } from "../../ports/type-bindings.port.ts";
 import { createTraceQueries, type TraceQueriesDeps } from "./trace-queries.ts";
 
 const SHA = "a".repeat(40);
@@ -89,6 +90,8 @@ interface Options {
   placedSites?: readonly PlacedCallSite[];
   /** Runs each time the call sites are read. */
   onCallSites?: () => void;
+  /** What the type checker answers over a declared build output; nothing is declared by default. */
+  typed?: TypeBindingsAnswer;
 }
 
 function setup(options: Options) {
@@ -137,6 +140,7 @@ function setup(options: Options) {
     ...(options.imports === undefined ? {} : { moduleDependencies: { extract: async () => ({ dependencies: Object.entries(options.imports!).flatMap(([file, bound]) => bound.map(({ local, from }, index) => ({ file, line: index + 1, endLine: index + 1, specifier: from, kind: "import", typeOnly: false, target: { kind: "repository", file: from }, bindings: [{ local, imported: local, line: index + 1, column: 10, typeOnly: false, exportedAs: local }] }))) }) } }),
     callSites: { placed: async () => (options.onCallSites?.(), options.placedSites ?? (options.callSites ?? []).map((site) => ({ site, column: 0 }))) },
     engines: {},
+    ...(options.typed && { typeBindings: { of: async () => options.typed }, checkerInputs: { filesAt: async () => ({ ok: true, value: { files: [], cuts: [] } }) }, declaredOutputs: () => DECLARED }),
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
   } as unknown as TraceQueriesDeps;
   return { queries: createTraceQueries(deps), log };
@@ -1061,6 +1065,40 @@ const resolvedOnParameter = (holds?: ReceiverBinding["holds"]): Options => ({
   sources: [{ path: A, content: "" }],
 });
 const PARAMETER_CUT = [["unresolved-link", ["src/a.ts:9 save", "src/a.ts::Twin.save", "src/b.ts::Repo.save"]]];
+
+const DECLARED = [{ kind: "node-modules" as const, at: "", path: "/host/checkout/node_modules" }];
+const USED = [{ kind: "node-modules" as const, at: "", verified: false, digest: "read" }];
+/** The checker's answer binding the call at `src/a.ts:9:5` named `name` to `target`. */
+const typedAt = (name: string, target: TypeTarget): TypeBindingsAnswer => ({ status: "bound", bindings: [{ file: A, line: 9, column: 5, name, target }], unowned: [], refused: [], outputs: USED });
+const REPO_SAVE_TYPE: TypeTarget = { kind: "repository", file: B, line: 3, name: "save" };
+
+test("a call the type checker binds to another declaration is a step there, and the trace records the build output it read", async () => {
+  const named: Options = { nodes: [SVC, RUN, callee("helper", A, 30), { ...callee("helper-b", B, 12), name: "helper" }], edges: [...CONTAINS, call("run", "helper", 9, 4)], unresolved: [OUTWARD_CALL("helper"), OUTWARD_CALL("helper-b", B, 13)] };
+
+  const fact = await factOf({ ...named, typed: typedAt("helper", { kind: "repository", file: B, line: 12, name: "helper" }) });
+
+  assert.deepEqual(valueOf(fact).steps.slice(1).map(({ symbol, file }) => [symbol, file]), [["helper", B]]);
+  assert.deepEqual(fact.inputs.buildOutputs, USED);
+});
+
+test("a call on a structural parameter the type checker binds proves the dependence, not what runs: trace keeps its cut (structural parameter, ADR-0045 decision 5)", async () => {
+  const fact = await factOf({ ...resolvedOnParameter({ kind: "annotated", type: "Repo", line: 8, column: 20 }), typed: typedAt("save", REPO_SAVE_TYPE) });
+
+  assert.deepEqual(cutsOf(fact), PARAMETER_CUT);
+  assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["run"]);
+});
+
+test("a call on an inject() local a provider may replace that the type checker binds runs no proven class: trace keeps its cut (replaceable provider, ADR-0045 decision 5)", async () => {
+  const holds = { class: { path: B, symbol: "Repo", line: 1 } };
+  const owner = { path: A, symbol: "Svc", line: 1 };
+  const written = (name: string): SyntaxCall => ({ kind: "calls", line: 9, column: 5, name, callee: "save", owners: [] });
+  const replaceable: Options = { ...resolvedOnParameter(), syntaxCalls: { [A]: [written("store.save")] }, proofs: { locals: [{ owner, local: "store", holds }], memberUses: [{ ...SAVE_PROOF, reference: { ...SAVE_PROOF.reference, name: "store.save" }, substitutes: [] }], externalUses: [] } };
+
+  const fact = await factOf({ ...replaceable, typed: typedAt("save", REPO_SAVE_TYPE) });
+
+  assert.deepEqual(cutsOf(fact), PARAMETER_CUT);
+  assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["run"]);
+});
 
 test("a call the index resolved on a parameter or a variable nothing proves, or a method passed from one, is a cut listing the declarations of its name, never a step", async () => {
   const parameter = await factOf(resolvedOnParameter());

@@ -336,6 +336,9 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     callSites: placedCallSites,
     dataEffects: { placed: async (files) => createJavaDataEffects(await javaParser()).placed(files) },
     sourceSelection: isWritten,
+    typeBindings: impactDeps.typeBindings,
+    checkerInputs: createRevisionSources({ ...headDeps, sourceSelection: isTypeCheckerInput }),
+    ...(options.buildOutputs === undefined ? {} : { declaredOutputs: options.buildOutputs }),
   });
   const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);
   const bareWorkspace = createWorkspaceQueries(workspaceDeps, operation);

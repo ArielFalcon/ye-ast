@@ -37,9 +37,10 @@ import { placeEffects } from "./trace-effects.ts";
 import { comparePlacement, type DataEffectReader } from "../../domain/trace/data-effect-site.ts";
 import type { PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
 import { pagePlans } from "./page-plans.ts";
-import { createBaseReadings } from "../snapshot/base-reading.ts";
+import { createBaseReadings, withOutputs, type BaseReadingDeps } from "../snapshot/base-reading.ts";
+import { buildOutputCuts } from "../../domain/shared/build-outputs.ts";
 
-export interface TraceQueriesDeps extends HeadReaderDeps {
+export interface TraceQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, "typeBindings" | "checkerInputs" | "declaredOutputs"> {
   workspace?: WorkspaceReadOperation;
   librarySources?: readonly LibrarySource[];
   /** Reads where the bare names a file calls come from, so a call to a package or a language global is external. */
@@ -155,7 +156,9 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
 
           const roots = [...new Map(selections.flatMap(({ selection }) => selection.seeds.map(({ symbol }): [GraphNodeId, GraphSymbol] => [symbol.id, symbol]))).values()].sort(comparePosition);
           const origins = reading.origins();
-          const edgeTargets = reading.edgeTargets();
+          const typed = await reading.typed();
+          if (typed === "aborted") return ABORTED;
+          const edgeTargets = reading.edgeTargets(typed.typed);
           const reconciled = edgeTargets === undefined ? undefined : reading.reconciledCalls(edgeTargets, reading.declarationUses());
           if (origins === undefined || edgeTargets?.bindings === undefined || reconciled === undefined) throw new Error("a trace binds calls through the base binder, which needs the syntax and the relations' proofs");
           const pageRoots = new Set(selections.flatMap(({ target, selection }) => (isEntrypointTarget(target) ? selection.seeds.map(({ symbol }) => symbol.id) : [])));
@@ -176,6 +179,8 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           };
           const cuts = [
             ...fixed,
+            ...typed.inputsLeftOut,
+            ...buildOutputCuts(typed.buildOutputs),
             ...summary.filesNotIndexed.map((file) => fileCut("no-extractor", file, "not-indexed")),
             ...selections.flatMap(({ selection }) => selection.withoutSymbols.map((file) => fileCut("no-extractor", file, "no-symbols"))),
             ...handlers.unplaced,
@@ -184,7 +189,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             ...effectCuts,
           ];
           const walked: Asserted = { kind: "walk", files: [...new Set([...selections.flatMap(({ target }) => (isEntrypointTarget(target) ? [] : [target.file])), ...steps.map(({ file }) => file)])] };
-          return { ok: true, value: withCuts(head.base(content, true), value, cuts, walked) };
+          return { ok: true, value: withCuts(withOutputs(head.base(content, true), typed.outputs), value, cuts, walked) };
         } finally {
           store.close();
         }
