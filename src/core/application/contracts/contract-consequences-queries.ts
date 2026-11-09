@@ -239,12 +239,11 @@ type Start = { kind: "start"; pending: Pending } | { kind: "ambiguous"; finding:
 function startOf(link: Link, hypothesis: ResponseHypothesis, placed: ReadonlyMap<string, ConsumerPlacedSites>, excludes: ConsumerSession["excludes"]): Start {
   const { from } = link;
   const read = placed.get(from.repo);
-  const reported = read === undefined ? undefined : siteAt(from, read.sites, excludes);
-  const issuing = read === undefined || reported === undefined ? [] : issuingCallsOf(reported, read.sites, read.owned);
+  const reported = read === undefined ? [] : sitesAt(from, read.sites, excludes);
+  const issuing = read === undefined ? [] : issuingCallsOf(reported, read.sites, read.owned);
   if (issuing.length > 1) {
-    const places = issuing.map((call): Evidence => ({ path: call.file, line: call.line }));
-    const hops = places.slice(0, -1).map((evidence): Hop => ({ step: "http-call", evidence }));
-    return { kind: "ambiguous", finding: frontierItem({ at: places.at(-1)!, cause: "ambiguous-caller", reason: "unresolved", hops }, [], from.repo) };
+    const hops = issuing.map((call): Hop => ({ step: "http-call", evidence: { path: call.file, line: call.line } }));
+    return { kind: "ambiguous", finding: frontierItem({ at: { path: from.file, line: from.line }, cause: "ambiguous-caller", reason: "unresolved", hops }, [], from.repo) };
   }
   const [only] = issuing;
   if (only === undefined) {
@@ -269,10 +268,10 @@ function startOf(link: Link, hypothesis: ResponseHypothesis, placed: ReadonlyMap
  * states one, and the operation the link reaches. Several operations can be written at one place, so the operation is
  * decided by the session's own matcher, never by the first site found; no site that reaches the operation is no site.
  */
-function siteAt(from: Link["from"], sites: readonly PlacedCallSite[], excludes: ConsumerSession["excludes"]): PlacedCallSite | undefined {
+function sitesAt(from: Link["from"], sites: readonly PlacedCallSite[], excludes: ConsumerSession["excludes"]): PlacedCallSite[] {
   const here = sites.filter(({ site }) => site.file === from.file && site.line === from.line && site.symbol === from.symbol);
   const at = from.column === undefined ? here : here.filter(({ column }) => column !== undefined && column + 1 === from.column);
-  return at.find(({ site }) => !excludes(reachOf(site)));
+  return at.filter(({ site }) => !excludes(reachOf(site)));
 }
 
 /** The request a call site writes, as the matcher's reach states it; a site with no method or template is never excluded. */
@@ -281,9 +280,9 @@ const reachOf = (site: PlacedCallSite["site"]): CallSiteReach => {
   return { kind: "call-site", transport: site.transport, ...(target === undefined ? {} : { method: target.method, template: target.path }) };
 };
 
-/** The owned calls that issue a propagated site: each owned origin that is a placed call of its own, once, in file then line order. */
-function issuingCallsOf(site: PlacedCallSite, placed: readonly PlacedCallSite[], owned: ReadonlySet<string>): { file: string; line: number; symbol: string }[] {
-  const issuing = (site.origins ?? []).filter((origin) => owned.has(origin.file)).flatMap((leaf) => {
+/** The owned calls that issue the sites a link reaches: each owned origin that is a placed call of its own, once, in file then line order. */
+function issuingCallsOf(sites: readonly PlacedCallSite[], placed: readonly PlacedCallSite[], owned: ReadonlySet<string>): { file: string; line: number; symbol: string }[] {
+  const issuing = sites.flatMap((site) => (site.origins ?? []).filter((origin) => owned.has(origin.file))).flatMap((leaf) => {
     const at = placed.find((candidate) => candidate.site.file === leaf.file && candidate.site.line === leaf.line && candidate.column === leaf.column);
     return at === undefined ? [] : [{ file: at.site.file, line: at.site.line, symbol: at.site.symbol }];
   });

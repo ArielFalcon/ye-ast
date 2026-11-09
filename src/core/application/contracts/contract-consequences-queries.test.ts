@@ -673,7 +673,44 @@ test("two issuing calls of one operation are an ambiguity frontier naming both, 
 
   assert.deepEqual(followed.map((carrier) => carrier.site.kind === "call-site" && [carrier.site.file, carrier.site.line]), []);
   assert.deepEqual(verdictsOf(fact), ["ambiguous-caller"]);
-  assert.deepEqual(fact.value.findings.map((finding) => finding.evidence.map((place) => [place.path, place.line])), [[["src/first.ts", 6], ["src/second.ts", 9]]]);
+  assert.deepEqual(fact.value.findings.map((finding) => finding.evidence.map((place) => [place.path, place.line])), [[["src/first.ts", 6], ["src/second.ts", 9], ["src/owner.service.ts", 10]]]);
+});
+
+test("two calls of the asked operation in one body are both issuing calls: one body, two placed sites, an ambiguity frontier naming both", async () => {
+  // A body writes the request twice on two paths: the extraction places one site per path, at one line and symbol.
+  const first = { ...placedAt("GET", "/owners/{}", [], "src/first.ts", 6), column: 9 };
+  const second = { ...placedAt("GET", "/owners/{}", [], "src/second.ts", 9), column: 9 };
+  const pathA = [{ file: "src/adapter.ts", line: 4, column: 3 }, { file: "src/first.ts", line: 6, column: 9 }];
+  const pathB = [{ file: "src/adapter.ts", line: 4, column: 3 }, { file: "src/second.ts", line: 9, column: 9 }];
+  const sites = [placedAt("GET", "/owners/{}", pathA), placedAt("GET", "/owners/{}", pathB), first, second];
+  const placed = { web: { sites, owned: new Set(["src/adapter.ts", "src/first.ts", "src/second.ts", "src/owner.service.ts"]) } };
+  const { ask, followed } = setup({ links: [link({ name: OPERATION })], placed, operationSites: true });
+
+  const fact = await ask();
+
+  assert.deepEqual(followed.map((carrier) => carrier.site.kind === "call-site" && [carrier.site.file, carrier.site.line]), []);
+  assert.deepEqual(verdictsOf(fact), ["ambiguous-caller"]);
+  assert.deepEqual(fact.value.findings.map((finding) => finding.evidence.map((place) => [place.path, place.line])), [[["src/first.ts", 6], ["src/second.ts", 9], ["src/owner.service.ts", 10]]]);
+});
+
+test("two roots that reach the same two issuing calls are two distinguishable frontiers, each naming the root it was reached from", async () => {
+  // Two listeners (roots) each reach the same two implementations (issuing calls): each root gets its own frontier.
+  const issuingA = { ...placedAt("GET", "/owners/{}", [], "src/first.ts", 6), column: 9 };
+  const issuingB = { ...placedAt("GET", "/owners/{}", [], "src/second.ts", 9), column: 9 };
+  // Each root's propagated site reaches both implementations, so its origins name both leaves.
+  const reachesBoth = (root: string, line: number) => placedAt("GET", "/owners/{}", [{ file: "src/adapter.ts", line: 4, column: 3 }, { file: "src/first.ts", line: 6, column: 9 }, { file: "src/second.ts", line: 9, column: 9 }], root, line);
+  const placed = { web: { sites: [reachesBoth("src/listener-a.ts", 3), reachesBoth("src/listener-b.ts", 7), issuingA, issuingB], owned: new Set(["src/adapter.ts", "src/first.ts", "src/second.ts", "src/listener-a.ts", "src/listener-b.ts"]) } };
+  const roots = [link({ file: "src/listener-a.ts", line: 3, name: OPERATION }), link({ file: "src/listener-b.ts", line: 7, name: OPERATION })];
+  const { ask } = setup({ links: roots, placed, operationSites: true });
+
+  const fact = await ask();
+
+  assert.equal(fact.value.findings.length, 2);
+  const chainOf = (finding: (typeof fact.value.findings)[number]) => (finding.status === "unknown" ? finding.evidence.map((place) => `${place.path}:${place.line}`) : []);
+  const [first, second] = fact.value.findings.map(chainOf);
+  assert.notDeepEqual(first, second);
+  assert.ok(first?.includes("src/listener-a.ts:3"), JSON.stringify(first));
+  assert.ok(second?.includes("src/listener-b.ts:7"), JSON.stringify(second));
 });
 
 test("a single issuing call of the asked operation still starts the carrier there, with the call it was reached from in the chain", async () => {
