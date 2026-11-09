@@ -1,5 +1,4 @@
 import type { Node } from "web-tree-sitter";
-import { isJavaSource } from "../../domain/languages/java.ts";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
@@ -51,14 +50,13 @@ interface ReadFile {
  * no name-only index target proves it. Non-Java and non-invocation sites remain unknown.
  */
 export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts): ImportOrigins["receiverMethods"] {
-  const java = sources.filter(({ path }) => isJavaSource(path));
   const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
   let layout: string | undefined;
   const resolved = async (sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ReceiverMethod[]> => {
     const results: ReceiverMethod[] = sites.map(() => UNKNOWN);
     const read = await parser();
     return withJavaSources(read, (parse) => {
-      const { files, unparsed } = parse(java);
+      const { files, unparsed } = parse(sources);
       const project = createJavaProject(files);
       const falsified = unparsed.length > 0 || unreadJvm || project.unreadable.length > 0 || files.some((file) => namesAnyDynamicImplementation(file, project));
       const proves = !falsified && !files.some(({ root }) => rewritesCalls(root));
@@ -94,9 +92,9 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
     });
   };
   return async (sites, signal) => {
-    if (!sites.some(({ file }) => isJavaSource(file))) return sites.map(() => UNKNOWN);
+    if (sites.length === 0) return [];
     if (facts === undefined) return resolved(sites, signal);
-    layout ??= facts.fingerprint({ java: java.map(({ path, content }) => [path, content]), paths });
+    layout ??= facts.fingerprint({ java: sources.map(({ path, content }) => [path, content]), paths });
     try {
       return await facts.ofInputs(SLOT, { layout, sites }, async () => {
         const results = await resolved(sites, signal);

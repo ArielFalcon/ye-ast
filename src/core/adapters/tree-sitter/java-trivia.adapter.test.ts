@@ -13,16 +13,13 @@ test("a line inside a text block or a string that spells a comment is code", asy
   assert.deepEqual(await trivia(["class A {", '  String page = """', "    // not a comment", "    /* nor this", '    """;', '  String url = "http://host";', "}", "// a comment"]), [8]);
 });
 
-test("a file that does not parse, or of another language, has no trivia, so every line counts as code", async () => {
+test("a file that does not parse has no trivia, so every line counts as code", async () => {
   assert.deepEqual(await trivia(["", "class {", ""]), []);
-  assert.deepEqual(await trivia(["", "// x"], "src/a.ts"), []);
 });
 
-test("the parser is created only for a Java source, once however many sources are read", async () => {
+test("the parser is created once however many sources are read", async () => {
   let created = 0;
   const reader = createJavaTrivia(async () => (created += 1, createJavaParser()));
-  await reader.triviaLines({ path: "src/a.ts", content: "// x\n" });
-  assert.equal(created, 0);
   await reader.triviaLines({ path: "src/A.java", content: "class A {}\n" });
   await reader.triviaLines({ path: "src/B.java", content: "class B {}\n" });
   assert.equal(created, 1);

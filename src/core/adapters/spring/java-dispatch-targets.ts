@@ -1,5 +1,4 @@
 import type { Node } from "web-tree-sitter";
-import { isJavaSource } from "../../domain/languages/java.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchTargets, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
@@ -51,19 +50,18 @@ export interface Hierarchy {
  * functional interface; an enum below it; or a class whose chain reaches no single body of the method's signature.
  */
 export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[]): ImportOrigins["dispatchTargets"] {
-  const java = sources.filter(({ path }) => isJavaSource(path));
   const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
   return async (sites, signal) => {
-    const results: DispatchTargets[] = sites.map(({ file }) => isJavaSource(file) ? UNKNOWN : { kind: "unknown" });
-    if (unreadJvm || !sites.some(({ file }) => isJavaSource(file))) return results;
+    const results: DispatchTargets[] = sites.map(() => UNKNOWN);
+    if (unreadJvm || sites.length === 0) return results;
     const read = await parser();
     return withJavaSources(read, (parse) => {
-      const { files, unparsed } = parse(java);
+      const { files, unparsed } = parse(sources);
       if (unparsed.length > 0) return results;
       const project = createJavaProject(files);
       if (project.unreadable.length > 0) return results;
       const veto = globalVeto(files, project);
-      if ("reason" in veto) return sites.map(({ file }) => isJavaSource(file) ? { kind: "unknown", reason: veto.reason } : { kind: "unknown" });
+      if ("reason" in veto) return sites.map(() => ({ kind: "unknown", reason: veto.reason }));
       const hierarchy = readHierarchy(files, project);
       for (const [index, site] of sites.entries()) {
         if (signal?.aborted) break;

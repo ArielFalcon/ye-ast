@@ -238,11 +238,6 @@ test("a computed key or index adds no name; a literal one adds its name", async 
   assert.deepEqual(await names(["const table = { [key]: run, ['literal']: run };", "target[name] = run;", "target['indexed'] = run;"]), ["indexed", "literal"]);
 });
 
-test("a file that is not a TypeScript source declares none", async () => {
-  assert.deepEqual(await read(["const table = { plain: run };"], "src/a.d.ts"), { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] });
-  assert.deepEqual(await read(["class A { void run() {} }"], "src/A.java"), { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] });
-});
-
 test("functions, overload signatures and ambient functions are callables that no subtype overrides, with a body only when written", async () => {
   assert.deepEqual((await read([
     "export function pick(a: string): string;",

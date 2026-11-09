@@ -1,5 +1,4 @@
 import type { Node } from "web-tree-sitter";
-import { isJavaSource } from "../../domain/languages/java.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -34,7 +33,6 @@ interface Spelled {
  * type, a class the reader does not place) is `unknown`. Nothing comes from the graph.
  */
 export function createJavaNameBindings(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[] = sources.map(({ path }) => path), facts?: DerivedFacts): ImportOrigins {
-  const javaSources = sources.filter(({ path }) => isJavaSource(path));
   return {
     origins: async (sites) => sites.map((site) => unresolved(site)),
     rootBindings: (sites, signal) => createJavaRootBindings(parser(), sources)(sites, signal),
@@ -44,11 +42,11 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
     replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),
     rootOrigins: async (sites, signal) => {
       const results: RootOrigin[] = sites.map((site) => unresolved(site));
-      const asked = sites.flatMap((site, index) => (isJavaSource(site.file) ? [{ site, index }] : []));
+      const asked = sites.map((site, index) => ({ site, index }));
       if (asked.length === 0 || signal?.aborted) return results;
       const java = await parser();
       return withJavaSources(java, (parse) => {
-        const files = new Map(parse(javaSources).files.map((file) => [file.path, file]));
+        const files = new Map(parse(sources).files.map((file) => [file.path, file]));
         const project = createJavaProject([...files.values()]);
         const unreadable = new Set(project.unreadable);
         const variables = declaredVariablesOnce();

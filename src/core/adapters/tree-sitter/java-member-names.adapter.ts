@@ -1,6 +1,5 @@
 import type { Node } from "web-tree-sitter";
 import { compareText } from "../../domain/shared/code-node.ts";
-import { isJavaSource } from "../../domain/languages/java.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, FunctionValueCall, ReceiverBinding, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import { isFunctionValueNode, javaFunctionValueCalls } from "./java-function-value-calls.ts";
@@ -26,7 +25,6 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
   let parser: Promise<JavaParser> | undefined;
   return {
     memberNames: async (file, facts) => {
-      if (!isJavaSource(file.path)) return NONE;
       parser ??= createParser();
       const ready = await parser;
       return facts === undefined ? derive(ready, file) : facts.ofFile("java-member-names", file, () => derive(ready, file));

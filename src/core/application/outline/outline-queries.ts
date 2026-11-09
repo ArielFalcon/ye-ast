@@ -17,14 +17,13 @@ import { focusWithUses, readFocus, readOutline } from "./outline.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import { syntaxOfSources } from "../navigation/edge-targets.ts";
-import { combinedModuleReader } from "../snapshot/language-packs.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 
 export interface OutlineQueriesDeps extends HeadReaderDeps {
   /** Version of each engine every operation runs on, by package name. */
   engines: Readonly<Record<string, string>>;
-  /** The readers of module statements, one per language; each reads only the files of its language. */
-  moduleReaders: readonly ModuleDependenciesReader[];
+  /** The reader of every language's module statements. */
+  moduleReader: ModuleDependenciesReader;
   /** The requested files whose declarations the graph cannot place; without it no such file is cut. */
   unmodelled?: UnmodelledConstructsReader;
   /** Reads what binds the names a focused declaration uses, from the head's sources. */
@@ -66,7 +65,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
           const focused = focus === undefined ? undefined : readFocus(store, focus.filter(({ file }) => isReadableFile(file)));
           if (focused !== undefined && focused.unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${focused.unknown.map(unknownTargetKey).join(", ")}${unmodelledNote(focused.unknown, unmodelled)}`, entries: focused.unknown } };
           if (focused !== undefined && focused.topLevel.length > 0) return { ok: false, fault: { kind: "top-level-line", detail: `no declaration holds ${focused.topLevel.map(({ file, line }) => `${file}:${line}`).join(", ")}; the line is at the top level of its file`, entries: focused.topLevel } };
-          const modules = await combinedModuleReader(deps.moduleReaders).extract(sources, { files: covered });
+          const modules = await deps.moduleReader.extract(sources, { files: covered });
           if (request.signal?.aborted) return ABORTED;
           const listed = focused === undefined ? readOutline(store, covered, modules) : undefined;
           const used = focused === undefined ? undefined : await focusWithUses(store, focused, deps.importOrigins(sources, undefined, head.prepared?.facts), modules, syntaxOfSources(deps.memberNames, sources, head.prepared?.facts), request.signal);

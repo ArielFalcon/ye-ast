@@ -1,5 +1,4 @@
 import type { Node } from "web-tree-sitter";
-import { isJavaSource } from "../../domain/languages/java.ts";
 import type { ModuleBinding, ModuleDependencies, ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import type { ModuleTarget } from "../../domain/shared/module-target.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
@@ -25,7 +24,7 @@ export function createJavaImportsReader(parser: JavaParser): ModuleDependenciesR
   return {
     async extract(sources, options): Promise<ModuleDependencies> {
       const selected = options?.files === undefined ? undefined : new Set(options.files);
-      if (selected !== undefined && !sources.some(({ path }) => isJavaSource(path) && selected.has(path))) return { files: [], dependencies: [], unread: [] };
+      if (selected !== undefined && !sources.some(({ path }) => selected.has(path))) return { files: [], dependencies: [], unread: [] };
       let universe = universes.get(sources);
       if (universe === undefined) {
         universe = readUniverse(parser, sources);
@@ -39,7 +38,7 @@ export function createJavaImportsReader(parser: JavaParser): ModuleDependenciesR
 
 function readUniverse(parser: JavaParser, sources: readonly SourceFile[]): JavaUniverse {
   return withJavaSources(parser, (parse) => {
-    const { files, unparsed } = parse(sources.filter(({ path }) => isJavaSource(path)));
+    const { files, unparsed } = parse(sources);
     const project = createJavaProject(files);
     const unreadable = new Set(project.unreadable);
     const unread = [...unparsed, ...project.unreadable].map(({ path }) => ({ file: path, reason: "source-unreadable" as const }));

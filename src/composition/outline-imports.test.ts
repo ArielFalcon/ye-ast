@@ -1,3 +1,5 @@
+import { routedReaders } from "../core/application/snapshot/language-packs.ts";
+import { composeLanguagePacks } from "./language-packs.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
@@ -16,7 +18,7 @@ const MANIFEST: SourceFile = { path: "package.json", content: JSON.stringify({ d
 const USE_NODES: FakeNode[] = [fakeNode("use", "file", USE, 1, 9), fakeNode("use.run", "function", USE, 8, 9, "run")];
 
 /** The outline of `src/use.ts` read through the real module readers over `sources`, on a fake graph. */
-async function outlineOf(content: string, options: { nodes?: FakeNode[]; edges?: FakeEdge[]; sources?: SourceFile[]; file?: string; readers?: ModuleDependenciesReader[] } = {}): Promise<{ status: string; file: OutlineFile | undefined; cuts: readonly Cut[] }> {
+async function outlineOf(content: string, options: { nodes?: FakeNode[]; edges?: FakeEdge[]; sources?: SourceFile[]; file?: string; reader?: ModuleDependenciesReader } = {}): Promise<{ status: string; file: OutlineFile | undefined; cuts: readonly Cut[] }> {
   const file = options.file ?? USE;
   const sources = [{ path: file, content }, ...(options.sources ?? [DEFS, MANIFEST])];
   const store = fakeCodeGraph(options.nodes ?? USE_NODES, options.edges ?? []);
@@ -30,7 +32,7 @@ async function outlineOf(content: string, options: { nodes?: FakeNode[]; edges?:
     matcher: { matches: () => true },
     graph: { index: async () => ({ ok: true, value: { filesIndexed: 1, filesSkipped: 0, filesErrored: 0, filesNotIndexed: [], versions: { codegraph: "fake", schema: 0, extraction: 0 } } }), open: () => ({ ok: true, value: store }) },
     engines: {},
-    moduleReaders: options.readers ?? [createModuleDependenciesReader()],
+    moduleReader: options.reader ?? createModuleDependenciesReader(),
   } as unknown as OutlineQueriesDeps;
   const answer = await createOutlineQueries(deps).outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: [file] });
   assert.ok(answer.ok && answer.value.status !== "unknown", JSON.stringify(answer));
@@ -97,7 +99,7 @@ test("imports sharing a line come in source order, whether statements or runtime
 test("the outline asks each module reader for the statements of the requested files only", async () => {
   const asked: (readonly string[] | undefined)[] = [];
   const reader = createModuleDependenciesReader();
-  await outlineOf("import './defs';", { readers: [{ extract: async (sources, options) => (asked.push(options?.files), reader.extract(sources, options)) }] });
+  await outlineOf("import './defs';", { reader: { extract: async (sources, options) => (asked.push(options?.files), reader.extract(sources, options)) } });
   assert.deepEqual(asked, [[USE]]);
 });
 
@@ -115,7 +117,7 @@ test("a requested source the module reader reads only in part is a no-extractor 
 });
 
 test("a requested file no module reader reads is a no-extractor cut, so its empty imports never read as none", async () => {
-  const { status, file, cuts } = await outlineOf("import { one } from './defs';", { readers: [createJavaImportsReader(await createJavaParser())] });
+  const { status, file, cuts } = await outlineOf("import { one } from './defs';", { reader: createJavaImportsReader(await createJavaParser()) });
   assert.equal(status, "partial");
   assert.deepEqual(file?.imports, []);
   assert.deepEqual(cuts, [{ kind: "no-extractor", at: [USE] }]);
@@ -125,7 +127,7 @@ test("a Java import of a type the sources declare reaches that type's declaratio
   const owner: SourceFile = { path: "src/app/owner/Owner.java", content: "package app.owner;\npublic class Owner {}\n" };
   const client = javaGraph("src/app/api/Client.java", "app.api", [{ id: "Client", kind: "class", line: 3 }]);
   const owners = javaGraph(owner.path, "app.owner", [{ id: "Owner", kind: "class", line: 2 }]);
-  const { status, file } = await outlineOf("package app.api;\nimport app.owner.Owner;\nclass Client {}\n", { file: "src/app/api/Client.java", nodes: [...client.nodes, ...owners.nodes], edges: [...client.edges, ...owners.edges], sources: [owner], readers: [createModuleDependenciesReader(), createJavaImportsReader(await createJavaParser())] });
+  const { status, file } = await outlineOf("package app.api;\nimport app.owner.Owner;\nclass Client {}\n", { file: "src/app/api/Client.java", nodes: [...client.nodes, ...owners.nodes], edges: [...client.edges, ...owners.edges], sources: [owner], reader: routedReaders(composeLanguagePacks(createJavaParser, { typescript: createModuleDependenciesReader(), java: createJavaImportsReader(await createJavaParser()) })).modules });
   assert.equal(status, "complete");
   assert.deepEqual(file?.imports, [{ line: 2, endLine: 2, specifier: "app.owner.Owner", kind: "import", typeOnly: false, target: { kind: "repository", file: owner.path }, bindings: [{ local: "Owner", imported: "Owner", declaration: { file: owner.path, name: "Owner", kind: "class", line: 2, endLine: 2 } }] }]);
 });
@@ -149,7 +151,7 @@ test("a Java static import of a member the named type only inherits reaches no d
     nodes: [...client.nodes, ...owners.nodes, ...parents.nodes],
     edges: [...client.edges, ...owners.edges, ...parents.edges],
     sources: [parent, owner],
-    readers: [createJavaImportsReader(await createJavaParser())],
+    reader: createJavaImportsReader(await createJavaParser()),
   });
   assert.equal(status, "partial");
   assert.deepEqual(file?.imports[0]?.bindings, [{ local: "LIMIT", imported: "LIMIT" }]);
@@ -171,7 +173,7 @@ test("a Java import reaches the declaration at its qualified name from the file'
     nodes: [...client.nodes, ...owners.nodes],
     edges: [...client.edges, ...owners.edges],
     sources: [owner],
-    readers: [createJavaImportsReader(await createJavaParser())],
+    reader: createJavaImportsReader(await createJavaParser()),
   });
   assert.deepEqual(file?.imports.map(({ bindings }) => bindings[0]?.declaration), [undefined, { file: owner.path, name: "LIMIT", kind: "field", line: 4, endLine: 4 }]);
 });

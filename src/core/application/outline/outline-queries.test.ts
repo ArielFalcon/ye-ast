@@ -58,7 +58,7 @@ function setup(options: Options = {}) {
     matcher: { matches: options.matches ?? (() => true) },
     graph: { index: async () => ({ ok: true, value: SUMMARY }), open: () => ({ ok: true, value: store }) },
     engines: {},
-    moduleReaders: [{ extract: async (_sources: unknown, read?: { files?: readonly string[] }) => { log.moduleReads.push(read?.files); return { files: written.map((file) => ({ file, statements: [], moduleOnly: true })), dependencies: options.dependencies ?? [], unread: [] }; } }],
+    moduleReader: { extract: async (_sources: unknown, read?: { files?: readonly string[] }) => { log.moduleReads.push(read?.files); return { files: written.map((file) => ({ file, statements: [], moduleOnly: true })), dependencies: options.dependencies ?? [], unread: [] }; } },
     importOrigins: () => ({
       origins: async () => [],
       rootOrigins: async (sites: readonly ResolvedNameSite[]) => sites.map((site): RootOrigin => options.roots?.[`${site.line}:${site.column}`] ?? { status: "unknown", reason: "unresolved", evidence: [] }),

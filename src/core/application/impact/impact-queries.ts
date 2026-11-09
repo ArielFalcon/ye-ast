@@ -53,7 +53,6 @@ import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
 import { createEdgeTargets, edgeKey, SYNTAX_ONLY, syntaxOfSources, type EdgeTargets, type FollowedEdge } from "../navigation/edge-targets.ts";
-import { combinedModuleReader } from "../snapshot/language-packs.ts";
 import type { AttributedCall, ReverseCalls } from "../navigation/reverse-calls.ts";
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
@@ -93,10 +92,10 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
   sourceTrivia?: SourceTrivia;
   moduleDependencies?: ModuleDependenciesReader;
   /**
-   * The readers of module statements, one per language, whose bindings prove the declaration a graph edge's root reaches
-   * (`edge-targets.ts`); without them `moduleDependencies` alone proves it.
+   * The reader of every language's module statements, whose bindings prove the declaration a graph edge's root reaches
+   * (`edge-targets.ts`); without it `moduleDependencies` alone proves it.
    */
-  moduleReaders?: readonly ModuleDependenciesReader[];
+  moduleReader?: ModuleDependenciesReader;
   declarationEvidence?: DeclarationEvidenceReader;
   /** The changed or targeted files whose declarations the graph cannot place; without it no such file is cut. */
   unmodelled?: UnmodelledConstructsReader;
@@ -134,7 +133,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   const moduleDependenciesOf = (reader: ModuleDependenciesReader, prepared: PreparedCommit | undefined, tree: Pick<CommitExtraction, "sources">, signal: AbortSignal | undefined) =>
     retainedOf(prepared, canonicalJson({ output: "module-dependencies" }), () => reader.extract(tree.sources), signal);
   const headReader = createHeadReader(deps);
-  const bindingModules = deps.moduleReaders === undefined ? deps.moduleDependencies : combinedModuleReader(deps.moduleReaders);
+  const bindingModules = deps.moduleReader ?? deps.moduleDependencies;
   const moduleSource = deps.moduleDependencies === undefined ? isInMapScope : isWritten;
   const changeDeps = { ...deps, sourceSelection: moduleSource };
   const changeReader = createHeadReader(changeDeps);

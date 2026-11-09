@@ -41,7 +41,6 @@ test("a selection reads the imports of the selected Java files only, resolved by
 });
 
 const BROKEN = { path: "src/main/java/app/Broken.java", content: "import a.b.C;\nclass {" };
-const SCRIPT = { path: "src/main/webapp/app.ts", content: "export const app = 1;\n" };
 
 function countingParser(parser: JavaParser): { parser: JavaParser; parsed: () => number } {
   let count = 0;
@@ -51,7 +50,7 @@ function countingParser(parser: JavaParser): { parser: JavaParser; parsed: () =>
 test("reads of one source list parse each Java source once, and another list parses its own", async () => {
   const counting = countingParser(await createJavaParser());
   const reader = createJavaImportsReader(counting.parser);
-  const sources = [OWNER, CLIENT, BROKEN, SCRIPT];
+  const sources = [OWNER, CLIENT, BROKEN];
 
   await reader.extract(sources, { files: [CLIENT.path] });
   await reader.extract(sources, { files: [OWNER.path] });
@@ -65,7 +64,7 @@ test("reads of one source list parse each Java source once, and another list par
 
 test("a selection over a list already read answers its files in list order, their imports, and every unread source", async () => {
   const reader = createJavaImportsReader(await createJavaParser());
-  const sources = [OWNER, CLIENT, BROKEN, SCRIPT];
+  const sources = [OWNER, CLIENT, BROKEN];
   await reader.extract(sources);
   const clientImports = ["app.owner.Owner", "app.owner.Owner.LIMIT", "app.owner.*", "java.util.List", "com.acme.Missing"];
   const unread = [{ file: BROKEN.path, reason: "source-unreadable" }];
@@ -76,7 +75,6 @@ test("a selection over a list already read answers its files in list order, thei
     [[CLIENT.path, OWNER.path], { files: [OWNER.path, CLIENT.path], specifiers: clientImports, unread }],
     [[OWNER.path], { files: [OWNER.path], specifiers: [], unread }],
     [[BROKEN.path], { files: [], specifiers: [], unread }],
-    [[SCRIPT.path], { files: [], specifiers: [], unread: [] }],
   ] as const) {
     const read = await reader.extract(sources, files === undefined ? undefined : { files });
     assert.deepEqual({ files: read.files.map(({ file }) => file), specifiers: read.dependencies.map(({ specifier }) => specifier), unread: read.unread }, expected, JSON.stringify(files));

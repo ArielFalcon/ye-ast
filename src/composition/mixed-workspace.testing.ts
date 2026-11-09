@@ -22,8 +22,8 @@ import { createJavaCallSites } from "../core/adapters/spring/java-call-sites.ada
 import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-routes.adapter.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
-import { createJavaNameBindings } from "../core/adapters/spring/java-name-bindings.adapter.ts";
-import { importOriginsByLanguage } from "../core/application/snapshot/language-packs.ts";
+import { routedReaders } from "../core/application/snapshot/language-packs.ts";
+import { composeLanguagePacks } from "./language-packs.ts";
 import { createAngularDeclarationReader } from "../core/adapters/typescript/angular-declarations.adapter.ts";
 import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
 import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loads.adapter.ts";
@@ -32,7 +32,6 @@ import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { CallSiteReader } from "../core/domain/topology/call-site.ts";
 import type { EntrypointExtractor, SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
-import { createImportOrigins } from "../core/adapters/typescript/import-origins.adapter.ts";
 import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
@@ -85,10 +84,11 @@ export function realWorkspaceFixture(scratchRoot: string, roots: readonly string
   const trust: TrustRecordReader = { read: async (root) => ({ ok: true, value: roots.includes(root) ? "trusted" : undefined }) };
   const common = { vcs, scratch, reader, extractor, digest, matcher, graph, live, trust, producer: { name: "ye-ast", version }, engines };
   const moduleDependencies = createModuleDependenciesReader();
+  const languages = routedReaders(composeLanguagePacks(createJavaParser, { typescript: moduleDependencies, java: { extract: async (sources, options) => createJavaImportsReader(await createJavaParser()).extract(sources, options) } }));
   const impactDeps: ImpactQueriesDeps = { ...common, engines: { ...engines, "@colbymchenry/codegraph": codegraph },
     angular: createAngularDeclarationReader(), contracts, relations: composeAngularRelations(), dynamicLoads: createDynamicLoadReader(),
     angularEngines: { "@angular/compiler": installedVersion("@angular/compiler") },
-    importOrigins: (sources) => importOriginsByLanguage([createImportOrigins(sources), createJavaNameBindings(createJavaParser, sources)]), moduleDependencies, moduleReaders: [moduleDependencies, { extract: async (sources, options) => createJavaImportsReader(await createJavaParser()).extract(sources, options) }], declarationEvidence: createDeclarationEvidenceReader() };
+    importOrigins: languages.importOrigins, moduleDependencies, moduleReader: languages.modules, declarationEvidence: createDeclarationEvidenceReader() };
   const workspaceDeps: WorkspaceQueriesDeps = { ...common, callSites, evidence: createWorkspaceEvidence() };
   const operation = createWorkspaceReadOperation(workspaceDeps);
   const discoveries: import("../core/ports/workspace-queries.port.ts").WorkspaceRead[] = [];

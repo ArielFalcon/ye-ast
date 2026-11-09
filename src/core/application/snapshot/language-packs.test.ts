@@ -1,97 +1,83 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { combinedModuleReader, importOriginsByLanguage, mergedReaders } from "./language-packs.ts";
-import type { DeclaredMemberNames } from "../../ports/declared-member-names.port.ts";
-import type { LanguagePack } from "../../ports/language-pack.port.ts";
-import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
+import { test } from "node:test";
+import { JAVA_PROFILE, TYPESCRIPT_PROFILE, type LanguageProfile } from "../../domain/languages/profiles.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
-import type { DispatchTargets, ImportOrigins, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { ImportOrigins } from "../../ports/import-origins.port.ts";
+import type { LanguagePack } from "../../ports/language-pack.port.ts";
+import { routedReaders } from "./language-packs.ts";
 
-const SITES: ResolvedNameSite[] = ["src/a.ts", "src/main/java/A.java"].map((file) => ({ file, line: 1, column: 1, kind: "calls", name: "a" }));
-const unknown = (site: ResolvedNameSite): Finding<ImportOrigin> => ({ status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] });
-const complete = (site: ResolvedNameSite, module: string): Finding<ImportOrigin> => ({ status: "complete", value: { kind: "external", module }, evidence: [{ path: site.file, line: site.line }] });
+const TS = "src/a.ts";
+const JAVA = "src/main/java/A.java";
+const TS_TEST = "src/a.spec.ts";
+const MANIFEST = "package.json";
+const PATHS = [TS, JAVA, TS_TEST, MANIFEST, "src/main/kotlin/B.kt"];
+const SOURCES: SourceFile[] = PATHS.map((path) => ({ path, content: "" }));
 
-const NO_REPLACED = { paths: [], globalObjects: new Set<string>(), packages: new Set<string>() };
-
-/** A reader that settles only the sites whose file ends in `extension`, binding their roots as `binding`. */
-function reader(extension: string, module: string, binding: RootBinding = { kind: "ambient", root: "a" }): ImportOrigins {
-  const answer = (sites: readonly ResolvedNameSite[]) => sites.map((site) => (site.file.endsWith(extension) ? complete(site, module) : unknown(site)));
+/** A pack that records every path it is handed and answers each site with its own language's tag. */
+function recordingPack(profile: LanguageProfile, received: string[], readsProjectFiles?: true, universe: string[] = []): LanguagePack {
+  const tag = profile.language;
+  const answer = (site: { file: string; line: number }): Finding<ImportOrigin> => (received.push(site.file), { status: "complete", value: { kind: "external", module: tag }, evidence: [{ path: site.file, line: site.line }] });
+  const origins: ImportOrigins = {
+    origins: async (sites) => sites.map(answer),
+    rootOrigins: async (sites) => sites.map(answer),
+    rootBindings: async (sites) => sites.map((site) => (received.push(site.file), { kind: "ambient", root: tag })),
+    declaredTypes: async (sites) => sites.map((site) => (received.push(site.file), { kind: "package", module: tag, name: tag })),
+    dispatchTargets: async (sites) => sites.map((site) => (received.push(site.file), { kind: "unknown", reason: tag === "java" ? "aspect may replace the body" : "dispatch not proven" })),
+    receiverMethods: async (sites) => sites.map((site) => (received.push(site.file), { kind: "unproven" })),
+    replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),
+  };
   return {
-    origins: async (sites) => answer(sites.map((site) => ({ ...site, column: site.column ?? 1, kind: site.kind ?? "calls" }))),
-    rootOrigins: async (sites) => answer(sites),
-    rootBindings: async (sites) => sites.map((site): RootBinding => (site.file.endsWith(extension) ? binding : { kind: "unknown" })),
-    declaredTypes: async (sites) => sites.map(() => ({ kind: "unknown" as const })),
-    dispatchTargets: async (sites) => sites.map(() => ({ kind: "unknown" as const })),
-    receiverMethods: async (sites) => sites.map(() => ({ kind: "unknown" as const })),
-    replacedRoots: async () => NO_REPLACED,
+    profile,
+    ...(readsProjectFiles === undefined ? {} : { readsProjectFiles }),
+    memberNames: { memberNames: async (file) => (received.push(file.path), { names: [tag], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] }) },
+    origins: (sources, paths) => (received.push(...sources.map(({ path }) => path)), universe.push(...(paths ?? [])), origins),
+    modules: { extract: async (sources) => (received.push(...sources.map(({ path }) => path)), { files: [], dependencies: [], unread: sources.map(({ path }) => ({ file: path, reason: "unresolved" as const })), untraversed: [] }) },
+    trivia: { triviaLines: async (file) => (received.push(file.path), new Set([tag.length])) },
   };
 }
 
-test("each site takes the complete answer of the reader of its language, in the order the sites came", async () => {
-  const combined = importOriginsByLanguage([reader(".ts", "ts"), reader(".java", "java")]);
+test("a site, a file or a source of one language reaches only its pack, and a site no pack reads is unknown", async () => {
+  const typescript: string[] = [];
+  const java: string[] = [];
+  const universe: string[] = [];
+  const readers = routedReaders([recordingPack(TYPESCRIPT_PROFILE, typescript, true), recordingPack(JAVA_PROFILE, java, undefined, universe)]);
+  const sites = [JAVA, TS, TS_TEST, JAVA].map((file, line) => ({ file, line, column: 1, kind: "calls", name: "a", spelled: "a", member: "a", owner: { name: "f", line: 1, endLine: 9 } }));
 
-  assert.deepEqual(await combined.rootOrigins(SITES), [complete(SITES[0]!, "ts"), complete(SITES[1]!, "java")]);
-  assert.deepEqual(await combined.rootOrigins([SITES[1]!, { ...SITES[0]!, file: "src/a.py" }]), [complete(SITES[1]!, "java"), unknown({ ...SITES[0]!, file: "src/a.py" })]);
-});
-
-test("each use takes the binding of the reader of its language, an ambiguous one included", async () => {
-  const uses: UseSite[] = ["src/a.ts", "src/main/java/A.java", "src/a.py"].map((file) => ({ file, line: 1, column: 1, spelled: "a", owner: { name: "f", line: 1, endLine: 2 } }));
-  const combined = importOriginsByLanguage([reader(".ts", "ts", { kind: "local", root: "a" }), reader(".java", "java", { kind: "ambiguous", root: "a" })]);
-
-  assert.deepEqual(await combined.rootBindings(uses), [{ kind: "local", root: "a" }, { kind: "ambiguous", root: "a" }, { kind: "unknown" }]);
-});
-
-test("dispatch preserves a veto reason when no language proves bodies and keeps body proof priority", async () => {
-  const java: ImportOrigins = { ...reader(".java", "java"), dispatchTargets: async (sites) => sites.map((site): DispatchTargets => site.file.endsWith(".java") ? { kind: "unknown", reason: "aspect may replace the body" } : { kind: "unknown" }) };
-  const ts: ImportOrigins = { ...reader(".ts", "ts"), dispatchTargets: async (sites) => sites.map((site): DispatchTargets => site.name === "settled" ? { kind: "bodies", bodies: [] } : { kind: "unknown" }) };
-  for (const readers of [[ts, java], [java, ts]]) {
-    const result = await importOriginsByLanguage(readers).dispatchTargets([
-      { file: "A.java", name: "work", line: 1 },
-      { file: "A.java", name: "settled", line: 1 },
-      { file: "A.py", name: "work", line: 1 },
-    ]);
-    assert.deepEqual(result, [{ kind: "unknown", reason: "aspect may replace the body" }, { kind: "bodies", bodies: [] }, { kind: "unknown" }]);
+  const origins = readers.importOrigins(SOURCES);
+  const answers = [
+    await origins.origins(sites),
+    await origins.rootOrigins(sites),
+    await origins.rootBindings(sites),
+    await origins.declaredTypes(sites),
+    await origins.dispatchTargets(sites),
+    await origins.receiverMethods(sites),
+  ];
+  for (const file of SOURCES) {
+    await readers.memberNames.memberNames(file);
+    await readers.sourceTrivia.triviaLines(file);
   }
+  await readers.modules.extract(SOURCES);
+
+  assert.deepEqual([...new Set(java)].sort(), [JAVA]);
+  assert.deepEqual(universe, PATHS);
+  assert.deepEqual([...new Set(typescript)].sort(), [MANIFEST, "src/a.spec.ts", TS, "src/main/kotlin/B.kt"].sort());
+  assert.ok(!typescript.includes(JAVA));
+  assert.deepEqual(answers[0]!.map((finding) => (finding as Finding<ImportOrigin>).status === "complete" ? ((finding as { value: { module: string } }).value.module) : "unknown"), ["java", "typescript", "unknown", "java"]);
+  assert.deepEqual(answers[2], [{ kind: "ambient", root: "java" }, { kind: "ambient", root: "typescript" }, { kind: "unknown" }, { kind: "ambient", root: "java" }]);
+  assert.deepEqual(answers[4], [{ kind: "unknown", reason: "aspect may replace the body" }, { kind: "unknown", reason: "dispatch not proven" }, { kind: "unknown" }, { kind: "unknown", reason: "aspect may replace the body" }]);
+  assert.deepEqual((await readers.memberNames.memberNames({ path: TS_TEST, content: "" })).names, []);
 });
 
-const FILE = { path: "src/a.ts", content: "" };
+test("one list of sources reaches a pack as one list, however many times it is read", async () => {
+  const lists: (readonly SourceFile[])[] = [];
+  const java: LanguagePack = { ...recordingPack(JAVA_PROFILE, []), modules: { extract: async (sources) => (lists.push(sources), { files: [], dependencies: [], unread: [] }) } };
+  const readers = routedReaders([recordingPack(TYPESCRIPT_PROFILE, [], true), java]);
 
-/** A pack whose readers answer only `tag`: one entry in every list, so the merged order shows which pack came first. */
-function pack(tag: string, origins: LanguagePack["origins"] = () => reader(".none", tag)): LanguagePack {
-  const entry = { name: tag, start: 1, nameLine: 1 } as never;
-  const names: DeclaredMemberNames = { names: [tag, "shared"], functionValueCalls: [entry], callables: [entry], initializedFields: [entry], receiverBindings: [entry], functionValues: [entry], calls: [entry] };
-  const modules: ModuleDependencies = { files: [entry], dependencies: [entry], unread: [entry], untraversed: [entry] };
-  return {
-    memberNames: { memberNames: async () => names },
-    origins,
-    modules: { extract: async () => modules },
-    trivia: { triviaLines: async () => new Set([tag === "first" ? 2 : 1, 3]) },
-  };
-}
+  await readers.modules.extract(SOURCES);
+  await readers.modules.extract(SOURCES);
 
-const tagsOf = (entries: readonly unknown[]): string[] => entries.map((entry) => (entry as { name: string }).name);
-
-test("a source's syntax concatenates every pack's lists in the packs' order, its names their sorted union", async () => {
-  const read = await mergedReaders([pack("first"), pack("second")]).memberNames.memberNames(FILE);
-
-  for (const list of [read.functionValueCalls, read.callables, read.initializedFields ?? [], read.receiverBindings, read.functionValues, read.calls ?? []]) assert.deepEqual(tagsOf(list), ["first", "second"]);
-  assert.deepEqual(read.names, ["first", "second", "shared"]);
-});
-
-test("a source's trivia lines are every pack's, in the packs' order", async () => {
-  assert.deepEqual([...(await mergedReaders([pack("first"), pack("second")]).sourceTrivia.triviaLines(FILE))], [2, 3, 1]);
-});
-
-test("a site two packs complete takes the first pack's answer", async () => {
-  const merged = mergedReaders([pack("first", () => reader(".ts", "first")), pack("second", () => reader(".ts", "second"))]);
-
-  assert.deepEqual(await merged.importOrigins([FILE]).rootOrigins([SITES[0]!]), [complete(SITES[0]!, "first")]);
-});
-
-test("the module readers are every pack's, in the packs' order, and their reads concatenate in it", async () => {
-  const { moduleReaders } = mergedReaders([pack("first"), pack("second")]);
-  const read = await combinedModuleReader(moduleReaders).extract([FILE]);
-
-  for (const list of [read.files, read.dependencies, read.unread, read.untraversed ?? []]) assert.deepEqual(tagsOf(list), ["first", "second"]);
+  assert.equal(lists.length, 2);
+  assert.equal(lists[0], lists[1]);
 });

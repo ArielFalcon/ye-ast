@@ -1,5 +1,4 @@
 import type { Node } from "web-tree-sitter";
-import { isJavaSource } from "../../domain/languages/java.ts";
 import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
 import type { JavaParser } from "./java-parser.adapter.ts";
 
@@ -10,7 +9,6 @@ export function createJavaTrivia(createParser: () => Promise<JavaParser>): Sourc
   let parser: Promise<JavaParser> | undefined;
   return {
     triviaLines: async (file) => {
-      if (!isJavaSource(file.path)) return new Set();
       parser ??= createParser();
       const parsed = (await parser).parse(file);
       if (!parsed.ok) return new Set();

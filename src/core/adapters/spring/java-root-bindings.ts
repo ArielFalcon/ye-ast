@@ -1,5 +1,4 @@
 import type { Node } from "web-tree-sitter";
-import { isJavaSource } from "../../domain/languages/java.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
@@ -20,13 +19,12 @@ const CHAIN_LINKS: readonly string[] = ["field_access", "method_invocation", "sc
  * released after.
  */
 export function createJavaRootBindings(parser: Promise<JavaParser>, sources: readonly SourceFile[]): ImportOrigins["rootBindings"] {
-  const java = sources.filter(({ path }) => isJavaSource(path));
   return async (sites, signal) => {
     const results: RootBinding[] = sites.map(() => UNKNOWN);
-    if (!sites.some(({ file }) => isJavaSource(file))) return results;
+    if (sites.length === 0) return results;
     const read = await parser;
     return withJavaSources(read, (parse) => {
-      const files = new Map(parse(java).files.map((file) => [file.path, file]));
+      const files = new Map(parse(sources).files.map((file) => [file.path, file]));
       const project = createJavaProject([...files.values()]);
       for (const [index, site] of sites.entries()) {
         if (signal?.aborted) break;

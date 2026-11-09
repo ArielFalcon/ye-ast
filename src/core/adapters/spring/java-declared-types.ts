@@ -1,5 +1,4 @@
 import type { Node } from "web-tree-sitter";
-import { isJavaSource } from "../../domain/languages/java.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredType, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
@@ -39,14 +38,13 @@ export type Resolved = { kind: "repository"; type?: TypeDecl } | { kind: "platfo
  * aspect, a Java source that does not parse, or a source of a JVM language no extractor reads (ADR-0029 decision 9).
  */
 export function createJavaDeclaredTypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[]): ImportOrigins["declaredTypes"] {
-  const java = sources.filter(({ path }) => isJavaSource(path));
   const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
   return async (sites, signal) => {
     const results: DeclaredType[] = sites.map(() => UNKNOWN);
-    if (unreadJvm || !sites.some(({ file }) => isJavaSource(file))) return results;
+    if (unreadJvm || sites.length === 0) return results;
     const read = await parser();
     return withJavaSources(read, (parse) => {
-      const { files: parsed, unparsed } = parse(java);
+      const { files: parsed, unparsed } = parse(sources);
       const files = new Map(parsed.map((file) => [file.path, file]));
       const project = createJavaProject(parsed);
       if (unparsed.length > 0 || project.unreadable.length > 0) return results;

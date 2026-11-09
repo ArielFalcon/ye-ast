@@ -1,5 +1,4 @@
 import ts from "typescript";
-import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
 import { sourceTree } from "./source-tree.ts";
 import { hasSyntaxErrors } from "./syntax.ts";
@@ -11,7 +10,6 @@ import { hasSyntaxErrors } from "./syntax.ts";
 export function createTypeScriptTrivia(): SourceTrivia {
   return {
     triviaLines: async (file) => {
-      if (!isTypeScriptSource(file.path)) return new Set();
       const tree = sourceTree(file, ts.ScriptTarget.Latest);
       if (hasSyntaxErrors(tree)) return new Set();
       const code = new Set<number>();

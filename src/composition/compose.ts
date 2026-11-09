@@ -50,10 +50,6 @@ import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-rout
 import { createJavaRecordsReader } from "../core/adapters/tree-sitter/java-records.adapter.ts";
 import type { UnmodelledConstructsReader } from "../core/ports/unmodelled-constructs.port.ts";
 import { createJavaParser, createJavaTreeHolds } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
-import { createJavaMemberNames } from "../core/adapters/tree-sitter/java-member-names.adapter.ts";
-import { createJavaTrivia } from "../core/adapters/tree-sitter/java-trivia.adapter.ts";
-import { createTypeScriptMemberNames } from "../core/adapters/typescript/declared-member-names.adapter.ts";
-import { createTypeScriptTrivia } from "../core/adapters/typescript/source-trivia.adapter.ts";
 import { createAngularDeclarationReader } from "../core/adapters/typescript/angular-declarations.adapter.ts";
 import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
 import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loads.adapter.ts";
@@ -62,10 +58,8 @@ import { composeConsumerSources, composeContractConsequences } from "./consumer-
 import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
 import { compareCallPlaces, type CallSiteReader, type PlacedCallSiteReader } from "../core/domain/topology/call-site.ts";
 import type { EntrypointExtractor, SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
-import { createImportOrigins } from "../core/adapters/typescript/import-origins.adapter.ts";
-import { createJavaNameBindings } from "../core/adapters/spring/java-name-bindings.adapter.ts";
-import { mergedReaders } from "../core/application/snapshot/language-packs.ts";
-import type { LanguagePack } from "../core/ports/language-pack.port.ts";
+import { routedReaders } from "../core/application/snapshot/language-packs.ts";
+import { composeLanguagePacks } from "./language-packs.ts";
 import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
 import type { DerivedFacts } from "../core/ports/derived-facts.port.ts";
@@ -170,8 +164,6 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     },
   }, { extract: "entrypoints" });
   const typescriptCallSites = createHttpCallSites();
-  const typescriptTrivia = createTypeScriptTrivia();
-  const javaTrivia = createJavaTrivia(javaParser);
   const callSites = staged<CallSiteReader>({
     of: async (files, repo, libraries) => {
       const java = await createJavaCallSites(await javaParser()).of(files, repo, libraries);
@@ -212,12 +204,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const moduleDependencies = staged(createModuleDependenciesReader(), { extract: "module-dependencies" });
   let javaImportsReader: Promise<ModuleDependenciesReader> | undefined;
   const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => (await (javaImportsReader ??= javaParser().then(createJavaImportsReader))).extract(sources, options) }, { extract: "java-imports" });
-  const typescriptMemberNames = createTypeScriptMemberNames();
-  const javaMemberNames = createJavaMemberNames(javaParser);
-  const typescriptPack: LanguagePack = { memberNames: typescriptMemberNames, origins: (sources, _paths, facts) => createImportOrigins(sources, facts === undefined ? {} : { facts }), modules: moduleDependencies, trivia: typescriptTrivia };
-  const javaPack: LanguagePack = { memberNames: javaMemberNames, origins: (sources, paths, facts) => createJavaNameBindings(javaParser, sources, paths, facts), modules: javaImports, trivia: javaTrivia };
-  const merged = mergedReaders([typescriptPack, javaPack]);
-  const { sourceTrivia, moduleReaders } = merged;
+  const merged = routedReaders(composeLanguagePacks(javaParser, { typescript: moduleDependencies, java: javaImports }));
+  const { sourceTrivia, modules: moduleReader } = merged;
   const memberNames = measurement === undefined ? merged.memberNames : measuredTalliedStages(merged.memberNames, { memberNames: "member-names" }, measurement);
   const importOrigins = (sources: readonly SourceFile[], paths?: readonly string[], facts?: DerivedFacts) => {
     const reader = merged.importOrigins(sources, paths, facts);
@@ -249,7 +237,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     memberNames,
     sourceTrivia,
     moduleDependencies,
-    moduleReaders,
+    moduleReader,
     declarationEvidence: createDeclarationEvidenceReader(),
     unmodelled,
     sourceSelection: isWritten,
@@ -286,7 +274,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...trust,
     sourceSelection: isWritten,
   };
-  const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders, unmodelled, importOrigins, memberNames });
+  const bareOutline = createOutlineQueries({ ...headDeps, moduleReader, unmodelled, importOrigins, memberNames });
   const outline = measurement === undefined ? bareOutline : measuredOutline(bareOutline, measurement);
   const defaults = createWorkspaceDefaults(createFixedLayerStore());
   const refresh = options.refresh ?? (options.cacheDirectory === undefined ? undefined : createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory: options.cacheDirectory, digest }));

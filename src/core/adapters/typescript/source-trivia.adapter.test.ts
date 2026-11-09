@@ -16,7 +16,6 @@ test("a string or a regular expression that spells a comment opener keeps its li
   assert.deepEqual(await trivia(['const url = "http://host";', "const re = /\\/*/;", "register();", "// a comment"]), [4]);
 });
 
-test("a file that does not parse, or of another language, has no trivia, so every line counts as code", async () => {
+test("a file that does not parse has no trivia, so every line counts as code", async () => {
   assert.deepEqual(await trivia(["", "function (", ""]), []);
-  assert.deepEqual([...(await createTypeScriptTrivia().triviaLines({ path: "src/A.java", content: "\n// x\n" }))], []);
 });
