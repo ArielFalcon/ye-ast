@@ -329,7 +329,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...budget,
     ...trust,
     importOrigins,
-    moduleDependencies,
+    moduleReader,
     sourceTrivia,
     memberNames,
     relations: impactDeps.relations,

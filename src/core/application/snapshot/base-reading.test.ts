@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SnapshotRef } from "../../domain/shared/fact.ts";
-import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
+import type { CodeGraphReader, GraphNodeId } from "../../ports/code-graph.port.ts";
+import type { ImportOrigins } from "../../ports/import-origins.port.ts";
+import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
+import { fakeCodeGraph, fakeNode } from "../navigation/fake-code-graph.testing.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import type { RevisionSources } from "../../ports/revision-sources.port.ts";
 import type { TypeBindingsAnswer } from "../../ports/type-bindings.port.ts";
@@ -36,4 +39,23 @@ test("the typed reading answers evidence and builds no cut, whatever kept it fro
     assert.ok(reading !== "aborted");
     assert.equal("cuts" in reading, false, JSON.stringify(reading));
   }
+});
+
+test("every reading redirects an edge by the module statements composition hands the line, without a family naming a reader", async () => {
+  const store = fakeCodeGraph(
+    [fakeNode("run", "function", "src/a.ts", 2, 4), fakeNode("helper-a", "function", "src/a.ts", 6, 8, "helper"), fakeNode("helper-b", "function", "src/b.ts", 1, 3, "helper")],
+    [{ from: "run", to: "helper-a", kind: "calls", line: 3, column: 2 }],
+  );
+  const origins = () => ({ rootOrigins: async (sites: readonly unknown[]) => sites.map(() => ({ status: "complete", value: { kind: "repository", file: "src/b.ts" }, bare: true, evidence: [] })) }) as unknown as ImportOrigins;
+  const modules: ModuleDependenciesReader = {
+    extract: async () => ({ files: [], unread: [], dependencies: [{ file: "src/a.ts", line: 1, endLine: 1, specifier: "./b", kind: "import", typeOnly: false, target: { kind: "repository", file: "src/b.ts" }, bindings: [{ local: "helper", imported: "helper", line: 1, column: 10, typeOnly: false, exportedAs: "helper" }] }] }),
+  };
+  const readings = createBaseReadings({ relations: {} as RelationExtractor, importOrigins: origins, modules });
+  const tree = { export: { files: [], skipped: [] }, sources: [{ path: "src/a.ts", content: "" }, { path: "src/b.ts", content: "" }] };
+  const [run] = store.symbolsByIds(["run" as GraphNodeId]);
+  const [edge] = store.outgoingEdges([run!.id], ["calls"]);
+
+  const [verdict] = await readings.of({ tree, prepared: undefined, store, snapshot: SHA, request: { repo: "/work/shop" } }).edgeTargets()!.verdictsOf([{ edge: edge!, source: run!, target: store.symbolsByIds([edge!.target])[0]! }]);
+
+  assert.deepEqual(verdict?.kind === "redirect" && verdict.to.file, "src/b.ts");
 });

@@ -40,7 +40,7 @@ export interface OutlineQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps
 
 export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
   const headReader = createHeadReader(deps);
-  const readings = createBaseReadings(deps);
+  const readings = createBaseReadings({ ...deps, modules: deps.moduleReader });
   const engines = sortedEngines(deps.engines);
 
   return {
@@ -75,7 +75,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
           if (focused !== undefined && focused.topLevel.length > 0) return { ok: false, fault: { kind: "top-level-line", detail: `no declaration holds ${focused.topLevel.map(({ file, line }) => `${file}:${line}`).join(", ")}; the line is at the top level of its file`, entries: focused.topLevel } };
           const listed = focused === undefined ? readOutline(store, covered, await deps.moduleReader.extract(sources, { files: covered })) : undefined;
           if (request.signal?.aborted) return ABORTED;
-          const reading = focused === undefined ? undefined : readings.of({ tree: headTree, prepared: head.prepared, store, digest: index.digest, snapshot: head.base(content).snapshot, request }, { modules: deps.moduleReader });
+          const reading = focused === undefined ? undefined : readings.of({ tree: headTree, prepared: head.prepared, store, digest: index.digest, snapshot: head.base(content).snapshot, request });
           const typed = reading === undefined ? undefined : await reading.typed();
           if (typed === "aborted") return ABORTED;
           const used = focused === undefined || reading === undefined ? undefined : await focusWithUses(store, focused, reading, typed?.typed, request.signal);

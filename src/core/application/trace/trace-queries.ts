@@ -45,8 +45,8 @@ export interface TraceQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, 
   librarySources?: readonly LibrarySource[];
   /** Reads where the bare names a file calls come from, so a call to a package or a language global is external. */
   importOrigins: ImportOriginsReader;
-  /** Reads the module statements that prove which declaration an imported name reaches; without it no edge is redirected. */
-  moduleDependencies?: ModuleDependenciesReader;
+  /** Reads every language's module statements, which prove which declaration an imported name reaches; without it no edge is redirected. */
+  moduleReader?: ModuleDependenciesReader;
   /** Reads the member names each source declares in value positions, so a member call R6 cannot place in the index is still a cut when the code declares its name. */
   memberNames: DeclaredMemberNamesReader;
   /** Reads the relations impact reads, under the same retained key, for the member calls they prove (RFC-0013 R3). */
@@ -64,7 +64,7 @@ const NO_COMPONENTS: ReadonlyMap<string, readonly ComponentRef[]> = new Map();
 
 export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
   const headReader = createHeadReader(deps);
-  const readings = createBaseReadings(deps);
+  const readings = createBaseReadings({ ...deps, modules: deps.moduleReader });
   const engines = sortedEngines(deps.engines);
 
   return {
@@ -126,7 +126,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const trivia = triviaOncePerFile(deps.sourceTrivia);
           const reading = readings.of(
             { tree: head.tree, prepared: head.prepared, store, digest: index.digest, snapshot: head.base(content).snapshot, request },
-            { originPaths: head.tree.export.files.map(({ path }) => path).filter(head.selected), modules: deps.moduleDependencies, inScope: head.selected },
+            { inScope: head.selected },
           );
           const { unresolvedIn, lineOf } = reading;
           const syntaxOf = reading.syntaxOf ?? (async (): Promise<DeclaredMemberNames> => NOTHING_DECLARED);

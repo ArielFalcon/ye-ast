@@ -137,7 +137,7 @@ function setup(options: Options) {
       }),
     }),
     relations: { language: TYPESCRIPT_PROFILE, extract: async () => ({ relations: [], fields: [], locals: [], ...options.proofs, ...options.relations }) },
-    ...(options.imports === undefined ? {} : { moduleDependencies: { extract: async () => ({ dependencies: Object.entries(options.imports!).flatMap(([file, bound]) => bound.map(({ local, from }, index) => ({ file, line: index + 1, endLine: index + 1, specifier: from, kind: "import", typeOnly: false, target: { kind: "repository", file: from }, bindings: [{ local, imported: local, line: index + 1, column: 10, typeOnly: false, exportedAs: local }] }))) }) } }),
+    ...(options.imports === undefined ? {} : { moduleReader: { extract: async () => ({ dependencies: Object.entries(options.imports!).flatMap(([file, bound]) => bound.map(({ local, from }, index) => ({ file, line: index + 1, endLine: index + 1, specifier: from, kind: "import", typeOnly: false, target: { kind: "repository", file: from }, bindings: [{ local, imported: local, line: index + 1, column: 10, typeOnly: false, exportedAs: local }] }))) }) } }),
     callSites: { placed: async () => (options.onCallSites?.(), options.placedSites ?? (options.callSites ?? []).map((site) => ({ site, column: 0 }))) },
     engines: {},
     ...(options.typed && { typeBindings: { of: async () => options.typed }, checkerInputs: { filesAt: async () => ({ ok: true, value: { files: [], cuts: [] } }) }, declaredOutputs: () => DECLARED }),

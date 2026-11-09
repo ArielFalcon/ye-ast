@@ -41,6 +41,8 @@ export interface BaseReadingDeps {
   relations: RelationExtractor;
   importOrigins?: ImportOriginsReader | undefined;
   memberNames?: DeclaredMemberNamesReader | undefined;
+  /** Every language's module statements, which bind a root to a declaration; without them no edge is redirected. */
+  modules?: ModuleDependenciesReader | undefined;
   typeBindings?: TypeBindings | undefined;
   /** The lockfiles and declaration files a commit's typed pass reads beside its sources; without them nothing is typed. */
   checkerInputs?: RevisionSources | undefined;
@@ -67,13 +69,9 @@ export interface ReadingSource {
   request: ReadingRequest;
 }
 
-/** The proofs a family binds with until every family reads the full reading (ADR-0045 decision 4). */
-export interface ProofSelection {
-  /** The paths whose import origins are read; every source's by default. */
-  originPaths?: readonly string[] | undefined;
-  /** The reader of module statements that bind a root to a declaration; without it no edge is redirected. */
-  modules?: ModuleDependenciesReader | undefined;
-  /** Whether a declaration's file is in the read's scope, for the candidates of an unbound call. */
+/** How a family narrows what the reading binds; every family binds with the same proofs (ADR-0045 decision 4). */
+export interface ReadingNarrowing {
+  /** Whether a declaration's file is in the read's scope, for the candidates of an unbound call; every file by default. */
   inScope?: ((path: string) => boolean) | undefined;
 }
 
@@ -109,7 +107,7 @@ export interface BaseReading {
 }
 
 export interface BaseReadings {
-  of(source: ReadingSource, selection: ProofSelection): BaseReading;
+  of(source: ReadingSource, narrowing?: ReadingNarrowing): BaseReading;
 }
 
 function once<T>(produce: () => T): () => T {
@@ -149,7 +147,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
   }
 
   return {
-    of(source, selection) {
+    of(source, narrowing = {}) {
       const { tree, prepared, store, request } = source;
       const facts = prepared?.facts;
       const sources = new Map(tree.sources.map((file) => [file.path, file]));
@@ -171,7 +169,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       const lineOf = linesOncePerFile(sources);
       const unresolvedIn = unresolvedOncePerFile(store);
       const navigation = once(() => createGraphNavigation(store, () => false));
-      const origins = once(() => deps.importOrigins?.(tree.sources, selection.originPaths, facts));
+      const origins = once(() => deps.importOrigins?.(tree.sources, undefined, facts));
       const unresolved = once(() => unresolvedOf(store, tree));
       const relations = once(() => retainedRelations(deps.relations, prepared, tree, request));
       const declarationUses = once(() => createDeclarationUses(store, navigation(), unresolvedIn));
@@ -191,7 +189,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
         edgeTargets(typed) {
           const read = origins();
           if (read === undefined) return undefined;
-          return createEdgeTargets({ origins: read, store, modules: selection.modules === undefined ? undefined : { reader: selection.modules, sources: tree.sources }, syntaxOf, proofs: relations, typed, inScope: selection.inScope });
+          return createEdgeTargets({ origins: read, store, modules: deps.modules === undefined ? undefined : { reader: deps.modules, sources: tree.sources }, syntaxOf, proofs: relations, typed, inScope: narrowing.inScope });
         },
         reconciledCalls,
         declarationUses,

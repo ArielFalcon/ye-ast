@@ -147,9 +147,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   const changeReader = createHeadReader(changeDeps);
   const importerSource = (file: string): boolean => moduleSource(file) || isTypeScriptFile(file) || isJavaSource(file);
   const importerReader = createHeadReader({ ...deps, sourceSelection: importerSource });
-  const readings = createBaseReadings({ ...deps, checkerInputs: deps.typeBindings === undefined ? undefined : createRevisionSources({ ...deps, sourceSelection: isTypeCheckerInput }) });
+  const readings = createBaseReadings({ ...deps, modules: bindingModules, checkerInputs: deps.typeBindings === undefined ? undefined : createRevisionSources({ ...deps, sourceSelection: isTypeCheckerInput }) });
   const readingOf = (head: HeadReading<Pick<CommitExtraction, "export" | "sources">>, index: HeadIndex, snapshot: SnapshotRef, request: ReadingRequest): BaseReading =>
-    readings.of({ tree: head.tree, prepared: head.prepared, store: index.store, digest: index.digest, snapshot, request }, { modules: bindingModules });
+    readings.of({ tree: head.tree, prepared: head.prepared, store: index.store, digest: index.digest, snapshot, request });
 
   return {
     async ofChange(request) {
