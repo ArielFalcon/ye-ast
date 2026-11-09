@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { GraphNodeId } from "../../ports/code-graph.port.ts";
 import type { ImportOrigins } from "../../ports/import-origins.port.ts";
-import { createEdgeTargets, NOTHING_DECLARED, type FollowedEdge } from "../navigation/edge-targets.ts";
-import { fakeCodeGraph, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
+import { createEdgeTargets, edgeKey, NOTHING_DECLARED, type FollowedEdge } from "../navigation/edge-targets.ts";
+import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
 import type { CallBindings } from "../navigation/call-binding.ts";
-import { originCallsOf } from "./inbound-origins.ts";
+import { typedCallsOf } from "../navigation/proven-calls.ts";
+import { originCallsOf, receiverCorrectionsOf } from "./inbound-origins.ts";
 import { callsThroughOrigins, createOriginCalls } from "../navigation/origin-calls.ts";
 
 const SVC = "src/svc.ts";
@@ -87,4 +88,24 @@ test("calls through origins are bound once each, and only when a declaration of 
   assert.deepEqual(shown(await calls.into([list!])), ["caller→Base.list@7"]);
   assert.deepEqual(shown(await calls.into([list!])), []);
   assert.deepEqual(boundBatches, [["this.svc.list"]]);
+});
+
+test("a typed redirect reaches the declaration the checker binds whether or not the call names a receiver", async () => {
+  const A = "src/a.ts";
+  const B = "src/b.ts";
+  const store = fakeCodeGraph(
+    [fakeNode("run", "function", A, 1, 3), fakeNode("helper-a", "function", A, 5, 7, "helper"), fakeNode("helper-b", "function", B, 1, 3, "helper")],
+    [{ from: "run", to: "helper-a", kind: "calls", line: 2, column: 4 }],
+  );
+  const owners = [{ name: "run", start: 1, nameLine: 1, nameColumn: 0, startColumn: 0, endLine: 3, endColumn: 1 }];
+  const unknown = async (sites: readonly unknown[]) => sites.map(() => ({ status: "unknown" as const, reason: "unresolved" as const, evidence: [] }));
+  const origins = { origins: unknown, rootOrigins: unknown, rootBindings: async (sites: readonly unknown[]) => sites.map(() => ({ kind: "unknown" as const })), receiverMethods: async (sites: readonly unknown[]) => sites.map(() => ({ kind: "unknown" as const })) } as unknown as ImportOrigins;
+  const targets = createEdgeTargets({ origins, store, syntaxOf: async () => ({ ...NOTHING_DECLARED, calls: [{ kind: "calls", line: 2, column: 5, name: "helper", callee: "helper", owners }] }), proofs: async () => ({ fields: [], locals: [], memberUses: [] }), typed: typedCallsOf([{ file: A, line: 2, column: 5, name: "helper", target: { kind: "repository", file: B, name: "helper", line: 1 } }]) });
+
+  const corrections = await receiverCorrectionsOf(store, targets, { fields: [], locals: [] }, [A]);
+  const [raw] = store.outgoingEdges(["run" as GraphNodeId], ["calls"]);
+
+  assert.equal(corrections.dropped.has(edgeKey(raw!)), true);
+  assert.deepEqual((corrections.into.get("helper-b" as GraphNodeId) ?? []).map(({ edge }) => edge.line), [2]);
+  assert.equal(corrections.settled?.get(edgeKey(raw!)), "typed");
 });
