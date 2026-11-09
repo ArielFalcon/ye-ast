@@ -255,7 +255,7 @@ retention silently becomes a per-call cost.
      rooted chain, none; each proof link of the chain that holds). The checker sets the target and the derivation and
      never erases the receiver classification.
    - Trace expands a target only on positive execution evidence: a proof that the receiver holds that class (constructed
-     there, `this`, a nominal Java receiver with its closure, ADR-0044 (Proposed) decision 1), never the derivation alone.
+     there, `this`, a nominal Java receiver with its closure, ADR-0044 decision 1), never the derivation alone.
      A `typed` binding on a structural value receiver proves the dependence, not the execution: trace keeps the target
      as the compile-time declaration and states the step as unproven, as it does without the checker. The
      replaceable-provider rule (the U3 rule) is one source of that refusal, not the whole of it. A typed binding to an
@@ -301,7 +301,7 @@ retention silently becomes a per-call cost.
    CPU on the measured applications; a live tree is never typed (ADR-0037 Gate), so live syncs never pay it, and a new
    commit pays it once in the background when prebuilt.
 8. **A stage enters with its retention, its measurement and its fixtures, in one place.** A new mechanism (ADR-0044's
-   Java closure, ADR-0044 being Proposed, a future Java class-file reader under ADR-0037's build-output model, Java value flow of [RFC-0021](../rfc/0021-java-value-flow.md)) is one
+   Java closure, a future Java class-file reader under ADR-0037's build-output model, Java value flow of [RFC-0021](../rfc/0021-java-value-flow.md)) is one
    row of decision 2: its dependencies, its retention and what one changed file invalidates, one measurement stage line
    (RFC-0012), and conformance fixtures through a family's public seam (ADR-0013). A whole-snapshot derivation without a
    retention other than per read is refused at review: that is the cause of the measured 1.9× warm regression. A
@@ -316,7 +316,7 @@ retention silently becomes a per-call cost.
    - **The Java URL flow (E18)** is a declared extension of B5: its method selection (`methodsOf`,
      `java-method-flow.ts:73`) reads ADR-0044's `receiverMethods` and `dispatchTargets` once ADR-0044 V3 lands; until
      then it is listed as a second Java selector in the single-owner fitness test, frozen. Its lenient following is
-     ADR-0044 open question 2's to decide, not this ADR's.
+     ADR-0044 decision 11's to decide, not this ADR's.
    - **Redaction and measurement (E19)** are transversal wrappers, never stages: composition wraps the families and the
      line's stages (one measurement line per stage, RFC-0012) and redaction applies at egress. Neither reads nor
      changes evidence, and no stage depends on them.
@@ -393,12 +393,12 @@ retention silently becomes a per-call cost.
     | B1 syntax: written calls, receiver bindings, function values | yes (`declared-member-names.adapter.ts`) | yes (`java-member-names.adapter.ts`) |
     | B2a/B2b origins, root origins, root bindings | yes (`import-origins.adapter.ts`) | root origins and bindings yes; import `origins` answered unresolved per site (`java-name-bindings.adapter.ts:38`) |
     | B2b declared types | yes (`import-origins.adapter.ts:243`) | yes (`java-declared-types.ts`) |
-    | B2b receiver methods, dispatch targets | absent: `unknown` per site (`:240`, `:242`); structural typing keeps trace's R7 cut | yes (`java-receiver-methods.ts`, `java-dispatch-targets.ts`; ADR-0044, Proposed) |
+    | B2b receiver methods, dispatch targets | absent: `unknown` per site (`:240`, `:242`); structural typing keeps trace's R7 cut | yes (`java-receiver-methods.ts`, `java-dispatch-targets.ts`; ADR-0044) |
     | B2b replaced roots | yes | absent: none replaced (`java-name-bindings.adapter.ts:43`) |
     | B3 module statements | yes, JSON module resources included | yes (`java-imports.adapter.ts`) |
     | B4 relations (fields, locals, member proofs) | through the Angular framework plugin | absent: no Java relations reader; Java receivers settle through B2 |
     | B5 cross-file project in the read's hold | absent (B7 is TypeScript's cross-file reading) | yes (`JavaProject`, ADR-0040) |
-    | B7 typed bindings over declared build outputs | yes (ADR-0037) | absent until a class-file or generated-source reader (ADR-0044 decision 6, Proposed) |
+    | B7 typed bindings over declared build outputs | yes (ADR-0037) | absent until a class-file reader (generated sources enter B5, ADR-0044 decision 13) |
     | B9 alignment | yes (base rule over B1 and B0) | yes |
     | B12 value-flow program | yes (consumer flow, request origins) | absent: the Java URL flow is B5's extension (E18) |
     | B11 trivia | yes | yes |
