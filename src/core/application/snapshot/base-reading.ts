@@ -1,6 +1,6 @@
 import { isReadSource } from "../../domain/languages/profiles.ts";
 import type { BuildOutputEvidence, DeclaredBuildOutput, UnreadOutputReason } from "../../domain/shared/build-outputs.ts";
-import type { BuildOutputInput, Cut, SnapshotRef } from "../../domain/shared/fact.ts";
+import type { BuildOutputInput, Cut, FactBase, SnapshotRef } from "../../domain/shared/fact.ts";
 import type { ScopeRequest } from "../../domain/shared/scope.ts";
 import type { CodeGraphReader, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
@@ -31,6 +31,11 @@ export interface TypedReading {
 }
 
 const NOT_TYPED: TypedReading = { inputsLeftOut: [] };
+
+/** A fact base that records the declared build outputs its answer read, if any. */
+export function withOutputs(base: FactBase, outputs: readonly BuildOutputInput[] | undefined): FactBase {
+  return outputs === undefined ? base : { ...base, inputs: { ...base.inputs, buildOutputs: outputs } };
+}
 
 export interface BaseReadingDeps {
   relations: RelationExtractor;

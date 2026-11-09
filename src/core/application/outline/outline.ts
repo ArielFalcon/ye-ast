@@ -11,10 +11,10 @@ import { branchesOf, declarationPath, innermostAt, selectedBySymbol, type Declar
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
 import type { OutlineSelector, TopLevelLineFault } from "../../ports/outline-queries.port.ts";
-import type { ImportOrigins } from "../../ports/import-origins.port.ts";
 import { outlineUses, unprovedUseCuts } from "../../domain/outline/outline-uses.ts";
-import { createDeclarationUses, usesOf } from "../navigation/declaration-uses.ts";
-import { createEdgeTargets, SYNTAX_ONLY, type EdgeTargetsDeps } from "../navigation/edge-targets.ts";
+import { usesOf } from "../navigation/declaration-uses.ts";
+import type { BaseReading } from "../snapshot/base-reading.ts";
+import type { TypeTarget } from "../../ports/type-bindings.port.ts";
 import { createGraphNavigation } from "../navigation/graph-navigation.ts";
 
 export interface ListingRead {
@@ -134,9 +134,12 @@ function focused(file: string, selector: string, branch: DeclarationBranch<Graph
  * Each focused declaration with what its own body uses, and one `unresolved-link` cut per name it uses that no binding
  * proves, a call the index matched by name alone included (ADR-0036). A declaration two selectors match is read once.
  */
-export async function focusWithUses(store: CodeGraphReader, read: FocusRead, origins: ImportOrigins, modules: ModuleDependencies, syntaxOf: EdgeTargetsDeps["syntaxOf"], signal: AbortSignal | undefined): Promise<{ focus: OutlineFocus[]; cuts: Cut[] } | "aborted"> {
-  const navigation = createGraphNavigation(store, () => false);
-  const input = { store, navigation, uses: createDeclarationUses(store, navigation), targets: createEdgeTargets({ origins, store, modules, syntaxOf, proofs: async () => SYNTAX_ONLY }), origins, ...(signal === undefined ? {} : { signal }) };
+export async function focusWithUses(store: CodeGraphReader, read: FocusRead, reading: BaseReading, typed: ReadonlyMap<string, TypeTarget> | undefined, signal: AbortSignal | undefined): Promise<{ focus: OutlineFocus[]; cuts: Cut[] } | "aborted"> {
+  const origins = reading.origins();
+  const targets = reading.edgeTargets(typed);
+  if (origins === undefined || targets === undefined) throw new Error("a focus binds its uses through the line's import origins");
+  const uses = reading.declarationUses();
+  const input = { store, navigation: createGraphNavigation(store, () => false), uses, targets, origins, reconciled: reading.reconciledCalls(targets, uses), ...(signal === undefined ? {} : { signal }) };
   const settled = new Map<GraphSymbol["id"], { uses: readonly OutlineUse[]; cuts: Cut[] }>();
   const focus: OutlineFocus[] = [];
   for (const [index, entry] of read.value.focus.entries()) {

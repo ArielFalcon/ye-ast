@@ -9,6 +9,7 @@ import { containmentTree } from "./containment-tree.ts";
 import { branchesOf, declarationPath, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
 import type { EdgeTargets, FollowedEdge } from "./edge-targets.ts";
 import { ownMembersOf, type GraphNavigation } from "./graph-navigation.ts";
+import type { ReconciledCalls } from "./reconciled-calls.ts";
 
 /**
  * What one declaration's own body names, as the index records it: the edges it resolved and the references it left
@@ -95,6 +96,8 @@ export interface UsesInput {
   uses: DeclarationUses;
   targets: EdgeTargets;
   origins: ImportOrigins;
+  /** The body's calls aligned with what its source writes; with it, a written call no index record matches is a use too. */
+  reconciled?: ReconciledCalls | undefined;
   signal?: AbortSignal;
 }
 
@@ -107,7 +110,7 @@ export interface UsesInput {
  * hold the line its name is written on; a use nothing proves is unproved, never dropped.
  */
 export async function usesOf(branch: DeclarationBranch<GraphSymbol>, input: UsesInput): Promise<{ found: FoundUse[]; unproved: UnprovedUse[] }> {
-  const { store, navigation, uses, targets, origins, signal } = input;
+  const { store, navigation, uses, targets, origins, reconciled, signal } = input;
   const node = branch.declaration;
   const nested = new Set(branchesOf([branch]).map(({ declaration }) => declaration.id).filter((id) => id !== node.id));
   const owner = { name: node.name, line: node.startLine, endLine: node.endLine };
@@ -143,7 +146,8 @@ export async function usesOf(branch: DeclarationBranch<GraphSymbol>, input: Uses
     else if (verdict.root.kind === "ambient") use({ global: verdict.root.name }, edge.kind, place);
   }
 
-  const references = unsettledBy(uses.referencesFrom(node, USE_EDGE_KINDS), edges);
+  const written = reconciled === undefined ? [] : await reconciled.callsOf(node).then(({ writtenOnly, deferredOnly }) => [...writtenOnly, ...deferredOnly]);
+  const references = [...unsettledBy(uses.referencesFrom(node, USE_EDGE_KINDS), edges), ...written];
   const spelled = references.map((reference) => ({ reference, spelled: SPELLED.exec(reference.name)?.[0] }));
   const sites = spelled.flatMap(({ reference, spelled: name }): UseSite[] => (name === undefined ? [] : [{ file: reference.file, line: reference.line, column: reference.column + 1, spelled: name, owner }]));
   const bindings = await origins.rootBindings(sites, signal);

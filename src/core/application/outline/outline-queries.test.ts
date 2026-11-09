@@ -10,6 +10,7 @@ import type { ModuleDependency } from "../../domain/impact/module-dependency.ts"
 import type { OutlineUse } from "../../domain/outline/outline-fact.ts";
 import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
 import { createOutlineQueries, type OutlineQueriesDeps } from "./outline-queries.ts";
+import type { TypeBindingsAnswer } from "../../ports/type-bindings.port.ts";
 
 const SHA = "a".repeat(40);
 const SUMMARY = { filesIndexed: 1, filesSkipped: 0, filesErrored: 0, filesNotIndexed: [], versions: { codegraph: "fake", schema: 0, extraction: 0 } };
@@ -37,6 +38,8 @@ interface Options {
   dependencies?: readonly ModuleDependency[];
   /** The written files the index could not hold. */
   notIndexed?: readonly string[];
+  /** What the type checker answers over one declared build output; nothing is typed without it. */
+  typed?: TypeBindingsAnswer;
 }
 
 function setup(options: Options = {}) {
@@ -67,6 +70,7 @@ function setup(options: Options = {}) {
       rootBindings: async (sites: readonly UseSite[]) => sites.map((site): RootBinding => options.bindings?.[`${site.line}:${site.column} ${site.spelled}`] ?? { kind: "unknown" }),
     }),
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
+    ...(options.typed && { typeBindings: { of: async () => options.typed }, checkerInputs: { filesAt: async () => ({ ok: true, value: { files: [], cuts: [] } }) }, declaredOutputs: () => [{ kind: "node-modules", at: "", path: "/host/node_modules" }] }),
     ...(options.unmodelled && { unmodelled: { extract: async (sources: readonly { path: string }[]) => (log.scanned.push(sources.map(({ path }) => path)), sources).map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
   } as unknown as OutlineQueriesDeps;
@@ -370,6 +374,17 @@ function named(uses: readonly OutlineUse[]): string[] {
 test("a focused declaration lists what its body uses outside itself, in order of first use, a use the index places nowhere last", async () => {
   const { uses } = await usesAnswer("run");
   assert.deepEqual(named(uses), ["helper", "module zod", "top", "global Map", "module typescript", "Other"]);
+});
+
+test("a focus reads the type checker's bindings: a call it binds outside the repository is a use of the package, and the fact records what it read", async () => {
+  const outputs = [{ kind: "node-modules" as const, at: "", verified: false, digest: "read" }];
+  const typed: TypeBindingsAnswer = { status: "bound", bindings: [{ file: USE, line: 11, column: 3, name: "helper", target: { kind: "external", module: "kit", name: "helper" } }], unowned: [], refused: [], outputs };
+
+  const answer = await setup({ ...USES_INDEX, typed }).queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: USE, symbol: "run" }] });
+
+  assert.ok(answer.ok && answer.value.status !== "unknown", JSON.stringify(answer));
+  assert.deepEqual(answer.value.value.focus?.[0]?.uses?.find((use) => "module" in use && use.module === "kit"), { module: "kit", relations: ["calls"], at: [{ line: 11, column: 3 }] });
+  assert.deepEqual(answer.value.inputs.buildOutputs, outputs);
 });
 
 test("a declaration reached by a call, a reference and an import alias is one use with every relation and place", async () => {

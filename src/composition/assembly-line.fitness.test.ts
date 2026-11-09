@@ -13,15 +13,15 @@ const BASE_READING = "core/application/snapshot/base-reading.ts";
 
 /** The calls of each stage constructor of decision 1 outside `BASE_READING`, by file. */
 const STAGE_CONSTRUCTOR_SITES: Readonly<Record<string, Readonly<Record<string, number>>>> = {
-  createEdgeTargets: { "core/application/contracts/consumer-sources.ts": 1, "core/application/outline/outline.ts": 1 },
+  createEdgeTargets: { "core/application/contracts/consumer-sources.ts": 1 },
   createCallBinder: { "core/application/navigation/edge-targets.ts": 1 },
   createCallBindings: { "core/application/navigation/edge-targets.ts": 1 },
   createReconciledCalls: {},
   createReverseCalls: {},
-  createDeclarationUses: { "core/application/outline/outline.ts": 1 },
+  createDeclarationUses: {},
   retainedRelations: {},
   referenceProofsOf: { "core/application/contracts/consumer-sources.ts": 1 },
-  syntaxOfSources: { "core/application/contracts/consumer-sources.ts": 1, "core/application/outline/outline-queries.ts": 1 },
+  syntaxOfSources: { "core/application/contracts/consumer-sources.ts": 1 },
 };
 
 /** The language checks of decision 12. */

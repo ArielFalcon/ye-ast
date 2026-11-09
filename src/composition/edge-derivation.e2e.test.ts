@@ -212,14 +212,31 @@ test("a caller the index matched by name alone is an ambiguous caller of a consu
   );
 });
 
-test("importers reads the line's proofs: a call through an inject() field of a subclass that inherits the method makes its file a user, not a namer", async () => {
-  const web = join(root, "web-importers");
-  await commitFiles(web, WEB);
+let webRepo: Promise<string> | undefined;
+/** `WEB` committed once, apart from the repositories of the contract test. */
+function web(): Promise<string> {
+  return (webRepo ??= (async () => {
+    const at = join(root, "web-line");
+    await commitFiles(at, WEB);
+    return at;
+  })());
+}
 
-  const result = await composeQueries({ scratchRoot }).impact.importers({ repo: web, repoId: "web", revision: "HEAD", files: ["src/app/order.service.ts"] });
+test("importers reads the line's proofs: a call through an inject() field of a subclass that inherits the method makes its file a user, not a namer", async () => {
+  const repo = await web();
+
+  const result = await composeQueries({ scratchRoot }).impact.importers({ repo, repoId: "web", revision: "HEAD", files: ["src/app/order.service.ts"] });
 
   assert.ok(result.ok && result.value.status !== "unknown", JSON.stringify(result));
   assert.deepEqual(result.value.value.files.map(({ users, unresolvedNamers }) => ({ users, unresolvedNamers })), [
     { users: ["src/app/order-page.ts", "src/app/order-view.ts", "src/app/special-orders.ts"], unresolvedNamers: ["src/app/report.ts"] },
   ]);
+});
+
+test("a focused body's call on an injected field the relations bind is a use of the method, no longer a name no binding proves", async () => {
+  const answer = await composeQueries({ scratchRoot }).outline.outline({ repo, repoId: "edge-derivation", revision: "HEAD", focus: [{ file: "src/escaping.ts", symbol: "Escaping.flush" }] });
+
+  assert.ok(answer.ok && answer.value.status !== "unknown", JSON.stringify(answer));
+  const cuts = answer.value.status === "partial" ? answer.value.cuts : [];
+  assert.deepEqual(answer.value.value.focus?.map((entry) => ({ uses: (entry.uses ?? []).flatMap((use) => ("declaration" in use ? [`${use.declaration.file}:${use.declaration.name}`] : [])), unproved: hasUnprovedUses(cuts, entry.file, entry.path) })), [{ uses: ["src/store.ts:save"], unproved: false }]);
 });

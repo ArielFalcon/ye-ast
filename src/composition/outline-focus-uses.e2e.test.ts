@@ -25,6 +25,7 @@ const FILES: Record<string, string> = {
   "src/main/java/q/Helper.java": "package q;\npublic class Helper {}\n",
   "src/main/java/p/Service.java": "package p;\nimport q.*;\nclass Service {\n  void together() { new Helper(); }\n}\n",
   "factory.ts": "export function make(deps: { graph: { open(): number } }) {\n  return function together() { return deps.graph.open(); };\n}\n",
+  "defaulted.ts": "import { real } from './defs';\nexport function together(value = real()) { return value; }\n",
   "ambiguous.ts": "export function handler() {\n  const handler = () => 1;\n  function together() { return handler.call(null); }\n  return together;\n}\n",
 };
 
@@ -74,6 +75,10 @@ test("a decorated class used by the focused body is a use of the class", async (
 
 test("a function whose signature spans several lines, used by the focused body, is a use of the function", async () => {
   assert.deepEqual(await usesOf("multiline.ts"), [{ declaration: { file: "multiline.ts", name: "external", kind: "function", line: 2, endLine: 3 }, relations: ["calls"], at: [{ line: 4, column: 37 }] }]);
+});
+
+test("a call the index does not record, written in a parameter's default, is a use of what its import binds (ADR-0041 U5)", async () => {
+  assert.deepEqual(await usesOf("defaulted.ts"), [{ declaration: { file: "defs.ts", name: "real", kind: "function", line: 1, endLine: 1 }, relations: ["calls"], at: [{ line: 2, column: 34 }] }]);
 });
 
 test("a parameter of a factory around the focused function is a local root: no use and no cut", async () => {

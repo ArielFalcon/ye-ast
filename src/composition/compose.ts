@@ -15,6 +15,8 @@ import { openLive, type LiveDeps } from "../core/application/live/live-tree.ts";
 import { exportSelection } from "../core/domain/shared/scope.ts";
 import { WRITTEN_UNIVERSE_VERSION, isWritten, liveScope } from "../core/domain/snapshot/live-export.ts";
 import { isExtractorConfiguration } from "../core/domain/languages/configuration.ts";
+import { isTypeCheckerInput } from "../core/domain/languages/typescript.ts";
+import { createRevisionSources } from "../core/application/snapshot/revision-sources.ts";
 import type { IndexRetentionPolicy } from "../core/ports/index-cache.port.ts";
 import type { LiveRetentionPolicy } from "../core/domain/snapshot/live-retention.ts";
 import { createFixedLayerAdmin } from "../core/application/fixed-layer/fixed-layer-admin.ts";
@@ -274,7 +276,17 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...trust,
     sourceSelection: isWritten,
   };
-  const bareOutline = createOutlineQueries({ ...headDeps, moduleReader, unmodelled, importOrigins, memberNames });
+  const bareOutline = createOutlineQueries({
+    ...headDeps,
+    moduleReader,
+    unmodelled,
+    importOrigins,
+    memberNames,
+    relations: impactDeps.relations,
+    typeBindings: impactDeps.typeBindings,
+    checkerInputs: createRevisionSources({ ...headDeps, sourceSelection: isTypeCheckerInput }),
+    ...(options.buildOutputs === undefined ? {} : { declaredOutputs: options.buildOutputs }),
+  });
   const outline = measurement === undefined ? bareOutline : measuredOutline(bareOutline, measurement);
   const defaults = createWorkspaceDefaults(createFixedLayerStore());
   const refresh = options.refresh ?? (options.cacheDirectory === undefined ? undefined : createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory: options.cacheDirectory, digest }));

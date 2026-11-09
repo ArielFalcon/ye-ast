@@ -18,10 +18,12 @@ import type { UnmodelledConstructsReader } from "../../ports/unmodelled-construc
 import { focusWithUses, readFocus, readOutline } from "./outline.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
-import { syntaxOfSources } from "../navigation/edge-targets.ts";
+import { buildOutputCuts } from "../../domain/shared/build-outputs.ts";
+import type { RelationExtractor } from "../relations/relation-extractor.ts";
+import { createBaseReadings, withOutputs, type BaseReadingDeps } from "../snapshot/base-reading.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 
-export interface OutlineQueriesDeps extends HeadReaderDeps {
+export interface OutlineQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, "typeBindings" | "checkerInputs" | "declaredOutputs"> {
   /** Version of each engine every operation runs on, by package name. */
   engines: Readonly<Record<string, string>>;
   /** The reader of every language's module statements. */
@@ -32,10 +34,13 @@ export interface OutlineQueriesDeps extends HeadReaderDeps {
   importOrigins: ImportOriginsReader;
   /** What a source's syntax states; without it a focused body's call on a value receiver is listed as the graph resolved it. */
   memberNames?: DeclaredMemberNamesReader;
+  /** The relations whose origins and member proofs settle a focused body's calls on a value receiver. */
+  relations: RelationExtractor;
 }
 
 export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
   const headReader = createHeadReader(deps);
+  const readings = createBaseReadings(deps);
   const engines = sortedEngines(deps.engines);
 
   return {
@@ -68,20 +73,24 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
           const focused = focus === undefined ? undefined : readFocus(store, focus.filter(({ file }) => isReadableFile(file)));
           if (focused !== undefined && focused.unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${focused.unknown.map(unknownTargetKey).join(", ")}${unmodelledNote(focused.unknown, unmodelled)}`, entries: focused.unknown } };
           if (focused !== undefined && focused.topLevel.length > 0) return { ok: false, fault: { kind: "top-level-line", detail: `no declaration holds ${focused.topLevel.map(({ file, line }) => `${file}:${line}`).join(", ")}; the line is at the top level of its file`, entries: focused.topLevel } };
-          const modules = await deps.moduleReader.extract(sources, { files: covered });
+          const listed = focused === undefined ? readOutline(store, covered, await deps.moduleReader.extract(sources, { files: covered })) : undefined;
           if (request.signal?.aborted) return ABORTED;
-          const listed = focused === undefined ? readOutline(store, covered, modules) : undefined;
-          const used = focused === undefined ? undefined : await focusWithUses(store, focused, deps.importOrigins(sources, undefined, head.prepared?.facts), modules, syntaxOfSources(deps.memberNames, sources, head.prepared?.facts), request.signal);
+          const reading = focused === undefined ? undefined : readings.of({ tree: headTree, prepared: head.prepared, store, digest: index.digest, snapshot: head.base(content).snapshot, request }, { modules: deps.moduleReader });
+          const typed = reading === undefined ? undefined : await reading.typed();
+          if (typed === "aborted") return ABORTED;
+          const used = focused === undefined || reading === undefined ? undefined : await focusWithUses(store, focused, reading, typed?.typed, request.signal);
           if (used === "aborted" || request.signal?.aborted) return ABORTED;
           const read = focused === undefined ? listed!.value : { ...focused.value, focus: used!.focus };
           const cuts = [
             ...fixed,
+            ...(typed?.inputsLeftOut ?? []),
+            ...buildOutputCuts(typed?.buildOutputs),
             ...(listed?.cuts ?? used!.cuts),
             ...summary.filesNotIndexed.map((file) => fileCut("no-extractor", file, "not-indexed")),
             ...read.unheld.map((file) => unheldCut(file, held)),
             ...unmodelled.map((file) => fileCut("no-extractor", file, "unmodelled")),
           ];
-          return { ok: true, value: withCuts(head.base(content, true), read, cuts, asserted) };
+          return { ok: true, value: withCuts(withOutputs(head.base(content, true), typed?.outputs), read, cuts, asserted) };
         } finally {
           store.close();
         }

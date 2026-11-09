@@ -62,10 +62,9 @@ import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 import { buildOutputCuts, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
-import type { BuildOutputInput } from "../../domain/shared/fact.ts";
 import type { TypeBindings, TypeTarget } from "../../ports/type-bindings.port.ts";
 import { createRevisionSources } from "../snapshot/revision-sources.ts";
-import { createBaseReadings, type BaseReading, type ReadingRequest } from "../snapshot/base-reading.ts";
+import { createBaseReadings, withOutputs, type BaseReading, type ReadingRequest } from "../snapshot/base-reading.ts";
 
 export interface ImpactQueriesDeps extends HeadReaderDeps {
   /** The walk reads the change between two revisions, which no other family asks for. */
@@ -107,11 +106,6 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
   typeBindings?: TypeBindings;
   /** The build outputs a host declared for the repository at a root, for a request that declares none itself. */
   declaredOutputs?: (repo: string) => readonly DeclaredBuildOutput[] | undefined;
-}
-
-/** A fact base that records the declared build outputs its answer read, if any. */
-function withOutputs(base: FactBase, outputs: readonly BuildOutputInput[] | undefined): FactBase {
-  return outputs === undefined ? base : { ...base, inputs: { ...base.inputs, buildOutputs: outputs } };
 }
 
 type Answer = Result<Fact<ImpactValue>, OfChangeFault>;
