@@ -247,7 +247,9 @@ entry, and S1 needs no edit in `http-call-sites.adapter.ts` to own it.
    `gaps: [{cause: "dispatch-disagreement"}]` with every signature as evidence.
 2. **Leaves.** Walk a declaration's body without entering nested functions (they are declarations of their own). A call
    is a leaf when its callee is in the pack's client vocabulary — Angular `HttpClient` by import, `fetch`,
-   `httpResource`, or a client a declared library source names (the same rule as today, `:20,288-304`). The shape's
+   `httpResource`, or a client a declared library source names (the same rule as today, `:20,288-304`); a member call's
+   receiver must be an `HttpClient` by `SummaryResolver.clientReceiver`, so a custom service with the same verb is not a
+   leaf. The shape's
    `path` is `evaluate` of the path argument **in the declaration's own scope**, so `this.url`, a const import and an
    `environment` object member fold to text and a parameter becomes `{}` wherever it sits (`${this.url}${path}` is
    `http://localhost:8080/api{}`). `method` is the verb, or the `method` argument when it is a value. `body` is
@@ -361,7 +363,10 @@ One function answers "is this call a request of the project" for the TypeScript 
 rule lives in one module, `src/core/adapters/typescript/request-summaries.ts`; the function is
 `createRequestCallLookup`, exported from the B11 stage `src/core/adapters/typescript/http-call-sites.adapter.ts` because
 that stage owns the pack's one URL evaluator. There is no other predicate: `VERBS.has(name)`, `fetch` and `httpResource`
-are the *client vocabulary of a leaf*, read inside the rule module, never a test any other file applies.
+are the *client vocabulary of a leaf*, read inside the rule module, never a test any other file applies. The rule module
+combines that vocabulary with `SummaryResolver.clientReceiver`, which answers receiver typing only (is the receiver an
+`HttpClient`, through the B11 reader's fields, parameters and inherited fields); the reader answers the typing and the
+rule decides what a request is.
 
 The adapter already owns the one URL evaluator and exports the two seams the flow readers use (`createRequestBodies` at
 `:141`, `VERBS` at `:19`), so the lookup is created there, from `readerOf(files)`, with no second evaluator and no new
@@ -380,6 +385,8 @@ export interface SummaryResolver {
   >;
   /** The declaration a call resolves to, or undefined when it is not a snapshot declaration. */
   calleeOf(file: string, call: ts.CallExpression): Promise<{ key: DeclarationKey; file: string; body: ts.Node | undefined } | undefined>;
+  /** Whether the call's receiver is an Angular `HttpClient`, typed by the B11 reader (fields, parameters, inherited fields). It answers receiver typing only; it does not decide what a request is. */
+  clientReceiver(file: string, call: ts.CallExpression): Promise<boolean>;
 }
 
 /** Every summary of one read, by declaration key. Memoized by the `files` array and `resolver` identity: one read. */
@@ -697,6 +704,7 @@ Owner decision 2026-11-09: every question is resolved as recommended here. No un
 | 1 | A wrapper's base read from an `InjectionToken` whose provider value is a constant in the snapshot (`app.config.ts:55`: `{ provide: API_URL, useValue: environment.api_url }`): read it, or name it as a cut? | **Name it as a cut, and do not read provider values in this RFC.** Reading it closes neither measured item: `realworld`'s base is `https://…/api`, so its call `/api/articles/feed` still matches only by `suffix` (decision 2), and `nname`'s provider value is not in the snapshot at all (only `src/environments/environment.mock.ts`). A reading that changes no answer is not taken (ADR-0044 decision 5's precedent). The cut is `destination-undecidable`, its evidence names the declaration that assigns the field, and its recovery says how to state the base (declare the gateway, or hand the configuration in). Revisit only when a measured item turns on it; that is follow-up F1 with its own evidence. |
 | 2 | A call matched only by `suffix` because the server's context path is not in the snapshot: may the answer follow it as a candidate, or keep the cut? | **Keep the cut, and name the two ways out in the recovery.** `suffix` is 0.5 confidence and may name another operation that ends the same way; following it would trade a missing consumer for a wrong one, which ADR-0042 forbids. S2's finding text states the request the code writes and the declaration that resolves it: a declared gateway prefix (`--gateway`, the protocol's `gateways`) or a declared server configuration. No unit reads context paths from a build output; that would be a new mechanism with no measured item behind it. |
 | 3 | A wrapper whose request is inside a callback the table does not know (`fromEvent`, a custom `retryWhen`): a gap or nothing? | **Nothing.** Claiming a gap would make every function that calls an RxJS operator a summary gap, and the signal "this body issues no request" is what keeps the join quiet. The operation-level `no-call-site` finding remains the statement at the operation. The one exception is a call that matches a `ForwardingRow` but writes the carried position differently: that is a `destination-undecidable` gap at the call (S1 step 4), because the row promises a construct the code then uses otherwise. |
+| 4 | S1: how does the leaf rule type a receiver (`this.http`, an inherited field, a parameter) without a second owner of "what is a request", given that the B11 receiver reader is private to its adapter? | **Receiver typing stays with the B11 adapter's reader; the port gains `clientReceiver`; the vocabulary stays in the rule module.** `SummaryResolver.clientReceiver(file, call)` answers only whether the receiver is an `HttpClient`, using `Reader.ownerClass`/`memberType` (inject fields, typed parameters, inherited fields of a base class in another file, `http-call-sites.adapter.ts:692-721`). The rule module keeps `VERBS`, the global `fetch` and `httpResource` by import, and combines them with that answer; no other file applies `VERBS`. A call whose receiver is not an `HttpClient` (a custom service with a `get()`) is not a leaf. S1 tests use a fake that answers the question; S2 implements it on the reader. |
 
 ## Review responses
 
