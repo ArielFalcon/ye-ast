@@ -1,4 +1,5 @@
 import type { FileChange } from "../domain/change/diff-reader.ts";
+import type { ExportSkipReason } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
 
 export interface ExportedFile {
@@ -10,7 +11,7 @@ export interface ExportedFile {
 
 export interface SkippedEntry {
   path: string;
-  reason: "symlink" | "submodule" | "unsafe-path" | "collision";
+  reason: ExportSkipReason;
 }
 
 /** The first entry the export did not take because a budget ran out; `limit` is that budget. */

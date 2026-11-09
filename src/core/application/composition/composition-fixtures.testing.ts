@@ -74,7 +74,7 @@ export function entrypointsValue(): EntrypointMap {
         { status: "complete", value: { kind: "job", name: "scheduled cron=0 * * * *", trigger: { attribute: "cron", value: "0 * * * *" }, handler: handler("src/Jobs.java", "Jobs.tick", 20, 22) }, evidence: [] },
         { status: "unknown", reason: "unresolved", evidence: [{ path: "src/Dynamic.java", line: 4 }, { path: "src/Dynamic.java", line: 4 }] },
       ],
-      { cuts: [{ kind: "no-extractor", at: ["src/legacy.kt"] }] },
+      { cuts: [{ kind: "no-extractor", at: ["src/legacy.kt"], reason: "not-indexed", reach: { kind: "anything" } }] },
     ),
   };
 }
@@ -150,7 +150,7 @@ const eventCallSite: CallSite = { repo: "web", file: "src/orders.service.ts", li
 function repoImpact(kind: "trigger" | "upstream", repo: string, snapshot: SnapshotRef, impact: ImpactValue | undefined, sites: Pick<RepoImpact, "callSites" | "unmatched" | "external" | "unresolved">): Fact<RepoImpact> {
   const reads: RepoImpact["reads"] = [
     { kind: "discovery", fact: { schema: SCHEMA, snapshot, producer: PRODUCER, inputs: inputsOf(), evidence: [], status: "complete" } },
-    { kind, fact: { schema: SCHEMA, snapshot, producer: PRODUCER, inputs: inputsOf({ trust: repo === "shop" ? "trusted" : "untrusted" }), evidence: [{ path: "pom.xml", line: 1 }], status: "partial", cuts: [{ kind: "depth", at: ["src/Root.java"], limit: 2 }] } },
+    { kind, fact: { schema: SCHEMA, snapshot, producer: PRODUCER, inputs: inputsOf({ trust: repo === "shop" ? "trusted" : "untrusted" }), evidence: [{ path: "pom.xml", line: 1 }], status: "partial", cuts: [{ kind: "depth", at: ["src/Root.java"], limit: 2, reason: "depth", reach: { kind: "anything" } }] } },
   ];
   return factOf<RepoImpact>({ reads, ...(impact === undefined ? {} : { impact }), ...sites }, { snapshot });
 }
@@ -259,7 +259,7 @@ export function workspaceValue(): PublicWorkspaceValue {
           ],
           unresolved: [{ reason: "unresolved", diagnostic: { cause: "destination-undecidable", source: "read" }, evidence: [{ path: "(library)/lib/Client.java", line: 17 }], path: "src/dyn.ts", line: 4, symbol: "Dyn.call", transport: "http", via: "httpClient", stated: { method: "POST", path: "/x" } }, { reason: "source-unreadable", evidence: [{ path: "src/dyn.ts", line: 9 }], path: "src/dyn.ts", line: 9, endLine: 11, symbol: "Dyn.emit", transport: "event" }],
         },
-        { snapshot: liveRef("web", "state-1"), cuts: [{ kind: "unresolved-link", at: ["src/dyn.ts"], dependency: { name: "com.acme:clients", reason: "ambiguous", candidates: ["one", "two"] } }] },
+        { snapshot: liveRef("web", "state-1"), cuts: [{ kind: "unresolved-link", at: ["src/dyn.ts"], reason: "dependency-unresolved", reach: { kind: "anything" }, dependency: { name: "com.acme:clients", reason: "ambiguous", candidates: ["one", "two"] } }] },
       ),
       shop: unknownFactOf("index-unavailable", { snapshot: shaRef("shop") }),
     },
@@ -356,7 +356,7 @@ export function sourceFixture(kind: FixtureKind, overrides?: AnyOverrides): Fixt
     }
     case "impact-local": {
       const o = overrides as FixtureOverrides<ImpactValue> | undefined;
-      return { family: "impact", branch: "local", query: query("impact", o?.arguments ?? { repo: "shop", base: "main", head: SHA_A }), ...build(impactValue, o, { inputs: inputsOf({ declaredConfig: { walk: { depth: 2 }, changed: ["src/**"] } }), cuts: [{ kind: "depth", at: ["src/Root.java", "src/Report.java"], limit: 2 }] }) };
+      return { family: "impact", branch: "local", query: query("impact", o?.arguments ?? { repo: "shop", base: "main", head: SHA_A }), ...build(impactValue, o, { inputs: inputsOf({ declaredConfig: { walk: { depth: 2 }, changed: ["src/**"] } }), cuts: [{ kind: "depth", at: ["src/Root.java", "src/Report.java"], limit: 2, reason: "depth", reach: { kind: "anything" } }] }) };
     }
     case "callers-local": {
       const o = overrides as FixtureOverrides<ImpactValue> | undefined;

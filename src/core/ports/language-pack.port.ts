@@ -9,8 +9,13 @@ import type { SourceTrivia } from "./source-trivia.port.ts";
  * that language's adapters. The line hands each reader only the sites, files and sources of the paths its profile reads,
  * so a reader never tells its language's files apart itself.
  */
+/** The stage contracts a pack may declare it cannot implement: the line answers each site `capability-absent` for it. */
+export type AbsentCapability = "dispatchTargets" | "receiverMethods";
+
 export interface LanguagePack {
   profile: LanguageProfile;
+  /** The stages its readers cannot answer for its sources (ADR-0045 decision 12); the line never asks them there. */
+  absent?: readonly AbsentCapability[];
   /** Whether it also reads the project's files no pack owns: manifests, configurations, declarations, resources. */
   readsProjectFiles?: true;
   memberNames: DeclaredMemberNamesReader;

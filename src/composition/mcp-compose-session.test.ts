@@ -53,7 +53,7 @@ test("compose records an outline focus read whole, as the outline tool answers i
 
 test("a focused declaration with no proven use but an unproved one never reads as using nothing, alone or composed", async () => {
   const value: OutlineValue = { focus: [{ file: "src/Api.ts", selector: "get", path: "get", ancestors: [], declaration: { kind: "function", name: "get", line: 10, endLine: 20 }, omitted: 0, uses: [] }], unheld: [] };
-  const cuts: [Cut] = [{ kind: "unresolved-link", at: ["src/Api.ts::get", "src/Api.ts:11 Buffer.byteLength"], reason: "unresolved" }];
+  const cuts: [Cut] = [{ kind: "unresolved-link", at: ["src/Api.ts::get", "src/Api.ts:11 Buffer.byteLength"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/Api.ts::get"] } }];
   const { session } = await setup(async () => ({ ok: true, value: focusFact(value, cuts) }));
   try {
     const focus = [{ file: "src/Api.ts", symbol: "get" }];

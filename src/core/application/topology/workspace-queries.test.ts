@@ -334,14 +334,14 @@ test("a stopped workspace export keeps its budget cut", async () => {
   const result = await queries.outwardNames({ repo: { path: "/work/app" } });
   const section = valueOf(result).sections.app;
   assert.equal(section?.status, "partial");
-  assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "caller-budget", at: ["src/next.ts"], limit: 2 }]);
+  assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "caller-budget", at: ["src/next.ts"], limit: 2, reason: "export-budget", reach: { kind: "anything" } }]);
 });
 
 test("an in-scope source skipped by export remains a repository cut", async () => {
   const queries = setup({ "/work/app": { files: {}, skipped: [{ path: "src/missing.ts", reason: "symlink" }] } });
   const section = valueOf(await queries.outwardNames({ repo: { path: "/work/app" } })).sections.app;
   assert.equal(section?.status, "partial");
-  assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "not-exported", at: ["src/missing.ts"] }]);
+  assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "not-exported", at: ["src/missing.ts"], reason: "symlink", reach: { kind: "anything" } }]);
 });
 
 test("workspace identity includes every repository snapshot and the declared gateways", async () => {
@@ -557,7 +557,7 @@ test("a path prefix and a host a call site names are outward names, and an undec
   const section = value.sections["shop-web"];
   assert.ok(section !== undefined);
   assert.deepEqual(section.value.names.map((name) => `${name.kind} ${name.name}`), ["http-host https://maps.example.com/geo", "path-prefix orders-api"]);
-  assert.equal(section.status === "partial" && section.cuts[0]?.reason, "unresolved");
+  assert.equal(section.status === "partial" && section.cuts[0]?.reason, "call-site-unresolved");
   assert.deepEqual(section.value.unresolved, [{ path: "src/app/core/auth/auth.service.ts", line: 48, symbol: "AuthService.refresh", transport: "http", reason: "unresolved", evidence: [{ path: "src/app/core/auth/auth.service.ts", line: 48 }] }]);
 });
 
@@ -827,7 +827,7 @@ test("a pinned sha the mirror lacks is an unknown section naming that sha, and t
   assert.equal(value.repositorySnapshots.some(({ repo }) => repo === "orders-svc"), false);
   assert.deepEqual(value.workspace.repos, ["orders-svc", "shop-web"]);
   assert.equal(read.fact.status, "partial");
-  assert.deepEqual(read.fact.status === "partial" ? read.fact.cuts : [], [{ kind: "section", at: ["orders-svc"] }]);
+  assert.deepEqual(read.fact.status === "partial" ? read.fact.cuts : [], [{ kind: "section", at: ["orders-svc"], reason: "section-unknown", reach: { kind: "anything" } }]);
 });
 
 test("a listing that chooses no sha leaves the section unknown with the local clone's revision as its snapshot", async () => {
@@ -1029,7 +1029,7 @@ test("a call the join reaches without a link is an explicit outcome: unmatched u
   ]);
   const section = value.sections["shop-web"];
   assert.equal(section?.status, "partial");
-  assert.deepEqual(section?.status === "partial" ? section.cuts : [], [{ kind: "unresolved-link", at: ["src/app/shop-web.api.ts", "src/app/shop-web.api.ts:3"] }]);
+  assert.deepEqual(section?.status === "partial" ? section.cuts : [], [{ kind: "unresolved-link", at: ["src/app/shop-web.api.ts", "src/app/shop-web.api.ts:3"], reason: "join-unsettled", reach: { kind: "call-site", transport: "http", method: "POST", template: "/shared" } }]);
 });
 
 test("an absolute URL names its origin as the host and its first path segment as the prefix, never a value filled at run time", async () => {
@@ -1048,7 +1048,7 @@ test("a call no route takes and that names no host is unmatched; one a route cou
 
   assert.deepEqual(value.unlinked.map(({ from, outcome, name }) => `${from.line} ${outcome} ${name}`), ["3 unmatched /geo/provinces", "5 could-match /orders/user-{}"]);
   const section = value.sections["shop-web"];
-  assert.deepEqual(section?.status === "partial" ? section.cuts : [], [{ kind: "unresolved-link", at: ["src/app/shop-web.api.ts", "src/app/shop-web.api.ts:5"] }]);
+  assert.deepEqual(section?.status === "partial" ? section.cuts : [], [{ kind: "unresolved-link", at: ["src/app/shop-web.api.ts", "src/app/shop-web.api.ts:5"], reason: "join-unsettled", reach: { kind: "call-site", transport: "http", method: "POST", template: "/orders/user-{}" } }]);
 });
 
 test("a published destination is an outward name the repository whose listener the join linked serves, with basis event-destination; one nothing consumes is unserved", async () => {
@@ -1131,7 +1131,7 @@ test("duplicate dependency coordinates are a typed cut and never a union of libr
   if (first.status === "unknown") return;
   const section = first.value.sections.app;
   assert.equal(section?.status, "partial");
-  assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "unresolved-link", reason: "unresolved", at: ["pom.xml", "pom.xml:4"], dependency: { name: "com.acme:clients", reason: "ambiguous", candidates: ["one", "two"] } }]);
+  assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "unresolved-link", reason: "dependency-unresolved", reach: { kind: "anything" }, at: ["pom.xml", "pom.xml:4"], dependency: { name: "com.acme:clients", reason: "ambiguous", candidates: ["one", "two"] } }]);
   assert.deepEqual(readOf(await queries.outwardNames({ ...ask, repos: [...ask.repos].reverse() })).fact, first);
 });
 
@@ -1227,7 +1227,7 @@ test("a blocked transitive hop cuts the consumer at the declaring library", asyn
   const value = valueOf(await queries.outwardNames({ repo: { path: "/work/app" }, repos: [{ path: "/work/b" }, { path: "/work/x2" }, { path: "/work/x1" }] }));
   const section = value.sections.app;
   assert.deepEqual(section?.status === "partial" && section.cuts, [{
-    kind: "unresolved-link", reason: "unresolved",
+    kind: "unresolved-link", reason: "dependency-unresolved", reach: { kind: "anything" },
     at: ["(library)/b/pom.xml", "(library)/b/pom.xml:7"],
     dependency: { name: "com.acme:x", reason: "ambiguous", candidates: ["x1", "x2"] },
   }]);

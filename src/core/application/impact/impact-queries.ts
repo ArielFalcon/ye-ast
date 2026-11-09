@@ -9,7 +9,7 @@ import type { FileChange } from "../../domain/change/diff-reader.ts";
 import type { ComponentRef } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
-import { attributedCallCuts, unresolvedPlaceCuts, removedDeclarationCuts, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
+import { attributedCallCuts, fileCut, removedDeclarationCuts, unheldCut, unreadRelationCuts, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
 import { impactFact, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
@@ -165,7 +165,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const componentsByResource = resourceOwners(declarations);
         const fixed = [
           ...exportCuts(headTree.export),
-          ...changes.filter((file) => kindOfChangedFile(file.path) !== "source" && !componentsByResource.has(file.path)).map((file): Cut => ({ kind: "no-extractor", at: [file.path] })),
+          ...changes.filter((file) => kindOfChangedFile(file.path) !== "source" && !componentsByResource.has(file.path)).map((file) => fileCut("no-extractor", file.path, "not-source")),
         ];
         const value: ImpactValue = { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
 
@@ -217,7 +217,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const content = contentFingerprint(headTree.export, importerSource);
         const outside = files.filter((file) => !head.selected(file));
         if (outside.length > 0) return { ok: true, value: { ...head.base(content), evidence: outside.map((path): Evidence => ({ path, line: 1 })), status: "unknown", reason: "out-of-scope" } };
-        const fixed = [...exportCuts(headTree.export), ...headTree.export.files.filter((file) => importerSource(file.path) && (isReadableFile(file.path) || isJsonModuleResource(file.path)) && !file.written).map((file): Cut => ({ kind: "not-exported", at: [file.path] })), ...files.filter((file) => !(isReadableFile(file) || (deps.moduleDependencies !== undefined && isJsonModuleResource(file)))).map((file): Cut => ({ kind: "no-extractor", at: [file] }))];
+        const fixed = [...exportCuts(headTree.export), ...headTree.export.files.filter((file) => importerSource(file.path) && (isReadableFile(file.path) || isJsonModuleResource(file.path)) && !file.written).map((file) => fileCut("not-exported", file.path, "unwritten")), ...files.filter((file) => !(isReadableFile(file) || (deps.moduleDependencies !== undefined && isJsonModuleResource(file)))).map((file) => fileCut("no-extractor", file, "language"))];
         const covered = files.filter((file) => isReadableFile(file) || (deps.moduleDependencies !== undefined && isJsonModuleResource(file)));
         if (covered.length === 0) return { ok: true, value: impactFact(head.base(content), { files: [] }, fixed) };
 
@@ -245,10 +245,10 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
               [],
               loadPlaces,
             ),
-            ...summary.filesNotIndexed.filter((file) => !moduleOnly.has(file)).map((file): Cut => ({ kind: "no-extractor", at: [file] })),
-            ...read.unheld.map((file): Cut => ({ kind: held.has(file) ? "no-extractor" : "not-exported", at: [file] })),
-            ...(modules?.unread.map(({ file }): Cut => ({ kind: "no-extractor", at: [file] })) ?? []),
-            ...unresolvedPlaceCuts(modules?.dependencies.filter((edge) => edge.target.kind === "unresolved").map((edge) => ({ file: edge.file, line: edge.line, reason: edge.specifier })) ?? []),
+            ...summary.filesNotIndexed.filter((file) => !moduleOnly.has(file)).map((file) => fileCut("no-extractor", file, "not-indexed")),
+            ...read.unheld.map((file) => unheldCut(file, held)),
+            ...(modules?.unread.map(({ file }) => fileCut("no-extractor", file, "module-unread")) ?? []),
+            ...unresolvedSpecifierCuts(modules?.dependencies.filter((edge) => edge.target.kind === "unresolved") ?? []),
           ];
           return { ok: true, value: impactFact(head.base(content, true), { files: read.files }, cuts) };
         } finally {
@@ -372,7 +372,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       ...(sameTree ? [] : exportCuts(baseTree.export)),
       ...changes
         .filter((file) => cutsCompleteness(file.path, declared) || (isAngularTemplate(file.path) && !covered.has(file.path)))
-        .map((file): Cut => ({ kind: "no-extractor", at: [file.path] })),
+        .map((file) => fileCut("no-extractor", file.path, cutsCompleteness(file.path, declared) ? "language" : "template-uncovered")),
     ];
     const entrypointSelected = pathSelection({ include: request.changed ?? [], exclude: [] }, deps.matcher.matches);
     const entrypointChanges = changedEntrypoints(entrypointsOf(baseTree.findings), entrypointsOf(headTree.findings)).filter((change) => entrypointSelected(change.handler.path));
@@ -533,9 +533,9 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
     ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(walk.expanded, reachedIds), knownPlaces, input.proofs?.bound, inbound.memberProofs(walk.expanded)),
     ...removedDeclarationCuts(unresolved, selection.removed, knownPlaces, input.proofs?.bound, input.proofs?.localParameters),
     ...unreadRelationCuts(unread, new Set(walked.map((symbol) => symbol.file)), templateOwners(componentsByResource)),
-    ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
-    ...selection.withoutSymbols.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
-    ...input.unmodelled.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
+    ...summary.filesNotIndexed.map((file) => fileCut("no-extractor", file, "not-indexed")),
+    ...selection.withoutSymbols.map((file) => fileCut("no-extractor", file, "no-symbols")),
+    ...input.unmodelled.map((file) => fileCut("no-extractor", file, "unmodelled")),
   ];
   const value = {
     cost: walk.cost,

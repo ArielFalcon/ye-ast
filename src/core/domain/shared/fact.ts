@@ -142,6 +142,49 @@ export type UnknownReason =
 
 export const DEPENDENCY_SELECTION_REASONS = ["ambiguous", "unproven-coordinates"] as const;
 
+/** Why an export left a path out; the VCS port owns the vocabulary. */
+export const EXPORT_SKIP_REASONS = ["symlink", "submodule", "unsafe-path", "collision"] as const;
+export type ExportSkipReason = (typeof EXPORT_SKIP_REASONS)[number];
+
+/** Why a dispatch port could not name the bodies a call runs, when it says; the dispatch port owns the vocabulary. */
+export const DISPATCH_UNKNOWN_REASONS = ["aspect may replace the body", "generated implementation", "dispatch not proven"] as const;
+export type DispatchUnknownReason = (typeof DISPATCH_UNKNOWN_REASONS)[number];
+
+/** A stage the language pack of the site's file declares it cannot implement (ADR-0045 decision 12). */
+export const CAPABILITY_ABSENT = "capability-absent";
+
+/** Why a cut exists: one member per emitter situation (ADR-0042 decision 1). */
+export const CUT_REASONS = [
+  "depth", "hub", "caller-budget", "node-cap", "deadline", "export-budget",
+  ...EXPORT_SKIP_REASONS, "unwritten",
+  "language", "template-uncovered", "not-source", "not-indexed", "no-symbols", "unmodelled", "module-unread", "contract-unread",
+  "live-tree", "inputs-unreadable", "version-mismatch", "outputs-unreadable", "checker-failed", "link-outside",
+  "hidden-caller", "dynamic-load", "name-only", "specifier", "removed-declaration", "relation-unread", "use-unproven",
+  "receiver-unproven", "callee-unknown", "constructor-unsettled", "contradicted", "unowned", "dispatch", "function-value",
+  "page-unplanned", "handler-unplaced", "effect-unplaced",
+  "dependency-unresolved", "call-site-unresolved", "join-unsettled", "operation-unserved",
+  "section-partial", "section-unknown",
+] as const;
+export type CutReason = (typeof CUT_REASONS)[number];
+
+/** What narrows a reason: why a dispatch was not proven, or that the stage which would settle the cut is absent. */
+export const CUT_SUB_REASONS = [...DISPATCH_UNKNOWN_REASONS, "several-bodies", "overridable", "unproven", CAPABILITY_ABSENT] as const;
+export type CutSubReason = (typeof CUT_SUB_REASONS)[number];
+
+export type Runtime = "java" | "typescript";
+
+/** What a cut could hide, from the data its emitter holds (ADR-0042 decision 2); `anything` when it holds no narrower one. */
+export type CutReach =
+  | { kind: "anything"; runtime?: Runtime }
+  /** Callers of these declaration anchors. */
+  | { kind: "callers-of"; declarations: readonly string[] }
+  /** A call at this place inside a walked body. */
+  | { kind: "call-at"; place: string }
+  /** Edges from an importing file through these specifiers; `package` when the resolver classified one, absent when it did not. */
+  | { kind: "module"; importer: string; specifiers: readonly { specifier: string; package?: boolean }[] }
+  /** A call site as the topology extractor read it. */
+  | { kind: "call-site"; transport: string; method?: string; template?: string };
+
 export interface Cut {
   kind:
     | "depth"
@@ -157,13 +200,24 @@ export interface Cut {
   /** Where the computation stopped: repo-relative paths or symbols, or the section of a composite. */
   at: readonly string[];
   limit?: number;
-  detail?: "aspect may replace the body" | "generated implementation" | "dispatch not proven";
-  reason?: UnknownReason;
+  reason: CutReason;
+  subReason?: CutSubReason;
+  reach: CutReach;
   dependency?: {
     name: string;
     reason: (typeof DEPENDENCY_SELECTION_REASONS)[number];
     candidates: readonly string[];
   };
+}
+
+/** The reach of a cut nothing narrower bounds. */
+export const ANYTHING: CutReach = { kind: "anything" };
+
+export type WalkBoundKind = "depth" | "hub" | "caller-budget";
+
+/** A walk bound at `at`: what it left out is unknown, so it is in question for every family (ADR-0042 decision 3). */
+export function boundCut(kind: WalkBoundKind, at: string, limit: number): Cut {
+  return { kind, at: [at], limit, reason: kind, reach: ANYTHING };
 }
 
 export interface FactBase {
@@ -215,7 +269,7 @@ export function incompleteSectionCuts(sections: Sections): Cut[] {
   return Object.keys(sections)
     .filter((name) => sections[name]?.status !== "complete")
     .sort()
-    .map((name): Cut => ({ kind: "section", at: [name] }));
+    .map((name): Cut => ({ kind: "section", at: [name], reason: sections[name]?.status === "unknown" ? "section-unknown" : "section-partial", reach: ANYTHING }));
 }
 
 export function composeSections<S extends Sections>(base: FactBase, sections: S): CompleteFact<S> | PartialFact<S> {
@@ -237,6 +291,11 @@ export function sameIdentity(a: FactIdentity, b: FactIdentity): boolean {
   return canonicalJson([a.schema, a.inputs, a.producer]) === canonicalJson([b.schema, b.inputs, b.producer]);
 }
 
+/** Where a cut stopped the answer, without why it stopped or what it could hide. */
+function placeKey({ reason: _reason, subReason: _subReason, reach: _reach, ...place }: Cut): string {
+  return JSON.stringify(place);
+}
+
 const CUT_RANK: Record<Cut["kind"], number> = {
   depth: 0,
   hub: 1,
@@ -250,9 +309,12 @@ const CUT_RANK: Record<Cut["kind"], number> = {
   section: 9,
 };
 
-/** Complete only when nothing cut the answer; otherwise partial with the cuts in kind order, each once. */
+/**
+ * Complete only when nothing cut the answer; otherwise partial with the cuts in kind order, each place once: where two
+ * situations cut the same place, the cut emitted last states why.
+ */
 export function withCuts<T>(base: FactBase, value: T, cuts: readonly Cut[]): CompleteFact<T> | PartialFact<T> {
-  const [first, ...rest] = [...new Map(cuts.map((cut) => [JSON.stringify(cut), cut])).values()].sort(
+  const [first, ...rest] = [...new Map(cuts.map((cut) => [placeKey(cut), cut])).values()].sort(
     (a, b) => CUT_RANK[a.kind] - CUT_RANK[b.kind] || compareText(a.at.join("\0"), b.at.join("\0")),
   );
   return first === undefined ? { ...base, status: "complete", value } : { ...base, status: "partial", value, cuts: [first, ...rest] };

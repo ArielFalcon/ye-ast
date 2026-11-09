@@ -443,7 +443,7 @@ test("complete answers beside a derivation that records frontiers are a complete
 });
 
 test("what reading either revision left out stays on the derivation, once and sorted, and makes the composite partial with the derivation as its only cut, with or without a derived hypothesis", async () => {
-  const cut = (kind: Cut["kind"], path: string): Cut => ({ kind, at: [path] });
+  const cut = (kind: "not-exported" | "caller-budget", path: string): Cut => ({ kind, at: [path], reason: kind === "caller-budget" ? "export-budget" : "unwritten", reach: { kind: "anything" } });
   const cuts = { base: [cut("not-exported", "b.java"), cut("not-exported", "a.java")], head: [cut("not-exported", "a.java"), cut("caller-budget", "z.json")] };
   const expected = [cut("caller-budget", "z.json"), cut("not-exported", "a.java"), cut("not-exported", "b.java")];
   const same = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_BASE }])];
@@ -459,7 +459,7 @@ test("what reading either revision left out stays on the derivation, once and so
 
 test("a cut of the workspace read reaches the derivation, so a change with nothing derived is not complete over a workspace that was cut", async () => {
   const same = [fileOf("api/openapi.json", [{ path: "/pets", shape: PET_BASE }])];
-  const cut: Cut = { kind: "not-exported", at: ["big.java"] };
+  const cut: Cut = { kind: "not-exported", at: ["big.java"], reason: "unwritten", reach: { kind: "anything" } };
 
   const { fact, change } = await composite(setup({ base: same, head: same }, {}, {}, { workspaceCuts: [cut] }).ask());
 

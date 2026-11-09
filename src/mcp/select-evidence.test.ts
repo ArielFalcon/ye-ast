@@ -31,7 +31,7 @@ test("unions the recorded seed indexes of handler aliases in ascending order", a
 });
 
 const complete = <T>(value: T, repo = "app"): Fact<T> => ({ ...base, snapshot: { repo, kind: "sha", sha: "head" }, status: "complete", value });
-const partial = <T>(value: T, repo = "app"): Fact<T> => ({ ...base, snapshot: { repo, kind: "sha", sha: "head" }, status: "partial", value, cuts: [{ kind: "depth", at: ["anchor", "one", "two"], limit: 3 }] });
+const partial = <T>(value: T, repo = "app"): Fact<T> => ({ ...base, snapshot: { repo, kind: "sha", sha: "head" }, status: "partial", value, cuts: [{ kind: "depth", at: ["anchor", "one", "two"], limit: 3, reason: "depth", reach: { kind: "anything" } }] });
 const unknown = { ...base, status: "unknown", reason: "deadline", evidence: [{ path: "unknown.ts", line: 9 }] } as const;
 const handlerSelect = { kind: "handler-origins", owner: { kind: "local" }, handler } as const;
 const selected = (result: ReturnType<typeof selectEvidence>) => {
@@ -156,7 +156,7 @@ test("cut selection addresses all owners using public indices and preserves sepa
     deepStrictEqual(result.items, [{ atIndex: 1, place: "one" }, { atIndex: 2, place: "two" }]);
     deepStrictEqual({ owner: result.context.owner, anchor: result.context.anchor, analysis: result.context.analysis }, { owner, anchor: "anchor", analysis: { status: "partial" } });
   }
-  const noAnchor: Fact<ImpactValue> = { ...base, status: "partial", value: fact.value, cuts: [{ kind: "depth", at: [] }] };
+  const noAnchor: Fact<ImpactValue> = { ...base, status: "partial", value: fact.value, cuts: [{ kind: "depth", at: [], reason: "depth", reach: { kind: "anything" } }] };
   const unavailable = selectEvidence({ kind: "local", fact: noAnchor }, { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 });
   strictEqual(unavailable.ok && unavailable.value.availability === "unavailable" && unavailable.value.reason, "unresolved");
   deepStrictEqual(selectEvidence(workspaceSource, { kind: "cut-places", owner: { kind: "read", repo: "constructor", index: 1 }, cutIndex: 0 }), { ok: false, fault: { code: "selection-not-found" } });
@@ -196,7 +196,7 @@ test("unknown section and read cuts return their recorded reason and evidence", 
 });
 
 test("source limits group only matching owner, kind and limit", () => {
-  const multiple: Fact<ImpactValue> = { ...base, status: "partial", value: fact.value, cuts: [{ kind: "depth", at: ["a", "b"], limit: 3 }, { kind: "depth", at: ["c", "d", "e"], limit: 3 }, { kind: "depth", at: ["f"], limit: 4 }, { kind: "hub", at: ["g", "h"] }] };
+  const multiple: Fact<ImpactValue> = { ...base, status: "partial", value: fact.value, cuts: [{ kind: "depth", at: ["a", "b"], limit: 3, reason: "depth", reach: { kind: "anything" } }, { kind: "depth", at: ["c", "d", "e"], limit: 3, reason: "depth", reach: { kind: "anything" } }, { kind: "depth", at: ["f"], limit: 4, reason: "depth", reach: { kind: "anything" } }, { kind: "hub", at: ["g", "h"], reason: "hub", reach: { kind: "anything" } }] };
   const result = selected(selectEvidence({ kind: "local", fact: multiple }, handlerSelect));
   deepStrictEqual(result.source.limits, [
     { owner: { kind: "fact" }, kind: "depth", cuts: 2, places: 3, limit: 3 },
@@ -226,8 +226,8 @@ test("link endpoint preserves unknown analysis when its provenance is present", 
 });
 
 test("cut projections keep the typed reason and dependency diagnostic that discovery recorded", () => {
-  const source = { ...fact, status: "partial" as const, cuts: [{ kind: "unresolved-link" as const, reason: "source-unreadable" as const, at: ["broken.java", "broken.java:3"], dependency: { name: "com.acme:clients", reason: "ambiguous" as const, candidates: ["one", "two"] } }] as const };
+  const source = { ...fact, status: "partial" as const, cuts: [{ kind: "unresolved-link" as const, reason: "dependency-unresolved" as const, reach: { kind: "anything" as const }, at: ["broken.java", "broken.java:3"], dependency: { name: "com.acme:clients", reason: "ambiguous" as const, candidates: ["one", "two"] } }] as const };
   const result = selected(selectEvidence({ kind: "local", fact: source }, { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 }));
-  strictEqual(result.kind === "cut-places" && result.context.reason, "source-unreadable");
+  strictEqual(result.kind === "cut-places" && result.context.reason, "dependency-unresolved");
   deepStrictEqual(result.kind === "cut-places" && result.context.dependency, source.cuts[0].dependency);
 });

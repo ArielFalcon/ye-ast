@@ -8,11 +8,11 @@ import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 const base = { schema: SCHEMA, snapshot: { repo: "repo", kind: "sha" as const, sha: "abc" }, producer: { name: "test", version: "1" }, inputs: { trust: "untrusted" as const, scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "c", declaredConfig: {}, engines: {} }, evidence: [] };
 const value: ImpactValue = { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
 const longAnchor = (index: number) => `src/features/very-long-repository-relative-path/consumer-${index}.ts::Consumer.load`;
-const makeCut = (index: number): Cut => ({ kind: "unresolved-link", at: [longAnchor(index), `src/reference.ts:${index + 1} reason-${index}`], limit: index });
+const makeCut = (index: number): Cut => ({ kind: "unresolved-link", at: [longAnchor(index), `src/reference.ts:${index + 1} reason-${index}`], limit: index, reason: "callee-unknown", reach: { kind: "anything" } });
 
 test("detailed cut rows bind original indices, anchors, limits and reasons without a second anchor listing", () => {
   const first = makeCut(0);
-  const cuts: [Cut, ...Cut[]] = [first, makeCut(1), { ...first, at: [first.at[0]!, "src/other.ts:8 different-reason"], limit: 17 }, ...Array.from({ length: 9 }, (_, i) => makeCut(i + 2)), { kind: "depth", at: ["base:same.ts::f"], limit: 2 }, { kind: "hub", at: ["head:same.ts::f"], limit: 300 }];
+  const cuts: [Cut, ...Cut[]] = [first, makeCut(1), { ...first, at: [first.at[0]!, "src/other.ts:8 different-reason"], limit: 17 }, ...Array.from({ length: 9 }, (_, i) => makeCut(i + 2)), { kind: "depth", at: ["base:same.ts::f"], limit: 2, reason: "depth", reach: { kind: "anything" } }, { kind: "hub", at: ["head:same.ts::f"], limit: 300, reason: "hub", reach: { kind: "anything" } }];
   const fact: Fact<ImpactValue> = { ...base, status: "partial", cuts, value };
   const before = structuredClone(fact);
   const text = renderImpact(fact, "details");
@@ -50,7 +50,7 @@ test("unavailable recovery retains indexed cut context without promising a selec
 
 
 test("tiny cut categories retain the shorter complete literal layout", () => {
-  const fact: Fact<ImpactValue> = { ...base, status: "partial", cuts: [{ kind: "depth", at: ["x"], limit: 1 }], value };
+  const fact: Fact<ImpactValue> = { ...base, status: "partial", cuts: [{ kind: "depth", at: ["x"], limit: 1, reason: "depth", reach: { kind: "anything" } }], value };
   const text = renderImpact(fact, "details");
   assert.match(text, /depth \(1\): x \(limit 1\)/);
   assert.doesNotMatch(text, /includes every place/);
@@ -60,8 +60,8 @@ test("tiny cut categories retain the shorter complete literal layout", () => {
 
 test("a place's path ends at its line, so a path or a reason holding spaces keeps them in every view of its cut", () => {
   const cuts: [Cut, ...Cut[]] = [
-    { kind: "unresolved-link", at: ["src/svc.ts::Service.read", "src/my app/a.ts:12 this.svc.read", "src/my app/a.ts:30 this.svc.read"] },
-    { kind: "unresolved-link", at: ["src/my app/b.ts", "src/my app/b.ts:4 import outside module traversal (offset 9)"] },
+    { kind: "unresolved-link", at: ["src/svc.ts::Service.read", "src/my app/a.ts:12 this.svc.read", "src/my app/a.ts:30 this.svc.read"], reason: "hidden-caller", reach: { kind: "anything" } },
+    { kind: "unresolved-link", at: ["src/my app/b.ts", "src/my app/b.ts:4 import outside module traversal (offset 9)"], reason: "callee-unknown", reach: { kind: "anything" } },
   ];
   const importers: Fact<ImportersValue> = { ...base, status: "partial", cuts, value: { files: [] } };
 

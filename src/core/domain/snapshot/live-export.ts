@@ -1,5 +1,5 @@
 import { isJsonModuleResource } from "../languages/typescript.ts";
-import type { DeclaredScope } from "../shared/fact.ts";
+import type { DeclaredScope, ExportSkipReason } from "../shared/fact.ts";
 import { declaredScope, isInMapScope } from "../map/entrypoint-map.ts";
 import type { ScopeRequest } from "../shared/scope.ts";
 import { compareText } from "../shared/code-node.ts";
@@ -13,7 +13,7 @@ interface Blob {
  * The export of a live tree, shaped like a commit's: every mirrored file, whose `written` says what an export would
  * have written, and every skipped entry. `contentFingerprint` and the extraction read it unchanged.
  */
-export function liveExport<S extends { path: string; reason: string }>(manifest: readonly Blob[], skipped: readonly S[]): { files: { path: string; blob: string; written: boolean }[]; skipped: S[] } {
+export function liveExport<S extends { path: string; reason: ExportSkipReason }>(manifest: readonly Blob[], skipped: readonly S[]): { files: { path: string; blob: string; written: boolean }[]; skipped: S[] } {
   return { files: manifest.map(({ path, blob }) => ({ path, blob, written: isWritten(path) })), skipped: [...skipped] };
 }
 

@@ -1,12 +1,17 @@
 import { isExtractorConfiguration } from "./configuration.ts";
 import { isJavaSource } from "./java.ts";
+import type { CutReach, Runtime } from "../shared/fact.ts";
 import { isAngularTemplate, isTypeScriptFile } from "./typescript.ts";
-
-type Runtime = "java" | "typescript";
 
 function runtimeOf(path: string): Runtime | undefined {
   if (isJavaSource(path)) return "java";
   return isTypeScriptFile(path) || isAngularTemplate(path) ? "typescript" : undefined;
+}
+
+/** What a cut at a file could hide: anything, in the file's runtime when a predicate classifies it. */
+export function fileReach(path: string): CutReach {
+  const runtime = runtimeOf(path);
+  return runtime === undefined ? { kind: "anything" } : { kind: "anything", runtime };
 }
 
 /**

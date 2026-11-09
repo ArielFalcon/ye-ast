@@ -11,9 +11,9 @@ import type { ComponentRef } from "../../domain/change/seeds.ts";
 import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
-import { placeAt } from "../../domain/impact/impact-cuts.ts";
+import { fileCut, placeAt } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique } from "../../domain/impact/importers-fact.ts";
-import { sortedEngines, withCuts, type Cut, type Fact, type Finding } from "../../domain/shared/fact.ts";
+import { ANYTHING, sortedEngines, withCuts, type Cut, type Fact, type Finding } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { readingPlan } from "../../domain/trace/reading-plan.ts";
 import type { TraceValue } from "../../domain/trace/trace-fact.ts";
@@ -112,7 +112,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         if (handlers.unknown.length > 0) return { ok: false, fault: { kind: "unknown-entrypoint", detail: `no entrypoint of the map at the revision for ${handlers.unknown.map(traceTargetKey).join(", ")}`, entries: handlers.unknown } };
         const fixed = [
           ...exportCuts(head.tree.export),
-          ...rangeChanges(declarations).filter((file) => kindOfChangedFile(file.path) !== "source").map((file): Cut => ({ kind: "no-extractor", at: [file.path] })),
+          ...rangeChanges(declarations).filter((file) => kindOfChangedFile(file.path) !== "source").map((file) => fileCut("no-extractor", file.path, "not-source")),
         ];
 
         const index = await head.open();
@@ -175,8 +175,8 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           };
           const cuts = [
             ...fixed,
-            ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
-            ...selections.flatMap(({ selection }) => selection.withoutSymbols.map((file): Cut => ({ kind: "no-extractor", at: [file] }))),
+            ...summary.filesNotIndexed.map((file) => fileCut("no-extractor", file, "not-indexed")),
+            ...selections.flatMap(({ selection }) => selection.withoutSymbols.map((file) => fileCut("no-extractor", file, "no-symbols"))),
             ...handlers.unplaced,
             ...selections.flatMap(({ target, selection }) => (isEntrypointTarget(target) ? unplacedHandlers(handlers.byTarget.get(traceTargetKey(target)) ?? [], selection) : [])),
             ...walk.cuts,
@@ -231,7 +231,7 @@ function entrypointHandlers(findings: readonly Finding<Entrypoint>[], targets: r
     const places: HandlerPlace[] = [];
     for (const { entrypoint, evidence } of named) {
       const handler = entrypoint.kind === "ui-route" ? entrypoint.component : entrypoint.handler;
-      if (handler === "unknown") unplaced.push({ kind: "unresolved-link", at: evidence.map((at) => placeAt(at.path, at.line, entrypoint.name)) });
+      if (handler === "unknown") unplaced.push({ kind: "unresolved-link", at: evidence.map((at) => placeAt(at.path, at.line, entrypoint.name)), reason: "handler-unplaced", reach: ANYTHING });
       else places.push({ path: handler.path, symbol: handler.symbol, line: handler.line });
     }
     byTarget.set(traceTargetKey(target), places);
@@ -250,7 +250,7 @@ function handlerRoots(store: CodeGraphReader, handlers: readonly HandlerPlace[],
 function unplacedHandlers(handlers: readonly HandlerPlace[], selection: Pick<RootSelection, "seeds">): Cut[] {
   return handlers
     .filter((handler) => !selection.seeds.some(({ symbol }) => joinsFact(symbol, handler)))
-    .map((handler): Cut => ({ kind: "unresolved-link", at: [placeAt(handler.path, handler.line, handler.symbol)] }));
+    .map((handler): Cut => ({ kind: "unresolved-link", at: [placeAt(handler.path, handler.line, handler.symbol)], reason: "handler-unplaced", reach: ANYTHING }));
 }
 
 /** Reads each source once for the life of one query, for its member names and its callables alike. */

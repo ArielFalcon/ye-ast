@@ -1,6 +1,6 @@
 import type { DependenceBasis, DependenceDerivation, ImpactBudget } from "../../domain/impact/impact-fact.ts";
 import { declarationAnchor } from "../../domain/impact/impact-cuts.ts";
-import type { Cut } from "../../domain/shared/fact.ts";
+import { boundCut, type Cut, type WalkBoundKind } from "../../domain/shared/fact.ts";
 import { comparePosition } from "../../domain/shared/code-node.ts";
 import type { MemberSubstitute } from "../../domain/relations/member-use.ts";
 import type { GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
@@ -143,9 +143,9 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
     .sort((a, b) => a.depth - b.depth || comparePosition(a.symbol, b.symbol));
 
   const unreached = (rec: Rec): boolean => rec.callers.some((caller) => !recs.has(caller.from.id));
-  const cutAt = (kind: Cut["kind"], list: readonly Rec[], limit: number | undefined): Cut[] => {
+  const cutAt = (kind: WalkBoundKind, list: readonly Rec[], limit: number | undefined): Cut[] => {
     const anchors = [...new Set(list.filter(unreached).map((rec) => declarationAnchor(rec.symbol.file, rec.symbol.name)))].sort();
-    return anchors.map((anchor): Cut => ({ kind, at: [anchor], limit: limit as number }));
+    return anchors.map((anchor) => boundCut(kind, anchor, limit as number));
   };
   return {
     reached,

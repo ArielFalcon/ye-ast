@@ -1,11 +1,11 @@
 import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { Finding } from "../../domain/shared/fact.ts";
+import { CAPABILITY_ABSENT, type Finding } from "../../domain/shared/fact.ts";
 import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
-import type { LanguagePack } from "../../ports/language-pack.port.ts";
+import type { AbsentCapability, LanguagePack } from "../../ports/language-pack.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
 
@@ -20,7 +20,14 @@ export interface RoutedReaders {
 /** What a source no pack reads states: nothing. */
 const NOTHING_DECLARED: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
 const UNKNOWN = { kind: "unknown" } as const;
+/** What a site answers where its pack declares the stage absent: unknown, naming the absence, never "nothing there". */
+const ABSENT = { kind: "unknown", reason: CAPABILITY_ABSENT } as const;
 const unresolved = (site: { file: string; line: number }): Finding<ImportOrigin> => ({ status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] });
+
+/** One `capability-absent` answer per site where the pack declares `capability` absent; nothing where it implements it. */
+function unlessAbsent(owner: LanguagePack, capability: AbsentCapability, sites: readonly unknown[]): Promise<readonly (typeof ABSENT)[]> | undefined {
+  return owner.absent?.includes(capability) === true ? Promise.resolve(sites.map(() => ABSENT)) : undefined;
+}
 
 export function routedReaders(packs: readonly LanguagePack[]): RoutedReaders {
   const ownerOf = (path: string): LanguagePack | undefined => packs.find((pack) => pack.profile.reads(path));
@@ -40,14 +47,14 @@ export function routedReaders(packs: readonly LanguagePack[]): RoutedReaders {
   };
 
   /** Each site answered by the pack that owns its file, in the sites' order; a site no pack owns keeps `absent`. */
-  async function routed<S extends { file: string }, A>(sites: readonly S[], readers: ReadonlyMap<LanguagePack, ImportOrigins>, ask: (reader: ImportOrigins, sites: readonly S[]) => Promise<readonly A[]>, absent: (site: S) => NoInfer<A>): Promise<A[]> {
+  async function routed<S extends { file: string }, A>(sites: readonly S[], readers: ReadonlyMap<LanguagePack, ImportOrigins>, ask: (reader: ImportOrigins, sites: readonly S[], owner: LanguagePack) => Promise<readonly A[]>, absent: (site: S) => NoInfer<A>): Promise<A[]> {
     const results = sites.map(absent);
     const byPack = Map.groupBy(sites.flatMap((site, index) => {
       const owner = ownerOf(site.file);
       return owner === undefined ? [] : [{ owner, site, index }];
     }), ({ owner }) => owner);
     await Promise.all([...byPack].map(async ([owner, asked]) => {
-      const answers = await ask(readers.get(owner)!, asked.map(({ site }) => site));
+      const answers = await ask(readers.get(owner)!, asked.map(({ site }) => site), owner);
       for (const [k, { index }] of asked.entries()) results[index] = answers[k]!;
     }));
     return results;
@@ -79,8 +86,8 @@ export function routedReaders(packs: readonly LanguagePack[]): RoutedReaders {
         rootOrigins: (sites, signal) => routed(sites, readers, (reader, asked) => reader.rootOrigins(asked, signal), unresolved),
         rootBindings: (sites, signal) => routed(sites, readers, (reader, asked) => reader.rootBindings(asked, signal), () => UNKNOWN),
         declaredTypes: (sites, signal) => routed(sites, readers, (reader, asked) => reader.declaredTypes(asked, signal), () => UNKNOWN),
-        dispatchTargets: (sites, signal) => routed(sites, readers, (reader, asked) => reader.dispatchTargets(asked, signal), () => UNKNOWN),
-        receiverMethods: (sites, signal) => routed(sites, readers, (reader, asked) => reader.receiverMethods(asked, signal), () => UNKNOWN),
+        dispatchTargets: (sites, signal) => routed(sites, readers, (reader, asked, owner) => unlessAbsent(owner, "dispatchTargets", asked) ?? reader.dispatchTargets(asked, signal), () => UNKNOWN),
+        receiverMethods: (sites, signal) => routed(sites, readers, (reader, asked, owner) => unlessAbsent(owner, "receiverMethods", asked) ?? reader.receiverMethods(asked, signal), () => UNKNOWN),
         replacedRoots: async (signal) => {
           const replaced = await Promise.all([...readers.values()].map((reader) => reader.replacedRoots(signal)));
           return { paths: replaced.flatMap(({ paths }) => paths).toSorted((a, b) => compareText(a.join("\u0000"), b.join("\u0000"))), globalObjects: new Set(replaced.flatMap(({ globalObjects }) => [...globalObjects])), packages: new Set(replaced.flatMap(({ packages }) => [...packages])) };

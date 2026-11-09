@@ -183,7 +183,7 @@ test("a stored fact that is not JSON is rewritten", async () => {
 });
 
 test("a fact cut by a deadline is never written, even over an older layer", async () => {
-  const { admin, store } = setup([ok(mapFact({ cut: { kind: "deadline", at: ["src"] } }))]);
+  const { admin, store } = setup([ok(mapFact({ cut: { kind: "deadline", at: ["src"], reason: "deadline", reach: { kind: "anything" } } }))]);
   store.files.set(ENTRYPOINTS_FACT_FILE, "old");
   const result = await admin.refresh(REQUEST);
   assert.deepEqual(result, { ok: true, value: { outcome: "not-written", reason: "deadline" } });
@@ -216,7 +216,7 @@ test("an item unknown because the index is unavailable is never written", async 
 });
 
 test("the digest renders snapshot, producer, schema, status, every cut with its places and each entrypoint with path:line", async () => {
-  const cut: Cut = { kind: "not-exported", at: ["src/Link.java", "src/Caller.java:7 symlink"], limit: 3 };
+  const cut: Cut = { kind: "not-exported", at: ["src/Link.java", "src/Caller.java:7 symlink"], limit: 3, reason: "unwritten", reach: { kind: "anything" } };
   const findings = [route("GET /orders", "src/OrdersController.java", 12), route("GET /users", "src/UsersController.java", 30)];
   const { admin, store } = setup([ok(mapFact({ findings, cut }))]);
   await admin.refresh(REQUEST);

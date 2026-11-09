@@ -82,7 +82,7 @@ test("a call on an inject() local is a name match when it holds a class that doe
 
   assert.deepEqual(settlement(result.value.value, "src/local-wrong.ts", "useOther"), NAME_MATCH);
   assert.equal(settlement(result.value.value, "src/field-wrong.ts", "flush"), undefined);
-  assert.deepEqual(result.value.cuts, [{ kind: "unresolved-link", at: ["src/field-wrong.ts", "src/field-wrong.ts:9 this.store.save"] }]);
+  assert.deepEqual(result.value.cuts, [{ kind: "unresolved-link", at: ["src/field-wrong.ts", "src/field-wrong.ts:9 this.store.save"], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/store.ts::save"] } }]);
 });
 
 test("a call on a value constructed from an imported class is proven when that class declares the member, and a name match otherwise", async () => {

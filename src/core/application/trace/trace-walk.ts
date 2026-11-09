@@ -5,7 +5,7 @@ import { declarationAnchor, placeAt } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique } from "../../domain/impact/importers-fact.ts";
 import { branchesOf, declarationPath } from "../../domain/shared/declaration-tree.ts";
 import { joinsFact } from "../../domain/shared/code-node.ts";
-import type { Cut } from "../../domain/shared/fact.ts";
+import { boundCut, type Cut, type CutReason, type CutSubReason } from "../../domain/shared/fact.ts";
 import { calleeOf, compactSpelling, compareOccurrence, receiverOf, type OrderedPlace } from "../../domain/shared/call-place.ts";
 import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
@@ -199,10 +199,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   /** What the binder proves the receiver of a member call holds; nothing without a binder. */
   const receiverAt = async (body: GraphSymbol, reference: GraphUnresolvedReference, member: string, receiver: string, spelling?: string): Promise<ReceiverProof> =>
     binder === undefined ? { link: "none" } : binder.receiverOf({ body, line: reference.line, column: reference.column + 1, member, receiver, ...(spelling === undefined ? {} : { spelling }) });
-  const unresolvedAt = (reference: GraphUnresolvedReference, declarations: readonly GraphSymbol[]): Cut => ({
-    kind: "unresolved-link",
-    at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declarations.map(candidateOf)])],
-  });
+  const unresolvedAt = (reference: GraphUnresolvedReference, declarations: readonly GraphSymbol[], reason?: CutReason, subReason?: CutSubReason): Cut =>
+    callCut(placeAt(reference.file, reference.line, reference.name), sortedUnique([...reference.candidates, ...declarations.map(candidateOf)]), reason, subReason);
   /**
    * The types a type extends or implements: the index's edges, and a parameterized supertype (`Port<T>`) the index left
    * unresolved, which names every type declaration of its raw name.
@@ -235,10 +233,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       .declarationsNamed([symbol.name])
       .filter((method) => method.kind === "method" && navigation.ownersOf(method).some((type) => !ownerIds.has(type.id) && isBelow(type, ownerIds)));
   };
-  const dispatchCut = (symbol: GraphSymbol, implementations: readonly GraphSymbol[]): Cut => ({
-    kind: "unresolved-link",
-    at: [placeAt(symbol.file, symbol.startLine, symbol.name), ...sortedUnique(implementations.map(candidateOf))],
-  });
+  const dispatchCut = (symbol: GraphSymbol, implementations: readonly GraphSymbol[], subReason: CutSubReason): Cut =>
+    callCut(placeAt(symbol.file, symbol.startLine, symbol.name), sortedUnique(implementations.map(candidateOf)), "dispatch", subReason);
   /** Whether the index resolves every supertype of `type` and of each type above it to a type declaration. */
   const heritageResolved = (type: GraphSymbol): boolean =>
     [type, ...[...ancestorsOf(type)].flatMap((id) => navigation.symbolOf(id) ?? [])].every(
@@ -298,17 +294,17 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const owners = navigation.ownersOf(symbol);
     if (declared === undefined) {
       const interfaces = owners.filter((owner) => owner.kind === "interface");
-      return interfaces.length === 0 ? undefined : { cut: dispatchCut(symbol, implementationsBelow(symbol, interfaces)) };
+      return interfaces.length === 0 ? undefined : { cut: dispatchCut(symbol, implementationsBelow(symbol, interfaces), "unproven") };
     }
     if (!declared.body) {
       const [targets] = await origins.dispatchTargets([{ file: symbol.file, line: symbol.startLine, name: symbol.name }], signal);
       const bodies = targets === undefined ? undefined : placedBodies(targets);
-      if (bodies === undefined || bodies.length === 0) return { cut: { ...dispatchCut(symbol, implementationsBelow(symbol, owners)), ...(targets?.kind === "unknown" && targets.reason !== undefined ? { detail: targets.reason } : {}) } };
-      return bodies.length === 1 ? { to: bodies[0]!, alternatives: bodies } : { cut: dispatchCut(symbol, bodies), alternatives: bodies };
+      if (bodies === undefined || bodies.length === 0) return { cut: dispatchCut(symbol, implementationsBelow(symbol, owners), (targets?.kind === "unknown" ? targets.reason : undefined) ?? "unproven") };
+      return bodies.length === 1 ? { to: bodies[0]!, alternatives: bodies } : { cut: dispatchCut(symbol, bodies, "several-bodies"), alternatives: bodies };
     }
     if (!declared.overridable) return undefined;
     const overriders = implementationsBelow(symbol, owners);
-    return overriders.length === 0 ? undefined : { cut: dispatchCut(symbol, overriders) };
+    return overriders.length === 0 ? undefined : { cut: dispatchCut(symbol, overriders, "overridable") };
   };
   /** Whether the call's own source binds its receiver to a function value, which a library member such as `call` runs. */
   const holdsFunctionValue = async (reference: GraphUnresolvedReference, receiver: string, member: string): Promise<boolean> =>
@@ -361,7 +357,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         children.push(...await membersOf(owner, true));
       }
     }
-    const cuts: Cut[] = contradicted.map(({ record, target }) => unresolvedAt(record, target === undefined ? [] : [target]));
+    const cuts: Cut[] = contradicted.map(({ record, target }) => unresolvedAt(record, target === undefined ? [] : [target], "contradicted"));
     /** An external call is a leaf only while the repository writes nothing over what it names; otherwise `replaced` decides. */
     const leafUnlessReplaced = async (call: ExternalCall, root: LeafRoot, replaced: () => unknown): Promise<void> => {
       if (await isReplaced(root)) await replaced();
@@ -377,14 +373,14 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
      * A member call nothing settled by its receiver: a cut listing the declarations of its name, or, when no declaration and
      * no source names it and the repository replaces nothing the call was found to name, an external call (R6).
      */
-    const settleByName = async (reference: GraphUnresolvedReference, name: string, named: readonly GraphSymbol[], replaced = false): Promise<void> => {
-      if (named.length > 0) return void cuts.push(unresolvedAt(reference, named));
+    const settleByName = async (reference: GraphUnresolvedReference, name: string, named: readonly GraphSymbol[], replaced = false, subReason?: CutSubReason): Promise<void> => {
+      if (named.length > 0) return void cuts.push(unresolvedAt(reference, named, undefined, subReason));
       const receiver = receiverOf(reference.name);
       const declared = [
         ...((await memberDeclarations()).get(name) ?? []).filter((file) => mayRunDeclarationOf(reference.file, file)).map((file) => declarationAnchor(file, name)),
         ...(receiver !== undefined && (await holdsFunctionValue(reference, receiver, name)) ? [declarationAnchor(reference.file, receiver)] : []),
       ];
-      const cut = () => cuts.push({ kind: "unresolved-link", at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declared])] });
+      const cut = () => cuts.push(callCut(placeAt(reference.file, reference.line, reference.name), sortedUnique([...reference.candidates, ...declared]), undefined, subReason));
       if (declared.length === 0 && !replaced) await leafUnlessReplaced({ kind: "unnamed", name: reference.name }, { path: [], member: name }, cut);
       else cut();
     };
@@ -446,7 +442,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       if (binding.kind === "declaration") {
         if (binding.link === "own-member") return void children.push(childAt(binding.target, reference.line, reference.column, reference.name, "own-member"));
         const constructors = reference.kind === "instantiates" && isClassKind(binding.target.kind) ? await constructorsOf(binding.target) : [binding.target];
-        if (constructors.length !== 1) return void cuts.push(unresolvedAt(reference, constructors.length > 0 ? constructors : [binding.target]));
+        if (constructors.length !== 1) return void cuts.push(unresolvedAt(reference, constructors.length > 0 ? constructors : [binding.target], "constructor-unsettled"));
         return void children.push(childAt(constructors[0]!, reference.line, reference.column, reference.name, "call"));
       }
       if (binding.kind === "receiver") return settleReceiver(reference, name, binding.candidates, binding.proof, false, () => undefined);
@@ -469,7 +465,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       const named = members.length > 0 ? members : [target];
       await settleReceiver(reference, target.name, named, await receiverAt(node, reference, target.name, receiver), true, () => void cuts.push(unresolvedAt(reference, named)));
     }
-    for (const reference of ambiguous) cuts.push(unresolvedAt(reference, []));
+    for (const reference of ambiguous) cuts.push(unresolvedAt(reference, [], "unowned"));
     const unsettled = unsettledBy([...indexed, ...missing], called);
     const bound = await bindings.bindCalls(unsettled.map((reference) => ({ body: node, reference })), signal);
     for (const [index, reference] of unsettled.entries()) await settleBinding(reference, bound[index]!);
@@ -529,18 +525,18 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         if (edge.kind === "instantiates" && isClassKind(reached.kind)) {
           const constructors = await constructorsOf(reached);
           if (constructors.length !== 1) {
-            cuts.push(unresolvedAt({ from: node.id, file: node.file, line: edge.line ?? node.startLine, column: edge.column ?? 0, name: reached.name, kind: "instantiates", candidates: [] }, constructors.length ? constructors : [reached]));
+            cuts.push(unresolvedAt({ from: node.id, file: node.file, line: edge.line ?? node.startLine, column: edge.column ?? 0, name: reached.name, kind: "instantiates", candidates: [] }, constructors.length ? constructors : [reached], "constructor-unsettled"));
             continue;
           }
           reached = constructors[0]!;
         }
-        if (receiver !== undefined && receiver.kind !== "unknown" && proven === undefined) cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique([candidateOf(target), ...declarationsNamed(target.name, node.file).map(candidateOf)])] });
+        if (receiver !== undefined && receiver.kind !== "unknown" && proven === undefined) cuts.push(callCut(placeAt(node.file, edge.line ?? node.startLine, target.name), sortedUnique([candidateOf(target), ...declarationsNamed(target.name, node.file).map(candidateOf)])));
         else children.push(value ? childAt(reached, edge.line, edge.column, target.name, "reference", true) : childAt(reached, edge.line, edge.column, target.name, "call"));
       } else if (verdict.root.kind === "local-parameter" || verdict.root.kind === "lexical") {
-        cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name, node.file).map(candidateOf))] });
+        cuts.push(callCut(placeAt(node.file, edge.line ?? node.startLine, target.name), sortedUnique(declarationsNamed(target.name, node.file).map(candidateOf))));
       } else {
         const dropped = verdict.root;
-        const place: Cut = { kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name, node.file).map(candidateOf))] };
+        const place = callCut(placeAt(node.file, edge.line ?? node.startLine, target.name), sortedUnique(declarationsNamed(target.name, node.file).map(candidateOf)));
         await leafUnlessReplaced(dropped.kind === "external" ? { kind: "import", module: dropped.module, name: target.name } : { kind: "global", name: target.name }, dropped.kind === "external" ? { module: dropped.module } : { path: ["name" in dropped ? dropped.name : target.name], member: target.name, open: true }, () => cuts.push(place));
       }
     }
@@ -552,7 +548,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       }
       const method = receiver?.kind === "method" ? placedMethod(receiver, CALLABLE_KINDS) : undefined;
       if (method !== undefined) children.push(childAt(method, reference.line, reference.column, reference.name, "call"));
-      else await settleByName(reference, name, named);
+      else await settleByName(reference, name, named, false, receiver?.kind === "unknown" ? receiver.reason : undefined);
     }
     return { children: children.sort((a, b) => compareOccurrence(a.place, b.place)), external, cuts };
   }
@@ -567,7 +563,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     if (signal?.aborted) return;
     if (runsValue(step, symbol)) {
       step.unsettled = true;
-      cuts.push({ kind: "unresolved-link", at: [placeAt(symbol.file, symbol.startLine, symbol.name)] });
+      cuts.push(callCut(placeAt(symbol.file, symbol.startLine, symbol.name), [], "function-value"));
       return;
     }
     const first = expandedAt.get(symbol.id);
@@ -596,7 +592,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     if (page) {
       const plan = await pages!.of(symbol);
       if (plan === undefined) {
-        if (depth === 0) body.cuts.push({ kind: "unresolved-link", at: [placeAt(symbol.file, symbol.startLine, symbol.name)] });
+        if (depth === 0) body.cuts.push(callCut(placeAt(symbol.file, symbol.startLine, symbol.name), [], "page-unplanned"));
       } else body.children = pageOrder(body.children, plan, body.cuts);
     }
     const dispatch = await unboundDispatch(symbol);
@@ -625,7 +621,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     await visit(step, root, 0);
   }
   if (signal?.aborted) return "aborted";
-  const boundCuts = (kind: Cut["kind"], anchors: ReadonlySet<string>, limit: number | undefined): Cut[] => [...anchors].sort().map((anchor): Cut => ({ kind, at: [anchor], limit: limit as number }));
+  const boundCuts = (kind: "depth" | "caller-budget", anchors: ReadonlySet<string>, limit: number | undefined): Cut[] => [...anchors].sort().map((anchor) => boundCut(kind, anchor, limit as number));
   return {
     roots: walked,
     cuts: [...cuts, ...boundCuts("depth", stopped.depth, budget.depth), ...boundCuts("caller-budget", stopped.expansions, budget.expansions)],
@@ -645,7 +641,7 @@ function pageOrder(children: readonly Child[], plan: PagePlan, cuts: Cut[]): Chi
   const members = new Set(children.filter(({ via }) => via === "member").map(({ symbol }) => symbol.name));
   for (const [phase, calls] of [[2, plan.render ?? []], [3, plan.handlers]] as const) for (const [index, handler] of calls.entries()) {
     if ("runs" in handler) runs.push({ child: { symbol: handler.runs, place: { line: null, column: null, spelling: handler.runs.name, target: handler.runs.id }, via: "template" }, rank: [phase, index] });
-    else if (!members.has(handler.member)) cuts.push({ kind: "unresolved-link", at: [placeAt(handler.file, handler.line, handler.member)] });
+    else if (!members.has(handler.member)) cuts.push(callCut(placeAt(handler.file, handler.line, handler.member), [], "page-unplanned"));
     else if (!handlerRank.has(handler.member)) handlerRank.set(handler.member, [phase, index]);
   }
   cuts.push(...plan.cuts);
@@ -666,6 +662,14 @@ function pageOrder(children: readonly Child[], plan: PagePlan, cuts: Cut[]): Chi
  * What dispatch decides for a body-less or overridable callable: the one body it runs, or a cut; `alternatives` when the
  * declared hierarchy names every body it may run.
  */
+/**
+ * A call the walk cannot follow, at its place in a walked body, with the declarations it may run: a call no rule settles
+ * is `receiver-unproven` when it lists candidates and `callee-unknown` when it lists none, unless its situation names another reason.
+ */
+function callCut(place: string, candidates: readonly string[], reason: CutReason = candidates.length > 0 ? "receiver-unproven" : "callee-unknown", subReason?: CutSubReason): Cut {
+  return { kind: "unresolved-link", at: [place, ...candidates], reason, ...(subReason === undefined ? {} : { subReason }), reach: { kind: "call-at", place } };
+}
+
 type Dispatch = { to: GraphSymbol; alternatives: readonly GraphSymbol[]; cut?: undefined } | { to?: undefined; cut: Cut; alternatives?: readonly GraphSymbol[] };
 
 interface SyntaxIndex {

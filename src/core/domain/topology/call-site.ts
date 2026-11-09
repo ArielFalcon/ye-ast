@@ -1,7 +1,7 @@
 import type { LibrarySource } from "./library-source.ts";
 import type { HttpMethod } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
-import { declarationSpan, type Cut, type Evidence, type Finding, type UnknownReason } from "../shared/fact.ts";
+import { declarationSpan, type Cut, type CutReach, type Evidence, type Finding, type UnknownReason } from "../shared/fact.ts";
 
 /** A call one repository makes out of itself: an HTTP request or a published message, with where it is written. */
 export interface CallSite {
@@ -148,7 +148,19 @@ export function callSiteEvidence(site: CallSite): Evidence {
 
 /** A call site the join reached and could not settle, as the cut of its repository's section: its file, then its place. */
 export function unsettledCallSiteCut(site: CallSite): Cut {
-  return { kind: "unresolved-link", at: [site.file, `${site.file}:${site.line}`] };
+  return { kind: "unresolved-link", at: [site.file, `${site.file}:${site.line}`], reason: "join-unsettled", reach: callSiteReach(site) };
+}
+
+/** A call site the snapshot cannot decide, as the cut of its repository's section: its file, its place, the library it goes through. */
+export function unresolvedCallSiteCut(site: CallSite): Cut {
+  const via = site.target.status === "unknown" ? site.target.evidence[0]?.via : undefined;
+  return { kind: "unresolved-link", at: [site.file, `${site.file}:${site.line}`, ...(via === undefined ? [] : [`library ${via}`])], reason: "call-site-unresolved", reach: callSiteReach(site) };
+}
+
+/** What a call site could reach, as the extractor read it: its transport, and its method and path when the snapshot states them. */
+function callSiteReach(site: CallSite): CutReach {
+  const request = httpTargetOf(site) ?? site.stated;
+  return request === undefined ? { kind: "call-site", transport: site.transport } : { kind: "call-site", transport: site.transport, method: request.method, template: request.path };
 }
 
 /** A call site the snapshot cannot decide, as the workspace reports it: what is known, never only its place. */

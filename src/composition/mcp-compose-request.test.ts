@@ -328,7 +328,7 @@ test("time spent synchronously past the deadline prevents delivery", async () =>
 });
 
 test("a deadline cut inside a source is delivered unasserted; a composition expectation then fails", async () => {
-  const cut = () => spies({ outline: async () => ({ ok: true, value: factOf(outlineValue(), { cuts: [{ kind: "deadline", at: ["src/OrderController.java"] }] }) }) });
+  const cut = () => spies({ outline: async () => ({ ok: true, value: factOf(outlineValue(), { cuts: [{ kind: "deadline", at: ["src/OrderController.java"], reason: "deadline", reach: { kind: "anything" } }] }) }) });
   const result = ok(await runComposition({ queries: [Q.outline] }, cut().ctx()));
   assert.deepEqual(result.verification, { status: "unavailable", reason: "deadline" });
   assert.deepEqual(result.coverage.limits.map((limit) => limit.kind), ["deadline"]);

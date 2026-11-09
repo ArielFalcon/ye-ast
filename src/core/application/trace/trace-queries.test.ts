@@ -159,6 +159,9 @@ function valueOf(fact: Fact<TraceValue>): TraceValue {
 
 const cutsOf = (fact: Fact<TraceValue>) => (fact.status === "partial" ? fact.cuts.map(({ kind, at, limit }) => (limit === undefined ? [kind, at] : [kind, at, limit])) : []);
 
+/** Each cut's place with why it exists: the reason, and the sub-reason where it has one. */
+const reasonsOf = (fact: Fact<TraceValue>) => (fact.status === "partial" ? fact.cuts.map(({ at, reason, subReason }) => (subReason === undefined ? [at[0], reason] : [at[0], reason, subReason])) : []);
+
 const shape = (steps: readonly TraceStep[]) => steps.map((step) => [step.symbol, step.parent ?? null, step.seen ?? null]);
 
 /** A class `Svc` whose method `run` (lines 5-20) is the usual root; `outward` names a function that calls outside. */
@@ -186,6 +189,7 @@ test("a method no source's syntax states is a dispatch cut when an interface own
   const fact = await factOf({ nodes, edges });
 
   assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/b.ts:2 send", "src/b.ts::Impl.send"]]]);
+  assert.deepEqual(reasonsOf(fact), [["src/b.ts:2 send", "dispatch", "unproven"]]);
 });
 
 test("a body-less method whose declared hierarchy proves one body expands that body below it, via dispatch, with it as the one alternative", async () => {
@@ -215,6 +219,7 @@ test("a body-less method whose declared hierarchy proves several bodies is a cut
     { symbol: "send", line: 2, alternatives: [6, 9] },
   ]);
   assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/b.ts:2 send", "src/b.ts::One.send", "src/b.ts::Two.send"]]]);
+  assert.deepEqual(reasonsOf(fact), [["src/b.ts:2 send", "dispatch", "several-bodies"]]);
 });
 
 test("a proven body the index does not place as one method proves nothing: the body-less method stays a cut listing the implementations below its owner", async () => {
@@ -899,6 +904,7 @@ test("a handler no declaration of the index holds is a cut at the handler, never
   const fact = await factOf({ nodes: API, edges: API_EDGES, findings: [route("POST /orders", handlerAt(B, "Gone.handle", 4))] }, [{ kind: "http-route", name: "POST /orders" }]);
   assert.deepEqual(valueOf(fact).roots, [{ target: "http-route POST /orders", steps: [] }]);
   assert.deepEqual(cutsOf(fact), [["unresolved-link", [`${B}:4 Gone.handle`]]]);
+  assert.deepEqual(reasonsOf(fact), [[`${B}:4 Gone.handle`, "handler-unplaced"]]);
 });
 
 test("an entrypoint the map does not hold is an unknown-entrypoint fault listing the map's names of that kind", async () => {
@@ -960,6 +966,7 @@ test("a handler the template binds that the component does not declare is a cut 
   const relations = { ...PAGE_RELATIONS, templates: [{ component: PAGE_REF, handlers: [handlerCall("gone", 7)], eventCalls: [], uses: [] }] };
   const fact = await factOf({ nodes: PAGE_NODES, edges: PAGE_EDGES, unresolved: PAGE_OUTWARD, relations, findings: [page("/p", handlerAt(A, "Page", 1))] }, [{ kind: "ui-route", name: "/p" }]);
   assert.ok(cutsOf(fact).some(([kind, at]) => kind === "unresolved-link" && JSON.stringify(at) === JSON.stringify([`${PAGE_HTML}:7 gone`])), JSON.stringify(cutsOf(fact)));
+  assert.ok(reasonsOf(fact).some(([at, reason]) => at === `${PAGE_HTML}:7 gone` && reason === "page-unplanned"));
 });
 
 test("a page whose template cannot be read, or that the relations hold no template for, is a cut there and still lists what its class runs", async () => {
@@ -1114,6 +1121,7 @@ test("a call on a receiver annotated with a nominal class is a step at the class
   assert.equal(alone.status, "complete");
   for (const fact of [alone, overridden]) assert.deepEqual(valueOf(fact).steps.slice(1).map(({ symbol, file }) => [symbol, file]), [["save", B]]);
   assert.deepEqual(cutsOf(overridden), [["unresolved-link", ["src/b.ts:3 save", "src/c.ts::Sub.save"]]]);
+  assert.deepEqual(reasonsOf(overridden), [["src/b.ts:3 save", "dispatch", "overridable"]]);
 });
 
 test("a nominal class's inherited method is the step, and a class the index does not place, or a declaration of the name under heritage the index leaves unresolved, keeps the cut", async () => {
@@ -1389,6 +1397,7 @@ test("trace follows a synthesized call edge its source does not write and cuts a
   const fact = await factOf({ nodes, sources: [{ path: A, content: "run" }, { path: B, content: "handler" }], edges, syntaxCalls: { [A]: [alpha] } });
   assert.deepEqual(valueOf(fact).steps.flatMap((step) => step.leaves ?? []).map((leaf) => leaf.symbol), ["handler"]);
   assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/a.ts:3 alpha"]], ["unresolved-link", ["src/a.ts:3 beta", "src/b.ts::beta"]]]);
+  assert.deepEqual(reasonsOf(fact), [["src/a.ts:3 alpha", "callee-unknown"], ["src/a.ts:3 beta", "contradicted"]]);
 });
 
 test("a call record in a source no reader parsed is kept as the index has it, while a parsed source writing no call cuts it", async () => {
@@ -1425,13 +1434,13 @@ test("a workspace live trace forwards the root stale notice once and never subst
   assert.deepEqual(notices, [rootNotice]);
 });
 
-test("a dispatch veto projects its fixed reason onto the existing cut", async () => {
+test("a dispatch veto projects its fixed reason onto the existing cut as its sub-reason", async () => {
   const nodes = [SVC, RUN, fakeNode("Port", "interface", B, 1, 3), fakeNode("Port.send", "method", B, 2, 2, "send")];
   const edges: FakeEdge[] = [...CONTAINS, { from: "Port", to: "Port.send", kind: "contains" }, call("run", "Port.send", 8, 4)];
   for (const reason of ["aspect may replace the body", "generated implementation", "dispatch not proven"] as const) {
     const fact = await factOf({ nodes, edges, sources: [{ path: B, content: "" }], callables: { [B]: [{ name: "send", start: 2, nameLine: 2, body: false, overridable: true }] }, dispatch: { send: { kind: "unknown", reason } } });
     assert.equal(fact.status, "partial");
-    assert.ok(fact.status === "partial" && fact.cuts.some((cut) => cut.kind === "unresolved-link" && cut.detail === reason));
+    assert.ok(fact.status === "partial" && fact.cuts.some((cut) => cut.kind === "unresolved-link" && cut.reason === "dispatch" && cut.subReason === reason));
   }
 });
 

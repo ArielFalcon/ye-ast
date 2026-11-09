@@ -856,13 +856,13 @@ test("a workspace that cannot prepare the session of one hypothesis leaves that 
 });
 
 test("each answer that is not complete is one section cut of the composite, and the workspace's own cuts reach every answer", async () => {
-  const cut: Cut = { kind: "not-exported", at: ["big.ts"] };
+  const cut: Cut = { kind: "not-exported", at: ["big.ts"], reason: "unwritten", reach: { kind: "anything" } };
   const { queries, request, hypothesis } = setup({ cuts: [cut] });
 
   const fact = await statusesOf(queries, { ...request, hypotheses: [hypothesis, { ...hypothesis, property: "name" }] });
 
   assert.deepEqual(fact.value.answers.map((answer) => answer.status === "partial" && answer.cuts), [[cut], [cut]]);
-  assert.deepEqual(fact.status === "partial" && fact.cuts, [{ kind: "section", at: ["answers.0"] }, { kind: "section", at: ["answers.1"] }]);
+  assert.deepEqual(fact.status === "partial" && fact.cuts, [{ kind: "section", at: ["answers.0"], reason: "section-partial", reach: { kind: "anything" } }, { kind: "section", at: ["answers.1"], reason: "section-partial", reach: { kind: "anything" } }]);
 });
 
 test("every hop and finding of an answer carries the repository it happened in", async () => {

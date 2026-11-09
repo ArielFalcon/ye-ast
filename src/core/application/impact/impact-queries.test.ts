@@ -395,7 +395,7 @@ test("the walk is seeded from the change and its depth bound reaches the fact as
   assert.deepEqual(unbounded.status === "complete" && unbounded.value.symbols.map((symbol) => [symbol.symbol, symbol.depth]), [["f", 0], ["g", 1]]);
   const bounded = fact(await ask({ budget: { depth: 0 } }));
   assert.equal(bounded.status, "partial");
-  assert.deepEqual(bounded.status === "partial" && bounded.cuts, [{ kind: "depth", at: ["src/A.java::f"], limit: 0 }]);
+  assert.deepEqual(bounded.status === "partial" && bounded.cuts, [{ kind: "depth", at: ["src/A.java::f"], limit: 0, reason: "depth", reach: { kind: "anything" } }]);
 });
 
 test("a file the export left out cuts the answer, and one the index did not hold outside what the export staged does not", async () => {
@@ -408,7 +408,7 @@ test("a file the export left out cuts the answer, and one the index did not hold
     exports: { [FORK]: skipped },
   });
   const answer = fact(await ask());
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "not-exported", at: ["src/Link.java"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "not-exported", at: ["src/Link.java"], reason: "symlink", reach: { kind: "anything" } }]);
 });
 
 test("a staged file the index does not hold still cuts the answer at that file", async () => {
@@ -427,7 +427,7 @@ test("a staged file the index does not hold still cuts the answer at that file",
     exports: { [HEAD]: staged },
   });
   const answer = fact(await ask());
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/out/X.java"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/out/X.java"], reason: "not-indexed", reach: { kind: "anything", runtime: "java" } }]);
 });
 
 test("the config digest covers the walk budget, and the same request gives the same fact", async () => {
@@ -460,7 +460,7 @@ test("a changed template or style builds the index, since it may seed a componen
 
 test("a changed source file the index holds no symbol of cuts the answer at that file", async () => {
   const answer = fact(await setup({ changes: { ok: true, value: [change("src/Money.java")] }, nodes: SOURCE_NODES }).ask());
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Money.java"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Money.java"], reason: "no-symbols", reach: { kind: "anything", runtime: "java" } }]);
 });
 
 test("a call that never resolved to a walked name cuts the answer, and the head's own export cuts are in the fact", async () => {
@@ -472,8 +472,8 @@ test("a call that never resolved to a walked name cuts the answer, and the head'
   };
   const answer = fact(await setup({ changes, nodes: SOURCE_NODES, edges: SOURCE_EDGES, unresolved, exports: { [HEAD]: left } }).ask());
   assert.deepEqual(answer.status === "partial" && answer.cuts, [
-    { kind: "unresolved-link", at: ["src/A.java::f", "src/A.java:7"] },
-    { kind: "not-exported", at: ["src/Link.java"] },
+    { kind: "unresolved-link", at: ["src/A.java::f", "src/A.java:7"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/A.java::f"] } },
+    { kind: "not-exported", at: ["src/Link.java"], reason: "symlink", reach: { kind: "anything" } },
   ]);
 });
 
@@ -488,7 +488,7 @@ test("a reference whose rooted name the file imports from outside the repository
   const withoutImports = fact(await setup({ changes, nodes, unresolved, exports }).ask());
   const withImports = fact(await setup({ changes, nodes, unresolved, exports, importOrigins: externalImports(["tap"]) }).ask());
 
-  assert.deepEqual(withoutImports.status === "partial" && withoutImports.cuts, [{ kind: "unresolved-link", at: ["src/A.ts::tap", "src/A.ts:7"] }]);
+  assert.deepEqual(withoutImports.status === "partial" && withoutImports.cuts, [{ kind: "unresolved-link", at: ["src/A.ts::tap", "src/A.ts:7"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/A.ts::tap"] } }]);
   assert.equal(withImports.status, "complete");
 });
 
@@ -523,7 +523,7 @@ test("an external proof retires its own reference, never another one that shares
 
   const answer = fact(await setup({ changes, nodes, unresolved, exports, importOrigins: externalImports(["tap"]) }).ask());
 
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/A.ts::save", "src/A.ts:7"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/A.ts::save", "src/A.ts:7"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/A.ts::save"] } }]);
 });
 
 test("a reference rooted at a name the language's own libraries declare stops being a cut", async () => {
@@ -537,7 +537,7 @@ test("a reference rooted at a name the language's own libraries declare stops be
   const withoutProof = fact(await setup({ changes, nodes, unresolved, exports }).ask());
   const withProof = fact(await setup({ changes, nodes, unresolved, exports, importOrigins: ambientImports(["console"]) }).ask());
 
-  assert.deepEqual(withoutProof.status === "partial" && withoutProof.cuts, [{ kind: "unresolved-link", at: ["src/A.ts", "src/A.ts:7 console.log"] }]);
+  assert.deepEqual(withoutProof.status === "partial" && withoutProof.cuts, [{ kind: "unresolved-link", at: ["src/A.ts", "src/A.ts:7 console.log"], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/B.ts::log"] } }]);
   assert.equal(withProof.status, "complete");
 });
 
@@ -580,7 +580,7 @@ test("a dynamic load whose specifier is a literal names its module, so only a co
     { file: "src/Routes.ts", line: 8 },
   ];
   const answer = fact(await setup({ changes, nodes: SOURCE_NODES, edges: SOURCE_EDGES, unresolved, loads, exports: { [HEAD]: tree } }).ask());
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/Routes.ts", "src/Routes.ts:8 import"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/Routes.ts", "src/Routes.ts:8 import"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } }]);
 });
 
 test("a source file deleted whole that declared a name needs the index, and an unresolved reference to the name cuts the answer", async () => {
@@ -590,7 +590,7 @@ test("a source file deleted whole that declared a name needs the index, and an u
   const { log, ask } = setup({ changes: { ok: true, value: [gone] }, unresolved, exports });
   const answer = fact(await ask());
   assert.equal(log.indexed, 1);
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/Gone.java::Gone", "src/B.java:7"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/Gone.java::Gone", "src/B.java:7"], reason: "removed-declaration", reach: { kind: "callers-of", declarations: ["src/Gone.java::Gone"] } }]);
 });
 
 test("lines removed between symbols that declared a name cut the answer at the references that still name it, and a removed import does not", async () => {
@@ -601,7 +601,7 @@ test("lines removed between symbols that declared a name cut the answer at the r
     { from: "g", name: "Other", kind: "calls", file: "src/A.java", line: 23 },
   ];
   const answer = fact(await setup({ changes: { ok: true, value: [removed] }, nodes, unresolved }).ask());
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/A.java::helper", "src/A.java:22"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/A.java::helper", "src/A.java:22"], reason: "removed-declaration", reach: { kind: "callers-of", declarations: ["src/A.java::helper"] } }]);
 });
 
 test("removed-declaration cuts receive the head's exact import proofs without hiding unknown candidates", async () => {
@@ -618,7 +618,7 @@ test("removed-declaration cuts receive the head's exact import proofs without hi
     nodes: [fakeNode("use", "function", useFile, 1, 5)],
     importOrigins: origins((site) => site.name === "Promise" ? { kind: "ambient", name: "Promise" } : site.name === "save" ? { kind: "repository", file: "src/other.ts" } : undefined),
   }).ask());
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/gone.ts::resolve", `${useFile}:4`] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/gone.ts::resolve", `${useFile}:4`], reason: "removed-declaration", reach: { kind: "callers-of", declarations: ["src/gone.ts::resolve"] } }]);
 });
 
 const SVC_FILE = "src/app/svc.ts";
@@ -676,12 +676,12 @@ test("a reference through a field of known origin is a caller when the field hol
   const answer = fact(await setup({ changes, nodes, edges, unresolved, exports, sources, fields, importOrigins: origins(() => undefined), syntax: true }).ask());
   assert.ok(answer.status === "partial");
   assert.deepEqual(answer.value.symbols.filter((symbol) => symbol.file === CMP_FILE).map((symbol) => symbol.symbol), ["Cmp", "viaSvc", "viaSub"]);
-  assert.deepEqual(answer.cuts.find((cut) => cut.kind === "unresolved-link"), { kind: "unresolved-link", at: [CMP_FILE, ...[12, 15, 18, 21, 24, 6, 9].map((line) => `${CMP_FILE}:${line} ${unresolved.find((use) => use.line === line)!.name}`)] });
+  assert.deepEqual(answer.cuts.find((cut) => cut.kind === "unresolved-link"), { kind: "unresolved-link", at: [CMP_FILE, ...[12, 15, 18, 21, 24, 6, 9].map((line) => `${CMP_FILE}:${line} ${unresolved.find((use) => use.line === line)!.name}`)], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/app/svc.ts::get"] } });
 });
 
 test("a relation the reader could not place cuts the answer only in a file the walk reached", async () => {
   const reached = fact(await setup({ changes: SVC_CHANGE, nodes: ANGULAR_NODES, relations: [complete(INJECTION), unread(CMP_FILE, 5)] }).ask());
-  assert.deepEqual(reached.status === "partial" && reached.cuts, [{ kind: "unresolved-link", at: [CMP_FILE, `${CMP_FILE}:5 unresolved`] }]);
+  assert.deepEqual(reached.status === "partial" && reached.cuts, [{ kind: "unresolved-link", at: [CMP_FILE, `${CMP_FILE}:5 unresolved`], reason: "relation-unread", reach: { kind: "anything", runtime: "typescript" } }]);
   const elsewhere = fact(await setup({ changes: SVC_CHANGE, nodes: ANGULAR_NODES, relations: [complete(INJECTION), unread("src/app/far.ts", 5)] }).ask());
   assert.equal(elsewhere.status, "complete");
 });
@@ -692,8 +692,8 @@ test("a changed template no component names through templateUrl is a cut at that
   const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/app/cmp.html"), change("src/app/lost.html"), change("src/app/old.htm")] };
   const answer = fact(await setup({ changes, declarations, nodes }).ask());
   assert.deepEqual(answer.status === "partial" && answer.cuts, [
-    { kind: "no-extractor", at: ["src/app/lost.html"] },
-    { kind: "no-extractor", at: ["src/app/old.htm"] },
+    { kind: "no-extractor", at: ["src/app/lost.html"], reason: "template-uncovered", reach: { kind: "anything", runtime: "typescript" } },
+    { kind: "no-extractor", at: ["src/app/old.htm"], reason: "template-uncovered", reach: { kind: "anything", runtime: "typescript" } },
   ]);
 });
 
@@ -703,7 +703,7 @@ test("a changed source no declared framework reads cuts nothing, and one in a re
 
   const python = { files: [{ path: "app.py", blob: "1", written: true }], skipped: [] };
   const outside = fact(await setup({ changes: { ok: true, value: [change("app.py")] }, exports: { [BASE]: python, [HEAD]: python } }).ask());
-  assert.deepEqual(outside.status === "partial" && outside.cuts, [{ kind: "no-extractor", at: ["app.py"] }]);
+  assert.deepEqual(outside.status === "partial" && outside.cuts, [{ kind: "no-extractor", at: ["app.py"], reason: "language", reach: { kind: "anything" } }]);
 });
 
 function callersFact(answer: Result<Fact<ImpactValue>, ImpactFault>): Fact<ImpactValue> {
@@ -729,7 +729,7 @@ test("a call the index resolved into an edge of another kind is still a referenc
 
   const answer = callersFact(await setup({ nodes, edges, exports }).callers({ targets: [{ file: "src/B.ts", symbol: "navigate" }] }));
 
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/A.ts", "src/A.ts:7 this.router.navigate"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/A.ts", "src/A.ts:7 this.router.navigate"], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/B.ts::navigate"] } }]);
 });
 
 test("a reached symbol names locations of the selected evidence category", async () => {
@@ -865,7 +865,7 @@ test("a missing entry names the seedable declarations of its file, sorted and on
 test("the walk budget reaches the callers fact as a cut, and the config digest covers the targets", async () => {
   const { callers } = setup({ nodes: SOURCE_NODES, edges: SOURCE_EDGES });
   const bounded = callersFact(await callers({ targets: [{ file: "src/A.java", symbol: "f" }], budget: { depth: 0 } }));
-  assert.deepEqual(bounded.status === "partial" && bounded.cuts, [{ kind: "depth", at: ["src/A.java::f"], limit: 0 }]);
+  assert.deepEqual(bounded.status === "partial" && bounded.cuts, [{ kind: "depth", at: ["src/A.java::f"], limit: 0, reason: "depth", reach: { kind: "anything" } }]);
   const config = async (targets: ImpactCallersRequest["targets"]): Promise<string> => callersFact(await callers({ targets })).inputs.config;
   assert.notEqual(await config([{ file: "src/A.java", symbol: "f" }]), await config([{ file: "src/B.java", symbol: "g" }]));
   assert.equal(await config([{ file: "src/A.java", symbol: "f" }, { file: "src/B.java", symbol: "g" }]), await config([{ file: "src/B.java", symbol: "g" }, { file: "src/A.java", symbol: "f" }]));
@@ -875,9 +875,9 @@ test("a requested range in a file no extractor covers, and one in a file without
   const { callers } = setup({ nodes: SOURCE_NODES });
   const answer = callersFact(await callers({ targets: [{ file: "README.md", start: 1, end: 2 }, { file: "src/test/java/ATest.java", start: 1, end: 2 }, { file: "src/Money.java", start: 1, end: 2 }] }));
   assert.deepEqual(answer.status === "partial" && answer.cuts, [
-    { kind: "no-extractor", at: ["README.md"] },
-    { kind: "no-extractor", at: ["src/Money.java"] },
-    { kind: "no-extractor", at: ["src/test/java/ATest.java"] },
+    { kind: "no-extractor", at: ["README.md"], reason: "not-source", reach: { kind: "anything" } },
+    { kind: "no-extractor", at: ["src/Money.java"], reason: "no-symbols", reach: { kind: "anything", runtime: "java" } },
+    { kind: "no-extractor", at: ["src/test/java/ATest.java"], reason: "not-source", reach: { kind: "anything", runtime: "java" } },
   ]);
 });
 
@@ -968,8 +968,8 @@ test("a requested file outside the declared scope, or that the index holds nothi
   assert.equal(answer.status, "partial");
   assert.deepEqual(answer.status === "partial" && answer.value.files.map((entry) => entry.file), ["src/Order.java"]);
   assert.deepEqual(answer.status === "partial" && answer.cuts, [
-    { kind: "no-extractor", at: ["README.md"] },
-    { kind: "no-extractor", at: ["src/Late.java"] },
+    { kind: "no-extractor", at: ["README.md"], reason: "language", reach: { kind: "anything" } },
+    { kind: "no-extractor", at: ["src/Late.java"], reason: "not-indexed", reach: { kind: "anything", runtime: "java" } },
   ]);
 });
 
@@ -977,13 +977,13 @@ test("a requested file the snapshot does not hold is cut as not-exported, never 
   const { importers } = setup({ nodes: SHOP_NODES, exports: { [HEAD]: SHOP_EXPORT } });
   const answer = importersFact(await importers({ files: ["src/Order.java", "src/Ghost.java"] }));
   assert.equal(answer.status, "partial");
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "not-exported", at: ["src/Ghost.java"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "not-exported", at: ["src/Ghost.java"], reason: "unwritten", reach: { kind: "anything", runtime: "java" } }]);
 });
 
 test("a file that loads modules by a computed name may import anything, so it cuts the importers answer", async () => {
   const { importers } = setup({ nodes: SHOP_NODES, unresolved: [{ from: "x", name: "require", kind: "calls", file: "src/Late.java", line: 3 }], exports: { [HEAD]: SHOP_EXPORT } });
   const answer = importersFact(await importers({ files: ["src/Order.java"] }));
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/Late.java", "src/Late.java:3 require"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/Late.java", "src/Late.java:3 require"], reason: "dynamic-load", reach: { kind: "anything", runtime: "java" } }]);
 });
 
 test("a load whose specifier the reader read as a literal does not cut the importers answer", async () => {
@@ -1104,7 +1104,7 @@ test("an include leaves a callers target it does not match out of scope, and a f
   const noExtractor = callersFact(await callers({ targets: [{ file: "README.md", start: 1, end: 2 }], scope: { exclude: ["gen/"] } }));
 
   assert.equal(outside.status === "unknown" && outside.reason, "out-of-scope");
-  assert.deepEqual(noExtractor.status === "partial" && noExtractor.cuts, [{ kind: "no-extractor", at: ["README.md"] }]);
+  assert.deepEqual(noExtractor.status === "partial" && noExtractor.cuts, [{ kind: "no-extractor", at: ["README.md"], reason: "not-source", reach: { kind: "anything" } }]);
 });
 
 test("an importers request naming a file outside the scope is unknown out-of-scope with evidence naming each such file, even beside files in scope", async () => {
@@ -1196,7 +1196,7 @@ test("a live callers query cuts a file the mirror and the export hold but the st
 
   const answer = callersFact(await queries.callers({ ...LIVE_BASE, targets: [{ file: "src/A.java", symbol: "f" }], live: true }));
 
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Odd.java"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Odd.java"], reason: "not-indexed", reach: { kind: "anything", runtime: "java" } }]);
 });
 
 test("a live importers query cuts nothing for a file the mirror holds outside what the export staged", async () => {
@@ -1216,7 +1216,7 @@ test("a live importers query cuts a file the mirror and the export hold but the 
 
   const answer = importersFact(await queries.importers({ ...LIVE_BASE, files: ["src/Order.java"], live: true }));
 
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Odd.java"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Odd.java"], reason: "not-indexed", reach: { kind: "anything", runtime: "java" } }]);
 });
 
 test("a live fact that read no store carries no index origin", async () => {
@@ -1387,7 +1387,7 @@ test("local callback proof excludes only its own removed-declaration occurrence 
     importOrigins: origins((site) => site.column === 21 ? { kind: "local-parameter", name: "resolve" } : undefined) };
   const answer = fact(await setup(common).ask());
   assert.ok(answer.status === "partial");
-  assert.deepEqual(answer.cuts, [{ kind: "unresolved-link", at: ["src/address.ts::resolve", "src/promise.ts:2"] }]);
+  assert.deepEqual(answer.cuts, [{ kind: "unresolved-link", at: ["src/address.ts::resolve", "src/promise.ts:2"], reason: "removed-declaration", reach: { kind: "callers-of", declarations: ["src/address.ts::resolve"] } }]);
   assert.deepEqual(answer.value.symbols, []);
   const onlyLocal = fact(await setup({ ...common, unresolved: [unresolved[0]!] }).ask());
   assert.equal(onlyLocal.status, "complete");
@@ -1504,7 +1504,7 @@ test("change query uses declaration evidence only for removed candidates without
     assert.deepEqual(input, { path, base: "before", head: "after", deleted: false, names: ["effect", "save"] });
     return ["save", "not-a-candidate"];
   } } }).ask());
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/a.ts::save", "src/use.ts:2"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/a.ts::save", "src/use.ts:2"], reason: "removed-declaration", reach: { kind: "callers-of", declarations: ["src/a.ts::save"] } }]);
   assert.equal(baseline.status === "partial" && baseline.cuts.length, 2);
   assert.notEqual(answer.status, "unknown");
   assert.notEqual(baseline.status, "unknown");
@@ -1587,13 +1587,13 @@ test("a changed file whose declarations the graph cannot place keeps its seeds a
   const answer = fact(await setup({ ...RECORDS, changes: { ok: true, value: [change("src/Point.java", { added: [{ start: 5, end: 5 }] })] } }).ask());
 
   assert.deepEqual(answer.status === "partial" && answer.value.seeds.map((seed) => seed.symbol), ["origin"]);
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Point.java"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Point.java"], reason: "unmodelled", reach: { kind: "anything", runtime: "java" } }]);
 });
 
 test("callers of a symbol in a file the graph cannot place cut the answer at that file", async () => {
   const answer = callersFact(await setup(RECORDS).callers({ targets: [{ file: "src/Point.java", symbol: "origin" }] }));
 
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Point.java"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Point.java"], reason: "unmodelled", reach: { kind: "anything", runtime: "java" } }]);
 });
 
 test("importers cut each file's unresolved module statements once, anchored at the file with its places after it", async () => {
@@ -1606,8 +1606,8 @@ test("importers cut each file's unresolved module statements once, anchored at t
   const answer = importersFact(await importers({ files: ["src/Order.java"] }));
 
   assert.deepEqual(answer.status === "partial" && answer.cuts.filter((cut) => cut.kind === "unresolved-link"), [
-    { kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:4 @/env"] },
-    { kind: "unresolved-link", at: ["src/b.ts", "src/b.ts:2 @/env", "src/b.ts:9 geojson"] },
+    { kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:4 @/env"], reason: "specifier", reach: { kind: "module", importer: "src/a.ts", specifiers: [{ specifier: "@/env" }] } },
+    { kind: "unresolved-link", at: ["src/b.ts", "src/b.ts:2 @/env", "src/b.ts:9 geojson"], reason: "specifier", reach: { kind: "module", importer: "src/b.ts", specifiers: [{ specifier: "@/env" }, { specifier: "geojson" }] } },
   ]);
 });
 
@@ -2131,7 +2131,7 @@ test("a declaration the lockfile contradicts is not read: the call keeps its der
 
   assert.equal(viaOf(answer, "id")?.derivation, "name-match");
   assert.equal(answer.inputs.buildOutputs, undefined);
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "build-output", at: ["node_modules/kit"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "build-output", at: ["node_modules/kit"], reason: "version-mismatch", reach: { kind: "anything" } }]);
 });
 
 test("a live tree is not typed: the call keeps its derivation and a build-output cut names each declaration it did not read", async () => {
@@ -2140,7 +2140,7 @@ test("a live tree is not typed: the call keeps its derivation and a build-output
   const answer = callersFact(await setup({ trust: TRUSTED, live, nodes: TYPED_NODES, edges: TYPED_EDGES, importOrigins: origins(() => undefined), typeBindings: checker(boundTo(STORE_GET), seen) }).queries.callers({ ...LIVE_BASE, targets: [{ file: "src/store.ts", symbol: "get" }], live: true }));
 
   assert.equal(viaOf(answer, "id")?.derivation, "name-match");
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "build-output", at: ["node_modules"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "build-output", at: ["node_modules"], reason: "live-tree", reach: { kind: "anything" } }]);
   assert.equal(seen.length, 0);
 });
 
@@ -2177,22 +2177,22 @@ test("a checker fault leaves every call to the syntactic settlement and names ea
 
   assert.deepEqual([viaOf(unreadable, "id")?.derivation, viaOf(crashed, "id")?.derivation], ["name-match", "name-match"]);
   assert.deepEqual([unreadable.inputs.buildOutputs, crashed.inputs.buildOutputs], [undefined, undefined]);
-  assert.deepEqual(unreadable.status === "partial" && unreadable.cuts, [{ kind: "build-output", at: ["node_modules/kit"] }]);
-  assert.deepEqual(crashed.status === "partial" && crashed.cuts, [{ kind: "build-output", at: ["node_modules"] }]);
+  assert.deepEqual(unreadable.status === "partial" && unreadable.cuts, [{ kind: "build-output", at: ["node_modules/kit"], reason: "outputs-unreadable", reach: { kind: "anything" } }]);
+  assert.deepEqual(crashed.status === "partial" && crashed.cuts, [{ kind: "build-output", at: ["node_modules"], reason: "checker-failed", reach: { kind: "anything" } }]);
 });
 
 test("when one declaration is stale, every declaration the answer did not read is named, the clean one included", async () => {
   const two = { ...checker({ status: "unused", outputs: [{ kind: "node-modules", at: "", stale: [{ path: "kit", installed: "2.0.0", locked: "1.0.0" }] }] }), outputs: [...DECLARED, { kind: "node-modules" as const, at: "apps/web", path: "/host/checkout/apps/web/node_modules" }] };
   const answer = await typedCallers({ file: "src/store.ts", symbol: "get" }, two);
 
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "build-output", at: ["apps/web/node_modules"] }, { kind: "build-output", at: ["node_modules/kit"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "build-output", at: ["apps/web/node_modules"], reason: "version-mismatch", reach: { kind: "anything" } }, { kind: "build-output", at: ["node_modules/kit"], reason: "version-mismatch", reach: { kind: "anything" } }]);
 });
 
 test("a link the declared directory refused is named in a build-output cut", async () => {
   const answer = await typedCallers({ file: "src/store.ts", symbol: "get" }, checker({ ...boundTo(STORE_GET), refused: ["node_modules/evil"] }));
 
   assert.equal(viaOf(answer, "id")?.derivation, "typed");
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "build-output", at: ["node_modules/evil"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "build-output", at: ["node_modules/evil"], reason: "link-outside", reach: { kind: "anything" } }]);
 });
 
 test("an unresolved call the checker binds to a declaration the graph does not hold keeps its cut", async () => {

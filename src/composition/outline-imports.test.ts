@@ -59,7 +59,7 @@ test("a repository binding no edge proves makes the outline partial with one unr
   const { status, file, cuts } = await outlineOf("import { one } from './defs';");
   assert.equal(status, "partial");
   assert.deepEqual(file?.imports[0]?.bindings, [{ local: "one", imported: "one" }]);
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/use.ts", "src/use.ts:1 one"], reason: "unresolved" }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/use.ts", "src/use.ts:1 one"], reason: "use-unproven", reach: { kind: "anything", runtime: "typescript" } }]);
 });
 
 test("a namespace binding binds the module itself, so it reaches no declaration and is no cut", async () => {
@@ -107,20 +107,20 @@ test("a requested source the module reader cannot parse is a no-extractor cut, s
   const { status, file, cuts } = await outlineOf("import { one } from './defs';\nexport function (");
   assert.equal(status, "partial");
   assert.deepEqual(file?.imports, []);
-  assert.deepEqual(cuts, [{ kind: "no-extractor", at: [USE] }]);
+  assert.deepEqual(cuts, [{ kind: "no-extractor", at: [USE], reason: "module-unread", reach: { kind: "anything", runtime: "typescript" } }]);
 });
 
 test("a requested source the module reader reads only in part is a no-extractor cut, so its imports never read as all of them", async () => {
   const { status, cuts } = await outlineOf("namespace N { export class Member {} }\nimport Alias = N.Member;\n");
   assert.equal(status, "partial");
-  assert.deepEqual(cuts, [{ kind: "no-extractor", at: [USE] }]);
+  assert.deepEqual(cuts, [{ kind: "no-extractor", at: [USE], reason: "module-unread", reach: { kind: "anything", runtime: "typescript" } }]);
 });
 
 test("a requested file no module reader reads is a no-extractor cut, so its empty imports never read as none", async () => {
   const { status, file, cuts } = await outlineOf("import { one } from './defs';", { reader: createJavaImportsReader(await createJavaParser()) });
   assert.equal(status, "partial");
   assert.deepEqual(file?.imports, []);
-  assert.deepEqual(cuts, [{ kind: "no-extractor", at: [USE] }]);
+  assert.deepEqual(cuts, [{ kind: "no-extractor", at: [USE], reason: "module-unread", reach: { kind: "anything", runtime: "typescript" } }]);
 });
 
 test("a Java import of a type the sources declare reaches that type's declaration, without any graph edge", async () => {
@@ -155,7 +155,7 @@ test("a Java static import of a member the named type only inherits reaches no d
   });
   assert.equal(status, "partial");
   assert.deepEqual(file?.imports[0]?.bindings, [{ local: "LIMIT", imported: "LIMIT" }]);
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["app/Client.java", "app/Client.java:2 LIMIT"], reason: "unresolved" }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["app/Client.java", "app/Client.java:2 LIMIT"], reason: "use-unproven", reach: { kind: "anything", runtime: "java" } }]);
 });
 
 test("a Java import reaches the declaration at its qualified name from the file's top level, never a nested one ending the same", async () => {

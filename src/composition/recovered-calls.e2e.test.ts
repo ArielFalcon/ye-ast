@@ -101,7 +101,7 @@ test("super(...) the signature reading does not settle at its arity is a cut at 
   const fact = await callersOf({ file: "src/main/java/q/A.java", start: 4, end: 6 });
 
   assert.deepEqual(dependents(fact), []);
-  assert.deepEqual(linkCuts(fact), [{ kind: "unresolved-link", at: ["src/main/java/q/A.java::A", "src/main/java/q/B.java:5 super"] }]);
+  assert.deepEqual(linkCuts(fact), [{ kind: "unresolved-link", at: ["src/main/java/q/A.java::A", "src/main/java/q/B.java:5 super"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/main/java/q/A.java::A"] } }]);
 });
 
 test("impact of a changed method reaches the constant whose initializer calls it where the index records nothing", async () => {

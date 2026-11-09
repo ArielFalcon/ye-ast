@@ -19,7 +19,7 @@ test("seven ordinary tool families retain unknown context in both text modes", (
   }
 });
 test("complete, partial and live headers retain uncertainty and snapshot identity", () => {
-  const live = {...base, snapshot:{repo:"shop",kind:"live",head:"h",stateId:"state"},status:"partial",value:null,cuts:[{kind:"depth",at:["a"],limit:1}]} as Fact<null>;
+  const live = {...base, snapshot:{repo:"shop",kind:"live",head:"h",stateId:"state"},status:"partial",value:null,cuts:[{kind:"depth",at:["a"],limit:1,reason:"depth",reach:{kind:"anything"}}]} as Fact<null>;
   assert.equal(renderFactHeader(live)[0], "status: partial (cuts: 1 depth)");
   assert.equal(renderFactHeader(live).at(-1), "snapshot: shop live @ h (state)");
   assert.equal(renderFactHeader({...base,status:"complete",value:null})[0], "status: complete");

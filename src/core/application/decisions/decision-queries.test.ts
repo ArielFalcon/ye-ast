@@ -225,7 +225,7 @@ test("a workspace read that answers nothing is a git-failed fault, never an empt
 });
 
 test("a partial workspace read keeps its cuts on the decision fact", async () => {
-  const cuts = [{ kind: "section", at: ["shop-web"] }] as const;
+  const cuts = [{ kind: "section", at: ["shop-web"], reason: "section-partial", reach: { kind: "anything" } }] as const;
   const partial: Fact<WorkspaceValue> = { ...base(workspaceValue()), status: "partial", cuts } as PartialFact<WorkspaceValue>;
   const { queries } = setup({ ok: true, value: partial });
 

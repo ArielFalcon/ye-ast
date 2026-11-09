@@ -201,8 +201,8 @@ test("map cuts the entrypoints by a submodule and by a Kotlin source, which no e
   const section = JSON.parse(stdout.join("\n")).value.entrypoints;
   assert.equal(section.status, "partial");
   assert.deepEqual(section.cuts, [
-    { kind: "not-exported", at: ["services/orders"] },
-    { kind: "no-extractor", at: ["src/Billing.kt"] },
+    { kind: "not-exported", at: ["services/orders"], reason: "submodule", reach: { kind: "anything" } },
+    { kind: "no-extractor", at: ["src/Billing.kt"], reason: "language", reach: { kind: "anything" } },
   ]);
   assert.equal(section.value.length, 1);
 });
@@ -278,7 +278,7 @@ test("map under a budget the commit exceeds is partial with a caller-budget cut 
   const map = await mapOf({ exportBudget: { maxEntries: 0, maxBytes: Number.MAX_SAFE_INTEGER } });
 
   assert.equal(map.status, "partial");
-  assert.deepEqual(map.value.entrypoints.cuts, [{ kind: "caller-budget", at: ["src/OrderController.java"], limit: 0 }]);
+  assert.deepEqual(map.value.entrypoints.cuts, [{ kind: "caller-budget", at: ["src/OrderController.java"], limit: 0, reason: "export-budget", reach: { kind: "anything" } }]);
   assert.deepEqual(map.value.entrypoints.value, []);
   assert.deepEqual(readdirSync(scratchRoot), []);
 });

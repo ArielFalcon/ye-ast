@@ -1,13 +1,17 @@
 import type { Entrypoint } from "../entrypoints/entrypoint.ts";
+import { fileReach } from "../languages/call-targets.ts";
+import { compareText } from "../shared/code-node.ts";
 import { isExtractorConfiguration } from "../languages/configuration.ts";
 import { isJavaSource, isJvmTestFile } from "../languages/java.ts";
 import { cutsCompleteness } from "../languages/uncovered.ts";
 import { isAngularTemplate, isTypeScriptSource } from "../languages/typescript.ts";
 import {
+  ANYTHING,
   composeSections,
   type CompleteFact,
   type Cut,
   type DeclaredScope,
+  type ExportSkipReason,
   type Fact,
   type FactBase,
   type Finding,
@@ -47,7 +51,7 @@ export interface MapExport {
   /** Every regular file the export accepted, written or not. */
   files: readonly { path: string; blob: string; written: boolean }[];
   /** Every entry the export left out, with its reason. */
-  skipped: readonly { path: string; reason: string }[];
+  skipped: readonly { path: string; reason: ExportSkipReason }[];
   /** Where a budget stopped the export; nothing at or after that path was exported. */
   stopped?: { at: string; limit: number };
 }
@@ -92,18 +96,15 @@ export function buildEntrypointMap(base: MapBase, findings: readonly Finding<Ent
 export function exportCuts(exported: MapExport): Cut[] {
   const declared = holdsDeclaredSource(exported.files);
   return [
-    ...(exported.stopped === undefined ? [] : [{ kind: "caller-budget", at: [exported.stopped.at], limit: exported.stopped.limit } satisfies Cut]),
-    ...cutsAt(
-      "not-exported",
-      exported.skipped.filter((entry) => entry.reason === SUBMODULE || isInMapScope(entry.path)).map((entry) => entry.path),
-    ),
-    ...cutsAt(
-      "no-extractor",
-      exported.files.map((file) => file.path).filter((path) => cutsCompleteness(path, declared)),
-    ),
+    ...(exported.stopped === undefined ? [] : [{ kind: "caller-budget", at: [exported.stopped.at], limit: exported.stopped.limit, reason: "export-budget", reach: ANYTHING } satisfies Cut]),
+    ...exported.skipped
+      .filter((entry) => entry.reason === SUBMODULE || isInMapScope(entry.path))
+      .toSorted((a, b) => compareText(a.path, b.path))
+      .map(({ path, reason }): Cut => ({ kind: "not-exported", at: [path], reason, reach: ANYTHING })),
+    ...exported.files
+      .map((file) => file.path)
+      .filter((path) => cutsCompleteness(path, declared))
+      .toSorted()
+      .map((path): Cut => ({ kind: "no-extractor", at: [path], reason: "language", reach: fileReach(path) })),
   ];
-}
-
-function cutsAt(kind: Cut["kind"], paths: readonly string[]): Cut[] {
-  return paths.toSorted().map((path) => ({ kind, at: [path] }));
 }

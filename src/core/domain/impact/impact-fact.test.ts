@@ -18,14 +18,14 @@ test("a fact with no cut is complete", () => {
 
 test("a fact with a cut is partial and lists the cuts by kind then place, each once", () => {
   const cuts: Cut[] = [
-    { kind: "not-exported", at: ["b"] },
-    { kind: "no-extractor", at: ["z"] },
-    { kind: "no-extractor", at: ["a"] },
-    { kind: "depth", at: ["x"], limit: 2 },
-    { kind: "no-extractor", at: ["a"] },
-    { kind: "unresolved-link", at: ["q"] },
-    { kind: "hub", at: ["h"], limit: 1 },
-    { kind: "caller-budget", at: ["c"], limit: 3 },
+    { kind: "not-exported", at: ["b"], reason: "unwritten", reach: { kind: "anything" } },
+    { kind: "no-extractor", at: ["z"], reason: "not-indexed", reach: { kind: "anything" } },
+    { kind: "no-extractor", at: ["a"], reason: "not-indexed", reach: { kind: "anything" } },
+    { kind: "depth", at: ["x"], limit: 2, reason: "depth", reach: { kind: "anything" } },
+    { kind: "no-extractor", at: ["a"], reason: "not-indexed", reach: { kind: "anything" } },
+    { kind: "unresolved-link", at: ["q"], reason: "callee-unknown", reach: { kind: "anything" } },
+    { kind: "hub", at: ["h"], limit: 1, reason: "hub", reach: { kind: "anything" } },
+    { kind: "caller-budget", at: ["c"], limit: 3, reason: "caller-budget", reach: { kind: "anything" } },
   ];
   const fact = impactFact(BASE, VALUE, cuts);
   assert.equal(fact.status, "partial");
@@ -43,7 +43,7 @@ test("a fact with a cut is partial and lists the cuts by kind then place, each o
 test("every kind of cut has a place in the order, bounds first, whatever order the cuts arrive in", () => {
   const kinds: Cut["kind"][] = ["section", "deadline", "not-exported", "no-extractor", "unresolved-link", "node-cap", "caller-budget", "hub", "depth"];
   const order = (input: readonly Cut["kind"][]): string[] => {
-    const fact = impactFact(BASE, VALUE, input.map((kind): Cut => ({ kind, at: ["p"] })));
+    const fact = impactFact(BASE, VALUE, input.map((kind): Cut => ({ kind, at: ["p"], reason: kind === "section" ? "section-partial" : kind === "not-exported" ? "unwritten" : kind === "no-extractor" ? "not-indexed" : kind === "unresolved-link" ? "callee-unknown" : kind === "build-output" ? "live-tree" : kind, reach: { kind: "anything" } })));
     return fact.status === "partial" ? fact.cuts.map((cut) => cut.kind) : [];
   };
   const expected = ["depth", "hub", "caller-budget", "node-cap", "deadline", "unresolved-link", "no-extractor", "not-exported", "section"];

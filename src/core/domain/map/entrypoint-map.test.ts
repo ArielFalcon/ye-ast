@@ -29,14 +29,14 @@ test("a changed template changes the content digest, and the same template gives
 });
 
 test("a template the export left out is a not-exported cut", () => {
-  const cuts = exportCuts(exportOf("blob-1", { skipped: [{ path: "src/app/big.component.html", reason: "too-large" }] }));
-  assert.deepEqual(cuts, [{ kind: "not-exported", at: ["src/app/big.component.html"] }]);
+  const cuts = exportCuts(exportOf("blob-1", { skipped: [{ path: "src/app/big.component.html", reason: "unsafe-path" }] }));
+  assert.deepEqual(cuts, [{ kind: "not-exported", at: ["src/app/big.component.html"], reason: "unsafe-path", reach: { kind: "anything" } }]);
 });
 
 test("a JVM source no extractor parses, which Spring could still read, is a no-extractor cut", () => {
   const files = ["src/main/kotlin/Order.kt", "src/Order.java"].map((path) => ({ path, blob: "b1", written: false }));
 
-  assert.deepEqual(exportCuts(exportOf("b1", { files })), [{ kind: "no-extractor", at: ["src/main/kotlin/Order.kt"] }]);
+  assert.deepEqual(exportCuts(exportOf("b1", { files })), [{ kind: "no-extractor", at: ["src/main/kotlin/Order.kt"], reason: "language", reach: { kind: "anything" } }]);
 });
 
 test("a source in a language no declared framework reads is outside the declared scope, so it is no cut", () => {
@@ -50,8 +50,8 @@ test("a repository that holds no source of a declared language cuts every source
   const files = ["app.py", "src/Order.kt"].map((path) => ({ path, blob: "b1", written: false }));
 
   assert.deepEqual(exportCuts(exportOf("b1", { files })), [
-    { kind: "no-extractor", at: ["app.py"] },
-    { kind: "no-extractor", at: ["src/Order.kt"] },
+    { kind: "no-extractor", at: ["app.py"], reason: "language", reach: { kind: "anything" } },
+    { kind: "no-extractor", at: ["src/Order.kt"], reason: "language", reach: { kind: "anything" } },
   ]);
 });
 

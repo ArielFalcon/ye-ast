@@ -173,12 +173,12 @@ function workspaceFact(): Fact<WorkspaceValue> {
     ...base(),
     status: "partial",
     value: { names, unresolved: [{ reason: "unresolved", evidence: [], path: "src/app/order.api.ts", line: 9, endLine: 12, symbol: "OrderApi.create", transport: "http", stated: { method: "GET", path: "/orders" } }] },
-    cuts: [{ kind: "unresolved-link", at: ["src/app/order.api.ts", "src/app/order.api.ts:9"] }],
+    cuts: [{ kind: "unresolved-link", at: ["src/app/order.api.ts", "src/app/order.api.ts:9"], reason: "callee-unknown", reach: { kind: "anything" } }],
   };
   return {
     ...base(),
     status: "partial",
-    cuts: [{ kind: "section", at: ["shop"] }],
+    cuts: [{ kind: "section", at: ["shop"], reason: "section-partial", reach: { kind: "anything" } }],
     value: {
       workspace: { repos: ["shop"], gateways: [], source: "request" },
       repositorySnapshots: [{ repo: "shop", snapshot: { repo: "shop", kind: "sha", sha: "a".repeat(40) } }],
@@ -437,7 +437,7 @@ test("entrypoint recovery identity covers the complete source and recorded input
       ["nested value", { ...original, value: { entrypoints: { ...section, value: [{ ...first, value: { ...ROUTE, name: "different" } }, second] } } }],
       ["nested evidence", { ...original, value: { entrypoints: { ...section, value: [{ ...first, evidence: [{ path: "src/A.java", line: 9 }] }, second] } } }],
       ["finding order", { ...original, value: { entrypoints: { ...section, value: [second, first] } } }],
-      ["status", { ...original, status: "partial", cuts: [{ kind: "section", at: ["entrypoints"] }] }],
+      ["status", { ...original, status: "partial", cuts: [{ kind: "section", at: ["entrypoints"], reason: "section-partial", reach: { kind: "anything" } }] }],
       ["nested unknown", { ...original, value: { entrypoints: { ...section, value: [{ status: "unknown", reason: "unresolved", evidence: first.evidence }, second] } } }],
     ];
     for (const [label, variant] of variants) {
@@ -489,8 +489,8 @@ test("entrypoint recovery handles nested deadlines, unknown findings and unresol
     ...base(), status: "complete", value: { entrypoints: { ...base(), status: "complete", value: [{ status: "unknown", reason, evidence: [] }] } },
   });
   const cut: EntrypointMapFact = {
-    ...base(), status: "partial", cuts: [{ kind: "section", at: ["entrypoints"] }],
-    value: { entrypoints: { ...base(), status: "partial", cuts: [{ kind: "deadline", at: ["src/A.java"] }], value: [] } },
+    ...base(), status: "partial", cuts: [{ kind: "section", at: ["entrypoints"], reason: "section-partial", reach: { kind: "anything" } }],
+    value: { entrypoints: { ...base(), status: "partial", cuts: [{ kind: "deadline", at: ["src/A.java"], reason: "deadline", reach: { kind: "anything" } }], value: [] } },
   };
   let current = nested("deadline");
   const { session } = await setup({ map: async () => ({ ok: true, value: current }) });
@@ -666,7 +666,7 @@ test("every consumer route receives findings, status, snapshot, provenance, reco
         return { ok: true, value: { ...base(), status: "unknown", reason: "unresolved" } };
       }
       return { ok: true, value: request.targets.some(target => "symbol" in target && target.symbol === "Partial")
-        ? impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/Partial.java::p"], limit: 1 }] })
+        ? impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/Partial.java::p"], limit: 1, reason: "depth", reach: { kind: "anything" } }] })
         : impactFact() };
     },
     outwardNames: async () => ({ ok: true, value: { fact: workspaceFact(), repositoryRoots: [{ repo: "shop-web", path: "/clones/frontend" }] } }),
@@ -757,7 +757,7 @@ test("workspace repository roots accompany the answer without entering the fact"
 });
 
 test("full preserves the partial fact and presentation does not enter the query", async () => {
-  const cuts = [{ kind: "depth", at: ["src/A.java::f"], limit: 1 }] as const;
+  const cuts = [{ kind: "depth", at: ["src/A.java::f"], limit: 1, reason: "depth", reach: { kind: "anything" } }] as const;
   const partial = impactFact({ status: "partial", cuts } as Partial<Fact<ImpactValue>>);
   const { session, calls } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
   try {
@@ -784,7 +784,7 @@ test("the outline lists each declaration with its span and the files it imports,
         ...base(),
         status: "partial",
         value: OUTLINE,
-        cuts: [{ kind: "not-exported", at: ["src/Gone.swift"] }],
+        cuts: [{ kind: "not-exported", at: ["src/Gone.swift"], reason: "unwritten", reach: { kind: "anything" } }],
         inputs: { ...base().inputs, declaredConfig: { files: request.files } },
       } as Fact<OutlineValue>,
     }),
@@ -1003,7 +1003,7 @@ test("workspace membership advice uses the publishing tool's accepted argument s
 test("cut lookup categories share context while every coordinate reconstructs a usable selector", async () => {
   const cut = (index: number): Cut => ({
     kind: "unresolved-link",
-    at: [`src/consumer-${index}.ts::load`, `src/consumer-${index}.ts:${index + 3} unresolved`],
+    at: [`src/consumer-${index}.ts::load`, `src/consumer-${index}.ts:${index + 3} unresolved`], reason: "hidden-caller", reach: { kind: "anything" },
   });
   const cuts: [Cut, ...Cut[]] = [cut(0), ...Array.from({ length: 11 }, (_, index) => cut(index + 1))];
   const fact = impactFact({ status: "partial", cuts, inputs: { ...base().inputs, declaredConfig: { targets: ["src/OrderService.java:OrderService.find"] } } });
@@ -1108,7 +1108,7 @@ test("output schemas validate real receipts and family payloads and reject broke
 
 test("runtime and full JSON impact schemas preserve unknown, partial and live identity", async () => {
   const unknown: Fact<ImpactValue> = { ...base(), status: "unknown", reason: "index-unavailable" };
-  const partial = impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/a.ts::f"], limit: 1 }] } as Partial<Fact<ImpactValue>>);
+  const partial = impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/a.ts::f"], limit: 1, reason: "depth", reach: { kind: "anything" } }] } as Partial<Fact<ImpactValue>>);
   for (const fact of [unknown, partial]) {
     const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
     try {
@@ -1408,7 +1408,7 @@ test("a changed selection keeps callers eligible only within scope and recorded 
   const fact = impactFact({
     inputs: { ...base().inputs, declaredScope: { ...base().inputs.declaredScope, include: ["src/allowed/**"] }, declaredConfig: { changed: ["src/allowed/a/**"] } },
     status: "partial",
-    cuts: [{ kind: "depth", at: ["src/allowed/b.ts::B.user"], limit: 1 }],
+    cuts: [{ kind: "depth", at: ["src/allowed/b.ts::B.user"], limit: 1, reason: "depth", reach: { kind: "anything" } }],
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   try {
@@ -1494,7 +1494,7 @@ test("importers summary counts every category without double-counting distinct f
 });
 
 test("importers full keeps the original overlapping fact and cuts without repeating file lists in text", async () => {
-  const fact: Fact<ImportersValue> = { ...base(), status: "partial", value: OVERLAPPING_IMPORTERS, cuts: [{ kind: "no-extractor", at: ["src/Unread.java"] }] };
+  const fact: Fact<ImportersValue> = { ...base(), status: "partial", value: OVERLAPPING_IMPORTERS, cuts: [{ kind: "no-extractor", at: ["src/Unread.java"], reason: "not-indexed", reach: { kind: "anything" } }] };
   const { session } = await setup({ importers: async () => ({ ok: true, value: fact }) });
   for (const mode of ["full"] as const) {
     const result = await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], mode });
@@ -1542,7 +1542,7 @@ test("importers distinguishes a complete empty result from an unknown result in 
 test("a partial answer counts its cuts in the status line and keeps applicable limits under a closing heading", async () => {
   const partial = impactFact({
     status: "partial",
-    cuts: [{ kind: "depth", at: ["src/A.java:A.f", "src/B.java:B.g"], limit: 3 }, { kind: "hub", at: ["src/C.java:C.h"] }],
+    cuts: [{ kind: "depth", at: ["src/A.java:A.f", "src/B.java:B.g"], limit: 3, reason: "depth", reach: { kind: "anything" } }, { kind: "hub", at: ["src/C.java:C.h"], reason: "hub", reach: { kind: "anything" } }],
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
@@ -1574,17 +1574,17 @@ test("an impact summary counts every cut kind and keeps its bound regardless of 
       entrypoints: [],
     },
     cuts: [
-      { kind: "unresolved-link", at: ["src/a.ts::A.seed", "src/x.ts:5"] },
-      { kind: "hub", at: ["src/a.ts::A.other"] },
-      { kind: "depth", at: ["src/b.ts::B.one"], limit: 5 },
-      { kind: "depth", at: ["src/b.ts::B.two"], limit: 5 },
-      { kind: "depth", at: ["src/b.ts::B.three"], limit: 5 },
-      { kind: "depth", at: ["src/b.ts::B.four"], limit: 5 },
-      { kind: "depth", at: ["src/b.ts::B.five"], limit: 5 },
-      { kind: "depth", at: ["src/b.ts::B.six"], limit: 5 },
-      { kind: "depth", at: ["src/b.ts::B.seven"], limit: 5 },
-      { kind: "depth", at: ["src/b.ts::B.eight"], limit: 5 },
-      { kind: "no-extractor", at: ["src/z.swift"] },
+      { kind: "unresolved-link", at: ["src/a.ts::A.seed", "src/x.ts:5"], reason: "hidden-caller", reach: { kind: "anything" } },
+      { kind: "hub", at: ["src/a.ts::A.other"], reason: "hub", reach: { kind: "anything" } },
+      { kind: "depth", at: ["src/b.ts::B.one"], limit: 5, reason: "depth", reach: { kind: "anything" } },
+      { kind: "depth", at: ["src/b.ts::B.two"], limit: 5, reason: "depth", reach: { kind: "anything" } },
+      { kind: "depth", at: ["src/b.ts::B.three"], limit: 5, reason: "depth", reach: { kind: "anything" } },
+      { kind: "depth", at: ["src/b.ts::B.four"], limit: 5, reason: "depth", reach: { kind: "anything" } },
+      { kind: "depth", at: ["src/b.ts::B.five"], limit: 5, reason: "depth", reach: { kind: "anything" } },
+      { kind: "depth", at: ["src/b.ts::B.six"], limit: 5, reason: "depth", reach: { kind: "anything" } },
+      { kind: "depth", at: ["src/b.ts::B.seven"], limit: 5, reason: "depth", reach: { kind: "anything" } },
+      { kind: "depth", at: ["src/b.ts::B.eight"], limit: 5, reason: "depth", reach: { kind: "anything" } },
+      { kind: "no-extractor", at: ["src/z.swift"], reason: "not-indexed", reach: { kind: "anything" } },
     ],
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: deep }) });
@@ -1611,8 +1611,8 @@ test("impact detail localizes every cut anchor while full JSON retains every ref
       entrypoints: [],
     },
     cuts: [
-      { kind: "unresolved-link", at: ["src/b.ts::B.user", "src/y.ts:7", "src/y.ts:9"] },
-      { kind: "depth", at: ["src/c.ts::C.top"], limit: 5 },
+      { kind: "unresolved-link", at: ["src/b.ts::B.user", "src/y.ts:7", "src/y.ts:9"], reason: "hidden-caller", reach: { kind: "anything" } },
+      { kind: "depth", at: ["src/c.ts::C.top"], limit: 5, reason: "depth", reach: { kind: "anything" } },
     ],
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: deep }) });
@@ -1633,7 +1633,7 @@ test("a workspace summary attributes counted cuts to their repository", async ()
     ...base(),
     status: "partial",
     value: { reads: [], impact: IMPACT, callSites: [], unmatched: [], external: [], unresolved: [] },
-    cuts: [{ kind: "unresolved-link", at: ["src/OrderController.java::OrderController.one", "src/app/page.ts:9"] }],
+    cuts: [{ kind: "unresolved-link", at: ["src/OrderController.java::OrderController.one", "src/app/page.ts:9"], reason: "hidden-caller", reach: { kind: "anything" } }],
   };
   const fact = { ...built, value: { ...value, sections: { ...value.sections, shop: section } } } as Fact<WorkspaceImpactValue>;
   const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
@@ -1648,7 +1648,7 @@ test("cuts that name a single path are one line per kind listing every path", as
     ...base(),
     status: "partial",
     value: IMPORTERS,
-    cuts: [{ kind: "no-extractor", at: ["src/C.swift"] }, { kind: "no-extractor", at: ["src/A.swift"] }, { kind: "no-extractor", at: ["src/B.swift"] }],
+    cuts: [{ kind: "no-extractor", at: ["src/C.swift"], reason: "not-indexed", reach: { kind: "anything" } }, { kind: "no-extractor", at: ["src/A.swift"], reason: "not-indexed", reach: { kind: "anything" } }, { kind: "no-extractor", at: ["src/B.swift"], reason: "not-indexed", reach: { kind: "anything" } }],
   } as Fact<ImportersValue>;
   const { session } = await setup({ importers: async () => ({ ok: true, value: partial }) });
   const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"] }));
@@ -1660,7 +1660,7 @@ test("cuts that name a single path are one line per kind listing every path", as
 test("with detail full, an unresolved-link cut renders the places in its anchor's file as line numbers and other files as path:line", async () => {
   const partial = impactFact({
     status: "partial",
-    cuts: [{ kind: "unresolved-link", at: ["src/a.ts::A.f", "src/a.ts:18", "src/a.ts:123 no-extractor", "src/b.ts:7"] }],
+    cuts: [{ kind: "unresolved-link", at: ["src/a.ts::A.f", "src/a.ts:18", "src/a.ts:123 no-extractor", "src/b.ts:7"], reason: "hidden-caller", reach: { kind: "anything" } }],
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
   const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], mode: "details" }));
@@ -1670,7 +1670,7 @@ test("with detail full, an unresolved-link cut renders the places in its anchor'
 
 test("with detail full, the places of a cut are grouped under their file, every place kept and the path printed once", async () => {
   const places = ["src/a.ts::A.f", ...["10", "11", "12", "40"].map((line) => `src/x.ts:${line}`), ...["7", "9"].map((line) => `src/y.ts:${line}`), "src/z.ts:3 no-extractor"];
-  const partial = impactFact({ status: "partial", cuts: [{ kind: "unresolved-link", at: places }] } as Partial<Fact<ImpactValue>>);
+  const partial = impactFact({ status: "partial", cuts: [{ kind: "unresolved-link", at: places, reason: "callee-unknown", reach: { kind: "anything" } }] } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
   const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], mode: "details" }));
   assert.match(text, /unresolved-link at src\/a\.ts::A\.f: src\/x\.ts: 10, 11, 12, 40, src\/y\.ts: 7, 9, src\/z\.ts \(no-extractor\):3$/m);
@@ -1683,9 +1683,9 @@ test("by default a cut names the declarations it could not settle to and the fil
   const partial = impactFact({
     status: "partial",
     cuts: [
-      { kind: "unresolved-link", at: ["src/a.ts::A.f", "src/x.ts:10", "src/x.ts:11", "src/y.ts:7"] },
-      { kind: "unresolved-link", at: ["src/a.ts::A.g", "src/x.ts:10"] },
-      { kind: "unresolved-link", at: ["src/z.ts", "src/z.ts:4"] },
+      { kind: "unresolved-link", at: ["src/a.ts::A.f", "src/x.ts:10", "src/x.ts:11", "src/y.ts:7"], reason: "hidden-caller", reach: { kind: "anything" } },
+      { kind: "unresolved-link", at: ["src/a.ts::A.g", "src/x.ts:10"], reason: "hidden-caller", reach: { kind: "anything" } },
+      { kind: "unresolved-link", at: ["src/z.ts", "src/z.ts:4"], reason: "callee-unknown", reach: { kind: "anything" } },
     ],
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
@@ -1702,7 +1702,7 @@ test("by default a cut names the declarations it could not settle to and the fil
 test("a summary names the references of a cut the file leads, so the reader settles it without a line", async () => {
   const partial = impactFact({
     status: "partial",
-    cuts: [{ kind: "unresolved-link", at: ["src/z.ts", "src/z.ts:4 Promise.resolve", "src/z.ts:9 req.context.get"] }],
+    cuts: [{ kind: "unresolved-link", at: ["src/z.ts", "src/z.ts:4 Promise.resolve", "src/z.ts:9 req.context.get"], reason: "callee-unknown", reach: { kind: "anything" } }],
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
   const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"] }));
@@ -1717,8 +1717,8 @@ test("two cuts led by the same file keep every reference they name", async () =>
   const partial = impactFact({
     status: "partial",
     cuts: [
-      { kind: "unresolved-link", at: ["src/z.ts", "src/z.ts:4 Promise.resolve"] },
-      { kind: "unresolved-link", at: ["src/z.ts", "src/z.ts:9 req.context.get"] },
+      { kind: "unresolved-link", at: ["src/z.ts", "src/z.ts:4 Promise.resolve"], reason: "callee-unknown", reach: { kind: "anything" } },
+      { kind: "unresolved-link", at: ["src/z.ts", "src/z.ts:9 req.context.get"], reason: "callee-unknown", reach: { kind: "anything" } },
     ],
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
@@ -1731,9 +1731,9 @@ test("a declaration whose places are exactly another's points at it instead of p
   const partial = impactFact({
     status: "partial",
     cuts: [
-      { kind: "unresolved-link", at: ["src/a.ts::A.h", "src/x.ts:1", "src/y.ts:2"] },
-      { kind: "unresolved-link", at: ["src/b.ts::B.g", "src/x.ts:1", "src/y.ts:2"] },
-      { kind: "unresolved-link", at: ["src/a.ts::A.f", "src/x.ts:1", "src/y.ts:2"] },
+      { kind: "unresolved-link", at: ["src/a.ts::A.h", "src/x.ts:1", "src/y.ts:2"], reason: "hidden-caller", reach: { kind: "anything" } },
+      { kind: "unresolved-link", at: ["src/b.ts::B.g", "src/x.ts:1", "src/y.ts:2"], reason: "hidden-caller", reach: { kind: "anything" } },
+      { kind: "unresolved-link", at: ["src/a.ts::A.f", "src/x.ts:1", "src/y.ts:2"], reason: "hidden-caller", reach: { kind: "anything" } },
     ],
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
@@ -1748,8 +1748,8 @@ test("a declaration whose places are exactly another's points at it instead of p
 
 test("unresolved declarations at different lines in one file do not claim the same places", async () => {
   const partial = impactFact({ status: "partial", cuts: [
-    { kind: "unresolved-link", at: ["src/a.ts::A", "src/use.ts:10"] },
-    { kind: "unresolved-link", at: ["src/a.ts::B", "src/use.ts:90"] },
+    { kind: "unresolved-link", at: ["src/a.ts::A", "src/use.ts:10"], reason: "hidden-caller", reach: { kind: "anything" } },
+    { kind: "unresolved-link", at: ["src/a.ts::B", "src/use.ts:90"], reason: "hidden-caller", reach: { kind: "anything" } },
   ] } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
   const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"] }));
@@ -1955,9 +1955,9 @@ test("entrypoints closes with the cut list of the map and of its section", async
     ...base(),
     status: "partial",
     value: [{ ...base(), status: "complete", value: ROUTE }],
-    cuts: [{ kind: "no-extractor", at: ["src/scripts/build.js"] }],
+    cuts: [{ kind: "no-extractor", at: ["src/scripts/build.js"], reason: "not-indexed", reach: { kind: "anything" } }],
   } as Fact<readonly Fact<Entrypoint>[]>;
-  const fact = { ...base(), status: "partial", value: { entrypoints: section }, cuts: [{ kind: "section", at: ["entrypoints"] }] } as EntrypointMapFact;
+  const fact = { ...base(), status: "partial", value: { entrypoints: section }, cuts: [{ kind: "section", at: ["entrypoints"], reason: "section-partial", reach: { kind: "anything" } }] } as EntrypointMapFact;
   const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
   const text = textOf(await session.callTool("ye_ast_entrypoints", {}));
   const lines = text.split("\n");
@@ -2798,7 +2798,7 @@ test("workspace impact text presents every repository's consequences before any 
       workspace: { ...built.value.workspace, repos: ["shop", "shop-mobile", "shop-web"] },
       sections: { ...built.value.sections, "shop-mobile": consumer("shop-mobile"), "shop-web": consumer("shop-web") },
     },
-    cuts: [{ kind: "no-extractor", at: ["src/unknown.swift"] }],
+    cuts: [{ kind: "no-extractor", at: ["src/unknown.swift"], reason: "not-indexed", reach: { kind: "anything" } }],
   };
   const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
   for (const detail of ["summary", "details"] as const) {
@@ -2819,7 +2819,7 @@ test("workspace impact text names an unknown contributing read beside independen
   const built = workspaceImpactFact();
   assert.notEqual(built.status, "unknown");
   if (built.status === "unknown") return;
-  const cuts: [Cut] = [{ kind: "not-exported", at: ["src/omitted.ts"] }];
+  const cuts: [Cut] = [{ kind: "not-exported", at: ["src/omitted.ts"], reason: "unwritten", reach: { kind: "anything" } }];
   const section: Fact<RepoImpact> = {
     ...base(),
     status: "partial",
@@ -2832,7 +2832,7 @@ test("workspace impact text names an unknown contributing read beside independen
       callSites: [], unmatched: [], external: [], unresolved: [],
     },
   };
-  const fact: Fact<WorkspaceImpactValue> = { ...built, status: "partial", cuts: [{ kind: "section", at: ["shop"] }], value: { ...built.value, sections: { shop: section } } };
+  const fact: Fact<WorkspaceImpactValue> = { ...built, status: "partial", cuts: [{ kind: "section", at: ["shop"], reason: "section-partial", reach: { kind: "anything" } }], value: { ...built.value, sections: { shop: section } } };
   const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
   for (const detail of ["summary", "details"] as const) {
     const text = textOf(await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE, mode: detail }));
@@ -3036,7 +3036,7 @@ test("workspace details attribute repository-local cuts to the owning snapshot",
   if (original.status === "unknown") throw new Error("expected workspace fact");
   const section = original.value.sections.shop!;
   if (section.status === "unknown") throw new Error("expected section");
-  const copy = { ...section, snapshot: { repo: "other", kind: "sha" as const, sha: "c".repeat(40) }, cuts: [{ kind: "no-extractor" as const, at: ["src/same.ts"] }] as const, status: "partial" as const };
+  const copy = { ...section, snapshot: { repo: "other", kind: "sha" as const, sha: "c".repeat(40) }, cuts: [{ kind: "no-extractor" as const, at: ["src/same.ts"], reason: "not-indexed", reach: { kind: "anything" } }] as const, status: "partial" as const };
   const fact: Fact<WorkspaceValue> = { ...original, value: { ...original.value, workspace: { ...original.value.workspace, repos: ["shop", "other"] }, repositorySnapshots: [...original.value.repositorySnapshots, { repo: "other", snapshot: copy.snapshot }], sections: { shop: section, other: copy } } };
   const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact } }) });
   try {
@@ -3526,7 +3526,7 @@ test("impact and callers identities include recorded semantics and complete sour
         ["config", { ...initial, inputs: { ...initial.inputs, config: "different" } }],
         ["producer", { ...initial, producer: { ...initial.producer, version: "2" } }],
         ["source value", { ...base(), inputs: initial.inputs, status: "complete", value: { ...IMPACT, seeds: [{ ...IMPACT.seeds[0]!, line: 32 }] } }],
-        ["status and cut", { ...initial, status: "partial", value: IMPACT, cuts: [{ kind: "depth", at: ["src/A.java"], limit: 2 }] }],
+        ["status and cut", { ...initial, status: "partial", value: IMPACT, cuts: [{ kind: "depth", at: ["src/A.java"], limit: 2, reason: "depth", reach: { kind: "anything" } }] }],
         ["merge base", { ...base(), inputs: initial.inputs, status: "complete", value: { ...IMPACT, mergeBase: "c".repeat(40) } }],
       ];
       for (const [label, fact] of variants) { current = fact; assert.notEqual(await identity(name), baseline, `${name}: ${label}`); }
@@ -3545,12 +3545,12 @@ for (const dimension of ["schema", "order", "cuts"] as const) {
         { file: "src/A.java", symbol: "f", line: 3, basis: "lines" },
         { file: "src/B.java", symbol: "g", line: 7, basis: "lines" },
       ] },
-      cuts: [{ kind: "depth", at: ["src/A.java"], limit: 2 }],
+      cuts: [{ kind: "depth", at: ["src/A.java"], limit: 2, reason: "depth", reach: { kind: "anything" } }],
     };
     const variants: Record<typeof dimension, Fact<ImpactValue>> = {
       schema: { ...initial, schema: "0.12.1" },
       order: { ...initial, value: { ...initial.value, seeds: [...initial.value.seeds].reverse() } },
-      cuts: { ...initial, cuts: [{ kind: "depth", at: ["src/B.java"], limit: 2 }] },
+      cuts: { ...initial, cuts: [{ kind: "depth", at: ["src/B.java"], limit: 2, reason: "depth", reach: { kind: "anything" } }] },
     };
     let current: Fact<ImpactValue> = initial;
     const { session } = await setup({ callers: async () => ({ ok: true, value: current }), ofChange: async () => ({ ok: true, value: current }) });
@@ -4035,7 +4035,7 @@ test("selected evidence pages replay the source and reject changed identities be
 test("selected SDK responses bind all categories and modes to actual public schemas", async () => {
   const replay = {version:1 as const,declaration:`ws-r1:${"d".repeat(64)}`,snapshots:[{repo:"shop",kind:"sha" as const,sha:"a".repeat(40)}]};
   const values: ImpactValue = {...IMPACT,modules:{origins:[{file:"old",change:"modified"}],modules:[{file:"old",snapshot:"base",depth:0,origins:[0]}],cost:{expansionsUsed:0}}};
-  const local = impactFact({status:"partial",cuts:[{kind:"depth",at:["root","a","b"]}],value:values,inputs:{...base().inputs,declaredConfig:{targets:["src/A.java:A.f"]}}});
+  const local = impactFact({status:"partial",cuts:[{kind:"depth",at:["root","a","b"],reason:"depth",reach:{kind:"anything"}}],value:values,inputs:{...base().inputs,declaredConfig:{targets:["src/A.java:A.f"]}}});
   const ws = workspaceImpactFact();
   if (ws.status !== "complete") throw new Error("fixture");
   const composite: Fact<WorkspaceImpactValue> = {...ws,inputs:{...base().inputs,declaredConfig:{targets:["src/A.java:A.f"]}},value:{...ws.value,sections:{...ws.value.sections,shop:{...ws.value.sections.shop!,status:"complete",value:{impact:values,reads:[],callSites:[],unmatched:[],external:[],unresolved:[]}},"shop-web":{...ws.value.sections["shop-web"]!,snapshot:{repo:"shop-web",kind:"sha",sha:"f".repeat(40)}}}}};
@@ -4172,7 +4172,7 @@ test("selected UI evidence preserves known and unknown components through all pu
     { status: "complete", value: { kind: "ui-route", name: "/unknown", path: "/unknown", component: "unknown", guards: [] }, evidence: [{ path: "routes.ts", line: 2 }, { path: "routes.ts", line: 2 }] },
     { status: "unknown", reason: "no-extractor", evidence: [{ path: "routes.ts", line: 3 }] },
   ];
-  const fact: EntrypointMapFact = { ...base(), status: "partial", cuts: [{ kind: "section", at: ["entrypoints"] }], value: { entrypoints: { ...base(), status: "partial", cuts: [{ kind: "no-extractor", at: ["routes.ts"] }], value: findings } } };
+  const fact: EntrypointMapFact = { ...base(), status: "partial", cuts: [{ kind: "section", at: ["entrypoints"], reason: "section-partial", reach: { kind: "anything" } }], value: { entrypoints: { ...base(), status: "partial", cuts: [{ kind: "no-extractor", at: ["routes.ts"], reason: "not-indexed", reach: { kind: "anything" } }], value: findings } } };
   const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
   try {
     const tool = (await session.listTools()).find(({ name }) => name === "ye_ast_entrypoints")!;
@@ -4240,7 +4240,7 @@ test("an invalid select names the selection shapes its tool accepts", async () =
 
 test("a full answer with cuts prints a copyable cut selection", async () => {
   const targets = [{ file: "src/OrderService.java", symbol: "OrderService.find" }];
-  const fact = impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/OrderService.java::OrderService.find", "src/OrderController.java:17"], limit: 2 }], inputs: { ...base().inputs, declaredConfig: { targets: ["src/OrderService.java:OrderService.find"] } } });
+  const fact = impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/OrderService.java::OrderService.find", "src/OrderController.java:17"], limit: 2, reason: "depth", reach: { kind: "anything" } }], inputs: { ...base().inputs, declaredConfig: { targets: ["src/OrderService.java:OrderService.find"] } } });
   const { session } = await setup({ callers: async () => ({ ok: true, value: fact }), ofChange: async () => ({ ok: true, value: fact }) });
   try {
     for (const [name, args] of [["ye_ast_callers", { targets }], ["ye_ast_impact", { base: "main" }]] as const) {
@@ -4253,7 +4253,7 @@ test("a full answer with cuts prints a copyable cut selection", async () => {
 
 test("recovery recipes appear once in content across ordinary and selected response modes", async () => {
   const targets = [{ file: "src/OrderService.java", symbol: "OrderService.find" }];
-  const fact = impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/OrderService.java::OrderService.find", "src/OrderController.java:17"], limit: 2 }], inputs: { ...base().inputs, declaredConfig: { targets: ["src/OrderService.java:OrderService.find"] } } });
+  const fact = impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/OrderService.java::OrderService.find", "src/OrderController.java:17"], limit: 2, reason: "depth", reach: { kind: "anything" } }], inputs: { ...base().inputs, declaredConfig: { targets: ["src/OrderService.java:OrderService.find"] } } });
   const { session } = await setup({ callers: async () => ({ ok: true, value: fact }), ofChange: async () => ({ ok: true, value: fact }) });
   const cases = [
     { name: "ye_ast_entrypoints", args: {}, select: { kind: "entrypoint-evidence", findingIndex: 0 } },
@@ -4302,14 +4302,14 @@ function printedSelectors(text: string): Record<string, unknown>[] {
 test("every printed selector example executes through its recovery recipe, and pages continue only while records remain", async () => {
   const replay = { version: 1 as const, declaration: `ws-r1:${"d".repeat(64)}`, snapshots: [{ repo: "shop", kind: "sha" as const, sha: "a".repeat(40) }] };
   const value: ImpactValue = { ...IMPACT, modules: { origins: [{ file: "old", change: "modified" }], modules: [{ file: "old", snapshot: "base", depth: 1, origins: [0] }], cost: { expansionsUsed: 1 } } };
-  const cuts: [Cut, ...Cut[]] = [{ kind: "depth", at: ["src/OrderService.java::OrderService.find", "src/a.ts:3", "src/b.ts:4"], limit: 2 }];
+  const cuts: [Cut, ...Cut[]] = [{ kind: "depth", at: ["src/OrderService.java::OrderService.find", "src/a.ts:3", "src/b.ts:4"], limit: 2, reason: "depth", reach: { kind: "anything" } }];
   const inputs = { ...base().inputs, declaredConfig: { targets: ["src/A.java:A.f"], walk: { depth: 2 } } };
   const local = impactFact({ status: "partial", cuts, value, inputs });
-  const map = mapFact({ status: "partial", cuts: [{ kind: "no-extractor", at: ["src/a.js", "src/b.js"] }] } as Partial<EntrypointMapFact>);
+  const map = mapFact({ status: "partial", cuts: [{ kind: "no-extractor", at: ["src/a.js", "src/b.js"], reason: "not-indexed", reach: { kind: "anything" } }] } as Partial<EntrypointMapFact>);
   const ws = workspaceImpactFact();
   if (ws.status !== "complete") throw new Error("fixture");
   const section: Fact<RepoImpact> = { ...base({ inputs }), status: "partial", cuts, value: { impact: value, reads: [], callSites: [], unmatched: [], external: [], unresolved: [] } };
-  const composite: Fact<WorkspaceImpactValue> = { ...ws, status: "partial", cuts: [{ kind: "section", at: ["shop"] }], inputs, value: { ...ws.value, sections: { ...ws.value.sections, shop: section } } };
+  const composite: Fact<WorkspaceImpactValue> = { ...ws, status: "partial", cuts: [{ kind: "section", at: ["shop"], reason: "section-partial", reach: { kind: "anything" } }], inputs, value: { ...ws.value, sections: { ...ws.value.sections, shop: section } } };
   const { session } = await setup({
     map: async () => ({ ok: true, value: map }),
     callers: async () => ({ ok: true, value: local }),
@@ -4402,7 +4402,7 @@ test("contract consequences full mode delivers every answer with its chains and 
   const chain = [{ step: "call", evidence: { repo: "web", path: "src/client.ts", line: 3 } }];
   const finding = { status: "complete", value: { repo: "web", link: { id: "l", basis: "exact", call: { file: "src/client.ts", line: 3, symbol: "load" }, handler: { repo: "shop", path: "src/Owner.java", symbol: "show", line: 9 } }, verdict: { kind: "incompatible", witness: "null", at: 1, failing: {}, capability: "member" }, operation: {}, path: "name", changed: "name", chain }, evidence: [{ repo: "web", path: "src/use.ts", line: 5 }] };
   const value = { repositorySnapshots: [{ repo: "shop", snapshot: base().snapshot }], answers: [{ hypothesis: HYPOTHESIS, oldContract: "present-and-non-null", status: "complete", findings: [finding] }, { hypothesis: { ...HYPOTHESIS, path: "/none" }, oldContract: "present-and-non-null", status: "unknown", reason: "no-project", detail: "served by no repository" }] };
-  const fact = { ...base(), status: "partial", cuts: [{ kind: "section", at: ["answers.1"] }], value } as unknown as Fact<ConsequencesValue>;
+  const fact = { ...base(), status: "partial", cuts: [{ kind: "section", at: ["answers.1"], reason: "section-partial", reach: { kind: "anything" } }], value } as unknown as Fact<ConsequencesValue>;
   const { session } = await setup({ consequences: async () => ({ ok: true, value: fact }) });
   try {
     const full = resultFields(await session.callTool("ye_ast_contract_consequences", { hypotheses: [HYPOTHESIS], mode: "full" }));

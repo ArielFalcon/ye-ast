@@ -7,7 +7,7 @@ import { dependencyDiagnostic } from "./dependency-schema.ts";
 import { z } from "zod";
 import { HTTP_METHODS } from "../core/domain/entrypoints/http-route.ts";
 import { CALL_SITE_CAUSES } from "../core/domain/topology/call-site.ts";
-import { TRUST_MODES, type DeclaredConfig } from "../core/domain/shared/fact.ts";
+import { CUT_REASONS, CUT_SUB_REASONS, TRUST_MODES, type DeclaredConfig } from "../core/domain/shared/fact.ts";
 import type { Part } from "../core/ports/evidence-composition.port.ts";
 import { compositionIdSchema as idOf } from "./composition-id-schema.ts";
 
@@ -23,11 +23,19 @@ const strings = z.array(z.string());
 const recordedCollectionState = z.discriminatedUnion("state", [z.strictObject({ state: z.literal("absent") }), z.strictObject({ state: z.literal("present"), count })]);
 
 export const unknownReason = z.enum(["no-extractor", "no-project", "out-of-scope", "index-unavailable", "source-unreadable", "unresolved", "revision-unavailable", "deadline"]);
+const cutReach = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("anything"), runtime: z.enum(["java", "typescript"]).exactOptional() }),
+  z.strictObject({ kind: z.literal("callers-of"), declarations: strings }),
+  z.strictObject({ kind: z.literal("call-at"), place: z.string() }),
+  z.strictObject({ kind: z.literal("module"), importer: z.string(), specifiers: z.array(z.strictObject({ specifier: z.string(), package: z.boolean().exactOptional() })) }),
+  z.strictObject({ kind: z.literal("call-site"), transport: z.string(), method: z.string().exactOptional(), template: z.string().exactOptional() }),
+]);
 export const cut = z.strictObject({
   kind: z.enum(["depth", "hub", "caller-budget", "node-cap", "unresolved-link", "build-output", "deadline", "section", "not-exported", "no-extractor"]),
   at: strings,
-  reason: unknownReason.exactOptional(),
-  detail: z.enum(["aspect may replace the body", "generated implementation", "dispatch not proven"]).exactOptional(),
+  reason: z.enum(CUT_REASONS),
+  subReason: z.enum(CUT_SUB_REASONS).exactOptional(),
+  reach: cutReach,
   dependency: dependencyDiagnostic.exactOptional(),
   limit: z.number().exactOptional(),
 });

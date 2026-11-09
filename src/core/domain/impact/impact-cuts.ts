@@ -1,8 +1,8 @@
 import type { RemovedDeclaration } from "../change/seeds.ts";
-import { sharesRuntime } from "../languages/call-targets.ts";
+import { fileReach, sharesRuntime } from "../languages/call-targets.ts";
 import { nameTail } from "../shared/call-place.ts";
 import { compareText } from "../shared/code-node.ts";
-import type { Cut, UnknownReason } from "../shared/fact.ts";
+import type { Cut, CutReach, CutReason } from "../shared/fact.ts";
 
 /** A reference the index could not resolve to a declaration. */
 export interface UnresolvedUse {
@@ -94,18 +94,40 @@ function isKnownReference(reference: UnresolvedUse, known: ReadonlySet<string>, 
  * declaration, led by it, at every such call, as a reference the index left unresolved that names it is cut.
  */
 export function attributedCallCuts(calls: readonly { declaration: { file: string; name: string }; place: { file: string; line: number; name: string } }[]): Cut[] {
-  return [...Map.groupBy(calls, ({ declaration }) => declarationAnchor(declaration.file, declaration.name))].map(([anchor, here]) => unresolvedLinkAt(anchor, new Set(here.map(({ place }) => placeAt(place.file, place.line, place.name)))));
+  return [...Map.groupBy(calls, ({ declaration }) => declarationAnchor(declaration.file, declaration.name))].map(([anchor, here]) => unresolvedLinkAt(anchor, new Set(here.map(({ place }) => placeAt(place.file, place.line, place.name))), "hidden-caller", callersOf([anchor])));
 }
 
-function unresolvedLinkAt(anchor: string, places: Iterable<string>): Cut {
-  return { kind: "unresolved-link", at: [anchor, ...[...places].sort()] };
+function unresolvedLinkAt(anchor: string, places: Iterable<string>, reason: CutReason, reach: CutReach): Cut {
+  return { kind: "unresolved-link", at: [anchor, ...[...places].sort()], reason, reach };
+}
+
+const callersOf = (declarations: Iterable<string>): CutReach => ({ kind: "callers-of", declarations: [...new Set(declarations)].sort() });
+
+/** A cut at one file, which could hide anything in the file's runtime. */
+export function fileCut(kind: Cut["kind"], file: string, reason: CutReason): Cut {
+  return { kind, at: [file], reason, reach: fileReach(file) };
+}
+
+/** An asked file whose declarations the index does not place: not indexed when the export listed it, otherwise not exported. */
+export function unheldCut(file: string, listed: ReadonlySet<string>): Cut {
+  return listed.has(file) ? fileCut("no-extractor", file, "not-indexed") : fileCut("not-exported", file, "unwritten");
 }
 
 /** One unresolved-link cut per file, anchored at the file, its places after it, as `Cut.at` reads everywhere. */
-export function unresolvedPlaceCuts(places: readonly { file: string; line: number; reason: string }[], reason?: UnknownReason): Cut[] {
+function placeCuts(places: readonly { file: string; line: number; reason: string }[], reason: CutReason, reach: (file: string, here: readonly { reason: string }[]) => CutReach): Cut[] {
   return [...Map.groupBy(places, (place) => place.file)]
     .sort(([left], [right]) => compareText(left, right))
-    .map(([file, here]) => ({ ...unresolvedLinkAt(file, new Set(here.map((place) => placeAt(place.file, place.line, place.reason)))), ...(reason === undefined ? {} : { reason }) }));
+    .map(([file, here]) => unresolvedLinkAt(file, new Set(here.map((place) => placeAt(place.file, place.line, place.reason))), reason, reach(file, here)));
+}
+
+/** The module specifiers no resolver rule placed, one cut per importing file. */
+export function unresolvedSpecifierCuts(specifiers: readonly { file: string; line: number; specifier: string }[]): Cut[] {
+  return placeCuts(specifiers.map(({ file, line, specifier }) => ({ file, line, reason: specifier })), "specifier", (importer, here) => ({ kind: "module", importer, specifiers: [...new Set(here.map(({ reason }) => reason))].sort().map((specifier) => ({ specifier })) }));
+}
+
+/** Places whose data a reader could not follow, for `reason`, one cut per file: what they would bind is anything. */
+export function unresolvedPlaceCuts(places: readonly { file: string; line: number; reason: string }[], reason: CutReason): Cut[] {
+  return placeCuts(places, reason, fileReach);
 }
 
 /** Whether the reference names a declaration without qualifying it, so its tail is the whole name. */
@@ -147,6 +169,7 @@ export function unresolvedLinkCuts(
   const pointingCache = new Map<string, readonly WalkedDeclaration[]>();
   const hidden = new Map<string, Set<string>>();
   const unattributed = new Map<string, Set<string>>();
+  const unattributedNames = new Map<string, Set<string>>();
   const loaders = new Map<string, Set<string>>();
   const loadsAt = Map.groupBy(loads, (load) => placeAt(load.file, load.line));
   const namesModule = (place: string): boolean => {
@@ -185,12 +208,17 @@ export function unresolvedLinkCuts(
       hidden.set(key, (hidden.get(key) ?? new Set()).add(place));
     }
     const decided = pointing.some(settledAt);
-    if (attributing.length === 0 && pointing.length > 0 && !decided) unattributed.set(reference.file, (unattributed.get(reference.file) ?? new Set()).add(named));
+    if (attributing.length === 0 && pointing.length > 0 && !decided) {
+      unattributed.set(reference.file, (unattributed.get(reference.file) ?? new Set()).add(named));
+      const names = unattributedNames.get(reference.file) ?? new Set();
+      for (const declaration of pointing) names.add(declarationAnchor(declaration.file, declaration.name));
+      unattributedNames.set(reference.file, names);
+    }
   }
   return [
-    ...[...hidden].map(([declaration, places]) => unresolvedLinkAt(declaration, places)),
-    ...[...loaders].map(([file, places]) => unresolvedLinkAt(file, places)),
-    ...[...unattributed].map(([file, places]) => unresolvedLinkAt(file, places)),
+    ...[...hidden].map(([declaration, places]) => unresolvedLinkAt(declaration, places, "hidden-caller", callersOf([declaration]))),
+    ...[...loaders].map(([file, places]) => unresolvedLinkAt(file, places, "dynamic-load", fileReach(file))),
+    ...[...unattributed].map(([file, places]) => unresolvedLinkAt(file, places, "name-only", callersOf(unattributedNames.get(file)!))),
   ];
 }
 
@@ -221,7 +249,7 @@ export function removedDeclarationCuts(
       places.set(key, (places.get(key) ?? new Set()).add(placeAt(reference.file, reference.line)));
     }
   }
-  return [...places].map(([declaration, at]) => unresolvedLinkAt(declaration, at));
+  return [...places].map(([declaration, at]) => unresolvedLinkAt(declaration, at, "removed-declaration", callersOf([declaration])));
 }
 
 /** An injection or template use the relation reader named but could not place: where, and why. */
@@ -240,5 +268,5 @@ export function unreadRelationCuts(unread: readonly UnreadRelation[], walkedFile
   const reached = unread.filter(({ path }) => walkedFiles.has(path) || (templateOwners.get(path) ?? []).some((owner) => walkedFiles.has(owner)));
   return [...Map.groupBy(reached, ({ path }) => path)]
     .toSorted(([a], [b]) => compareText(a, b))
-    .map(([path, places]) => unresolvedLinkAt(path, places.map(({ line, reason }) => placeAt(path, line, reason))));
+    .map(([path, places]) => unresolvedLinkAt(path, places.map(({ line, reason }) => placeAt(path, line, reason)), "relation-unread", fileReach(path)));
 }

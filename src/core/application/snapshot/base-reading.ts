@@ -1,5 +1,5 @@
 import { isReadSource } from "../../domain/languages/profiles.ts";
-import { unreadOutputCuts, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
+import { refusedLinkCuts, unreadOutputCuts, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
 import type { BuildOutputInput, Cut, SnapshotRef } from "../../domain/shared/fact.ts";
 import type { ScopeRequest } from "../../domain/shared/scope.ts";
 import type { CodeGraphReader, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
@@ -122,10 +122,9 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
     const outputs = request.buildOutputs ?? deps.declaredOutputs?.(request.repo) ?? [];
     if (bindings === undefined || inputs === undefined || outputs.length === 0) return NOT_TYPED;
     const { signal } = request;
-    const unread: TypedReading = { cuts: unreadOutputCuts(outputs) };
-    if (snapshot.kind === "live") return unread;
+    if (snapshot.kind === "live") return { cuts: unreadOutputCuts(outputs, "live-tree") };
     const read = await inputs.filesAt({ repo: { path: request.repo }, scope: { exclude: request.scope?.exclude ?? [] }, ...(signal === undefined ? {} : { signal }) }, snapshot.sha);
-    if (!read.ok) return read.fault.kind === "aborted" ? "aborted" : unread;
+    if (!read.ok) return read.fault.kind === "aborted" ? "aborted" : { cuts: unreadOutputCuts(outputs, "inputs-unreadable") };
     let answer;
     try {
       answer = await bindings.of([...tree.sources, ...read.value.files], outputs, signal, prepared?.facts);
@@ -133,9 +132,9 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       if (signal?.aborted) return "aborted";
       throw error;
     }
-    if (answer.status === "unused") return { cuts: [...read.value.cuts, ...unreadOutputCuts(outputs, new Map(answer.outputs.map(({ at, stale }) => [at, stale.map(({ path }) => path)])))] };
-    if (answer.status === "fault") return { cuts: [...read.value.cuts, ...unreadOutputCuts(outputs, new Map(answer.fault.kind === "unreadable" ? answer.fault.outputs.map(({ at, paths }) => [at, paths]) : []))] };
-    return { typed: typedCallsOf(answer.bindings), outputs: answer.outputs, cuts: [...read.value.cuts, ...(answer.refused.length === 0 ? [] : [{ kind: "build-output" as const, at: answer.refused }])] };
+    if (answer.status === "unused") return { cuts: [...read.value.cuts, ...unreadOutputCuts(outputs, "version-mismatch", new Map(answer.outputs.map(({ at, stale }) => [at, stale.map(({ path }) => path)])))] };
+    if (answer.status === "fault") return { cuts: [...read.value.cuts, ...(answer.fault.kind === "unreadable" ? unreadOutputCuts(outputs, "outputs-unreadable", new Map(answer.fault.outputs.map(({ at, paths }) => [at, paths]))) : unreadOutputCuts(outputs, "checker-failed"))] };
+    return { typed: typedCallsOf(answer.bindings), outputs: answer.outputs, cuts: [...read.value.cuts, ...refusedLinkCuts(answer.refused)] };
   }
 
   return {

@@ -139,7 +139,7 @@ const CHAIN_EDGES = [call("b", "a"), call("c", "b"), call("d", "c")];
 test("a depth bound stops at that level and cuts where more callers were left", () => {
   const result = walk(CHAIN_NODES, CHAIN_EDGES, ["a"], { depth: 2 });
   assert.deepEqual(summary(result), ["a@0", "b@1", "c@2"]);
-  assert.deepEqual(result.cuts, [{ kind: "depth", at: ["src/c.ts::c"], limit: 2 }]);
+  assert.deepEqual(result.cuts, [{ kind: "depth", at: ["src/c.ts::c"], limit: 2, reason: "depth", reach: { kind: "anything" } }]);
 });
 
 test("a budget that stops several symbols is one cut per symbol, sorted by name, not by position", () => {
@@ -147,8 +147,8 @@ test("a budget that stops several symbols is one cut per symbol, sorted by name,
   const edges = [call("zeta", "seed"), call("alpha", "seed"), call("beyondZ", "zeta"), call("beyondA", "alpha")];
   const result = walk(nodes, edges, ["seed"], { depth: 1 });
   assert.deepEqual(result.cuts, [
-    { kind: "depth", at: ["src/same.ts::alpha"], limit: 1 },
-    { kind: "depth", at: ["src/same.ts::zeta"], limit: 1 },
+    { kind: "depth", at: ["src/same.ts::alpha"], limit: 1, reason: "depth", reach: { kind: "anything" } },
+    { kind: "depth", at: ["src/same.ts::zeta"], limit: 1, reason: "depth", reach: { kind: "anything" } },
   ]);
 });
 
@@ -161,7 +161,7 @@ test("a depth bound that stops where nothing is left cuts nothing", () => {
 test("a depth of zero reaches the seeds alone", () => {
   const result = walk(CHAIN_NODES, CHAIN_EDGES, ["a"], { depth: 0 });
   assert.deepEqual(summary(result), ["a@0"]);
-  assert.deepEqual(result.cuts, [{ kind: "depth", at: ["src/a.ts::a"], limit: 0 }]);
+  assert.deepEqual(result.cuts, [{ kind: "depth", at: ["src/a.ts::a"], limit: 0, reason: "depth", reach: { kind: "anything" } }]);
 });
 
 test("a symbol with more callers than the hub bound is kept and not expanded; one at the bound is expanded", () => {
@@ -169,7 +169,7 @@ test("a symbol with more callers than the hub bound is kept and not expanded; on
   const edges = [call("hub", "seed"), call("c1", "hub"), call("c2", "hub"), call("c3", "hub"), call("beyond", "c1")];
   const stopped = walk(nodes, edges, ["seed"], { hubFanIn: 2 });
   assert.deepEqual(summary(stopped), ["seed@0", "hub@1"]);
-  assert.deepEqual(stopped.cuts, [{ kind: "hub", at: ["src/hub.ts::hub"], limit: 2 }]);
+  assert.deepEqual(stopped.cuts, [{ kind: "hub", at: ["src/hub.ts::hub"], limit: 2, reason: "hub", reach: { kind: "anything" } }]);
   const atBound = walk(nodes, edges, ["seed"], { hubFanIn: 3 });
   assert.deepEqual(summary(atBound), ["seed@0", "hub@1", "c1@2", "c2@2", "c3@2", "beyond@3"]);
   assert.deepEqual(atBound.cuts, []);
@@ -184,7 +184,7 @@ test("the hub bound and the reported fan-in count calls and instantiations alone
   assert.equal(bounded.reached.find((r) => r.symbol.id === "hub")?.fanIn, 2);
   const tighter = walk(nodes, edges, ["seed"], { hubFanIn: 1 });
   assert.deepEqual(summary(tighter), ["seed@0", "hub@1"]);
-  assert.deepEqual(tighter.cuts, [{ kind: "hub", at: ["src/hub.ts::hub"], limit: 1 }]);
+  assert.deepEqual(tighter.cuts, [{ kind: "hub", at: ["src/hub.ts::hub"], limit: 1, reason: "hub", reach: { kind: "anything" } }]);
 });
 
 test("a caller that both references and calls a symbol counts once, whichever edge is the stronger", () => {
@@ -200,7 +200,7 @@ test("an expansion budget follows the callers of that many symbols in position o
   const edges = [call("b", "a"), call("c", "a"), call("x", "b"), call("y", "c")];
   const result = walk(nodes, edges, ["a"], { expansions: 2 });
   assert.deepEqual(summary(result), ["a@0", "b@1", "c@1", "x@2"]);
-  assert.deepEqual(result.cuts, [{ kind: "caller-budget", at: ["src/c.ts::c"], limit: 2 }]);
+  assert.deepEqual(result.cuts, [{ kind: "caller-budget", at: ["src/c.ts::c"], limit: 2, reason: "caller-budget", reach: { kind: "anything" } }]);
 });
 
 test("a hub stopped by the bound whose callers were all reached already cuts nothing", () => {

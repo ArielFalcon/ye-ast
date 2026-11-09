@@ -1,3 +1,4 @@
+import { CUT_REASONS } from "../core/domain/shared/fact.ts";
 import { dependencyDiagnostic } from "./dependency-schema.ts";
 import { z } from 'zod';
 import { RESULT_IDENTITY_PATTERN } from './evidence-cursor.ts';
@@ -178,7 +179,7 @@ export function selectedOutputFor(tool: Tool, deps: SelectedOutputDeps) {
     {select:handlerSelection, context:z.strictObject({owner:impactOwner,snapshot,handler,matchedEntrypointCount:index,interpretation:z.literal('recorded-origin-union')}), item:z.strictObject({seedIndex:index,seed:z.strictObject({file:z.string(),symbol:z.string(),line:z.number(),endLine:z.number().optional(),basis:z.enum(['lines','top-level','resource','requested'])})})},
     {select:moduleSelection, context:z.strictObject({owner:impactOwner,snapshot,module:z.strictObject({file:z.string(),snapshot:z.enum(['base','head']),depth:z.number(),via:moduleVia.optional()}),originCount:index}), item:z.strictObject({originIndex:index,origin:z.strictObject({file:z.string(),change:z.enum(['added','modified','deleted'])})})},
     {select:findingSelection, context:z.strictObject({findingIndex:index,section:analysis,finding}), item:z.strictObject({evidenceIndex:index,evidence:evidence.element})},
-    {select:cutSelection, context:z.strictObject({owner:cutOwner,snapshot,analysis,cutIndex:index,kind:cutKind,reason:reason.optional(),dependency:dependencyDiagnostic.optional(),anchor:z.string(),limit:z.number().optional()}), item:z.strictObject({atIndex:positive,place:z.string()})},
+    {select:cutSelection, context:z.strictObject({owner:cutOwner,snapshot,analysis,cutIndex:index,kind:cutKind,reason:z.enum(CUT_REASONS),dependency:dependencyDiagnostic.optional(),anchor:z.string(),limit:z.number().optional()}), item:z.strictObject({atIndex:positive,place:z.string()})},
     {select:linkSelection, context:z.strictObject({link,direction:z.enum(['upstream','downstream']),reachCount:index,endpoints:z.strictObject({from:z.strictObject({snapshot,analysis}),to:z.strictObject({snapshot,analysis})})}), item:z.union([z.strictObject({position:index,linkId:z.string(),link}),z.strictObject({position:index,linkId:z.string(),unavailable:z.literal(true)})])},
   ];
   const allowed = tool === 'entrypoints' ? categories.slice(2,4) : tool === 'callers' ? [categories[0]!,categories[3]!,categories[4]!] : [categories[0]!,categories[1]!,categories[3]!,categories[4]!];

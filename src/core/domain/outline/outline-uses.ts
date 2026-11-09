@@ -1,4 +1,5 @@
 import { declarationAnchor, placeAt } from "../impact/impact-cuts.ts";
+import { fileReach } from "../languages/call-targets.ts";
 import { compareText } from "../shared/code-node.ts";
 import type { Cut } from "../shared/fact.ts";
 import type { OutlinePlace, OutlineUse, OutlineUseTarget } from "./outline-fact.ts";
@@ -37,7 +38,8 @@ export function unprovedUseCuts(file: string, path: string, unproved: readonly U
   return [...Map.groupBy(unproved, (use) => use.root)].map(([, uses]) => ({
     kind: "unresolved-link",
     at: [declarationAnchor(file, path), ...[...new Set(uses.map((use) => placeAt(file, use.line, use.spelling)))].sort(compareText)],
-    reason: "unresolved",
+    reason: "use-unproven",
+    reach: fileReach(file),
   }));
 }
 

@@ -35,7 +35,17 @@ interface Cut {
     | "not-exported" | "no-extractor";
   at: string[];
   limit?: number;
+  reason: CutReason;                  // ADR-0042 decision 1: why the cut exists, one closed member per emitter situation
+  subReason?: CutSubReason;           // why a dispatch was not proven, or "capability-absent"
+  reach: CutReach;                    // ADR-0042 decision 2: what the cut could hide
 }
+
+type CutReach =
+  | { kind: "anything"; runtime?: "java" | "typescript" }
+  | { kind: "callers-of"; declarations: string[] }
+  | { kind: "call-at"; place: string }
+  | { kind: "module"; importer: string; specifiers: { specifier: string; package?: boolean }[] }
+  | { kind: "call-site"; transport: string; method?: string; template?: string };
 
 interface DeclaredScope {
   languages: string[]; frameworks: string[]; include: string[]; exclude: string[];

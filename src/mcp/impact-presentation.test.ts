@@ -76,14 +76,14 @@ test("workspace cut anchors and distinct limits stay with their owning repositor
   const symbols = Array.from({ length: 8 }, (_, i) => ({ file: "same-relative-path.ts", line: i + 1, symbol: `use${i}`, kind: "function", depth: 0, confidence: 1, fanIn: 0 }));
   const section = (depth: number): Fact<RepoImpact> => ({
     ...base, status: "partial",
-    cuts: [{ kind: "depth", at: ["same-relative-path.ts::use0"], limit: depth + 1 }, ...symbols.slice(1).map((symbol) => ({ kind: "depth" as const, at: [`${symbol.file}::${symbol.symbol}`], limit: depth + 1 }))],
+    cuts: [{ kind: "depth", at: ["same-relative-path.ts::use0"], limit: depth + 1, reason: "depth", reach: { kind: "anything" } }, ...symbols.slice(1).map((symbol) => ({ kind: "depth" as const, at: [`${symbol.file}::${symbol.symbol}`], limit: depth + 1, reason: "depth" as const, reach: { kind: "anything" as const } }))],
     value: { reads: [], callSites: [], unmatched: [], external: [], unresolved: [], impact: { ...impact, seeds: [], entrypoints: [], symbols: symbols.map((symbol) => ({ ...symbol, depth })) } },
   });
   const value: WorkspaceImpactValue = {
     workspace: { repos: ["a", "b"], gateways: [], unmatchedGateways: [], unserved: [], source: "request" },
     repositorySnapshots: [], trigger: { repo: "a" }, sections: { a: section(0), b: section(4) }, links: [],
   };
-  const workspaceFact: Fact<WorkspaceImpactValue> = { ...base, status: "partial", cuts: [{ kind: "section", at: ["a", "b"] }], value };
+  const workspaceFact: Fact<WorkspaceImpactValue> = { ...base, status: "partial", cuts: [{ kind: "section", at: ["a", "b"], reason: "section-partial", reach: { kind: "anything" } }], value };
   for (const detail of ["summary", "details"] as const) {
     const output = renderWorkspaceImpact(workspaceFact, detail);
     const a = output.split("cuts for repository a:")[1]?.split("cuts for repository b:")[0] ?? "";
@@ -147,8 +147,8 @@ test("detailed impact retains the nearest dependency frontier and reached handle
 
 test("impact detail localizes cut anchors and limits while counting their reference places", () => {
   const partial: Fact<ImpactValue> = { ...base, status: "partial", value: impact, cuts: [
-    { kind: "unresolved-link", at: ["service.ts::Service.read", "consumer-a.ts:12", "consumer-b.ts:91"] },
-    { kind: "depth", at: ["route.ts::handler"], limit: 4 },
+    { kind: "unresolved-link", at: ["service.ts::Service.read", "consumer-a.ts:12", "consumer-b.ts:91"], reason: "hidden-caller", reach: { kind: "anything" } },
+    { kind: "depth", at: ["route.ts::handler"], limit: 4, reason: "depth", reach: { kind: "anything" } },
   ] };
   const summary = renderImpact(partial);
   const detail = renderImpact(partial, "details");
@@ -440,7 +440,7 @@ test("unavailable recovery keeps the reason and does not promise executable look
 });
 
 test("unavailable recovery labels cut coordinates without advertising selection", () => {
-  const partial: Fact<ImpactValue> = { ...fact, status: "partial", cuts: [{ kind: "depth", at: ["src/file.ts"], limit: 1 }] };
+  const partial: Fact<ImpactValue> = { ...fact, status: "partial", cuts: [{ kind: "depth", at: ["src/file.ts"], limit: 1, reason: "depth", reach: { kind: "anything" } }] };
   const text = renderImpact(partial, "details", { tool: "callers", recovery: { version: 1, status: "unavailable", reason: "deadline" } });
   assert.match(text, /cutIndex/);
   assert.doesNotMatch(text, /lookup example:|Selection lookup:/);
@@ -554,7 +554,7 @@ test("a change summary counted per changed area counts module dependencies per a
 });
 
 test("established walk bounds name their budget field; ambiguous or unrecorded bounds name none", () => {
-  const cuts: [Cut, ...Cut[]] = [{ kind: "depth", at: ["a.ts::a"], limit: 2 }, { kind: "hub", at: ["b.ts::b"], limit: 40 }, { kind: "caller-budget", at: ["c.ts::c"], limit: 9 }];
+  const cuts: [Cut, ...Cut[]] = [{ kind: "depth", at: ["a.ts::a"], limit: 2, reason: "depth", reach: { kind: "anything" } }, { kind: "hub", at: ["b.ts::b"], limit: 40, reason: "hub", reach: { kind: "anything" } }, { kind: "caller-budget", at: ["c.ts::c"], limit: 9, reason: "caller-budget", reach: { kind: "anything" } }];
   const withWalk = (walk?: WalkBounds): Fact<ImpactValue> => ({ ...base, inputs: { ...base.inputs, declaredConfig: walk === undefined ? {} : { walk } }, status: "partial", cuts, value: { ...impact, entrypoints: [] } });
   for (const detail of ["summary", "details", "full"] as const) {
     const established = renderImpact(withWalk({ depth: 2, hubFanIn: 40, expansions: 9 }), detail);
@@ -568,7 +568,7 @@ test("established walk bounds name their budget field; ambiguous or unrecorded b
     workspace: { repos: ["a"], gateways: [], unmatchedGateways: [], unserved: [], source: "none" }, repositorySnapshots: [], trigger: { repo: "a" },
     sections: { a: { ...base, inputs: { ...base.inputs, declaredConfig: { walk: { depth: 2 } } }, status: "partial", cuts, value: { reads: [], impact: { ...impact, entrypoints: [] }, callSites: [], unmatched: [], external: [], unresolved: [] } } }, links: [],
   };
-  const sectionText = renderWorkspaceImpact({ ...base, status: "partial", cuts: [{ kind: "section", at: ["a"] }], value: workspace }, "summary").split("cuts for repository a:")[1] ?? "";
+  const sectionText = renderWorkspaceImpact({ ...base, status: "partial", cuts: [{ kind: "section", at: ["a"], reason: "section-partial", reach: { kind: "anything" } }], value: workspace }, "summary").split("cuts for repository a:")[1] ?? "";
   assert.match(sectionText, /depth cuts stopped at the walk bound budget\.depth 2/);
   assert.doesNotMatch(sectionText, /budget\.(hubFanIn|expansions)/);
 });

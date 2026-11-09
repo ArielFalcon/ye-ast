@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { composeSections, SCHEMA, type Fact, type FactBase } from "./fact.ts";
+import { composeSections, SCHEMA, withCuts, type Cut, type Fact, type FactBase } from "./fact.ts";
 
 function buildBase(): FactBase {
   return {
@@ -31,7 +31,7 @@ test("a composite whose sections are all complete is complete", () => {
 
 test("a composite cuts each incomplete section once, sorted by name, and never a complete one", () => {
   const sections = {
-    routes: { ...buildBase(), status: "partial", value: ["/orders"], cuts: [{ kind: "depth", at: ["src/app.ts"] }] },
+    routes: { ...buildBase(), status: "partial", value: ["/orders"], cuts: [{ kind: "depth", at: ["src/app.ts"], reason: "depth", reach: { kind: "anything" } }] },
     links: complete([]),
     api: { ...buildBase(), status: "unknown", reason: "index-unavailable" },
   } satisfies Record<string, Fact<string[]>>;
@@ -40,8 +40,24 @@ test("a composite cuts each incomplete section once, sorted by name, and never a
 
   assert.equal(composite.status, "partial");
   assert.deepEqual(composite.status === "partial" && composite.cuts, [
-    { kind: "section", at: ["api"] },
-    { kind: "section", at: ["routes"] },
+    { kind: "section", at: ["api"], reason: "section-unknown", reach: { kind: "anything" } },
+    { kind: "section", at: ["routes"], reason: "section-partial", reach: { kind: "anything" } },
   ]);
   assert.equal(composite.value, sections);
+});
+
+test("a cut that does not state why it exists does not type-check", () => {
+  // @ts-expect-error a cut states why it exists (ADR-0042 decision 1)
+  const reasonless: Cut = { kind: "depth", at: ["src/app.ts"] };
+  assert.ok(reasonless);
+});
+
+test("two situations that cut one place leave one cut there, stating the later one's reason", () => {
+  const noSymbols: Cut = { kind: "no-extractor", at: ["src/Money.java"], reason: "no-symbols", reach: { kind: "anything", runtime: "java" } };
+  const unmodelled: Cut = { ...noSymbols, reason: "unmodelled" };
+  const elsewhere: Cut = { ...noSymbols, at: ["src/Other.java"] };
+
+  const fact = withCuts(buildBase(), [], [noSymbols, elsewhere, unmodelled]);
+
+  assert.deepEqual(fact.status === "partial" && fact.cuts, [unmodelled, elsewhere]);
 });

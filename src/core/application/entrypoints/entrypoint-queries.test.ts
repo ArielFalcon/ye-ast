@@ -184,10 +184,10 @@ test("an export stopped by the host's budget makes the section partial with a ca
   const result = await createEntrypointQueries(deps).map(REQUEST);
 
   assert.ok(result.ok && result.value.status === "partial");
-  assert.deepEqual(result.value.cuts, [{ kind: "section", at: ["entrypoints"] }]);
+  assert.deepEqual(result.value.cuts, [{ kind: "section", at: ["entrypoints"], reason: "section-partial", reach: { kind: "anything" } }]);
   const section = result.value.value.entrypoints;
   assert.ok(section.status === "partial");
-  assert.deepEqual(section.cuts, [{ kind: "caller-budget", at: [BILLING.path], limit: 7 }]);
+  assert.deepEqual(section.cuts, [{ kind: "caller-budget", at: [BILLING.path], limit: 7, reason: "export-budget", reach: { kind: "anything" } }]);
   assert.deepEqual(readPaths, ["src/Orders.java"]);
 });
 
@@ -260,12 +260,12 @@ test("a submodule or an in-scope entry that was not exported cuts the section; a
   const result = await createEntrypointQueries(deps).map(REQUEST);
 
   assert.ok(result.ok && result.value.status === "partial");
-  assert.deepEqual(result.value.cuts, [{ kind: "section", at: ["entrypoints"] }]);
+  assert.deepEqual(result.value.cuts, [{ kind: "section", at: ["entrypoints"], reason: "section-partial", reach: { kind: "anything" } }]);
   const section = result.value.value.entrypoints;
   assert.ok(section.status === "partial");
   assert.deepEqual(section.cuts, [
-    { kind: "not-exported", at: ["services/orders"] },
-    { kind: "not-exported", at: ["src/Linked.java"] },
+    { kind: "not-exported", at: ["services/orders"], reason: "submodule", reach: { kind: "anything" } },
+    { kind: "not-exported", at: ["src/Linked.java"], reason: "symlink", reach: { kind: "anything" } },
   ]);
 
   const unreadBuildFile = setup({ files: [ORDERS], skipped: [{ path: "services/orders/pom.xml", reason: "symlink" }] });
@@ -398,8 +398,8 @@ test("a source file of a JVM language without an extractor cuts the section, out
   const section = result.value.value.entrypoints;
   assert.ok(section.status === "partial");
   assert.deepEqual(section.cuts, [
-    { kind: "not-exported", at: ["src/Linked.java"] },
-    ...unsupported.toSorted().map((path) => ({ kind: "no-extractor", at: [path] })),
+    { kind: "not-exported", at: ["src/Linked.java"], reason: "symlink", reach: { kind: "anything" } },
+    ...unsupported.toSorted().map((path) => ({ kind: "no-extractor", at: [path], reason: "language", reach: { kind: "anything" } })),
   ]);
 });
 

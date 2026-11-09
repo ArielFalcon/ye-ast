@@ -1,7 +1,8 @@
 import type { FileChange } from "../change/diff-reader.ts";
+import { fileReach } from "../languages/call-targets.ts";
 import { isJsonModuleResource, isTypeScriptSource } from "../languages/typescript.ts";
 import { compareText } from "../shared/code-node.ts";
-import type { Cut } from "../shared/fact.ts";
+import { ANYTHING, type Cut, type WalkBoundKind } from "../shared/fact.ts";
 import type { ImpactBudget } from "./impact-fact.ts";
 import type { ModuleDependencies, ModuleDependency, ModuleImpactValue, ModuleOrigin, ReachedModule } from "./module-dependency.ts";
 
@@ -38,13 +39,13 @@ export function moduleImpact(changes: readonly FileChange[], base: ModuleDepende
   let expansionsUsed = 0;
   for (const [name, snapshot] of [["base", base], ["head", head]] as const) {
     for (const reference of snapshot.untraversed ?? []) {
-      if (isTypeScriptSource(reference.file)) cuts.push({ kind: "unresolved-link", at: [`module:${name}:${reference.file}`, `${reference.file}:${reference.line} ${reference.form} outside module traversal (offset ${reference.offset})`] });
+      if (isTypeScriptSource(reference.file)) cuts.push({ kind: "unresolved-link", at: [`module:${name}:${reference.file}`, `${reference.file}:${reference.line} ${reference.form} outside module traversal (offset ${reference.offset})`], reason: "dynamic-load", reach: fileReach(reference.file) });
     }
     const adjacency = new Map<string, ModuleDependency[]>();
     for (const dependency of snapshot.dependencies) {
       if (!isTypeScriptSource(dependency.file)) continue;
       if (dependency.target.kind === "unresolved") {
-        cuts.push({ kind: "unresolved-link", at: [`module:${name}:${dependency.file}`, `${dependency.file}:${dependency.line} ${dependency.specifier}`] });
+        cuts.push({ kind: "unresolved-link", at: [`module:${name}:${dependency.file}`, `${dependency.file}:${dependency.line} ${dependency.specifier}`], reason: "specifier", reach: { kind: "module", importer: dependency.file, specifiers: [{ specifier: dependency.specifier }] } });
       } else if (dependency.target.kind === "repository") {
         const entries = adjacency.get(dependency.target.file) ?? [];
         entries.push(dependency);
@@ -53,13 +54,13 @@ export function moduleImpact(changes: readonly FileChange[], base: ModuleDepende
     }
     for (const entries of adjacency.values()) entries.sort((left, right) => compareText(left.file, right.file) || left.line - right.line || compareText(left.specifier, right.specifier) || compareText(left.kind, right.kind) || Number(left.typeOnly) - Number(right.typeOnly));
     for (const unread of snapshot.unread.filter(({ file }) => isTypeScriptSource(file) || isJsonModuleResource(file)).sort((left, right) => compareText(left.file, right.file))) {
-      cuts.push({ kind: "no-extractor", at: [`module:${name}:${unread.file}`] });
+      cuts.push({ kind: "no-extractor", at: [`module:${name}:${unread.file}`], reason: "module-unread", reach: fileReach(unread.file) });
     }
     const files = new Set(snapshot.files.map(({ file }) => file));
     const records = new Map<string, RecordOfModule>();
     let frontier = new Map<string, bigint>();
-    const expanded = new Map<string, Cut["kind"] | "open">();
-    const stopped: { file: string; origins: bigint; kind: Cut["kind"]; limit: number; edges: ModuleDependency[] }[] = [];
+    const expanded = new Map<string, WalkBoundKind | "open">();
+    const stopped: { file: string; origins: bigint; kind: WalkBoundKind; limit: number; edges: ModuleDependency[] }[] = [];
     for (const [index, origin] of origins.entries()) {
       if (!files.has(origin.file)) continue;
       const bit = originBits[index]!;
@@ -105,7 +106,7 @@ export function moduleImpact(changes: readonly FileChange[], base: ModuleDepende
     for (const stop of stopped) {
       const key = `${stop.kind}\0${stop.file}`;
       if (!emitted.has(key) && stop.edges.some(({ file }) => (stop.origins & ~(records.get(file)?.origins ?? 0n)) !== 0n)) {
-        cuts.push({ kind: stop.kind, at: [`module:${name}:${stop.file}`], limit: stop.limit });
+        cuts.push({ kind: stop.kind, at: [`module:${name}:${stop.file}`], limit: stop.limit, reason: stop.kind, reach: ANYTHING });
         emitted.add(key);
       }
     }

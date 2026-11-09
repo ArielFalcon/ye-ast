@@ -1,6 +1,6 @@
 import type { RootOrigin } from "../domain/impact/edge-policy.ts";
 import type { ImportOrigin } from "../domain/relations/resolved-reference.ts";
-import type { Finding } from "../domain/shared/fact.ts";
+import type { CAPABILITY_ABSENT, DispatchUnknownReason, Finding } from "../domain/shared/fact.ts";
 import type { DerivedFacts } from "./derived-facts.port.ts";
 import type { SourceFile } from "./entrypoint-extractor.port.ts";
 
@@ -137,8 +137,11 @@ export interface DispatchSite {
   name: string;
 }
 
-/** The method bodies a call to a body-less method may run, each by its file and the 1-based lines from its first token to its name, sorted. */
-export type DispatchTargets = { kind: "bodies"; bodies: readonly { file: string; start: number; nameLine: number }[] } | { kind: "unknown"; reason?: "aspect may replace the body" | "generated implementation" | "dispatch not proven" };
+/**
+ * The method bodies a call to a body-less method may run, each by its file and the 1-based lines from its first token to
+ * its name, sorted. `capability-absent`: the language pack of the site's file declares it cannot answer (ADR-0045 decision 12).
+ */
+export type DispatchTargets = { kind: "bodies"; bodies: readonly { file: string; start: number; nameLine: number }[] } | { kind: "unknown"; reason?: DispatchUnknownReason | typeof CAPABILITY_ABSENT };
 
 /** A member call by the place it starts, repository-relative and 1-based with a UTF-16 column, and the member it calls. */
 export interface ReceiverCallSite {
@@ -152,9 +155,10 @@ export interface ReceiverCallSite {
  * The method declaration a call names, by its file and the 1-based lines from its first token to its name; `unproven`
  * when its value or declared repository receiver has no settled member, so no index edge proves a step; `unknown`
  * when this reader establishes no receiver obligation. `bound`: a type variable types a receiver of the chain, so the
- * method is its bound's: the call depends on it, and what runs is not proven.
+ * method is its bound's: the call depends on it, and what runs is not proven. `capability-absent`: the language pack of the
+ * site's file declares it cannot answer (ADR-0045 decision 12).
  */
-export type ReceiverMethod = { kind: "method"; file: string; start: number; nameLine: number; bound?: true } | { kind: "unproven" } | { kind: "unknown" };
+export type ReceiverMethod = { kind: "method"; file: string; start: number; nameLine: number; bound?: true } | { kind: "unproven" } | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT };
 
 /** A place a declaration uses a name, where the index places the use: repository-relative and 1-based. */
 export interface UseSite {

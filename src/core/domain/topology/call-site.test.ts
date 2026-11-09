@@ -36,7 +36,7 @@ test("unresolved discovery retains the typed reason, diagnostic and every causal
 });
 
 test("a call site the join could not settle is an unresolved-link cut at its file, then at its line", () => {
-  assert.deepEqual(unsettledCallSiteCut(site({ file: "src/app/catalog.api.ts", line: 12 })), { kind: "unresolved-link", at: ["src/app/catalog.api.ts", "src/app/catalog.api.ts:12"] });
+  assert.deepEqual(unsettledCallSiteCut(site({ file: "src/app/catalog.api.ts", line: 12 })), { kind: "unresolved-link", at: ["src/app/catalog.api.ts", "src/app/catalog.api.ts:12"], reason: "join-unsettled", reach: { kind: "call-site", transport: "http" } });
 });
 
 test("call sites order by repository, file, line and symbol, then by the status of the target at one place", () => {

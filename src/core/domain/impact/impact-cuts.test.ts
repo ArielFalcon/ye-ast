@@ -14,13 +14,13 @@ function qualified(name: string, kind: string, candidates: readonly string[], fi
 
 test("a bare call that never resolved and shares a declared method's name is a cut at it, with every place", () => {
   const cuts = unresolvedLinkCuts([use("save", "calls", "src/Repo.java", 9), use("save", "calls", "src/Repo.java", 4)], [SAVE], []);
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Repo.java:4", "src/Repo.java:9"] }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Repo.java:4", "src/Repo.java:9"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } }]);
 });
 
 test("a bare call in another file is never attributed to a homonym it did not import", () => {
   const cuts = unresolvedLinkCuts([use("save", "calls", "src/Use.java", 5)], [SAVE], []);
 
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Use.java", "src/Use.java:5 save"] }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Use.java", "src/Use.java:5 save"], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } }]);
 });
 
 test("an unresolved call never points at a walked homonym of the other runtime, only at one of its own", () => {
@@ -28,21 +28,21 @@ test("an unresolved call never points at a walked homonym of the other runtime, 
   const calls = [use("repo.save", "calls", "src/Use.java", 5)];
 
   assert.deepEqual(unresolvedLinkCuts(calls, [typescript], []), []);
-  assert.deepEqual(unresolvedLinkCuts(calls, [SAVE], []), [{ kind: "unresolved-link", at: ["src/Use.java", "src/Use.java:5 repo.save"] }]);
+  assert.deepEqual(unresolvedLinkCuts(calls, [SAVE], []), [{ kind: "unresolved-link", at: ["src/Use.java", "src/Use.java:5 repo.save"], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } }]);
 });
 
 test("a reference that reads a key of a configuration file still points at it", () => {
   const version: WalkedDeclaration = { file: "package.json", name: "version", kind: "property", qualifiedName: "version" };
   const cuts = unresolvedLinkCuts([use("pkg.version", "references", "src/app/about.ts", 4)], [version], []);
 
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/app/about.ts", "src/app/about.ts:4 pkg.version"] }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/app/about.ts", "src/app/about.ts:4 pkg.version"], reason: "name-only", reach: { kind: "callers-of", declarations: ["package.json::version"] } }]);
 });
 
 test("a bare call a binding proves is a cut at the declaration that binding names", () => {
   const bound = new Map([[referenceKey(use("save", "calls", "src/Use.java", 5))!, "src/Repo.java"]]);
   const cuts = unresolvedLinkCuts([use("save", "calls", "src/Use.java", 5)], [SAVE], [], new Set(), new Set(), bound);
 
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:5"] }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:5"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } }]);
 });
 
 test("an external proof retires the reference whose own root it proves", () => {
@@ -56,7 +56,7 @@ test("an external proof never retires another reference that shares its line", (
   const other = use("repo.save", "calls", "src/Use.java", 3);
 
   assert.deepEqual(unresolvedLinkCuts([proven, other], [SAVE], [], new Set(), new Set([referenceKey(proven)!])), [
-    { kind: "unresolved-link", at: ["src/Use.java", "src/Use.java:3 repo.save"] },
+    { kind: "unresolved-link", at: ["src/Use.java", "src/Use.java:3 repo.save"], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } },
   ]);
 });
 
@@ -65,24 +65,24 @@ test("a settlement retires the reference it names, never another reference that 
   const other = qualified("this.b.save", "calls", ["Repo::save"], "src/Use.java", 7);
 
   assert.deepEqual(unresolvedLinkCuts([settledUse, other], [SAVE], [], new Set(), new Set([referenceKey(settledUse)!])), [
-    { kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:7"] },
+    { kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:7"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } },
   ]);
 });
 
 test("a qualified call the index considered for the walked declaration is a cut at it", () => {
   const cuts = unresolvedLinkCuts([qualified("this.repo.save", "calls", ["Repo::save"], "src/Use.java", 5)], [SAVE], []);
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:5"] }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:5"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } }]);
 });
 
 test("a qualified call whose receiver the index attributed to no candidate is never a cut at a homonym, but cuts the caller's file and names the reference", () => {
   const resolve: WalkedDeclaration = { file: "src/app/address.service.ts", name: "resolve", kind: "method", qualifiedName: "AddressService::resolve" };
   const cuts = unresolvedLinkCuts([qualified("Promise.resolve", "calls", [], "src/app/order.component.ts", 12)], [resolve], []);
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/app/order.component.ts", "src/app/order.component.ts:12 Promise.resolve"] }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/app/order.component.ts", "src/app/order.component.ts:12 Promise.resolve"], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/app/address.service.ts::resolve"] } }]);
 });
 
 test("a qualified call the index considered for another declaration cuts the caller's file, not the walked one", () => {
   const cuts = unresolvedLinkCuts([qualified("this.repo.save", "calls", ["Other::save"], "src/Use.java", 5)], [SAVE], []);
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Use.java", "src/Use.java:5 this.repo.save"] }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Use.java", "src/Use.java:5 this.repo.save"], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } }]);
 });
 
 test("a qualified call whose tail names no walked declaration is no cut", () => {
@@ -92,7 +92,7 @@ test("a qualified call whose tail names no walked declaration is no cut", () => 
 test("a call or a reference that never resolved and names a walked class field is a cut at it when the index considered it", () => {
   const total: WalkedDeclaration = { file: "src/store.ts", name: "total", kind: "property", qualifiedName: "Sale::total" };
   const cuts = unresolvedLinkCuts([qualified("this.sale.total", "calls", ["Sale::total"], "src/page.ts", 7), qualified("sale.total", "references", ["Sale::total"], "src/view.ts", 2)], [total], []);
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/store.ts::total", "src/page.ts:7", "src/view.ts:2"] }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/store.ts::total", "src/page.ts:7", "src/view.ts:2"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/store.ts::total"] } }]);
 });
 
 test("an unresolved reference whose kind cannot point at the walked kind is no cut", () => {
@@ -106,14 +106,14 @@ test("an unresolved reference to a name no walked declaration has is no cut", ()
 test("a file that loads a module by a computed name is a cut at the call, walked declarations or not", () => {
   const cuts = unresolvedLinkCuts([use("require", "calls", "src/a.ts", 7), use("Class.forName", "calls", "src/B.java", 2), use("require", "references", "src/c.ts", 1)], [], []);
   assert.deepEqual(cuts, [
-    { kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:7 require"] },
-    { kind: "unresolved-link", at: ["src/B.java", "src/B.java:2 Class.forName"] },
+    { kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:7 require"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } },
+    { kind: "unresolved-link", at: ["src/B.java", "src/B.java:2 Class.forName"], reason: "dynamic-load", reach: { kind: "anything", runtime: "java" } },
   ]);
 });
 
 test("two computed-name loads in one file are one cut led by the file, with both places", () => {
   const cuts = unresolvedLinkCuts([use("require", "calls", "src/a.ts", 9), use("import", "calls", "src/a.ts", 2)], [], []);
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:2 import", "src/a.ts:9 require"] }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:2 import", "src/a.ts:9 require"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } }]);
 });
 
 test("a load whose specifier is a literal names its module and is no cut, and a place with any computed load stays one", () => {
@@ -125,27 +125,27 @@ test("a load whose specifier is a literal names its module and is no cut, and a 
     { file: "src/read.ts", line: 1 },
   ];
   assert.deepEqual(unresolvedLinkCuts(references, [], loads), [
-    { kind: "unresolved-link", at: ["src/routes.ts", "src/routes.ts:8 import"] },
-    { kind: "unresolved-link", at: ["src/read.ts", "src/read.ts:1 import"] },
+    { kind: "unresolved-link", at: ["src/routes.ts", "src/routes.ts:8 import"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } },
+    { kind: "unresolved-link", at: ["src/read.ts", "src/read.ts:1 import"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } },
   ]);
 });
 
 test("a reference at head that never resolved and names a removed declaration is a cut led by that declaration, with every place", () => {
   const removed = [{ file: "src/Repo.java", name: "save" }];
   const cuts = removedDeclarationCuts([use("repo.save", "calls", "src/B.java", 9), use("save", "references", "src/A.java", 4), use("repo.find", "calls")], removed);
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/A.java:4", "src/B.java:9"] }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/A.java:4", "src/B.java:9"], reason: "removed-declaration", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } }]);
 });
 
 test("a removed name never captures a reference of the other runtime, only one of its own", () => {
   const reference = use("repo.save", "calls", "src/Use.java", 5);
 
   assert.deepEqual(removedDeclarationCuts([reference], [{ file: "src/app/repo.ts", name: "save" }]), []);
-  assert.deepEqual(removedDeclarationCuts([reference], [{ file: "src/Repo.java", name: "save" }]), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:5"] }]);
+  assert.deepEqual(removedDeclarationCuts([reference], [{ file: "src/Repo.java", name: "save" }]), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:5"], reason: "removed-declaration", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } }]);
 });
 
 test("a removed key of a configuration file still captures a reference that reads it", () => {
   assert.deepEqual(removedDeclarationCuts([use("pkg.version", "references", "src/app/about.ts", 4)], [{ file: "package.json", name: "version" }]), [
-    { kind: "unresolved-link", at: ["package.json::version", "src/app/about.ts:4"] },
+    { kind: "unresolved-link", at: ["package.json::version", "src/app/about.ts:4"], reason: "removed-declaration", reach: { kind: "callers-of", declarations: ["package.json::version"] } },
   ]);
 });
 
@@ -159,7 +159,7 @@ test("a removed name never captures a reference whose own root is proven externa
   const known = new Set([referenceKey(references[0]!)!]);
 
   assert.deepEqual(removedDeclarationCuts(references, removed, known), [
-    { kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:3"] },
+    { kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:3"], reason: "removed-declaration", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } },
   ]);
   assert.deepEqual(removedDeclarationCuts([references[0]!], removed, known), []);
 });
@@ -172,7 +172,7 @@ test("a removed name keeps an unsettled reference sharing a settled reference's 
 
   assert.deepEqual(removedDeclarationCuts([settled], removed, known), []);
   assert.deepEqual(removedDeclarationCuts([settled, unknown], removed, known), [
-    { kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:3"] },
+    { kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:3"], reason: "removed-declaration", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } },
   ]);
 });
 
@@ -182,7 +182,7 @@ test("a removed bare name is attributed only to the file its import proves when 
   const bound = new Map([[referenceKey(reference)!, "src/Current.java"]]);
 
   assert.deepEqual(removedDeclarationCuts([reference], removed, new Set(), bound), [
-    { kind: "unresolved-link", at: ["src/Current.java::save", "src/Use.java:3"] },
+    { kind: "unresolved-link", at: ["src/Current.java::save", "src/Use.java:3"], reason: "removed-declaration", reach: { kind: "callers-of", declarations: ["src/Current.java::save"] } },
   ]);
 });
 
@@ -203,14 +203,14 @@ test("a relation the reader could not place is a cut only in a file the walk rea
     { path: "src/app/a.ts", line: 3, reason: "no-extractor" },
     { path: "src/app/far.ts", line: 4, reason: "unresolved" },
   ];
-  assert.deepEqual(unreadRelationCuts(unread, new Set(["src/app/a.ts", "src/app/b.ts"]), new Map()), [{ kind: "unresolved-link", at: ["src/app/a.ts", "src/app/a.ts:3 no-extractor", "src/app/a.ts:9 unresolved"] }]);
+  assert.deepEqual(unreadRelationCuts(unread, new Set(["src/app/a.ts", "src/app/b.ts"]), new Map()), [{ kind: "unresolved-link", at: ["src/app/a.ts", "src/app/a.ts:3 no-extractor", "src/app/a.ts:9 unresolved"], reason: "relation-unread", reach: { kind: "anything", runtime: "typescript" } }]);
   assert.deepEqual(unreadRelationCuts([], new Set(["src/app/a.ts"]), new Map()), []);
 });
 
 test("an unreadable template is a cut when the walk reached a component that names it", () => {
   const unread = [{ path: "src/app/page.html", line: 2, reason: "source-unreadable" }];
   const owners = new Map([["src/app/page.html", ["src/app/page.ts"]]]);
-  assert.deepEqual(unreadRelationCuts(unread, new Set(["src/app/page.ts"]), owners), [{ kind: "unresolved-link", at: ["src/app/page.html", "src/app/page.html:2 source-unreadable"] }]);
+  assert.deepEqual(unreadRelationCuts(unread, new Set(["src/app/page.ts"]), owners), [{ kind: "unresolved-link", at: ["src/app/page.html", "src/app/page.html:2 source-unreadable"], reason: "relation-unread", reach: { kind: "anything", runtime: "typescript" } }]);
   assert.deepEqual(unreadRelationCuts(unread, new Set(["src/app/other.ts"]), owners), []);
 });
 
@@ -218,13 +218,13 @@ test("same_line_same_name_only_exact_proof_retires", async () => {
   const { referenceKey } = await import("./impact-cuts.ts");
   const first = { ...use("save", "calls", "src/Repo.java", 9), from: "a", column: 0 };
   const second = { ...first, column: 8 };
-  assert.deepEqual(unresolvedLinkCuts([first, second], [SAVE], [], new Set(), new Set([referenceKey(first)!])), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Repo.java:9"] }]);
+  assert.deepEqual(unresolvedLinkCuts([first, second], [SAVE], [], new Set(), new Set([referenceKey(first)!])), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Repo.java:9"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } }]);
 });
 
 test("ambiguous_exact_occurrence_keeps_both", async () => {
   const { referenceKey } = await import("./impact-cuts.ts");
   const occurrence = { ...use("save", "calls", "src/Repo.java", 9), from: "a", column: 0 };
-  assert.deepEqual(unresolvedLinkCuts([occurrence, { ...occurrence }], [SAVE], [], new Set(), new Set([referenceKey(occurrence)!])), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Repo.java:9"] }]);
+  assert.deepEqual(unresolvedLinkCuts([occurrence, { ...occurrence }], [SAVE], [], new Set(), new Set([referenceKey(occurrence)!])), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Repo.java:9"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } }]);
 });
 
 test("reference identity preserves all tuple fields and rejects missing coordinates", () => {
@@ -243,7 +243,7 @@ test("local callback excludes only a bare call to a removed declaration in anoth
   const qualified = { ...local, name: "obj.resolve", column: 30 };
   const removed = [{ file: "src/address.ts", name: "resolve" }, { file: "src/promise.ts", name: "resolve" }];
   const proof = new Set([referenceKey(local)!]);
-  assert.deepEqual(removedDeclarationCuts([local], removed, new Set(), new Map(), proof), [{ kind: "unresolved-link", at: ["src/promise.ts::resolve", "src/promise.ts:1"] }]);
+  assert.deepEqual(removedDeclarationCuts([local], removed, new Set(), new Map(), proof), [{ kind: "unresolved-link", at: ["src/promise.ts::resolve", "src/promise.ts:1"], reason: "removed-declaration", reach: { kind: "callers-of", declarations: ["src/promise.ts::resolve"] } }]);
   assert.equal(removedDeclarationCuts([local, unknown, qualified], removed, new Set(), new Map(), proof).length, 2);
   const { column: _column, ...noColumn } = local;
   assert.equal(removedDeclarationCuts([noColumn], removed, new Set(), new Map(), proof).length, 2);
@@ -254,14 +254,14 @@ test("anchor settlement does not retire another occurrence on the same line", as
   const a = { ...qualified("this.a.save", "calls", ["Repo::save"], "src/Use.java", 7), column: 0 };
   const b = { ...a, column: 20 };
   const settled = new Set([declarationUseKey("src/Repo.java::save", referenceKey(a)!)]);
-  assert.deepEqual(unresolvedLinkCuts([a, b], [SAVE], [], settled), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:7"] }]);
+  assert.deepEqual(unresolvedLinkCuts([a, b], [SAVE], [], settled), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:7"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } }]);
 });
 
 test("missing_column_never_retires", () => {
   const legacy = use("save", "calls", "src/Repo.java", 2);
   const { column: _column, ...withoutColumn } = legacy;
   const imagined = referenceKey(legacy)!;
-  assert.deepEqual(unresolvedLinkCuts([withoutColumn], [SAVE], [], new Set(), new Set([imagined])), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Repo.java:2"] }]);
+  assert.deepEqual(unresolvedLinkCuts([withoutColumn], [SAVE], [], new Set(), new Set([imagined])), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Repo.java:2"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/Repo.java::save"] } }]);
 });
 
 

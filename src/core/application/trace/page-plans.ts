@@ -13,6 +13,11 @@ const placeKey = (file: string, line: number, column: number): string => JSON.st
 
 const TEMPLATE_RELATIONS: readonly string[] = ["uses-component", "uses-directive", "uses-pipe"];
 
+/** A place of a page's template its plan cannot order: a call there may run anything. */
+function unplannedAt(place: string): Cut {
+  return { kind: "unresolved-link", at: [place], reason: "page-unplanned", reach: { kind: "call-at", place } };
+}
+
 /**
  * What a component runs as a page (RFC-0013 R9), from the relations: the framework's lifecycle hooks, what its template's
  * render expressions and event bindings call, and the declarations its template uses, in template order. A template call
@@ -26,7 +31,7 @@ export function pagePlans(store: CodeGraphReader, relations: () => Promise<Pick<
     const read = await relations();
     const template = read.templates?.find(({ component: ref }) => joinsFact(component, ref));
     if (template === undefined) return undefined;
-    const cuts: Cut[] = template.unreadable === undefined ? [] : [{ kind: "unresolved-link", at: [placeAt(template.unreadable.path, template.unreadable.line)] }];
+    const cuts: Cut[] = template.unreadable === undefined ? [] : [unplannedAt(placeAt(template.unreadable.path, template.unreadable.line))];
     const { lines } = template;
     const inTemplate = (at: { path: string; line: number } | undefined): boolean => lines !== undefined && at !== undefined && at.path === lines.path && lines.start <= at.line && at.line <= lines.end;
     const order = new Map(template.uses.map((ref, index) => [refKey(ref), index]));
@@ -34,21 +39,21 @@ export function pagePlans(store: CodeGraphReader, relations: () => Promise<Pick<
     for (const finding of read.relations) {
       const at = finding.evidence[0];
       if (finding.status === "unknown") {
-        if (inTemplate(at)) cuts.push({ kind: "unresolved-link", at: [placeAt(at!.path, at!.line)] });
+        if (inTemplate(at)) cuts.push(unplannedAt(placeAt(at!.path, at!.line)));
         continue;
       }
       const { kind, from, to } = finding.value;
       if (!TEMPLATE_RELATIONS.includes(kind) || !joinsFact(component, from)) continue;
       const joined = store.symbolsInFiles([to.path]).filter((symbol) => joinsFact(symbol, to));
       if (joined.length === 1) used.push({ symbol: joined[0]!, rank: order.get(refKey(to)) ?? -1, line: at?.line ?? 0 });
-      else cuts.push({ kind: "unresolved-link", at: [placeAt(at?.path ?? to.path, at?.line ?? to.line, to.symbol)] });
+      else cuts.push(unplannedAt(placeAt(at?.path ?? to.path, at?.line ?? to.line, to.symbol)));
     }
     const proven = Map.groupBy((read.memberUses ?? []).filter((use) => use.template === true), ({ reference }) => placeKey(reference.file, reference.line, reference.column));
     const settledCalls = (calls: readonly TemplateEventCall[]) => calls.flatMap((call): PagePlan["handlers"][number][] => {
       const proofs = proven.get(placeKey(call.file, call.line, call.column)) ?? [];
       const runs = proofs.length === 1 && proofs[0]!.substitutes === undefined ? store.symbolsInFiles([proofs[0]!.member.path]).filter((symbol) => symbol.kind === "method" && joinsFact(symbol, proofs[0]!.member)) : [];
       if (runs.length === 1) return [{ file: call.file, line: call.line, column: call.column, runs: runs[0]! }];
-      cuts.push({ kind: "unresolved-link", at: [placeAt(call.file, call.line, call.name)] });
+      cuts.push(unplannedAt(placeAt(call.file, call.line, call.name)));
       return [];
     });
     return {

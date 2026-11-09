@@ -454,7 +454,7 @@ test("a changed contract whose reference the snapshot cannot follow is a partial
   const result = await impact("--base", "HEAD~1");
 
   assert.equal(result.fact.status, "partial");
-  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: [document, `${document}:16 https://example.com/items.yaml#/Items`] }]);
+  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: [document, `${document}:16 https://example.com/items.yaml#/Items`], reason: "contract-unread", reach: { kind: "anything" } }]);
 });
 
 test("changed seeds only the selected changed paths, while a caller in an unselected changed file is still reached", async () => {
@@ -542,7 +542,7 @@ test("a changed file no extractor reads is a cut only when the selection names i
   const all = await impact("--base", "HEAD~1");
   const selected = await impact("--base", "HEAD~1", "--changed", "src/main/java/shop/Util.java");
 
-  assert.deepEqual(all.fact.cuts, [{ kind: "no-extractor", at: ["web/stray.html"] }]);
+  assert.deepEqual(all.fact.cuts, [{ kind: "no-extractor", at: ["web/stray.html"], reason: "template-uncovered", reach: { kind: "anything", runtime: "typescript" } }]);
   assert.equal(selected.fact.cuts, undefined);
 });
 
@@ -552,7 +552,7 @@ test("a changed file the index could not read stays a cut even when the selectio
 
   const selected = await impact("--base", "HEAD~1", "--changed", "src/main/java/shop/Util.java");
 
-  assert.deepEqual(selected.fact.cuts, [{ kind: "no-extractor", at: ["scripts/tool.kt"] }]);
+  assert.deepEqual(selected.fact.cuts, [{ kind: "no-extractor", at: ["scripts/tool.kt"], reason: "language", reach: { kind: "anything" } }]);
 });
 
 test("a test that calls a changed helper is not a caller", async () => {
@@ -588,7 +588,7 @@ class Stray {
   const result = await impact("--base", "HEAD~1");
 
   assert.equal(result.fact.status, "partial");
-  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: ["src/main/java/shop/Stray.java", "src/main/java/shop/Stray.java:5 Missing.fmt"] }]);
+  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: ["src/main/java/shop/Stray.java", "src/main/java/shop/Stray.java:5 Missing.fmt"], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/main/java/shop/Util.java::fmt"] } }]);
 });
 
 test("a source file deleted whole leaves no seed, and the caller that still names its method is a cut", async () => {
@@ -600,7 +600,7 @@ test("a source file deleted whole leaves no seed, and the caller that still name
 
   assert.equal(result.fact.status, "partial");
   assert.deepEqual(result.fact.value.seeds, []);
-  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: ["src/main/java/shop/Util.java::fmt", "src/main/java/shop/OrderServiceImpl.java:8"] }]);
+  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: ["src/main/java/shop/Util.java::fmt", "src/main/java/shop/OrderServiceImpl.java:8"], reason: "removed-declaration", reach: { kind: "callers-of", declarations: ["src/main/java/shop/Util.java::fmt"] } }]);
 });
 
 test("a changed Java record, which the index gives no symbol, seeds nothing and cuts the answer at its file", async () => {
@@ -611,7 +611,7 @@ test("a changed Java record, which the index gives no symbol, seeds nothing and 
 
   assert.equal(result.code, EXIT_CODE.ok, result.stderr);
   assert.deepEqual(result.fact.value.seeds, []);
-  assert.deepEqual(result.fact.cuts, [{ kind: "no-extractor", at: ["src/main/java/shop/Money.java"] }]);
+  assert.deepEqual(result.fact.cuts, [{ kind: "no-extractor", at: ["src/main/java/shop/Money.java"], reason: "unmodelled", reach: { kind: "anything", runtime: "java" } }]);
 });
 
 test("a change to a JVM source no extractor reads is a cut at that file, and one in a language no framework reads is not", async () => {
@@ -620,7 +620,7 @@ test("a change to a JVM source no extractor reads is a cut at that file, and one
 
   const result = await impact("--base", "HEAD~1");
 
-  assert.deepEqual(result.fact.cuts, [{ kind: "no-extractor", at: ["scripts/tool.kt"] }]);
+  assert.deepEqual(result.fact.cuts, [{ kind: "no-extractor", at: ["scripts/tool.kt"], reason: "language", reach: { kind: "anything" } }]);
   assert.deepEqual(result.fact.value.seeds, []);
 });
 
@@ -733,7 +733,7 @@ test("a moved component's old template is covered by its selected removal, never
   assert.deepEqual(all.fact.value.seeds.map((seed) => [seed.file, seed.symbol]), [["src/new/page.ts", "Page"]]);
   const selected = await impact("--base", "HEAD~1", "--changed", "src/old.html");
   assert.equal(selected.fact.status, "partial");
-  assert.deepEqual(selected.fact.cuts, [{ kind: "no-extractor", at: ["src/old.html"] }]);
+  assert.deepEqual(selected.fact.cuts, [{ kind: "no-extractor", at: ["src/old.html"], reason: "template-uncovered", reach: { kind: "anything", runtime: "typescript" } }]);
   assert.deepEqual(selected.fact.value.seeds, []);
 });
 
@@ -759,7 +759,7 @@ test("a method deleted from a class that survives, with a caller left behind, cu
   const result = await impact("--base", "HEAD~1");
 
   assert.equal(result.fact.status, "partial");
-  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: ["src/main/java/shop/Util.java::helper", "src/main/java/shop/Caller.java:4"] }]);
+  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: ["src/main/java/shop/Util.java::helper", "src/main/java/shop/Caller.java:4"], reason: "removed-declaration", reach: { kind: "callers-of", declarations: ["src/main/java/shop/Util.java::helper"] } }]);
 });
 
 test("a method renamed in place, with a caller left behind, cuts the answer at the caller", async () => {
@@ -771,7 +771,7 @@ test("a method renamed in place, with a caller left behind, cuts the answer at t
   const result = await impact("--base", "HEAD~1");
 
   assert.equal(result.fact.status, "partial");
-  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: ["src/main/java/shop/Util.java::helper", "src/main/java/shop/Caller.java:4"] }]);
+  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: ["src/main/java/shop/Util.java::helper", "src/main/java/shop/Caller.java:4"], reason: "removed-declaration", reach: { kind: "callers-of", declarations: ["src/main/java/shop/Util.java::helper"] } }]);
 });
 
 test("an Angular app under a subfolder seeds its component from a changed template and reaches its route", async () => {
@@ -792,7 +792,7 @@ test("a changed template that no component names is a cut at the file, never sil
 
   const result = await impact("--base", "HEAD~1");
 
-  assert.deepEqual(result.fact.cuts, [{ kind: "no-extractor", at: ["web/stray.html"] }]);
+  assert.deepEqual(result.fact.cuts, [{ kind: "no-extractor", at: ["web/stray.html"], reason: "template-uncovered", reach: { kind: "anything", runtime: "typescript" } }]);
 });
 
 test("callers walks from a symbol and from a line range alike, to the same route, and leaves no export behind", async () => {
@@ -825,7 +825,7 @@ test("importers names the files that use a file, and cuts a file no extractor co
   const value = result.fact.value as unknown as { files: { file: string; users: string[] }[] };
   assert.deepEqual(value.files.map((entry) => entry.file), ["src/main/java/shop/OrderService.java"]);
   assert.ok(value.files[0]?.users.includes("src/main/java/shop/OrderController.java"), JSON.stringify(value));
-  assert.deepEqual(result.fact.cuts, [{ kind: "no-extractor", at: ["README.md"] }]);
+  assert.deepEqual(result.fact.cuts, [{ kind: "no-extractor", at: ["README.md"], reason: "language", reach: { kind: "anything" } }]);
 });
 
 const kept = (): string[] => (existsSync(join(cacheRoot, "indexes")) ? readdirSync(join(cacheRoot, "indexes")) : []);

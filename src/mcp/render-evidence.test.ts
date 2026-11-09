@@ -10,7 +10,7 @@ const source = {
 } as unknown as EvidenceSelectionResult["source"];
 
 test("renders the supplied page without slicing it again and preserves provenance and recovery", () => {
-  const records = { source, availability: "available", kind: "cut-places", context: { owner: { kind: "fact" }, snapshot: source.snapshot, analysis: { status: "partial" }, cutIndex: 2, kind: "depth", anchor: "anchor" }, items: [{ atIndex: 2, place: "second" }] } as EvidenceSelectionResult;
+  const records = { source, availability: "available", kind: "cut-places", context: { owner: { kind: "fact" }, snapshot: source.snapshot, analysis: { status: "partial" }, cutIndex: 2, kind: "depth", reason: "depth", anchor: "anchor" }, items: [{ atIndex: 2, place: "second" }] } as EvidenceSelectionResult;
   const text = renderEvidenceSelection({ select: { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 2 }, records, page: { limit: 1, offset: 1, returned: 1, total: 2 }, recovery: { version: 1, status: "available", resultIdentity: "identity", query: { name: "ye_ast_callers", arguments: { revision: "sha" } } } });
   assert.match(text, /"place":"second"/);
   assert.match(text, /"anchor":"anchor"/);
@@ -51,7 +51,7 @@ test("a verified empty base-module page retains its owner, snapshot, and zero to
 });
 
 test("full selection guides the complete structured page without serializing its records twice", () => {
-  const records = { source, availability: "available", kind: "cut-places", context: { owner: { kind: "fact" }, snapshot: source.snapshot, analysis: { status: "partial" }, cutIndex: 2, kind: "depth", anchor: "anchor" }, items: [{ atIndex: 2, place: "unique-place" }] } as EvidenceSelectionResult;
+  const records = { source, availability: "available", kind: "cut-places", context: { owner: { kind: "fact" }, snapshot: source.snapshot, analysis: { status: "partial" }, cutIndex: 2, kind: "depth", reason: "depth", anchor: "anchor" }, items: [{ atIndex: 2, place: "unique-place" }] } as EvidenceSelectionResult;
   const recovery = { version: 1 as const, status: "available" as const, resultIdentity: "identity", query: { name: "ye_ast_callers" as const, arguments: { revision: "sha" } } };
   const text = renderEvidenceSelection({ mode: "full", select: { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 2 }, records, page: { limit: 1, offset: 1, returned: 1, total: 2, nextCursor: "next" }, recovery });
   assert.equal(text.split("source in the result JSON").length - 1, 1);
@@ -113,7 +113,7 @@ test("selected read context inherits exactly and preserves ordered owner-specifi
 });
 
 test("a page offers continuation only while records remain, in every mode", () => {
-  const records = { source, availability: "available", kind: "cut-places", context: { owner: { kind: "fact" }, snapshot: source.snapshot, analysis: { status: "partial" }, cutIndex: 0, kind: "depth", anchor: "anchor" }, items: [{ atIndex: 1, place: "p" }] } as EvidenceSelectionResult;
+  const records = { source, availability: "available", kind: "cut-places", context: { owner: { kind: "fact" }, snapshot: source.snapshot, analysis: { status: "partial" }, cutIndex: 0, kind: "depth", reason: "depth", anchor: "anchor" }, items: [{ atIndex: 1, place: "p" }] } as EvidenceSelectionResult;
   const recovery = { version: 1 as const, status: "available" as const, resultIdentity: "identity", query: { name: "ye_ast_impact" as const, arguments: { base: "b" } } };
   const select = { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 } as const;
   for (const mode of ["summary", "details", "full"] as const) {

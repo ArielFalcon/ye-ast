@@ -3,7 +3,8 @@ import { isReadableFile } from "../../domain/change/changed-file.ts";
 import { sortedUnique } from "../../domain/impact/importers-fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
-import type { Cut, Evidence, Fact } from "../../domain/shared/fact.ts";
+import type { Evidence, Fact } from "../../domain/shared/fact.ts";
+import { fileCut, unheldCut } from "../../domain/impact/impact-cuts.ts";
 import { sortedEngines, withCuts } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { OutlineValue } from "../../domain/outline/outline-fact.ts";
@@ -48,7 +49,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
         const content = contentFingerprint(headTree.export);
         const outside = files.filter((file) => !head.selected(file));
         if (outside.length > 0) return { ok: true, value: { ...head.base(content), evidence: outside.map((path): Evidence => ({ path, line: 1 })), status: "unknown", reason: "out-of-scope" } };
-        const fixed = [...exportCuts(headTree.export), ...files.filter((file) => !isReadableFile(file)).map((file): Cut => ({ kind: "no-extractor", at: [file] }))];
+        const fixed = [...exportCuts(headTree.export), ...files.filter((file) => !isReadableFile(file)).map((file) => fileCut("no-extractor", file, "language"))];
         const covered = files.filter(isReadableFile);
         if (covered.length === 0) return { ok: true, value: withCuts(head.base(content), focus === undefined ? { files: [], unheld: [] } : { focus: [], unheld: [] }, fixed) };
 
@@ -74,9 +75,9 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
           const cuts = [
             ...fixed,
             ...(listed?.cuts ?? used!.cuts),
-            ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
-            ...read.unheld.map((file): Cut => ({ kind: held.has(file) ? "no-extractor" : "not-exported", at: [file] })),
-            ...unmodelled.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
+            ...summary.filesNotIndexed.map((file) => fileCut("no-extractor", file, "not-indexed")),
+            ...read.unheld.map((file) => unheldCut(file, held)),
+            ...unmodelled.map((file) => fileCut("no-extractor", file, "unmodelled")),
           ];
           return { ok: true, value: withCuts(head.base(content, true), read, cuts) };
         } finally {

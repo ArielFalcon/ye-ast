@@ -310,7 +310,7 @@ test("captured callers reject a missing live handle without walking HEAD", async
 test("prototype-like repository IDs retain sections, uncertainty and contributing read identity", async () => {
   for (const [available, unavailable] of [["__proto__", "constructor"], ["constructor", "__proto__"]] as const) {
     const read = (sha: string) => setup({
-      repositories: { orders: ORDERS, [available]: { sha, cuts: [{ kind: "not-exported", at: ["src/missing.ts"] }] } },
+      repositories: { orders: ORDERS, [available]: { sha, cuts: [{ kind: "not-exported", at: ["src/missing.ts"], reason: "symlink", reach: { kind: "anything" } }] } },
       unavailable: [unavailable],
     }).queries.callers({ ...ASK, repos: [available, unavailable].map((id) => ({ id, path: `/work/${id}` })) });
 
@@ -344,7 +344,7 @@ test("an unavailable trigger walk remains named and makes the workspace partial"
 });
 
 test("an unknown consumer preserves both discovery cuts and its named reason", async () => {
-  const { queries } = setup({ repositories: { orders: ORDERS, "shop-web": { callSites: [callSite("shop-web", "orders-api/orders")], cuts: [{ kind: "not-exported", at: ["src/missing.ts"] }] } }, walkFact: (repo, answer) => repo === "shop-web" ? { ...answer, status: "unknown", reason: "index-unavailable" } : answer });
+  const { queries } = setup({ repositories: { orders: ORDERS, "shop-web": { callSites: [callSite("shop-web", "orders-api/orders")], cuts: [{ kind: "not-exported", at: ["src/missing.ts"], reason: "symlink", reach: { kind: "anything" } }] } }, walkFact: (repo, answer) => repo === "shop-web" ? { ...answer, status: "unknown", reason: "index-unavailable" } : answer });
   const result = await queries.callers(ASK);
   const section = valueOf(result).sections["shop-web"];
   assert.equal(section?.status, "partial");
@@ -356,11 +356,11 @@ test("an unknown consumer preserves both discovery cuts and its named reason", a
 });
 
 test("a consumer walk retains its depth cut", async () => {
-  const { queries } = setup({ repositories: { orders: ORDERS, "shop-web": { callSites: [callSite("shop-web", "orders-api/orders")] } }, walkFact: (repo, answer) => repo === "shop-web" && answer.status === "complete" ? { ...answer, status: "partial", cuts: [{ kind: "depth", at: ["src/app/shop-web.api.ts"], limit: 1 }] } : answer });
+  const { queries } = setup({ repositories: { orders: ORDERS, "shop-web": { callSites: [callSite("shop-web", "orders-api/orders")] } }, walkFact: (repo, answer) => repo === "shop-web" && answer.status === "complete" ? { ...answer, status: "partial", cuts: [{ kind: "depth", at: ["src/app/shop-web.api.ts"], limit: 1, reason: "depth", reach: { kind: "anything" } }] } : answer });
   const result = await queries.callers(ASK);
   const section = valueOf(result).sections["shop-web"];
   assert.equal(section?.status, "partial");
-  assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "depth", at: ["src/app/shop-web.api.ts"], limit: 1 }]);
+  assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "depth", at: ["src/app/shop-web.api.ts"], limit: 1, reason: "depth", reach: { kind: "anything" } }]);
 });
 
 test("the trigger walk uses the snapshot resolved by workspace discovery", async () => {
@@ -432,13 +432,13 @@ test("a call that matches no route is unmatched unless it names a host, which ma
 
   assert.deepEqual(section.unmatched.map(pathOf), ["orders-api/missing", "geo-api/provinces"]);
   assert.deepEqual(section.external.map(pathOf), ["https://geo.example/provinces"]);
-  assert.deepEqual(fact?.status === "partial" && fact.cuts, [{ kind: "unresolved-link", at: ["src/app/shop-web.api.ts", "src/app/shop-web.api.ts:12"] }]);
+  assert.deepEqual(fact?.status === "partial" && fact.cuts, [{ kind: "unresolved-link", at: ["src/app/shop-web.api.ts", "src/app/shop-web.api.ts:12"], reason: "join-unsettled", reach: { kind: "call-site", transport: "http", method: "GET", template: "/user-{}" } }]);
 });
 
 test("a call site whose target is undecided joins nothing and stays a cut naming its place", async () => {
   const place = "src/app/shop-web.api.ts";
   const { queries } = setup({
-    repositories: { orders: ORDERS, "shop-web": { callSites: [undecidedCallSite("shop-web", 21)], cuts: [{ kind: "unresolved-link", at: [place, `${place}:21`] }] } },
+    repositories: { orders: ORDERS, "shop-web": { callSites: [undecidedCallSite("shop-web", 21)], cuts: [{ kind: "unresolved-link", at: [place, `${place}:21`], reason: "callee-unknown", reach: { kind: "anything" } }] } },
   });
 
   const result = await queries.callers(ASK);
@@ -448,9 +448,9 @@ test("a call site whose target is undecided joins nothing and stays a cut naming
   assert.deepEqual(value.links, []);
   assert.deepEqual(repoImpact(value, "shop-web").external, []);
   assert.ok(section?.status === "partial");
-  assert.deepEqual(section.cuts, [{ kind: "unresolved-link", at: [place, `${place}:21`] }]);
+  assert.deepEqual(section.cuts, [{ kind: "unresolved-link", at: [place, `${place}:21`], reason: "callee-unknown", reach: { kind: "anything" } }]);
   assert.ok(result.ok && result.value.fact.status === "partial");
-  assert.deepEqual(result.value.fact.cuts, [{ kind: "section", at: ["shop-web"] }]);
+  assert.deepEqual(result.value.fact.cuts, [{ kind: "section", at: ["shop-web"], reason: "section-partial", reach: { kind: "anything" } }]);
 });
 
 test("each section carries the unresolved call sites its own repository's discovery read, with the request they state", async () => {
@@ -476,7 +476,7 @@ test("a call two repositories serve equally is no link: it is a cut naming its p
   const section = value.sections["shop-web"];
   assert.deepEqual(value.links, []);
   assert.ok(section?.status === "partial");
-  assert.deepEqual(section.cuts, [{ kind: "unresolved-link", at: ["src/app/shop-web.api.ts", "src/app/shop-web.api.ts:12"] }]);
+  assert.deepEqual(section.cuts, [{ kind: "unresolved-link", at: ["src/app/shop-web.api.ts", "src/app/shop-web.api.ts:12"], reason: "join-unsettled", reach: { kind: "call-site", transport: "http", method: "POST", template: "orders" } }]);
 });
 
 test("the repository holding an impacted call site is walked from that call site's line at its own snapshot", async () => {
@@ -675,7 +675,7 @@ test("captured change walks its selected live trigger and downstream live and SH
         if (request.repoId === "payments") s.fake.tree.set("src/a.ts", "v2");
         const answer = fact(request.repoId, "trusted", walkAnswer(model, request.targets));
         return { ok: true, value: request.repoId === "payments" && answer.status === "complete"
-          ? { ...answer, snapshot, status: "partial", cuts: [{ kind: "caller-budget", at: ["payments.call8"], limit: 1 }] }
+          ? { ...answer, snapshot, status: "partial", cuts: [{ kind: "caller-budget", at: ["payments.call8"], limit: 1, reason: "caller-budget", reach: { kind: "anything" } }] }
           : { ...answer, snapshot } };
       },
       importers: async () => assert.fail("unexpected importers walk"),
@@ -822,12 +822,12 @@ test("a downstream consumer's expansion cut remains on its repository section", 
       payments: { entrypoints: [routeOf(CHARGES, "POST", "/charges")] },
     },
     trigger: impactOf([], { seeds: [{ file: "src/app/webapp.api.ts", symbol: "call9", line: 9, basis: "lines" }] }),
-    walkFact: (repo, answer) => repo === "orders" && answer.status === "complete" ? { ...answer, status: "partial", cuts: [{ kind: "caller-budget", at: ["orders.call7"], limit: 1 }] } : answer,
+    walkFact: (repo, answer) => repo === "orders" && answer.status === "complete" ? { ...answer, status: "partial", cuts: [{ kind: "caller-budget", at: ["orders.call7"], limit: 1, reason: "caller-budget", reach: { kind: "anything" } }] } : answer,
   });
   const result = await queries.ofChange({ repo: { path: "/work/webapp" }, repos: [{ path: "/work/orders" }, { path: "/work/payments" }], base: "main" });
   const section = valueOf(result).sections.orders;
   assert.equal(section?.status, "partial");
-  assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "caller-budget", at: ["orders.call7"], limit: 1 }]);
+  assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "caller-budget", at: ["orders.call7"], limit: 1, reason: "caller-budget", reach: { kind: "anything" } }]);
 });
 
 test("a cycle between two repositories terminates and admits each link once", async () => {
@@ -1030,7 +1030,7 @@ test("a repository the read could not reach keeps its unknown section, so the an
 
   assert.ok(result.ok);
   assert.equal(result.value.fact.status, "partial");
-  assert.deepEqual(result.value.fact.status === "partial" ? result.value.fact.cuts : [], [{ kind: "section", at: ["orders-web"] }]);
+  assert.deepEqual(result.value.fact.status === "partial" ? result.value.fact.cuts : [], [{ kind: "section", at: ["orders-web"], reason: "section-unknown", reach: { kind: "anything" } }]);
   const section = valueOf(result).sections["orders-web"];
   assert.equal(section?.status, "unknown");
   assert.equal(section?.status === "unknown" ? section.reason : undefined, "revision-unavailable");

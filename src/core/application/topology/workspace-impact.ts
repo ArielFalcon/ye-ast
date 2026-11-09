@@ -2,7 +2,7 @@ import type { ChangedEntrypoint } from "../../domain/impact/changed-entrypoints.
 import type { ImpactValue, Seed } from "../../domain/impact/impact-fact.ts";
 import { parseHttpRouteName, type HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { Cut, Fact, FactBase, SnapshotRef } from "../../domain/shared/fact.ts";
-import { incompleteSectionCuts, provenanceOf, withCuts } from "../../domain/shared/fact.ts";
+import { ANYTHING, incompleteSectionCuts, provenanceOf, withCuts } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
@@ -379,7 +379,7 @@ function reachedHandlers(impact: ImpactValue): Set<string> {
 
 /** An altered or removed operation no route serves cannot name the consumers that call it, so the trigger's section stops there. */
 function unservedOperationCuts(contracts: readonly ChangedContract[]): Cut[] {
-  return contracts.flatMap(({ change, handlers, document, line }): Cut[] => (change === "added" || handlers !== undefined ? [] : [{ kind: "unresolved-link", at: [document, `${document}:${line}`] }]));
+  return contracts.flatMap(({ change, handlers, document, line }): Cut[] => (change === "added" || handlers !== undefined ? [] : [{ kind: "unresolved-link", at: [document, `${document}:${line}`], reason: "operation-unserved", reach: ANYTHING }]));
 }
 
 /** A link that lands in a handler of the trigger serving an operation the change altered or removed calls that operation. */
@@ -428,7 +428,7 @@ function baseOf(fact: FactBase): FactBase {
 function sectionOf(section: Fact<{ unresolved: readonly unknown[] }>, value: RepoImpact, undecided: readonly CallSite[], unserved: readonly Cut[], digest: Digest): Fact<RepoImpact> {
   if (section.status === "unknown") return section;
   const cuts: Cut[] = [
-    ...value.reads.flatMap(({ kind, fact }, index): readonly Cut[] => fact.status === "partial" ? fact.cuts : fact.status === "unknown" ? [{ kind: "section", at: [kind, String(index)] }] : []),
+    ...value.reads.flatMap(({ kind, fact }, index): readonly Cut[] => fact.status === "partial" ? fact.cuts : fact.status === "unknown" ? [{ kind: "section", at: [kind, String(index)], reason: "section-unknown", reach: ANYTHING }] : []),
     ...undecided.map(unsettledCallSiteCut),
     ...unserved,
   ];

@@ -70,6 +70,21 @@ test("a site, a file or a source of one language reaches only its pack, and a si
   assert.deepEqual((await readers.memberNames.memberNames({ path: TS_TEST, content: "" })).names, []);
 });
 
+test("a stage a pack declares absent answers each of its sites capability-absent and is never asked, while another pack's stays its own", async () => {
+  const typescript: string[] = [];
+  const java: string[] = [];
+  const readers = routedReaders([{ ...recordingPack(TYPESCRIPT_PROFILE, typescript, true), absent: ["dispatchTargets", "receiverMethods"] }, recordingPack(JAVA_PROFILE, java)]);
+  const origins = readers.importOrigins(SOURCES);
+  typescript.length = 0;
+
+  const dispatch = await origins.dispatchTargets([{ file: TS, line: 1, name: "a" }, { file: JAVA, line: 2, name: "a" }]);
+  const receivers = await origins.receiverMethods([{ file: TS, line: 1, column: 1, member: "a" }, { file: JAVA, line: 2, column: 1, member: "a" }]);
+
+  assert.deepEqual(dispatch, [{ kind: "unknown", reason: "capability-absent" }, { kind: "unknown", reason: "aspect may replace the body" }]);
+  assert.deepEqual(receivers, [{ kind: "unknown", reason: "capability-absent" }, { kind: "unproven" }]);
+  assert.deepEqual(typescript, []);
+});
+
 test("one list of sources reaches a pack as one list, however many times it is read", async () => {
   const lists: (readonly SourceFile[])[] = [];
   const java: LanguagePack = { ...recordingPack(JAVA_PROFILE, []), modules: { extract: async (sources) => (lists.push(sources), { files: [], dependencies: [], unread: [] }) } };

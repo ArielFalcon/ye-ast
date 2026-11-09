@@ -2,7 +2,7 @@ import type { ContractOperation } from "../contracts/contract-operation.ts";
 import type { Entrypoint } from "../entrypoints/entrypoint.ts";
 import type { Handler, HttpMethod } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
-import type { Cut, Finding } from "../shared/fact.ts";
+import { ANYTHING, type Cut, type Finding } from "../shared/fact.ts";
 import { unresolvedPlaceCuts } from "./impact-cuts.ts";
 
 export type ContractPart = "request" | "response";
@@ -63,7 +63,7 @@ export function changedContracts(base: readonly Finding<ContractOperation>[], he
   }
   for (const finding of [...base, ...head]) {
     const place = finding.status === "unknown" ? finding.evidence[0] : undefined;
-    if (place !== undefined && touched(place.path)) cuts.set(place.path, { kind: "no-extractor", at: [place.path] });
+    if (place !== undefined && touched(place.path)) cuts.set(place.path, { kind: "no-extractor", at: [place.path], reason: "contract-unread", reach: ANYTHING });
   }
   return { changes: changes.sort(compareChanges), cuts: [...cuts.values()].sort((a, b) => compareText(a.at.join("\0"), b.at.join("\0"))) };
 }
@@ -93,7 +93,7 @@ function unresolvedCuts(operations: readonly ContractOperation[], touched: (path
     operation.data.unresolved
       .filter((reference) => touched(operation.document) || (reference.file !== undefined && touched(reference.file)))
       .map((reference) => ({ file: operation.document, line: operation.line, reason: reference.ref })),
-  ));
+  ), "contract-unread");
 }
 
 function changedOf(change: ChangedContract["change"], operation: ContractOperation): ChangedContract {

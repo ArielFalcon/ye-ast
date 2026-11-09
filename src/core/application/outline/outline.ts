@@ -3,6 +3,7 @@ import type { ModuleBinding, ModuleDependencies, ModuleDependency, UntraversedRe
 import type { OutlineBinding, OutlineDeclaration, OutlineFile, OutlineFocus, OutlineFocusValue, OutlineImport, OutlineListing, OutlineUse } from "../../domain/outline/outline-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
 import { unresolvedPlaceCuts } from "../../domain/impact/impact-cuts.ts";
+import { fileReach } from "../../domain/languages/call-targets.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
 import { importBindings } from "../navigation/import-bindings.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -38,7 +39,7 @@ export function readOutline(store: CodeGraphReader, requested: readonly string[]
       unheld.push(file);
       continue;
     }
-    if (unread.has(file) || !read.has(file)) cuts.push({ kind: "no-extractor", at: [file] });
+    if (unread.has(file) || !read.has(file)) cuts.push({ kind: "no-extractor", at: [file], reason: "module-unread", reach: fileReach(file) });
     const dependencies = statements.get(file) ?? [];
     const reached = importBindings(store, file, dependencies);
     unproved.push(...unprovedBindings(dependencies, reached));
@@ -49,7 +50,7 @@ export function readOutline(store: CodeGraphReader, requested: readonly string[]
       imports: placed.toSorted((left, right) => left.line - right.line || (left.offset ?? 0) - (right.offset ?? 0)).map(({ entry }) => entry),
     });
   }
-  return { value: { files, unheld }, cuts: [...cuts, ...unresolvedPlaceCuts(unproved, "unresolved")] };
+  return { value: { files, unheld }, cuts: [...cuts, ...unresolvedPlaceCuts(unproved, "use-unproven")] };
 }
 
 function unprovedBindings(dependencies: readonly ModuleDependency[], reached: ReadonlyMap<ModuleBinding, GraphSymbol>) {

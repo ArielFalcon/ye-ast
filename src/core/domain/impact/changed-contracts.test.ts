@@ -42,8 +42,8 @@ test("a reference the reader could not follow cuts the answer only when the chan
   const unresolved = { unresolved: [{ ref: "schemas/money.yaml#/Money", file: "openapi/schemas/money.yaml" }] };
   const unchanged = [operation("GET /orders", unresolved)];
 
-  assert.deepEqual(changedContracts(unchanged, unchanged, touched(DOCUMENT)).cuts, [{ kind: "unresolved-link", at: [DOCUMENT, `${DOCUMENT}:5 schemas/money.yaml#/Money`] }]);
-  assert.deepEqual(changedContracts(unchanged, unchanged, touched("openapi/schemas/money.yaml")).cuts, [{ kind: "unresolved-link", at: [DOCUMENT, `${DOCUMENT}:5 schemas/money.yaml#/Money`] }]);
+  assert.deepEqual(changedContracts(unchanged, unchanged, touched(DOCUMENT)).cuts, [{ kind: "unresolved-link", at: [DOCUMENT, `${DOCUMENT}:5 schemas/money.yaml#/Money`], reason: "contract-unread", reach: { kind: "anything" } }]);
+  assert.deepEqual(changedContracts(unchanged, unchanged, touched("openapi/schemas/money.yaml")).cuts, [{ kind: "unresolved-link", at: [DOCUMENT, `${DOCUMENT}:5 schemas/money.yaml#/Money`], reason: "contract-unread", reach: { kind: "anything" } }]);
   assert.deepEqual(changedContracts(unchanged, unchanged, touched("src/Other.java")).cuts, []);
 });
 
@@ -52,7 +52,7 @@ test("a touched document the reader could not parse cuts the answer at it instea
 
   assert.deepEqual(changedContracts([operation("GET /orders")], [unreadable], touched(DOCUMENT)), {
     changes: [{ change: "removed", method: "GET", path: "/orders", document: DOCUMENT, line: 5 }],
-    cuts: [{ kind: "no-extractor", at: [DOCUMENT] }],
+    cuts: [{ kind: "no-extractor", at: [DOCUMENT], reason: "contract-unread", reach: { kind: "anything" } }],
   });
   assert.deepEqual(changedContracts([unreadable], [unreadable], touched("src/Other.java")).cuts, []);
 });

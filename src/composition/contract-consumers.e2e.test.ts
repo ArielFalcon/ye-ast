@@ -211,7 +211,7 @@ test("a consumer call two repositories serve equally stays a cut, never a named 
 
   assert.deepEqual(answer.links, []);
   assert.equal(answer.status, "partial");
-  assert.deepEqual(answer.sections.web?.cuts, [{ kind: "unresolved-link", at: ["src/app/order.api.ts", "src/app/order.api.ts:5"] }]);
+  assert.deepEqual(answer.sections.web?.cuts, [{ kind: "unresolved-link", at: ["src/app/order.api.ts", "src/app/order.api.ts:5"], reason: "join-unsettled", reach: { kind: "call-site", transport: "http", method: "GET", template: "/orders" } }]);
 });
 
 test("a changed contract whose reference the snapshot cannot follow keeps the provider section partial", async () => {
@@ -222,7 +222,7 @@ test("a changed contract whose reference the snapshot cannot follow keeps the pr
   const answer = await changeOfOrders();
 
   assert.equal(answer.status, "partial");
-  assert.deepEqual(answer.sections.orders?.cuts, [{ kind: "unresolved-link", at: [DOCUMENT, `${DOCUMENT}:6 https://example.com/orders.yaml#/Orders`] }]);
+  assert.deepEqual(answer.sections.orders?.cuts, [{ kind: "unresolved-link", at: [DOCUMENT, `${DOCUMENT}:6 https://example.com/orders.yaml#/Orders`], reason: "contract-unread", reach: { kind: "anything" } }]);
 });
 
 test("a changed handler body still names its consumer through the changed route, with no other altered operation attached", async () => {
@@ -246,7 +246,7 @@ test("an altered operation no route of the provider serves leaves its section pa
 
   assert.deepEqual(answer.links, []);
   assert.equal(answer.status, "partial");
-  assert.deepEqual(answer.sections.orders?.cuts, [{ kind: "unresolved-link", at: [DOCUMENT, `${DOCUMENT}:6`] }]);
+  assert.deepEqual(answer.sections.orders?.cuts, [{ kind: "unresolved-link", at: [DOCUMENT, `${DOCUMENT}:6`], reason: "operation-unserved", reach: { kind: "anything" } }]);
 });
 
 test("operations a contract declares on one line are told apart: a consumer of an unchanged one is not named", async () => {

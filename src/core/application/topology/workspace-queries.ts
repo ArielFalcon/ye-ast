@@ -1,6 +1,6 @@
 import { type LibrarySource, libraryPath } from "../../domain/topology/library-source.ts";
 import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
-import { incompleteSectionCuts, provenanceOf, withCuts, type Cut, type DeclaredScope, type Fact, type Finding, type FactBase, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
+import { ANYTHING, incompleteSectionCuts, provenanceOf, withCuts, type Cut, type DeclaredScope, type Fact, type Finding, type FactBase, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Result } from "../../domain/shared/result.ts";
@@ -12,7 +12,7 @@ import { entrypointsOf, joinWorkspace, linkMapOf } from "./workspace-join.ts";
 import { hostOf, prefixOf } from "../../domain/topology/link-match.ts";
 import type { HeadReaderDeps, HeldLive } from "../snapshot/head-reading.ts";
 import type { WorkspaceReadOperation } from "./workspace-operation.ts";
-import { callSiteEvidence, unresolvedCallSite, unsettledCallSiteCut, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
+import { callSiteEvidence, unresolvedCallSite, unresolvedCallSiteCut, unsettledCallSiteCut, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
 import { nameCandidates, dependencyClosures, repositoryNameOf, type RepositoryIdentity } from "../../domain/topology/repository-identity.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
@@ -139,7 +139,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
       const cuts: Cut[] = [...entry.cuts, ...closure.unresolved.map(({ repo, name, diagnostic }): Cut => {
         const at = (path: string): string => repo === entry.identity.id ? path : libraryPath(repo, path);
         return {
-          kind: "unresolved-link", reason: "unresolved",
+          kind: "unresolved-link", reason: "dependency-unresolved", reach: ANYTHING,
           at: [at(name.evidence[0]?.path ?? name.name), ...name.evidence.map((place) => `${at(place.path)}:${place.line}`)],
           dependency: diagnostic,
         };
@@ -196,12 +196,13 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
         const unserved: RepositoryOutwardName[] = [];
         for (const entry of resolved) {
           const names = gatherNames(entry.names);
-          const unresolved = entry.callSites.flatMap((site) => (site.target.status === "unknown" ? [unresolvedCallSite(site)] : []));
+          const undecided = entry.callSites.filter((site) => site.target.status === "unknown");
+          const unresolved = undecided.map(unresolvedCallSite);
           const unsettled = join.joined.filter(({ site, joined }) => site.repo === entry.repository.repo && (joined.ambiguous !== undefined || joined.undecided !== undefined)).map(({ site }) => site);
           const section: FactBase & { evidence: readonly { path: string; line: number }[] } = { ...(entry.base as FactBase), evidence: sortEvidence(names.flatMap((name) => name.evidence)) };
           const cuts = [
             ...entry.cuts,
-            ...unresolved.map((place) => ({ kind: "unresolved-link" as const, reason: place.reason, at: [place.path, `${place.path}:${place.line}`, ...(place.via === undefined ? [] : [`library ${place.via}`])] })),
+            ...undecided.map(unresolvedCallSiteCut),
             ...unsettled.map(unsettledCallSiteCut),
           ];
           sections[entry.repository.repo] = withCuts(section, { names, unresolved }, cuts);

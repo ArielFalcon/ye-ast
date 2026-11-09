@@ -22,8 +22,12 @@ export function effectOf(site: CallSite | DataEffectSite): { effect: TraceEffect
 
 /** A call site the trace cannot carry as an effect: a cut at its place, naming the library its target goes through when the extraction names one. */
 export function unplacedEffect(site: CallSite | DataEffectSite): Cut {
-  if (!("transport" in site)) return { kind: "unresolved-link", at: [placeAt(site.file, site.line, "data effect")] };
+  if (!("transport" in site)) return unplacedAt(placeAt(site.file, site.line, "data effect"));
   const kind = site.transport === "http" ? "http" : "message";
   const via = site.target.status === "unknown" ? site.target.evidence[0]?.via : undefined;
-  return { kind: "unresolved-link", at: [placeAt(site.file, site.line, `${kind} effect${via === undefined ? "" : ` through ${via}`}`)] };
+  return unplacedAt(placeAt(site.file, site.line, `${kind} effect${via === undefined ? "" : ` through ${via}`}`));
+}
+
+function unplacedAt(place: string): Cut {
+  return { kind: "unresolved-link", at: [place], reason: "effect-unplaced", reach: { kind: "call-at", place } };
 }

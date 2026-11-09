@@ -384,7 +384,7 @@ test("summary names the handler of a reached entrypoint wherever the reach is ci
 });
 
 test("summary lists the cut places of an importers read and counts those of other families", () => {
-  const importers = sourceFixture("importers", { fact: factOf(importersValue(), { cuts: [{ kind: "unresolved-link", at: ["src/dyn.ts"] }] }) });
+  const importers = sourceFixture("importers", { fact: factOf(importersValue(), { cuts: [{ kind: "unresolved-link", at: ["src/dyn.ts"], reason: "callee-unknown", reach: { kind: "anything" } }] }) });
   const text = renderComposition(resultOf([importers, sourceFixture("impact-local")]), "summary");
   assert.match(text, /unresolved-link cut ×1, 1 places: src\/dyn\.ts/);
   assert.match(text, /depth cut ×1, 2 places, limit 2(?!:)/);
@@ -481,7 +481,7 @@ test("composition text retains dependency selection diagnostics next to their cu
   const value = workspaceValue();
   const section = value.sections.web;
   assert.ok(section && section.status !== "unknown");
-  const cut = { kind: "unresolved-link" as const, reason: "unresolved" as const, at: ["pom.xml", "pom.xml:4"], dependency: { name: "com.acme:clients", reason: "unproven-coordinates" as const, candidates: ["clients"] } };
+  const cut = { kind: "unresolved-link" as const, reason: "dependency-unresolved" as const, reach: { kind: "anything" as const }, at: ["pom.xml", "pom.xml:4"], dependency: { name: "com.acme:clients", reason: "unproven-coordinates" as const, candidates: ["clients"] } };
   const result = resultOf([sourceFixture("workspace", { value: { ...value, sections: { ...value.sections, web: { ...section, status: "partial", cuts: [cut] } } } })]);
   for (const mode of ["summary", "details"] as const) assert.match(renderComposition(result, mode), /com.acme:clients.*unproven-coordinates.*clients/);
 });

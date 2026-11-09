@@ -14,6 +14,7 @@ import { composeFull, composeReceipt } from "../mcp/render-composition.ts";
 import type { CompositionResult, CoverageSummary } from "../mcp/composition-contract.ts";
 import type { PartKind, ReadOwner } from "../core/ports/evidence-composition.port.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
+import { CUT_SUB_REASONS } from "../core/domain/shared/fact.ts";
 
 const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
 const COMPOSE_OUTPUT = composeOutput(createEvidenceComposition(digest));
@@ -210,24 +211,30 @@ test("compose accepts structured data effects with and without an entity and rej
   assert.equal(COMPOSE_OUTPUT.safeParse(invalid).success, false);
 });
 
-test("dispatch cut details pass both strict composition schemas and unknown details are rejected", () => {
-  for (const detail of ["aspect may replace the body", "generated implementation", "dispatch not proven"] as const) {
+test("a cut's sub-reason passes both strict composition schemas only from the closed set, and a cut without a reason is rejected", () => {
+  for (const subReason of CUT_SUB_REASONS) {
     const value = json(full);
     const read = value.graph.reads.find((read) => read.analysis.status === "partial");
     assert.ok(read?.analysis.status === "partial");
-    Object.assign(read.analysis.cuts[0]!, { detail });
+    Object.assign(read.analysis.cuts[0]!, { reason: "dispatch", subReason });
     assert.equal(runtime(value), true);
     assert.equal(ajv(value).valid, true);
-    Object.assign(read.analysis.cuts[0]!, { detail: "unproven guess" });
+    Object.assign(read.analysis.cuts[0]!, { subReason: "unproven guess" });
     assert.equal(runtime(value), false);
     assert.equal(ajv(value).valid, false);
   }
+  const reasonless = json(full);
+  const read = reasonless.graph.reads.find((read) => read.analysis.status === "partial");
+  assert.ok(read?.analysis.status === "partial");
+  delete (read.analysis.cuts[0] as { reason?: unknown }).reason;
+  assert.equal(runtime(reasonless), false);
+  assert.equal(ajv(reasonless).valid, false);
 });
 
 test("a read whose fact used a declared build output, and one that names an unread declaration, pass the schema", () => {
   const plain = sourceFixture("callers-local").read.fact;
   const declared = { ...plain, inputs: { ...plain.inputs, buildOutputs: [{ kind: "node-modules" as const, at: "", verified: false, digest: "d" }] } };
-  const unread = { ...plain, status: "partial" as const, cuts: [{ kind: "build-output" as const, at: ["node_modules"] }] } as typeof plain;
+  const unread = { ...plain, status: "partial" as const, cuts: [{ kind: "build-output" as const, at: ["node_modules"], reason: "live-tree", reach: { kind: "anything" } }] } as typeof plain;
   for (const fact of [declared, unread]) {
     const value = composeFull(resultOf([sourceFixture("callers-local", { fact })]));
     assert.equal(runtime(value), true, JSON.stringify(COMPOSE_OUTPUT.safeParse(value).error?.issues.slice(0, 3)));
