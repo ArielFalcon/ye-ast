@@ -126,7 +126,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const trivia = triviaOncePerFile(deps.sourceTrivia);
           const reading = readings.of(
             { tree: head.tree, prepared: head.prepared, store, digest: index.digest, snapshot: head.base(content).snapshot, request },
-            { inScope: head.selected },
+            { originPaths: head.tree.export.files.map(({ path }) => path).filter(head.selected), inScope: head.selected },
           );
           const { unresolvedIn, lineOf } = reading;
           const syntaxOf = reading.syntaxOf ?? (async (): Promise<DeclaredMemberNames> => NOTHING_DECLARED);

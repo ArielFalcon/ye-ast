@@ -71,6 +71,8 @@ export interface ReadingSource {
 
 /** How a family narrows what the reading binds; every family binds with the same proofs (ADR-0045 decision 4). */
 export interface ReadingNarrowing {
+  /** The snapshot's paths the import origins read as its universe; every source's by default. */
+  originPaths?: readonly string[] | undefined;
   /** Whether a declaration's file is in the read's scope, for the candidates of an unbound call; every file by default. */
   inScope?: ((path: string) => boolean) | undefined;
 }
@@ -169,7 +171,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       const lineOf = linesOncePerFile(sources);
       const unresolvedIn = unresolvedOncePerFile(store);
       const navigation = once(() => createGraphNavigation(store, () => false));
-      const origins = once(() => deps.importOrigins?.(tree.sources, undefined, facts));
+      const origins = once(() => deps.importOrigins?.(tree.sources, narrowing.originPaths, facts));
       const unresolved = once(() => unresolvedOf(store, tree));
       const relations = once(() => retainedRelations(deps.relations, prepared, tree, request));
       const declarationUses = once(() => createDeclarationUses(store, navigation(), unresolvedIn));
