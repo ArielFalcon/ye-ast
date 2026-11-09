@@ -11,7 +11,7 @@ import { configurationsOf, type Configuration } from "./application-config.ts";
 import { JavaEventReader } from "./event-call-sites.adapter.ts";
 import { JavaHttpReader } from "./http-call-sites.adapter.ts";
 import { createJavaProject, type JavaFile, type JavaProject } from "./java-symbols.ts";
-import type { CallSiteProof } from "./java-call-site-owner.ts";
+import { callSiteProofOf, type CallSiteProof } from "./java-call-site-owner.ts";
 
 /** A reader of one kind of call site, over a project the snapshot was parsed into once. */
 export interface JavaSiteReader {
@@ -28,7 +28,7 @@ const eventSites: JavaSiteReader = { transport: "event", read: (project, configu
  * parser rejects is one site whose target is `unknown` with `source-unreadable`, at the parser's fault line and under
  * the first reader's transport: none of its calls can be read.
  */
-function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[], libraries: readonly LibrarySource[], repo: string, readers: readonly JavaSiteReader[], includeNested = false): CallSite[] {
+export function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[], libraries: readonly LibrarySource[], repo: string, readers: readonly JavaSiteReader[], includeNested = false): CallSite[] {
   const readable = <T extends SourceFile>(sources: readonly T[]): T[] => sources.filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path));
   return withJavaSources(parser, (parse) => {
     const { files: owned, unparsed: unreadable } = parse(readable(files));
@@ -38,7 +38,7 @@ function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[], libra
     const held = new Set(owned);
     const transport = readers[0]?.transport;
     const unread = transport === undefined ? [] : unreadable.map((at): CallSite => ({ repo, file: at.path, line: at.line, symbol: basename(at.path, ".java"), transport, target: { status: "unknown", reason: "source-unreadable", evidence: [at] } }));
-    const proof: CallSiteProof = { unparsed: unreadable, unreadJvm: false };
+    const proof = callSiteProofOf(files, libraries, unreadable, unreadableLibraries);
     const sites = readers.flatMap((reader) => reader.read(project, configuration, held, repo, includeNested, proof));
     for (const site of sites) if (site.diagnostic?.source === "not-read" && unreadableLibraries.length > 0) {
       site.diagnostic = { ...site.diagnostic, unreadableSources: unreadableLibraries };

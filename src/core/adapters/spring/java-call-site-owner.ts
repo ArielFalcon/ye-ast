@@ -6,6 +6,8 @@
  */
 import type { JavaFile, JavaProject, MethodDecl, TypeDecl } from "./java-symbols.ts";
 import { scopeOf } from "./java-symbols.ts";
+import type { LibrarySource } from "../../domain/topology/library-source.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchTargets } from "../../ports/import-origins.port.ts";
 import type { FieldLookup, Invocation } from "./java-invocations.ts";
 import { receiverOf } from "./java-invocations.ts";
@@ -13,6 +15,7 @@ import { argumentsOf, descendants, typeNameOf } from "./java-members.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { callKey, createResolver, provesBinding, type ReceiverSource } from "./java-receiver-methods.ts";
 import { dispatchReadingOf, type DispatchReading } from "./java-dispatch-targets.ts";
+import { UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import type { UnparsedSource } from "./java-project.ts";
 import { annotationUses, isAnnotation } from "./request-mapping.ts";
 import { BEAN, NAMED_COMPONENTS, PRIMARY, QUALIFIER } from "./java-value-vocabulary.ts";
@@ -25,7 +28,7 @@ import { BEAN, NAMED_COMPONENTS, PRIMARY, QUALIFIER } from "./java-value-vocabul
 export interface StagedSelection {
   method: MethodDecl;
   receiver: TypeDecl;
-  /** Proven when the owner's `receiverMethods` names the declaration and `dispatchTargets` proves its closure. */
+  /** Proven when the owner's `receiverMethods` names the declaration and `dispatchTargets` proves its closure; read lazily, so a consumer that never asks pays no proof. */
   proven: boolean;
 }
 
@@ -37,6 +40,14 @@ export interface CallSiteProof {
 
 /** The proof of a read that handed the flow only its parsed sources. */
 export const NO_PROOF: CallSiteProof = { unparsed: [], unreadJvm: false };
+
+/**
+ * The owner's proof over the call-site flow's own inputs: every source the parse left unread, its own and the libraries
+ * it reads, and every JVM source no extractor reads in the universe it was handed.
+ */
+export function callSiteProofOf(files: readonly SourceFile[], libraries: readonly LibrarySource[], unparsed: readonly UnparsedSource[], unreadableLibraries: readonly UnparsedSource[]): CallSiteProof {
+  return { unparsed: [...unparsed, ...unreadableLibraries], unreadJvm: [...files, ...libraries].some(({ path }) => UNREAD_JVM_SOURCE.test(path)) };
+}
 
 interface ProjectReading {
   resolver: ReturnType<typeof createResolver>;
@@ -66,8 +77,15 @@ function sourceOf(file: JavaFile, reading: ProjectReading): ReceiverSource {
 }
 
 export function stagedSelections(call: Invocation, project: JavaProject, text: FieldLookup, concrete: TypeDecl = call.type, proof: CallSiteProof = NO_PROOF): StagedSelection[] {
-  const proven = provenBodies(call, project, proof);
-  return lenientSelections(call, project, text, concrete).map(({ method, receiver }) => ({ method, receiver, proven: proven.has(`${method.owner.file.path}:${method.node.startPosition.row + 1}`) }));
+  let proven: Set<string> | undefined;
+  const prove = (): Set<string> => (proven ??= provenBodies(call, project, proof));
+  return lenientSelections(call, project, text, concrete).map(({ method, receiver }) => ({
+    method,
+    receiver,
+    get proven(): boolean {
+      return prove().has(`${method.owner.file.path}:${method.node.startPosition.row + 1}`);
+    },
+  }));
 }
 
 /**

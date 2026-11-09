@@ -35,6 +35,14 @@ export interface HeldJavaSource {
  * One project per read, held by the read's parse hold (ADR-0040): `keep` gives the sources the hold parses once,
  * `release` frees every tree at the read's end. One held value per (sources identity, declared outputs identity).
  */
+/** A read asked for a project of a parse hold that was released: its trees are gone, so a new read must open a hold. */
+export class ReleasedParseHoldError extends Error {
+  constructor() {
+    super("the parse hold was released");
+    this.name = "ReleasedParseHoldError";
+  }
+}
+
 export interface HeldJavaProject {
   files: readonly HeldJavaSource[];
   project: JavaProject;
@@ -52,7 +60,7 @@ const heldProjects = new WeakMap<ParseHold, Map<string, Promise<HeldJavaProject>
  * split — never the list that carries them, so a changed source or a declared file is another project.
  */
 export function heldJavaProject(hold: ParseHold, parser: () => Promise<JavaParser>, sources: readonly SourceFile[], declared: readonly SourceFile[] = []): Promise<HeldJavaProject> {
-  if (!hold.open()) return Promise.reject(new TypeError("the parse hold was released"));
+  if (!hold.open()) return Promise.reject(new ReleasedParseHoldError());
   let byKey = heldProjects.get(hold);
   if (byKey === undefined) {
     byKey = new Map();

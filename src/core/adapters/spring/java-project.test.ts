@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createJavaParser, createJavaTreeHolds, type JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { heldJavaProject, withJavaSources } from "./java-project.ts";
+import { heldJavaProject, ReleasedParseHoldError, withJavaSources } from "./java-project.ts";
 
 const SOURCES = [
   { path: "A.java", content: "class A {}" },
@@ -132,5 +132,5 @@ test("a released hold never serves the project it built", async () => {
 
   hold.release();
   assert.equal(hold.open(), false);
-  await assert.rejects(() => heldJavaProject(hold, () => Promise.resolve(parser), sources), TypeError);
+  await assert.rejects(() => heldJavaProject(hold, () => Promise.resolve(parser), sources), ReleasedParseHoldError);
 });
