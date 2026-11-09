@@ -1,111 +1,23 @@
 import { LIBRARY_ROOT } from "../../domain/topology/library-source.ts";
 import { isFunctionValueNode } from "../tree-sitter/java-function-value-calls.ts";
-import { BEAN, NAMED_COMPONENTS, PRIMARY, QUALIFIER } from "./java-value-vocabulary.ts";
 import type { Node } from "web-tree-sitter";
-import { argumentsOf, descendants, localBindings, typeNameOf } from "./java-members.ts";
-import { invocationsOf, parametersOf, receiverOf, type Invocation, type FieldLookup } from "./java-invocations.ts";
-import { scopeOf, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
-import { annotationUses, isAnnotation } from "./request-mapping.ts";
+import { argumentsOf, localBindings } from "./java-members.ts";
+import { invocationsOf, parametersOf, type Invocation, type FieldLookup } from "./java-invocations.ts";
+import { type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 import type { UrlScope } from "./java-values.ts";
 import type { CallSiteDiagnostic, StatedRequest } from "../../domain/topology/call-site.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import { reachedDiagnostic } from "../../domain/topology/evaluated.ts";
 import { spanOf, unknown } from "./findings.ts";
+import { stagedSelections } from "./java-call-site-owner.ts";
 
 export interface MethodSelection {
   method: MethodDecl;
   receiver: TypeDecl;
 }
 
-interface DispatchIndex {
-  implementations: Map<TypeDecl, TypeDecl[]>;
-  named: Map<string, Set<TypeDecl>>;
-  primary: Set<TypeDecl>;
-}
-
-const dispatchIndexes = new WeakMap<JavaProject, DispatchIndex>();
-
-function dispatchIndex(project: JavaProject): DispatchIndex {
-  const cached = dispatchIndexes.get(project);
-  if (cached !== undefined) return cached;
-  const index: DispatchIndex = { implementations: new Map(), named: new Map(), primary: new Set() };
-  const register = (name: string, type: TypeDecl) => {
-    const types = index.named.get(name) ?? new Set<TypeDecl>();
-    index.named.set(name, types.add(type));
-  };
-  for (const type of project.types) {
-    if (type.kind === "class" && !type.isAbstract) for (const parent of project.hierarchy(type).types) {
-      const types = index.implementations.get(parent) ?? [];
-      types.push(type);
-      index.implementations.set(parent, types);
-    }
-    for (const use of annotationUses(type.node, scopeOf(type))) {
-      if (isAnnotation(use, PRIMARY)) index.primary.add(type);
-      if (!isAnnotation(use, NAMED_COMPONENTS)) continue;
-      for (const value of [...use.attributes.values()].flat()) {
-        const evaluated = project.evaluate(value);
-        if ("value" in evaluated) register(evaluated.value, type);
-      }
-    }
-    for (const method of type.methods) indexBean(method, project, register);
-  }
-  dispatchIndexes.set(project, index);
-  return index;
-}
-
-function indexBean(method: MethodDecl, project: JavaProject, register: (name: string, type: TypeDecl) => void): void {
-  const beans = annotationUses(method.node, scopeOf(method.owner)).filter((use) => isAnnotation(use, BEAN));
-  if (beans.length === 0) return;
-  const returns = descendants(method.node).filter((node) => node.type === "return_statement");
-  const value = returns.length === 1 ? returns[0]?.namedChildren[0] : undefined;
-  if (value?.type !== "object_creation_expression") return;
-  const type = project.lookupType(typeNameOf(value.childForFieldName("type")), scopeOf(method.owner));
-  if (typeof type !== "object") return;
-  for (const bean of beans) {
-    if (bean.attributes.size === 0) register(method.name, type);
-    for (const name of bean.attributes.get("name") ?? bean.attributes.get("value") ?? []) {
-      const evaluated = project.evaluate(name);
-      if ("value" in evaluated) register(evaluated.value, type);
-    }
-  }
-}
-
 export function methodsOf(call: Invocation, project: JavaProject, text: FieldLookup, concrete = call.type): MethodSelection[] {
-  if (call.node.type === "object_creation_expression" || call.node.type === "explicit_constructor_invocation") {
-    const found = call.node.type === "object_creation_expression"
-      ? project.lookupType(typeNameOf(call.node.childForFieldName("type")), scopeOf(call.type))
-      : call.node.childForFieldName("constructor")?.text === "super" ? project.classChain(call.type)[1] : call.type;
-    if (typeof found !== "object" || found === null) return [];
-    const arity = argumentsOf(call.node).length;
-    return found.constructors.filter(method => method.hasBody && method.parameterTypes.length === arity).map(method => ({ method, receiver: found }));
-  }
-  const object = call.node.childForFieldName("object");
-  const held = object === null || object.type === "this" ? undefined : receiverOf(object, call, project, text);
-  let declared = object === null || object.type === "this" ? concrete : held !== undefined && "decl" in held.resolved ? held.resolved.decl : undefined;
-  if (declared === undefined && object?.type === "identifier") {
-    const found = project.lookupType(object.text, scopeOf(call.type));
-    if (typeof found === "object") declared = found;
-  }
-  if (declared === undefined) return [];
-  const index = dispatchIndex(project);
-  let candidates = declared.kind === "interface" || declared.isAbstract ? index.implementations.get(declared) ?? [] : [declared];
-  const qualifier = held === undefined ? undefined : annotationUses(held.binding.node, scopeOf(call.type)).find((use) => isAnnotation(use, QUALIFIER));
-  const expression = qualifier?.attributes.get("value")?.[0];
-  const selected = expression === undefined ? undefined : project.evaluate(expression);
-  if (selected !== undefined && "value" in selected) candidates = candidates.filter((type) => index.named.get(selected.value)?.has(type));
-  else {
-    const primary = candidates.filter((type) => index.primary.has(type));
-    if (primary.length === 1) candidates = primary;
-  }
-  const name = call.node.childForFieldName("name")?.text;
-  const arity = argumentsOf(call.node).length;
-  return candidates.flatMap((receiver) => {
-    for (const owner of project.classChain(receiver)) {
-      const methods = owner.methods.filter((method) => method.name === name && method.parameterTypes.length === arity && method.hasBody);
-      if (methods.length > 0) return methods.map((method) => ({ method, receiver }));
-    }
-    return [];
-  });
+  return stagedSelections(call, project, text, concrete).map(({ method, receiver }) => ({ method, receiver }));
 }
 
 /** The one value every alternative agrees on; undefined when alternatives disagree. */

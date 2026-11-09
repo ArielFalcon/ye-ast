@@ -28,9 +28,12 @@ const CALL_REWRITING_ANNOTATIONS: ReadonlySet<string> = new Set(["Delegate", "Ex
 const MEMBERLESS_PLATFORM_INTERFACES: ReadonlySet<string> = new Set(["java.io.Serializable", "java.lang.Cloneable", "java.util.RandomAccess", "java.util.EventListener"]);
 
 /** One Java source as the resolver reads it: its description, and its receiver bindings by the call's place, member and receiver. */
-interface ReadFile {
+export interface ReceiverSource {
   file: JavaFile;
   bindings: ReadonlyMap<string, ReceiverBinding>;
+}
+
+interface ReadFile extends ReceiverSource {
   /** Method invocations by the place they start and the member they call: one place may start several (`a.f().f()`). */
   invocations: ReadonlyMap<string, readonly Node[]>;
 }
@@ -122,7 +125,7 @@ class DeadlineCut extends Error {
   }
 }
 
-function createResolver(project: JavaProject) {
+export function createResolver(project: JavaProject) {
   const hierarchies = new Map<TypeDecl, ReturnType<JavaProject["hierarchy"]>>();
   /** The supertype clauses, by file and offset, that name a platform interface declaring no members. */
   const memberless = new Set<string>();
@@ -149,7 +152,7 @@ function createResolver(project: JavaProject) {
    * The repository type the receiver of an invocation is declared to hold; none when nothing proves one. `bound` when a
    * type variable types the receiver, or a receiver up its chain: the type is the variable's one bound (JLS 4.4).
    */
-  const receiverOf = (invocation: Node, source: ReadFile): { type: TypeDecl; bound: boolean } | undefined => {
+  const receiverOf = (invocation: Node, source: ReceiverSource): { type: TypeDecl; bound: boolean } | undefined => {
     const object = invocation.childForFieldName("object");
     const declared = (type: TypeDecl | undefined, bound = false) => (type === undefined ? undefined : { type, bound });
     if (object === null || object.type === "this") return declared(thisType(invocation, source.file, project));
@@ -171,7 +174,7 @@ function createResolver(project: JavaProject) {
   };
 
   /** The one method of the name that the receiver's declared type offers for the call's arity. */
-  const methodNamed = (invocation: Node, source: ReadFile): { method: MethodDecl; bound: boolean } | undefined => {
+  const methodNamed = (invocation: Node, source: ReceiverSource): { method: MethodDecl; bound: boolean } | undefined => {
     const held = receiverOf(invocation, source);
     const name = invocation.childForFieldName("name")?.text;
     const method = held === undefined || name === undefined ? undefined : memberOf(held.type, name, argumentCount(invocation), enclosingType(invocation, source.file, project));
@@ -238,7 +241,7 @@ function createResolver(project: JavaProject) {
 
   return {
     constructorOf,
-    hasDeclaredReceiver: (invocation: Node, source: ReadFile): boolean => receiverOf(invocation, source) !== undefined,
+    hasDeclaredReceiver: (invocation: Node, source: ReceiverSource): boolean => receiverOf(invocation, source) !== undefined,
     /** The method the call names through its declared receiver and one settled signature; dispatch decides its body separately. */
     methodOf: methodNamed,
     /**
