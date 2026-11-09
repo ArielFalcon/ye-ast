@@ -6,8 +6,8 @@ import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts"
 import { calleeOf, compactSpelling, ownMemberOf, receiverOf } from "../../domain/shared/call-place.ts";
 import type { CodeGraphReader, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOrigins, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
-import type { CallBinder, ReceiverProof } from "./call-binder.ts";
-import { ownMembersOf, type GraphNavigation } from "./graph-navigation.ts";
+import type { CallBinder, CallPlace, ReceiverProof } from "./call-binder.ts";
+import { ownMembersOf, placedBetween, type GraphNavigation } from "./graph-navigation.ts";
 
 /** A call the index left without a target: its body, and the reference the index or the syntax states for it. */
 export interface UnboundCall {
@@ -32,7 +32,7 @@ type Outside = Extract<ImportOrigin, { kind: "external" | "ambient" }>;
  * `form` tells how the call spells its callee, for a family that settles each form its own way.
  */
 export type CallBinding =
-  | { kind: "declaration"; target: GraphSymbol; link: "own-member" | "chain" | "import" | "file" | "declared-receiver" | "bound-receiver" }
+  | { kind: "declaration"; target: GraphSymbol; link: "own-member" | "chain" | "import" | "file" | "declared-receiver" | "bound-receiver" | "overload" }
   | { kind: "receiver"; proof: ReceiverProof; target?: GraphSymbol; outside?: true; candidates: readonly GraphSymbol[]; attributed: readonly GraphSymbol[] }
   | { kind: "outside"; form: "bare" | "chain"; origin: Outside }
   | { kind: "unbound"; form: "own" | "computed" | "bare" | "member" | "chain"; candidates: readonly GraphSymbol[]; attributed: readonly GraphSymbol[] }
@@ -69,7 +69,7 @@ export interface CallBindings {
   /** The declarations of `name` a call written in `from` may run, in scope; `values` leaves out the kinds only types have. */
   namedDeclarations(name: string, from: string, values?: boolean): readonly GraphSymbol[];
   /** What a member call of `member` binds to by what its receiver's proof decides, attributed among `candidates`. */
-  ofReceiver(proof: ReceiverProof, member: string, candidates: readonly GraphSymbol[]): Extract<CallBinding, { kind: "receiver" }>;
+  ofReceiver(proof: ReceiverProof, member: string, candidates: readonly GraphSymbol[], place: CallPlace): Promise<Extract<CallBinding, { kind: "receiver" }>>;
 }
 
 export interface CallBindingsDeps {
@@ -99,11 +99,7 @@ export function createCallBindings({ store, navigation, origins, binder, importe
     return found.filter((symbol) => mayRunDeclarationOf(from, symbol.file) && (!values || !TYPE_ONLY_KINDS.includes(symbol.kind)));
   }
 
-  /** The one declaration of `kinds` the index places between a declaration's first token and its name. */
-  const placed = (file: string, start: number, nameLine: number): GraphSymbol | undefined => {
-    const found = store.symbolsInFiles([file]).filter((symbol) => CALLABLE_KINDS.includes(symbol.kind) && start <= symbol.startLine && symbol.startLine <= nameLine);
-    return found.length === 1 ? found[0] : undefined;
-  };
+  const placed = (file: string, start: number, nameLine: number): GraphSymbol | undefined => placedBetween(store, file, start, nameLine, CALLABLE_KINDS);
 
   /**
    * The constructors of the class a chaining call in `body` runs one of: its own class's for `this`, its superclass's
@@ -132,16 +128,16 @@ export function createCallBindings({ store, navigation, origins, binder, importe
   }
 
   /** What a member call's receiver proof binds it to: the method the proof places, or the member the proven type has. */
-  function proven(proof: ReceiverProof, name: string, candidates: readonly GraphSymbol[]): Extract<CallBinding, { kind: "receiver" }> {
-    const typed = (type: GraphSymbol | undefined) => {
-      const target = type === undefined ? undefined : binder.memberOf(type, name);
+  async function proven(proof: ReceiverProof, name: string, candidates: readonly GraphSymbol[], place: CallPlace): Promise<Extract<CallBinding, { kind: "receiver" }>> {
+    const typed = async (type: GraphSymbol | undefined) => {
+      const target = type === undefined ? undefined : await binder.memberOf(type, name, place);
       return { ...(target === undefined ? {} : { target }), attributed: target !== undefined || type === undefined ? [] : candidates.filter((candidate) => binder.declares(type, candidate)) };
     };
     if (proof.link === "member") return { kind: "receiver", proof, candidates, attributed: [], ...(proof.method === undefined ? {} : { target: proof.method }) };
     if (proof.link === "external") return { kind: "receiver", proof, candidates, attributed: [], outside: true };
-    if (proof.link === "field" || proof.link === "local") return "external" in proof.holds ? { kind: "receiver", proof, candidates, attributed: [], outside: true } : { kind: "receiver", proof, candidates, ...typed(proof.type) };
+    if (proof.link === "field" || proof.link === "local") return "external" in proof.holds ? { kind: "receiver", proof, candidates, attributed: [], outside: true } : { kind: "receiver", proof, candidates, ...(await typed(proof.type)) };
     if (proof.link === "syntax" && proof.holds.kind === "literal") return { kind: "receiver", proof, candidates, attributed: [], outside: true };
-    if (proof.link === "syntax" && proof.unspelled !== true && ["declared", "annotated", "constructed"].includes(proof.holds.kind)) return { kind: "receiver", proof, candidates, ...typed(proof.type) };
+    if (proof.link === "syntax" && proof.unspelled !== true && ["declared", "annotated", "constructed"].includes(proof.holds.kind)) return { kind: "receiver", proof, candidates, ...(await typed(proof.type)) };
     return { kind: "receiver", proof, candidates, attributed: [] };
   }
 
@@ -155,7 +151,11 @@ export function createCallBindings({ store, navigation, origins, binder, importe
       const own = ownMemberOf(compactSpelling(reference.name));
       const members = own === undefined || hasTyping(reference.file, "nominal") ? [] : ownMembersOf(navigation, body, own, ["method"]);
       if (members.length === 1) bindings[index] = { kind: "declaration", target: members[0]!, link: "own-member" };
-      else if (members.length > 1) bindings[index] = { kind: "unbound", form: "own", candidates: members, attributed: members };
+      else if (members.length > 1) {
+        const [owner] = classesOf(body);
+        const overload = owner === undefined ? undefined : await binder.memberOf(owner, own!, { file: reference.file, line: reference.line, column: reference.column + 1 });
+        bindings[index] = overload === undefined ? { kind: "unbound", form: "own", candidates: members, attributed: members } : { kind: "declaration", target: overload, link: "overload" };
+      }
       else if (isChaining(reference.file, reference.name)) typed.push({ index, member: reference.name, site: call });
       else {
         const callee = calleeOf(reference.name);
@@ -164,7 +164,7 @@ export function createCallBindings({ store, navigation, origins, binder, importe
         else {
           const candidates = namedDeclarations(callee.name, reference.file, true);
           const proof = await binder.receiverOf({ body, line: reference.line, column: reference.column + 1, member: callee.name, receiver: receiverOf(compactSpelling(reference.name)) ?? "", spelling: reference.name });
-          if (proof.link !== "none") bindings[index] = proven(proof, callee.name, candidates);
+          if (proof.link !== "none") bindings[index] = await proven(proof, callee.name, candidates, { file: reference.file, line: reference.line, column: reference.column + 1 });
           else if (PLAIN_CHAIN.test(compactSpelling(reference.name)) && !reference.name.startsWith("this.")) rooted.push({ index, member: callee.name });
           else typed.push({ index, member: callee.name, site: call });
         }

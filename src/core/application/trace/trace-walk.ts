@@ -13,10 +13,10 @@ import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, Receiver
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { DeclaredType, DispatchTargets, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
-import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
+import { createGraphNavigation, placedBetween, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
 import type { EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
-import type { ReceiverProof } from "../navigation/call-binder.ts";
+import type { CallPlace, ReceiverProof } from "../navigation/call-binder.ts";
 import { unsettledBy, type DeclarationUses, type UnresolvedIn } from "../navigation/declaration-uses.ts";
 import { callEdgesOf, valueEdgesOf, type ReconciledCalls } from "../navigation/reconciled-calls.ts";
 import type { CallBinding, CallBindings, DeclaredBinding } from "../navigation/call-binding.ts";
@@ -196,9 +196,11 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const onPrototype = (written: readonly string[]): boolean => (written.at(-2) === "prototype" || written.at(-2) === "*") && (written.at(-1) === "*" || written.at(-1) === root.member);
     return paths.some((written) => (path.length > 0 && covers(written, path, root.open)) || onPrototype(written));
   };
+  /** The 1-based place a reference is written at, which the binder reads a call by. */
+  const placeOf = (reference: GraphUnresolvedReference): CallPlace => ({ file: reference.file, line: reference.line, column: reference.column + 1 });
   /** What the binder proves the receiver of a member call holds; nothing without a binder. */
   const receiverAt = async (body: GraphSymbol, reference: GraphUnresolvedReference, member: string, receiver: string, spelling?: string): Promise<ReceiverProof> =>
-    binder === undefined ? { link: "none" } : binder.receiverOf({ body, line: reference.line, column: reference.column + 1, member, receiver, ...(spelling === undefined ? {} : { spelling }) });
+    binder === undefined ? { link: "none" } : binder.receiverOf({ body, ...placeOf(reference), member, receiver, ...(spelling === undefined ? {} : { spelling }) });
   const unresolvedAt = (reference: GraphUnresolvedReference, declarations: readonly GraphSymbol[], reason?: CutReason, subReason?: CutSubReason): Cut =>
     callCut(placeAt(reference.file, reference.line, reference.name), sortedUnique([...reference.candidates, ...declarations.map(candidateOf)]), reason, subReason);
   /**
@@ -275,10 +277,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
    */
   /** A method a type variable's bound names proves the dependence, never what runs: trace holds it unproven (RFC-0013 R5). */
   const executed = (method: ReceiverMethod): ReceiverMethod => (method.kind === "method" && method.bound === true ? { kind: "unproven" } : method);
-  const placedMethod = ({ file, start, nameLine }: Omit<Extract<ReceiverMethod, { kind: "method" }>, "kind">, kinds: readonly string[] = ["method"]): GraphSymbol | undefined => {
-    const placed = store.symbolsInFiles([file]).filter((symbol) => kinds.includes(symbol.kind) && start <= symbol.startLine && symbol.startLine <= nameLine);
-    return placed.length === 1 ? placed[0] : undefined;
-  };
+  const placedMethod = ({ file, start, nameLine }: Omit<Extract<ReceiverMethod, { kind: "method" }>, "kind">, kinds: readonly string[] = ["method"]): GraphSymbol | undefined => placedBetween(store, file, start, nameLine, kinds);
   /**
    * What dispatch may run instead of the body the walk reads, from the declaration's own syntax: a body-less callable
    * runs whatever implements it, so the sources' declared hierarchy names every body it may run (R7): one is expanded in
@@ -417,7 +416,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       if (proof.link === "field" || proof.link === "local") {
         if (proof.replaceable === true) return settleByName(reference, name, named);
         if ("external" in proof.holds) return outside(proof.holds.external);
-        return step(proof.type === undefined ? undefined : binder?.memberOf(proof.type, name));
+        return step(proof.type === undefined ? undefined : await binder?.memberOf(proof.type, name, placeOf(reference)));
       }
       if (proof.link === "none") return unproved();
       if (proof.link !== "syntax") return;
@@ -426,7 +425,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       if (holds.kind === "literal") return leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(holds.type, name), () => settleByName(reference, name, named, true));
       if (holds.kind === "annotated") return void annotated.push({ reference, name, named, holds, type });
       if (holds.kind === "constructed" && type === undefined) return void constructed.push({ reference, name, named, holds });
-      if (holds.kind === "constructed" || holds.kind === "declared") return step(type === undefined ? undefined : binder?.memberOf(type, name));
+      if (holds.kind === "constructed" || holds.kind === "declared") return step(type === undefined ? undefined : await binder?.memberOf(type, name, placeOf(reference)));
       return settleByName(reference, name, named);
     };
     /**

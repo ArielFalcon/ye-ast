@@ -35,6 +35,12 @@ export interface GraphNavigation {
   localOriginAt(user: GraphSymbol, local: string, locals: readonly LocalOrigin[]): HeldOrigin<LocalOrigin>;
 }
 
+/** The one declaration of `kinds` the index places between a declaration's first token and its name, in `store`. */
+export function placedBetween(store: CodeGraphReader, file: string, start: number, nameLine: number, kinds: readonly string[]): GraphSymbol | undefined {
+  const found = store.symbolsInFiles([file]).filter((symbol) => kinds.includes(symbol.kind) && start <= symbol.startLine && symbol.startLine <= nameLine);
+  return found.length === 1 ? found[0] : undefined;
+}
+
 /** Whether `inner` is declared within the lines of `outer`, in the same file. */
 export function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
   return inner.file === outer.file && outer.startLine <= inner.startLine && inner.endLine <= outer.endLine;

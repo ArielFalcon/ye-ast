@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { GraphNodeId, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
+import type { DeclaredCallable } from "../../ports/declared-member-names.port.ts";
 import type { ImportOrigins, ReceiverMethod, RootBinding } from "../../ports/import-origins.port.ts";
 import { createCallBinder } from "./call-binder.ts";
 import { createCallBindings, type SettledBinding } from "./call-binding.ts";
@@ -25,6 +26,8 @@ interface World {
   receivers?: Readonly<Record<string, ReceiverMethod>>;
   /** The declarations a file's imports bind, by local name. */
   imports?: Readonly<Record<string, string>>;
+  /** The callable declarations each file's syntax states, by file; none for a file not listed. */
+  callables?: Readonly<Record<string, readonly DeclaredCallable[]>>;
 }
 
 /** The binding of each call `body` writes, as `name@line`, through the base's public seam. */
@@ -40,7 +43,7 @@ async function bound(world: World, body: string, calls: readonly Pick<GraphUnres
   } as Pick<ImportOrigins, "origins" | "rootOrigins" | "rootBindings" | "receiverMethods"> as ImportOrigins;
   const imported = new Map(Object.entries(world.imports ?? {}).map(([local, id]) => [local, store.symbolsByIds([id as GraphNodeId])[0]!]));
   const importedDeclarations = async () => imported;
-  const binder = createCallBinder({ store, navigation, syntaxIn: async () => ({ receiverBindings: new Map(), callees: new Map() }), proofs: async () => ({ fields: [], locals: [] }), importedDeclarations });
+  const binder = createCallBinder({ store, navigation, syntaxIn: async () => ({ receiverBindings: new Map(), callees: new Map() }), proofs: async () => ({ fields: [], locals: [] }), importedDeclarations, callablesIn: async (file) => world.callables?.[file] ?? [] });
   const bindings = createCallBindings({ store, navigation, origins, binder, importedDeclarations });
   const [from] = store.symbolsByIds([body as GraphNodeId]);
   const file = from!.file;
@@ -108,4 +111,28 @@ test("super(...) binds the constructor the receiver reading names; several of it
   assert.deepEqual((await bound({ nodes, edges, receivers: { super: { kind: "method", file: java("A"), start: 4, nameLine: 4 } } }, "B1", call)).map(summary), [["declaration", "chain", "A1"]]);
   assert.deepEqual((await bound({ nodes, edges, receivers: { super: { kind: "unproven" } } }, "B1", call)).map(summary), [["unbound", "chain", ["A1", "A2"], ["A1", "A2"]]]);
   assert.deepEqual((await bound({ nodes, edges }, "F1", call)).map(summary), [["declaration", "chain", "E"]]);
+});
+
+/** A class `Client` in `CLIENT` declaring three `save` overloads, and a `run` method that calls `this.save`. */
+function overloadedOwnCall(bodies: readonly boolean[]): World {
+  const CLIENT = "src/client.ts";
+  const saves = bodies.map((body, index) => ({ line: 2 + index, body }));
+  return {
+    nodes: [fakeNode("Client", "class", CLIENT, 1, 8), ...saves.map(({ line }) => fakeNode(`save${line}`, "method", CLIENT, line, line, "save")), fakeNode("run", "method", CLIENT, 6, 7)],
+    edges: [...saves.map(({ line }) => ({ from: "Client", to: `save${line}`, kind: "contains" })), { from: "Client", to: "run", kind: "contains" }],
+    callables: { [CLIENT]: [...saves.map(({ line, body }) => ({ name: "save", start: line, nameLine: line, body, overridable: true })), { name: "run", start: 6, nameLine: 6, body: true, overridable: true }] },
+  };
+}
+
+test("a this-call to a method its class overloads binds to the one implementation the class declares, as an overload link", async () => {
+  const [settled] = await bound(overloadedOwnCall([false, false, true]), "run", [{ name: "this.save", line: 6, kind: "calls" }]);
+
+  assert.deepEqual(summary(settled!), ["declaration", "overload", "save4"]);
+});
+
+test("a this-call to an overload set with no implementation attributes the class's own overloads and never another class's homonym", async () => {
+  const world = overloadedOwnCall([false, false, false]);
+  const [settled] = await bound({ ...world, nodes: [...world.nodes, fakeNode("Other.save", "method", "src/other.ts", 3, 3, "save")] }, "run", [{ name: "this.save", line: 6, kind: "calls" }]);
+
+  assert.deepEqual(summary(settled!), ["unbound", "own", ["save2", "save3", "save4"], ["save2", "save3", "save4"]]);
 });

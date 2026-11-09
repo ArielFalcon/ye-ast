@@ -90,6 +90,11 @@ export function isClassKind(kind: string): boolean {
   return (CLASS_KINDS as readonly string[]).includes(kind);
 }
 
+/** Declarations that can own a member a value receiver stands for: a class, a component, or an interface (JLS 9.2). */
+export function isOwnerKind(kind: string): boolean {
+  return (EDGE_POLICY.ownerKinds as readonly string[]).includes(kind);
+}
+
 export function holdsValue(kind: string): boolean {
   return (VALUE_KINDS as readonly string[]).includes(kind);
 }
