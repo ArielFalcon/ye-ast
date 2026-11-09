@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { SourceReading, TokenReading } from "../../domain/change/source-tokens.ts";
+import { settledOf } from "../../domain/change/hunk-settling.ts";
 import { tokenTexts } from "../../domain/change/token-lines.ts";
 import { createTypeScriptTokens } from "./source-tokens.adapter.ts";
 
@@ -63,4 +64,13 @@ test("a regular expression after a closing parenthesis keeps its own token", asy
 test("JsxText keeps the whitespace the parser holds, so an added space changes the tokens", async () => {
   await differs(["export function view() { return <div>a</div>; }"], ["export function view() { return <div> a</div>; }"], "src/a.tsx");
   await differs(["export function view() { return <div>", "  a", "</div>; }"], ["export function view() { return <div>", " a", "</div>; }"], "src/a.tsx");
+});
+
+test("U+2028 and U+2029 before an LF do not move a token off its git line, so a change there never settles", async () => {
+  for (const separator of ["\u2028", "\u2029"]) {
+    const base = await reading([`export function pre(){return 0;}${separator}`, "export function f(){return 1;}"]);
+    const head = await reading([`export function pre(){return 0;}${separator}`, "export function f(){return 2;}"]);
+    assert.equal(base.tokens.find((token) => token.text === "f")?.start, 2);
+    assert.deepEqual(settledOf(base, head, { base: { start: 2, end: 2 }, head: { start: 2, end: 2 }, removedNames: [] }), { settled: undefined });
+  }
 });

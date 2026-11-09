@@ -72,7 +72,14 @@ export function selectSeeds<S extends SeedSymbol>(
     const symbols = (symbolsByFile.get(change.path) ?? []).filter(isRoot);
     for (const removal of change.removals) {
       const holder = innermostHolding(symbols, removal.after, removal.after + 1);
-      if (holder !== undefined) take(holder, "lines");
+      if (holder !== undefined) {
+        take(holder, "lines");
+        continue;
+      }
+      const place: LineRange = { start: removal.after + 1, end: removal.after + 1 };
+      const owners = symbols.filter((symbol) => intersects(ownLines(symbol, symbols), [place]));
+      if (owners.length > 0) for (const symbol of owners) take(symbol, "lines");
+      else for (const symbol of topLevelOf(symbols)) take(symbol, "top-level");
     }
     removed.push(...change.removedNames.map((name): RemovedDeclaration => ({ file: change.path, name })));
     const touched = change.binary ? [WHOLE_FILE] : change.added;

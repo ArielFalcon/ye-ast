@@ -75,10 +75,10 @@ test("a changed file with no symbol a walk could start from seeds nothing and is
   assert.deepEqual(selection, { seeds: [], withoutSymbols: ["src/Order.java"] });
 });
 
-test("lines removed from inside a symbol seed it, and lines removed between top-level symbols seed nothing", () => {
+test("lines removed from inside a symbol seed it, and a removal between top-level symbols seeds the file's top level", () => {
   const symbols = [symbol("first", "function", 1, 10), symbol("second", "function", 20, 30)];
   assert.deepEqual(run([change("src/Order.java", { removals: [{ after: 5 }] })], symbols).seeds, ["first:lines"]);
-  assert.deepEqual(run([change("src/Order.java", { removals: [{ after: 10 }] })], symbols), { seeds: [], withoutSymbols: [] });
+  assert.deepEqual(run([change("src/Order.java", { removals: [{ after: 10 }] })], symbols).seeds, ["first:top-level", "second:top-level"]);
 });
 
 test("a file git reports as binary seeds every symbol it holds", () => {

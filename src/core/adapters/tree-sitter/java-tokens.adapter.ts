@@ -1,6 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import { JAVA_PROFILE } from "../../domain/languages/profiles.ts";
 import type { SourceReading, Token } from "../../domain/change/source-tokens.ts";
+import { lfLineIndex } from "../../domain/change/source-tokens.ts";
 import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser } from "./java-parser.adapter.ts";
@@ -22,7 +23,8 @@ export function createJavaTokens(createParser: () => Promise<JavaParser>): Sourc
       if (!parsed.ok) return { status: "unread", reason: "unparsed" };
       const tokens: Token[] = [];
       const imports: { start: number; end: number }[] = [];
-      const tokenOf = (text: string, first: Node, last: Node): Token => ({ start: first.startPosition.row + 1, end: last.endPosition.row + 1, text, startOffset: first.startIndex, endOffset: last.endIndex });
+      const lineOf = lfLineIndex(file.content);
+      const tokenOf = (text: string, first: Node, last: Node): Token => ({ start: lineOf(first.startIndex), end: lineOf(Math.max(first.startIndex, last.endIndex - 1)), text, startOffset: first.startIndex, endOffset: last.endIndex });
       const sourceText = (first: Node, last: Node): string => file.content.slice(first.startIndex, last.endIndex);
       const visit = (node: Node): void => {
         if (node.type === IMPORT_DECLARATION) imports.push({ start: node.startIndex, end: node.endIndex });

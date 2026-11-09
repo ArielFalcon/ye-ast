@@ -2448,3 +2448,48 @@ test("a JSDoc change inside a class and a body change in one hunk select only th
 
   assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["f"]);
 });
+
+function topLevelChange(file: string, base: string, head: string, nodes: FakeNode[], edited: FileChange) {
+  const commentLines = (content: string): number[] => content.split("\n").flatMap((text, index) => (text.trim().startsWith("//") ? [index + 1] : []));
+  return setup({
+    changes: { ok: true, value: [edited] },
+    nodes,
+    sources: [{ path: file, content: head }],
+    snapshotSources: { [HEAD]: [{ path: file, content: head }], [FORK]: [{ path: file, content: base }] },
+    exports: listingOf([file]),
+    sourceTokens: { tokensOf: async (source) => lineReading(source, commentLines(source.content)) },
+  });
+}
+
+test("a top-level statement replaced by a comment seeds the declaration beside it", async () => {
+  const file = "src/a.ts";
+  const base = ["export const x=1;", "console.log(x);"].join("\n");
+  const head = ["export const x=1;", "// gone"].join("\n");
+  const edited = change(file, { added: [{ start: 2, end: 2 }], hunks: [{ base: { start: 2, end: 2 }, head: { start: 2, end: 2 }, removedNames: [] }] });
+  const answer = fact(await topLevelChange(file, base, head, [fakeNode("x", "variable", file, 1, 1)], edited).ask());
+  const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
+
+  assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["x"]);
+});
+
+test("a call at the start of the file replaced by a comment seeds the declaration below it", async () => {
+  const file = "src/a.ts";
+  const base = ["console.log(1);", "export function f(){return 1;}"].join("\n");
+  const head = ["// gone", "export function f(){return 1;}"].join("\n");
+  const edited = change(file, { added: [{ start: 1, end: 1 }], hunks: [{ base: { start: 1, end: 1 }, head: { start: 1, end: 1 }, removedNames: [] }] });
+  const answer = fact(await topLevelChange(file, base, head, [fakeNode("f", "function", file, 2, 2)], edited).ask());
+  const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
+
+  assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["f"]);
+});
+
+test("a plain top-level deletion with no trivia seeds the declaration beside it", async () => {
+  const file = "src/a.ts";
+  const base = ["export const x=1;", "console.log(x);"].join("\n");
+  const head = ["export const x=1;"].join("\n");
+  const edited = change(file, { added: [], removals: [{ after: 1 }], hunks: [{ base: { start: 2, end: 2 }, removedNames: [] }] });
+  const answer = fact(await topLevelChange(file, base, head, [fakeNode("x", "variable", file, 1, 1)], edited).ask());
+  const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
+
+  assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["x"]);
+});

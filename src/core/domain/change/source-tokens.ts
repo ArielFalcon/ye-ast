@@ -38,3 +38,22 @@ export interface UnreadTokens {
 }
 
 export type SourceReading = TokenReading | UnreadTokens;
+
+/**
+ * The line coordinates git hunks and requested ranges use: only LF starts a new line, so a parser's own line map (which
+ * may also count a lone CR or U+2028) never moves a token off its hunk.
+ */
+export function lfLineIndex(content: string): (offset: number) => number {
+  const starts = [0];
+  for (let at = content.indexOf("\n"); at !== -1; at = content.indexOf("\n", at + 1)) starts.push(at + 1);
+  return (offset: number): number => {
+    let low = 0;
+    let high = starts.length - 1;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (starts[middle]! <= offset) low = middle;
+      else high = middle - 1;
+    }
+    return low + 1;
+  };
+}

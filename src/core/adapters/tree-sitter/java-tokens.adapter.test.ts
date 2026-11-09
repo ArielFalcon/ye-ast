@@ -71,3 +71,8 @@ test("the same source read twice gives the same reading", async () => {
   const source = ["class A {}", "// note"];
   assert.deepEqual(await read(source), await read(source));
 });
+
+test("a lone CR is not a line break for git, so every token stays on its LF line", async () => {
+  const held = await reading(["class A {}\rclass B { int x=1; }"]);
+  assert.ok(held.tokens.every((token) => token.start === 1 && token.end === 1));
+});

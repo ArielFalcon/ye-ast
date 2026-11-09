@@ -1,6 +1,7 @@
 import ts from "typescript";
 import { TYPESCRIPT_PROFILE } from "../../domain/languages/profiles.ts";
 import type { ImportDeclarationRange, SourceReading, Token } from "../../domain/change/source-tokens.ts";
+import { lfLineIndex } from "../../domain/change/source-tokens.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 import { sourceTree } from "./source-tree.ts";
@@ -9,7 +10,7 @@ import { hasSyntaxErrors } from "./syntax.ts";
 const REFERENCE_DIRECTIVE = /^\/\/\/\s*<reference\b/;
 const TS_PRAGMA = /@ts-(?:expect-error|ignore|nocheck|check)\b/;
 const BUNDLER_ANNOTATION = /[@#]__[A-Z0-9_]+__/;
-const LINE_TERMINATOR = /[\r\n]/;
+const LINE_TERMINATOR = /\r|\n|\u2028|\u2029/;
 const NOT_SPACE = /\S/;
 
 interface Span {
@@ -33,7 +34,7 @@ export function createTypeScriptTokens(): SourceTokens {
       const tree = sourceTree(file, ts.ScriptTarget.Latest);
       if (hasSyntaxErrors(tree)) return { status: "unread", reason: "unparsed" };
       const content = file.content;
-      const lineOf = (offset: number): number => tree.getLineAndCharacterOfPosition(offset).line + 1;
+      const lineOf = lfLineIndex(content);
       const imports: ImportDeclarationRange[] = [];
       const importArguments: Span[] = [];
       const collect = (node: ts.Node): void => {
