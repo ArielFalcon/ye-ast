@@ -2,7 +2,7 @@
 
 - Status: Proposed | Accepted, <date>, <who>
 - Decision source: <the owner's words that decided it, quoted and dated; translated when needed>
-- Related: <ADRs and RFCs>
+- Related: <the RFC that designs this decision; other ADRs and RFCs>
 
 **In short:** <the decision and its main consequence in two or three sentences>
 

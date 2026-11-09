@@ -3,6 +3,17 @@
 Read the ADRs for what is decided and the RFCs for designs under discussion. Start with ADR-0001 and RFC-0001. An ADR
 marked **Proposed** awaits the owner's acceptance.
 
+## How an RFC and an ADR relate
+
+- An **RFC** holds a design: the problem with its evidence, the confirmed root cause, the rules and contracts, the
+  delivery units and the open questions with a recommended answer each. It stays `Draft` until the owner accepts it.
+- An **ADR** records one narrow decision the owner took, quotes the owner's words, and points to the RFC that designs
+  it. It carries neither the design nor the delivery units.
+- Owner, 2026-11-09: "los ADR recogen decisiones mas acotadas referentes a un RFC" (ADRs record narrower decisions
+  that refer to an RFC).
+- ADR-0041 to ADR-0045 predate this rule and hold their design inside the ADR; they stay as written, and new work
+  follows the split.
+
 ## Decisions (ADR)
 
 | ADR | Decision | Status |
@@ -51,6 +62,12 @@ marked **Proposed** awaits the owner's acceptance.
 | [0043](adr/0043-a-change-seeds-only-where-its-tokens-differ.md) | A changed hunk whose base and head tokens are equal (comments, whitespace, Java import order) seeds nothing and is reported as `settled`, never dropped; a line no token touches selects nothing; when unsure, it is a token | Accepted |
 | [0044](adr/0044-one-implementation-closure-with-scoped-vetoes.md) | What a Java call names (`receiverMethods`) and what it may run (`dispatchTargets`) have one owner per language, read by trace, the call-site flow and data effects; a veto is released only on proven target types; framework selection is per call; generated Java sources enter as a declared build output; dispatch stays trace's extension of 0041 | Accepted |
 | [0045](adr/0045-one-assembly-line-for-the-snapshot-reading.md) | One owner in `core/application/snapshot` assembles per snapshot every evidence stage (syntax, origins, modules, relations, Java readings, typed bindings, edge targets, reconciled calls) with one retention each; every family reads the same proofs and extends by narrowing; the bound snapshot is prebuilt in the background and rebuilt only where content changed; the line is language-agnostic and one language pack per language implements its stages, declares absent capabilities and supplies a profile; amends 0035, 0036, 0037 and 0041 | Accepted |
+| [0046](adr/0046-a-call-binds-by-its-receivers-type.md) | A member call binds to what its receiver's type declares at the call: overload sets collapse to their implementation, interfaces declare, the dispatch bridge matches by signature, trace keeps no receiver rule of its own; designed in RFC-0024 | Accepted |
+| [0047](adr/0047-angular-routes-are-read-as-a-graph-from-the-router-configuration.md) | Angular routes are read as a graph from the router's configuration (module imports, every `loadChildren` form, real prefixes); an `include` narrows only the answer; the entrypoint map carries its reading's cuts; designed in RFC-0025 | Accepted |
+| [0048](adr/0048-a-framework-invoked-implementation-is-an-entrypoint.md) | Code a framework invokes through a library contract is an entrypoint of kind `callback`, declared as plugin data and proven by the Java supertype closure; designed in RFC-0026 | Accepted |
+| [0049](adr/0049-every-written-callable-is-a-declaration.md) | Object-literal and factory members, anonymous-class bodies and method references are declarations or references; a Java type target is `partial` until its type references are read; designed in RFC-0027 | Accepted |
+| [0050](adr/0050-one-request-summary-per-declaration.md) | One request summary per declaration, applied at every call, is the only reader of a request's parameters and a response's container; one owner answers "is this call a request"; designed in RFC-0028 | Accepted |
+| [0051](adr/0051-an-answer-never-hides-what-the-engine-knows.md) | Where the engine holds a fact the answer states it: one owner of fault text, a missing file is a fault everywhere, a declared answer bound refuses instead of truncating, an empty `include` is a fault, entrypoints carry their declaration place, `importers` relationships carry their lines; designed in RFC-0029 | Accepted |
 
 ## Designs (RFC)
 
@@ -76,6 +93,12 @@ marked **Proposed** awaits the owner's acceptance.
 | [0018](rfc/0018-change-selection.md) | `changed` on `impact.ofChange`: globs over the changed paths select what seeds the walk while the repository stays indexed whole, so callers outside the selection are still known | Draft |
 | [0022](rfc/0022-contract-change-consequences.md) | Contract change consequences: which consumers of a response, and which producers of a request, a contract change breaks, with evidence, from a written hypothesis or a diff | Draft |
 | [0023](rfc/0023-consequences-surfaces.md) | The `contractConsequences` family on every surface: one composite fact, the MCP tool `ye_ast_contract_consequences`, the CLI command, protocol methods and compose parts | Draft |
+| [0024](rfc/0024-receiver-typed-settlement.md) | Every call settles by its receiver's type and arity: the binder's member rule, candidates from the receiver's type, the contract bridge by signature, one receiver rule for trace | Accepted |
+| [0025](rfc/0025-angular-route-tables.md) | Angular route tables are read wherever the router receives them: the module graph, `loadChildren` forms, prefixes, cuts, `include` | Accepted |
+| [0026](rfc/0026-framework-invoked-entrypoints.md) | Code a framework invokes is an entrypoint: invoked contracts as plugin data, the `callback` kind, one finding per body | Accepted |
+| [0027](rfc/0027-declaration-model.md) | Every callable the source writes is a declaration: one declaration model, object-literal and factory members, method references, anonymous classes, Java type references | Accepted |
+| [0028](rfc/0028-value-flow-through-wrappers.md) | Values flow through the project's own wrappers: per-declaration request summaries, the request owner, holder carriers | Accepted |
+| [0029](rfc/0029-presentation-residuals.md) | An answer never hides or misstates what the engine knows: fault text owner, absent files, answer bound, empty scope, entrypoint places, `importers` lines | Accepted |
 
 ## Pending decisions
 

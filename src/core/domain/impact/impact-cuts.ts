@@ -1,5 +1,6 @@
 import type { RemovedDeclaration } from "../change/seeds.ts";
-import { fileReach, sharesRuntime } from "../languages/call-targets.ts";
+import { CALL_EDGE_KINDS } from "./call-kinds.ts";
+import { fileReach, mayRunDeclarationOf, sharesRuntime } from "../languages/call-targets.ts";
 import { nameTail } from "../shared/call-place.ts";
 import { compareText } from "../shared/code-node.ts";
 import type { Cut, CutReach, CutReason } from "../shared/fact.ts";
@@ -48,6 +49,14 @@ const REFERENCED_BY: Readonly<Record<string, readonly string[]>> = {
 
 /** Calls that load a module, a class or a file by a name the index cannot resolve. */
 const DYNAMIC_LOADERS: ReadonlySet<string> = new Set(["import", "require", "forName", "loadClass", "import_module", "__import__"]);
+
+/**
+ * Whether a declaration may be what an unresolved reference names: a call or an instantiation runs it, so a
+ * configuration file declares none it runs; any other reference may still read a configuration key.
+ */
+function mayReach(reference: UnresolvedUse, declarationFile: string): boolean {
+  return CALL_EDGE_KINDS.includes(reference.kind) ? mayRunDeclarationOf(reference.file, declarationFile) : sharesRuntime(reference.file, declarationFile);
+}
 
 /** The lead of a `Cut.at` that stops at a declaration: its file and name ([RFC-0002](../../../../docs/architecture/rfc/0002-facts-contract.md)). */
 export function declarationAnchor(file: string, name: string): string {
@@ -199,7 +208,7 @@ export function unresolvedLinkCuts(
       pointing = (byName.get(tail) ?? []).filter((declaration) => (REFERENCED_BY[reference.kind] ?? []).includes(declaration.kind));
       pointingCache.set(pointingKey, pointing);
     }
-    pointing = pointing.filter((declaration) => sharesRuntime(reference.file, declaration.file));
+    pointing = pointing.filter((declaration) => mayReach(reference, declaration.file));
     const attributing = !isBareName(reference.name) && (reference.candidates?.length ?? 0) === 0 ? [] : pointing.filter((declaration) => namesDeclaration(reference, declaration, bound, proofKey));
     const actual = proofKey === undefined ? undefined : members?.targets.get(proofKey);
     const settledAt = (declaration: WalkedDeclaration): boolean => {
@@ -247,7 +256,7 @@ export function removedDeclarationCuts(
     const proofKey = key !== undefined && unique.has(key) ? key : undefined;
     const imported = isBareName(reference.name) && proofKey !== undefined ? bound.get(proofKey) : undefined;
     for (const declaration of byName.get(nameTail(reference.name)) ?? []) {
-      if (!sharesRuntime(reference.file, declaration.file)) continue;
+      if (!mayReach(reference, declaration.file)) continue;
       if (imported !== undefined && imported !== declaration.file) continue;
       if (proofKey !== undefined && localParameters.has(proofKey) && reference.kind === "calls" && isBareName(reference.name) && reference.file !== declaration.file) continue;
       const key = declarationAnchor(declaration.file, declaration.name);
