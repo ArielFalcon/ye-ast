@@ -1,6 +1,10 @@
 # ADR-0043: A change seeds a declaration only where its tokens differ
 
-- Status: Proposed, 2026-11-08, design agent for the lead; final draft 2026-11-09, references checked on `main`
+- Status: Accepted, 2026-11-09. The owner delegated closing and accepting it after an independent review, verbatim:
+  "Cierra los 3 ADR pendientes con lo que recomiendes para las preguntas pendientes. Que se revisen con sol high y se
+  queden aprobados y listos. Ten en cuenta los cambios que aplicará 0045 por si debe cambiar algo en estos". Reviewed
+  and rechecked by an independent reviewer; open questions closed into decisions; every Java doc comment is a token
+  until follow-up F5 proves processing off for every compilation of a source.
   8c5f181a
 - Decision source: requested by the lead, 2026-11-08: decide whether ye-ast needs a base mechanism that compares tokens
   without trivia before deciding which declaration a change touched, so that a change that cannot alter behaviour stops
@@ -25,8 +29,9 @@ reordered Java import seeds a declaration, and a line between two members seeds 
 lines, but each hunk is now compared by tokens: a hunk whose base and head tokens are equal changes nothing and is
 reported as such, never dropped silently, and inside a remaining hunk a line no token touches selects nothing. The
 token reading is a per-file stage of ADR-0045's assembly line (B11 tokens), implemented by each language pack and
-retained per file; the hunk comparison and the line rule are agnostic domain rules. A Java doc comment is a token
-unless the module's build declares annotation processing off, because a processor can generate code from it; a range
+retained per file; the hunk comparison and the line rule are agnostic domain rules. A Java doc comment is always a
+token, because a processor can generate code from it and no build reading yet proves processing off for every
+compilation of a source; a range
 that holds only trivia answers successfully with that reason, never a fault and never a bare empty. The hypothesis that
 motivated this is half right: the mechanism is real, but the evaluation's commit was not javadoc-only, and none of its
 48 entrypoints depends on trivia alone.
@@ -64,9 +69,8 @@ about 20 of the 196 symbols are reached first through a trivia-only seed (a **hy
 symbol, so another path may still reach them).
 
 Those seven counts assume a comment is never a token. Under decision 2's doc-comment rule (fail closed: a Java doc
-comment is a token unless the build declares annotation processing off), the six javadoc seeds stay unless the
-repository's build declares `-proc:none`, and only the blank-line seed of `UserRepository` settles: **1 of 74 seeds,
-not 7 to 9**. That the evaluated build declares no such switch is a **hypothesis** (a generated build of that kind
+comment is always a token), the six javadoc seeds stay, and only the blank-line seed of `UserRepository` settles:
+**1 of 74 seeds, not 7 to 9**. That a future proof of processing off would not settle them either is a **hypothesis** (a generated build of that kind
 configures annotation processors such as a mapper and a JPA metamodel generator; the repository's POM was not read for
 this ADR). The TypeScript side of the commit is unaffected by that rule.
 
@@ -159,30 +163,20 @@ agnostic rules read. Five consequences for this ADR:
    - In both languages a string or template literal, an annotation or decorator and its order and arguments, a type or
      generic argument, a modifier and a member's position among fields or enum constants are tokens, so they always
      change their declaration.
-   - **Doc comments: a Java doc comment is a token unless the build declares annotation processing off** (fail
-     closed; former open question 1). An annotation processor can read a doc comment (`Elements.getDocComment`) and
-     generate code from a tag, so a doc-comment-only edit can change behaviour while every other token stays equal;
-     calling it trivia would answer `complete` with no seeds for a real change. javac discovers processors on the
-     class path on its own, so a declared processor list proves nothing about the absence of one that reads doc
-     comments; only "processing is off" does.
+   - **Doc comments: a Java doc comment is always a token** (fail closed; former open question 1). An annotation
+     processor can read a doc comment (`Elements.getDocComment`) and generate code from a tag, so a doc-comment-only
+     edit can change behaviour while every other token stays equal; calling it trivia would answer `complete` with no
+     seeds for a real change. javac discovers processors on the class path on its own, so a declared processor list
+     proves nothing about the absence of one that reads doc comments; only "processing is off" would, and it would have
+     to hold for every compilation that reads the source. A build file near the source does not prove that: another
+     module can compile the same sources (Maven `compileSourceRoots`, Gradle `sourceSets`), and turning processing off
+     in `compileJava` leaves `compileTestJava` and any other compile task as they were. No reading of ye-ast proves the
+     set of compilations of a source today, so no build state settles a doc comment; follow-up F5 holds that proof.
      - **What a doc comment is**: a `/** */` comment, and a run of `///` lines (Markdown documentation comments, JDK 23,
        JEP 467). `getDocComment` reads only these; plain `//` and `/* */` comments stay trivia under every build.
-     - **"Off" is read from the snapshot's build files, literally**, for the module that compiles the source: the nearest
-       `pom.xml`, `build.gradle` or `build.gradle.kts` in the source's ancestor directories. Accepted declarations:
-       Maven, in that file's own `maven-compiler-plugin` configuration, outside any `<profile>`, `<proc>none</proc>`,
-       `<compilerArgs><arg>-proc:none</arg></compilerArgs>` or `<compilerArgument>-proc:none</compilerArgument>`; Gradle,
-       at the script's top level, in a `compileJava { }`, `tasks.named("compileJava") { }` or
-       `tasks.withType(JavaCompile) { }` block, `options.compilerArgs` receiving the literal `"-proc:none"` (`add`, `+=`,
-       `<<`, `addAll` of a literal list). Everything else counts as "on": a value through a property (`${...}`), a parent
-       POM or a convention plugin, a profile, a conditional or a function, a `-proc:full` or `-proc:only` beside it, a
-       build file that does not parse, or no build file at all. A Java version's default (JDK 23 stopped discovering
-       processors implicitly) is never relied on: the compiler a build uses is not in the snapshot.
-     - **Under "off"**, a doc comment is trivia except one holding a `@deprecated` tag (javac derives the `Deprecated`
-       attribute from it) or a `\u` escape, which stay tokens.
-     - **Where it lives**: the Java pack decides it while reading tokens (decision 9). The retained reading's key names
-       every input (ADR-0035 decision 2, ADR-0045 decision 10 "Complete keys"): the source's path and content, the path
-       of every build-file candidate in its ancestor directories, present or absent, and the content of the nearest one.
-       A test removes `<proc>none</proc>` from a module's POM and asserts the source's reading misses.
+     - **Where it lives**: the Java pack decides it while reading tokens (decision 9); the retained reading's key is the
+       source's path and content (ADR-0035 decision 2, ADR-0045 decision 10 "Complete keys"), since no build input
+       enters the rule.
      - **Seeding**: a doc comment that is a token seeds by ownership, as every token line does: a doc comment between two
        members belongs to their class (`seeds.ts:101-103`), so a doc-comment edit under processing seeds the class, as
        today. Attributing it to the declaration it documents is follow-up F1.
@@ -214,8 +208,8 @@ agnostic rules read. Five consequences for this ADR:
        its file has no line to read and stays the `unknown-symbol` fault: it was a failure before and remains one.
      - Where the file has no token reading (decision 4), today's line rules apply, fault included.
    - **A range over a doc comment does not select the declaration it documents** (former open question 3). A Java doc
-     comment under processing is a token (decision 2) and selects by ownership; a TypeScript JSDoc, a plain comment and
-     a Java doc comment under declared "off" are trivia and settle. Attaching a comment to the declaration it documents
+     comment is a token (decision 2) and selects by ownership; a TypeScript JSDoc and a plain comment are trivia and
+     settle. Attaching a comment to the declaration it documents
      is a second rule with its own edge cases (a comment between annotations, a file header, a comment between two
      overloads), follow-up F1.
 4. **Unknown keeps the line.** A file no pack tokenizes (the stage answers `unread`, ADR-0045 decision 12's absent
@@ -347,18 +341,10 @@ Per language, one `impact` fixture per rule, each asserting seeds and `settled`:
   literal edited (seeds); two annotations swapped (seeds); an annotation value edited (seeds); a generic argument
   edited (seeds); a comment holding `\u000a` (seeds); a moved method (seeds, decision 10); a side that does not parse
   (line rules, nothing settled).
-- Java doc comments (decision 2), one fixture per build state, each a `/** */` text edit unless stated:
-  - no build file, and a POM that declares only `<annotationProcessorPaths>`: seeds (processing is on);
-  - the module's POM declares `<proc>none</proc>` in `maven-compiler-plugin`: settles; the same with
-    `<arg>-proc:none</arg>`: settles;
-  - a `build.gradle.kts` with `tasks.withType<JavaCompile> { options.compilerArgs.add("-proc:none") }` at top level:
-    settles; the same line inside an `if`: seeds;
-  - `<proc>none</proc>` only inside a `<profile>`, and only in a parent POM: seeds;
-  - `-proc:none` beside `-proc:full`: seeds;
-  - under declared "off": a `@deprecated` tag added (seeds); a `///` Markdown doc comment edit (settles); without the
-    declaration, the same `///` edit (seeds);
-  - complete key: the same source read twice with `<proc>none</proc>` removed from its POM between the reads misses
-    and seeds.
+- Java doc comments (decision 2): a `/** */` text edit seeds under every build state, including a module POM that
+  declares `<proc>none</proc>` while a sibling module compiles the same sources through `compileSourceRoots`, and a
+  Gradle build that disables processing in `compileJava` only; a `///` Markdown doc comment edit seeds; a plain `//` or
+  `/* */` comment edit settles.
 - TypeScript: JSDoc edit; blank line; comment inside a body; `return x` split after `return` (seeds); arguments
   re-wrapped (seeds, the line-break token); two imports swapped (seeds, and the module origin as today); a decorator
   argument edited (seeds); a template literal edited (seeds); a type argument edited (seeds); a `@ts-expect-error`
@@ -388,7 +374,7 @@ Per language, one `impact` fixture per rule, each asserting seeds and `settled`:
   members keeps that class-wide seed under processing; F1 is the precision step for it.
 - The evaluation's commit keeps its 48 entrypoints: they come from behavioural edits, moves and annotation order. With
   the fail-closed doc-comment rule, the gain on it is 1 fewer seed (the blank line of `UserRepository`), not the 7 to 9
-  a comment-blind rule would give, assuming its build declares no `-proc:none` (Context). The gain this ADR keeps is the
+  a comment-blind rule would give (Context). The gain this ADR keeps is the
   mechanism: plain comments, blank lines, formatting, Java import order and TypeScript JSDoc. The evaluation's
   recommendation 7 ("48 entrypoints for a no-op") rests on a misread commit and should be corrected in its report.
 - `callers` and `trace` answer `ok` with a `settled` entry for a range of trivia lines, inside or outside a declaration
@@ -436,7 +422,7 @@ Per language, one `impact` fixture per rule, each asserting seeds and `settled`:
 | # | Follow-up | Trigger | What it then decides |
 |---|---|---|---|
 | F1 | Attribute a token doc comment to the declaration it documents (decisions 2 and 3), so a Java doc-comment edit under processing seeds the documented member instead of its class | A corpus gate report or evaluation case where a class seed that comes only from a doc-comment hunk reaches entrypoints the documented member's seed would not reach | An ADR for comment attachment with its edge cases (a comment between annotations, a file header, overloads), keeping the fail-closed token rule unchanged |
-| F5 | Read "processing off" through a parent POM or a Gradle convention plugin (decision 2) | Corpus or evaluation repositories that declare `-proc:none` only through inheritance, so their doc comments keep seeding | The inheritance reading, with every parent named among the token reading's key inputs; until then such builds count as "on" |
+| F5 | Prove "processing off" for every compilation that reads a Java source (decision 2): every module whose source roots or source sets include it, and every compile task of each (main, test, custom), each with processing off by a literal declaration whose inheritance the reading also keys | Corpus or evaluation repositories where Java doc-comment-only edits seed declarations that reach entrypoints | An ADR for the compilation-set reading, its complete key (every build file that can add the source to a compilation), and its fixtures (sibling module, test task); until then every Java doc comment is a token |
 | F2 | Settle moved declarations as `moved` (decision 10) | A corpus gate report or evaluation case where a reached entrypoint is reached only through seeds of declarations that moved with unchanged tokens, diagnosed through `ReachedEntrypoint.seeds` and `via` | Reopens the per-declaration digest alternative with base-side declarations from the line |
 | F3 | A template token rule (decision 11) | An evaluation or corpus commit where template-only comment or whitespace edits seed components that reach entrypoints | An ADR for an Angular plugin stage with HTML's own exceptions (text content, `pre`, `preserveWhitespaces`) |
 | F4 | Name-scoped import seeding (decision 12) | Measurement I1's outcome | As I1's outcome rows state |
