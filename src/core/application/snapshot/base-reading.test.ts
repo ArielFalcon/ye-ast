@@ -9,11 +9,12 @@ import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import type { RevisionSources } from "../../ports/revision-sources.port.ts";
 import type { TypeBindingsAnswer } from "../../ports/type-bindings.port.ts";
 import type { WorkspaceFault } from "../../ports/workspace-repos.port.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { createBaseReadings } from "./base-reading.ts";
 import type { EdgeTargets } from "../navigation/edge-targets.ts";
+import { NOTHING_DECLARED } from "../navigation/edge-targets.ts";
 import type { SourceReading } from "../../domain/change/source-tokens.ts";
 import type { SourceTokens } from "../../ports/source-tokens.port.ts";
-import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 
 const SHA: SnapshotRef = { repo: "shop", kind: "sha", sha: "a".repeat(40) };
 const LIVE: SnapshotRef = { repo: "shop", kind: "live", head: "h", stateId: "s" };
@@ -141,4 +142,37 @@ test("a file no pack tokenizes answers unread through both entry points", async 
 
   assert.deepEqual(await readings.tokensOf(file, prepared), { status: "unread", reason: "no-language" });
   assert.deepEqual(await readings.of({ tree: EMPTY_TREE, prepared, store: {} as CodeGraphReader, snapshot: SHA, request: { repo: "/work/shop" } }).tokensOf(file), { status: "unread", reason: "no-language" });
+});
+
+function rememberingFacts(): DerivedFacts {
+  const kept = new Map<string, string>();
+  return {
+    ofFile: (_slot, _file, derive) => derive(),
+    async ofInputs(slot, inputs, derive) {
+      const key = JSON.stringify([slot, inputs]);
+      if (!kept.has(key)) kept.set(key, JSON.stringify(await derive()));
+      return JSON.parse(kept.get(key)!);
+    },
+    fingerprint: (inputs) => JSON.stringify(inputs),
+    drain: () => ({ hits: 0, misses: 0, admitted: 0, admittedBytes: 0, evicted: 0, skipped: 0, factBytes: 0, retainedBytes: 0 }),
+  };
+}
+
+test("a file's contradiction alignment is kept between readings by its content and index, and another index aligns again", async () => {
+  const file = "src/b.ts";
+  const graph = fakeCodeGraph([fakeNode("f", "function", "src/a.ts", 1, 3), fakeNode("g", "function", file, 1, 3)], [{ from: "g", to: "f", kind: "calls", line: 2, column: 4 }]);
+  let reads = 0;
+  const memberNames = { memberNames: async () => (reads++, { ...NOTHING_DECLARED, calls: [] }) };
+  const facts = rememberingFacts();
+  const readings = createBaseReadings({ relations: {} as RelationExtractor, memberNames });
+  const targets = { importedDeclarations: async () => new Map() } as unknown as EdgeTargets;
+  const [g] = graph.symbolsInFiles([file]);
+  const read = (digest: string) => readings.of({ tree: { export: { files: [], skipped: [] }, sources: [{ path: file, content: "export function g(): void {\n  return;\n}\n" }] }, prepared: { facts } as never, store: graph, digest, snapshot: SHA, request: { repo: "/work/shop" } }, {}).contradictedCalls(targets)!;
+
+  const found = await read("index-1")([g!]);
+  const again = await read("index-1")([g!]);
+  assert.deepEqual([...again.keys()], [...found.keys()]);
+  assert.equal(reads, 1);
+  await read("index-2")([g!]);
+  assert.equal(reads, 2);
 });

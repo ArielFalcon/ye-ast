@@ -23,6 +23,7 @@ import type { ImportOrigins, ImportOriginsReader, ImportOriginSite, ResolvedName
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { SourceTokens } from "../../ports/source-tokens.port.ts";
+import type { SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import { NOTHING_DECLARED } from "../navigation/edge-targets.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { ModuleDependency } from "../../domain/impact/module-dependency.ts";
@@ -112,6 +113,8 @@ interface Options {
   readsPlanned?: true;
   /** A syntax reader that states, in each source, the calls `unresolved` places there. */
   syntax?: true;
+  /** A syntax reader that states each source's written calls, by path. */
+  written?: Readonly<Record<string, readonly SyntaxCall[]>>;
 }
 
 function setup(options: Options = {}) {
@@ -207,6 +210,7 @@ function setup(options: Options = {}) {
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
     ...(options.typeBindings && { typeBindings: options.typeBindings.bindings, declaredOutputs: () => options.typeBindings!.outputs }),
     ...(options.syntax && { memberNames: { memberNames: async (file: SourceFile) => ({ ...NOTHING_DECLARED, calls: (options.unresolved ?? []).filter((use) => use.file === file.path).map(({ line, column, name }) => ({ kind: "calls" as const, line, column: (column ?? 0) + 1, name, owners: [] })) }) } }),
+    ...(options.written && { memberNames: { memberNames: async (file: SourceFile) => ({ ...NOTHING_DECLARED, calls: options.written![file.path] ?? [] }) } }),
     ...(options.unmodelled && { unmodelled: { extract: async (sources) => sources.map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };
@@ -765,6 +769,45 @@ test("a call the index resolved into an edge of another kind is still a referenc
   const answer = callersFact(await setup({ nodes, edges, exports }).callers({ targets: [{ file: "src/B.ts", symbol: "navigate" }] }));
 
   assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/A.ts", "src/A.ts:7 this.router.navigate"], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/B.ts::navigate"] } }]);
+});
+
+test("a call record the source contradicts proves no caller: it is dropped and cut at its place", async () => {
+  const caller = "src/B.ts";
+  const nodes = [fakeNode("f", "function", "src/A.ts", 1, 3), fakeNode("g", "function", caller, 1, 3)];
+  const edges: FakeEdge[] = [{ from: "g", to: "f", kind: "calls", line: 2, column: 4 }];
+  const exports: Options["exports"] = { [HEAD]: { files: [{ path: "src/A.ts", blob: "1", written: true }, { path: caller, blob: "2", written: true }], skipped: [] } };
+  const answer = callersFact(await setup({ nodes, edges, exports, sources: [{ path: caller, content: "export function g(): void {\n  return;\n}\n" }], importOrigins: origins(() => undefined), syntax: true }).callers({ targets: [{ file: "src/A.ts", symbol: "f" }] }));
+  assert.deepEqual(answer.status === "partial" && answer.value.symbols.map(({ symbol }) => symbol), ["f"]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: [`${caller}:2 f`, "src/A.ts::f"], reason: "contradicted", reach: { kind: "call-at", place: `${caller}:2 f` } }]);
+});
+
+test("a call record with no line proves its caller: a positionless record is never contradicted", async () => {
+  const caller = "src/B.ts";
+  const nodes = [fakeNode("f", "function", "src/A.ts", 1, 3), fakeNode("g", "function", caller, 1, 3)];
+  const edges: FakeEdge[] = [{ from: "g", to: "f", kind: "calls", column: 2 }];
+  const exports: Options["exports"] = { [HEAD]: { files: [{ path: "src/A.ts", blob: "1", written: true }, { path: caller, blob: "2", written: true }], skipped: [] } };
+  const written: Record<string, readonly SyntaxCall[]> = { [caller]: [{ kind: "calls", line: 2, column: 3, name: "f", callee: "f", owners: [] }] };
+  const answer = callersFact(await setup({ nodes, edges, exports, sources: [{ path: caller, content: "export function g(): void {\n  f();\n}\n" }], importOrigins: origins(() => undefined), written }).callers({ targets: [{ file: "src/A.ts", symbol: "f" }] }));
+  assert.equal(answer.status, "complete");
+  assert.deepEqual(answer.status === "complete" && answer.value.symbols.map(({ symbol }) => symbol), ["f", "g"]);
+});
+
+test("a contradiction known from incoming edges keeps the edge out when a redirect reaches a homonym", async () => {
+  const caller = "src/B.ts";
+  const first = "src/A.ts";
+  const second = "src/C.ts";
+  const nodes = [fakeNode("f1", "function", first, 1, 3, "f"), fakeNode("f2", "function", second, 1, 3, "f"), fakeNode("g", "function", caller, 1, 3)];
+  const edges: FakeEdge[] = [{ from: "g", to: "f1", kind: "calls", line: 2, column: 4 }];
+  const exports: Options["exports"] = { [HEAD]: { files: [first, second, caller].map((path, index) => ({ path, blob: `${index}`, written: true })), skipped: [] } };
+  const redirects = (): ImportOriginsReader => () => ({
+    origins: async (sites) => sites.map((site) => originFinding(site, undefined)),
+    rootOrigins: async (sites) => sites.map((site) => ({ status: "complete" as const, value: { kind: "repository" as const, file: second, declared: "f" }, evidence: [{ path: site.file, line: site.line }], bare: true as const })),
+    replacedRoots: async () => NOTHING_REPLACED,
+    rootBindings: NO_BINDINGS, declaredTypes: NO_DECLARED_TYPES, dispatchTargets: NO_DISPATCH_TARGETS, receiverMethods: NO_RECEIVER_METHODS,
+  });
+  const answer = callersFact(await setup({ nodes, edges, exports, sources: [{ path: caller, content: "export function g(): void {\n  return;\n}\n" }], importOrigins: redirects(), syntax: true }).callers({ targets: [{ file: first, symbol: "f" }, { file: second, symbol: "f" }] }));
+  assert.deepEqual(answer.status === "partial" && answer.value.symbols.map(({ symbol, depth }) => `${symbol}@${depth}`), ["f@0", "f@0"]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: [`${caller}:2 f`, "src/A.ts::f"], reason: "contradicted", reach: { kind: "call-at", place: `${caller}:2 f` } }]);
 });
 
 test("a reached symbol names locations of the selected evidence category", async () => {

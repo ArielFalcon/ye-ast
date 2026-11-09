@@ -12,7 +12,7 @@ import type { SettledHunkChange } from "../../domain/impact/impact-fact.ts";
 import type { ComponentRef } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
-import { attributedCallCuts, fileCut, removedDeclarationCuts, unheldCut, unreadRelationCuts, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
+import { attributedCallCuts, contradictedCallCuts, fileCut, removedDeclarationCuts, unheldCut, unreadRelationCuts, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
 import { impactFact, impactWalk, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
@@ -68,7 +68,7 @@ import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 import { buildOutputCuts, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
 import type { TypeBindings, TypeTarget } from "../../ports/type-bindings.port.ts";
 import { createRevisionSources } from "../snapshot/revision-sources.ts";
-import { createBaseReadings, withOutputs, type BaseReading, type ReadingRequest } from "../snapshot/base-reading.ts";
+import { createBaseReadings, withOutputs, type BaseReading, type ContradictedCall, type ContradictedCalls, type ReadingRequest } from "../snapshot/base-reading.ts";
 
 export interface ImpactQueriesDeps extends HeadReaderDeps {
   /** The walk reads the change between two revisions, which no other family asks for. */
@@ -610,7 +610,8 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const targets = input.reading.edgeTargets(input.typed);
   const typedReferences = input.typed === undefined ? undefined : typedReferencesOf(store, unresolved, input.typed);
   const originCalls = targets === undefined ? undefined : input.reading.originCalls(targets);
-  const { inbound, walk, attributed } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls);
+  const contradictions = targets === undefined ? undefined : input.reading.contradictedCalls(targets);
+  const { inbound, walk, attributed, cuts: contradictedCuts } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls, contradictions);
 
   const walked = walk.reached.map(({ symbol }) => symbol);
   const reachedIds = new Set(walked.map((symbol) => symbol.id));
@@ -620,6 +621,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
 
   const cuts: Cut[] = [
     ...walk.cuts,
+    ...contradictedCuts,
     ...attributedCallCuts(attributed.map(({ node, call: { reference } }) => ({ declaration: node, place: { ...reference, name: compactSpelling(reference.name) } }))),
     ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(walk.expanded, reachedIds), knownPlaces, input.proofs?.bound, inbound.memberProofs(walk.expanded)),
     ...removedDeclarationCuts(unresolved, selection.removed, knownPlaces, input.proofs?.bound, input.proofs?.localParameters),
@@ -670,13 +672,34 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
  * symbol depends on, the walk runs again, because a bound it frees, or an edge it moves, can read edges no earlier walk
  * read. `attributed` holds the unbound written calls attributed to a symbol it reached.
  */
-async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = [], reverse?: ReverseCalls, originCalls?: OriginCalls): Promise<{ inbound: InboundEdges; walk: Walk; attributed: readonly AttributedCall[] }> {
+async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = [], reverse?: ReverseCalls, originCalls?: OriginCalls, contradictions?: ContradictedCalls): Promise<{ inbound: InboundEdges; walk: Walk; attributed: readonly AttributedCall[]; cuts: readonly Cut[] }> {
   const attributed: AttributedCall[] = [];
+  const contradictedByEdge = new Map<string, ContradictedCall>();
+  const contradicted: ContradictedCall[] = [];
+  const cutKeys = new Set<string>();
   const dropped = new Set<string>();
   const settled = new Map<string, ReceiverSettlement>();
   const into = new Map<GraphNodeId, Map<string, FollowedEdge>>();
   const checked = new Set<string>();
   const probed = new Set<GraphNodeId>();
+  /** The record an edge would be when the source of its place proves it writes no call (ADR-0041 U6). */
+  const contradicts = (followed: FollowedEdge): ContradictedCall | undefined => contradictedByEdge.get(edgeKey(followed.edge));
+  /** Drops a contradicted edge's cut once; the edge itself is rejected every time the walk asks for it. */
+  const dropContradicted = (followed: FollowedEdge): boolean => {
+    const call = contradicts(followed);
+    if (call === undefined) return false;
+    const key = edgeKey(followed.edge);
+    dropped.add(key);
+    if (cutKeys.has(key)) return false;
+    cutKeys.add(key);
+    contradicted.push(call);
+    return true;
+  };
+  const readContradictions = async (edges: readonly FollowedEdge[]): Promise<void> => {
+    if (contradictions === undefined || edges.length === 0) return;
+    const sources = [...new Map(edges.map(({ source }) => [source.id, source])).values()];
+    for (const [key, call] of await contradictions(sources)) contradictedByEdge.set(key, call);
+  };
   const moveTo = (to: GraphSymbol, followed: FollowedEdge): boolean => {
     const held = into.get(to.id) ?? new Map<string, FollowedEdge>();
     into.set(to.id, held);
@@ -688,18 +711,25 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
     moveTo(followed.target, followed);
     settled.set(edgeKey(followed.edge), "typed");
   }
+  const cuts = (): readonly Cut[] => contradictedCallCuts(contradicted);
   for (;;) {
     const inbound = build({ dropped, into: new Map([...into].map(([id, edges]) => [id, [...edges.values()]])), settled });
     const walk = walkImpact(seeds, inbound, budget);
-    if (targets === undefined || signal?.aborted) return { inbound, walk, attributed };
+    if (targets === undefined || signal?.aborted) return { inbound, walk, attributed, cuts: cuts() };
     const fresh = inbound.followed().filter(({ edge }) => !checked.has(edgeKey(edge)));
     const reached = [...seeds, ...walk.reached.map(({ symbol }) => symbol)].filter((symbol) => !probed.has(symbol.id));
-    if (fresh.length === 0 && reached.length === 0) return { inbound, walk, attributed };
+    if (fresh.length === 0 && reached.length === 0) return { inbound, walk, attributed, cuts: cuts() };
     for (const { edge } of fresh) checked.add(edgeKey(edge));
     for (const symbol of reached) probed.add(symbol.id);
     let changed = false;
-    const verdicts = await targets.verdictsOf(fresh, signal);
-    for (const [index, followed] of fresh.entries()) {
+    await readContradictions(fresh);
+    const judged = fresh.filter((followed) => {
+      if (contradicts(followed) === undefined) return true;
+      changed = dropContradicted(followed) || changed;
+      return false;
+    });
+    const verdicts = await targets.verdictsOf(judged, signal);
+    for (const [index, followed] of judged.entries()) {
       const verdict = verdicts[index]!;
       if (verdict.kind === "keep") {
         if (verdict.derivation !== undefined) {
@@ -716,8 +746,14 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
       }
     }
     const moved = await targets.redirectedInto(reached, signal);
-    const movedVerdicts = await targets.verdictsOf(moved, signal);
-    for (const [index, followed] of moved.entries()) {
+    await readContradictions(moved);
+    const relocated = moved.filter((followed) => {
+      if (contradicts(followed) === undefined) return true;
+      changed = dropContradicted(followed) || changed;
+      return false;
+    });
+    const movedVerdicts = await targets.verdictsOf(relocated, signal);
+    for (const [index, followed] of relocated.entries()) {
       const verdict = movedVerdicts[index]!;
       dropped.add(edgeKey(followed.edge));
       if (verdict.kind === "redirect" && verdict.derivation !== undefined) settled.set(edgeKey(followed.edge), verdict.derivation);
@@ -729,7 +765,7 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
       for (const followed of recovered.edges) if (moveTo(followed.target, followed)) changed = true;
       attributed.push(...recovered.attributed);
     }
-    if (!changed) return { inbound, walk, attributed };
+    if (!changed) return { inbound, walk, attributed, cuts: cuts() };
   }
 }
 

@@ -27,6 +27,7 @@ function setup(nodes: readonly FakeNode[], edges: readonly FakeEdge[], written: 
   const empty: BodyCalls = { edges: [], references: [], contradicted: [], writtenOnly: [], ambiguous: [], deferredOnly: [] };
   const reconciled: ReconciledCalls = {
     ownedIn: async (file) => (read.push(`owned ${file}`), new Map(nodes.filter((node) => node.file === file).map((node) => [node.id as GraphNodeId, written.filter((call) => call.body === node.id).map((call): OwnedCall => ({ kind: (call.kind ?? "calls") as OwnedCall["kind"], line: call.line, column: 3, name: call.name, owners: [] }))]))),
+    contradictedIn: async () => [],
     async callsOf(body) {
       read.push(body.id);
       const mine = written.filter((call) => call.body === body.id).map((call): GraphUnresolvedReference & { deferred?: true } => ({ from: body.id, file: body.file, line: call.line, column: 2, name: call.name, kind: call.kind ?? "calls", candidates: [], ...(call.deferred ? { deferred: true } : {}) }));

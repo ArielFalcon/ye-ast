@@ -106,6 +106,14 @@ export function attributedCallCuts(calls: readonly { declaration: { file: string
   return [...Map.groupBy(calls, ({ declaration }) => declarationAnchor(declaration.file, declaration.name))].map(([anchor, here]) => unresolvedLinkAt(anchor, new Set(here.map(({ place }) => placeAt(place.file, place.line, place.name))), "hidden-caller", callersOf([anchor])));
 }
 
+/**
+ * One cut per place a call record is contradicted (ADR-0041 U6): the index placed a call where its source writes none, so
+ * the record proves no dependence there. The cut names the targets the index held.
+ */
+export function contradictedCallCuts(calls: readonly { record: UnresolvedUse; target: { file: string; name: string } }[]): Cut[] {
+  return [...Map.groupBy(calls, ({ record }) => placeAt(record.file, record.line, record.name))].map(([place, here]) => ({ kind: "unresolved-link", at: [place, ...[...new Set(here.map(({ target }) => declarationAnchor(target.file, target.name)))].sort()], reason: "contradicted", reach: { kind: "call-at", place } }));
+}
+
 function unresolvedLinkAt(anchor: string, places: Iterable<string>, reason: CutReason, reach: CutReach): Cut {
   return { kind: "unresolved-link", at: [anchor, ...[...places].sort()], reason, reach };
 }

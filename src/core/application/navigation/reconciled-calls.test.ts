@@ -160,6 +160,14 @@ test("a record placed where the file writes no call is contradicted once", async
   assert.deepEqual(found.contradicted, ["import@2:21"]);
 });
 
+test("a record with no line is never contradicted, whatever its column: it stays at the index's place", async () => {
+  // run() {                                       (2)
+  //   alpha();                                    (3)
+  // }
+  const found = placed(await callsOf("run", [RUN, ...LIB], [{ from: "run", to: "alpha", kind: "calls", column: 2 }], [written(3, 3, "alpha", "alpha")], [], [], { 3: "  alpha();" }));
+  assert.deepEqual(found, { edges: ["alpha@null:2"], references: [], contradicted: [], writtenOnly: ["alpha"], ambiguous: [] });
+});
+
 test("a link of a chain with repeated names matches the link the index spells without its arguments, the others stay written-only", async () => {
   // run() {                                       (2)
   //   sb.append("a")                              (3)
