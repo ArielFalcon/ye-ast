@@ -478,6 +478,7 @@ test("callers answers an unknown symbol with the query code, one line per entry 
       entries: [
         { file: "A.java", symbol: "gone", absent: false, candidates: ["load", "save"] },
         { file: "B.java", symbol: "gone", absent: false, candidates: [] },
+        { file: "src/C.java", symbol: "gone", absent: true, candidates: ["C.java"] },
       ],
     },
   });
@@ -487,6 +488,7 @@ test("callers answers an unknown symbol with the query code, one line per entry 
     "ye-ast: unknown-symbol: no symbol at the revision for A.java:gone",
     "  - A.java:gone: declared in A.java: load, save",
     "  - B.java:gone: B.java declares no symbol",
+    "  - src/C.java:gone: src/C.java is not in the snapshot; snapshot paths: C.java",
   ]);
 });
 

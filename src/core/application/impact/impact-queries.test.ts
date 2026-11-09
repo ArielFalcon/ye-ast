@@ -797,6 +797,12 @@ test("a symbol target on a path the snapshot does not hold is absent, with the s
   assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/pkg/A.ts", symbol: "m", absent: true, candidates: ["src/A.ts"] }]);
 });
 
+test("a dotted symbol target on a path the snapshot does not hold looks its candidates up by the member's own name", async () => {
+  const answer = await setup(TWO_CLASSES).callers({ targets: [{ file: "src/pkg/A.ts", symbol: "B.m" }] });
+  assert.ok(!answer.ok);
+  assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/pkg/A.ts", symbol: "B.m", absent: true, candidates: ["src/A.ts"] }]);
+});
+
 test("a requested range on a file the snapshot does not hold is a fault, never a partial answer with a no-extractor cut", async () => {
   const files = [{ path: "src/A.ts", blob: "1", written: true }];
   const { callers } = setup({ nodes: [fakeNode("f", "function", "src/A.ts", 1, 3)], exports: { [HEAD]: { files, skipped: [] } } });

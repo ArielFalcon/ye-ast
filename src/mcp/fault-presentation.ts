@@ -167,7 +167,7 @@ function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-faul
         ? "Use a listed dotted path as focus[].symbol, or a line inside a declaration as focus[].line; files lists the file whole. Candidates are alternatives, not substitutions."
         : `Use a listed candidate as targets[].symbol, or an inclusive line range {file, start, end}. A line range listed here covers no declaration and no code: call ye_ast_outline for these files at the same ${query?.live ? "live state" : "revision"} and pick a range inside a declaration's span. Candidates are alternatives, not substitutions.`;
       return fault.entries.some((entry) => entry.absent)
-        ? `${step} ${query?.family === "outline" ? "focus[].file" : "targets[].file"} takes a repository-relative path from the repository root.`
+        ? `${step} For a file not in the snapshot, use a listed snapshot path as ${query?.family === "outline" ? "focus[].file" : "targets[].file"}: it takes a repository-relative path from the repository root.`
         : step;
     }
     case "unknown-entrypoint":

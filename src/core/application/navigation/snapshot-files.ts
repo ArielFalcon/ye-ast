@@ -24,9 +24,9 @@ export function snapshotFiles(store: CodeGraphReader, listing: readonly string[]
   };
 }
 
-/** The snapshot paths a target could name instead: those declaring its symbol, or those of its basename for a range. */
+/** The snapshot paths a target could name instead: those declaring its symbol's own name, or those of its basename for a range. */
 function candidatesOf(store: CodeGraphReader, listing: readonly string[], entry: RawUnknownEntry): string[] {
-  if ("symbol" in entry) return sortedUnique(store.declarationsNamed([entry.symbol]).map(({ file }) => file));
+  if ("symbol" in entry) return sortedUnique(store.declarationsNamed([entry.symbol.slice(entry.symbol.lastIndexOf(".") + 1)]).map(({ file }) => file));
   const name = baseNameOf(entry.file);
   return sortedUnique(listing.filter((file) => baseNameOf(file) === name));
 }

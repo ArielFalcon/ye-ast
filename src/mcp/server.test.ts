@@ -2082,7 +2082,7 @@ test("an absent path is printed as not in the snapshot with the snapshot paths t
   assert.equal(result.isError, true);
   const text = textOf(result);
   assert.match(text, /src\/gone\/A\.java:A\.gone: src\/gone\/A\.java is not in the snapshot; snapshot paths: src\/A\.java, src\/B\.java/);
-  assert.match(text, /targets\[\]\.file takes a repository-relative path from the repository root/);
+  assert.match(text, /use a listed snapshot path as targets\[\]\.file: it takes a repository-relative path from the repository root/);
   await session.close();
 });
 
