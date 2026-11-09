@@ -375,6 +375,19 @@ retention silently becomes a per-call cost.
       the TypeScript pack, Spring the entrypoints, routes, call sites and data effects over the Java pack. A framework
       reads a pack's outputs and never implements a language stage; the frozen exception that lets `spring` read the
       Java trees (`.dependency-cruiser.cjs`, `spring-reads-only-the-java-parser`) stays, inside the Java hold.
+    - **A framework owns no path and is selected by a signal, never by an extension** (the owner, 2026-11-09,
+      verbatim: "Lo que si no se distingue tan fácil es el procesado cuando hayan varios framework de un lenguaje,
+      porque la extensión puede ser la misma. Como se conectan en este diseño los plugins al lenguaje, soporta la
+      extensión a futuro a otros plugin?"). Packs partition paths; frameworks do not. Each framework plugin declares
+      the languages it reads and its applicability signal, read from the snapshot as data: a manifest dependency of
+      the nearest project (Angular: a `package.json` naming `@angular/core`, RFC-0007 row A1), or the code's own
+      references (Spring: annotations and types of `org.springframework`). The signal is a stage input like any other,
+      so its key names it (decision 10). Two frameworks may read the same file: each contributes its own facts through
+      its stages, contributions to one collection (entrypoints, call sites, relations) are a union sorted by the
+      collection's own order, and two frameworks asserting different values of one fact for the same site yield an
+      explicit `unknown` with both as evidence, never a choice by registration order. A second framework of a
+      language enters as one plugin with its signal, its stages and its conformance fixtures, including one where it
+      shares files with the first; the line, the packs and the families stay unedited.
     - **Adding a language** is one pack, one profile, its registration in composition and in the profile list of
       `domain/languages`, and the conformance fixtures of each stage it implements (ADR-0013, RFC-0007 Conformance). The
       line, `navigation` and every family stay unedited. Two limits are stated, not hidden: the index (B0) covers a
