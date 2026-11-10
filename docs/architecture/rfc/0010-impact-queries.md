@@ -321,6 +321,7 @@ requested targets (sorted) with the budget.
 `ReachedEntrypoint.seeds` indexes the top-level `seeds` array; `ImpactedSymbol` carries none, because nothing consumes
 it and it outweighed the rest of the answer. Order: symbols by depth, file, line, symbol; entrypoints by kind,
 name, handler; seeds by file, line, symbol. `name` is absent for a reached entrypoint the extractor reported `unknown`.
+A reached `ui-route` also carries `declaredAt`: the place its route entry was read at (the first evidence of its complete finding). Other kinds carry no `declaredAt`.
 The snapshot is `head`'s sha; `inputs.content` covers both trees' in-scope files and `inputs.config` the budget.
 
 ### Completeness

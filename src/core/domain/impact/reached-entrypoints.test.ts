@@ -83,3 +83,19 @@ test("entrypoints come sorted by kind, name and handler", () => {
   const entries = reachedEntrypoints([route("Orders.b", 6, "GET /b"), route("Orders.a", 2, "GET /a")], reached);
   assert.deepEqual(entries.map((entry) => entry.name), ["GET /a", "GET /b"]);
 });
+
+test("a reached UI route carries the route entry's declaration place", () => {
+  const uiRoute: Finding<Entrypoint> = {
+    status: "complete",
+    evidence: [{ path: "src/routes.ts", line: 12 }],
+    value: { kind: "ui-route", name: "/orders", path: "/orders", component: { path: "src/Orders.java", symbol: "Orders.list", line: 11 }, guards: [] },
+  };
+  const entries = reachedEntrypoints([uiRoute], [node("list", 10, 14)]);
+  assert.deepEqual(entries.map((entry) => entry.declaredAt), [{ path: "src/routes.ts", line: 12 }]);
+});
+
+test("only a UI route carries a declaration place: an HTTP route's row keeps no place", () => {
+  const httpRoute: Finding<Entrypoint> = { ...route("Orders.list", 11), evidence: [{ path: "src/routes.ts", line: 12 }] };
+  const [entry] = reachedEntrypoints([httpRoute], [node("list", 10, 14)]);
+  assert.ok(entry !== undefined && !("declaredAt" in entry));
+});

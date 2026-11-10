@@ -377,7 +377,7 @@ Impact text locates both the call site and destination handler of each cross-rep
 references identify the recorded links crossed from the change, nearest first; they do not invent a path inside a
 repository. A shared `via` heading applies to the declarations indented beneath it and retains their dependency
 locations. Workspace cuts are grouped by their owning repository so identical relative paths in different clones
-remain distinct. Impact/callers detailed text shows one verified origin association per entrypoint, without ranking
+remain distinct. Impact/callers text names the declaration place of a reached UI route (`at <routes file>:<line>`). Impact/callers detailed text shows one verified origin association per entrypoint, without ranking
 it or claiming a complete call chain. Its symbol evidence covers the nearest recorded consequence depth and the
 reached handlers; other symbols are counted, with a literal listing when shorter. Change origins supplying that
 evidence remain localizable. Cut details keep anchors and limits while counting repeated reference places.

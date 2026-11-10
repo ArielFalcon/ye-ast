@@ -18,7 +18,7 @@ import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
 import type { ChangeFrontier, ClassifiedDifference, ConsequenceFinding, ConsequencesValue, HypothesisAnswer, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
-import type { Cut, Fact, Finding, SnapshotRef, WalkBounds } from "../core/domain/shared/fact.ts";
+import type { Cut, Evidence, Fact, Finding, SnapshotRef, WalkBounds } from "../core/domain/shared/fact.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { NameCandidate, OutwardKind, OutwardName, RepositoryOutwardName } from "../core/domain/topology/outward-name.ts";
 import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
@@ -271,13 +271,14 @@ function entrypointLocation(entrypoint: Entrypoint): string {
   return entrypoint.kind === "ui-route" ? (entrypoint.component === "unknown" ? "component unknown" : handlerText(entrypoint.component)) : handlerText(entrypoint.handler);
 }
 
-function entrypointLine(entrypoint: Entrypoint): string {
+function entrypointLine(entrypoint: Entrypoint, declaredAt?: Evidence): string {
   const served = entrypointLocation(entrypoint);
-  return `  - ${entrypoint.kind} ${entrypoint.name} -> ${served}`;
+  return `  - ${entrypoint.kind} ${entrypoint.name} -> ${served}${declaredAt === undefined ? "" : ` at ${declaredAt.path}:${declaredAt.line}`}`;
 }
 
 function itemLine(item: Finding<Entrypoint>): string {
-  return item.status === "unknown" ? `  - unknown (${item.reason}) ${item.evidence.map(evidenceText).join(", ")}`.trimEnd() : entrypointLine(item.value);
+  if (item.status === "unknown") return `  - unknown (${item.reason}) ${item.evidence.map(evidenceText).join(", ")}`.trimEnd();
+  return entrypointLine(item.value, item.value.kind === "ui-route" ? item.evidence[0] : undefined);
 }
 
 function entrypointContext(entrypoint: Entrypoint): string[] {
@@ -479,8 +480,9 @@ function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail
   const origin = seeds[reached.seeds[0] ?? -1];
   const others = reached.seeds.length - 1;
   const { path, symbol, line } = reached.handler;
+  const declared = reached.declaredAt === undefined ? "" : ` at ${reached.declaredAt.path}:${reached.declaredAt.line}`;
   return [
-    compact ? `  - ${name} -> ${handlerText(reached.handler)} (${facts.join(", ")})` : `  - ${name} (${facts.join(", ")}); lookup example: ${literalSelection({ kind: "handler-origins", owner, handler: { path, symbol, line } })}`,
+    compact ? `  - ${name} -> ${handlerText(reached.handler)} (${facts.join(", ")})${declared}` : `  - ${name} (${facts.join(", ")})${declared}; lookup example: ${literalSelection({ kind: "handler-origins", owner, handler: { path, symbol, line } })}`,
     ...(detail === "summary" || origin === undefined || sharedOrigin ? [] : [`    one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${plural(others, "other origin")}` : ""}`]),
   ];
 }

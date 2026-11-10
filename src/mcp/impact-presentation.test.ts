@@ -710,3 +710,14 @@ test("a callers answer with a settled range says how many ranges held no token",
   const value: ImpactValue = { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 }, settled: [{ basis: "range", file: "src/A.java", start: 2, end: 2, reason: "no-token", candidates: ["A"] }] };
   assert.match(renderImpact({ ...base, status: "complete", value }), /1 requested ranges hold no token/);
 });
+
+test("a reached UI route names the place its route entry is declared at", () => {
+  const value: ImpactValue = { ...impact, entrypoints: [{ kind: "ui-route", name: "/orders", handler: { path: "src/orders.page.ts", symbol: "OrdersPage", line: 5 }, depth: 1, confidence: 1, seeds: [0], declaredAt: { path: "src/routes.ts", line: 12 } }] };
+  const output = renderImpact({ ...fact, value }, "details");
+  assert.match(output, /^  - ui-route \/orders \(depth 1\) at src\/routes\.ts:12; lookup example: /m);
+});
+
+test("a reached HTTP route names no declaration place", () => {
+  const output = renderImpact({ ...fact, value: { ...impact, entrypoints: [{ ...impact.entrypoints[0]!, name: "GET /orders" }] } }, "details");
+  assert.doesNotMatch(output, / at src\/routes\.ts/);
+});

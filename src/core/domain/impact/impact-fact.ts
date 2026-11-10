@@ -2,7 +2,7 @@ import type { Entrypoint } from "../entrypoints/entrypoint.ts";
 import type { Handler } from "../entrypoints/http-route.ts";
 import type { SeedBasis } from "../change/seeds.ts";
 import type { SettledReason } from "../change/hunk-settling.ts";
-import type { WalkBounds } from "../shared/fact.ts";
+import type { Evidence, WalkBounds } from "../shared/fact.ts";
 import type { Asserted } from "../shared/question.ts";
 import type { ChangedContract } from "./changed-contracts.ts";
 import type { ChangedEntrypoint } from "./changed-entrypoints.ts";
@@ -70,6 +70,8 @@ export interface ReachedEntrypoint {
   depth: number;
   confidence: number;
   seeds: readonly number[];
+  /** A UI route's declaration: the place its route entry was read at. Absent for every other entrypoint. */
+  declaredAt?: Evidence;
 }
 
 export interface ImpactValue {
