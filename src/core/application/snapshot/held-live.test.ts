@@ -117,7 +117,7 @@ function setup(options: Options = {}) {
       remove: async (path) => void log.removed.push(path),
     },
     reader: { read: async (root) => { log.reads++; return options.snapshotSources?.[log.plans.find((plan) => plan.destination === root)?.sha ?? ""] ?? options.sources ?? []; } },
-    extractor: { extract: async () => { log.extractions++; return []; } },
+    extractor: { extract: async () => { log.extractions++; return { findings: [], readingCuts: [] }; } },
     angular: { read: async () => options.declarations ?? [] },
     relations: options.relationReader ?? { language: TYPESCRIPT_PROFILE, extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [], locals: [] }) },
     dynamicLoads: { extract: async () => options.loads ?? [] },
@@ -514,7 +514,7 @@ test("a read at a revision and a live read hand their readers the sources their 
       deps.extractor.extract = async (files) => {
         read.push(...files);
         if (fails) throw new Error("reader failed");
-        return [];
+        return { findings: [], readingCuts: [] };
       };
       const targets = [{ file: "src/A.java", symbol: "f" }];
       const asked = live ? queries.callers({ ...LIVE_BASE, targets, live: true }) : callers({ targets });

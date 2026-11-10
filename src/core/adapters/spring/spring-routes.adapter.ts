@@ -102,7 +102,7 @@ function contractIndex(operations: readonly Finding<ContractOperation>[]): Contr
 }
 
 export function createSpringRoutesExtractor(parser: JavaParser, contracts: ContractRoutes = NO_CONTRACTS): EntrypointExtractor {
-  return { extract: async (files, libraries = []) => extractRoutes(parser, files, libraries, contracts) };
+  return { extract: async (files, libraries = []) => ({ findings: extractRoutes(parser, files, libraries, contracts), readingCuts: [] }) };
 }
 
 export function extractRoutes(parser: JavaParser, files: readonly SourceFile[], libraries: readonly LibrarySource[], contracts: ContractRoutes): readonly Finding<Entrypoint>[] {

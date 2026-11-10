@@ -1,6 +1,6 @@
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { isInMapScope } from "../../domain/map/entrypoint-map.ts";
-import { sortedEngines, SCHEMA, type DeclaredConfig, type DeclaredScope, type FactBase, type Finding, type IndexOrigin, type Producer, type TrustMode } from "../../domain/shared/fact.ts";
+import { sortedEngines, SCHEMA, type Cut, type DeclaredConfig, type DeclaredScope, type FactBase, type Finding, type IndexOrigin, type Producer, type TrustMode } from "../../domain/shared/fact.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { PathSelection } from "../../domain/shared/scope.ts";
@@ -57,11 +57,14 @@ export interface CommitExtraction {
   /** The exported files in map scope, as read. */
   sources: readonly SourceFile[];
   findings: readonly Finding<Entrypoint>[];
+  /** Where the entrypoint reading stopped; the map's cuts, never an answer of another family. */
+  readingCuts: readonly Cut[];
 }
 
 export interface SnapshotData {
   sources: readonly SourceFile[];
   findings?: readonly Finding<Entrypoint>[];
+  readingCuts?: readonly Cut[];
   /** The serialized output of one reader over the sources of another entry; such an entry holds no sources itself. */
   output?: unknown;
 }
@@ -219,8 +222,8 @@ export async function extractSources(
   signal?: AbortSignal,
 ): Promise<Result<CommitExtraction, VcsFault>> {
   if (signal?.aborted) return ABORTED;
-  const findings = await deps.extractor.extract(tree.sources);
-  return signal?.aborted ? ABORTED : { ok: true, value: { ...tree, findings } };
+  const extraction = await deps.extractor.extract(tree.sources);
+  return signal?.aborted ? ABORTED : { ok: true, value: { ...tree, findings: extraction.findings, readingCuts: extraction.readingCuts } };
 }
 
 /** What one fact states about the revision it read; the rest is derived. */

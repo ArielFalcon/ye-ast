@@ -1,12 +1,11 @@
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
-import type { DeclaredScope, Finding, TrustMode } from "../../domain/shared/fact.ts";
+import type { DeclaredScope, TrustMode } from "../../domain/shared/fact.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { PathSelection } from "../../domain/shared/scope.ts";
 import { isInMapScope } from "../../domain/map/entrypoint-map.ts";
 import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
-import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
+import type { EntrypointExtraction, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { createDerivedFacts } from "./derived-facts.ts";
 import { ABORTED, extractSources, listExport, readSources, withScratch, type CommitExtraction, type ReadScope, type SnapshotData, type SnapshotReaderDeps, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
 
@@ -36,7 +35,7 @@ export function withSnapshotPreparation<T>(deps: Pick<SnapshotReaderDeps, "scrat
 export interface SnapshotRetention {
   lookup(): SnapshotData | undefined;
   keepSources(sources: readonly SourceFile[]): void;
-  keepFindings(sources: readonly SourceFile[], findings: readonly Finding<Entrypoint>[]): void;
+  keepExtraction(sources: readonly SourceFile[], extraction: EntrypointExtraction): void;
   output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal): Promise<T>;
   /** The derived facts of the files read under this snapshot's trust, kept by their content (ADR-0035). */
   facts: DerivedFacts;
@@ -55,8 +54,8 @@ export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache"
     keepSources(sources) {
       if (entry !== undefined && cache.get(entry)?.findings === undefined) cache.put(entry, { sources });
     },
-    keepFindings(sources, findings) {
-      if (entry !== undefined && !findings.some((finding) => finding.status === "unknown" && finding.reason === "deadline")) cache.put(entry, { sources, findings });
+    keepExtraction(sources, extraction) {
+      if (entry !== undefined && !extraction.findings.some((finding) => finding.status === "unknown" && finding.reason === "deadline")) cache.put(entry, { sources, findings: extraction.findings, readingCuts: extraction.readingCuts });
     },
     async output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal): Promise<T> {
       if (entry === undefined) return produce();
@@ -109,7 +108,7 @@ export async function prepareCommit(
       const retained = retention?.lookup();
       if (retained !== undefined) {
         loaded = { read: retained.sources, kept: { export: exported.value, sources: keep(retained.sources) } };
-        if (retained.findings !== undefined) extracted = { ...loaded.kept, findings: retained.findings };
+        if (retained.findings !== undefined && retained.readingCuts !== undefined) extracted = { ...loaded.kept, findings: retained.findings, readingCuts: retained.readingCuts };
         return { ok: true, value: loaded };
       }
       const ready = await materialize(signal);
@@ -141,7 +140,7 @@ export async function prepareCommit(
           const answer = await extractSources(deps, read.value.kept, signal);
           if (answer.ok) {
             extracted = answer.value;
-            retention?.keepFindings(read.value.read, extracted.findings);
+            retention?.keepExtraction(read.value.read, extracted);
           }
           return answer;
         },

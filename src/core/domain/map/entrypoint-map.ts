@@ -79,9 +79,12 @@ export function holdsDeclaredSource(files: MapExport["files"]): boolean {
   return files.some((file) => isJavaSource(file.path) || isTypeScriptSource(file.path));
 }
 
-/** The section is cut, so the entrypoint table never looks complete, by every cause `exportCuts` names. */
-export function buildEntrypointMap(base: MapBase, findings: readonly Finding<Entrypoint>[], exported: MapExport): EntrypointMapFact {
-  const [first, ...rest] = exportCuts(exported);
+/**
+ * The section is cut, so the entrypoint table never looks complete, by every cause `exportCuts` names and every place the
+ * reading stopped at.
+ */
+export function buildEntrypointMap(base: MapBase, findings: readonly Finding<Entrypoint>[], exported: MapExport, readingCuts: readonly Cut[] = []): EntrypointMapFact {
+  const [first, ...rest] = [...exportCuts(exported), ...samePlaceOnce(readingCuts)];
   const section: Fact<readonly Finding<Entrypoint>[]> =
     first === undefined
       ? { ...base, evidence: [], status: "complete", value: findings }
@@ -107,4 +110,14 @@ export function exportCuts(exported: MapExport): Cut[] {
       .toSorted()
       .map((path): Cut => ({ kind: "no-extractor", at: [path], reason: "language", reach: fileReach(path) })),
   ];
+}
+
+function samePlaceOnce(cuts: readonly Cut[]): Cut[] {
+  const seen = new Set<string>();
+  return cuts.filter((cut) => {
+    const place = JSON.stringify(cut.at);
+    if (seen.has(place)) return false;
+    seen.add(place);
+    return true;
+  });
 }

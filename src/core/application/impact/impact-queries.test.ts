@@ -181,7 +181,7 @@ function setup(options: Options = {}) {
         return options.readsPlanned ? read.filter(({ path }) => plan?.wanted.includes(path)) : read;
       },
     },
-    extractor: { extract: async () => { log.extractions++; return []; } },
+    extractor: { extract: async () => { log.extractions++; return { findings: [], readingCuts: [] }; } },
     angular: { read: async () => options.declarations ?? [] },
     relations: options.relationReader ?? { language: TYPESCRIPT_PROFILE, extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [], locals: [] }) },
     dynamicLoads: { extract: async () => options.loads ?? [] },

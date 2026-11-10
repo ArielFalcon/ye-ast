@@ -29,6 +29,8 @@ export interface RouteTableInputs {
   /** The files that seed the walk. `read` and `reading` may reach any path the export holds: a legacy string, a barrel and a lazily loaded module need not be candidates. */
   candidates: readonly string[];
   read: SourceReader;
+  /** The paths the snapshot holds: what proves an import names no file of it. */
+  listing: readonly string[];
   packages: ManifestPackages;
   /** The one reading of a file, memoized by the caller; `undefined` when the file does not parse. */
   reading(file: string): Promise<RouteFileReading | undefined>;
@@ -81,6 +83,13 @@ export interface UnresolvedReference {
   endLine: number;
 }
 
+/**
+ * An `@NgModule` import the module graph could not follow. An import whose module specifier the resolver answers is
+ * carried with that specifier, and `namesNoFile` says whether no path of the snapshot could be its target; an operand the
+ * metadata reading marks `unreadable`, or a file that does not parse, carries no specifier.
+ */
+export type UnresolvedModuleImport = UnresolvedReference & ({ specifier: string; namesNoFile: boolean } | { specifier?: undefined });
+
 export interface LoadedRouteTables {
   /**
    * The tables the router is configured with (`provideRouter` and `RouterModule.forRoot`) and the module graphs the
@@ -102,7 +111,7 @@ export interface LoadedRouteTables {
    * operand that names the router's own `RouterModule`, an external package, a type-only import, a namespace without that
    * member, or a declaration that is no module class is skipped and not recorded.
    */
-  unresolvedModuleImports: UnresolvedReference[];
+  unresolvedModuleImports: UnresolvedModuleImport[];
 }
 
 /** A module-graph name as the reading answers it: a top-level array to expand, a module class to visit, or nothing to follow. */
@@ -110,8 +119,16 @@ type OperandTarget =
   | { kind: "module"; file: string; name: string }
   | { kind: "array"; file: string; name: string }
   | { kind: "skip" }
-  | { kind: "unresolved"; line: number }
+  | { kind: "unresolved"; line: number; specifier: string; namesNoFile: boolean }
   | { kind: "unreadable"; line: number };
+
+/** What a module-graph reference names: a declaration of a file, an external package, a specifier the resolver answers without a file, a file that does not parse, or nothing to follow. */
+type NamedReference =
+  | { kind: "declared"; file: string; name: string }
+  | { kind: "external" }
+  | { kind: "unresolved"; specifier: string; namesNoFile: boolean }
+  | { kind: "unreadable" }
+  | undefined;
 
 /** A child reference read: the table it loads, or why the sources do not come down to one. */
 type ChildResolution = { table: RouteTable } | { reason: UnknownReason };
@@ -127,8 +144,8 @@ type ChildResolution = { table: RouteTable } | { reason: UnknownReason };
  * unresolved child references and the unresolved module imports.
  */
 export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedRouteTables> {
-  const { candidates, read, packages, reading } = inputs;
-  const resolver = createModuleResolver(read, packages);
+  const { candidates, read, listing, packages, reading } = inputs;
+  const resolver = createModuleResolver(read, packages, { listing });
   const readings = new Map<string, Promise<RouteFileReading | undefined>>();
   const readOf = (file: string): Promise<RouteFileReading | undefined> => {
     let held = readings.get(file);
@@ -236,7 +253,7 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
   const nodes = new Map<RawTable, RouteTable>();
   const loads = new Map<RouteTable, Set<RouteTable>>();
   const unresolvedReferences = new Map<string, UnresolvedReference>();
-  const unresolvedModuleImports = new Map<string, UnresolvedReference>();
+  const unresolvedModuleImports = new Map<string, UnresolvedModuleImport>();
   const noteUnresolved = (file: string, at: { line: number; endLine: number }): void => {
     unresolvedReferences.set(`${file}:${at.line}:${at.endLine}`, { path: file, line: at.line, endLine: at.endLine });
   };
@@ -250,15 +267,18 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
     return node;
   };
   /* The name a module-graph reference comes down to, in the file that declares it; a declaration of this file shadows an import of the same name. */
-  const moduleNameOf = async (file: string, raw: RawRouteFile, reference: RawReference): Promise<{ file: string; name: string } | "external" | "unresolved" | undefined> => {
-    if (reference.member === undefined && raw.declared.has(reference.name)) return { file, name: reference.name };
+  const moduleNameOf = async (file: string, raw: RawRouteFile, reference: RawReference): Promise<NamedReference> => {
+    if (reference.member === undefined && raw.declared.has(reference.name)) return { kind: "declared", file, name: reference.name };
     const binding = raw.imports.get(reference.name);
     if (binding === undefined || binding.typeOnly === true) return undefined;
     const resolution = await resolver.resolve(file, binding.module);
-    if ("external" in resolution) return "external";
-    if (!("file" in resolution)) return "unresolved";
+    if ("external" in resolution) return { kind: "external" };
+    if (!("file" in resolution)) return { kind: "unresolved", specifier: binding.module, namesNoFile: resolution.namesNoFile === true };
     const name = reference.member ?? (binding.imported === "*" ? undefined : binding.imported);
-    return name === undefined ? undefined : declarationOf(resolution.file, name);
+    if (name === undefined) return undefined;
+    if ((await parse(resolution.file)) === undefined) return { kind: "unreadable" };
+    const declaration = await declarationOf(resolution.file, name);
+    return declaration === undefined ? undefined : { kind: "declared", file: declaration.file, name: declaration.name };
   };
   /* What one operand of an `imports` list names; an external package, the router's own `RouterModule` and a class that composes no table are nothing to follow. */
   const operandTarget = async (file: string, raw: RawRouteFile, operand: RawOperand): Promise<OperandTarget> => {
@@ -268,10 +288,11 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
     const routerModule = binding?.module === ANGULAR_ROUTER && (binding.imported === "RouterModule" || (binding.imported === "*" && reference.member === "RouterModule"));
     if (routerModule) return { kind: "skip" };
     const named = await moduleNameOf(file, raw, reference);
-    if (named === undefined || named === "external") return { kind: "skip" };
-    if (named === "unresolved") return { kind: "unresolved", line: operand.line };
+    if (named === undefined || named.kind === "external") return { kind: "skip" };
+    if (named.kind === "unresolved") return { kind: "unresolved", line: operand.line, specifier: named.specifier, namesNoFile: named.namesNoFile };
+    if (named.kind === "unreadable") return { kind: "unreadable", line: operand.line };
     const held = await readOf(named.file);
-    if (held === undefined) return { kind: "unresolved", line: operand.line };
+    if (held === undefined) return { kind: "unreadable", line: operand.line };
     if (held.modules.arrays.has(named.name)) return { kind: "array", file: named.file, name: named.name };
     return held.modules.modules.some((module) => module.name === named.name) ? { kind: "module", file: named.file, name: named.name } : { kind: "skip" };
   };
@@ -297,14 +318,18 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
     const visitedArrays = new Set<string>();
     let readable = true;
     let conditional = false;
-    const unclear = (path: string, line: number): void => {
+    const unclear = (path: string, line: number, specifier?: { specifier: string; namesNoFile: boolean }): void => {
       readable = false;
-      unresolvedModuleImports.set(`${path}:${line}`, { path, line, endLine: line });
+      unresolvedModuleImports.set(`${path}:${line}`, specifier === undefined ? { path, line, endLine: line } : { path, line, endLine: line, ...specifier });
     };
     const follow = async (at: string, raw: RawRouteFile, operand: RawOperand): Promise<void> => {
       const target = await operandTarget(at, raw, operand);
-      if (target.kind === "unreadable" || target.kind === "unresolved") {
+      if (target.kind === "unreadable") {
         unclear(at, target.line);
+        return;
+      }
+      if (target.kind === "unresolved") {
+        unclear(at, target.line, { specifier: target.specifier, namesNoFile: target.namesNoFile });
         return;
       }
       if (target.kind === "array") await expand(target.file, target.name);

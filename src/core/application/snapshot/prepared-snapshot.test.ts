@@ -30,7 +30,7 @@ function setup() {
       remove: async (path) => { log.removed.push(path); },
     },
     reader: { read: async (root) => { assert.ok(!log.removed.includes(root)); log.reads++; return [{ path: "src/app.ts", content: "export const value = 1;" }]; } },
-    extractor: { extract: async () => { log.extracts++; return []; } },
+    extractor: { extract: async () => { log.extracts++; return { findings: [], readingCuts: [] }; } },
     digest: { of: (value) => value },
     producer: { name: "ye-ast", version: "test" },
   };
@@ -386,7 +386,7 @@ test("deadline findings are not reused as a completed extraction", async () => {
   let deadline = true;
   deps.extractor.extract = async () => {
     log.extracts++;
-    return deadline ? [{ status: "unknown", reason: "deadline", evidence: [] }] : [];
+    return { findings: deadline ? [{ status: "unknown", reason: "deadline", evidence: [] }] : [], readingCuts: [] };
   };
   const queries = query({ snapshotCache: dataCache() });
   assert.ok((await queries.map(request)).ok);

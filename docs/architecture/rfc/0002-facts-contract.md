@@ -121,7 +121,9 @@ names are settled in the first slice; the union, the cuts and the inputs are the
    snapshot, producer and inputs are the collection's. Such a collection is `complete` when nothing bounded it, even if some of its items are `unknown`: an item
    says what could not be known at its place, and a cut says what the computation never reached. A bound, and a source file in a
    language with no extractor, is a cut; a construct that an extractor reads but cannot resolve or extract is an
-   `unknown` item ([ADR-0013](../adr/0013-coverage-grows-only-with-evidence.md) rule 7).
+   `unknown` item ([ADR-0013](../adr/0013-coverage-grows-only-with-evidence.md) rule 7). A reading can also stop at a place
+   the sources do not let it cross (a route reference it cannot follow): that place is a `cut` of the section, never an
+   item, so the section is `partial` ([RFC-0025](0025-angular-route-tables.md), U4).
 3. **Determinism.** Sorted collections, repo-relative paths, no engine-internal ids and no timestamps in the value: the
    same inputs give the same bytes. Count budgets are deterministic, as qayaba's walk budgets are (qayaba@4105c582
    `qa-engine/src/shared-kernel/code/index.ts:84-98`). A wall-clock deadline is not: the same query can finish in a

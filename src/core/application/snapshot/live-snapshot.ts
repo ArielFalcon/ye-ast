@@ -1,6 +1,5 @@
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
-import type { DeclaredScope, Finding, TrustMode } from "../../domain/shared/fact.ts";
-import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
+import type { DeclaredScope, TrustMode } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
 import { snapshotRetention } from "./prepared-snapshot.ts";
@@ -32,13 +31,13 @@ export function liveSnapshotReaders(deps: Pick<SnapshotReaderDeps, "reader" | "e
   const retention = snapshotRetention(deps, canonicalJson({ live: true, repo: capture.repo, scope: capture.scope, trust: capture.trust }), capture.export, capture.trust);
   let loaded: Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>> | undefined;
   let extracted: Promise<Result<CommitExtraction, VcsFault>> | undefined;
-  let retainedFindings: readonly Finding<Entrypoint>[] | undefined;
+  let retainedReading: Pick<CommitExtraction, "findings" | "readingCuts"> | undefined;
   /** The sources as read, the only ones retention stores; readers take the capture's own copies of them. */
   let read: readonly SourceFile[] = [];
   const load = async (signal?: AbortSignal): Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>> => {
     const retained = retention?.lookup();
     if (retained !== undefined) {
-      retainedFindings = retained.findings;
+      retainedReading = retained.findings === undefined || retained.readingCuts === undefined ? undefined : { findings: retained.findings, readingCuts: retained.readingCuts };
       read = retained.sources;
       return { ok: true, value: { export: capture.export, sources: keep(read) } };
     }
@@ -68,9 +67,9 @@ export function liveSnapshotReaders(deps: Pick<SnapshotReaderDeps, "reader" | "e
       const pending = extracted ??= (async () => {
         const result = await sources(signal);
         if (!result.ok) return result;
-        if (retainedFindings !== undefined) return { ok: true as const, value: { ...result.value, findings: retainedFindings } };
+        if (retainedReading !== undefined) return { ok: true as const, value: { ...result.value, ...retainedReading } };
         const answer = await extractSources(deps, result.value, signal);
-        if (answer.ok) retention?.keepFindings(read, answer.value.findings);
+        if (answer.ok) retention?.keepExtraction(read, answer.value);
         return answer;
       })();
       try {

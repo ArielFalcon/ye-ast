@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import ts from "typescript";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
+import type { EntrypointExtraction } from "../../ports/entrypoint-extractor.port.ts";
 import * as routes from "./angular-routes.adapter.ts";
 import { parseAngularRouteFile } from "./angular-router.extractor.ts";
 import { readAngularMetadataFile, type RawAngularFile, type RawOperand } from "./angular-metadata.extractor.ts";
@@ -14,8 +15,7 @@ const ROUTES_HEADER = "import { Routes } from '@angular/router';\n";
 
 /** A repository read through the port seam: in-memory sources and the manifest that makes them an Angular project. */
 function extract(files: Record<string, string>): Promise<readonly Finding<Entrypoint>[]> {
-  const sources = Object.entries({ "package.json": PACKAGE, ...files }).map(([path, content]) => ({ path, content }));
-  return routes.createAngularRoutesExtractor().extract(sources);
+  return extraction(files).then((whole) => whole.findings);
 }
 
 function namesOf(findings: readonly Finding<Entrypoint>[]): string[] {
@@ -133,4 +133,68 @@ test("a legacy workspace rooted at the repository resolves module graphs without
     "feature.ts": `${NG_MODULE}${ROUTER_MODULE}@NgModule({imports: [RouterModule.forChild([{path: 'leaf', component: Leaf}])]}) export class FeatureModule {}`,
   });
   assert.deepEqual(namesOf(findings), ["/feature/leaf"]);
+});
+
+const ROOT_MAIN = "import { provideRouter } from '@angular/router';\nimport { routes } from './app/app.routes';\nbootstrap(App, { providers: [provideRouter(routes)] });\n";
+
+function extraction(files: Record<string, string>): Promise<EntrypointExtraction> {
+  const sources = Object.entries({ "package.json": PACKAGE, ...files }).map(([path, content]) => ({ path, content }));
+  return routes.createAngularRoutesExtractor().extract(sources);
+}
+
+test("a loadChildren the sources do not resolve is an unknown item and one cut", async () => {
+  const extracted = await extraction({
+    "src/main.ts": ROOT_MAIN,
+    "src/app/app.routes.ts": `${ROUTES_HEADER}export const routes: Routes = [\n  { path: 'home', component: Home },\n  { path: 'gone', loadChildren: () => import('./missing.routes') },\n];\n`,
+  });
+
+  assert.deepEqual(extracted.readingCuts, [
+    { kind: "unresolved-link", at: ["src/app/app.routes.ts", "src/app/app.routes.ts:4"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } },
+  ]);
+  assert.deepEqual(extracted.findings.filter((finding) => finding.status === "unknown"), [{ status: "unknown", reason: "unresolved", evidence: [{ path: "src/app/app.routes.ts", line: 4, endLine: 4 }] }]);
+});
+
+test("the same place never yields two cuts: a root configuration that is both an unresolved reference and an unresolved configuration", async () => {
+  const extracted = await extraction({
+    "src/main.ts": "import { provideRouter } from '@angular/router';\nimport { routes } from './app/nowhere';\nbootstrap(App, { providers: [provideRouter(routes)] });\n",
+  });
+
+  assert.deepEqual(extracted.readingCuts, [
+    { kind: "unresolved-link", at: ["src/main.ts", "src/main.ts:3"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } },
+  ]);
+});
+
+test("an @NgModule import that names no file is one cut with the module reach", async () => {
+  const extracted = await extraction({
+    "src/main.ts": "import { AppModule } from './app/app.module';\nplatformBrowserDynamic().bootstrapModule(AppModule);\n",
+    "src/app/app.module.ts": `${NG_MODULE}import { MissingModule } from './missing.module';\n@NgModule({ imports: [MissingModule] })\nexport class AppModule {}\n`,
+  });
+
+  assert.deepEqual(extracted.readingCuts, [
+    { kind: "unresolved-link", at: ["src/app/app.module.ts", "src/app/app.module.ts:3"], reason: "specifier", reach: { kind: "module", importer: "src/app/app.module.ts", specifiers: [{ specifier: "./missing.module", namesNoFile: true }] } },
+  ]);
+});
+
+test("an @NgModule import of a file that does not parse is one cut of the graph, never a silent skip", async () => {
+  const extracted = await extraction({
+    "src/main.ts": "import { AppModule } from './app/app.module';\nplatformBrowserDynamic().bootstrapModule(AppModule);\n",
+    "src/app/app.module.ts": `${NG_MODULE}import { FeatureModule } from './feature.module';\n@NgModule({ imports: [FeatureModule] })\nexport class AppModule {}\n`,
+    "src/app/feature.module.ts": `${NG_MODULE}${ROUTER_MODULE}@NgModule({ imports: [RouterModule.forChild([{ path: 'x', component: X }])] })\nexport class FeatureModule {\n`,
+  });
+
+  assert.deepEqual(extracted.readingCuts, [
+    { kind: "unresolved-link", at: ["src/app/app.module.ts", "src/app/app.module.ts:3"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } },
+  ]);
+});
+
+test("an @NgModule operand the metadata reading cannot read is one cut of the graph it sits in", async () => {
+  const extracted = await extraction({
+    "src/main.ts": "import { AppModule } from './app/app.module';\nplatformBrowserDynamic().bootstrapModule(AppModule);\n",
+    "src/app/app.module.ts": `${NG_MODULE}import { FeatureModule } from './feature.module';\n@NgModule({ imports: [makeModule(), FeatureModule] })\nexport class AppModule {}\n`,
+    "src/app/feature.module.ts": `${NG_MODULE}${ROUTER_MODULE}@NgModule({ imports: [RouterModule.forChild([{ path: 'x', component: X }])] })\nexport class FeatureModule {}\n`,
+  });
+
+  assert.deepEqual(extracted.readingCuts, [
+    { kind: "unresolved-link", at: ["src/app/app.module.ts", "src/app/app.module.ts:3"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } },
+  ]);
 });

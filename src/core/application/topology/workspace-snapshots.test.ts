@@ -261,7 +261,7 @@ test("a held live handle shares successful lazy sources and extraction", async (
   let reads = 0;
   let extracts = 0;
   s.deps.reader.read = async (_root, paths) => { reads++; return paths.map((path) => ({ path, content: "source" })); };
-  s.deps.extractor.extract = async () => { extracts++; return []; };
+  s.deps.extractor.extract = async () => { extracts++; return { findings: [], readingCuts: [] }; };
   const signal = new AbortController().signal;
   const signals: (AbortSignal | undefined)[] = [];
   const lock = s.fake.deps.mirror.lock;

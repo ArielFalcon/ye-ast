@@ -39,7 +39,7 @@ test("two held mirrors retain captured bytes and report the changed repository a
       return { ok: true, value: { release: async () => { await acquired.value.release(); active--; } } };
     };
     const live = { ...fake.deps, mirror, workingTree: createGitWorkingTree(), digest };
-    const deps = { live, graph: live.graph, digest, matcher: createPathMatcher(), reader: createFsSourceReader(), extractor: { extract: async () => [] }, vcs: createGitVcs() } as unknown as HeadReaderDeps;
+    const deps = { live, graph: live.graph, digest, matcher: createPathMatcher(), reader: createFsSourceReader(), extractor: { extract: async () => ({ findings: [], readingCuts: [] }) }, vcs: createGitVcs() } as unknown as HeadReaderDeps;
     const notices: { repo: string; stateId: string }[] = [];
     const snapshots: { head: string; stateId: string }[] = [];
     let callbackFinished = false;

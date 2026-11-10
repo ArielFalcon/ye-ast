@@ -448,9 +448,15 @@ map scope and readable, so no new export cut can appear.
 10. **Cuts**: one cut per unresolved place, deduplicated by `path:line:endLine`:
     - a `loadChildren`, `children` or spread reference, and a root configuration, that does not come down to one table →
       `{ kind: "unresolved-link", at: [path, `${path}:${line}`], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } }`;
-    - an `@NgModule` import that resolves to no module class, or whose graph holds an `unreadable` operand →
+    - an `@NgModule` import whose module specifier the resolver answers without a file →
       `{ kind: "unresolved-link", at: [path, `${path}:${line}`], reason: "specifier", reach: { kind: "module", importer: path, specifiers: [{ specifier, namesNoFile: true }] } }`
-      (`namesNoFile` only when no path of the snapshot could be its target, the resolver's own answer).
+      (`namesNoFile` only when no path of the snapshot could be its target, the resolver's own answer);
+    - an `@NgModule` import whose graph holds an `unreadable` operand, or whose target file does not parse → the
+      `dynamic-load` cut of the first bullet, since no specifier can be named for it;
+    - an `@NgModule` import that resolves to a declaration which is no module class is **not** a cut (decided
+      2026-11-10, amending the earlier spec line): `ModuleWithProviders` (`RouterModule.forRoot`, `RouterModule.forChild`)
+      and provider arrays legitimately resolve to no module class, so a cut for each would be mass noise, which the
+      repository's rules forbid. Only the imports listed above are cut.
 11. **Determinism**: aggregates follow source order (module, then `imports` in source order, depth first); roots follow
     the sorted candidate order the loader already uses (`route-table.loader.ts:295`) and line; cuts and references are
     sorted; `sortFindings` (`finding-order.ts:8-14`) sorts and deduplicates findings. Paths stay repo-relative, and no
@@ -608,6 +614,12 @@ narrowed answer `partial`.
 - **Docs**: RFC-0002 rule 2 note (the map can carry a reading cut); the MCP status line already renders reasons
   (`src/mcp/presentation-context.ts`), so only the `entrypoints` section of the tool text gains "a route reference the
   sources do not resolve is listed as unknown and as a cut".
+- **Module imports (Algorithm item 10)**: the cut rules for `@NgModule` imports are the ones stated there. Two tests pin
+  the unreadable cases: `an @NgModule import of a file that does not parse is one cut of the graph, never a silent skip`
+  and `an @NgModule operand the metadata reading cannot read is one cut of the graph it sits in`. Known gap, not fixed
+  here: a re-export chain through a file that does not parse (a barrel re-exporting a module from an unparsable file)
+  still skips the import silently, because `createDeclarationLookup` answers `undefined` for an unparsable file and for
+  an absent name alike. Fixing it changes a lookup shared by other readers and needs its own unit.
 - **Risk**: item 3 — `EntrypointExtractor` is a port the composition and every family test double consume. One commit,
   one purpose, and the port's doc comment states the shape. It lands before RFC-0026 U3 (seam order above).
 

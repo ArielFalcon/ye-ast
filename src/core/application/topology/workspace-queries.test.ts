@@ -101,7 +101,7 @@ function setup(
   };
   const scratch: ScratchDirectory = { create: async () => "/scratch", remove: async () => undefined };
   const reader: SourceReader = { read: async (_root, paths) => paths.map((path) => ({ path, content: repositories[exported ?? ""]?.files[path] ?? "" })) };
-  const extractor: EntrypointExtractor = { extract: async (files, libraries) => { hooks?.extract?.(); const held = libraries?.length ? Object.values(repositories).find((repository) => files.every(({ path }) => path in repository.files)) : repositories[exported ?? ""]; return (libraries?.length ? held?.inherited : undefined) ?? held?.entrypoints ?? []; } };
+  const extractor: EntrypointExtractor = { extract: async (files, libraries) => { hooks?.extract?.(); const held = libraries?.length ? Object.values(repositories).find((repository) => files.every(({ path }) => path in repository.files)) : repositories[exported ?? ""]; return { findings: (libraries?.length ? held?.inherited : undefined) ?? held?.entrypoints ?? [], readingCuts: [] }; } };
   const digest: Digest = testDigest ?? { of: (text) => `digest(${text})` };
   const deps: WorkspaceQueriesDeps = {
     vcs,

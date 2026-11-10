@@ -163,7 +163,8 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const extractor = staged<EntrypointExtractor>({
     extract: async (files, libraries) => {
       const spring = await createSpringRoutesExtractor(await javaParser(), contracts).extract(files, libraries);
-      return sortFindings([...spring, ...(await angular.extract(files))]);
+      const routes = await angular.extract(files);
+      return { findings: sortFindings([...spring.findings, ...routes.findings]), readingCuts: routes.readingCuts };
     },
   }, { extract: "entrypoints" });
   const typescriptCallSites = createHttpCallSites();
