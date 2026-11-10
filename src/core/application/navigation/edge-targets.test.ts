@@ -77,13 +77,13 @@ test("a call edge on a value of a class its file declares is proven at the metho
   assert.deepEqual(await verdictOf(world("Plain", "Api.load"), "run"), ["keep", "proven"]);
 });
 
-test("a call edge on a value of a class that declares several methods of its name stays proven at the one the index chose, and a name match on a class that declares none", async () => {
+test("a call edge on a value of a class that declares several methods of its name stays a name match without a selection, as does a class that declares none", async () => {
   const world = (holds: string): World => ({
     nodes: [{ id: "Over", kind: "class", file: SITE, start: 1, end: 6 }, { id: "Over.load1", kind: "method", name: "load", file: SITE, start: 2, end: 2 }, { id: "Over.load2", kind: "method", name: "load", file: SITE, start: 3, end: 5 }, { id: "Empty", kind: "class", file: SITE, start: 8, end: 8 }, { id: "run", kind: "function", file: SITE, start: 10, end: 13 }],
     edges: [{ from: "Over", to: "Over.load1", kind: "contains" }, { from: "Over", to: "Over.load2", kind: "contains" }, { from: "run", to: "Over.load2", kind: "calls", line: 12, column: 4 }],
     receiverBindings: [{ line: 12, column: 5, receiver: "api", member: "load", holds: { kind: "declared", name: holds, line: holds === "Over" ? 1 : 8 } }],
   });
 
-  assert.deepEqual(await verdictOf(world("Over"), "run"), ["keep", "proven"]);
+  assert.deepEqual(await verdictOf(world("Over"), "run"), ["keep", "name-match"]);
   assert.deepEqual(await verdictOf(world("Empty"), "run"), ["keep", "name-match"]);
 });

@@ -175,3 +175,22 @@ test("an unproven receiver names the candidates its owner read, never the reposi
   assert.deepEqual(binding.candidates.map(({ id }) => id), ["load3"]);
   assert.deepEqual(binding.attributed.map(({ id }) => id), ["load3"]);
 });
+
+test("an unsettled receiver's candidates are the members of its type, not the homonyms", async () => {
+  const world: World = {
+    nodes: [fakeNode("A", "class", "src/a.ts", 1, 8), fakeNode("A.save@3", "method", "src/a.ts", 3, 3, "save"), fakeNode("A.save@4", "method", "src/a.ts", 4, 4, "save"), fakeNode("B", "class", "src/b.ts", 1, 6), fakeNode("B.save", "method", "src/b.ts", 3, 3, "save"), fakeNode("run", "function", USE, 5, 9)],
+    edges: [{ from: "A", to: "A.save@3", kind: "contains" }, { from: "A", to: "A.save@4", kind: "contains" }, { from: "B", to: "B.save", kind: "contains" }],
+    imports: { A: "A" },
+    syntax: {
+      receiverBindings: new Map([["7:5:save", { line: 7, column: 5, receiver: "a", member: "save", holds: { kind: "annotated", type: "A", line: 6, column: 17 } }]]),
+      callees: new Map([["7:5", ["a.save"]]]),
+    },
+  };
+  const [settled] = await bound(world, "run", [{ name: "a.save", line: 7, kind: "calls" }]);
+  const binding = asReceiver(settled!);
+  assert.equal(binding.target, undefined);
+  assert.deepEqual(binding.candidates.map(({ id }) => id), ["A.save@3", "A.save@4"]);
+  assert.deepEqual(binding.attributed.map(({ id }) => id), ["A.save@3", "A.save@4"]);
+  const [unproven] = await bound(world, "run", [{ name: "factory().save", line: 8, kind: "calls" }]);
+  assert.deepEqual(summary(unproven!), ["unbound", "member", ["A.save@3", "A.save@4", "B.save"], []]);
+});

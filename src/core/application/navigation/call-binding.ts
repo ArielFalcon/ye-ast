@@ -24,6 +24,8 @@ type Outside = Extract<ImportOrigin, { kind: "external" | "ambient" }>;
  *   declaration a bare name's import or the file's own scope binds, or the method a Java receiver's declared type names
  *   (`bound-receiver` when a type variable types the receiver: the method its bound names, which any type below the
  *   bound may replace when the call runs);
+ *   When the receiver type declares several members of the name without a selection, the edge keeps the index target
+ *   as a name match rather than proven (RFC-0024 U3).
  * - `receiver`: a member call whose receiver a proof decides, with the declaration the proof binds it to, if any;
  * - `outside`: a bare name or a plain chain rooted at a package or the language's libraries;
  * - `unbound`: nothing binds it, with the declarations of its name the language rule admits (`candidates`) and those
@@ -139,12 +141,10 @@ export function createCallBindings({ store, navigation, origins, binder, importe
 
   /** What a member call's receiver proof binds it to: the method the proof places, or the member the proven type has. */
   async function proven(proof: ReceiverProof, name: string, candidates: readonly GraphSymbol[], place: CallPlace): Promise<Extract<CallBinding, { kind: "receiver" }>> {
-    /** A nominal language's owner states what the cut names; a structural language's keeps the declarations of the name the call may run. */
     const typed = async (type: GraphSymbol | undefined) => {
       if (type === undefined) return { attributed: [] };
       const answer = await memberOfReceiver(type, name, place);
-      if (hasTyping(place.file, "nominal")) return { candidates: answer.candidates, ...(answer.target === undefined ? { attributed: answer.candidates } : { target: answer.target, attributed: [] }) };
-      return { ...(answer.target === undefined ? {} : { target: answer.target }), attributed: answer.target === undefined ? candidates.filter((candidate) => binder.declares(type, candidate)) : [] };
+      return { candidates: answer.candidates, ...(answer.target === undefined ? { attributed: answer.candidates } : { target: answer.target, attributed: [] }) };
     };
     if (proof.link === "member") return { kind: "receiver", proof, candidates, attributed: [], ...(proof.method === undefined ? {} : { target: proof.method }) };
     if (proof.link === "external") return { kind: "receiver", proof, candidates, attributed: [], outside: true };
