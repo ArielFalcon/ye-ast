@@ -227,3 +227,109 @@ test("a member whose stated length reaches past the file is unreadable, never cl
   const archive = openJdkArchive(await archiveFile(bytes));
   assert.deepEqual(archive.entry("java/lang/Object.class"), { kind: "unreadable", name: "java/lang/Object.class" });
 });
+
+test("a stored member whose directory states unequal sizes refuses the archive, never its raw bytes", async () => {
+  const bytes = Buffer.from(zipBytes([{ name: "java/lang/Object.class", content: "OBJECT", method: STORED }]));
+  const directoryAt = bytes.readUInt32LE(bytes.length - 22 + 16);
+  bytes.writeUInt32LE(3, directoryAt + 20);
+  const archive = openJdkArchive(await archiveFile(bytes));
+  assert.deepEqual(archive.names(""), []);
+  assert.deepEqual(archive.entry("java/lang/Object.class"), { kind: "unreadable", name: "java/lang/Object.class" });
+});
+
+test("an end record hidden in another end record's comment is refused, never read as an empty archive", async () => {
+  const hidden = Buffer.alloc(22);
+  hidden.writeUInt32LE(EOCD_SIGNATURE, 0);
+  const members = [{ name: "java/lang/Object.class", content: "OBJECT", method: STORED }];
+  const archive = openJdkArchive(await archiveFile(zipBytes(members, hidden.toString("latin1"))));
+  assert.deepEqual(archive.names(""), []);
+  assert.deepEqual(archive.entry("java/lang/Object.class"), { kind: "unreadable", name: "java/lang/Object.class" });
+});
+
+test("an encrypted member refuses the archive, never answering its ciphertext", async () => {
+  const bytes = Buffer.from(zipBytes([{ name: "java/lang/Object.class", content: "OBJECT", method: STORED }]));
+  const directoryAt = bytes.readUInt32LE(bytes.length - 22 + 16);
+  bytes.writeUInt16LE(1, directoryAt + 8);
+  bytes.writeUInt16LE(1, bytes.readUInt32LE(directoryAt + 42) + 6);
+  const archive = openJdkArchive(await archiveFile(bytes));
+  assert.deepEqual(archive.names(""), []);
+  assert.deepEqual(archive.entry("java/lang/Object.class"), { kind: "unreadable", name: "java/lang/Object.class" });
+});
+
+test("two members under one name refuse the archive, never a partial listing", async () => {
+  const members = [
+    { name: "java/lang/Object.class", content: "FIRST", method: STORED },
+    { name: "java/lang/Object.class", content: "SECOND", method: STORED },
+  ];
+  const archive = openJdkArchive(await archiveFile(zipBytes(members)));
+  assert.deepEqual(archive.names(""), []);
+  assert.deepEqual(archive.entry("java/lang/Object.class"), { kind: "unreadable", name: "java/lang/Object.class" });
+});
+
+test("a multi-disk archive is unreadable, whichever disk number reports it", async () => {
+  const bytes = zipBytes([{ name: "java/lang/Object.class", content: "OBJECT", method: STORED }]);
+  for (const at of [4, 6]) {
+    const split = Buffer.from(bytes);
+    split.writeUInt16LE(1, split.length - 22 + at);
+    const archive = openJdkArchive(await archiveFile(split));
+    assert.deepEqual(archive.names(""), []);
+    assert.deepEqual(archive.entry("java/lang/Object.class"), { kind: "unreadable", name: "java/lang/Object.class" });
+  }
+});
+
+test("a deflate bomb declaring a small size is refused without inflating it", async () => {
+  const declared = 10;
+  const bytes = Buffer.from(zipBytes([{ name: "java/lang/Bomb.class", content: "0".repeat(16_000_000), method: DEFLATE }]));
+  const directoryAt = bytes.readUInt32LE(bytes.length - 22 + 16);
+  bytes.writeUInt32LE(declared, directoryAt + 24);
+  const archive = openJdkArchive(await archiveFile(bytes));
+  const before = process.memoryUsage().external;
+  const entry = archive.entry("java/lang/Bomb.class");
+  const inflated = process.memoryUsage().external - before;
+  assert.deepEqual(entry, { kind: "unreadable", name: "java/lang/Bomb.class" });
+  assert.ok(inflated < 1_000_000, `the reader allocated ${inflated} bytes for a member declaring ${declared}`);
+});
+
+test("a ZIP64 entry count in the end record is refused even when the directory holds that many records", async () => {
+  const members = Array.from({ length: 0xffff }, (_, index) => ({ name: `f/${index}.class`, content: "", method: STORED }));
+  const archive = openJdkArchive(await archiveFile(zipBytes(members)));
+  assert.deepEqual(archive.names(""), []);
+  assert.deepEqual(archive.entry("f/0.class"), { kind: "unreadable", name: "f/0.class" });
+});
+
+test("an end record whose size or offset is the ZIP64 sentinel is refused", async () => {
+  for (const at of [12, 16]) {
+    const bytes = Buffer.from(zipBytes([{ name: "java/lang/Object.class", content: "OBJECT", method: STORED }]));
+    bytes.writeUInt32LE(0xffffffff, bytes.length - 22 + at);
+    const archive = openJdkArchive(await archiveFile(bytes));
+    assert.deepEqual(archive.names(""), []);
+    assert.deepEqual(archive.entry("java/lang/Object.class"), { kind: "unreadable", name: "java/lang/Object.class" });
+  }
+});
+
+test("a member whose size or offset is the ZIP64 sentinel refuses the archive, never listing it", async () => {
+  for (const at of [20, 24, 42]) {
+    const bytes = Buffer.from(zipBytes([{ name: "java/lang/Object.class", content: "OBJECT", method: STORED }]));
+    const directoryAt = bytes.readUInt32LE(bytes.length - 22 + 16);
+    bytes.writeUInt32LE(0xffffffff, directoryAt + at);
+    const archive = openJdkArchive(await archiveFile(bytes));
+    assert.deepEqual(archive.names(""), []);
+    assert.deepEqual(archive.entry("java/lang/Object.class"), { kind: "unreadable", name: "java/lang/Object.class" });
+  }
+});
+
+test("a member whose local method differs from its directory method is unreadable", async () => {
+  const bytes = Buffer.from(zipBytes([{ name: "java/lang/Object.class", content: "OBJECT", method: STORED }]));
+  const directoryAt = bytes.readUInt32LE(bytes.length - 22 + 16);
+  bytes.writeUInt16LE(DEFLATE, directoryAt + 10);
+  const archive = openJdkArchive(await archiveFile(bytes));
+  assert.deepEqual(archive.entry("java/lang/Object.class"), { kind: "unreadable", name: "java/lang/Object.class" });
+});
+
+test("a jmod's JM header before the ZIP makes the archive unreadable, never unwrapped", async () => {
+  const bytes = zipBytes([{ name: "java/lang/Object.class", content: "OBJECT", method: STORED }]);
+  const header = Buffer.from([0x4a, 0x4d, 0x01, 0x00]);
+  const archive = openJdkArchive(await archiveFile(Buffer.concat([header, bytes])));
+  assert.deepEqual(archive.names(""), []);
+  assert.deepEqual(archive.entry("java/lang/Object.class"), { kind: "unreadable", name: "java/lang/Object.class" });
+});

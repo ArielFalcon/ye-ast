@@ -48,6 +48,8 @@ const ZIP64_SENTINEL = 0xffffffff;
 const ZIP64_ENTRIES = 0xffff;
 const STORED = 0;
 const DEFLATE = 8;
+/** General-purpose bit 0: the member's payload is encrypted, which this reader never decrypts. */
+const ENCRYPTED = 0x0001;
 /** Deflate expands at most about 1032:1 (RFC 1951's 32 KiB window), so its input bounds the output. */
 const DEFLATE_RATIO = 1032;
 const DRIVE_PREFIX = /^[A-Za-z]:/;
@@ -123,18 +125,24 @@ function isConfined(name: string): boolean {
 function readDirectory(bytes: Buffer): Directory | undefined {
   const end = endRecordAt(bytes);
   if (end === undefined) return undefined;
+  const disk = u16At(bytes, end + 4);
+  const directoryDisk = u16At(bytes, end + 6);
   const entries = u16At(bytes, end + 10);
   const size = u32At(bytes, end + 12);
   const offset = u32At(bytes, end + 16);
-  if (entries === undefined || size === undefined || offset === undefined) return undefined;
+  if (disk === undefined || directoryDisk === undefined || entries === undefined || size === undefined || offset === undefined) {
+    return undefined;
+  }
+  if (disk !== 0 || directoryDisk !== 0) return undefined;
   if (entries === ZIP64_ENTRIES || size === ZIP64_SENTINEL || offset === ZIP64_SENTINEL) return undefined;
   const limit = offset + size;
-  if (size < entries * DIRECTORY_RECORD_SIZE || limit > end) return undefined;
+  if (size < entries * DIRECTORY_RECORD_SIZE || limit !== end) return undefined;
   const members: Member[] = [];
   const byName = new Map<string, Member>();
   let at = offset;
   for (let index = 0; index < entries; index += 1) {
     if (u32At(bytes, at) !== DIRECTORY_SIGNATURE) return undefined;
+    const flags = u16At(bytes, at + 8);
     const method = u16At(bytes, at + 10);
     const compressedSize = u32At(bytes, at + 20);
     const uncompressedSize = u32At(bytes, at + 24);
@@ -143,6 +151,7 @@ function readDirectory(bytes: Buffer): Directory | undefined {
     const commentLength = u16At(bytes, at + 32);
     const localOffset = u32At(bytes, at + 42);
     if (
+      flags === undefined ||
       method === undefined ||
       compressedSize === undefined ||
       uncompressedSize === undefined ||
@@ -153,13 +162,16 @@ function readDirectory(bytes: Buffer): Directory | undefined {
     ) {
       return undefined;
     }
+    if ((flags & ENCRYPTED) !== 0) return undefined;
     if (compressedSize === ZIP64_SENTINEL || uncompressedSize === ZIP64_SENTINEL || localOffset === ZIP64_SENTINEL) return undefined;
+    if (method === STORED && compressedSize !== uncompressedSize) return undefined;
     const next = at + DIRECTORY_RECORD_SIZE + nameLength + extraLength + commentLength;
     if (next > limit) return undefined;
     const name = bytes.toString("utf8", at + DIRECTORY_RECORD_SIZE, at + DIRECTORY_RECORD_SIZE + nameLength);
+    if (byName.has(name)) return undefined;
     const member: Member = { name, method, compressedSize, uncompressedSize, localOffset };
     members.push(member);
-    if (!byName.has(name)) byName.set(name, member);
+    byName.set(name, member);
     at = next;
   }
   return at === limit ? { members, byName } : undefined;
@@ -191,7 +203,8 @@ function readMember(bytes: Buffer, member: Member): Buffer | undefined {
   if (method !== DEFLATE) return undefined;
   let inflated: Buffer;
   try {
-    inflated = inflateRawSync(data, { maxOutputLength: Math.max(member.compressedSize * DEFLATE_RATIO, 1) });
+    const bound = Math.max(Math.min(member.uncompressedSize, member.compressedSize * DEFLATE_RATIO), 1);
+    inflated = inflateRawSync(data, { maxOutputLength: bound });
   } catch (error) {
     if (!isPlatformFault(error)) throw error;
     return undefined;
