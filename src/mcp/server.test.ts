@@ -854,6 +854,17 @@ test("an outline focus lists each use under its declaration, a declaration by fi
   await session.close();
 });
 
+test("a top-level-line fault names the line and the dotted paths the file declares", async () => {
+  const fault: OutlineFault = { kind: "top-level-line", detail: "no declaration holds src/Api.ts:99", entries: [{ file: "src/Api.ts", line: 99, candidates: ["Api", "Api.get"] }] };
+  const { session } = await setup({ outline: async () => ({ ok: false, fault }) });
+  const result = await session.callTool("ye_ast_outline", { focus: [{ file: "src/Api.ts", line: 99 }] });
+  assert.equal(result.isError, true);
+  const text = textOf(result);
+  assert.match(text, /src\/Api\.ts:99: declared in src\/Api\.ts: Api, Api\.get/);
+  assert.deepEqual(result._meta?.["ye-ast/fault"], fault);
+  await session.close();
+});
+
 test("an outline call with both files and focus, or with neither, is refused before any query", async () => {
   const { session, calls } = await setup();
   for (const args of [{ files: ["src/Api.ts"], focus: [{ file: "src/Api.ts", line: 3 }] }, {}]) assert.equal((await session.callTool("ye_ast_outline", args)).isError, true, JSON.stringify(args));
