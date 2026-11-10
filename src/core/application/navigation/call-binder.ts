@@ -1,4 +1,5 @@
 import { EDGE_POLICY, isClassKind, isOwnerKind } from "../../domain/impact/edge-policy.ts";
+import { hasTyping } from "../../domain/languages/profiles.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { ExternalMemberUseOrigin, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { SymbolRef } from "../../domain/relations/relation.ts";
@@ -94,7 +95,10 @@ export interface CallBinder {
    * offers several and the language singles none out, or when its source was not read.
    */
   memberOf(type: GraphSymbol, member: string, place: CallPlace): Promise<GraphSymbol | undefined>;
-  /** Every declaration of `member` that `type` and its hierarchy declare, nearest first, sorted: the candidate set a cut names. */
+  /**
+   * Every declaration of `member` that `type` and its hierarchy declare, as one group per declaring type in nearest-type
+   * order, each group sorted by `(file, startLine)`: the candidate set a cut names.
+   */
   membersAbove(type: GraphSymbol, member: string): readonly GraphSymbol[];
   /** Whether `type`, or a type above it, declares `member`. */
   declares(type: GraphSymbol | undefined, member: GraphSymbol): boolean;
@@ -170,8 +174,9 @@ export function createCallBinder({ store, navigation, syntaxIn, proofs, imported
   const above = (type: GraphSymbol): GraphSymbol[] => [type, ...navigation.typesAround(type, "up").map((around) => around.type)];
 
   /**
-   * The overload set's one implementation: the only body of `member` among the files the set lives in, placed on the
-   * member the index holds there. Several bodies, or none, bind nothing: signatures are never guessed from arity.
+   * A structural language's overload set's one implementation: the only body of `member` among the files that declare it,
+   * placed on the member the index holds there. Several bodies, or none, bind nothing: signatures are never guessed from
+   * arity. A nominal language has no such collapse — its overloads are distinct methods — so `memberOf` never asks this.
    */
   async function implementationOf(members: readonly GraphSymbol[], member: string): Promise<GraphSymbol | undefined> {
     const files = [...new Set(members.map((symbol) => symbol.file))];
@@ -189,7 +194,7 @@ export function createCallBinder({ store, navigation, syntaxIn, proofs, imported
       for (const declaring of above(type).filter((candidate) => isOwnerKind(candidate.kind))) {
         const own = navigation.methodsOf(declaring).filter((method) => method.name === member);
         if (own.length === 1) return own[0];
-        if (own.length > 1) return implementationOf(own, member);
+        if (own.length > 1) return hasTyping(declaring.file, "structural") ? implementationOf(own, member) : undefined;
       }
       return undefined;
     },

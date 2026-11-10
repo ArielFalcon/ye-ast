@@ -64,7 +64,27 @@ test("an overload set binds to its one implementation, the member with a body", 
   const { settle, store } = settling(nodes, edges, { [CLIENT]: [callable("post", 2, false), callable("post", 3, false), callable("post", 4, false), callable("post", 5, true)] });
   const [type] = store.symbolsByIds(["Client" as GraphNodeId]);
 
-  assert.equal((await settle.memberOf(type!, "post", CALL))?.startLine, 5);
+  for (const place of [CALL, { ...CALL, line: 24, column: 9 }]) assert.equal((await settle.memberOf(type!, "post", place))?.startLine, 5, JSON.stringify(place));
+});
+
+test("a nominal language's overloads are distinct methods: several of the name bind none, never the one that has a body", async () => {
+  const SERVICE = "src/main/java/p/CustomerService.java";
+  const nodes = [fakeNode("CustomerService", "interface", SERVICE, 1, 5), fakeNode("strict2", "method", SERVICE, 2, 2, "getByNick"), fakeNode("lenient3", "method", SERVICE, 3, 3, "getByNick")];
+  const edges: FakeEdge[] = [{ from: "CustomerService", to: "strict2", kind: "contains" }, { from: "CustomerService", to: "lenient3", kind: "contains" }];
+  const { settle, store } = settling(nodes, edges, { [SERVICE]: [callable("getByNick", 2, false), callable("getByNick", 3, true)] });
+  const [type] = store.symbolsByIds(["CustomerService" as GraphNodeId]);
+
+  assert.equal(await settle.memberOf(type!, "getByNick", CALL), undefined);
+});
+
+test("a body of another class in the same file never stands for the member, so the set binds none", async () => {
+  const own = classWith("Client", CLIENT, [{ line: 2, name: "post" }, { line: 3, name: "post" }]);
+  const nodes = [...own.nodes, fakeNode("Other", "class", CLIENT, 7, 10), fakeNode("post9", "method", CLIENT, 9, 9, "post")];
+  const edges: FakeEdge[] = [...own.edges, { from: "Other", to: "post9", kind: "contains" }];
+  const { settle, store } = settling(nodes, edges, { [CLIENT]: [callable("post", 2, false), callable("post", 3, false), callable("post", 9, true)] });
+  const [type] = store.symbolsByIds(["Client" as GraphNodeId]);
+
+  assert.equal(await settle.memberOf(type!, "post", CALL), undefined);
 });
 
 test("an overload set with a body in each of two files binds to none, never to the one its type's own file holds", async () => {

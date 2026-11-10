@@ -271,12 +271,12 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const placed = targets.bodies.map((body) => placedMethod(body));
     return placed.every((symbol) => symbol !== undefined) ? placed : undefined;
   };
+  /** A method a type variable's bound names proves the dependence, never what runs: trace holds it unproven (RFC-0013 R5). */
+  const executed = (method: ReceiverMethod): ReceiverMethod => (method.kind === "method" && method.bound === true ? { kind: "unproven" } : method);
   /**
    * The one declaration of `kinds` the index places between a declaration's first token and its name. The index holds a
    * record's methods as functions of no container, so a proof of the method a call names accepts either kind.
    */
-  /** A method a type variable's bound names proves the dependence, never what runs: trace holds it unproven (RFC-0013 R5). */
-  const executed = (method: ReceiverMethod): ReceiverMethod => (method.kind === "method" && method.bound === true ? { kind: "unproven" } : method);
   const placedMethod = ({ file, start, nameLine }: Omit<Extract<ReceiverMethod, { kind: "method" }>, "kind">, kinds: readonly string[] = ["method"]): GraphSymbol | undefined => placedBetween(store, file, start, nameLine, kinds);
   /**
    * What dispatch may run instead of the body the walk reads, from the declaration's own syntax: a body-less callable
