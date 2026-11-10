@@ -465,30 +465,45 @@ test("a module loaded lazily gets its routes from the RouterModule.forChild in i
   const body = ["  { path: 'admin', loadChildren: () => import('./admin/admin.module').then((m) => m.AdminModule) },", "  { path: 'inline', loadChildren: () => import('./inline.module').then((m) => m.InlineModule) },", "  { path: 'dflt', loadChildren: () => import('./dflt.module') },"].join("\n");
   const files = {
     ...table(body),
-    "src/app/app.module.ts": "import { RouterModule } from '@angular/router';\nimport { routes } from './app.routes';\n@NgModule({ imports: [RouterModule.forRoot(routes)] })\nexport class AppModule {}\n",
-    "src/app/admin/admin.module.ts": "import { RouterModule } from '@angular/router';\nimport { ADMIN_ROUTES } from './admin.routes';\n@NgModule({ imports: [RouterModule.forChild(ADMIN_ROUTES)] })\nexport class AdminModule {}\n",
+    "src/app/app.module.ts": "import { NgModule } from '@angular/core';\nimport { RouterModule } from '@angular/router';\nimport { routes } from './app.routes';\n@NgModule({ imports: [RouterModule.forRoot(routes)] })\nexport class AppModule {}\n",
+    "src/app/admin/admin.module.ts": "import { NgModule } from '@angular/core';\nimport { RouterModule } from '@angular/router';\nimport { ADMIN_ROUTES } from './admin.routes';\n@NgModule({ imports: [RouterModule.forChild(ADMIN_ROUTES)] })\nexport class AdminModule {}\n",
     "src/app/admin/admin.routes.ts": `${HEADER}export const ADMIN_ROUTES: Routes = [\n  { path: 'users', component: Users },\n];\n`,
-    "src/app/inline.module.ts": "import { RouterModule } from '@angular/router';\n@NgModule({ imports: [RouterModule.forChild([{ path: 'item', component: Item }])] })\nexport class InlineModule {}\n",
-    "src/app/dflt.module.ts": "import { RouterModule } from '@angular/router';\n@NgModule({ imports: [RouterModule.forChild([{ path: 'd', component: D }])] })\nexport default class DefaultModule {}\n",
-    "src/app/unloaded.module.ts": "import { RouterModule } from '@angular/router';\n@NgModule({ imports: [RouterModule.forChild([{ path: 'nobody', component: N }])] })\nexport class UnloadedModule {}\n",
+    "src/app/inline.module.ts": "import { NgModule } from '@angular/core';\nimport { RouterModule } from '@angular/router';\n@NgModule({ imports: [RouterModule.forChild([{ path: 'item', component: Item }])] })\nexport class InlineModule {}\n",
+    "src/app/dflt.module.ts": "import { NgModule } from '@angular/core';\nimport { RouterModule } from '@angular/router';\n@NgModule({ imports: [RouterModule.forChild([{ path: 'd', component: D }])] })\nexport default class DefaultModule {}\n",
+    "src/app/unloaded.module.ts": "import { NgModule } from '@angular/core';\nimport { RouterModule } from '@angular/router';\n@NgModule({ imports: [RouterModule.forChild([{ path: 'nobody', component: N }])] })\nexport class UnloadedModule {}\n",
   };
 
   assert.deepEqual(names(await extract(files)), ["/admin/users", "/dflt/d", "/inline/item"]);
 });
 
-test("a module with two router configurations, or none, is an unresolved lazy section", async () => {
+test("a module graph composing two forChild tables names both, and a graph with no forChild table at all is unknown (no-extractor) at the reference", async () => {
   const body = ["  { path: 'two', loadChildren: () => import('./two.module').then((m) => m.TwoModule) },", "  { path: 'none', loadChildren: () => import('./none.module').then((m) => m.NoneModule) },"].join("\n");
   const files = {
     ...table(body),
     "src/main.ts": MAIN_WITH("provideRouter(routes)"),
-    "src/app/two.module.ts": "import { RouterModule } from '@angular/router';\n@NgModule({ imports: [RouterModule.forChild([{ path: 'a', component: A }]), RouterModule.forChild([{ path: 'b', component: B }])] })\nexport class TwoModule {}\n",
-    "src/app/none.module.ts": "@NgModule({})\nexport class NoneModule {}\n",
+    "src/app/two.module.ts": "import { NgModule } from '@angular/core';\nimport { RouterModule } from '@angular/router';\n@NgModule({ imports: [RouterModule.forChild([{ path: 'a', component: A }]), RouterModule.forChild([{ path: 'b', component: B }])] })\nexport class TwoModule {}\n",
+    "src/app/none.module.ts": "import { NgModule } from '@angular/core';\n@NgModule({})\nexport class NoneModule {}\n",
+  };
+
+  const findings = await extract(files);
+
+  assert.deepEqual(names(findings), ["/two/a", "/two/b"]);
+  assert.deepEqual(unknowns(findings), [`no-extractor@${ROUTES}:4`]);
+});
+
+test("an @angular/core that resolves inside the snapshot is not the framework: a module graph is not read, and its lazy section is unknown, never silent", async () => {
+  const files = {
+    "tsconfig.json": JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@angular/core": ["src/vendor/angular-core.ts"] } } }),
+    "src/vendor/angular-core.ts": "export const NgModule: ClassDecorator = () => {};\n",
+    ...table("  { path: 'owners', loadChildren: () => import('./owners/owners.module').then((m) => m.OwnersModule) },"),
+    "src/app/owners/owners.module.ts": "import { NgModule } from '@angular/core';\nimport { OwnersRoutingModule } from './owners-routing.module';\n@NgModule({ imports: [OwnersRoutingModule] })\nexport class OwnersModule {}\n",
+    "src/app/owners/owners-routing.module.ts": "import { NgModule } from '@angular/core';\nimport { RouterModule } from '@angular/router';\n@NgModule({ imports: [RouterModule.forChild([{ path: 'list', component: OwnerList }])] })\nexport class OwnersRoutingModule {}\n",
   };
 
   const findings = await extract(files);
 
   assert.deepEqual(names(findings), []);
-  assert.deepEqual(unknowns(findings), [`unresolved@${ROUTES}:3`, `unresolved@${ROUTES}:4`, "unresolved@src/app/two.module.ts:2"]);
+  assert.deepEqual(unknowns(findings), [`unresolved@${ROUTES}:3`, "unresolved@src/app/owners/owners-routing.module.ts:3"]);
 });
 
 test("a router configuration whose table cannot be followed is an unknown item at the call", async () => {

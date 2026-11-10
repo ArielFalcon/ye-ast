@@ -15,7 +15,7 @@ import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { TemplateEffects } from "../../ports/template-usage.port.ts";
 import type { AngularMetadata, AngularMetadataReader, AngularMetadataReadOptions } from "../../ports/angular-metadata.port.ts";
-import { readAngularMetadataFile, type RawAngularClass, type RawAngularFile, type RawInstanceMethod, type RawInjection, type RawOperand, type RawReference, type RawTemplate, type RawText, type RawWrite, type RawWriteTarget } from "./angular-metadata.extractor.ts";
+import { coreExternalOf, readAngularMetadataFile, type RawAngularClass, type RawAngularFile, type RawInstanceMethod, type RawInjection, type RawOperand, type RawReference, type RawTemplate, type RawText, type RawWrite, type RawWriteTarget } from "./angular-metadata.extractor.ts";
 import { readAngularRouteFile, type RawRouteFile } from "./angular-router.extractor.ts";
 import { createDeclarationLookup } from "./declaration-lookup.ts";
 import { manifestsOf, pathsByProject, projectOf } from "./angular-projects.ts";
@@ -132,8 +132,7 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
         const sf = sourceTree(contents.get(file)!, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
         const shape = readAngularRouteFile(sf);
         if (shape === undefined) return undefined;
-        const usesCore = [...shape.imports.values()].some((binding) => binding.module === ANGULAR_CORE);
-        const coreExternal = usesCore && "external" in await resolver.resolve(file, ANGULAR_CORE);
+        const coreExternal = await coreExternalOf(shape, async (specifier) => "external" in (await resolver.resolve(file, specifier)));
         const angular = readAngularMetadataFile(sf, shape, collectSites, coreExternal);
         return { shape, angular, identity: proveMembers ? providerIdentityEvidence(sf, shape, coreExternal, angular.memberEvidence.declarations) : NO_PROVIDER_IDENTITY };
       })();
