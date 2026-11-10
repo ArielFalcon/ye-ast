@@ -1,7 +1,8 @@
 import { parseWorkspaceManifest } from "../core/domain/topology/workspace-manifest.ts";
 import { entrypointCandidateText, unknownEntryText, unknownTargetKey } from "../core/domain/shared/unknown-target.ts";
-import { basename, resolve } from "node:path";
-import { readFile } from "node:fs/promises";
+import { basename, join, resolve } from "node:path";
+import { constants } from "node:fs";
+import { access, readFile, stat } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import type { Result } from "../core/domain/shared/result.ts";
 import { isValidGlob, type ScopeRequest } from "../core/domain/shared/scope.ts";
@@ -76,7 +77,7 @@ const USAGE = [
   "       ye-ast decisions [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast contract-consequences --hypothesis <json> [--hypothesis <json>]... [--revision <rev>] [--repo-id <id>] [scope] <repo>",
   "       ye-ast contract-consequences --base <rev> [--head <rev>] [--repo-id <id>] [scope] <repo>",
-  "       ye-ast init --trust trusted|untrusted [--workspace <file>] [outputs] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration, which carries the outputs)",
+  "       ye-ast init --trust trusted|untrusted [--workspace <file>] [outputs] [--jdk <path>] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration, which carries the outputs)",
   "       ye-ast init --trust trusted|untrusted [--workspace <file>] --repo <id> <path> [--repo <id> <path>]... <launch-repo>",
   "       ye-ast serve   (the query protocol, JSON-RPC 2.0, one message per line on stdin/stdout)",
   "       ye-ast mcp [<launch-root>] [--repo <id> <root>]... [outputs]   (read-only stdio MCP server; the outputs are the launch repository's)",
@@ -90,6 +91,7 @@ const USAGE = [
   "changed: [--changed <glob>]...   (impact only: globs over the changed paths; only the change's paths they select seed the walk, while the repository is read whole, so callers outside them are known; a glob that selects no changed path is an error)",
   "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default; trace takes no --hub-fan-in, which counts callers)",
   "outputs: [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]...   (a node_modules directory your own install produced, standing for <at>/node_modules in the repository, the root's without <at>=; read as data, never run, checked against the commit's lockfile, and used at a revision only, never with --live; each answer that used one lists it in inputs.buildOutputs, and one it could not use is a build-output cut. Write =<path> for a path that holds =. --java-sources names the repository directory <at> its generated Java sources stand for, both required; no answer reads it yet and it never appears in inputs.buildOutputs)",
+  "jdk: init and mcp, once: --jdk <path>   (a host JDK home whose lib/ct.sym is read as data, accepted only at a pinned digest (ADR-0044 decision 10); init prints it into the MCP registration; no answer reads the table yet, so every obligation that needs it stays unsettled)",
   "workspace: --workspace <file>   (the workspace init persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\", \"remote\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository, and a remote is the source of truth a trusted repository's queries refresh into ye-ast's own mirror)",
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
 ].join("\n");
@@ -157,7 +159,7 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promi
       io.err(USAGE);
       return EXIT_CODE.usage;
     }
-    const { workspaceFile, buildOutputs, ...request } = parsed;
+    const { workspaceFile, buildOutputs, jdkPath, ...request } = parsed;
     const workspace = workspaceFile === undefined ? undefined : await readWorkspaceFile(workspaceFile);
     if (workspace !== undefined && !workspace.ok) {
       io.err(deps.redaction.redact(`ye-ast: ${workspace.fault.kind}: ${workspace.fault.detail}`));
@@ -169,7 +171,7 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promi
       io.err(`ye-ast: ${result.fault.kind}: ${deps.redaction.redact(result.fault.detail.trim())}`);
       return result.fault.kind === "aborted" ? EXIT_CODE.interrupted : EXIT_CODE.queryFailed;
     }
-    for (const line of initReport(result.value, request.repo, deps.mcpCommand, buildOutputs ?? [])) io.out(line);
+    for (const line of initReport(result.value, request.repo, deps.mcpCommand, buildOutputs ?? [], jdkPath)) io.out(line);
     return EXIT_CODE.ok;
   } catch (error) {
     io.err(`ye-ast: internal fault: ${deps.redaction.redact(firstLine(error))}`);
@@ -290,7 +292,7 @@ function registrationDeclarations(outputs: readonly DeclaredBuildOutput[]): stri
   return [...nodeModules, ...javaSources].flatMap(({ kind, at, path }) => [`--${kind}`, shellWord(kind === "node-modules" && at === "" && !path.includes("=") ? path : `${at}=${path}`)]);
 }
 
-function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo: string, mcpCommand: readonly string[], outputs: readonly DeclaredBuildOutput[]): string[] {
+function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo: string, mcpCommand: readonly string[], outputs: readonly DeclaredBuildOutput[], jdkPath: string | undefined): string[] {
   const declared = registrationDeclarations(outputs);
   const layerLines =
     layer.outcome === "not-written"
@@ -302,7 +304,7 @@ function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo:
     ...layerLines,
     ...(workspace === undefined ? [] : [`${FIXED_LAYER_DIRECTORY}/${WORKSPACE_MANIFEST_FILE}: ${workspace.outcome}`]),
     "register the MCP server with Claude Code:",
-    `claude mcp add ye-ast -- ${[...mcpCommand.map(shellWord), "mcp", shellWord(repo), ...declared].join(" ")}`,
+    `claude mcp add ye-ast -- ${[...mcpCommand.map(shellWord), "mcp", shellWord(repo), ...declared, ...(jdkPath === undefined ? [] : ["--jdk", shellWord(jdkPath)])].join(" ")}`,
   ];
 }
 
@@ -400,17 +402,35 @@ interface ParsedInit extends Omit<InstallRequest, "signal" | "workspace"> {
   workspaceFile?: string;
   /** The build outputs the printed MCP registration declares (ADR-0037); `init` itself reads none. */
   buildOutputs?: readonly DeclaredBuildOutput[];
+  /** The host JDK home the printed MCP registration names (ADR-0044 decision 10); `init` reads no table from it. */
+  jdkPath?: string;
 }
 
 async function parseInitRequest(args: readonly string[], deps: RepositoryNaming): Promise<ParsedInit | undefined> {
   try {
-    const { values, positionals } = parseArgs({ args: [...args], options: { trust: { type: "string" }, workspace: { type: "string" }, ...NODE_MODULES_OPTION }, allowPositionals: true });
+    const { values, positionals } = parseArgs({ args: [...args], options: { trust: { type: "string" }, workspace: { type: "string" }, jdk: { type: "string" }, ...NODE_MODULES_OPTION }, allowPositionals: true });
     const [path = ".", ...extra] = positionals;
     const outputs = parseBuildOutputs(values);
-    if (!isTrustMode(values.trust) || extra.length > 0 || values.workspace === "" || outputs === undefined) return undefined;
-    return { ...(await repositoryOf(deps, path, undefined)), trust: values.trust, ...(values.workspace === undefined ? {} : { workspaceFile: resolve(values.workspace) }), ...outputs };
+    if (!isTrustMode(values.trust) || extra.length > 0 || values.workspace === "" || values.jdk === "" || outputs === undefined) return undefined;
+    if (values.jdk !== undefined && !(await isJdkHome(resolve(values.jdk)))) return undefined;
+    return { ...(await repositoryOf(deps, path, undefined)), trust: values.trust, ...(values.workspace === undefined ? {} : { workspaceFile: resolve(values.workspace) }), ...(values.jdk === undefined ? {} : { jdkPath: resolve(values.jdk) }), ...outputs };
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Whether a host JDK home holds a readable `lib/ct.sym`: the one thing a `--jdk` path must hold before a registration names
+ * it. Whether the archive is pinned is a later, silent outcome (no table), not a refusal.
+ */
+export async function isJdkHome(home: string): Promise<boolean> {
+  const archive = join(home, "lib", "ct.sym");
+  try {
+    if (!(await stat(archive)).isFile()) return false;
+    await access(archive, constants.R_OK);
+    return true;
+  } catch {
+    return false;
   }
 }
 

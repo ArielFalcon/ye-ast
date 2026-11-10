@@ -1,6 +1,6 @@
 import { basename, resolve } from "node:path";
 import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
-import { EXIT_CODE } from "../cli/main.ts";
+import { EXIT_CODE, isJdkHome } from "../cli/main.ts";
 import { repositoryCatalog, type RepositoryBinding } from "../mcp/repository-targeting.ts";
 import { createMcpServer } from "../mcp/server.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
@@ -8,7 +8,7 @@ import type { ProcessHost } from "./process-host.ts";
 import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
 import { javaSourcesDeclared, nodeModulesDeclared, type DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
 
-const USAGE = "usage: ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]...";
+const USAGE = "usage: ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]... [--jdk <path>]";
 
 /**
  * `ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]...`:
@@ -20,8 +20,18 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
   const launchPath = args[0] !== undefined && !args[0].startsWith("-") ? args[index++] : ".";
   const declarations: { repoId: string; path: string }[] = [];
   const outputs: DeclaredBuildOutput[] = [];
+  let jdkPath: string | undefined;
   while (index < args.length) {
     const flag = args[index++];
+    if (flag === "--jdk") {
+      const path = args[index++];
+      if (!path || path.startsWith("-") || jdkPath !== undefined) {
+        host.err(USAGE);
+        return EXIT_CODE.usage;
+      }
+      jdkPath = resolve(host.cwd, path);
+      continue;
+    }
     if (flag === "--node-modules" || flag === "--java-sources") {
       const spec = args[index++] ?? "";
       const declared = flag === "--node-modules" ? nodeModulesDeclared(spec) : javaSourcesDeclared(spec);
@@ -40,7 +50,7 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
     }
     declarations.push({ repoId, path });
   }
-  if (!launchPath) {
+  if (!launchPath || (jdkPath !== undefined && !(await isJdkHome(jdkPath)))) {
     host.err(USAGE);
     return EXIT_CODE.usage;
   }
