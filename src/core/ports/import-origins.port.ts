@@ -173,7 +173,11 @@ export interface ImplementingSite {
   name: string;
 }
 
-/** The supertype methods a method declares it implements, sorted by place; `unknown` when the sources do not settle them. */
+/**
+ * The supertype methods a method declares it implements, sorted by place. `declarations`, possibly empty, is established
+ * only from a hierarchy the reader read in full: a supertype it did not read may declare the contract, so that answers
+ * `unknown`. A consumer treats `unknown` as "any contract may apply", never as "none".
+ */
 export type ImplementedDeclarations = { kind: "declarations"; declarations: readonly MethodPlace[] } | { kind: "unknown" };
 
 /**

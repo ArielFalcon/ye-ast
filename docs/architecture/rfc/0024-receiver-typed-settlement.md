@@ -612,6 +612,11 @@ Each unit is one commit, failing fixture first, `npm run check`, and the corpus 
   fixtures), ADR-0044 decision 1's placement table (one row).
 - **Risks / high-risk item:** none by the global list; the new port member is additive and the `unknown` fallback keeps
   today's answers for a language that cannot answer.
+- **Totality (ADR-0051 decision 7):** the bridge is a total function over the port's two states: `unknown` (and a method
+  nobody asked about) keeps the by-name set; `declarations` keeps the members the answer lists. The Java adapter decides
+  which state applies, and `declarations`, possibly empty, is reached only from a hierarchy it read in full: a supertype
+  the sources do not declare (a platform type aside) answers `unknown`. An unread hierarchy can therefore never produce
+  "no implementor".
 
 ### U5 — trace's second Java receiver rule is deleted
 

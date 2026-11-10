@@ -131,8 +131,10 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
 /**
  * `ImportOrigins.implementedDeclarations` for Java sources: a method implements or overrides the methods of the supertypes
  * in the repository that declare the same parameter types (JLS 8.4.8.1), read from the declared hierarchy. A signature the
- * sources do not settle (a type variable on either side, an unread parameter type, an ambiguous supertype, a source the
- * reader does not place) answers `unknown`, so the by-name bridge keeps its reach.
+ * sources do not settle answers `unknown`, so the by-name bridge keeps its reach: a type variable on either side, an unread
+ * parameter type, a source the reader does not place, and any supertype the sources do not declare exactly once (a
+ * platform type aside), since such a supertype may declare the contract. `declarations`, possibly empty, is therefore
+ * established only from a hierarchy the reader read in full.
  */
 export function createJavaImplementedDeclarations(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold): ImportOrigins["implementedDeclarations"] {
   const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
@@ -156,7 +158,7 @@ export function createJavaImplementedDeclarations(parser: () => Promise<JavaPars
       const signature = signatureOf(method);
       if (signature === undefined || signature.some(isVariable)) return UNKNOWN_DECLARATIONS;
       const { types, gaps } = hierarchyOf(method.owner);
-      if (gaps.some((gap) => gap.kind === "ambiguous")) return UNKNOWN_DECLARATIONS;
+      if (gaps.length > 0) return UNKNOWN_DECLARATIONS;
       const found: MethodPlace[] = [];
       for (const type of types) {
         if (type === method.owner) continue;

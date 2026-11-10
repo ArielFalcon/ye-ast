@@ -91,6 +91,7 @@ export interface EdgeCorrections {
 }
 
 const NO_CORRECTIONS: EdgeCorrections = { dropped: new Set(), into: new Map() };
+const UNKNOWN_IMPLEMENTED: ImplementedDeclarations = { kind: "unknown" };
 
 const USAGE_EDGES = ["calls", "instantiates", "references"];
 
@@ -135,10 +136,10 @@ export function createInboundEdges(
     return into;
   }
 
-  /** Whether `implementation`'s own declared signature names `contract`; an unsettled answer keeps the by-name bridge. */
+  /** Whether `implementation`'s own declared signature names `contract`; `unknown`, or no answer asked, keeps the by-name bridge. */
   function implementsDeclared(implementation: GraphSymbol, contract: GraphSymbol): boolean {
-    const answer = corrections.implemented?.get(implementation.id);
-    if (answer === undefined || answer.kind === "unknown") return true;
+    const answer = corrections.implemented?.get(implementation.id) ?? UNKNOWN_IMPLEMENTED;
+    if (answer.kind === "unknown") return true;
     return answer.declarations.some((place) => place.file === contract.file && contract.startLine <= place.nameLine && place.nameLine <= contract.endLine);
   }
 
