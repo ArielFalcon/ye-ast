@@ -1,7 +1,7 @@
 import ts from "typescript";
 import { moduleShape, type ModuleShape, type RawSpan } from "./module-shape.ts";
 import { sourceTree } from "./source-tree.ts";
-import { hasModifier, unwrapped } from "./syntax.ts";
+import { hasModifier, propertyOf, unwrapped } from "./syntax.ts";
 
 /** A value the loader resolves: a literal, or a reference to a constant (`RoutePath.Home`, or a plain identifier), with the module it is imported from when it is. */
 export type RawValue = { literal: string } | { ref: string; member?: string; module?: string; imported?: string } | { template: RawValue[] } | { opaque: true };
@@ -63,7 +63,7 @@ export interface RawRouterConfig {
   kind: "root" | "child";
   line: number;
   endLine: number;
-  /** The class whose decorator holds the call. */
+  /** The class whose decorator `imports` operand holds the call: the only place Angular registers the configuration. */
   owner?: string;
   /** The array literal passed inline. */
   table?: RawTable;
@@ -384,22 +384,38 @@ export function readAngularRouteFile(sf: ts.SourceFile): RawRouteFile | undefine
       endLine: line(call.end),
     };
   };
-  const findConfigs = (node: ts.Node, owner: string | undefined): void => {
-    const inside = ts.isClassDeclaration(node) && node.name ? node.name.text : owner;
+  /* The `imports` operand of each decorator of a class: the one place a `forChild` call of its body is registered. */
+  const importsOperandsOf = (declaration: ts.ClassDeclaration): ts.Expression[] =>
+    (ts.canHaveDecorators(declaration) ? (ts.getDecorators(declaration) ?? []) : []).flatMap((decorator): ts.Expression[] => {
+      const argument = ts.isCallExpression(decorator.expression) ? decorator.expression.arguments[0] : undefined;
+      const metadata = argument === undefined ? undefined : unwrapped(argument);
+      const imports = metadata !== undefined && ts.isObjectLiteralExpression(metadata) ? propertyOf(metadata, "imports") : undefined;
+      return imports === undefined ? [] : [imports];
+    });
+  /* The class a configuration belongs to: the nearest one whose decorator `imports` operand holds the call, never the class body at large. */
+  const configOwnerOf = (node: ts.Node): string | undefined => {
+    for (let at = node.parent; at !== undefined; at = at.parent) {
+      if (!ts.isClassDeclaration(at) || at.name === undefined) continue;
+      return importsOperandsOf(at).some((operand) => operand.getStart(sf) <= node.getStart(sf) && node.end <= operand.end) ? at.name.text : undefined;
+    }
+    return undefined;
+  };
+  const findConfigs = (node: ts.Node): void => {
     const kind = ts.isCallExpression(node) ? routerKind(node) : undefined;
     const arg = ts.isCallExpression(node) ? node.arguments[0] : undefined;
     if (kind !== undefined && arg !== undefined) {
       const b = unwrapped(arg);
       const table = ts.isArrayLiteralExpression(b) ? tableOfNode.get(b) : undefined;
       const target = table !== undefined ? { table } : { ref: ts.isArrayLiteralExpression(b) ? { unresolved: true as const } : refOf(b) };
-      routerConfigs.push({ kind, line: line(node.getStart(sf)), endLine: line(node.end), ...(inside !== undefined ? { owner: inside } : {}), ...target });
+      const owner = configOwnerOf(node);
+      routerConfigs.push({ kind, line: line(node.getStart(sf)), endLine: line(node.end), ...(owner !== undefined ? { owner } : {}), ...target });
     }
     if (ts.isCallExpression(node)) {
       const boot = bootstrapOf(node);
       if (boot !== undefined) bootstraps.push(boot);
     }
-    ts.forEachChild(node, (child) => findConfigs(child, inside));
+    ts.forEachChild(node, findConfigs);
   };
-  findConfigs(sf, undefined);
+  findConfigs(sf);
   return { ...module, tables, routerConfigs, bootstraps, entryConstants, guardLists, constants };
 }

@@ -86,7 +86,11 @@ reuse code that moves from qayaba ([ADR-0012](../adr/0012-foundation-before-qaya
     (`/auth/register`), and one graph registered both ways yields both prefixes. A graph that holds an `imports` operand
     the metadata reading could not resolve is not built at all. A lazy module whose graph holds no `forChild` table is an
     unresolved lazy section with `no-extractor` at the reference: silence would assert no routes. A `loadChildren` that
-    imports a module with a default export, or a routes file with a default export, is followed.
+    imports a module with a default export, or a routes file with a default export, is followed. A file whose
+    `@angular/core` resolves inside the snapshot (a local re-export, or a `paths` mapping to a vendored file) is not
+    Angular code: its decorators are not recognised, so the module graph a class composes is not read and the lazy
+    section that loads it is `unknown` with `unresolved` at the reference — an honest gap, never a silent empty answer.
+    Recognising a decorator that reaches the file through a re-export or a path mapping is follow-up work.
     A table no declared root reaches (dead code, a `forChild` table nobody loads, or a root this extractor does not
     recognize, such as one configured through a namespace import) is never named and never an empty answer: each
     would-be `ui-route` of it is an `unknown` item at its entry, with `unresolved` (and the unresolved references as

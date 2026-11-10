@@ -104,6 +104,17 @@ test("a module graph registered at the root and loaded lazily yields both prefix
   assert.deepEqual(namesOf(findings).sort(), ["/lazy/owners", "/owners"]);
 });
 
+test("a forChild outside the decorator's imports operand is never attributed to the module: a static field and a static method hold no route", async () => {
+  const findings = await extract({
+    "src/main.ts": "import { AppModule } from './app/app.module';\nplatformBrowserDynamic().bootstrapModule(AppModule);\n",
+    "src/app/app.module.ts": `${NG_MODULE}${ROUTER_MODULE}import { OwnersModule } from './owners/owners.module';\n@NgModule({ imports: [RouterModule.forChild([{ path: 'real', component: Real }]), OwnersModule] })\nexport class AppModule {\n  static unused = RouterModule.forChild([{ path: 'ghost', component: Ghost }]);\n  static build() { return RouterModule.forChild([{ path: 'spook', component: Spook }]); }\n}\n`,
+    "src/app/owners/owners.module.ts": OWNERS_MODULE,
+    "src/app/owners/owners-routing.module.ts": OWNERS_ROUTING,
+  });
+
+  assert.deepEqual(namesOf(findings), ["/real", "/owners"]);
+});
+
 test("a module graph with an import the reading could not resolve is not built: never a route from the rest of it", async () => {
   const findings = await extract({
     "src/main.ts": "import { AppModule } from './app/app.module';\nplatformBrowserDynamic().bootstrapModule(AppModule);\n",

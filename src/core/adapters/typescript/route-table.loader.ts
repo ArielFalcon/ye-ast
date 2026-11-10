@@ -95,7 +95,12 @@ export interface LoadedRouteTables {
   unresolvedReferences: UnresolvedReference[];
   /** The root configurations among them, with why each is unresolved. */
   unresolvedConfigurations: Array<UnresolvedReference & { reason: UnknownReason }>;
-  /** Every `@NgModule` import that does not come down to a module class, or whose graph holds an `unreadable` operand, sorted. */
+  /**
+   * Every `@NgModule({ imports })` operand a visited module graph could not follow to a file, sorted: one the metadata
+   * reading marks `unreadable`, or a name whose import names no file of the snapshot or a file that does not parse. An
+   * operand that names the router's own `RouterModule`, an external package, a type-only import, a namespace without that
+   * member, or a declaration that is no module class is skipped and not recorded.
+   */
   unresolvedModuleImports: UnresolvedReference[];
 }
 
