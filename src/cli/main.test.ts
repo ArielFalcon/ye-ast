@@ -1,6 +1,6 @@
 import { test, after, before } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { EntrypointMapFact } from "../core/domain/map/entrypoint-map.ts";
@@ -791,6 +791,14 @@ after(async () => {
   await rm(scratch, { recursive: true, force: true });
 });
 
+/** A host JDK home holding a `lib/ct.sym`: the CLI checks that the file is readable, never what it holds. */
+async function jdkHome(): Promise<string> {
+  const home = await mkdtemp(join(scratch, "jdk-home-"));
+  await mkdir(join(home, "lib"));
+  await writeFile(join(home, "lib", "ct.sym"), "");
+  return home;
+}
+
 /** A manifest file in the scratch directory; the CLI reads it, the core never does. */
 async function workspaceFile(content: string): Promise<string> {
   counter += 1;
@@ -1236,15 +1244,28 @@ test("--java-sources declares a generated source directory for callers and impac
 });
 
 test("init with --jdk registers the MCP server with that host JDK path, resolved, and never hands it to the install", async () => {
+  const home = await jdkHome();
   const { io, deps, installs } = setupInstall();
 
-  assert.equal(await run(["init", "--trust", "untrusted", "--jdk", "/opt/jdk", "/work/shop"], io, deps), EXIT_CODE.ok);
+  assert.equal(await run(["init", "--trust", "untrusted", "--jdk", home, "/work/shop"], io, deps), EXIT_CODE.ok);
 
-  assert.ok(io.stdout.includes(`claude mcp add ye-ast -- npx --yes tsx ${MCP_ENTRYPOINT} mcp /work/shop --jdk /opt/jdk`), io.stdout.join("\n"));
+  assert.ok(io.stdout.includes(`claude mcp add ye-ast -- npx --yes tsx ${MCP_ENTRYPOINT} mcp /work/shop --jdk ${home}`), io.stdout.join("\n"));
   assert.equal(installs.some((request) => "jdk" in request || "jdkPath" in request), false);
   const refused = setupInstall();
   assert.equal(await run(["init", "--trust", "untrusted", "--jdk"], refused.io, refused.deps), EXIT_CODE.usage);
   assert.equal(refused.installs.length, 0);
+});
+
+test("init with --jdk names a home without a readable lib/ct.sym as a usage error before any install, and accepts a readable one whatever its digest", async () => {
+  const home = await jdkHome();
+  const missing = setupInstall();
+  assert.equal(await run(["init", "--trust", "untrusted", "--jdk", join(home, "absent"), "/work/shop"], missing.io, missing.deps), EXIT_CODE.usage);
+  assert.ok(missing.io.stderr.join("\n").startsWith("usage:"), missing.io.stderr.join("\n"));
+  assert.equal(missing.installs.length, 0);
+
+  const present = setupInstall();
+  assert.equal(await run(["init", "--trust", "untrusted", "--jdk", home, "/work/shop"], present.io, present.deps), EXIT_CODE.ok);
+  assert.equal(present.installs.length, 1);
 });
 
 test("init carries every declared output into the registration: node modules as given, then java sources sorted by at", async () => {

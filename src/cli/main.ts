@@ -1,7 +1,8 @@
 import { parseWorkspaceManifest } from "../core/domain/topology/workspace-manifest.ts";
 import { entrypointCandidateText, unknownEntryText, unknownTargetKey } from "../core/domain/shared/unknown-target.ts";
-import { basename, resolve } from "node:path";
-import { readFile } from "node:fs/promises";
+import { basename, join, resolve } from "node:path";
+import { constants } from "node:fs";
+import { access, readFile, stat } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import type { Result } from "../core/domain/shared/result.ts";
 import { isValidGlob, type ScopeRequest } from "../core/domain/shared/scope.ts";
@@ -411,9 +412,25 @@ async function parseInitRequest(args: readonly string[], deps: RepositoryNaming)
     const [path = ".", ...extra] = positionals;
     const outputs = parseBuildOutputs(values);
     if (!isTrustMode(values.trust) || extra.length > 0 || values.workspace === "" || values.jdk === "" || outputs === undefined) return undefined;
+    if (values.jdk !== undefined && !(await isJdkHome(resolve(values.jdk)))) return undefined;
     return { ...(await repositoryOf(deps, path, undefined)), trust: values.trust, ...(values.workspace === undefined ? {} : { workspaceFile: resolve(values.workspace) }), ...(values.jdk === undefined ? {} : { jdkPath: resolve(values.jdk) }), ...outputs };
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Whether a host JDK home holds a readable `lib/ct.sym`: the one thing a `--jdk` path must hold before a registration names
+ * it. Whether the archive is pinned is a later, silent outcome (no table), not a refusal.
+ */
+export async function isJdkHome(home: string): Promise<boolean> {
+  const archive = join(home, "lib", "ct.sym");
+  try {
+    if (!(await stat(archive)).isFile()) return false;
+    await access(archive, constants.R_OK);
+    return true;
+  } catch {
+    return false;
   }
 }
 

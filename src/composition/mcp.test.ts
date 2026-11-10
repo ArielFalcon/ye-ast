@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { createInterface } from "node:readline";
 import { EXIT_CODE } from "../cli/main.ts";
@@ -275,17 +278,37 @@ test("--node-modules declares a build output of the launch repository only, and 
   }
 });
 
-test("--jdk takes one host JDK path, and a missing path or a second one is a usage error", async () => {
-  const h = harness();
-  h.start(["shop", "--jdk", "/opt/jdk"]);
-  h.stdin.end();
-  assert.equal(await h.finished(), EXIT_CODE.ok);
-  for (const args of [["shop", "--jdk"], ["shop", "--jdk", "--node-modules"], ["shop", "--jdk", "/opt/a", "--jdk", "/opt/b"]]) {
+test("--jdk takes one host JDK home, and a missing path or a second one is a usage error", async () => {
+  const home = await mkdtemp(join(tmpdir(), "ye-ast-mcp-jdk-"));
+  try {
+    await mkdir(join(home, "lib"));
+    await writeFile(join(home, "lib", "ct.sym"), "");
+    const h = harness();
+    h.start(["shop", "--jdk", home]);
+    h.stdin.end();
+    assert.equal(await h.finished(), EXIT_CODE.ok);
+    for (const args of [["shop", "--jdk"], ["shop", "--jdk", "--node-modules"], ["shop", "--jdk", home, "--jdk", home]]) {
+      const refused = harness();
+      refused.start(args);
+      refused.stdin.end();
+      assert.equal(await refused.finished(), EXIT_CODE.usage, args.join(" "));
+      assert.equal(refused.composed.count, 0);
+    }
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("--jdk naming a home without a readable lib/ct.sym is a usage error before the server starts", async () => {
+  const home = await mkdtemp(join(tmpdir(), "ye-ast-mcp-jdk-"));
+  try {
     const refused = harness();
-    refused.start(args);
+    refused.start(["shop", "--jdk", join(home, "absent")]);
     refused.stdin.end();
-    assert.equal(await refused.finished(), EXIT_CODE.usage, args.join(" "));
+    assert.equal(await refused.finished(), EXIT_CODE.usage);
     assert.equal(refused.composed.count, 0);
+  } finally {
+    await rm(home, { recursive: true, force: true });
   }
 });
 

@@ -1,6 +1,6 @@
 import { basename, resolve } from "node:path";
 import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
-import { EXIT_CODE } from "../cli/main.ts";
+import { EXIT_CODE, isJdkHome } from "../cli/main.ts";
 import { repositoryCatalog, type RepositoryBinding } from "../mcp/repository-targeting.ts";
 import { createMcpServer } from "../mcp/server.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
@@ -50,7 +50,7 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
     }
     declarations.push({ repoId, path });
   }
-  if (!launchPath) {
+  if (!launchPath || (jdkPath !== undefined && !(await isJdkHome(jdkPath)))) {
     host.err(USAGE);
     return EXIT_CODE.usage;
   }

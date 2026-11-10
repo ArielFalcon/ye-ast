@@ -5,7 +5,7 @@ import type { JdkArchive } from "./jdk-archive.adapter.js";
 import { jdkSignaturesOf } from "./jdk-signature-source.js";
 import { PINNED_JDK_DIGESTS } from "./jdk-signature-generator.js";
 
-const [PINNED] = [...PINNED_JDK_DIGESTS];
+const PINNED = [...PINNED_JDK_DIGESTS][0] ?? assert.fail("the generator pins at least one JDK digest");
 const OBJECT_SIG = "N/java.base/java/lang/Object.sig";
 
 function u16(value: number): Buffer {

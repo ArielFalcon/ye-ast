@@ -36,10 +36,17 @@ and no dependency is added for it.
 
 - `init` and `mcp` accept `--jdk <path>` once: the JDK home the user names (`lib/ct.sym` is read from it). The path is
   resolved against the working directory and printed into the MCP registration that `init` prints.
+- A home without a readable `lib/ct.sym` is a usage error (exit 2) before anything runs: a registration must not name a
+  JDK that cannot work. A home whose archive is readable but not pinned is accepted and yields no table; that is a
+  policy outcome, not a refusal.
 - `jdkSignaturesOf` (`jdk-signature-source.ts`) generates the table in memory, once per process and path. A path that is
   unreadable, an archive whose digest is not one of the two pinned digests, or a pinned archive that does not decode
   yields no table (`undefined`): every obligation that needs the table stays unsettled. Nothing is written to disk.
-- No query reads the table yet; the flag only carries the path until the unit that consumes it lands.
+- The source names a home only; the digests live in `PINNED_JDK_DIGESTS` (`jdk-signature-generator.ts`), a constant set,
+  so the source carries no per-source digest.
+- A generation fault answers `undefined` too. Its reason is not surfaced yet; the consuming unit may need a typed fault.
+- No query reads the table yet, and `compose.ts` is untouched: the wiring that hands the table to a query belongs to the
+  unit that consumes it.
 
 ## What the reader refuses
 
