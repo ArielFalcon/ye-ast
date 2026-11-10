@@ -122,11 +122,12 @@ type OperandTarget =
   | { kind: "unresolved"; line: number; specifier: string; namesNoFile: boolean }
   | { kind: "unreadable"; line: number };
 
-/** What a module-graph reference names: a declaration of a file, an external package, a specifier the resolver answers without a file, or nothing to follow. */
+/** What a module-graph reference names: a declaration of a file, an external package, a specifier the resolver answers without a file, a file that does not parse, or nothing to follow. */
 type NamedReference =
   | { kind: "declared"; file: string; name: string }
   | { kind: "external" }
   | { kind: "unresolved"; specifier: string; namesNoFile: boolean }
+  | { kind: "unreadable" }
   | undefined;
 
 /** A child reference read: the table it loads, or why the sources do not come down to one. */
@@ -274,7 +275,9 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
     if ("external" in resolution) return { kind: "external" };
     if (!("file" in resolution)) return { kind: "unresolved", specifier: binding.module, namesNoFile: resolution.namesNoFile === true };
     const name = reference.member ?? (binding.imported === "*" ? undefined : binding.imported);
-    const declaration = name === undefined ? undefined : await declarationOf(resolution.file, name);
+    if (name === undefined) return undefined;
+    if ((await parse(resolution.file)) === undefined) return { kind: "unreadable" };
+    const declaration = await declarationOf(resolution.file, name);
     return declaration === undefined ? undefined : { kind: "declared", file: declaration.file, name: declaration.name };
   };
   /* What one operand of an `imports` list names; an external package, the router's own `RouterModule` and a class that composes no table are nothing to follow. */
@@ -287,6 +290,7 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
     const named = await moduleNameOf(file, raw, reference);
     if (named === undefined || named.kind === "external") return { kind: "skip" };
     if (named.kind === "unresolved") return { kind: "unresolved", line: operand.line, specifier: named.specifier, namesNoFile: named.namesNoFile };
+    if (named.kind === "unreadable") return { kind: "unreadable", line: operand.line };
     const held = await readOf(named.file);
     if (held === undefined) return { kind: "unreadable", line: operand.line };
     if (held.modules.arrays.has(named.name)) return { kind: "array", file: named.file, name: named.name };

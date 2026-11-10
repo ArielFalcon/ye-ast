@@ -69,7 +69,7 @@ async function extractProject(sources: readonly string[], packages: ManifestPack
   const noRoot: UnknownReason | undefined = loaded.declared ? undefined : "unresolved";
   for (const table of loaded.unreached) unreachedRoutesOf(table.entries, unresolvedReferences, walk.findings, noRoot);
   for (const path of unparsed) walk.findings.push(unknown("source-unreadable", { path, line: 1 }));
-  const importCuts = loaded.unresolvedModuleImports.flatMap((reference) => (reference.specifier === undefined ? [] : [importFrontierOf(reference.path, reference.line, reference.specifier, reference.namesNoFile)]));
+  const importCuts = loaded.unresolvedModuleImports.map((reference) => (reference.specifier === undefined ? frontierOf(reference) : importFrontierOf(reference.path, reference.line, reference.specifier, reference.namesNoFile)));
   return { findings: walk.findings, readingCuts: [...loaded.unresolvedReferences.map(frontierOf), ...importCuts] };
 }
 

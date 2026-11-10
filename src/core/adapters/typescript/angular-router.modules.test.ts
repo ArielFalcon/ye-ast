@@ -174,3 +174,27 @@ test("an @NgModule import that names no file is one cut with the module reach", 
     { kind: "unresolved-link", at: ["src/app/app.module.ts", "src/app/app.module.ts:3"], reason: "specifier", reach: { kind: "module", importer: "src/app/app.module.ts", specifiers: [{ specifier: "./missing.module", namesNoFile: true }] } },
   ]);
 });
+
+test("an @NgModule import of a file that does not parse is one cut of the graph, never a silent skip", async () => {
+  const extracted = await extraction({
+    "src/main.ts": "import { AppModule } from './app/app.module';\nplatformBrowserDynamic().bootstrapModule(AppModule);\n",
+    "src/app/app.module.ts": `${NG_MODULE}import { FeatureModule } from './feature.module';\n@NgModule({ imports: [FeatureModule] })\nexport class AppModule {}\n`,
+    "src/app/feature.module.ts": `${NG_MODULE}${ROUTER_MODULE}@NgModule({ imports: [RouterModule.forChild([{ path: 'x', component: X }])] })\nexport class FeatureModule {\n`,
+  });
+
+  assert.deepEqual(extracted.readingCuts, [
+    { kind: "unresolved-link", at: ["src/app/app.module.ts", "src/app/app.module.ts:3"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } },
+  ]);
+});
+
+test("an @NgModule operand the metadata reading cannot read is one cut of the graph it sits in", async () => {
+  const extracted = await extraction({
+    "src/main.ts": "import { AppModule } from './app/app.module';\nplatformBrowserDynamic().bootstrapModule(AppModule);\n",
+    "src/app/app.module.ts": `${NG_MODULE}import { FeatureModule } from './feature.module';\n@NgModule({ imports: [makeModule(), FeatureModule] })\nexport class AppModule {}\n`,
+    "src/app/feature.module.ts": `${NG_MODULE}${ROUTER_MODULE}@NgModule({ imports: [RouterModule.forChild([{ path: 'x', component: X }])] })\nexport class FeatureModule {}\n`,
+  });
+
+  assert.deepEqual(extracted.readingCuts, [
+    { kind: "unresolved-link", at: ["src/app/app.module.ts", "src/app/app.module.ts:3"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } },
+  ]);
+});
