@@ -99,7 +99,7 @@ function provenBodies(call: Invocation, project: JavaProject, proof: CallSitePro
   if (!held.proves) return new Set();
   const reading = readingOf(project);
   const named = reading.resolver.methodOf(call.node, sourceOf(call.type.file, reading));
-  if (named === undefined || named.bound) return new Set();
+  if (named === undefined || !("method" in named) || named.bound) return new Set();
   let answer = held.answers.get(named.method.node.id);
   if (answer === undefined) {
     const [site] = held.dispatch?.of([{ file: named.method.owner.file.path, line: named.method.node.startPosition.row + 1, name: named.method.name }]) ?? [];

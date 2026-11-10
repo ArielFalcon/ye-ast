@@ -58,6 +58,14 @@ export function receiverSiteOf({ member, call: { reference } }: DeclaredBinding)
   return { file: reference.file, line: reference.line, column: reference.column + 1, member };
 }
 
+/** What a member call binds to on a value of a proven type: the one answer and the set a cut names. */
+export interface ReceiverMemberAnswer {
+  /** The declaration the call binds to; absent when the type offers several and no language rule singles one out. */
+  target?: GraphSymbol;
+  /** The declarations the receiver's type offers for the member, sorted. */
+  candidates: readonly GraphSymbol[];
+}
+
 /** The one owner of what a call the index left without a target binds to, for every family (ADR-0041 decisions 1 and 4). */
 export interface CallBindings {
   /** One binding per call, in the order given; the reads each link needs are made once for all of them, save the receiver methods a `declared` binding waits on. */
@@ -70,6 +78,8 @@ export interface CallBindings {
   namedDeclarations(name: string, from: string, values?: boolean): readonly GraphSymbol[];
   /** What a member call of `member` binds to by what its receiver's proof decides, attributed among `candidates`. */
   ofReceiver(proof: ReceiverProof, member: string, candidates: readonly GraphSymbol[], place: CallPlace): Promise<Extract<CallBinding, { kind: "receiver" }>>;
+  /** What a member call of `member` on a value of `type` binds to: one call, one answer, through the language's chain. */
+  memberOfReceiver(type: GraphSymbol, member: string, place: CallPlace): Promise<ReceiverMemberAnswer>;
 }
 
 export interface CallBindingsDeps {
@@ -129,9 +139,12 @@ export function createCallBindings({ store, navigation, origins, binder, importe
 
   /** What a member call's receiver proof binds it to: the method the proof places, or the member the proven type has. */
   async function proven(proof: ReceiverProof, name: string, candidates: readonly GraphSymbol[], place: CallPlace): Promise<Extract<CallBinding, { kind: "receiver" }>> {
+    /** A nominal language's owner states what the cut names; a structural language's keeps the declarations of the name the call may run. */
     const typed = async (type: GraphSymbol | undefined) => {
-      const target = type === undefined ? undefined : await binder.memberOf(type, name, place);
-      return { ...(target === undefined ? {} : { target }), attributed: target !== undefined || type === undefined ? [] : candidates.filter((candidate) => binder.declares(type, candidate)) };
+      if (type === undefined) return { attributed: [] };
+      const answer = await memberOfReceiver(type, name, place);
+      if (hasTyping(place.file, "nominal")) return { candidates: answer.candidates, ...(answer.target === undefined ? { attributed: answer.candidates } : { target: answer.target, attributed: [] }) };
+      return { ...(answer.target === undefined ? {} : { target: answer.target }), attributed: answer.target === undefined ? candidates.filter((candidate) => binder.declares(type, candidate)) : [] };
     };
     if (proof.link === "member") return { kind: "receiver", proof, candidates, attributed: [], ...(proof.method === undefined ? {} : { target: proof.method }) };
     if (proof.link === "external") return { kind: "receiver", proof, candidates, attributed: [], outside: true };
@@ -139,6 +152,25 @@ export function createCallBindings({ store, navigation, origins, binder, importe
     if (proof.link === "syntax" && proof.holds.kind === "literal") return { kind: "receiver", proof, candidates, attributed: [], outside: true };
     if (proof.link === "syntax" && proof.unspelled !== true && ["declared", "annotated", "constructed"].includes(proof.holds.kind)) return { kind: "receiver", proof, candidates, ...(await typed(proof.type)) };
     return { kind: "receiver", proof, candidates, attributed: [] };
+  }
+
+  /**
+   * What a member call of `member` on a value of `type` binds to: the declaration its language's rule places and the
+   * declarations the type offers for the member. A nominal language's owner answers both; a structural language's member
+   * rule answers the declaration, over the members the type and its hierarchy declare.
+   */
+  async function memberOfReceiver(type: GraphSymbol, member: string, place: CallPlace): Promise<ReceiverMemberAnswer> {
+    if (!hasTyping(place.file, "nominal")) {
+      const target = await binder.memberOf(type, member, place);
+      return { ...(target === undefined ? {} : { target }), candidates: binder.membersAbove(type, member) };
+    }
+    const [answered] = await origins.receiverMethods([{ file: place.file, line: place.line, column: place.column, member }]);
+    if (answered?.kind === "method") {
+      const target = placed(answered.file, answered.start, answered.nameLine);
+      return { ...(target === undefined ? {} : { target }), candidates: binder.membersAbove(type, member) };
+    }
+    const offered = answered?.kind === "unproven" && answered.candidates !== undefined ? answered.candidates.flatMap(({ file, start, nameLine }) => placed(file, start, nameLine) ?? []) : undefined;
+    return { candidates: offered ?? binder.membersAbove(type, member) };
   }
 
   async function bindCalls(calls: readonly UnboundCall[], signal?: AbortSignal): Promise<readonly CallBinding[]> {
@@ -243,6 +275,7 @@ export function createCallBindings({ store, navigation, origins, binder, importe
     settleDeclared,
     namedDeclarations,
     ofReceiver: proven,
+    memberOfReceiver,
     async boundCalls(calls, signal) {
       const bound = await bindCalls(calls, signal);
       const pending = bound.flatMap((binding) => (binding.kind === "declared" ? [binding] : []));

@@ -281,8 +281,9 @@ export interface MethodPlace {
 export type ReceiverMethod =
   | { kind: "method"; file: string; start: number; nameLine: number; bound?: true }
   /**
-   * `candidates`: the declarations of the called name that the receiver's type and its hierarchy declare, sorted, present
-   * only when the reading read that whole hierarchy. A family attributes the call among them; it never widens them.
+   * `candidates`: the declarations of the called name that the receiver's type and its hierarchy offer at the call's
+   * arity, sorted, present only when the reading read that whole hierarchy. A family attributes the call among them; it
+   * never widens them.
    */
   | { kind: "unproven"; candidates?: readonly MethodPlace[] }
   | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT };

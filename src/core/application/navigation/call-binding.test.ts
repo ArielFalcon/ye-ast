@@ -5,7 +5,7 @@ import type { Finding } from "../../domain/shared/fact.ts";
 import type { GraphNodeId, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { DeclaredCallable } from "../../ports/declared-member-names.port.ts";
 import type { ImportOrigins, ReceiverMethod, RootBinding } from "../../ports/import-origins.port.ts";
-import { createCallBinder } from "./call-binder.ts";
+import { createCallBinder, type ReceiverSyntax } from "./call-binder.ts";
 import { createCallBindings, type SettledBinding } from "./call-binding.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "./fake-code-graph.testing.ts";
 import { createGraphNavigation } from "./graph-navigation.ts";
@@ -28,6 +28,8 @@ interface World {
   imports?: Readonly<Record<string, string>>;
   /** The callable declarations each file's syntax states, by file; none for a file not listed. */
   callables?: Readonly<Record<string, readonly DeclaredCallable[]>>;
+  /** What a file's syntax binds: its receivers by place and member, and the callee each place spells. */
+  syntax?: ReceiverSyntax;
 }
 
 /** The binding of each call `body` writes, as `name@line`, through the base's public seam. */
@@ -43,7 +45,7 @@ async function bound(world: World, body: string, calls: readonly Pick<GraphUnres
   } as Pick<ImportOrigins, "origins" | "rootOrigins" | "rootBindings" | "receiverMethods"> as ImportOrigins;
   const imported = new Map(Object.entries(world.imports ?? {}).map(([local, id]) => [local, store.symbolsByIds([id as GraphNodeId])[0]!]));
   const importedDeclarations = async () => imported;
-  const binder = createCallBinder({ store, navigation, syntaxIn: async () => ({ receiverBindings: new Map(), callees: new Map() }), proofs: async () => ({ fields: [], locals: [] }), importedDeclarations, callablesIn: async (file) => world.callables?.[file] ?? [] });
+  const binder = createCallBinder({ store, navigation, syntaxIn: async () => world.syntax ?? { receiverBindings: new Map(), callees: new Map() }, proofs: async () => ({ fields: [], locals: [] }), importedDeclarations, callablesIn: async (file) => world.callables?.[file] ?? [] });
   const bindings = createCallBindings({ store, navigation, origins, binder, importedDeclarations });
   const [from] = store.symbolsByIds([body as GraphNodeId]);
   const file = from!.file;
@@ -135,4 +137,41 @@ test("a this-call to an overload set with no implementation attributes the class
   const [settled] = await bound({ ...world, nodes: [...world.nodes, fakeNode("Other.save", "method", "src/other.ts", 3, 3, "save")] }, "run", [{ name: "this.save", line: 6, kind: "calls" }]);
 
   assert.deepEqual(summary(settled!), ["unbound", "own", ["save2", "save3", "save4"], ["save2", "save3", "save4"]]);
+});
+
+const JAVA = "src/main/java/p";
+const PORT = `${JAVA}/Port.java`;
+
+/** A Java holder whose `run` calls `port.load(a, b)` at line 7, `port` annotated with the interface `Port`. */
+function nominalReceiver(): World {
+  return {
+    nodes: [fakeNode("Port", "interface", PORT, 1, 8), fakeNode("load3", "method", PORT, 3, 3, "load"), fakeNode("load4", "method", PORT, 4, 4, "load"), fakeNode("Holder", "class", `${JAVA}/Use.java`, 1, 10), fakeNode("run", "method", `${JAVA}/Use.java`, 5, 9)],
+    edges: [{ from: "Port", to: "load3", kind: "contains" }, { from: "Port", to: "load4", kind: "contains" }, { from: "Holder", to: "run", kind: "contains" }],
+    imports: { Port: "Port" },
+    syntax: {
+      receiverBindings: new Map([["7:5:load", { line: 7, column: 5, receiver: "port", member: "load", holds: { kind: "annotated", type: "Port", line: 6, column: 17 } }]]),
+      callees: new Map([["7:5", ["port.load"]]]),
+    },
+  };
+}
+
+const PORT_CALL = [{ name: "port.load", line: 7, kind: "calls" }];
+const asReceiver = (settled: SettledBinding): Extract<SettledBinding, { kind: "receiver" }> => settled as Extract<SettledBinding, { kind: "receiver" }>;
+
+test("a nominal receiver the owner settles by arity binds to that declaration, with the members its type offers as candidates", async () => {
+  const [settled] = await bound({ ...nominalReceiver(), receivers: { load: { kind: "method", file: PORT, start: 4, nameLine: 4 } } }, "run", PORT_CALL);
+  const binding = asReceiver(settled!);
+
+  assert.equal(binding.target?.id, "load4");
+  assert.deepEqual(binding.candidates.map(({ id }) => id), ["load3", "load4"]);
+  assert.deepEqual(binding.attributed, []);
+});
+
+test("an unproven receiver names the candidates its owner read, never the repository's set of the name", async () => {
+  const [settled] = await bound({ ...nominalReceiver(), receivers: { load: { kind: "unproven", candidates: [{ file: PORT, start: 3, nameLine: 3 }] } } }, "run", PORT_CALL);
+  const binding = asReceiver(settled!);
+
+  assert.equal(binding.target, undefined);
+  assert.deepEqual(binding.candidates.map(({ id }) => id), ["load3"]);
+  assert.deepEqual(binding.attributed.map(({ id }) => id), ["load3"]);
 });

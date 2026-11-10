@@ -31,7 +31,10 @@ async function methodAt(sources: readonly SourceFile[], member = "save", paths?:
   return method!;
 }
 
-const method = (source: SourceFile, line: number): ReceiverMethod => ({ kind: "method", file: source.path, start: line, nameLine: line });
+const method = (source: SourceFile, line: number): ReceiverMethod => ({ kind: "method", ...place(source, line) });
+
+/** A declaration of `source` starting and naming itself on `line`. */
+const place = (source: SourceFile, line: number) => ({ file: source.path, start: line, nameLine: line });
 
 const KOTLIN = (sources: readonly SourceFile[]) => [...sources.map(({ path }) => path), "src/main/kotlin/Twin.kt"];
 
@@ -195,8 +198,15 @@ test("two overloads of an argument's settled type bind the exact match, never bo
   const both = java("Both.java", ["package app;", "", "interface Left { Owner find(String id); }", "interface Right { Owner find(String id); }", "interface Both extends Left, Right {}"]);
 
   assert.deepEqual(await methodAt([owner, port, use("port.find(\"7\")", [], "Port port")], "find"), method(port, 4));
-  assert.deepEqual(await methodAt([owner, port, use("port.find(value)", [], "Port port, Object value")], "find"), { kind: "unproven" });
-  assert.deepEqual(await methodAt([owner, both, use("both.find(\"7\")", [], "Both both")], "find"), { kind: "unproven" });
+  assert.deepEqual(await methodAt([owner, port, use("port.find(value)", [], "Port port, Object value")], "find"), { kind: "unproven", candidates: [place(port, 4), place(port, 5)] });
+  assert.deepEqual(await methodAt([owner, both, use("both.find(\"7\")", [], "Both both")], "find"), { kind: "unproven", candidates: [place(both, 3), place(both, 4)] });
+});
+
+test("an unproven receiver names the declarations of the call's arity its type offers, and none where no member takes that arity", async () => {
+  const port = java("Port.java", ["package app;", "", "interface Port {", "  Store find(String id);", "  Store find(Long id);", "}"]);
+
+  assert.deepEqual(await methodAt([STORE, port, use("port.find(1)", [], "Port port")], "find"), { kind: "unproven", candidates: [place(port, 4), place(port, 5)] });
+  assert.deepEqual(await methodAt([STORE, port, use("port.find()", [], "Port port")], "find"), { kind: "unproven" });
 });
 
 test("an exact match binds among public overloads of one package, the caller's own", async () => {
@@ -215,7 +225,7 @@ test("a call binds only an overload the caller can reach: a package-private one 
 test("generic overloads prove no exact match, since a raw argument is applicable to each by unchecked conversion and javac finds the call ambiguous", async () => {
   const generic = java("C.java", ["package app;", "", "class C {", "  void f(java.util.List<String> x) {}", "  void f(java.util.Collection<Integer> x) {}", "}"]);
 
-  assert.deepEqual(await methodAt([generic, use("c.f(raw)", [], "C c, java.util.List raw")], "f"), { kind: "unproven" });
+  assert.deepEqual(await methodAt([generic, use("c.f(raw)", [], "C c, java.util.List raw")], "f"), { kind: "unproven", candidates: [place(generic, 4), place(generic, 5)] });
 });
 
 test("a plain argument still binds its exact overload beside a generic one, since no unchecked conversion makes the call ambiguous", async () => {
