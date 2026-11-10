@@ -247,7 +247,9 @@ entry, and S1 needs no edit in `http-call-sites.adapter.ts` to own it.
    `gaps: [{cause: "dispatch-disagreement"}]` with every signature as evidence.
 2. **Leaves.** Walk a declaration's body without entering nested functions (they are declarations of their own). A call
    is a leaf when its callee is in the pack's client vocabulary — Angular `HttpClient` by import, `fetch`,
-   `httpResource`, or a client a declared library source names (the same rule as today, `:20,288-304`). The shape's
+   `httpResource`, or a client a declared library source names (the same rule as today, `:20,288-304`); a member call's
+   receiver must be an `HttpClient` by `SummaryResolver.clientReceiver`, so a custom service with the same verb is not a
+   leaf. The shape's
    `path` is `evaluate` of the path argument **in the declaration's own scope**, so `this.url`, a const import and an
    `environment` object member fold to text and a parameter becomes `{}` wherever it sits (`${this.url}${path}` is
    `http://localhost:8080/api{}`). `method` is the verb, or the `method` argument when it is a value. `body` is
@@ -274,7 +276,7 @@ entry, and S1 needs no edit in `http-call-sites.adapter.ts` to own it.
    a fixpoint over the finite set of declaration keys, growing monotonically. A declaration met on its own substitution
    path contributes `{cause: "recursive"}` with its place and is not entered again (RFC-0021 S1, no depth cap).
 7. **Substitution.** For a shape `s` of `g` reached by the call `c` with arguments `a₁…aₙ`: evaluate each `aᵢ` in
-   `c`'s scope; replace `s`'s holes in source order with the written text (a run-time value keeps `{}`). `method`
+   `c`'s scope; replace each of `s`'s holes by the parameter it reads (`holes` gives that index), with the argument written at that parameter, never by argument order (a hole whose source is not a parameter keeps `{}`). `method`
    undefined maps from an argument that states a verb, else the shape becomes a gap `destination-undecidable`.
    `body` maps `{kind:"parameter", index:i}` to the caller's own parameter when `aᵢ` is one, else to `none`/`unknown`.
    A `when` test on parameter `i` is decided against `aᵢ` (`""`, `0`, `false`, `null`, `undefined` are falsy; a non-empty
@@ -361,7 +363,10 @@ One function answers "is this call a request of the project" for the TypeScript 
 rule lives in one module, `src/core/adapters/typescript/request-summaries.ts`; the function is
 `createRequestCallLookup`, exported from the B11 stage `src/core/adapters/typescript/http-call-sites.adapter.ts` because
 that stage owns the pack's one URL evaluator. There is no other predicate: `VERBS.has(name)`, `fetch` and `httpResource`
-are the *client vocabulary of a leaf*, read inside the rule module, never a test any other file applies.
+are the *client vocabulary of a leaf*, read inside the rule module, never a test any other file applies. The rule module
+combines that vocabulary with `SummaryResolver.clientReceiver`, which answers receiver typing only (is the receiver an
+`HttpClient`, through the B11 reader's fields, parameters and inherited fields); the reader answers the typing and the
+rule decides what a request is.
 
 The adapter already owns the one URL evaluator and exports the two seams the flow readers use (`createRequestBodies` at
 `:141`, `VERBS` at `:19`), so the lookup is created there, from `readerOf(files)`, with no second evaluator and no new
@@ -373,13 +378,15 @@ export type DeclarationKey = string; // `file\0` + `Class.member`, or the functi
 
 /** What the rule needs from the pack's one URL evaluator: the B11 reader supplies it. `SummaryCause` is the domain's. */
 export interface SummaryResolver {
-  /** What an expression states in a declaration's scope: text with `{}` for a run-time value, or why not. */
+  /** What an expression states in a declaration's scope: its text with `{}` per run-time value, `holes` with one entry per `{}` in order (the declaration parameter index that value is, undefined when it is not a parameter), or why not. */
   evaluate(file: string, expression: ts.Expression): Promise<
     | { status: "known"; text: string }
     | { status: "undecided"; cause: SummaryCause; evidence: readonly Evidence[] }
   >;
   /** The declaration a call resolves to, or undefined when it is not a snapshot declaration. */
   calleeOf(file: string, call: ts.CallExpression): Promise<{ key: DeclarationKey; file: string; body: ts.Node | undefined } | undefined>;
+  /** Whether the call's receiver is an Angular `HttpClient`, typed by the B11 reader (fields, parameters, inherited fields). It answers receiver typing only; it does not decide what a request is. */
+  clientReceiver(file: string, call: ts.CallExpression): Promise<boolean>;
 }
 
 /** Every summary of one read, by declaration key. Memoized by the `files` array and `resolver` identity: one read. */
@@ -541,7 +548,9 @@ decides the body itself, and `memberDeclaration`'s first-match behaviour is only
 `src/composition/assembly-line.fitness.test.ts` to add `REQUEST_VOCABULARY_IMPORTERS` (seeded with the two copies) and
 remove `request-origins.adapter.ts` from it. Specifically, in the call-site adapter:
 export `createRequestCallLookup` (the owner), implement `SummaryResolver` over the existing `Reader` (three small
-methods: the evaluator the adapter already has, the callee resolution it already has, and the file shape), rewrite
+methods: the evaluator the adapter already has, the callee resolution it already has, and the file shape; the evaluator
+also reports `holes`, so `Evaluation` tracks for each run-time value the declaration parameter it reads, per RFC row 5),
+rewrite
 `readPlaced`/`callSite` without the `includeForwarding` flag, and rewrite `requestBody` to read the summary's `hops`
 instead of `FORWARDING_CALLS`; the rule keeps, beside the domain `RequestShape`, an adapter-internal chain of those hops as
 `ts` nodes, which is what `RequestBody.wrappers` is filled from. A public signature changes in none of `of`, `placed`,
@@ -697,6 +706,9 @@ Owner decision 2026-11-09: every question is resolved as recommended here. No un
 | 1 | A wrapper's base read from an `InjectionToken` whose provider value is a constant in the snapshot (`app.config.ts:55`: `{ provide: API_URL, useValue: environment.api_url }`): read it, or name it as a cut? | **Name it as a cut, and do not read provider values in this RFC.** Reading it closes neither measured item: `realworld`'s base is `https://…/api`, so its call `/api/articles/feed` still matches only by `suffix` (decision 2), and `nname`'s provider value is not in the snapshot at all (only `src/environments/environment.mock.ts`). A reading that changes no answer is not taken (ADR-0044 decision 5's precedent). The cut is `destination-undecidable`, its evidence names the declaration that assigns the field, and its recovery says how to state the base (declare the gateway, or hand the configuration in). Revisit only when a measured item turns on it; that is follow-up F1 with its own evidence. |
 | 2 | A call matched only by `suffix` because the server's context path is not in the snapshot: may the answer follow it as a candidate, or keep the cut? | **Keep the cut, and name the two ways out in the recovery.** `suffix` is 0.5 confidence and may name another operation that ends the same way; following it would trade a missing consumer for a wrong one, which ADR-0042 forbids. S2's finding text states the request the code writes and the declaration that resolves it: a declared gateway prefix (`--gateway`, the protocol's `gateways`) or a declared server configuration. No unit reads context paths from a build output; that would be a new mechanism with no measured item behind it. |
 | 3 | A wrapper whose request is inside a callback the table does not know (`fromEvent`, a custom `retryWhen`): a gap or nothing? | **Nothing.** Claiming a gap would make every function that calls an RxJS operator a summary gap, and the signal "this body issues no request" is what keeps the join quiet. The operation-level `no-call-site` finding remains the statement at the operation. The one exception is a call that matches a `ForwardingRow` but writes the carried position differently: that is a `destination-undecidable` gap at the call (S1 step 4), because the row promises a construct the code then uses otherwise. |
+| 4 | S1: how does the leaf rule type a receiver (`this.http`, an inherited field, a parameter) without a second owner of "what is a request", given that the B11 receiver reader is private to its adapter? | **Receiver typing stays with the B11 adapter's reader; the port gains `clientReceiver`; the vocabulary stays in the rule module.** `SummaryResolver.clientReceiver(file, call)` answers only whether the receiver is an `HttpClient`, using `Reader.ownerClass`/`memberType` (inject fields, typed parameters, inherited fields of a base class in another file, `http-call-sites.adapter.ts:692-721`). The rule module keeps `VERBS`, the global `fetch` and `httpResource` by import, and combines them with that answer; no other file applies `VERBS`. A call whose receiver is not an `HttpClient` (a custom service with a `get()`) is not a leaf. S1 tests use a fake that answers the question; S2 implements it on the reader. |
+| 5 | S1: how is a hole bound to the parameter it reads, when the path is read in a branch or out of order? | **Hole → parameter binding comes from the reader's `evaluate`, and S2's `Evaluation` tracks the parameter source per hole.** `evaluate` returns `holes`, one entry per `{}` in order, the declaration parameter index that value is (undefined for a run-time value that is not a parameter). Substitution fills each hole by its parameter, never by argument order. |
+| 6 | S1: what does a path that writes a brace (`'/x/{}'`) do, when the rule cannot tell it from a run-time hole? | **Conservative: no substitution through it.** A literal path text the code writes that contains `{` or `}` yields a gap at the call with the existing cause `destination-undecidable`, naming the literal in its evidence, never a substituted path. No new vocabulary. |
 
 ## Review responses
 

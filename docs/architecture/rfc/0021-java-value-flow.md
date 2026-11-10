@@ -1,7 +1,7 @@
 # RFC-0021: Java value-flow summaries
 
 - Status: Draft, 2026-11-05
-- Related: RFC-0007, RFC-0011 E5/E6, ADR-0013
+- Related: RFC-0007, RFC-0011 E5/E6, ADR-0013, [RFC-0028](0028-value-flow-through-wrappers.md) (the language-agnostic summary contract this design extends)
 
 **In short:** Replace the HTTP and event readers’ single-hop wrappers with one adapter-local method summary analysis. Preserve argument scopes, object records and consuming-module configuration while following source-declared implementations.
 
