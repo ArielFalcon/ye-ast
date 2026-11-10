@@ -1235,6 +1235,18 @@ test("--java-sources declares a generated source directory for callers and impac
   }
 });
 
+test("init with --jdk registers the MCP server with that host JDK path, resolved, and never hands it to the install", async () => {
+  const { io, deps, installs } = setupInstall();
+
+  assert.equal(await run(["init", "--trust", "untrusted", "--jdk", "/opt/jdk", "/work/shop"], io, deps), EXIT_CODE.ok);
+
+  assert.ok(io.stdout.includes(`claude mcp add ye-ast -- npx --yes tsx ${MCP_ENTRYPOINT} mcp /work/shop --jdk /opt/jdk`), io.stdout.join("\n"));
+  assert.equal(installs.some((request) => "jdk" in request || "jdkPath" in request), false);
+  const refused = setupInstall();
+  assert.equal(await run(["init", "--trust", "untrusted", "--jdk"], refused.io, refused.deps), EXIT_CODE.usage);
+  assert.equal(refused.installs.length, 0);
+});
+
 test("init carries every declared output into the registration: node modules as given, then java sources sorted by at", async () => {
   const { io, deps } = setupInstall();
 

@@ -275,6 +275,20 @@ test("--node-modules declares a build output of the launch repository only, and 
   }
 });
 
+test("--jdk takes one host JDK path, and a missing path or a second one is a usage error", async () => {
+  const h = harness();
+  h.start(["shop", "--jdk", "/opt/jdk"]);
+  h.stdin.end();
+  assert.equal(await h.finished(), EXIT_CODE.ok);
+  for (const args of [["shop", "--jdk"], ["shop", "--jdk", "--node-modules"], ["shop", "--jdk", "/opt/a", "--jdk", "/opt/b"]]) {
+    const refused = harness();
+    refused.start(args);
+    refused.stdin.end();
+    assert.equal(await refused.finished(), EXIT_CODE.usage, args.join(" "));
+    assert.equal(refused.composed.count, 0);
+  }
+});
+
 test("--java-sources declares a generated source directory of the launch repository only, and one that names no at is a usage error", async () => {
   const h = harness();
   h.start(["shop", "--java-sources", "target/generated-sources/openapi=deps/generated"]);

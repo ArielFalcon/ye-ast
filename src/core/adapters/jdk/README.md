@@ -32,6 +32,15 @@ and no dependency is added for it.
   nothing.
 - **Reproduce a digest:** `shasum -a 256 <java-home>/lib/ct.sym`.
 
+## The host JDK (`--jdk`)
+
+- `init` and `mcp` accept `--jdk <path>` once: the JDK home the user names (`lib/ct.sym` is read from it). The path is
+  resolved against the working directory and printed into the MCP registration that `init` prints.
+- `jdkSignaturesOf` (`jdk-signature-source.ts`) generates the table in memory, once per process and path. A path that is
+  unreadable, an archive whose digest is not one of the two pinned digests, or a pinned archive that does not decode
+  yields no table (`undefined`): every obligation that needs the table stays unsettled. Nothing is written to disk.
+- No query reads the table yet; the flag only carries the path until the unit that consumes it lands.
+
 ## What the reader refuses
 
 `names` lists the central directory and inflates nothing; `entry` returns the bytes of one member. An archive that
