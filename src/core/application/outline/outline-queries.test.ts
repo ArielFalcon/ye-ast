@@ -20,6 +20,8 @@ interface Options {
   live?: FakeLive;
   /** The paths the commit export wrote, so the index's own list of what it could not hold is meaningful. */
   written?: readonly string[];
+  /** The paths the commit export skipped, which the commit still holds. */
+  skipped?: readonly string[];
   nodes?: Parameters<typeof fakeCodeGraph>[0];
   edges?: Parameters<typeof fakeCodeGraph>[1];
   /** What the path matcher answers for a repository path and a declared glob; every glob matches by default. */
@@ -46,12 +48,13 @@ function setup(options: Options = {}) {
   const log = { closed: 0, reads: 0, extractions: 0, readPaths: [] as string[][], materialized: 0, readBeforeWrite: false, moduleReads: [] as (readonly string[] | undefined)[], scanned: [] as string[][] };
   const store = { ...fakeCodeGraph(options.nodes ?? [], options.edges ?? [], options.unresolved ?? []), close: () => void (log.closed += 1) };
   const written = options.written ?? [];
+  const exported = { files: written.map((path) => ({ path, blob: "1", written: true })), skipped: (options.skipped ?? []).map((path) => ({ path, reason: "symlink" as const })) };
   const deps = {
     vcs: {
       resolveCommit: async () => ({ ok: true, value: SHA }),
-      exportCommit: async () => ({ ok: true, value: { files: written.map((path) => ({ path, blob: "1", written: true })), skipped: [] } }),
+      exportCommit: async () => ({ ok: true, value: exported }),
       ...(options.lazy && {
-        listCommit: async () => ({ ok: true, value: { files: written.map((path) => ({ path, blob: "1", written: true })), skipped: [] } }),
+        listCommit: async () => ({ ok: true, value: exported }),
         materializeCommit: async () => (log.materialized++, options.lazy!.materialize ? { ok: false, fault: options.lazy!.materialize } : { ok: true, value: undefined }),
       }),
     },
@@ -92,14 +95,41 @@ test("a requested file the scope leaves out is unknown with its evidence, not an
 test("a file the index holds nothing of is a cut, and says which reason, so an empty list never reads as nothing declared", async () => {
   const { queries } = setup({ written: ["src/Held.ts"] });
 
-  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: ["src/Held.ts", "src/Never.ts"] });
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: ["src/Held.ts"] });
 
   const fact = answer.ok ? answer.value : undefined;
   assert.equal(fact?.status, "partial");
-  assert.deepEqual(fact?.value, { files: [], unheld: ["src/Held.ts", "src/Never.ts"] });
-  assert.deepEqual(fact?.cuts?.map((cut) => [cut.kind, cut.at]), [
-    ["no-extractor", ["src/Held.ts"]],
-    ["not-exported", ["src/Never.ts"]],
+  assert.deepEqual(fact?.value, { files: [], unheld: ["src/Held.ts"] });
+  assert.deepEqual(fact?.cuts?.map((cut) => [cut.kind, cut.at]), [["no-extractor", ["src/Held.ts"]]]);
+});
+
+test("an outline files call on a path no entry of the commit holds is an absent unknown-symbol entry", async () => {
+  const { queries } = setup({ written: ["src/Held.ts"] });
+
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: ["src/Gone.ts"] });
+
+  assert.ok(!answer.ok && answer.fault.kind === "unknown-symbol");
+  assert.deepEqual(answer.ok ? undefined : answer.fault.entries, [{ file: "src/Gone.ts", wholeFile: true, absent: true, candidates: ["src/Held.ts"] }]);
+});
+
+test("an extensionless focus on a path no entry holds is absent with no candidate, never a language cut", async () => {
+  const { queries } = setup({ written: ["src/Held.ts"] });
+
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: "x", symbol: "A" }] });
+
+  assert.ok(!answer.ok && answer.fault.kind === "unknown-symbol");
+  assert.deepEqual(answer.ok ? undefined : answer.fault.entries, [{ file: "x", wholeFile: true, absent: true, candidates: [] }]);
+});
+
+test("a path the export skipped is held, so asking for it keeps its cut instead of an absent fault", async () => {
+  const { queries } = setup({ written: ["src/Held.ts"], skipped: ["src/Link.ts"] });
+
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: ["src/Link.ts"] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, cut.at, cut.reason]), [
+    ["no-extractor", ["src/Link.ts"], "not-indexed"],
+    ["not-exported", ["src/Link.ts"], "symlink"],
   ]);
 });
 
@@ -228,10 +258,10 @@ test("a focus line outside every declaration is a top-level-line fault with the 
   assert.deepEqual(answer.fault.kind === "top-level-line" && answer.fault.entries, [{ file: API, line: 27, candidates: ["A", "A.m", "A.m.inner", "A.n", "Aardvark", "B", "B.m"] }]);
 });
 
-test("a focus symbol on a path the snapshot does not hold is an absent entry naming the files that declare it", async () => {
+test("a focus on a path the snapshot does not hold is an absent entry naming the files of its extension", async () => {
   const answer = await setup(TWO_CLASSES).queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: "src/gone.ts", symbol: "A" }] });
   assert.ok(!answer.ok);
-  assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/gone.ts", symbol: "A", absent: true, candidates: [API] }]);
+  assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/gone.ts", wholeFile: true, absent: true, candidates: [API] }]);
 });
 
 test("a focus on a file the index holds nothing of leaves it unheld with its cut instead of a fault", async () => {

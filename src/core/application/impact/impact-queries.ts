@@ -63,7 +63,7 @@ import type { AttributedCall, ReverseCalls } from "../navigation/reverse-calls.t
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey } from "../navigation/root-selection.ts";
-import { snapshotFiles } from "../navigation/snapshot-files.ts";
+import { absentFileEntries, heldPaths, snapshotFiles } from "../navigation/snapshot-files.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
@@ -133,7 +133,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   const retainedOf = <T>(prepared: PreparedCommit | undefined, slot: string, produce: () => Promise<T>, signal: AbortSignal | undefined): Promise<T> =>
     prepared?.retained === undefined ? produce() : prepared.retained(slot, produce, signal);
   /** Every path of the snapshot, written or not, skipped entries included; none once a budget stopped the export. */
-  const listingOf = ({ export: listed }: Pick<CommitExtraction, "export">): readonly string[] | undefined => listed.stopped === undefined ? [...listed.files, ...listed.skipped].map(({ path }) => path) : undefined;
+  const listingOf = ({ export: listed }: Pick<CommitExtraction, "export">): readonly string[] | undefined => heldPaths(listed);
   /**
    * The module statements of a tree. With `across`, the other snapshot of a change, a specifier names no file only when no
    * path of either snapshot could be its target: one the change deleted or added is still a module the walk reaches.
@@ -178,7 +178,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const declarations = await deps.angular.read(headTree.sources);
         if (signal?.aborted) return ABORTED;
         const componentsByResource = resourceOwners(declarations);
-        const listing = headTree.export.files.map(({ path }) => path);
+        const listing = heldPaths(headTree.export) ?? headTree.export.files.map(({ path }) => path);
         const listed = new Set(listing);
         const fixed = [
           ...exportCuts(headTree.export),
@@ -232,11 +232,16 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       const files = sortedUnique(request.files);
       const spec: FactSpec = { declaredConfig: { files }, engines: importersEngines };
 
-      return importerReader.atSources({ ...request, synthesized: true }, spec, async (head): Promise<Result<Fact<ImportersValue>, VcsFault>> => {
+      return importerReader.atSources({ ...request, synthesized: true }, spec, async (head): Promise<Result<Fact<ImportersValue>, ImpactFault>> => {
         const headTree = head.tree;
         const content = contentFingerprint(headTree.export, importerSource);
         const outside = files.filter((file) => !head.selected(file));
         if (outside.length > 0) return { ok: true, value: { ...head.base(content), evidence: outside.map((path): Evidence => ({ path, line: 1 })), status: "unknown", reason: "out-of-scope" } };
+        const listing = heldPaths(headTree.export);
+        if (listing !== undefined) {
+          const absent = absentFileEntries(files, listing);
+          if (absent.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no file at the revision for ${absent.map((entry) => entry.file).join(", ")}`, entries: absent } };
+        }
         const fixed = [...exportCuts(headTree.export), ...headTree.export.files.filter((file) => importerSource(file.path) && (isReadableFile(file.path) || isJsonModuleResource(file.path)) && !file.written).map((file) => fileCut("not-exported", file.path, "unwritten")), ...files.filter((file) => !(isReadableFile(file) || (deps.moduleDependencies !== undefined && isJsonModuleResource(file)))).map((file) => fileCut("no-extractor", file, "language"))];
         const covered = files.filter((file) => isReadableFile(file) || (deps.moduleDependencies !== undefined && isJsonModuleResource(file)));
         if (covered.length === 0) return { ok: true, value: impactFact(head.base(content), { files: [] }, fixed, { kind: "dependents", files }) };
@@ -248,7 +253,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const { store, summary } = index;
         try {
           const written = headTree.export.files.filter((file) => file.written && isReadableFile(file.path)).map((file) => file.path);
-          const held = new Set(headTree.export.files.map((file) => file.path));
+          const held = new Set(listing ?? headTree.export.files.map((file) => file.path));
           const references = unresolvedReferencesIn(store, written);
           const modules = deps.moduleDependencies === undefined ? undefined : await moduleDependenciesOf(deps.moduleDependencies, head.prepared, headTree, request.signal);
           if (request.signal?.aborted) return ABORTED;

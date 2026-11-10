@@ -27,7 +27,7 @@ import type { ModuleDependenciesReader } from "../../ports/module-dependencies.p
 import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { EntrypointTarget, TraceFault, TraceQueries, TraceTarget, UnknownEntrypointFault } from "../../ports/trace-queries.port.ts";
 import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey, type RootSelection } from "../navigation/root-selection.ts";
-import { snapshotFiles, type SnapshotFiles } from "../navigation/snapshot-files.ts";
+import { heldPaths, snapshotFiles, type SnapshotFiles } from "../navigation/snapshot-files.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
 import { NOTHING_DECLARED } from "../navigation/edge-targets.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
@@ -124,7 +124,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         if ("fault" in index) return { ok: false, fault: index.fault };
         const { store, summary } = index;
         try {
-          const snapshot = snapshotFiles(store, head.tree.export.files.map(({ path }) => path));
+          const snapshot = snapshotFiles(store, heldPaths(head.tree.export) ?? head.tree.export.files.map(({ path }) => path));
           const reading = readings.of(
             { tree: head.tree, prepared: head.prepared, hold: head.hold, store, digest: index.digest, snapshot: head.base(content).snapshot, request },
             { originPaths: head.tree.export.files.map(({ path }) => path).filter(head.selected), inScope: head.selected },

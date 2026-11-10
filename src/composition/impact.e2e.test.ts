@@ -819,7 +819,7 @@ test("callers of a symbol the revision does not hold fails with the query code a
 });
 
 test("importers names the files that use a file, and cuts a file no extractor covers", async () => {
-  commit(SHOP, "base");
+  commit({ ...SHOP, "README.md": "# shop\n" }, "base");
   const result = await ye("importers", [], ["src/main/java/shop/OrderService.java", "README.md"]);
   assert.equal(result.code, EXIT_CODE.ok, result.stderr);
   const value = result.fact.value as unknown as { files: { file: string; users: string[] }[] };

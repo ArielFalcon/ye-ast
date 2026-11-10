@@ -10,7 +10,7 @@ import { sameIdentity, type Fact, type Finding } from "../../domain/shared/fact.
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { CodeGraph, CodeGraphFault, CodeGraphReader, IndexSummary } from "../../ports/code-graph.port.ts";
-import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, OfChangeFault } from "../../ports/impact-queries.port.ts";
+import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, OfChangeFault, UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
 import type { AtRevision } from "../../ports/live-queries.port.ts";
 import type { ImportersValue } from "../../domain/impact/importers-fact.ts";
 import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
@@ -887,6 +887,15 @@ test("a requested range on a file the snapshot does not hold is a fault, never a
   assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/pkg/A.ts", start: 4, end: 6, absent: true, candidates: ["src/A.ts"] }]);
 });
 
+test("a symbol target on a path the export skipped stays present and faults only for the symbol", async () => {
+  const { callers } = setup({ exports: { [HEAD]: { files: [], skipped: [{ path: "src/A.ts", reason: "symlink" }] } } });
+
+  const answer = await callers({ targets: [{ file: "src/A.ts", symbol: "m" }] });
+
+  assert.ok(!answer.ok);
+  assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/A.ts", symbol: "m", absent: false, candidates: [] }]);
+});
+
 test("a declaration carries its last line only when it spans more than one line", async () => {
   const nodes = [fakeNode("f", "function", "src/A.java", 1, 3), fakeNode("one", "function", "src/B.java", 7, 7)];
   const answer = callersFact(await setup({ nodes }).callers({ targets: [{ file: "src/A.java", symbol: "f" }, { file: "src/B.java", symbol: "one" }] }));
@@ -1071,7 +1080,7 @@ test("a change that only removes a member of a Java class seeds the class as the
   assert.equal(answer.status, "complete", JSON.stringify(answer.status === "partial" ? answer.cuts : undefined));
 });
 
-function importersFact(answer: Result<Fact<ImportersValue>, OfChangeFault>): Fact<ImportersValue> {
+function importersFact(answer: Result<Fact<ImportersValue>, OfChangeFault | UnknownSymbolFault>): Fact<ImportersValue> {
   assert.ok(answer.ok, JSON.stringify(answer));
   return answer.value;
 }
@@ -1091,6 +1100,35 @@ const SHOP_EXPORT: CommitExport = {
   files: ["src/Order.java", "src/Cart.java", "src/test/java/CartTest.java", "src/Svc.java", "src/Beta.java", "src/Late.java", "src/Quiet.java", "src/Own.java"].map((path) => ({ path, blob: path, written: true })),
   skipped: [],
 };
+
+test("importers answers a file no commit entry holds with an absent unknown-symbol entry", async () => {
+  const { importers, log } = setup({ exports: { [HEAD]: { files: ["src/held.ts", "src/owner.service.ts", "src/held.spec.ts"].map((path) => ({ path, blob: path, written: true })), skipped: [] } } });
+
+  const answer = await importers({ files: ["src/gone.ts"] });
+
+  assert.ok(!answer.ok && answer.fault.kind === "unknown-symbol");
+  assert.deepEqual(answer.ok ? undefined : answer.fault.entries, [{ file: "src/gone.ts", wholeFile: true, absent: true, candidates: ["src/held.spec.ts", "src/held.ts", "src/owner.service.ts"] }]);
+  assert.equal(log.indexed, 0, "the listing alone decides, so no index is built");
+});
+
+test("a stopped export decides no absence, so the importers answer keeps today's cut", async () => {
+  const stopped: CommitExport = { files: [{ path: "src/Order.java", blob: "1", written: true }], skipped: [], stopped: { at: "src/Order.java", limit: 1 } };
+  const { importers } = setup({ nodes: SHOP_NODES, exports: { [HEAD]: stopped } });
+
+  const answer = await importers({ files: ["src/Ghost.java"] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+});
+
+test("an absent file names the snapshot files of its own stem before its whole directory", async () => {
+  const listing = ["src/app/label-update.ts", "src/app/other.ts"];
+  const { importers } = setup({ exports: { [HEAD]: { files: listing.map((path) => ({ path, blob: path, written: true })), skipped: [] } } });
+
+  const answer = await importers({ files: ["src/app/label-update.component.ts"] });
+
+  assert.ok(!answer.ok && answer.fault.kind === "unknown-symbol");
+  assert.deepEqual(answer.ok ? undefined : answer.fault.entries, [{ file: "src/app/label-update.component.ts", wholeFile: true, absent: true, candidates: ["src/app/label-update.ts"] }]);
+});
 
 test("importers tells importing files from using files from files that only name it, each sorted, other files only, tests included", async () => {
   const { importers } = setup({
@@ -1135,7 +1173,7 @@ test("importers reads a call the index resolved into an edge of another kind as 
 });
 
 test("a file the index did not hold cuts the importers of an asked file only when it shares the file's runtime (ADR-0042 fixtures 1, 4)", async () => {
-  const exports: Options["exports"] = { [HEAD]: { files: ["src/A.ts", "src/B.ts", "src/X.java"].map((path) => ({ path, blob: path, written: true })), skipped: [] } };
+  const exports: Options["exports"] = { [HEAD]: { files: ["src/A.ts", "src/B.ts", "src/X.java", "src/Order.java"].map((path) => ({ path, blob: path, written: true })), skipped: [] } };
   const nodes = [fakeNode("A.ts", "file", "src/A.ts", 1, 9), fakeNode("Order.java", "file", "src/Order.java", 1, 9)];
   const { importers } = setup({ nodes, exports, index: { ok: true, value: { ...SUMMARY, filesNotIndexed: ["src/B.ts"] } } });
 
@@ -1153,7 +1191,8 @@ test("importers answers the files in path order whatever order they were asked i
 });
 
 test("a requested file outside the declared scope, or that the index holds nothing of, is a cut and has no entry", async () => {
-  const { importers } = setup({ nodes: SHOP_NODES, exports: { [HEAD]: SHOP_EXPORT } });
+  const exports: CommitExport = { files: [...SHOP_EXPORT.files, { path: "README.md", blob: "readme", written: true }], skipped: [] };
+  const { importers } = setup({ nodes: SHOP_NODES, exports: { [HEAD]: exports } });
   const answer = importersFact(await importers({ files: ["README.md", "src/Order.java", "src/Late.java"] }));
   assert.equal(answer.status, "partial");
   assert.deepEqual(answer.status === "partial" && answer.value.files.map((entry) => entry.file), ["src/Order.java"]);
@@ -1163,11 +1202,15 @@ test("a requested file outside the declared scope, or that the index holds nothi
   ]);
 });
 
-test("a requested file the snapshot does not hold is cut as not-exported, never as no-extractor", async () => {
-  const { importers } = setup({ nodes: SHOP_NODES, exports: { [HEAD]: SHOP_EXPORT } });
+test("a requested file the export skipped is held, so its importers keep the cuts that name it", async () => {
+  const exports: CommitExport = { files: SHOP_EXPORT.files, skipped: [{ path: "src/Ghost.java", reason: "symlink" }] };
+  const { importers } = setup({ nodes: SHOP_NODES, exports: { [HEAD]: exports } });
   const answer = importersFact(await importers({ files: ["src/Order.java", "src/Ghost.java"] }));
   assert.equal(answer.status, "partial");
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "not-exported", at: ["src/Ghost.java"], reason: "unwritten", reach: { kind: "anything", runtime: "java" } }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [
+    { kind: "no-extractor", at: ["src/Ghost.java"], reason: "not-indexed", reach: { kind: "anything", runtime: "java" } },
+    { kind: "not-exported", at: ["src/Ghost.java"], reason: "symlink", reach: { kind: "anything" } },
+  ]);
 });
 
 test("a file that loads modules by a computed name may import anything, so it cuts the importers answer", async () => {
@@ -1190,7 +1233,7 @@ test("a computed-name load in a test file does not cut the importers answer", as
 });
 
 test("importers answers unknown when the index cannot be built, and releases its directories and store otherwise", async () => {
-  const unavailable = setup({ index: { ok: false, fault: { kind: "index-failed", detail: "x" } } });
+  const unavailable = setup({ exports: { [HEAD]: SHOP_EXPORT }, index: { ok: false, fault: { kind: "index-failed", detail: "x" } } });
   const answer = importersFact(await unavailable.importers({ files: ["src/Order.java"] }));
   assert.equal(answer.status === "unknown" && answer.reason, "index-unavailable");
   assert.deepEqual(unavailable.log.removed.toSorted(), unavailable.log.created.toSorted());
@@ -1791,7 +1834,8 @@ test("importers cut each file's unresolved module statements once, anchored at t
   const moduleDependencies: ModuleDependenciesReader = {
     extract: async () => ({ files: [], dependencies: [unresolved("src/b.ts", 9, "geojson"), unresolved("src/a.ts", 4, "@/env"), unresolved("src/b.ts", 2, "@/env")], unread: [] }),
   };
-  const { importers } = setup({ nodes: SHOP_NODES, exports: { [HEAD]: SHOP_EXPORT }, moduleDependencies });
+  const exports: CommitExport = { files: [...SHOP_EXPORT.files, { path: "src/c.ts", blob: "c", written: true }], skipped: [] };
+  const { importers } = setup({ nodes: SHOP_NODES, exports: { [HEAD]: exports }, moduleDependencies });
 
   const answer = importersFact(await importers({ files: ["src/c.ts"] }));
 
@@ -2302,7 +2346,8 @@ test("a call on a structural parameter the type checker binds is a typed depende
 });
 
 test("importers read the type checker's bindings: a call it moves to another file's declaration makes no user, and the fact records what it read", async () => {
-  const importersOf = async (typeBindings?: TypedOption) => importersFact(await setup({ nodes: TYPED_NODES, edges: TYPED_EDGES, importOrigins: origins(() => undefined), ...(typeBindings && { typeBindings }) }).importers({ files: ["src/store.ts"] }));
+  const exports: Options["exports"] = { [HEAD]: { files: ["src/store.ts", "src/other.ts", "src/reader.ts"].map((path) => ({ path, blob: path, written: true })), skipped: [] } };
+  const importersOf = async (typeBindings?: TypedOption) => importersFact(await setup({ nodes: TYPED_NODES, edges: TYPED_EDGES, exports, importOrigins: origins(() => undefined), ...(typeBindings && { typeBindings }) }).importers({ files: ["src/store.ts"] }));
   const namesOf = (answer: Fact<ImportersValue>) => answer.status !== "unknown" && answer.value.files.map(({ users, unresolvedNamers }) => ({ users, unresolvedNamers }));
 
   const moved = await importersOf(checker(boundTo({ kind: "repository", file: "src/other.ts", line: 1, name: "get" })));

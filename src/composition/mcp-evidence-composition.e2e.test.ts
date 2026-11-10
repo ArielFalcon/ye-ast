@@ -336,10 +336,9 @@ test("dependent acquisitions transfer exact coordinates, including a foreign lin
   assert.ok(transferred.entities.every((item) => item.kind !== "declaration" || item.id === foreignNode.id || !item.declarations.some((id) => foreignNode.kind === "declaration" && foreignNode.declarations.includes(id))));
   assert.ok(foreignNode.kind === "declaration" && foreignNode.declarations.every((id) => !webDeclarations.includes(id)), "a look-alike path never joins");
 
-  // An absent destination file is an unheld file, not an empty outline.
-  const absent = await compose([{ name: "ye_ast_outline", arguments: { repo: SHOP, revision: fixture.shop.head, files: ["src/main/java/shop/Missing.java"] } }]);
-  assert.equal(one(parts(absent, "unheld-file"), "unheld").file, one(absent.files, "absent file").id);
-  assert.equal(parts(absent, "outline-file").length, 0);
+  // An absent destination file faults as unknown-symbol instead of reading as an empty outline.
+  const absent = await warm.callTool("ye_ast_compose", { queries: [{ name: "ye_ast_outline", arguments: { repo: SHOP, revision: fixture.shop.head, files: ["src/main/java/shop/Missing.java"] } }] });
+  assert.equal(faultOf(absent).cause?.kind, "unknown-symbol");
 });
 
 test("three acquisition orders compose the same canonical result in a warm session and in cold sessions", async () => {

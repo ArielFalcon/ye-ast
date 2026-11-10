@@ -362,7 +362,7 @@ test("an importers fact declares no template engine and a callers fact declares 
   const { impact } = composeQueries({ scratchRoot });
   const request = { repo, repoId: "shop-service", revision: "HEAD" };
 
-  const importers = await impact.importers({ ...request, files: ["README.md"] });
+  const importers = await impact.importers({ ...request, files: ["src/OrderController.java"] });
   const callers = await impact.callers({ ...request, targets: [{ file: "src/OrderController.java", start: 1, end: 1 }] });
 
   assert.ok(importers.ok && callers.ok);
@@ -494,7 +494,7 @@ test("a composed decisions answer offers the origin URL of a clone the request d
 
 test("the traversal families stamp the producer every other family stamps, so compositions can derive across them", async () => {
   const { impact, version } = composeQueries({ scratchRoot });
-  const answer = await impact.importers({ repo, repoId: "shop-service", revision: "HEAD", files: ["README.md"] });
+  const answer = await impact.importers({ repo, repoId: "shop-service", revision: "HEAD", files: ["src/OrderController.java"] });
   assert.ok(answer.ok);
   assert.deepEqual(answer.value.producer, { name: "ye-ast", version });
 });

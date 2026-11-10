@@ -21,8 +21,8 @@ type RenderedFault = PublicFault | SourceIdentityCause;
 export type FaultQueryContext = {
   family: QueryFamily;
   live: boolean;
-  /** Outline's subject form. */
-  subject?: "files" | "focus";
+  /** The family's subject form: outline's `files`/`focus`, or importers' `files`. */
+  subject?: "files" | "focus" | "importers";
   /** A contract_consequences read of a change between revisions: it names `base` and `head`, as impact does. */
   change?: true;
   workspace: boolean;
@@ -39,10 +39,11 @@ export type FaultControls = { select?: unknown; page?: { cursor?: string | undef
 export function faultContext(query: SemanticQuery, controls: FaultControls = {}): FaultQueryContext {
   const args: { live?: boolean | undefined; workspace?: { repos?: unknown } | undefined; repos?: unknown; replay?: unknown; focus?: unknown; base?: unknown; hypotheses?: unknown } = query.arguments;
   const family = familyOf(query.name);
+  const subject = family === "outline" ? (args.focus === undefined ? "files" as const : "focus" as const) : family === "importers" ? "importers" as const : undefined;
   return {
     family,
     live: args.live === true,
-    ...(family === "outline" ? { subject: args.focus === undefined ? "files" as const : "focus" as const } : {}),
+    ...(subject === undefined ? {} : { subject }),
     ...(family === "contract_consequences" && args.base !== undefined ? { change: true as const } : {}),
     workspace: args.workspace !== undefined || family === "workspace" || family === "decisions" || family === "contract_consequences",
     members: args.workspace?.repos !== undefined || args.repos !== undefined,
@@ -105,6 +106,9 @@ function membersArgument(query: FaultQueryContext | undefined): string {
   return query?.family === "workspace" || query?.family === "decisions" ? "repos" : "workspace.repos";
 }
 
+/** The argument of the tool that faulted naming a file a target can use instead. */
+const FILE_ARGUMENT: Readonly<Record<NonNullable<FaultQueryContext["subject"]>, string>> = { files: "files[]", focus: "focus[].file", importers: "files" };
+
 function omitLive(query: FaultQueryContext | undefined): string {
   return `omit live and pass a committed ${commitArgument(query)}; that answer excludes uncommitted edits`;
 }
@@ -158,11 +162,14 @@ function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-faul
     case "internal-fault":
       return undefined;
     case "unknown-symbol": {
-      const step = query?.family === "outline"
+      const step = query?.subject === "importers"
+        ? "Pass one of the listed candidates as files; candidates are alternatives, not substitutions."
+        : query?.family === "outline"
         ? "Use a listed dotted path as focus[].symbol, or a line inside a declaration as focus[].line; files lists the file whole. Candidates are alternatives, not substitutions."
         : `Use a listed candidate as targets[].symbol, or an inclusive line range {file, start, end}. A line range listed here covers no declaration and no code: call ye_ast_outline for these files at the same ${query?.live ? "live state" : "revision"} and pick a range inside a declaration's span. Candidates are alternatives, not substitutions.`;
+      const fileArgument = query?.subject === undefined ? "targets[].file" : FILE_ARGUMENT[query.subject];
       return fault.entries.some((entry) => entry.absent)
-        ? `${step} For a file not in the snapshot, use a listed snapshot path as ${query?.family === "outline" ? "focus[].file" : "targets[].file"}: it takes a repository-relative path from the repository root.`
+        ? `${step} For a file not in the snapshot, use a listed snapshot path as ${fileArgument}: it takes a repository-relative path from the repository root.`
         : step;
     }
     case "unknown-entrypoint":

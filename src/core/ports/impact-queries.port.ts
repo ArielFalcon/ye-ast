@@ -110,7 +110,8 @@ export interface ImpactQueries {
   callers(request: ImpactCallersRequest): Promise<Result<Fact<ImpactValue>, ImpactFault>>;
   /**
    * Per requested file, the files that import it, use it and name it in a reference the index could not resolve. A
-   * requested file outside the declared scope or that the index holds nothing of is a cut, never an empty entry.
+   * requested file no entry of the revision holds is an `unknown-symbol` fault; one outside the declared scope, or one
+   * the revision holds but the index places nothing of, is a cut, never an empty entry.
    */
-  importers(request: ImpactImportersRequest): Promise<Result<Fact<ImportersValue>, OfChangeFault>>;
+  importers(request: ImpactImportersRequest): Promise<Result<Fact<ImportersValue>, OfChangeFault | UnknownSymbolFault>>;
 }
