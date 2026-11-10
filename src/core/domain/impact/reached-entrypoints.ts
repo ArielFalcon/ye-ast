@@ -31,8 +31,9 @@ export function reachedEntrypoints(findings: readonly Finding<Entrypoint>[], rea
       if (handler === undefined) continue;
       const guards = finding.value.kind === "ui-route" ? finding.value.guards : [];
       const guarding = reached.filter((candidate) => guards.some((guard) => guard.path === candidate.file && guard.name === candidate.name));
+      const declaredAt = finding.value.kind === "ui-route" ? finding.evidence[0] : undefined;
       for (const node of [...reached.filter((candidate) => joinsFact(candidate, { path: handler.path, line: handler.line, symbol: handler.symbol })), ...guarding]) {
-        add({ kind: finding.value.kind, name: finding.value.name, handler, depth: node.depth, confidence: node.confidence, seeds: node.seeds });
+        add({ kind: finding.value.kind, name: finding.value.name, handler, depth: node.depth, confidence: node.confidence, seeds: node.seeds, ...(declaredAt === undefined ? {} : { declaredAt }) });
       }
     } else {
       for (const place of finding.evidence) {

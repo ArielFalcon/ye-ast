@@ -60,3 +60,11 @@ test("shared cut rows print only their cutIndex, and each completes the one sele
   assert.equal(text.split('"kind":"cut-places"').length - 1, 1);
   assert.ok(rows.every(({ cutIndex }) => validRecoveryControls("entrypoints", { select: { ...example, cutIndex }, page: { limit: 1 } })));
 });
+
+test("an entrypoints row for a UI route prints the place its route entry is declared at; an HTTP route row prints none", () => {
+  const uiRoute = { status: "complete", evidence: [{ path: "src/routes.ts", line: 12 }], value: { kind: "ui-route", name: "/orders", path: "/orders", component: { path: "src/orders.page.ts", symbol: "OrdersPage", line: 5 }, guards: [] } };
+  const httpRoute = { status: "complete", evidence: [{ path: "src/orders.ts", line: 3 }], value: { kind: "http-route", name: "GET /orders", method: "GET", path: "/orders", handler: { path: "src/orders.ts", symbol: "list", line: 3 }, basePath: { status: "complete", value: { default: {}, profiles: {} }, evidence: [] } } };
+  const text = render([uiRoute, httpRoute], "details");
+  assert.match(text, /^  - ui-route \/orders -> src\/orders\.page\.ts:5 OrdersPage at src\/routes\.ts:12 \[findingIndex 0\]$/m);
+  assert.match(text, /^  - http-route GET \/orders -> src\/orders\.ts:3 list \[findingIndex 1\]$/m);
+});
