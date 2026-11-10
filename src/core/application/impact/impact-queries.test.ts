@@ -1063,6 +1063,14 @@ test("a Java method target is not cut for unread type references, and a TypeScri
   assert.equal(callersFact(await tsClass.callers({ targets: [{ file: tsPath, symbol: "Target" }] })).status, "complete");
 });
 
+test("a change that only removes a member of a Java class seeds the class as the removal's holder, not as the type target", async () => {
+  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change(TARGET_JAVA, { added: [], removals: [{ after: 2 }], removedNames: ["gone"] })] };
+  const answer = fact(await setup({ changes, nodes: TYPE_TARGET_NODES, exports: listingOf([TARGET_JAVA, HOLDER_JAVA]), absentCapabilities: JAVA_PACK_ABSENT }).ask());
+  assert.notEqual(answer.status, "unknown");
+  assert.deepEqual((answer.status === "unknown" ? [] : answer.value.seeds).map((seed) => [seed.symbol, seed.basis]), [["Target", "lines"]]);
+  assert.equal(answer.status, "complete", JSON.stringify(answer.status === "partial" ? answer.cuts : undefined));
+});
+
 function importersFact(answer: Result<Fact<ImportersValue>, OfChangeFault>): Fact<ImportersValue> {
   assert.ok(answer.ok, JSON.stringify(answer));
   return answer.value;

@@ -81,6 +81,20 @@ test("lines removed from inside a symbol seed it, and a removal between top-leve
   assert.deepEqual(run([change("src/Order.java", { removals: [{ after: 10 }] })], symbols).seeds, ["first:top-level", "second:top-level"]);
 });
 
+test("a removal's place seeds its holder as a walk start, and an added line of that symbol makes it a target too", () => {
+  const byFile = Map.groupBy(CLASS_WITH_METHODS, (candidate) => candidate.file);
+  const removedAt = (after: number): FileChange => change("src/Order.java", { added: [], removals: [{ after }] });
+  const held = selectSeeds(blastRadius("base", [removedAt(5)]), byFile, new Map());
+  assert.deepEqual(held.seeds.map(({ symbol, basis }) => `${symbol.id}:${basis}`), ["total:lines"]);
+  assert.deepEqual(held.removalHolders.map((symbol) => symbol.id), ["total"]);
+  const between = selectSeeds(blastRadius("base", [removedAt(31)]), byFile, new Map());
+  assert.deepEqual(between.seeds.map(({ symbol, basis }) => `${symbol.id}:${basis}`), ["Order:top-level"]);
+  assert.deepEqual(between.removalHolders.map((symbol) => symbol.id), ["Order"]);
+  const touched = selectSeeds(blastRadius("base", [change("src/Order.java", { added: [{ start: 7, end: 7 }], removals: [{ after: 5 }] })]), byFile, new Map());
+  assert.deepEqual(touched.seeds.map(({ symbol, basis }) => `${symbol.id}:${basis}`), ["total:lines"]);
+  assert.deepEqual(touched.removalHolders, []);
+});
+
 test("a file git reports as binary seeds every symbol it holds", () => {
   const { seeds } = run([change("src/Order.java", { binary: true })], CLASS_WITH_METHODS);
   assert.deepEqual(seeds, ["Order:lines", "tax:lines", "total:lines"]);

@@ -421,7 +421,9 @@ Prerequisites: ADR-0045 L2 on `main` (the families read the line); ADR-0042's re
   reach is the target's callers, not a whole file: a file-level cut would repeat `unreadRelationCuts`' shape
   (`impact-cuts.ts:267-277`) and would not be the absent stage. It is emitted only when (a) the requested or seeded
   declaration is a Java type (class, interface, enum, record, annotation) and (b) the Java pack declares `relations`
-  absent. A Java method target is untouched.
+  absent. A Java method target is untouched, and so is a class a removal's place holds only because the member it held
+  is gone at head: that holder starts the walk at the removal, whose own cut already names what the change broke
+  (`removalHolders`, `seeds.ts`).
 - **RED**: `src/core/application/impact/impact-queries.test.ts`, "a Java class target with no B4 reader is partial":
   a fixture (written under `os.tmpdir()`) with `class Target` and `class Holder { private Target t; }`; `callers` of
   `Target` answers `partial` with exactly that cut and no impacted symbol. Fails today: the answer is `complete`.

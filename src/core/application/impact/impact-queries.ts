@@ -11,7 +11,7 @@ import { settledOf } from "../../domain/change/hunk-settling.ts";
 import type { TokenReading } from "../../domain/change/source-tokens.ts";
 import { triviaLinesOf } from "../../domain/change/token-lines.ts";
 import type { SettledHunkChange } from "../../domain/impact/impact-fact.ts";
-import type { ComponentRef } from "../../domain/change/seeds.ts";
+import type { ComponentRef, SelectedSeed } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
 import { attributedCallCuts, contradictedCallCuts, fileCut, isJavaTypeKind, removedDeclarationCuts, unheldCut, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
@@ -634,11 +634,15 @@ interface ImpactRead {
 
 
 /**
- * The Java type targets among `targets` whose language pack declares the type references absent (RFC-0027 U0): each is
- * one cut at the declaration, so its dependents are never asserted complete while no stage reads them.
+ * The Java type targets among `seeds` whose language pack declares type references absent (RFC-0027 U0): each is one
+ * cut at the declaration, so its dependents are never asserted complete while no stage reads them. A seed that only
+ * holds a removed member starts the walk at that member's place and is no target: the removal is cut on its own.
  */
-function unreadTypeReferenceCuts(targets: readonly GraphSymbol[], reading: BaseReading): Cut[] {
-  return targets.filter((target) => isJavaTypeKind(target.kind, target.file) && reading.absentCapabilitiesOf(target.file).has("relations")).map((target) => unreadTypeReferenceCut(target));
+function unreadTypeReferenceCuts(seeds: readonly SelectedSeed<GraphSymbol>[], removalHolders: readonly GraphSymbol[], reading: BaseReading): Cut[] {
+  const held = new Set(removalHolders);
+  return seeds
+    .filter(({ symbol }) => !held.has(symbol) && isJavaTypeKind(symbol.kind, symbol.file) && reading.absentCapabilitiesOf(symbol.file).has("relations"))
+    .map(({ symbol }) => unreadTypeReferenceCut(symbol));
 }
 
 async function impactOf(input: WalkInput): Promise<ImpactRead> {
@@ -661,7 +665,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
 
   const cuts: Cut[] = [
     ...walk.cuts,
-    ...unreadTypeReferenceCuts(seeds.map(({ symbol }) => symbol), input.reading),
+    ...unreadTypeReferenceCuts(seeds, selection.removalHolders, input.reading),
     ...contradictedCuts,
     ...attributedCallCuts(attributed.map(({ node, call: { reference } }) => ({ declaration: node, place: { ...reference, name: compactSpelling(reference.name) } }))),
     ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(walk.expanded, reachedIds), knownPlaces, input.proofs?.bound, inbound.memberProofs(walk.expanded)),
