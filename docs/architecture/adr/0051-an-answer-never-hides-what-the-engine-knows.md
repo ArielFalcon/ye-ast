@@ -30,6 +30,16 @@ evidence and units.
 6. A relationship the `importers` value names carries its place; an answer without a recorded place says so instead of
    implying one.
 
+7. **One transversal mechanism per domain, built when the algorithm is needed.** A rule that decides a fact about code
+   lives in one owner that every reader consults, and that owner is designed whole for the fact it decides: its answer
+   is a sum type that distinguishes "established" from "not established", so a reader cannot collapse the two by
+   accident. A second name-based or heuristic path beside it, and a chain of special cases added per observed input, are
+   both defects: the first duplicates the fact, the second turns an algorithm into patches. When a new case appears, the
+   owner's contract grows to state it, and the case is answered by the mechanism, never by an `if` in a consumer.
+   Corollary for this ADR: an empty result is a fact only when the owner read what it had to read and found nothing;
+   otherwise the answer is the engine's explicit "not established", which is what decisions 2 and 6 already require of
+   presentation.
+
 ## Consequences
 
 - The delivery units, their order and their tests are in RFC-0029, and each unit names the units of other RFCs it waits for.
