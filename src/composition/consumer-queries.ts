@@ -19,6 +19,7 @@ import type { WorkspaceReadOperation } from "../core/application/topology/worksp
 import type { ContractConsequencesQueries } from "../core/ports/contract-consequences-queries.port.ts";
 import type { ConsumerSources } from "../core/ports/consumer-sources.port.ts";
 import type { ContractRoutes } from "../core/ports/contract-routes.port.ts";
+import type { PlacedCallSiteReader } from "../core/domain/topology/call-site.ts";
 import type { ImportOriginsReader } from "../core/ports/import-origins.port.ts";
 import type { DeclaredMemberNamesReader } from "../core/ports/declared-member-names.port.ts";
 import type { ModuleDependenciesReader } from "../core/ports/module-dependencies.port.ts";
@@ -28,7 +29,7 @@ import type { DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts
 import type { Digest } from "../core/ports/digest.port.ts";
 
 /** The workspace read of consequences queries over the workspace read, the TypeScript flow and request origin readers and the Angular template reader. */
-export function composeConsumerSources(deps: { operation: WorkspaceReadOperation; heads: HeadReaderDeps; digest: Digest; importOrigins: ImportOriginsReader; memberNames: DeclaredMemberNamesReader; modules: ModuleDependenciesReader; engines: Readonly<Record<string, string>>; typeBindings?: TypeBindings; checkerInputs?: RevisionSources; declaredOutputs?: (repo: string) => readonly DeclaredBuildOutput[] | undefined }): ConsumerSources {
+export function composeConsumerSources(deps: { operation: WorkspaceReadOperation; heads: HeadReaderDeps; digest: Digest; importOrigins: ImportOriginsReader; memberNames: DeclaredMemberNamesReader; modules: ModuleDependenciesReader; engines: Readonly<Record<string, string>>; callSites: PlacedCallSiteReader; typeBindings?: TypeBindings; checkerInputs?: RevisionSources; declaredOutputs?: (repo: string) => readonly DeclaredBuildOutput[] | undefined }): ConsumerSources {
   return createConsumerSources({ ...deps, flow: createConsumerFlowReader, origins: createRequestOriginReader, metadata: createAngularMetadataReader(), templateFlow: createTemplateFlowReader(), relations: composeAngularRelations() });
 }
 

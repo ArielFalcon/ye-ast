@@ -99,7 +99,7 @@ export interface FactInputs {
 
 /** A declared build output a fact read: whether the snapshot's lockfile verified it, and the digest of what was read from it. */
 export interface BuildOutputInput {
-  kind: "node-modules";
+  kind: "node-modules" | "java-sources";
   /** The repository directory the output stands for, `""` for the root. */
   at: string;
   verified: boolean;

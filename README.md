@@ -168,6 +168,13 @@ each answer that used a declaration lists it in `inputs.buildOutputs` and says w
 declaration it could not use is a `build-output` cut. Without one every answer is unchanged
 ([ADR-0037](docs/architecture/adr/0037-host-declared-build-outputs.md)).
 
+A registration may also declare generated Java sources with repeatable `--java-sources <at>=<path>`, beside
+`--node-modules`: `<path>` is the host directory a build wrote its Java sources to, and `<at>` the repository directory
+those sources stand for (for example `target/generated-sources/openapi/src/main/java`). Both parts are required, since no
+generator has a conventional directory. Declaring one is accepted and validated, but no answer reads it yet: the Java
+reading that uses generated sources is a later change, so every answer is unchanged by it today
+([ADR-0044](docs/architecture/adr/0044-one-implementation-closure-with-scoped-vetoes.md), decision 13).
+
 <details open>
 <summary><b>Claude Code</b></summary>
 

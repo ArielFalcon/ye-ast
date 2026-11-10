@@ -82,18 +82,18 @@ function scopeOf(params: Params): { scope?: ScopeRequest } {
   return { scope };
 }
 
-/** Build outputs a host declares (ADR-0037): `node-modules` directories, each an absolute host path and the repository directory it stands for. */
+/** Build outputs a host declares: each an absolute host path and the repository directory it stands for. */
 function buildOutputsOf(params: Params): { buildOutputs?: readonly DeclaredBuildOutput[] } {
   if (params.buildOutputs === undefined) return {};
   return {
     buildOutputs: list(params, "buildOutputs", (value): DeclaredBuildOutput => {
       const output = only(value, ["kind", "at", "path"]);
-      if (output.kind !== "node-modules") throw new InvalidParamsError("buildOutputs.kind must be node-modules");
+      if (output.kind !== "node-modules" && output.kind !== "java-sources") throw new InvalidParamsError("buildOutputs.kind must be node-modules or java-sources");
       const at = output.at ?? "";
-      if (typeof at !== "string" || !isRepositoryDirectory(at)) throw new InvalidParamsError("buildOutputs.at must be a relative, normalized repository directory");
+      if (typeof at !== "string" || !isRepositoryDirectory(at) || (output.kind === "java-sources" && at === "")) throw new InvalidParamsError("buildOutputs.at must be a relative, normalized repository directory");
       const path = text(output, "path");
       if (!isAbsolute(path)) throw new InvalidParamsError("buildOutputs.path must be an absolute path");
-      return { kind: "node-modules", at, path };
+      return { kind: output.kind, at, path };
     }),
   };
 }

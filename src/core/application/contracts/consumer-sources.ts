@@ -7,7 +7,7 @@ import { nameTail } from "../../domain/shared/call-place.ts";
 import { contradictedCallCuts } from "../../domain/impact/impact-cuts.ts";
 import { followedEdge } from "../../domain/impact/edge-policy.ts";
 import type { Result } from "../../domain/shared/result.ts";
-import { callPlaceOf, compareCallPlaces, httpTargetOf } from "../../domain/topology/call-site.ts";
+import { callPlaceOf, compareCallPlaces, httpTargetOf, type PlacedCallSite, type PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import { excludedFrom, matchCallSite, matchDeclaredOperation, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
@@ -17,7 +17,7 @@ import { buildOutputCuts, type DeclaredBuildOutput } from "../../domain/shared/b
 import { compareOccurrences, occurrenceKey, type InboundOccurrence, type InboundOccurrences } from "../impact/inbound-edges.ts";
 import type { ConsumerFlowReader } from "../../ports/consumer-flow.port.ts";
 import type { RequestOriginReader } from "../../ports/request-origins.port.ts";
-import type { ConsumerSession, ConsumerSources, PreparedWorkspace, ServingOperation } from "../../ports/consumer-sources.port.ts";
+import type { ConsumerPlacedSites, ConsumerSession, ConsumerSources, PreparedWorkspace, ServingOperation } from "../../ports/consumer-sources.port.ts";
 import type { ConsumerTemplateReader } from "../../ports/consumer-template.port.ts";
 import type { TemplateFlowReader } from "../../ports/consumer-template-flow.port.ts";
 import type { RevisionSources } from "../../ports/revision-sources.port.ts";
@@ -68,6 +68,8 @@ export interface ConsumerSourcesDeps {
   checkerInputs?: RevisionSources;
   /** The build outputs a host declared for a repository at a root. */
   declaredOutputs?: (repo: string) => readonly DeclaredBuildOutput[] | undefined;
+  /** The call sites of a repository with their places; absent means a link keeps the site the join reported. */
+  callSites?: PlacedCallSiteReader;
 }
 
 type ReadPlan = Extract<WorkspaceSnapshotContext["plans"][number], { kind: "read" }>;
@@ -76,6 +78,8 @@ interface Reading {
   flow: ConsumerFlowReader;
   origins: RequestOriginReader;
   templates: ConsumerTemplateReader;
+  /** The call sites with their places, read the first time a carrier asks for them. */
+  placedSites: () => Promise<ConsumerPlacedSites>;
   graph: CodeGraphReader | undefined;
   inbound: InboundOccurrences | undefined;
   reading: BaseReading | undefined;
@@ -184,12 +188,18 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             if (context.signal?.aborted) return ABORTED;
             const typedCuts = typed === undefined ? [] : [...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs)];
             if (typed !== undefined) for (const output of typed.outputs ?? []) buildOutputs.set(canonicalJson(output), output);
+            const owned = new Set(sources.map((file) => file.path));
+            let placed: Promise<ConsumerPlacedSites> | undefined;
+            const placedSites = (): Promise<ConsumerPlacedSites> => (placed ??= deps.callSites === undefined
+              ? Promise.resolve({ sites: [], owned })
+              : deps.callSites.placed(sources, plan.at.repoId, context.librarySources?.get(plan.at.repoId) ?? []).then((sites) => ({ sites, owned })));
             return {
               ok: true,
               value: {
                 flow: await deps.flow(sources, plan.at.repoId),
                 origins: deps.origins(sources),
                 templates: await createConsumerTemplateReader({ metadata: deps.metadata, flow: deps.templateFlow }, sources),
+                placedSites,
                 graph: indexed === "unavailable" ? undefined : indexed.store,
                 inbound: indexed === "unavailable" || origins === undefined ? undefined : inboundEdgesOf(indexed.store, origins, proofs, corrections),
                 reading,
@@ -288,6 +298,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
                 },
                 flow: { follow: (carrier) => reached.get(carrier.site.repo)?.flow.follow(carrier) ?? sourceUnreadable(carrier.site) },
                 templates: { follow: (carrier) => reached.get(carrier.site.repo)?.templates.follow(carrier) ?? sourceUnreadable(carrier.site) },
+                placedSites: (repo) => reached.get(repo)?.placedSites() ?? Promise.resolve({ sites: [], owned: new Set<string>() }),
                 requestOrigins: (repo) => reached.get(repo)?.origins,
                 excludes: excludedFrom(operation, entrypointsOfWorkspace(), fact.value.workspace.gateways),
               },
