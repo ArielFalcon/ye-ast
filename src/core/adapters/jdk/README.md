@@ -48,3 +48,41 @@ Every length is bounded by the file's own size, by the directory's stated sizes 
 reader never allocates from a header alone. A deflated member is inflated at most to the smaller of its declared
 uncompressed size and `compressedSize × 1032` (RFC 1951's 32 KiB window bounds deflate at about 1032:1), so a member
 declaring a small size is never inflated past it.
+
+## The class-file decoder
+
+`class-file.ts` decodes one member of that archive: a class file, or the `.sig` of `ct.sym`, which is a class file
+without method bodies. `readClassFile(bytes)` answers the declaration ADR-0044 decision 10 holds, or `undefined`.
+
+### What is read
+
+| Part | Read |
+|---|---|
+| constant pool | every entry is skipped by the size its tag states (a `Long`/`Double` takes two slots); only `Utf8` and `Class` are kept |
+| class flags | `ACC_ANNOTATION`, `ACC_ENUM`, `ACC_INTERFACE`, `ACC_ABSTRACT` |
+| class attribute | `Signature` (type parameters and generic supertypes), `Record` (the kind) |
+| supertypes | `super_class` and `interfaces`, or the `Signature`'s version of them; an interface's `java.lang.Object` superclass is no superinterface and is left out |
+| methods | public and protected only; `ACC_BRIDGE` and `ACC_SYNTHETIC` are left out; each keeps `ACC_STATIC`, `ACC_ABSTRACT` and `ACC_VARARGS` |
+| method attribute | `Signature` (type parameters, parameter and return types); without it the descriptor's types |
+| other attributes | skipped by their stated length, as JVMS 4.7 requires |
+
+A type is rendered in Java source form with fully qualified names and the signature's type variables kept:
+`java.util.List<T>`, `int`, `java.lang.String[]`, `? extends java.lang.Number`. A binary name keeps its source form, so
+`java/util/Map$Entry` is `java.util.Map.Entry`; a constructor keeps the class file's name, `<init>`; a varargs parameter
+keeps its array form and states it again through `varargs`. A member's signature is used only while every type variable
+it names is declared by the class or by the member; a signature that names an undeclared variable (an inner class's
+artifact) is dropped and the descriptor's erased types are stated instead.
+
+### What makes the whole declaration `undefined`
+
+Never a partial declaration: the file is `undefined` when
+
+- it is not a class file (its magic is not `0xCAFEBABE`);
+- it is truncated or a stated length reaches past its end;
+- it carries a constant pool tag this reader does not know;
+- it is a module (`ACC_MODULE`) or a synthetic (`ACC_SYNTHETIC`) class, which state no declaration of their own;
+- a `Signature` attribute does not parse, or names a type variable the class signature does not declare;
+- a generic class signature states a different number of supertypes than the class file's own fields;
+- `ACC_VARARGS` is set on a method whose last parameter is not an array.
+
+No network, no dependency: the decoder reads the bytes it is handed.
