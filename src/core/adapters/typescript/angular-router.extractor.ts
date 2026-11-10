@@ -2,6 +2,7 @@ import ts from "typescript";
 import { moduleShape, type ModuleShape, type RawSpan } from "./module-shape.ts";
 import { sourceTree } from "./source-tree.ts";
 import { hasModifier, propertyOf, unwrapped } from "./syntax.ts";
+import type { ImportedName, RouterVocabulary } from "../../ports/router-vocabulary.port.ts";
 
 /** A value the loader resolves: a literal, or a reference to a constant (`RoutePath.Home`, or a plain identifier), with the module it is imported from when it is. */
 export type RawValue = { literal: string } | { ref: string; member?: string; module?: string; imported?: string } | { template: RawValue[] } | { opaque: true };
@@ -134,12 +135,15 @@ function isConditionalBranch(node: ts.Node): boolean {
 }
 
 /** The route arrays of one TypeScript file, or undefined when the file does not parse. Nothing is resolved across files. */
-export function parseAngularRouteFile(file: string, source: string): RawRouteFile | undefined {
-  return readAngularRouteFile(sourceTree({ path: file, content: source }, ts.ScriptTarget.Latest, ts.ScriptKind.TS));
+export function parseAngularRouteFile(file: string, source: string, router?: RouterVocabulary): RawRouteFile | undefined {
+  return readAngularRouteFile(sourceTree({ path: file, content: source }, ts.ScriptTarget.Latest, ts.ScriptKind.TS), router);
 }
 
-/** The route arrays of a parsed TypeScript file, or undefined when it has syntax errors. */
-export function readAngularRouteFile(sf: ts.SourceFile): RawRouteFile | undefined {
+/**
+ * The route arrays of a parsed TypeScript file, or undefined when it has syntax errors. Its router configurations are
+ * the calls `router` recognises; a reading without it holds none.
+ */
+export function readAngularRouteFile(sf: ts.SourceFile, router?: RouterVocabulary): RawRouteFile | undefined {
   const module = moduleShape(sf);
   if (module === undefined) return undefined;
   const { imports, declared } = module;
@@ -362,17 +366,14 @@ export function readAngularRouteFile(sf: ts.SourceFile): RawRouteFile | undefine
   };
   visit(sf, { name: "", exported: false });
   const routerConfigs: RawRouterConfig[] = [];
-  const routerKind = (call: ts.CallExpression): "root" | "child" | undefined => {
-    const callee = unwrapped(call.expression);
-    if (ts.isIdentifier(callee)) {
-      const bound = imports.get(callee.text);
-      return bound?.module === "@angular/router" && bound.imported === "provideRouter" ? "root" : undefined;
-    }
-    if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression)) return undefined;
-    const bound = imports.get(callee.expression.text);
-    if (bound?.module !== "@angular/router" || bound.imported !== "RouterModule") return undefined;
-    return callee.name.text === "forRoot" ? "root" : callee.name.text === "forChild" ? "child" : undefined;
+  const importedNameOf = (expression: ts.Expression): ImportedName => {
+    const members: string[] = [];
+    let at = expression;
+    for (; ts.isPropertyAccessExpression(at); at = at.expression) members.unshift(at.name.text);
+    const binding = ts.isIdentifier(at) ? imports.get(at.text) : undefined;
+    return { ...(binding !== undefined ? { binding } : {}), members };
   };
+  const routerKind = (call: ts.CallExpression): "root" | "child" | undefined => router?.configurationOf(importedNameOf(unwrapped(call.expression)));
   const bootstraps: RawBootstrap[] = [];
   /* `bootstrapModuleFactory(...)` is not matched: its argument is a factory, not a class. */
   const bootstrapOf = (call: ts.CallExpression): RawBootstrap | undefined => {

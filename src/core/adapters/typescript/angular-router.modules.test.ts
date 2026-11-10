@@ -5,6 +5,7 @@ import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { EntrypointExtraction } from "../../ports/entrypoint-extractor.port.ts";
 import * as routes from "./angular-routes.adapter.ts";
+import { ROUTER_VOCABULARY_DOUBLE } from "./angular-router.testing.ts";
 import { parseAngularRouteFile } from "./angular-router.extractor.ts";
 import { readAngularMetadataFile, type RawAngularFile, type RawOperand } from "./angular-metadata.extractor.ts";
 
@@ -139,7 +140,7 @@ const ROOT_MAIN = "import { provideRouter } from '@angular/router';\nimport { ro
 
 function extraction(files: Record<string, string>): Promise<EntrypointExtraction> {
   const sources = Object.entries({ "package.json": PACKAGE, ...files }).map(([path, content]) => ({ path, content }));
-  return routes.createAngularRoutesExtractor().extract(sources);
+  return routes.createAngularRoutesExtractor(ROUTER_VOCABULARY_DOUBLE).extract(sources);
 }
 
 test("a loadChildren the sources do not resolve is an unknown item and one cut", async () => {

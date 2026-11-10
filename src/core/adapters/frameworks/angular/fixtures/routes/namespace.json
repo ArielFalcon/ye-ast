@@ -1,0 +1,58 @@
+{
+  "files": {
+    "package.json": "{\"dependencies\":{\"@angular/core\":\"21.0.0\",\"@angular/router\":\"21.0.0\"}}",
+    "src/main.ts": "import { bootstrapApplication } from '@angular/platform-browser';\nimport * as r from '@angular/router';\nimport { App } from './app/app';\nimport { routes } from './app/app.routes';\nbootstrapApplication(App, { providers: [r.provideRouter(routes)] });\n",
+    "src/app/app.ts": "export class App {}\n",
+    "src/app/home.ts": "export class Home {}\n",
+    "src/app/app.routes.ts": "import * as r from '@angular/router';\nimport { Home } from './home';\nexport const routes: r.Routes = [\n  { path: 'home', component: Home },\n  { path: 'owners', loadChildren: () => import('./owners/owners.module').then((m) => m.OwnersModule) },\n];\n",
+    "src/app/owners/owner-list.ts": "export class OwnerList {}\n",
+    "src/app/owners/owners.module.ts": "import { NgModule } from '@angular/core';\nimport * as r from '@angular/router';\nimport { OwnerList } from './owner-list';\n@NgModule({ imports: [r.RouterModule.forChild([{ path: 'list', component: OwnerList }])] })\nexport class OwnersModule {}\n"
+  },
+  "expected": {
+    "findings": [
+      {
+        "status": "complete",
+        "value": {
+          "kind": "ui-route",
+          "name": "/home",
+          "path": "/home",
+          "component": {
+            "path": "src/app/home.ts",
+            "symbol": "Home",
+            "line": 1
+          },
+          "guards": []
+        },
+        "evidence": [
+          {
+            "path": "src/app/app.routes.ts",
+            "line": 4,
+            "endLine": 4
+          }
+        ]
+      },
+      {
+        "status": "complete",
+        "value": {
+          "kind": "ui-route",
+          "name": "/owners/list",
+          "path": "/owners/list",
+          "component": {
+            "path": "src/app/owners/owner-list.ts",
+            "symbol": "OwnerList",
+            "line": 1
+          },
+          "guards": []
+        },
+        "evidence": [
+          {
+            "path": "src/app/owners/owners.module.ts",
+            "line": 4,
+            "endLine": 4
+          }
+        ]
+      }
+    ],
+    "readingCuts": []
+  }
+}

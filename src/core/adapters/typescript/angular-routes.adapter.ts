@@ -4,6 +4,7 @@ import type { RouteGuard, UiRoute } from "../../domain/entrypoints/ui-route.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { Cut, Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
 import type { EntrypointExtraction, EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { RouterVocabulary } from "../../ports/router-vocabulary.port.ts";
 import { pathsByProject } from "./angular-projects.ts";
 import type { ManifestPackages } from "./module-resolver.ts";
 import { sourceTree } from "./source-tree.ts";
@@ -12,8 +13,6 @@ import { readAngularRouteFile } from "./angular-router.extractor.ts";
 import { coreExternalOf, readAngularMetadataFile, type RawAngularFile } from "./angular-metadata.extractor.ts";
 import { createModuleResolver, type ModuleResolver } from "./module-resolver.ts";
 import { loadRouteTables, type AngularModuleReading, type RouteEntry, type RouteFileReading, type RouteTable, type UnresolvedReference } from "./route-table.loader.ts";
-
-const ANGULAR_ROUTER = "@angular/router";
 
 /** The module reading the route graph needs, projected from the one Angular metadata reading of a file, never re-derived. */
 export function modulesOf(angular: RawAngularFile): AngularModuleReading {
@@ -24,7 +23,7 @@ export function modulesOf(angular: RawAngularFile): AngularModuleReading {
 }
 
 /**
- * The Angular router's routes: each project (the directory of a `package.json` that names `@angular/router`) has its
+ * The Angular router's routes: each project (the directory of a `package.json` that names the package of `router`'s signal) has its
  * route tables read from the TypeScript sources outside tests that belong to it, nearest project first, with nothing built or run. A table is read wherever the router receives one:
  * from every root configuration and from the module graph a `bootstrapModule(...)` call boots or a `loadChildren` loads,
  * so a `forChild` table a module composes is named under the prefix of the root or route that reaches its graph. Each route entry that shows a component is a
@@ -32,36 +31,36 @@ export function modulesOf(angular: RawAngularFile): AngularModuleReading {
  * and a source that does not parse are `unknown` items at their location. Lazy loads include legacy strings,
  * helpers, await and destructuring; a reference called with arguments is `no-extractor`.
  */
-export function createAngularRoutesExtractor(): EntrypointExtractor {
-  return { extract: async (files) => extractRoutes(files) };
+export function createAngularRoutesExtractor(router: RouterVocabulary): EntrypointExtractor {
+  return { extract: async (files) => extractRoutes(files, router) };
 }
 
-async function extractRoutes(files: readonly SourceFile[]): Promise<EntrypointExtraction> {
+async function extractRoutes(files: readonly SourceFile[], router: RouterVocabulary): Promise<EntrypointExtraction> {
   const contents = new Map(files.map((file) => [file.path, file]));
-  const { byProject, orphaned } = pathsByProject([...contents.keys()].filter(isTypeScriptSource), files, ANGULAR_ROUTER);
+  const { byProject, orphaned } = pathsByProject([...contents.keys()].filter(isTypeScriptSource), files, router.signal.dependency);
   const found: Finding<Entrypoint>[] = orphaned.map((path) => unknown("no-project", { path, line: 1 }));
   const readingCuts: Cut[] = [];
   for (const [project, sources] of byProject) {
-    const extracted = await extractProject(sources, project.packages, contents);
+    const extracted = await extractProject(sources, project.packages, contents, router);
     found.push(...extracted.findings);
     readingCuts.push(...extracted.readingCuts);
   }
   return { findings: sortFindings(found), readingCuts };
 }
 
-async function extractProject(sources: readonly string[], packages: ManifestPackages, contents: ReadonlyMap<string, SourceFile>): Promise<{ findings: Finding<Entrypoint>[]; readingCuts: Cut[] }> {
+async function extractProject(sources: readonly string[], packages: ManifestPackages, contents: ReadonlyMap<string, SourceFile>, router: RouterVocabulary): Promise<{ findings: Finding<Entrypoint>[]; readingCuts: Cut[] }> {
   const read = async (path: string): Promise<string | undefined> => contents.get(path)?.content;
   const resolver = createModuleResolver(read, packages);
   const readings = new Map<string, Promise<RouteFileReading | undefined>>();
   const reading = (path: string): Promise<RouteFileReading | undefined> => {
     let held = readings.get(path);
     if (held === undefined) {
-      held = readOne(path, contents.get(path), resolver);
+      held = readOne(path, contents.get(path), resolver, router);
       readings.set(path, held);
     }
     return held;
   };
-  const loaded = await loadRouteTables({ candidates: sources, read, listing: [...contents.keys()], packages, reading });
+  const loaded = await loadRouteTables({ candidates: sources, read, listing: [...contents.keys()], packages, router, reading });
   const { roots, unparsed, unresolvedReferences } = loaded;
   const walk: Walk = { findings: [], blockers: loaded.declared ? [] : unresolvedReferences };
   for (const root of roots) routesOf(root, enter(root, { segments: [], conditional: false, above: new Set() }), walk);
@@ -85,10 +84,10 @@ function importFrontierOf(path: string, line: number, specifier: string, namesNo
  * One file read once: its route reading and the Angular metadata reading of the same syntax tree. Both readings ask the
  * one `coreExternalOf` whether `@angular/core` is outside the snapshot, so they never disagree about the file's decorators.
  */
-async function readOne(path: string, file: SourceFile | undefined, resolver: ModuleResolver): Promise<RouteFileReading | undefined> {
+async function readOne(path: string, file: SourceFile | undefined, resolver: ModuleResolver, router: RouterVocabulary): Promise<RouteFileReading | undefined> {
   if (file === undefined) return undefined;
   const sf = sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
-  const routes = readAngularRouteFile(sf);
+  const routes = readAngularRouteFile(sf, router);
   if (routes === undefined) return undefined;
   const coreExternal = await coreExternalOf(routes, async (specifier) => "external" in (await resolver.resolve(path, specifier)));
   return { routes, modules: modulesOf(readAngularMetadataFile(sf, routes, false, coreExternal)) };

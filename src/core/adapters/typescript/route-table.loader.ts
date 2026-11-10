@@ -7,8 +7,7 @@ import type { RawChildRef, RawBootstrap, RawComponent, RawEntry, RawGuard, RawRo
 import type { RawOperand, RawReference } from "./angular-metadata.extractor.ts";
 import { createDeclarationLookup, type Declaration } from "./declaration-lookup.ts";
 import { createModuleResolver, type ManifestPackages, type SourceReader } from "./module-resolver.ts";
-
-const ANGULAR_ROUTER = "@angular/router";
+import type { RouterVocabulary } from "../../ports/router-vocabulary.port.ts";
 
 /** What the Angular metadata reading states about one file, projected to what the route graph needs. */
 export interface AngularModuleReading {
@@ -32,6 +31,7 @@ export interface RouteTableInputs {
   /** The paths the snapshot holds: what proves an import names no file of it. */
   listing: readonly string[];
   packages: ManifestPackages;
+  router: RouterVocabulary;
   /** The one reading of a file, memoized by the caller; `undefined` when the file does not parse. */
   reading(file: string): Promise<RouteFileReading | undefined>;
 }
@@ -144,7 +144,7 @@ type ChildResolution = { table: RouteTable } | { reason: UnknownReason };
  * unresolved child references and the unresolved module imports.
  */
 export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedRouteTables> {
-  const { candidates, read, listing, packages, reading } = inputs;
+  const { candidates, read, listing, packages, router, reading } = inputs;
   const resolver = createModuleResolver(read, packages, { listing });
   const readings = new Map<string, Promise<RouteFileReading | undefined>>();
   const readOf = (file: string): Promise<RouteFileReading | undefined> => {
@@ -285,8 +285,7 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
     if ("unreadable" in operand) return { kind: "unreadable", line: operand.line };
     const reference = operand.reference;
     const binding = raw.imports.get(reference.name);
-    const routerModule = binding?.module === ANGULAR_ROUTER && (binding.imported === "RouterModule" || (binding.imported === "*" && reference.member === "RouterModule"));
-    if (routerModule) return { kind: "skip" };
+    if (router.isRouterModule({ ...(binding !== undefined ? { binding } : {}), members: reference.member === undefined ? [] : [reference.member] })) return { kind: "skip" };
     const named = await moduleNameOf(file, raw, reference);
     if (named === undefined || named.kind === "external") return { kind: "skip" };
     if (named.kind === "unresolved") return { kind: "unresolved", line: operand.line, specifier: named.specifier, namesNoFile: named.namesNoFile };

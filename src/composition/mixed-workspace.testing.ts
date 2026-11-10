@@ -25,7 +25,6 @@ import { createJavaImportsReader } from "../core/adapters/spring/java-imports.ad
 import { routedReaders } from "../core/application/snapshot/language-packs.ts";
 import { composeLanguagePacks } from "./language-packs.ts";
 import { createAngularDeclarationReader } from "../core/adapters/typescript/angular-declarations.adapter.ts";
-import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
 import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loads.adapter.ts";
 import { composeAngularRelations } from "./angular-relations.ts";
 import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
@@ -35,17 +34,18 @@ import type { EntrypointExtractor, SourceFile } from "../core/ports/entrypoint-e
 import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
+import { composeFrameworkPlugins, frameworkEntrypoints } from "./framework-plugins.ts";
 
 export function realWorkspaceFixture(scratchRoot: string, roots: readonly string[], sleep?: typeof defaultLiveMirrorDeps.sleep) {
   const version = ownVersion();
-  const angular = createAngularRoutesExtractor();
+  const frameworks = composeFrameworkPlugins();
   const contracts = createContractRoutes();
   const extracted: string[][] = [];
   const extractor: EntrypointExtractor = {
     extract: async (files, libraries) => {
       extracted.push(files.map(({ path }) => path));
       const spring = await createSpringRoutesExtractor(await createJavaParser(), contracts).extract(files, libraries);
-      const routes = await angular.extract(files);
+      const routes = await frameworkEntrypoints(frameworks, files);
       return { findings: sortFindings([...spring.findings, ...routes.findings]), readingCuts: routes.readingCuts };
     },
   };

@@ -53,7 +53,6 @@ import { createJavaRecordsReader } from "../core/adapters/tree-sitter/java-recor
 import type { UnmodelledConstructsReader } from "../core/ports/unmodelled-constructs.port.ts";
 import { createJavaParser, createJavaTreeHolds } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
 import { createAngularDeclarationReader } from "../core/adapters/typescript/angular-declarations.adapter.ts";
-import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
 import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loads.adapter.ts";
 import { composeAngularRelations } from "./angular-relations.ts";
 import { composeConsumerSources, composeContractConsequences } from "./consumer-queries.ts";
@@ -81,6 +80,7 @@ import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
 import { measuredContractConsequences, measuredDecisions, measuredDerivedFacts, measuredStages, measuredTalliedStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredTrace, measuredWorkspace, stageTallies, type MeasurementSink } from "./measurement.ts";
+import { composeFrameworkPlugins, frameworkEntrypoints } from "./framework-plugins.ts";
 
 const PRODUCER_NAME = "ye-ast";
 export const LIVE_STAGING_VERSION = `${STAGING_RULES_VERSION}:${WRITTEN_UNIVERSE_VERSION}`;
@@ -158,12 +158,12 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const holds = createJavaTreeHolds();
   const javaParser = () => createJavaParser(holds);
   const staged = <T extends object>(port: T, stages: { readonly [K in keyof T]?: string }): T => (measurement === undefined ? port : measuredStages(port, stages, measurement));
-  const angular = createAngularRoutesExtractor();
+  const frameworks = composeFrameworkPlugins();
   const contracts = createContractRoutes();
   const extractor = staged<EntrypointExtractor>({
     extract: async (files, libraries) => {
       const spring = await createSpringRoutesExtractor(await javaParser(), contracts).extract(files, libraries);
-      const routes = await angular.extract(files);
+      const routes = await frameworkEntrypoints(frameworks, files);
       return { findings: sortFindings([...spring.findings, ...routes.findings]), readingCuts: routes.readingCuts };
     },
   }, { extract: "entrypoints" });

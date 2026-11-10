@@ -5,6 +5,7 @@ import type { UiRoute } from "../../domain/entrypoints/ui-route.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { createAngularRoutesExtractor } from "./angular-routes.adapter.ts";
+import { ROUTER_VOCABULARY_DOUBLE } from "./angular-router.testing.ts";
 
 const PACKAGE = JSON.stringify({ dependencies: { "@angular/core": "21.0.0", "@angular/router": "21.0.0" } });
 const ROUTES = "src/app/app.routes.ts";
@@ -23,7 +24,7 @@ function extract(files: Record<string, string>, manifest: string | null = PACKAG
 }
 
 function findingsOf(files: SourceFile[]): Promise<readonly Finding<Entrypoint>[]> {
-  return createAngularRoutesExtractor().extract(files).then((whole) => whole.findings);
+  return createAngularRoutesExtractor(ROUTER_VOCABULARY_DOUBLE).extract(files).then((whole) => whole.findings);
 }
 
 /** The table of a root routes file: the body starts at line 3, one line further per line of `header`. */
@@ -412,7 +413,7 @@ test("findings come out sorted by evidence location whatever the order of the so
     "src/m.routes.ts": table("  { path: 'm', component: M, matcher: m },")[ROUTES]!,
   };
   const forward = sources(files, PACKAGE, false);
-  const extractor = createAngularRoutesExtractor();
+  const extractor = createAngularRoutesExtractor(ROUTER_VOCABULARY_DOUBLE);
 
   const first = await extractor.extract(forward);
   const second = await extractor.extract(forward.toReversed());
