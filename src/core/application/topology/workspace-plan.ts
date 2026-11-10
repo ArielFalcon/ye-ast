@@ -171,7 +171,15 @@ export async function planWorkspace(deps: WorkspacePlanDeps, request: WorkspaceP
   if (!asked.every(validMember)) return { ok: false, fault: { kind: "git-failed", detail: "invalid workspace selection" } };
   const ids = asked.map((repository) => repository.id ?? directoryNameOf(repository.path));
   const duplicate = ids.find((id, index) => ids.indexOf(id) !== index);
-  if (duplicate !== undefined) return { ok: false, fault: { kind: "duplicate-repository", detail: duplicate } };
+  if (duplicate !== undefined) {
+    const entries = inForce.value.source === "request" ? ids.flatMap((id, index) => id === duplicate && index > 0 ? [index - 1] : []) : [];
+    const fromLaunch = ids[0] === duplicate;
+    const names = [...(fromLaunch ? ["the launch repository"] : []), ...entries.map((index) => `repos[${index}]`)];
+    const detail = entries.length === 0
+      ? `repository \`${duplicate}\` is listed twice among the persisted members`
+      : `${names.join(" and ")} name repository \`${duplicate}\``;
+    return { ok: false, fault: { kind: "duplicate-repository", detail, repo: duplicate, entries, fromLaunch } };
+  }
 
   const authority = inForce.value.source === "request"
     ? await workspaceInForce({ repo: request.repo }, deps.defaults, trust)

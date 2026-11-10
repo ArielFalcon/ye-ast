@@ -67,7 +67,7 @@ export function controlFault(fault: CodedFault): ControlFault {
 
 /** The text of a fault: its kind first, its detail and entries, and a next step only where an argument can correct it. */
 export function renderFault(fault: RenderedFault, query?: FaultQueryContext): string {
-  const entries = "entries" in fault ? fault.entries.map((entry) => `\n  - ${"kind" in entry ? entrypointText(entry) : `${"line" in entry ? `${entry.file}:${entry.line}` : unknownTargetKey(entry)}: ${unknownEntryText(entry)}`}`).join("") : "";
+  const entries = fault.kind !== "duplicate-repository" && "entries" in fault ? fault.entries.map((entry) => `\n  - ${"kind" in entry ? entrypointText(entry) : `${"line" in entry ? `${entry.file}:${entry.line}` : unknownTargetKey(entry)}: ${unknownEntryText(entry)}`}`).join("") : "";
   const head = `fault: ${fault.kind}\n${displayDetail(fault).trim()}${entries}`;
   if (fault.kind === "composition-source-fault") {
     return `${head}\nThe composition returned nothing: queries[${fault.requestIndices.join(", ")}] (${fault.family}) failed. Correct them as below and resend the whole composition.\n${renderFault(fault.cause, query)}`;
@@ -179,7 +179,7 @@ function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-faul
     case "unknown-change-path":
       return "Correct the changed globs against the paths base..head touches. Remove changed to walk every change within the declared scope; mode or budget cannot fix a path-selection mismatch.";
     case "duplicate-repository":
-      return `Two ${membersArgument(query)} entries name the same repository: keep one, with the intended id and revision.`;
+      return `Drop all but one of the named ${membersArgument(query)} entries, keeping the id and revision intended; a duplicate among persisted members is corrected in the host's workspace declaration.`;
     case "duplicate-workspace-source":
       return `Remove the duplicate workspace source identified by the repository IDs: one ${membersArgument(query)} entry per repository.`;
     case "workspace-capture-unavailable":
