@@ -92,3 +92,21 @@ test("replay kind mismatch stops before an otherwise authorized refresh", async 
   assert.equal(result.ok, false);
   assert.equal(s.counts().refreshes, 0);
 });
+
+test("duplicate-repository names the colliding repos entries", async () => {
+  const a = { path: "/a", id: "a" };
+  const b = { path: "/b", id: "b" };
+  for (const [repo, repos, entries, fromLaunch] of [
+    [request.repo, [a, a], [0, 1], false],
+    [a, [b, a, { path: "/a2", id: "other" }], [1], true],
+  ] as const) {
+    const result = await plan(setup().deps, { repo, repos });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.deepEqual(result.fault, { kind: "duplicate-repository", detail: `${fromLaunch ? "the launch repository and repos[1]" : "repos[0] and repos[1]"} name repository ` + "`a`", repo: "a", entries, fromLaunch });
+  }
+  const s = setup();
+  s.deps.defaults.of = async () => ({ ok: true, value: { repos: [a, a] } });
+  const persisted = await plan(s.deps, { repo: request.repo });
+  assert.equal(persisted.ok, false);
+  if (!persisted.ok) assert.deepEqual(persisted.fault, { kind: "duplicate-repository", detail: "repository `a` is listed twice among the persisted members", repo: "a", entries: [], fromLaunch: false });
+});
