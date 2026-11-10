@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import type { BasePath, HttpMethod, HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
+import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { ContractOperation } from "../../ports/contract-routes.port.ts";
 import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { Node } from "web-tree-sitter";
@@ -14,12 +15,18 @@ const BOOT = "package app;\nimport org.springframework.boot.autoconfigure.Spring
 const MAIN = { path: "src/main/java/app/Main.java", content: BOOT };
 const ALIAS = "import org.springframework.core.annotation.AliasFor;";
 
-let extractor: EntrypointExtractor;
+type FindingsReading = { extract: (files: readonly SourceFile[], libraries?: readonly LibrarySource[]) => Promise<readonly Finding<Entrypoint>[]> };
+
+function itemsOf(port: EntrypointExtractor): FindingsReading {
+  return { extract: async (files, libraries) => (await port.extract(files, libraries)).findings };
+}
+
+let extractor: FindingsReading;
 let parser: JavaParser;
 
 before(async () => {
   parser = await createJavaParser();
-  extractor = createSpringRoutesExtractor(parser);
+  extractor = itemsOf(createSpringRoutesExtractor(parser));
 });
 
 function file(path: string, content: string): SourceFile {
@@ -1948,7 +1955,7 @@ test("a file whose parsing throws is that file's source-unreadable item and the 
     },
   };
 
-  const findings = await createSpringRoutesExtractor(parser).extract([
+  const findings = await itemsOf(createSpringRoutesExtractor(parser)).extract([
     app("Explodes", `@RestController class Explodes {}`),
     app("Fine", `@RestController class Fine {\n  @GetMapping("/fine") void fine() {}\n}`),
   ]);
@@ -1984,7 +1991,7 @@ function poisonedParser(base: JavaParser, failsAt: (node: Node, member: string) 
 test("a file whose declarations throw is that file's source-unreadable item and the other files are still read", async () => {
   const parser = poisonedParser(await createJavaParser(), (node, member) => node.type === "method_declaration" && member === "childForFieldName");
 
-  const findings = await createSpringRoutesExtractor(parser).extract([
+  const findings = await itemsOf(createSpringRoutesExtractor(parser)).extract([
     app("Poisoned", `@RestController class Poisoned extends Absent {\n  @GetMapping("/poisoned") void poisoned() {}\n}`),
     app("Fine", `@RestController class Fine {\n  @GetMapping("/fine") void fine() {}\n}`),
   ]);
@@ -1999,7 +2006,7 @@ test("a file whose declarations throw is that file's source-unreadable item and 
 test("a type whose annotations throw is that type's unknown item and the other types are still read", async () => {
   const parser = poisonedParser(await createJavaParser(), (node, member) => node.type === "annotation" && member === "childForFieldName");
 
-  const findings = await createSpringRoutesExtractor(parser).extract([
+  const findings = await itemsOf(createSpringRoutesExtractor(parser)).extract([
     app("Poisoned", `@RequestMapping("/p") @RestController class Poisoned {}`),
     app("Fine", `@RestController class Fine {\n  @GetMapping("/fine") void fine() {}\n}`),
   ]);
@@ -2534,8 +2541,8 @@ test("a NATS subscription whose subject the sources do not state is an unresolve
 const CONTRACT = "src/main/resources/openapi/api-definition.yaml";
 
 /** The extractor with the operations a contract document of the repository declares, as the port hands them over. */
-function contracting(operations: readonly Finding<ContractOperation>[]): EntrypointExtractor {
-  return createSpringRoutesExtractor(parser, { operations: () => operations });
+function contracting(operations: readonly Finding<ContractOperation>[]): FindingsReading {
+  return itemsOf(createSpringRoutesExtractor(parser, { operations: () => operations }));
 }
 
 function operation(operationId: string | undefined, method: HttpMethod, path: string, line = 5, basePath: string | null = ""): Finding<ContractOperation> {

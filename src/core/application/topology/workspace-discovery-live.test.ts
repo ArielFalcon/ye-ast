@@ -23,7 +23,7 @@ test("live discovery uses held dirty sources and retains its snapshot through po
     trust: { read: async () => ({ ok: true, value: "trusted" }) },
     scratch: { create: async () => "/scratch", remove: async () => undefined },
     reader: { read: async (_root, paths) => paths.map((path) => ({ path, content: fake.tree.get(path) ?? "" })) },
-    extractor: { extract: async () => { extracts++; return []; } },
+    extractor: { extract: async () => { extracts++; return { findings: [], readingCuts: [] }; } },
     digest: { of: (text) => text }, matcher: { matches: () => true },
     evidence: { names: (sources) => sources.map(({ path, content }) => ({ name: content, kind: "dependency" as const, evidence: [{ path, line: 1 }] })), artifacts: () => [] },
     callSites: { of: async () => [] }, producer: { name: "test", version: "1" }, engines: {},
@@ -86,7 +86,7 @@ function multipleLive() {
     extractor: { extract: async (sources) => {
       const source = sources[0]!;
       counts[source.path] = (counts[source.path] ?? 0) + 1;
-      return [{ status: "complete", value: { kind: "http-route", name: source.content, method: "GET", path: `/${source.content}`, handler: { path: source.path, symbol: "handler", line: 2 }, basePath: { status: "unknown", reason: "unresolved", evidence: [] } }, evidence: [{ path: source.path, line: 2 }] }];
+      return { findings: [{ status: "complete", value: { kind: "http-route", name: source.content, method: "GET", path: `/${source.content}`, handler: { path: source.path, symbol: "handler", line: 2 }, basePath: { status: "unknown", reason: "unresolved", evidence: [] } }, evidence: [{ path: source.path, line: 2 }] }], readingCuts: [] };
     } },
     digest, matcher: { matches: () => true },
     evidence: { names: (sources) => sources.filter((source) => source.content === "client:library").map(({ path }) => ({ kind: "dependency" as const, name: "library", evidence: [{ path, line: 1 }] })), artifacts: (sources) => sources.some(({ content }) => content === "library:served") ? ["library"] : [] },

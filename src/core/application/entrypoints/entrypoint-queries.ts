@@ -38,7 +38,7 @@ export function createEntrypointQueries(deps: EntrypointQueriesDeps): Entrypoint
         ...factBaseOf(deps, { repoId, sha: head.value, trust, scope, content: contentFingerprint(extracted.value.export), declaredConfig: {}, engines: deps.engines }),
         snapshot: { repo: repoId, kind: "live" as const, head: head.value, stateId: tree.stateId },
       };
-      const map: Result<EntrypointMapFact, VcsFault> = { ok: true, value: buildEntrypointMap(base, extracted.value.findings, extracted.value.export) };
+      const map: Result<EntrypointMapFact, VcsFault> = { ok: true, value: buildEntrypointMap(base, extracted.value.findings, extracted.value.export, extracted.value.readingCuts) };
       return map;
     });
     return opened.ok ? opened.value : { ok: false, fault: asFault(opened.fault) };
@@ -60,10 +60,10 @@ export function createEntrypointQueries(deps: EntrypointQueriesDeps): Entrypoint
         if (!prepared.ok) return prepared;
         const extracted = await prepared.value.extract(signal);
         if (!extracted.ok) return extracted;
-        const { export: mapExport, findings } = extracted.value;
+        const { export: mapExport, findings, readingCuts } = extracted.value;
         const declaredConfig = deps.budget === undefined ? {} : { exportBudget: { maxEntries: deps.budget.maxEntries, maxBytes: deps.budget.maxBytes } };
         const base = factBaseOf(deps, { repoId, sha, trust, scope, content: contentFingerprint(mapExport), declaredConfig, engines: deps.engines });
-        return { ok: true, value: buildEntrypointMap(base, findings, mapExport) };
+        return { ok: true, value: buildEntrypointMap(base, findings, mapExport, readingCuts) };
       });
     },
   };

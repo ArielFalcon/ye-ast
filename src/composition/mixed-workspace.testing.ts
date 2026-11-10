@@ -45,7 +45,8 @@ export function realWorkspaceFixture(scratchRoot: string, roots: readonly string
     extract: async (files, libraries) => {
       extracted.push(files.map(({ path }) => path));
       const spring = await createSpringRoutesExtractor(await createJavaParser(), contracts).extract(files, libraries);
-      return sortFindings([...spring, ...await angular.extract(files)]);
+      const routes = await angular.extract(files);
+      return { findings: sortFindings([...spring.findings, ...routes.findings]), readingCuts: routes.readingCuts };
     },
   };
   const typescriptCallSites = createHttpCallSites();

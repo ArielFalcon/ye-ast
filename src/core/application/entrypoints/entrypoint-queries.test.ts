@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
-import { SCHEMA, type Finding } from "../../domain/shared/fact.ts";
+import { SCHEMA, type Cut, type Finding } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
@@ -87,7 +87,7 @@ function setup(overrides: Overrides = {}): Setup {
       return paths.map((path): SourceFile => ({ path, content: `class ${path}` }));
     },
   };
-  const extractor: EntrypointExtractor = { extract: overrides.extract ?? (async () => overrides.findings ?? []) };
+  const extractor: EntrypointExtractor = { extract: overrides.extract ?? (async () => ({ findings: overrides.findings ?? [], readingCuts: [] })) };
   const digest: Digest = { of: (text) => `digest(${text})` };
   const deps: EntrypointQueriesDeps = {
     vcs,
@@ -125,8 +125,10 @@ const MANIFEST: ListedFile = { path: "package.json", blob: "b11" };
  * The rule of the Angular extractor: a source it places in a project through the manifest above it answers a route,
  * and one it cannot place is an unknown item with reason `no-project` (S1).
  */
-const angularRoutes: EntrypointExtractor["extract"] = async (files) =>
-  files.some((file) => isPackageManifest(file.path)) ? [route("/home", 7)] : [{ status: "unknown", reason: "no-project", evidence: [{ path: COMPONENT.path, line: 1 }] }];
+const angularRoutes: EntrypointExtractor["extract"] = async (files) => ({
+  findings: files.some((file) => isPackageManifest(file.path)) ? [route("/home", 7)] : [{ status: "unknown", reason: "no-project", evidence: [{ path: COMPONENT.path, line: 1 }] }],
+  readingCuts: [],
+});
 
 test("a resolve fault is returned typed and leaves no scratch directory behind", async () => {
   const { deps, created, removed } = setup({ resolve: { ok: false, fault: { kind: "unknown-revision", detail: "main" } } });
@@ -410,7 +412,7 @@ test("an abort that arrives during the export, the read or the extraction answer
     const abort = () => interrupt.abort();
     const { deps, created, removed, readPaths } = setup({
       files: [ORDERS],
-      ...(stage === "extract" ? { extract: async () => (abort(), []) } : { [stage]: abort }),
+      ...(stage === "extract" ? { extract: async () => (abort(), { findings: [], readingCuts: [] }) } : { [stage]: abort }),
     });
     const extracted: string[] = [];
     const inner = deps.extractor.extract;
@@ -563,7 +565,7 @@ test("a live map whose lock is still held at the deadline answers aborted, and a
 test("a live map reports the paths that changed while it was answered", async () => {
   const live = fakeLive({ "src/Orders.java": "b1" }, DIGEST);
   const notices: LiveStaleNotice[] = [];
-  const { deps } = setup({ trust: TRUSTED, live, files: [ORDERS], extract: async () => (live.tree.set("src/Orders.java", "b2"), []) });
+  const { deps } = setup({ trust: TRUSTED, live, files: [ORDERS], extract: async () => (live.tree.set("src/Orders.java", "b2"), { findings: [], readingCuts: [] }) });
 
   const answer = await createEntrypointQueries(deps).map({ ...LIVE_REQUEST, onStale: (notice) => notices.push(notice) });
 
@@ -600,7 +602,7 @@ test("an exclude leaves the configuration out, so the sources it interprets are 
 test("a live map over an unchanged capture reads and extracts once, an edit misses, and a hit answers what a miss answers", async () => {
   const live = fakeLive({ "src/Orders.java": "b1" }, DIGEST);
   let extractions = 0;
-  const { deps, readPaths } = setup({ live, trust: TRUSTED, files: [ORDERS], extract: async () => (extractions++, [route("/orders", 3)]) });
+  const { deps, readPaths } = setup({ live, trust: TRUSTED, files: [ORDERS], extract: async () => (extractions++, { findings: [route("/orders", 3)], readingCuts: [] }) });
   deps.snapshotCache = createSnapshotDataCache(1 << 20);
   const queries = createEntrypointQueries(deps);
   const ask = () => queries.map({ repo: REQUEST.repo, repoId: REQUEST.repoId, live: true });
@@ -624,7 +626,7 @@ test("a live map over an unchanged capture reads and extracts once, an edit miss
 test("a live map under another scope does not reuse the data retained for the first", async () => {
   const live = fakeLive({ "src/Orders.java": "b1" }, DIGEST);
   let extractions = 0;
-  const { deps } = setup({ live, trust: TRUSTED, files: [ORDERS], extract: async () => (extractions++, []) });
+  const { deps } = setup({ live, trust: TRUSTED, files: [ORDERS], extract: async () => (extractions++, { findings: [], readingCuts: [] }) });
   deps.snapshotCache = createSnapshotDataCache(1 << 20);
   const queries = createEntrypointQueries(deps);
   const live1 = { repo: REQUEST.repo, repoId: REQUEST.repoId, live: true } as const;
@@ -637,7 +639,7 @@ test("a live map cancelled during extraction publishes nothing", async () => {
   const live = fakeLive({ "src/Orders.java": "b1" }, DIGEST);
   const controller = new AbortController();
   let extractions = 0;
-  const { deps } = setup({ live, trust: TRUSTED, files: [ORDERS], extract: async () => (extractions++, controller.abort(), []) });
+  const { deps } = setup({ live, trust: TRUSTED, files: [ORDERS], extract: async () => (extractions++, controller.abort(), { findings: [], readingCuts: [] }) });
   deps.snapshotCache = createSnapshotDataCache(1 << 20);
   const queries = createEntrypointQueries(deps);
   const cancelled = await queries.map({ repo: REQUEST.repo, repoId: REQUEST.repoId, live: true, signal: controller.signal });
@@ -646,4 +648,43 @@ test("a live map cancelled during extraction publishes nothing", async () => {
   assert.equal(extractions, 2);
   assert.ok((await queries.map({ repo: REQUEST.repo, repoId: REQUEST.repoId, live: true })).ok);
   assert.equal(extractions, 2);
+});
+
+test("a reading cut the extractor reports makes the entrypoints section partial, with that cut and no item", async () => {
+  const frontier: Cut = { kind: "unresolved-link", at: ["src/app/app.routes.ts", "src/app/app.routes.ts:4"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } };
+  const { deps } = setup({ files: [COMPONENT, MANIFEST], extract: async () => ({ findings: [], readingCuts: [frontier] }) });
+
+  const result = await createEntrypointQueries(deps).map(REQUEST);
+
+  assert.ok(result.ok);
+  const section = result.value.value.entrypoints;
+  assert.ok(section.status === "partial");
+  assert.deepEqual(section.cuts, [frontier]);
+  assert.deepEqual(section.value, []);
+});
+
+test("a reading cut the extractor reports twice at one place is one cut of the section", async () => {
+  const frontier: Cut = { kind: "unresolved-link", at: ["src/app/app.routes.ts", "src/app/app.routes.ts:4"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } };
+  const { deps } = setup({ files: [COMPONENT, MANIFEST], extract: async () => ({ findings: [], readingCuts: [frontier, { ...frontier }] }) });
+
+  const result = await createEntrypointQueries(deps).map(REQUEST);
+
+  assert.ok(result.ok);
+  assert.deepEqual(result.value.value.entrypoints.status === "partial" ? result.value.value.entrypoints.cuts : undefined, [frontier]);
+});
+
+test("a cached snapshot keeps its reading cuts: the next map of the same commit is partial with the same cut", async () => {
+  const frontier: Cut = { kind: "unresolved-link", at: ["src/app/app.routes.ts", "src/app/app.routes.ts:4"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } };
+  let extractions = 0;
+  const { deps } = setup({ files: [COMPONENT, MANIFEST], extract: async () => (extractions++, { findings: [], readingCuts: [frontier] }) });
+  deps.snapshotCache = createSnapshotDataCache(1 << 20);
+  const queries = createEntrypointQueries(deps);
+
+  await queries.map(REQUEST);
+  const second = await queries.map(REQUEST);
+
+  assert.equal(extractions, 1);
+  const section = second.ok ? second.value.value.entrypoints : undefined;
+  assert.ok(section?.status === "partial");
+  assert.deepEqual(section.cuts, [frontier]);
 });

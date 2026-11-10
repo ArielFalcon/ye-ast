@@ -582,7 +582,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_entrypoints",
     {
       title: "Entrypoints of a revision",
-      description: "Entrypoints with handler locations: HTTP/UI routes, listeners and jobs. For dependents use callers; for diffs use impact.",
+      description: "Entrypoints with handler locations: HTTP/UI routes, listeners and jobs. A route reference the sources do not resolve is listed as unknown and as a cut. For dependents use callers; for diffs use impact.",
       inputSchema: compactInput(TOOL_INPUTS.entrypoints),
       annotations,
     },

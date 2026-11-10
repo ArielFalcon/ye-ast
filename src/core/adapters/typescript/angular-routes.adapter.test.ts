@@ -19,7 +19,11 @@ function sources(files: Record<string, string>, manifest: string | null = PACKAG
 }
 
 function extract(files: Record<string, string>, manifest: string | null = PACKAGE, root = true): Promise<readonly Finding<Entrypoint>[]> {
-  return createAngularRoutesExtractor().extract(sources(files, manifest, root));
+  return findingsOf(sources(files, manifest, root));
+}
+
+function findingsOf(files: SourceFile[]): Promise<readonly Finding<Entrypoint>[]> {
+  return createAngularRoutesExtractor().extract(files).then((whole) => whole.findings);
 }
 
 /** The table of a root routes file: the body starts at line 3, one line further per line of `header`. */
@@ -413,7 +417,7 @@ test("findings come out sorted by evidence location whatever the order of the so
   const first = await extractor.extract(forward);
   const second = await extractor.extract(forward.toReversed());
 
-  assert.deepEqual(first.map((finding) => `${finding.evidence[0]?.path}:${finding.evidence[0]?.line}`), ["src/a.routes.ts:3", "src/a.routes.ts:4", "src/m.routes.ts:3", "src/z.routes.ts:3"]);
+  assert.deepEqual(first.findings.map((finding) => `${finding.evidence[0]?.path}:${finding.evidence[0]?.line}`), ["src/a.routes.ts:3", "src/a.routes.ts:4", "src/m.routes.ts:3", "src/z.routes.ts:3"]);
   assert.equal(JSON.stringify(second), JSON.stringify(first));
 });
 
@@ -712,7 +716,7 @@ const HOME = "export class Home {}\n";
 const handlerPath = (route: UiRoute): string => (route.component === "unknown" ? route.component : route.component.path);
 
 test("an app under a subfolder has its routes read, with repository-relative paths", async () => {
-  const findings = await createAngularRoutesExtractor().extract([
+  const findings = await findingsOf([
     { path: "frontend/package.json", content: PACKAGE },
     { path: "frontend/src/app/app.routes.ts", content: APP_ROUTES("home") },
     { path: "frontend/src/app/home.ts", content: HOME },
@@ -733,7 +737,7 @@ test("the component a route renders carries the span of its declaration", async 
 });
 
 test("two apps in one repository declaring the same route stay two routes, told apart by handler", async () => {
-  const findings = await createAngularRoutesExtractor().extract([
+  const findings = await findingsOf([
     { path: "web/package.json", content: PACKAGE },
     { path: "web/src/app.routes.ts", content: APP_ROUTES("home") },
     { path: "web/src/home.ts", content: HOME },
@@ -747,7 +751,7 @@ test("two apps in one repository declaring the same route stay two routes, told 
 });
 
 test("a source in a project that does not name the router has no route", async () => {
-  const findings = await createAngularRoutesExtractor().extract([
+  const findings = await findingsOf([
     { path: "frontend/package.json", content: JSON.stringify({ dependencies: { "@angular/core": "21.0.0" } }) },
     { path: "frontend/src/app.routes.ts", content: APP_ROUTES("home") },
     { path: "frontend/src/home.ts", content: HOME },

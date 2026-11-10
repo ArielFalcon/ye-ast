@@ -33,7 +33,7 @@ function controller(returns: string, annotation = "@RestController"): SourceFile
 }
 
 async function responses(...files: SourceFile[]): Promise<readonly Finding<OperationShape>[]> {
-  const routes = await createSpringRoutesExtractor(parser).extract(files);
+  const routes = (await createSpringRoutesExtractor(parser).extract(files)).findings;
   return createSpringPayloadShapes(parser, () => routes).responses(files);
 }
 

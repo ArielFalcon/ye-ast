@@ -2,8 +2,8 @@ import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import type { RouteGuard, UiRoute } from "../../domain/entrypoints/ui-route.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
-import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
-import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { Cut, Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
+import type { EntrypointExtraction, EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { pathsByProject } from "./angular-projects.ts";
 import type { ManifestPackages } from "./module-resolver.ts";
 import { sourceTree } from "./source-tree.ts";
@@ -36,15 +36,20 @@ export function createAngularRoutesExtractor(): EntrypointExtractor {
   return { extract: async (files) => extractRoutes(files) };
 }
 
-async function extractRoutes(files: readonly SourceFile[]): Promise<readonly Finding<Entrypoint>[]> {
+async function extractRoutes(files: readonly SourceFile[]): Promise<EntrypointExtraction> {
   const contents = new Map(files.map((file) => [file.path, file]));
   const { byProject, orphaned } = pathsByProject([...contents.keys()].filter(isTypeScriptSource), files, ANGULAR_ROUTER);
   const found: Finding<Entrypoint>[] = orphaned.map((path) => unknown("no-project", { path, line: 1 }));
-  for (const [project, sources] of byProject) found.push(...(await extractProject(sources, project.packages, contents)));
-  return sortFindings(found);
+  const readingCuts: Cut[] = [];
+  for (const [project, sources] of byProject) {
+    const extracted = await extractProject(sources, project.packages, contents);
+    found.push(...extracted.findings);
+    readingCuts.push(...extracted.readingCuts);
+  }
+  return { findings: sortFindings(found), readingCuts };
 }
 
-async function extractProject(sources: readonly string[], packages: ManifestPackages, contents: ReadonlyMap<string, SourceFile>): Promise<Finding<Entrypoint>[]> {
+async function extractProject(sources: readonly string[], packages: ManifestPackages, contents: ReadonlyMap<string, SourceFile>): Promise<{ findings: Finding<Entrypoint>[]; readingCuts: Cut[] }> {
   const read = async (path: string): Promise<string | undefined> => contents.get(path)?.content;
   const resolver = createModuleResolver(read, packages);
   const readings = new Map<string, Promise<RouteFileReading | undefined>>();
@@ -64,7 +69,11 @@ async function extractProject(sources: readonly string[], packages: ManifestPack
   const noRoot: UnknownReason | undefined = loaded.declared ? undefined : "unresolved";
   for (const table of loaded.unreached) unreachedRoutesOf(table.entries, unresolvedReferences, walk.findings, noRoot);
   for (const path of unparsed) walk.findings.push(unknown("source-unreadable", { path, line: 1 }));
-  return walk.findings;
+  return { findings: walk.findings, readingCuts: loaded.unresolvedReferences.map(frontierOf) };
+}
+
+function frontierOf(reference: UnresolvedReference): Cut {
+  return { kind: "unresolved-link", at: [reference.path, `${reference.path}:${reference.line}`], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } };
 }
 
 /**

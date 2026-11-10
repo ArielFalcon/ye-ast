@@ -1,10 +1,19 @@
 import type { LibrarySource } from "../domain/topology/library-source.ts";
 import type { Entrypoint } from "../domain/entrypoints/entrypoint.ts";
-import type { Finding } from "../domain/shared/fact.ts";
+import type { Cut, Finding } from "../domain/shared/fact.ts";
 
 export interface SourceFile {
   path: string;
   content: string;
+}
+
+export interface EntrypointExtraction {
+  findings: readonly Finding<Entrypoint>[];
+  /**
+   * The places where the reading stopped: a reference the sources do not let the reader cross. A cut is never an item; the
+   * map carries it as a cut of its section. Empty when the reading stopped nowhere.
+   */
+  readingCuts: readonly Cut[];
 }
 
 export interface EntrypointExtractor {
@@ -15,5 +24,5 @@ export interface EntrypointExtractor {
    * `libraries` are the sources of repositories the files depend on: a listener the files inherit from a class they
    * declare is read, and no entrypoint is reported from the libraries themselves.
    */
-  extract(files: readonly SourceFile[], libraries?: readonly LibrarySource[]): Promise<readonly Finding<Entrypoint>[]>;
+  extract(files: readonly SourceFile[], libraries?: readonly LibrarySource[]): Promise<EntrypointExtraction>;
 }

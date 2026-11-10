@@ -147,7 +147,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
       })];
       const librarySources = libraries.flatMap((library) => library.sources.toSorted((a, b) => compareText(a.path, b.path)).map((source) => ({ ...source, repo: library.identity.id })));
       const callSites = (await deps.callSites.of(entry.sources, entry.repository.repo, librarySources)).filter((site) => selected(site.file));
-      const entrypoints = librarySources.length === 0 ? entry.repository.entrypoints : selectedFindings(await deps.extractor.extract(entry.sources, librarySources), selected);
+      const entrypoints = librarySources.length === 0 ? entry.repository.entrypoints : selectedFindings((await deps.extractor.extract(entry.sources, librarySources)).findings, selected);
       resolved.push({ ...entry, librarySources, cuts, repository: { ...entry.repository, entrypoints }, callSites, names: [...entry.stated, ...callSiteNames(entry.repository.repo, callSites)] });
     }
     return resolved;
