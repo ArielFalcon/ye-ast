@@ -124,7 +124,7 @@ function setup(options: Options) {
     },
     scratch: { create: async () => "/scratch/head", remove: async () => undefined },
     reader: { read: async () => options.sources ?? [] },
-    extractor: { extract: async () => (options.onExtract?.(), options.findings ?? []) },
+    extractor: { extract: async () => (options.onExtract?.(), { findings: options.findings ?? [], readingCuts: [] }) },
     digest: { of: (value: string) => `digest:${value}` },
     producer: { name: "ye-ast", version: "0.0.0" },
     matcher: { matches: options.matches ?? (() => true) },
