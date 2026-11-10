@@ -375,6 +375,22 @@ retention silently becomes a per-call cost.
       the TypeScript pack, Spring the entrypoints, routes, call sites and data effects over the Java pack. A framework
       reads a pack's outputs and never implements a language stage; the frozen exception that lets `spring` read the
       Java trees (`.dependency-cruiser.cjs`, `spring-reads-only-the-java-parser`) stays, inside the Java hold.
+    - **A framework plugin is one contract value.** `core/ports/framework-plugin.port.ts` declares what a plugin
+      supplies: the languages it reads, its applicability signal at the two levels above, and the framework stages it
+      contributes, each implemented against the stage contract it extends. A plugin that cannot read a stage it claims
+      declares it absent in the same vocabulary a pack uses, and the line answers `capability-absent`, never an empty
+      result. Composition registers every plugin in one place, and a fitness rule keeps that the only place; a contract
+      with no registered consumer is dead code, so a plugin lands with the reader it wraps.
+    - **A framework owns no path but owns its vocabulary.** The names, packages, annotations and exports that carry
+      meaning for a framework — which exports of `@angular/router` are the router, which annotations Spring reads — are
+      declared once, inside that framework's plugin. A host redefines them only through `boundaries[]`, and only for a
+      third party's package, never for the framework's own. A second declaration of one of them is a defect and a
+      fitness rule holds it: the same duplication already produced two recognisers of `RouterModule.forChild`, one
+      missing a namespace import that the other accepts.
+    - **A framework's code lives behind its plugin.** Its modules live in `core/adapters/frameworks/<name>/`; no other
+      framework imports them and the language adapter does not. Only the plugin value and the stages it contributes are
+      reachable from composition, and a fitness rule states both directions, so framework code cannot drift back into a
+      language adapter as the next framework arrives.
     - **A framework owns no path and is selected by a signal, never by an extension** (the owner, 2026-11-09,
       verbatim: "Lo que si no se distingue tan fácil es el procesado cuando hayan varios framework de un lenguaje,
       porque la extensión puede ser la misma. Como se conectan en este diseño los plugins al lenguaje, soporta la
