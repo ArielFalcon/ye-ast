@@ -29,7 +29,8 @@ export function modulesOf(angular: RawAngularFile): AngularModuleReading {
  * from every root configuration and from the module graph a `bootstrapModule(...)` call boots or a `loadChildren` loads,
  * so a `forChild` table a module composes is named under the prefix of the root or route that reaches its graph. Each route entry that shows a component is a
  * `ui-route`; a path or an outlet the sources do not give as text, a lazy section that cannot be followed, a `matcher`
- * and a source that does not parse are `unknown` items at their location.
+ * and a source that does not parse are `unknown` items at their location. Lazy loads include legacy strings,
+ * helpers, await and destructuring; a reference called with arguments is `no-extractor`.
  */
 export function createAngularRoutesExtractor(): EntrypointExtractor {
   return { extract: async (files) => extractRoutes(files) };
