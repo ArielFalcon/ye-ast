@@ -43,8 +43,22 @@ function u32(value: number): Buffer {
   return bytes;
 }
 
+/** The end record a candidate is forged from; the comment length is stated in bytes, not derived. */
+function endRecord(fields: { entries: number; size: number; offset: number; commentLength: number }): Buffer {
+  return Buffer.concat([
+    u32(EOCD_SIGNATURE),
+    u16(0),
+    u16(0),
+    u16(fields.entries),
+    u16(fields.entries),
+    u32(fields.size),
+    u32(fields.offset),
+    u16(fields.commentLength),
+  ]);
+}
+
 /** A ZIP as a writer produces it: locals, then the central directory, then the end record. */
-function zipBytes(members: readonly Member[], comment = ""): Buffer {
+function zipBytes(members: readonly Member[], comment: string | Buffer = ""): Buffer {
   const locals: Buffer[] = [];
   const directory: Buffer[] = [];
   let offset = 0;
@@ -94,7 +108,7 @@ function zipBytes(members: readonly Member[], comment = ""): Buffer {
     offset += local.length;
   }
   const central = Buffer.concat(directory);
-  const stated = Buffer.from(comment, "utf8");
+  const stated = typeof comment === "string" ? Buffer.from(comment, "utf8") : comment;
   return Buffer.concat([
     ...locals,
     central,
@@ -237,13 +251,59 @@ test("a stored member whose directory states unequal sizes refuses the archive, 
   assert.deepEqual(archive.entry("java/lang/Object.class"), { kind: "unreadable", name: "java/lang/Object.class" });
 });
 
-test("an end record hidden in another end record's comment is refused, never read as an empty archive", async () => {
-  const hidden = Buffer.alloc(22);
-  hidden.writeUInt32LE(EOCD_SIGNATURE, 0);
+test("an end record forged inside another end record's comment is refused, never read as an empty archive", async () => {
   const members = [{ name: "java/lang/Object.class", content: "OBJECT", method: STORED }];
-  const archive = openJdkArchive(await archiveFile(zipBytes(members, hidden.toString("latin1"))));
+  for (const trailing of [0, 64]) {
+    const commentAt = zipBytes(members).length;
+    const comment = Buffer.concat([endRecord({ entries: 0, size: 0, offset: commentAt, commentLength: trailing }), Buffer.alloc(trailing)]);
+    const archive = openJdkArchive(await archiveFile(zipBytes(members, comment)));
+    assert.deepEqual(archive.names(""), ["java/lang/Object.class"]);
+    assert.deepEqual(archive.entry("java/lang/Object.class"), { kind: "entry", name: "java/lang/Object.class", bytes: Buffer.from("OBJECT") });
+    assert.deepEqual(archive.entry("java/lang/Forged.class"), { kind: "absent" });
+  }
+});
+
+test("a forged comment naming a member the file does not hold lists nothing and reads that member as absent", async () => {
+  const members = [{ name: "java/lang/Object.class", content: "OBJECT", method: STORED }];
+  const base = zipBytes(members);
+  const phantom = zipBytes([{ name: "java/lang/Phantom.class", content: "GHOST", method: STORED }]);
+  const phantomEnd = phantom.length - 22;
+  const phantomDirectoryAt = phantom.readUInt32LE(phantomEnd + 16);
+  const record = Buffer.from(phantom.subarray(0, phantomEnd));
+  record.writeUInt32LE(base.length, phantomDirectoryAt + 42);
+  const forged = endRecord({
+    entries: 1,
+    size: phantom.readUInt32LE(phantomEnd + 12),
+    offset: base.length + phantomDirectoryAt,
+    commentLength: 0,
+  });
+  const archive = openJdkArchive(await archiveFile(zipBytes(members, Buffer.concat([record, forged]))));
+  assert.deepEqual(archive.names(""), ["java/lang/Object.class"]);
+  assert.deepEqual(archive.entry("java/lang/Phantom.class"), { kind: "absent" });
+  assert.deepEqual(archive.entry("java/lang/Object.class"), { kind: "entry", name: "java/lang/Object.class", bytes: Buffer.from("OBJECT") });
+});
+
+test("a stored member whose declared size reaches into the next record is unreadable, never fabricated bytes", async () => {
+  const bytes = Buffer.from(
+    zipBytes([
+      { name: "java/lang/Object.class", content: "OBJECT", method: STORED },
+      { name: "java/lang/String.class", content: "S".repeat(5_000), method: STORED },
+    ]),
+  );
+  const directoryAt = bytes.readUInt32LE(bytes.length - 22 + 16);
+  bytes.writeUInt32LE(1_000, directoryAt + 20);
+  bytes.writeUInt32LE(1_000, directoryAt + 24);
+  const archive = openJdkArchive(await archiveFile(bytes));
   assert.deepEqual(archive.names(""), []);
   assert.deepEqual(archive.entry("java/lang/Object.class"), { kind: "unreadable", name: "java/lang/Object.class" });
+  assert.deepEqual(archive.entry("java/lang/String.class"), { kind: "unreadable", name: "java/lang/String.class" });
+});
+
+test("an entry name carrying a NUL byte is refused, never listed nor read", async () => {
+  const name = "java/lang/Ob\u0000ject.class";
+  const archive = openJdkArchive(await archiveFile(zipBytes([{ name, content: "OBJECT", method: STORED }])));
+  assert.deepEqual(archive.names(""), []);
+  assert.deepEqual(archive.entry(name), { kind: "unreadable", name });
 });
 
 test("an encrypted member refuses the archive, never answering its ciphertext", async () => {
