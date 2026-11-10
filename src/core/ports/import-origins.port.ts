@@ -94,7 +94,8 @@ export interface ImportOrigins {
    * field, or the declared return type of the repository method a receiver call names in the same way (`f().m()`).
    * `unproven` when a value or declared repository receiver has no settled member: an unread hierarchy, an unsettled
    * signature of the call's arity, varargs, an inaccessible private or an `Object` method. Such an index target cannot
-   * prove a step. `unknown` when this reader does not establish a receiver obligation, including TypeScript sites.
+   * prove a step, and its `candidates` name the declarations of the call's arity the type offers where the reading read
+   * the whole hierarchy. `unknown` when this reader does not establish a receiver obligation, including TypeScript sites.
    * Runtime body selection remains the separate `dispatchTargets` obligation. A Java `super(...)` or `this(...)`, asked
    * with `super` or `this` as its member, names the one constructor of the superclass or of the class with the call's
    * arity (a compact canonical constructor takes the record's components); `unproven` when several or none have that
@@ -152,6 +153,13 @@ export interface ReceiverCallSite {
   member: string;
 }
 
+/** A declaration by its file and the 1-based lines from its first token to its name. */
+export interface MethodPlace {
+  file: string;
+  start: number;
+  nameLine: number;
+}
+
 /**
  * The method declaration a call names, by its file and the 1-based lines from its first token to its name; `unproven`
  * when its value or declared repository receiver has no settled member, so no index edge proves a step; `unknown`
@@ -159,7 +167,15 @@ export interface ReceiverCallSite {
  * method is its bound's: the call depends on it, and what runs is not proven. `capability-absent`: the language pack of the
  * site's file declares it cannot answer (ADR-0045 decision 12).
  */
-export type ReceiverMethod = { kind: "method"; file: string; start: number; nameLine: number; bound?: true } | { kind: "unproven" } | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT };
+export type ReceiverMethod =
+  | { kind: "method"; file: string; start: number; nameLine: number; bound?: true }
+  /**
+   * `candidates`: the declarations of the called name that the receiver's type and its hierarchy offer at the call's
+   * arity, sorted, present only when the reading read that whole hierarchy. A family attributes the call among them; it
+   * never widens them.
+   */
+  | { kind: "unproven"; candidates?: readonly MethodPlace[] }
+  | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT };
 
 /** A place a declaration uses a name, where the index places the use: repository-relative and 1-based. */
 export interface UseSite {

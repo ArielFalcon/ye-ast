@@ -258,16 +258,17 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
 
   /**
    * What the base binds an edge on a value receiver to (ADR-0041 decision 4): `proven` at the declaration it binds, a
-   * redirect from a homonym or a method above it, `proven` where its receiver's type is attributed the target among
-   * several, and a `name-match` otherwise. Dependence is the binding the language makes at compile time, so a declared
-   * type proves it even where what runs is unproven.
+   * redirect from a homonym or a method above it, `proven` where its receiver's type offers that one declaration, and a
+   * `name-match` otherwise. Dependence is the binding the language makes at compile time, so a declared type proves it
+   * even where what runs is unproven.
    */
   async function receiverVerdict({ edge, source, target }: FollowedEdge, receiver: string, settle: CallBinder, bind: CallBindings): Promise<EdgeTarget> {
     const place = { file: source.file, line: edge.line!, column: edge.column! + 1 };
     const proof = await settle.receiverOf({ body: source, ...place, member: target.name, receiver });
     const binding = await bind.ofReceiver(proof, target.name, [target], place);
     if (binding.target !== undefined && binding.target.id !== target.id) return { kind: "redirect", to: binding.target, receiver };
-    return { kind: "keep", receiver, derivation: binding.target !== undefined || binding.attributed.length > 0 ? "proven" : "name-match" };
+    const offered = binding.candidates.length === 1 && binding.candidates[0]!.id === target.id && binding.attributed.length > 0;
+    return { kind: "keep", receiver, derivation: binding.target !== undefined || offered ? "proven" : "name-match" };
   }
 
   /** Per Java call edge, the method the receiver reading names at its place (ADR-0044 decision 1); none where it settles nothing. */

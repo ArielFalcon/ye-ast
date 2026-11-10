@@ -3,7 +3,7 @@ import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts"
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
-import type { ImportOrigins, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
+import type { ImportOrigins, MethodPlace, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
@@ -60,8 +60,9 @@ interface ReadFile extends ReceiverSource {
  * static call names no instance method — or the name is one of `Object`'s methods; when the call sits in an
  * anonymous or a local class; when a source holds an annotation by which a processor adds overloads or rewrites calls
  * (`CALL_REWRITING_ANNOTATIONS`); or when the declared hierarchy does not settle the member. Declaration selection and
- * runtime dispatch are separate obligations. An unproven value receiver or declared repository member remains a cut;
- * no name-only index target proves it. Non-Java and non-invocation sites remain unknown.
+ * runtime dispatch are separate obligations. An unproven value receiver or declared repository member remains a cut,
+ * naming the declarations of the call's arity its type offers where the whole hierarchy was read; no name-only index
+ * target proves it. Non-Java and non-invocation sites remain unknown.
  */
 export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts, hold?: ParseHold): ImportOrigins["receiverMethods"] {
   const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
@@ -95,7 +96,8 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
           continue;
         }
         const named = proves ? resolver.methodOf(invocation, source) : undefined;
-        if (named !== undefined) results[index] = { ...placedAt(named.method), ...(named.bound ? { bound: true as const } : {}) };
+        if (named !== undefined && "method" in named) results[index] = { ...placedAt(named.method), ...(named.bound ? { bound: true as const } : {}) };
+        else if (named !== undefined) results[index] = { kind: "unproven", candidates: named.candidates };
         else if (resolver.hasDeclaredReceiver(invocation, source) || resolver.holdsValue(invocation, source.file)) results[index] = UNPROVEN;
       }
       return results;
@@ -175,7 +177,7 @@ export function createResolver(project: JavaProject) {
     if (object === null || object.type === "this") return declared(thisType(invocation, source.file, project));
     if (object.type === "method_invocation") {
       const called = methodNamed(object, source);
-      return called === undefined ? undefined : declared(returnTypeOf(called.method), called.bound);
+      return called === undefined || !("method" in called) ? undefined : declared(returnTypeOf(called.method), called.bound);
     }
     const binding = source.bindings.get(callKey(invocation.startPosition.row + 1, invocation.startPosition.column + 1, invocation.childForFieldName("name")?.text ?? ""));
     const receiver = object.type === "identifier" ? object.text : object.type === "field_access" ? object.childForFieldName("field")?.text : undefined;
@@ -190,14 +192,18 @@ export function createResolver(project: JavaProject) {
     return bounds.length === 1 ? declared(repositoryType(bounds[0]!, source.file, bounds[0]!), true) : undefined;
   };
 
-  /** The one method of the name that the receiver's declared type offers for the call's arguments. */
-  const methodNamed = (invocation: Node, source: ReceiverSource): { method: MethodDecl; bound: boolean } | undefined => {
+  /**
+   * The one method of the name that the receiver's declared type offers for the call's arguments, or the declarations of
+   * the call's arity it cannot single one out of.
+   */
+  const methodNamed = (invocation: Node, source: ReceiverSource): { method: MethodDecl; bound: boolean } | { candidates: readonly MethodPlace[] } | undefined => {
     const held = receiverOf(invocation, source);
     const name = invocation.childForFieldName("name")?.text;
     if (held === undefined || name === undefined) return undefined;
-    const method = memberOf(held.type, name, invocation, source.file, enclosingType(invocation, source.file, project));
-    if (method === undefined || (held.typeName && !method.modifiers.includes("static"))) return undefined;
-    return { method, bound: held.bound };
+    const offered = memberOf(held.type, name, invocation, source.file, enclosingType(invocation, source.file, project));
+    if (offered === undefined) return undefined;
+    if ("candidates" in offered) return { candidates: offered.candidates.map(placeOf).sort(byPlace) };
+    return held.typeName && !offered.method.modifiers.includes("static") ? undefined : { method: offered.method, bound: held.bound };
   };
 
   /** The repository type a method declares it returns: none for a type variable, an array, a primitive or a type outside the repository. */
@@ -212,13 +218,14 @@ export function createResolver(project: JavaProject) {
   };
 
   /**
-   * The declaration a call of `name` with `invocation`'s arguments on a value of `type` is resolved to, among the members
-   * the call's file reaches: the member whose stated parameter types equal the arguments' settled signature (JLS
-   * 15.12.2.5), else the reachable members of the name, declared and inherited, must be one signature at the call's
-   * arity, so overload resolution has one candidate; the type's own, else the nearest up its class chain, else the only
-   * one. A member whose reach is unknown withholds the selection.
+   * What a call of `name` with `invocation`'s arguments on a value of `type` is resolved to, among the members the call's
+   * file reaches: the member whose stated parameter types equal the arguments' settled signature (JLS 15.12.2.5), else
+   * the reachable members of the name, declared and inherited, must be one signature at the call's arity, so overload
+   * resolution has one candidate; the type's own, else the nearest up its class chain, else the only one. The
+   * declarations of that arity it cannot single one out of are its answer when the selection settles none. A member whose
+   * reach is unknown withholds the selection.
    */
-  const memberOf = (type: TypeDecl, name: string, invocation: Node, file: JavaFile, caller: TypeDecl | undefined): MethodDecl | undefined => {
+  const memberOf = (type: TypeDecl, name: string, invocation: Node, file: JavaFile, caller: TypeDecl | undefined): { method: MethodDecl } | { candidates: readonly MethodDecl[] } | undefined => {
     if (OBJECT_METHODS.has(name)) return undefined;
     const above = declaredHierarchy(type);
     if (above.gaps.some((gap) => !memberless.has(clauseKey(gap.file, gap.node)))) return undefined;
@@ -232,13 +239,13 @@ export function createResolver(project: JavaProject) {
     const [first] = reachable;
     if (first === undefined) return undefined;
     const exact = caller === undefined ? undefined : exactCandidate(reachable, invocation, caller);
-    if (exact !== undefined) return exact;
-    if (reachable.some((method) => method !== first && !sameStatedSignature(method, first))) return undefined;
+    if (exact !== undefined) return { method: exact };
+    if (reachable.some((method) => method !== first && !sameStatedSignature(method, first))) return { candidates: reachable };
     for (const current of project.classChain(type)) {
       const own = reachable.find((method) => method.owner === current);
-      if (own !== undefined) return own;
+      if (own !== undefined) return { method: own };
     }
-    return reachable.length === 1 ? first : undefined;
+    return reachable.length === 1 ? { method: first } : { candidates: reachable };
   };
 
   /**
@@ -393,8 +400,17 @@ function hasTypeVariables(type: TypeDecl): boolean {
 }
 
 /** A method the index places by its file and the lines from its first token to its name (a compact constructor's first line). */
-function placedAt(method: MethodDecl): ReceiverMethod {
-  return { kind: "method", file: method.owner.file.path, start: method.node.startPosition.row + 1, nameLine: (method.node.childForFieldName("name") ?? method.node).startPosition.row + 1 };
+function placeOf(method: MethodDecl): MethodPlace {
+  return { file: method.owner.file.path, start: method.node.startPosition.row + 1, nameLine: (method.node.childForFieldName("name") ?? method.node).startPosition.row + 1 };
+}
+
+function placedAt(method: MethodDecl): Extract<ReceiverMethod, { kind: "method" }> {
+  return { kind: "method", ...placeOf(method) };
+}
+
+/** The order a cut names candidates in: by file, then by the lines each declaration spans. */
+function byPlace(first: MethodPlace, second: MethodPlace): number {
+  return first.file < second.file ? -1 : first.file > second.file ? 1 : first.start - second.start || first.nameLine - second.nameLine;
 }
 
 export function hasVarargs(method: MethodDecl): boolean {
