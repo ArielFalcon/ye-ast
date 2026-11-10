@@ -282,6 +282,16 @@ would answer the single body that the probe with the veto disabled shows.
       globals precedent (`typescript-lib-globals.extract.ts`): ye-ast's own pinned input, extracted as data, so no
       repository bytes are parsed and the answer is deterministic. A JDK pin upgrade regenerates it and passes the
       corpus gate like any parser upgrade (ADR-0013 decision 3).
+    - **Why the class file is read by ye-ast itself.** V1b.1a and V1b.1b read `ct.sym`'s entries and their class files
+      with code ye-ast owns, not with a dependency. No maintained JavaScript parser for the Java class-file format
+      exists (npm, searched 2026-11-10: `java-parser` reads source, and the rest of the results are other virtual
+      machines' bytecode), so the alternatives were an unmaintained single-author package or a port of a JVM tool; the
+      subset this table needs is closed and small (JVMS 4.6: header, constant pool, flags, interfaces, members, and the
+      `Signature` and `Record` attributes); and the reproducible generator needs the reading to be stable, free of
+      external processes and independent of the JDK build that happens to be installed. The cost is real and measured:
+      the first decoder read the field table as an attribute table and misaligned every following method, caught only by
+      decoding the 16 063 real entries of one `ct.sym`; that reading is now a test and the validation against the real
+      file is part of the unit's evidence.
     - **Precondition of V1b.** Before V1b ships, its commit fixes: the concrete JDK distribution and version, and the
       digest of the archive the extractor reads; a reproducible generator (same input digest, same output bytes) and
       its deterministic serialization (sorted keys and members, no timestamps); and the licence and notices that apply
