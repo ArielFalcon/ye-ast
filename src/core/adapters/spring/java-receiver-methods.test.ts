@@ -272,3 +272,21 @@ test("given derived facts, a second reader over the same sources answers the sam
   assert.deepEqual(again, first);
   assert.equal(parsed, afterFirst);
 });
+
+const OVERLOADED_PORT = java("Port.java", ["package app;", "public interface Port {", "  void save(String value);", "  void save(String value, int times);", "}"]);
+const OVERLOADING_IMPL = java("Impl.java", ["package app;", "public class Impl implements Port {", "  public void save(String value) {}", "  public void save(String value, int times) {}", "}"]);
+const GENERIC_BOX = java("Box.java", ["package app;", "public interface Box<T> {", "  void put(T value);", "}"]);
+const GENERIC_CRATE = java("Crate.java", ["package app;", "public class Crate implements Box<String> {", "  public void put(String value) {}", "}"]);
+
+test("a Java method names the supertype declaration of its own signature, and a generic contract stays unknown", async () => {
+  const answers = await createJavaNameBindings(createJavaParser, [OVERLOADED_PORT, OVERLOADING_IMPL, GENERIC_BOX, GENERIC_CRATE]).implementedDeclarations([
+    { file: OVERLOADING_IMPL.path, start: 3, name: "save" },
+    { file: OVERLOADING_IMPL.path, start: 4, name: "save" },
+    { file: GENERIC_CRATE.path, start: 3, name: "put" },
+  ]);
+  assert.deepEqual(answers, [
+    { kind: "declarations", declarations: [{ file: OVERLOADED_PORT.path, start: 3, nameLine: 3 }] },
+    { kind: "declarations", declarations: [{ file: OVERLOADED_PORT.path, start: 4, nameLine: 4 }] },
+    { kind: "unknown" },
+  ]);
+});

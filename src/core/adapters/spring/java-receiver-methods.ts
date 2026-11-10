@@ -3,7 +3,7 @@ import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts"
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
-import type { ImportOrigins, MethodPlace, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
+import type { ImplementedDeclarations, ImplementingSite, ImportOrigins, MethodPlace, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
@@ -15,6 +15,7 @@ import { createJavaProject, readArgumentSignature, readSignature, sameSignature,
 const SLOT = "java-receiver-methods";
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
+const UNKNOWN_DECLARATIONS: ImplementedDeclarations = { kind: "unknown" };
 /** Methods every class inherits from `Object` (JLS 4.3.2): a call of one of these names may resolve to `Object`'s. */
 const OBJECT_METHODS: ReadonlySet<string> = new Set(["clone", "equals", "finalize", "getClass", "hashCode", "notify", "notifyAll", "toString", "wait"]);
 /** Nodes the grammar places among a call's arguments that are no argument. */
@@ -125,6 +126,75 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
       throw error;
     }
   };
+}
+
+/**
+ * `ImportOrigins.implementedDeclarations` for Java sources: a method implements or overrides the methods of the supertypes
+ * in the repository that declare the same parameter types (JLS 8.4.8.1), read from the declared hierarchy. A signature the
+ * sources do not settle (a type variable on either side, an unread parameter type, an ambiguous supertype, a source the
+ * reader does not place) answers `unknown`, so the by-name bridge keeps its reach.
+ */
+export function createJavaImplementedDeclarations(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold): ImportOrigins["implementedDeclarations"] {
+  const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
+  const analyze = (sites: readonly ImplementingSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly ImplementedDeclarations[] => {
+    if (!provesBinding(files, project, unparsed, unreadJvm)) return sites.map(() => UNKNOWN_DECLARATIONS);
+    const methods = methodsByPlace(project);
+    const hierarchies = new Map<TypeDecl, ReturnType<JavaProject["hierarchy"]>>();
+    const signatures = new Map<MethodDecl, Signature | undefined>();
+    const hierarchyOf = (type: TypeDecl) => {
+      if (!hierarchies.has(type)) hierarchies.set(type, project.hierarchy(type));
+      return hierarchies.get(type)!;
+    };
+    const signatureOf = (method: MethodDecl) => {
+      if (!signatures.has(method)) signatures.set(method, readSignature(method, project));
+      return signatures.get(method);
+    };
+    return sites.map((site) => {
+      const method = methods.get(`${site.file}:${site.start}:${site.name}`);
+      if (method === undefined || method === "ambiguous") return UNKNOWN_DECLARATIONS;
+      const signature = signatureOf(method);
+      if (signature === undefined || signature.some(isVariable)) return UNKNOWN_DECLARATIONS;
+      const { types, gaps } = hierarchyOf(method.owner);
+      if (gaps.some((gap) => gap.kind === "ambiguous")) return UNKNOWN_DECLARATIONS;
+      const found: MethodPlace[] = [];
+      for (const type of types) {
+        if (type === method.owner) continue;
+        for (const candidate of type.methods) {
+          if (candidate.name !== method.name) continue;
+          const other = signatureOf(candidate);
+          if (other === undefined || other.some(isVariable)) return UNKNOWN_DECLARATIONS;
+          if (sameSignature(signature, other)) found.push(placeOf(candidate));
+        }
+      }
+      return { kind: "declarations", declarations: found.toSorted(byPlace) };
+    });
+  };
+  return async (sites) => {
+    if (sites.length === 0) return [];
+    const read = await parser();
+    const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources);
+    if (held !== undefined) return analyze(sites, held.files.map(({ file }) => file), held.unparsed, held.project);
+    return withJavaSources(read, (parse) => {
+      const { files, unparsed } = parse(sources);
+      return analyze(sites, files, unparsed, createJavaProject(files));
+    });
+  };
+}
+
+/** The methods of a project by file, first line and name; a place two declarations share is `ambiguous`. */
+function methodsByPlace(project: JavaProject): ReadonlyMap<string, MethodDecl | "ambiguous"> {
+  const methods = new Map<string, MethodDecl | "ambiguous">();
+  for (const type of project.types) {
+    for (const method of type.methods) {
+      const key = `${type.file.path}:${placeOf(method).start}:${method.name}`;
+      methods.set(key, methods.has(key) ? "ambiguous" : method);
+    }
+  }
+  return methods;
+}
+
+function isVariable(parameter: Signature[number]): boolean {
+  return "variable" in parameter;
 }
 
 /** An answer a deadline cut, which no derived fact retains. */

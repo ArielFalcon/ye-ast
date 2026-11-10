@@ -521,3 +521,44 @@ test("a template member proof makes its component a caller only for a test-free 
   assert.deepEqual(inbound.callersOf(target, false).map((edge) => [edge.from.id, edge.basis, edge.lines, edge.resource]), [["Page", "call", [2], "src/page.html"]]);
   assert.deepEqual(inbound.callersOf(twin, false), []);
 });
+
+const PORT_FILE = "src/port.ts";
+const IMPL_FILE = "src/impl.ts";
+
+/** A `Port` with two overloads of `save`, and `Impl` implementing it with the second one's signature. */
+function implementingGraph() {
+  const nodes = [fakeNode("Port", "interface", PORT_FILE, 1, 4), fakeNode("save1", "method", PORT_FILE, 2, 2, "save"), fakeNode("save2", "method", PORT_FILE, 3, 3, "save"), fakeNode("Impl", "class", IMPL_FILE, 1, 6), fakeNode("implSave", "method", IMPL_FILE, 4, 4, "save")];
+  const edges: FakeEdge[] = [
+    { from: "Port", to: "save1", kind: "contains" },
+    { from: "Port", to: "save2", kind: "contains" },
+    { from: "Impl", to: "implSave", kind: "contains" },
+    { from: "Impl", to: "Port", kind: "implements" },
+  ];
+  return fakeCodeGraph(nodes, edges);
+}
+
+test("a method bridges to the contract declaration of its own signature", () => {
+  const graph = implementingGraph();
+  const implSave = graph.symbolsByIds(["implSave" as GraphSymbol["id"]])[0]!;
+  const implemented = new Map([[implSave.id, { kind: "declarations" as const, declarations: [{ file: PORT_FILE, start: 3, nameLine: 3 }] }]]);
+  const inbound = createInboundEdges(graph, isTestFile, [], undefined, undefined, undefined, { dropped: new Set(), into: new Map(), implemented });
+  assert.deepEqual(inbound.callersOf(implSave, false).map((edge) => [edge.from.id, edge.bridge]), [["save2", "up"]]);
+});
+
+test("a method whose contract the port cannot settle keeps the by-name bridge to every overload", () => {
+  const graph = implementingGraph();
+  const implSave = graph.symbolsByIds(["implSave" as GraphSymbol["id"]])[0]!;
+  const implemented = new Map([[implSave.id, { kind: "unknown" as const }]]);
+  const inbound = createInboundEdges(graph, isTestFile, [], undefined, undefined, undefined, { dropped: new Set(), into: new Map(), implemented });
+  assert.deepEqual(inbound.callersOf(implSave, false).map((edge) => edge.from.id), ["save1", "save2"]);
+});
+
+test("a contract change reaches only the implementation whose declarations name it", () => {
+  const graph = implementingGraph();
+  const [save1, save2] = ["save1", "save2"].map((id) => graph.symbolsByIds([id as GraphSymbol["id"]])[0]!);
+  const implSave = graph.symbolsByIds(["implSave" as GraphSymbol["id"]])[0]!;
+  const implemented = new Map([[implSave.id, { kind: "declarations" as const, declarations: [{ file: PORT_FILE, start: 2, nameLine: 2 }] }]]);
+  const inbound = createInboundEdges(graph, isTestFile, [], undefined, undefined, undefined, { dropped: new Set(), into: new Map(), implemented });
+  assert.deepEqual(inbound.callersOf(save2!, true).map((edge) => edge.from.id), []);
+  assert.deepEqual(inbound.callersOf(save1!, true).map((edge) => [edge.from.id, edge.bridge]), [["implSave", "down"]]);
+});

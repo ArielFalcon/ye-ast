@@ -26,6 +26,7 @@ function recordingPack(profile: LanguageProfile, received: string[], readsProjec
     declaredTypes: async (sites) => sites.map((site) => (received.push(site.file), { kind: "package", module: tag, name: tag })),
     dispatchTargets: async (sites) => sites.map((site) => (received.push(site.file), { kind: "unknown", reason: tag === "java" ? "aspect may replace the body" : "dispatch not proven" })),
     receiverMethods: async (sites) => sites.map((site) => (received.push(site.file), { kind: "unproven" })),
+    implementedDeclarations: async (sites) => sites.map(() => ({ kind: "unknown" })),
     replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),
   };
   return {

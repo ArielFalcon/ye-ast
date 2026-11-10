@@ -2,10 +2,10 @@ import { isReadSource } from "../../domain/languages/profiles.ts";
 import type { BuildOutputEvidence, DeclaredBuildOutput, UnreadOutputReason } from "../../domain/shared/build-outputs.ts";
 import type { BuildOutputInput, Cut, FactBase, SnapshotRef } from "../../domain/shared/fact.ts";
 import type { ScopeRequest } from "../../domain/shared/scope.ts";
-import type { CodeGraphReader, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
+import type { CodeGraphReader, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { AbsentCapability } from "../../ports/language-pack.port.ts";
-import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
+import type { ImplementedDeclarations, ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { RevisionSources } from "../../ports/revision-sources.port.ts";
 import type { SourceReading } from "../../domain/change/source-tokens.ts";
@@ -14,6 +14,7 @@ import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 import type { TypeBindings, TypeTarget } from "../../ports/type-bindings.port.ts";
 import { createDeclarationUses, unresolvedOncePerFile, type DeclarationUses, type UnresolvedIn } from "../navigation/declaration-uses.ts";
 import { createEdgeTargets, edgeKey, NOTHING_DECLARED, type EdgeTargets } from "../navigation/edge-targets.ts";
+import { implementedContractsOf } from "../navigation/implemented-contracts.ts";
 import { createGraphNavigation } from "../navigation/graph-navigation.ts";
 import { callsThroughOrigins, createOriginCalls, type OriginCalls } from "../navigation/origin-calls.ts";
 import { typedCallsOf } from "../navigation/proven-calls.ts";
@@ -138,6 +139,8 @@ export interface BaseReading {
   reverseCalls(targets: EdgeTargets): ReverseCalls | undefined;
   /** The member calls through the relations' field and `inject()` local origins into reached declarations; absent without bindings. */
   originCalls(targets: EdgeTargets): OriginCalls | undefined;
+  /** The supertype declarations of each Java method of a class with a repository supertype, asked of the origins once (RFC-0024 U4); empty without origins. */
+  implementedContracts(): Promise<ReadonlyMap<GraphNodeId, ImplementedDeclarations>>;
   /** The stages the language pack of `path` declares absent (ADR-0045 decision 12); none where no pack reads it. */
   absentCapabilitiesOf(path: string): ReadonlySet<AbsentCapability>;
 }
@@ -233,6 +236,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       const unresolvedIn = unresolvedOncePerFile(store);
       const navigation = once(() => createGraphNavigation(store, () => false));
       const origins = once(() => deps.importOrigins?.(tree.sources, narrowing.originPaths, facts, source.hold));
+      const implementedContracts = once(() => implementedContractsOf(store, tree.sources.map(({ path }) => path), navigation(), origins()));
       const unresolved = once(() => unresolvedOf(store, tree));
       const relations = once(() => retainedRelations(deps.relations, prepared, tree, request));
       const declarationUses = once(() => createDeclarationUses(store, navigation(), unresolvedIn));
@@ -294,6 +298,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
         },
         declarationUses,
         originCalls: (targets) => (targets.bindings === undefined ? undefined : createOriginCalls(targets.bindings, throughOrigins)),
+        implementedContracts,
         absentCapabilitiesOf: (path) => deps.absentCapabilities?.(path) ?? NO_ABSENT,
         reverseCalls(targets) {
           const reconciled = reconciledCalls(targets, declarationUses());

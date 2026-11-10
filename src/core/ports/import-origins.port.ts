@@ -103,6 +103,12 @@ export interface ImportOrigins {
    */
   receiverMethods(sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ReceiverMethod[]>;
   /**
+   * One entry per site, in the order received: the declarations of the supertypes' methods the method at the site
+   * implements or overrides, by the signature each declares. A site whose class has no supertype in the repository
+   * names none. `unknown` when a signature the sources do not settle could be the same, or the method cannot be placed.
+   */
+  implementedDeclarations(sites: readonly ImplementingSite[], signal?: AbortSignal): Promise<readonly ImplementedDeclarations[]>;
+  /**
    * Where the repository may run its own code where a library's is expected: the path of every global the snapshot
    * declares, every member path a source writes from a global (`Math.max = f`, `Array.prototype[k] = f`,
    * `globalThis.fetch = f`, `Object.assign(process.env, vars)`), and every package a source writes through an import of
@@ -159,6 +165,16 @@ export interface MethodPlace {
   start: number;
   nameLine: number;
 }
+
+/** A method declaration by its file, the 1-based line of its first token, and its name. */
+export interface ImplementingSite {
+  file: string;
+  start: number;
+  name: string;
+}
+
+/** The supertype methods a method declares it implements, sorted by place; `unknown` when the sources do not settle them. */
+export type ImplementedDeclarations = { kind: "declarations"; declarations: readonly MethodPlace[] } | { kind: "unknown" };
 
 /**
  * The method declaration a call names, by its file and the 1-based lines from its first token to its name; `unproven`

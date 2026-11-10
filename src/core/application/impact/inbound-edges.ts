@@ -6,6 +6,7 @@ import type { MemberSubstitute, MemberUseOrigin } from "../../domain/relations/m
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
+import type { ImplementedDeclarations } from "../../ports/import-origins.port.ts";
 import { createGraphNavigation, isInside } from "../navigation/graph-navigation.ts";
 import { edgeKey, type FollowedEdge } from "../navigation/edge-targets.ts";
 
@@ -85,6 +86,8 @@ export interface EdgeCorrections {
   into: ReadonlyMap<GraphNodeId, readonly FollowedEdge[]>;
   /** By `edgeKey`: how each kept edge whose receiver is a value is known (ADR-0029 decision 11), and each edge the type checker kept or moved (ADR-0037). */
   settled?: ReadonlyMap<string, ReceiverSettlement>;
+  /** By method: the supertype declarations the port answered for it (RFC-0024 U4); a method without an answer keeps the by-name bridge. */
+  implemented?: ReadonlyMap<GraphNodeId, ImplementedDeclarations>;
 }
 
 const NO_CORRECTIONS: EdgeCorrections = { dropped: new Set(), into: new Map() };
@@ -132,13 +135,20 @@ export function createInboundEdges(
     return into;
   }
 
+  /** Whether `implementation`'s own declared signature names `contract`; an unsettled answer keeps the by-name bridge. */
+  function implementsDeclared(implementation: GraphSymbol, contract: GraphSymbol): boolean {
+    const answer = corrections.implemented?.get(implementation.id);
+    if (answer === undefined || answer.kind === "unknown") return true;
+    return answer.declarations.some((place) => place.file === contract.file && contract.startLine <= place.nameLine && place.nameLine <= contract.endLine);
+  }
+
   function bridgesOf(method: GraphSymbol, contractChanged: boolean): InboundEdge[] {
     const directions = contractChanged ? (["up", "down"] as const) : (["up"] as const);
     return ownersOf(method).flatMap((owner) =>
       directions.flatMap((bridge) =>
         typesAround(owner, bridge).flatMap(({ type, confidence }) =>
           methodsOf(type)
-            .filter((candidate) => candidate.name === method.name)
+            .filter((candidate) => candidate.name === method.name && (bridge === "up" ? implementsDeclared(method, candidate) : implementsDeclared(candidate, method)))
             .map((from) => ({ from, confidence, bridge, basis: "dispatch" as const, derivation: "resolved" as const, lines: [] })),
         ),
       ),
