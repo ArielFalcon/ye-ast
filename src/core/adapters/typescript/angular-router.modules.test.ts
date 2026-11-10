@@ -125,3 +125,12 @@ test("a module graph with an import the reading could not resolve is not built: 
 
   assert.deepEqual(namesOf(findings), []);
 });
+
+test("a legacy workspace rooted at the repository resolves module graphs without a promise cycle", async () => {
+  const findings = await extract({
+    "angular.json": JSON.stringify({ projects: { app: { sourceRoot: "" } } }),
+    "main.ts": "import { RouterModule } from '@angular/router'; RouterModule.forRoot([{path: 'feature', loadChildren: 'feature#FeatureModule'}]);",
+    "feature.ts": `${NG_MODULE}${ROUTER_MODULE}@NgModule({imports: [RouterModule.forChild([{path: 'leaf', component: Leaf}])]}) export class FeatureModule {}`,
+  });
+  assert.deepEqual(namesOf(findings), ["/feature/leaf"]);
+});

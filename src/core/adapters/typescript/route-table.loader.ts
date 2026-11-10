@@ -356,7 +356,7 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
       return ref.name === undefined ? { reason: "unresolved" } : aggregateResolution(file, ref.name);
     }
     const targets = ref.legacy === true
-      ? await Promise.all((await legacyRoots(file, read)).map((root) => fileOf(`${root}/__legacy__.ts`, `./${ref.module}`)))
+      ? await Promise.all((await legacyRoots(file, read)).map((root) => fileOf(`${root === "" ? "." : root}/__legacy__.ts`, `./${ref.module}`)))
       : [await fileOf(file, ref.module)];
     const unique = [...new Set(targets.filter((target): target is string => target !== undefined))];
     const target = unique.length === 1 ? unique[0] : undefined;
