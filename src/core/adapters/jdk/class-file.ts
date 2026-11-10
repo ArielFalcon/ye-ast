@@ -99,7 +99,7 @@ function fault(kind: "truncated" | "unsupported" = "unsupported"): never {
   throw new ClassFileFault(kind);
 }
 
-type PoolEntry = { kind: "utf8"; text: string } | { kind: "class"; name: string };
+type PoolEntry = { kind: "utf8"; text: string } | { kind: "class"; nameIndex: number };
 
 /** One type parameter as the signature states it: its name and its rendered declaration. */
 interface ParsedTypeParameter {
@@ -252,7 +252,7 @@ function readPool(cursor: Cursor): readonly (PoolEntry | undefined)[] {
       const length = cursor.u2();
       entries[index] = { kind: "utf8", text: cursor.text(length) };
     } else if (tag === CLASS_TAG) {
-      entries[index] = { kind: "class", name: utf8Of(entries, cursor.u2()) };
+      entries[index] = { kind: "class", nameIndex: cursor.u2() };
     } else if (tag === LONG_TAG || tag === DOUBLE_TAG) {
       cursor.skip(8);
       index += 1;
@@ -303,7 +303,7 @@ function utf8Of(pool: readonly (PoolEntry | undefined)[], index: number): string
 function classNameOf(pool: readonly (PoolEntry | undefined)[], index: number): string {
   const entry = pool[index];
   if (entry?.kind !== "class") fault();
-  return internalToSource(entry.name);
+  return internalToSource(utf8Of(pool, entry.nameIndex));
 }
 
 /** A binary name as Java source writes it: `java/util/Map$Entry` is `java.util.Map.Entry`. */

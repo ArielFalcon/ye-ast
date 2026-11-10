@@ -307,3 +307,20 @@ test("a synthetic class or a module states no declaration", () => {
   assert.equal(readClassFile(buildClass({ access: ACC_PUBLIC | ACC_SYNTHETIC, name: "app/Hidden" })), undefined);
   assert.equal(readClassFile(buildClass({ access: ACC_MODULE, name: "module-info", superName: null })), undefined);
 });
+
+test("a class whose pool names its own class before the name reads the same declaration", () => {
+  const name = Buffer.from("Probe", "utf8");
+  const pool = Buffer.concat([
+    u16(3),
+    Buffer.concat([u8(7), u16(2)]),
+    Buffer.concat([u8(1), u16(name.length), name]),
+  ]);
+  const bytes = Buffer.concat([
+    u32(MAGIC), u16(0), u16(MAJOR), pool,
+    u16(ACC_PUBLIC | ACC_SUPER), u16(1), u16(0), u16(0), u16(0), u16(0), u16(0),
+  ]);
+  const declaration = readClassFile(bytes);
+  assert.equal(declaration?.fqn, "Probe");
+  assert.equal(declaration?.kind, "class");
+  assert.deepEqual(declaration?.supertypes, []);
+});
