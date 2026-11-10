@@ -274,3 +274,19 @@ test("--node-modules declares a build output of the launch repository only, and 
     assert.equal(refused.composed.count, 0);
   }
 });
+
+test("--java-sources declares a generated source directory of the launch repository only, and one that names no at is a usage error", async () => {
+  const h = harness();
+  h.start(["shop", "--java-sources", "target/generated-sources/openapi=deps/generated"]);
+  h.stdin.end();
+  assert.equal(await h.finished(), EXIT_CODE.ok);
+  const declared = h.composed.options[0]?.buildOutputs;
+  assert.deepEqual([declared?.("/work/projects/shop"), declared?.("/work/projects/other")], [[{ kind: "java-sources", at: "target/generated-sources/openapi", path: "/work/projects/deps/generated" }], undefined]);
+  for (const args of [["shop", "--java-sources"], ["shop", "--java-sources", "deps/generated"], ["shop", "--java-sources", "=/host/generated"]]) {
+    const refused = harness();
+    refused.start(args);
+    refused.stdin.end();
+    assert.equal(await refused.finished(), EXIT_CODE.usage, args.join(" "));
+    assert.equal(refused.composed.count, 0);
+  }
+});
