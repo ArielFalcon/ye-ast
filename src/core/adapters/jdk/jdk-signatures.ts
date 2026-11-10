@@ -33,7 +33,7 @@ export function parseJdkSignatures(text: string): JdkSignatures {
  try { value = JSON.parse(text); } catch { throw new JdkSignaturesFault('format'); }
  if (!value || typeof value !== 'object') throw new JdkSignaturesFault('format');
  const v = value as {digest: unknown; releases: unknown};
- if (typeof v.digest !== 'string' || !/^[a-f0-9]{64}$/.test(v.digest) || !v.releases || typeof v.releases !== 'object' || Array.isArray(v.releases)) throw new JdkSignaturesFault('format');
+ if (typeof v.digest !== 'string' || v.digest.length !== 64 || !/^[a-f0-9]+$/u.test(v.digest) || !v.releases || typeof v.releases !== 'object' || Array.isArray(v.releases)) throw new JdkSignaturesFault('format');
  const releases = new Map<number,JdkRelease>();
  for (const [level,types] of Object.entries(v.releases)) {
  if (level !== '23' || !types || typeof types !== 'object' || Array.isArray(types) || !Object.values(types).every(validType)) throw new JdkSignaturesFault('format');
