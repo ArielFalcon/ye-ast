@@ -1,5 +1,5 @@
 import { parseWorkspaceManifest } from "../core/domain/topology/workspace-manifest.ts";
-import { unknownTargetKey } from "../core/ports/impact-queries.port.ts";
+import { entrypointCandidateText, unknownEntryText, unknownTargetKey } from "../core/domain/shared/unknown-target.ts";
 import { basename, resolve } from "node:path";
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
@@ -142,17 +142,11 @@ export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Pr
 /** Every line a fault prints: the kind and detail, then the symbol each entry named and what its file declares. */
 function faultText(fault: ImpactFault | OutlineFault | WorkspaceFault | TraceFault | ConsequencesFault, redaction: Redaction): string[] {
   const entries =
-    fault.kind === "unknown-symbol" ? fault.entries.map((entry) => `  - ${unknownTargetKey(entry)}: ${declarationText(entry)}`)
-    : fault.kind === "top-level-line" ? fault.entries.map((entry) => `  - ${entry.file}:${entry.line}: ${declarationText(entry)}`)
-    : fault.kind === "unknown-entrypoint" ? fault.entries.map((entry) => `  - ${entry.kind}:${entry.name}: ${entry.candidates.length === 0 ? `the map holds no ${entry.kind}` : `the map's ${entry.kind} names: ${entry.candidates.join(", ")}`}`)
+    fault.kind === "unknown-symbol" ? fault.entries.map((entry) => `  - ${unknownTargetKey(entry)}: ${unknownEntryText(entry)}`)
+    : fault.kind === "top-level-line" ? fault.entries.map((entry) => `  - ${entry.file}:${entry.line}: ${unknownEntryText(entry)}`)
+    : fault.kind === "unknown-entrypoint" ? fault.entries.map((entry) => `  - ${entry.kind}:${entry.name}: ${entrypointCandidateText(entry)}`)
     : [];
   return [`ye-ast: ${fault.kind}: ${redaction.redact(fault.detail.trim())}`, ...entries.map((line) => redaction.redact(line))];
-}
-
-/** What a fault entry can be told to the caller: what could have been asked instead, or that its file is not in the snapshot. */
-function declarationText(entry: { file: string; candidates: readonly string[]; absent?: boolean }): string {
-  if (entry.absent === true) return entry.candidates.length === 0 ? `${entry.file} is not in the snapshot` : `${entry.file} is not in the snapshot; snapshot paths: ${entry.candidates.join(", ")}`;
-  return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
 }
 
 async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {

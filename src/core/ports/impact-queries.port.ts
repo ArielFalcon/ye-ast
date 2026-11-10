@@ -1,4 +1,5 @@
 import type { ImpactBudget, ImpactValue } from "../domain/impact/impact-fact.ts";
+import type { UnknownSymbolEntry } from "../domain/shared/unknown-target.ts";
 import type { ImportersValue } from "../domain/impact/importers-fact.ts";
 import type { DeclaredBuildOutput } from "../domain/shared/build-outputs.ts";
 import type { ScopeRequest } from "../domain/shared/scope.ts";
@@ -82,23 +83,7 @@ export interface UnknownSymbolFault {
   entries: readonly UnknownSymbolEntry[];
 }
 
-export type UnknownSymbolEntry = ({ symbol: string } | { start: number; end: number }) & {
-  file: string;
-  /** Whether the snapshot holds no file at `file` at all. */
-  absent: boolean;
-  /**
-   * What could be asked instead, sorted and once each: when `absent`, repository-relative paths of the snapshot (the
-   * files declaring a symbol of that name, or the files of that basename for a line range); otherwise dotted
-   * containment paths (of the seedable declarations for `callers`, of every declaration for an outline focus). Empty
-   * when nothing in the snapshot could be asked instead.
-   */
-  candidates: readonly string[];
-};
-
-/** How a fault entry names its target: `file:symbol`, or `file:start-end` for a line range. */
-export function unknownTargetKey(entry: UnknownSymbolEntry): string {
-  return "symbol" in entry ? `${entry.file}:${entry.symbol}` : `${entry.file}:${entry.start}-${entry.end}`;
-}
+export { unknownTargetKey, type UnknownSymbolEntry } from "../domain/shared/unknown-target.ts";
 
 /** A `changed` glob that selected none of the paths the change touches; `globs` lists every one that did not. */
 export interface UnknownChangePathFault {

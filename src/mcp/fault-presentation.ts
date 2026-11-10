@@ -1,4 +1,4 @@
-import { unknownTargetKey } from "../core/ports/impact-queries.port.ts";
+import { entrypointCandidateText, unknownEntryText, unknownTargetKey } from "../core/domain/shared/unknown-target.ts";
 import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
 import type { QueryFault } from "./query-runner.ts";
 import { familyOf, type SemanticQuery } from "./query-schema.ts";
@@ -66,7 +66,7 @@ export function controlFault(fault: CodedFault): ControlFault {
 
 /** The text of a fault: its kind first, its detail and entries, and a next step only where an argument can correct it. */
 export function renderFault(fault: RenderedFault, query?: FaultQueryContext): string {
-  const entries = "entries" in fault ? fault.entries.map((entry) => `\n  - ${"kind" in entry ? entrypointText(entry) : `${"line" in entry ? `${entry.file}:${entry.line}` : unknownTargetKey(entry)}: ${declarationText(entry)}`}`).join("") : "";
+  const entries = "entries" in fault ? fault.entries.map((entry) => `\n  - ${"kind" in entry ? entrypointText(entry) : `${"line" in entry ? `${entry.file}:${entry.line}` : unknownTargetKey(entry)}: ${unknownEntryText(entry)}`}`).join("") : "";
   const head = `fault: ${fault.kind}\n${displayDetail(fault).trim()}${entries}`;
   if (fault.kind === "composition-source-fault") {
     return `${head}\nThe composition returned nothing: queries[${fault.requestIndices.join(", ")}] (${fault.family}) failed. Correct them as below and resend the whole composition.\n${renderFault(fault.cause, query)}`;
@@ -76,7 +76,7 @@ export function renderFault(fault: RenderedFault, query?: FaultQueryContext): st
 }
 
 function entrypointText(entry: { kind: string; name: string; candidates: readonly string[] }): string {
-  return `${entry.kind} ${entry.name}: ${entry.candidates.length === 0 ? `the map holds no ${entry.kind}` : `the map's ${entry.kind} names: ${entry.candidates.join(", ")}`}`;
+  return `${entry.kind} ${entry.name}: ${entrypointCandidateText(entry)}`;
 }
 
 function displayDetail(fault: RenderedFault): string {
@@ -89,11 +89,6 @@ function displayDetail(fault: RenderedFault): string {
     case "result-changed": return "The result differs from the asserted identity";
     default: return fault.detail;
   }
-}
-
-function declarationText(entry: { file: string; candidates: readonly string[]; absent?: boolean }): string {
-  if (entry.absent === true) return entry.candidates.length === 0 ? `${entry.file} is not in the snapshot` : `${entry.file} is not in the snapshot; snapshot paths: ${entry.candidates.join(", ")}`;
-  return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
 }
 
 /** The argument that selects the commit read. */

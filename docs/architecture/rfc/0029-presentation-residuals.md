@@ -156,8 +156,8 @@ export type UnknownSymbolEntry = UnknownTarget & {
 /** `file:symbol`, `file:start-end`, or `file`. */
 export function unknownTargetKey(entry: UnknownSymbolEntry): string;
 
-/** The sentence after the key: absent, declaring no symbol, or what the file declares. */
-export function unknownEntryText(entry: Pick<UnknownSymbolEntry, "file" | "candidates" | "absent">): string;
+/** The sentence after the key: absent, declaring no symbol, or what the file declares. `absent` is optional because a `top-level-line` entry does not carry it. */
+export function unknownEntryText(entry: { file: string; candidates: readonly string[]; absent?: boolean }): string;
 
 /** The same sentence for an `unknown-entrypoint` entry. */
 export function entrypointCandidateText(entry: { kind: string; name: string; candidates: readonly string[] }): string;
@@ -425,11 +425,12 @@ U1 precedes U2 (U2 uses the moved text); the rest are independent. Each is one w
 ### U1 — One owner for the fault-entry vocabulary
 
 - Files: create `src/core/domain/shared/unknown-target.ts`; edit `src/core/ports/impact-queries.port.ts` (re-export),
-  `src/mcp/fault-presentation.ts` (delete `declarationText` `:94-97` and `entrypointText` `:78-80`, import both),
-  `src/cli/main.ts` (delete `declarationText` `:151-154`, import, replace the `:145` branch), `src/mcp/fault-presentation.test.ts`,
+  `src/mcp/fault-presentation.ts` (delete `declarationText` `:94-97`, import the shared owner, and keep
+  `entrypointText` `:78-80` as the one-line MCP framing that wraps it), `src/cli/main.ts` (delete `declarationText`
+  `:151-154`, import, replace the `:145` branch), `src/core/domain/shared/unknown-target.test.ts`,
   `src/cli/main.test.ts`.
 - Must not touch: renderer bodies, `snapshot-files.ts`, query use cases.
-- RED: `src/mcp/fault-presentation.test.ts`, `"a fault entry is formatted by the one shared owner"` — assert
+- RED: `src/core/domain/shared/unknown-target.test.ts`, `"a fault entry is formatted by the one shared owner"` — assert
   `unknownEntryText({file: "a.ts", candidates: [], absent: true}) === "a.ts is not in the snapshot"` and the same for an
   entry with candidates; fails today because the module does not exist. Variant: `entrypointCandidateText` with and
   without candidates. CLI coverage: one `run`-level test in `src/cli/main.test.ts` with a fake port that returns an absent
