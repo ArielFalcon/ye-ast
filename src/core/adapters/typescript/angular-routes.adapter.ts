@@ -9,8 +9,7 @@ import type { ManifestPackages } from "./module-resolver.ts";
 import { sourceTree } from "./source-tree.ts";
 import ts from "typescript";
 import { readAngularRouteFile } from "./angular-router.extractor.ts";
-import { readAngularMetadataFile, type RawAngularFile } from "./angular-metadata.extractor.ts";
-import { ANGULAR_CORE } from "./angular-injection.ts";
+import { coreExternalOf, readAngularMetadataFile, type RawAngularFile } from "./angular-metadata.extractor.ts";
 import { createModuleResolver, type ModuleResolver } from "./module-resolver.ts";
 import { loadRouteTables, type AngularModuleReading, type RouteEntry, type RouteFileReading, type RouteTable, type UnresolvedReference } from "./route-table.loader.ts";
 
@@ -26,7 +25,9 @@ export function modulesOf(angular: RawAngularFile): AngularModuleReading {
 
 /**
  * The Angular router's routes: each project (the directory of a `package.json` that names `@angular/router`) has its
- * route tables read from the TypeScript sources outside tests that belong to it, nearest project first, with nothing built or run. Each route entry that shows a component is a
+ * route tables read from the TypeScript sources outside tests that belong to it, nearest project first, with nothing built or run. A table is read wherever the router receives one:
+ * from every root configuration and from the module graph a `bootstrapModule(...)` call boots or a `loadChildren` loads,
+ * so a `forChild` table a module composes is named under the prefix of the root or route that reaches its graph. Each route entry that shows a component is a
  * `ui-route`; a path or an outlet the sources do not give as text, a lazy section that cannot be followed, a `matcher`
  * and a source that does not parse are `unknown` items at their location.
  */
@@ -66,16 +67,15 @@ async function extractProject(sources: readonly string[], packages: ManifestPack
 }
 
 /**
- * One file read once: its route reading and the Angular metadata reading of the same syntax tree. The core-external flag
- * is computed as `angular-metadata.adapter.ts` computes it, so both readings of a file agree.
+ * One file read once: its route reading and the Angular metadata reading of the same syntax tree. Both readings ask the
+ * one `coreExternalOf` whether `@angular/core` is outside the snapshot, so they never disagree about the file's decorators.
  */
 async function readOne(path: string, file: SourceFile | undefined, resolver: ModuleResolver): Promise<RouteFileReading | undefined> {
   if (file === undefined) return undefined;
   const sf = sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
   const routes = readAngularRouteFile(sf);
   if (routes === undefined) return undefined;
-  const usesCore = [...routes.imports.values()].some((binding) => binding.module === ANGULAR_CORE);
-  const coreExternal = usesCore && "external" in (await resolver.resolve(path, ANGULAR_CORE));
+  const coreExternal = await coreExternalOf(routes, async (specifier) => "external" in (await resolver.resolve(path, specifier)));
   return { routes, modules: modulesOf(readAngularMetadataFile(sf, routes, false, coreExternal)) };
 }
 

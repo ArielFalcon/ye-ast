@@ -43,7 +43,7 @@ reuse code that moves from qayaba ([ADR-0012](../adr/0012-foundation-before-qaya
 
 | # | Gap | Approach | Fixtures | Starts | Cost |
 |---|---|---|---|---|---|
-| A1 | Routes: 0 route nodes for 43 screens behind a derived type and a helper | qayaba's extractor and loader, plus the target (`component`, `loadComponent`, a default `@Component` export); identifier arrays and spreads, or an item `unknown`; NgModule lazy children through `RouterModule.forChild`; guards and outlets per route. A budget that stops it is a cut | alias of `Route[]`; interface derived from `Route` (`extends Omit<Route, ...>`); helper function; identifier array with a spread; NgModule `forRoot`, `forChild` and lazy child; lazy-loading helper; named outlet; enum and template-literal paths; `matcher` | after the migration | 4-6 days |
+| A1 | Routes: 0 route nodes for 43 screens behind a derived type and a helper | qayaba's extractor and loader, plus the target (`component`, `loadComponent`, a default `@Component` export); identifier arrays and spreads, or an item `unknown`; NgModule lazy children through `RouterModule.forChild` and `@NgModule({ imports })` composition from the bootstrap module and from every lazily loaded module; guards and outlets per route. A budget that stops it is a cut | alias of `Route[]`; interface derived from `Route` (`extends Omit<Route, ...>`); helper function; identifier array with a spread; NgModule `forRoot`, `forChild` and lazy child; lazy-loading helper; named outlet; enum and template-literal paths; `matcher` | after the migration | 4-6 days |
 | A2 | Injection: 0 of 668 `inject()` sites linked | Own `injects` edges for `inject(X)`, constructor parameter types, `@Inject`, functional guards and interceptors; an injection token is `unknown` until providers are read | `inject()` in a field; constructor; optional; token; `inject(Router)` in a guard; an `inject` that is not Angular's | now | 4-5 days |
 | A3 | HTTP call sites: 0 of 86 linked | The HTTP protocol plugin's URL evaluator with Angular's receivers: pure helpers inlined; `this.prop` through base classes; `httpResource`, `HttpRequest` and `request(verb, url)`; parameter-flow summaries for wrappers, never "any call with a path", which would accept `router.navigateByUrl('/x/1')`; generated clients joined by method name and `operationId`. The base URL comes from the default environment file, else from `boundaries[]`, else it is `unknown`; an interceptor that rewrites URLs caps the confidence | a resource-URL helper behind a gateway prefix; literal; variable; wrapper; `httpResource` with a string, an arrow and an object; generated client; environment file absent from the snapshot; negatives | after the migration | 8-10 days |
 | A4 | Templates: directives 0 of 156 and pipes 0 of 11 linked; `.html` not indexed | `@angular/compiler` parses inline and external templates; `uses-component`, `uses-directive` and `uses-pipe` edges scoped by standalone `imports` or NgModule declarations, plus `hostDirectives` read from the decorator; a parse error is `unknown` | attribute, class and `:not` selectors; `*ngIf`; `@if`, `@for`, `@defer`, `@let`; pipes; clashing selectors; inline template and `templateUrl`; `hostDirectives` | now | 5-7 days with A5 |
@@ -78,10 +78,15 @@ reuse code that moves from qayaba ([ADR-0012](../adr/0012-foundation-before-qaya
     `{ path, component }` is read. The 4,000-file route cap and the working-copy walk do not move.
   - Roots. The tables the router is configured with are the roots: the first argument of `provideRouter` and of
     `RouterModule.forRoot`, also inside `importProvidersFrom`, as an array literal, a named array or a helper called
-    without arguments, when the call is imported from `@angular/router`. A table loaded by `loadChildren` is a root's
-    child; a lazy NgModule gets its routes from the one `RouterModule.forChild` or `forRoot` in its decorator
-    (inline array, named array or helper), and a module with none or with several is an unresolved lazy section. A
-    `loadChildren` that imports a module with a default export, or a routes file with a default export, is followed.
+    without arguments, when the call is imported from `@angular/router`; and the module graph the application boots, the
+    class a `bootstrapModule(...)` call names. A table loaded by `loadChildren` is a root's child. A module class answers
+    the aggregate of its `@NgModule({ imports })` graph: the `RouterModule.forChild` tables of the class itself, then
+    those of every module its `imports` reach, depth first in source order, each class and each expanded array once. A
+    `forChild` table is therefore named under the root that boots its graph (`/owners`) and under the route that loads it
+    (`/auth/register`), and one graph registered both ways yields both prefixes. A graph that holds an `imports` operand
+    the metadata reading could not resolve is not built at all. A lazy module whose graph holds no `forChild` table is an
+    unresolved lazy section with `no-extractor` at the reference: silence would assert no routes. A `loadChildren` that
+    imports a module with a default export, or a routes file with a default export, is followed.
     A table no declared root reaches (dead code, a `forChild` table nobody loads, or a root this extractor does not
     recognize, such as one configured through a namespace import) is never named and never an empty answer: each
     would-be `ui-route` of it is an `unknown` item at its entry, with `unresolved` (and the unresolved references as

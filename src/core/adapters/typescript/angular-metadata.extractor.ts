@@ -2,7 +2,7 @@ import ts from "typescript";
 import { declarationCounts } from "./syntax-names.ts";
 import type { RawRouteFile } from "./angular-router.extractor.ts";
 import { hasModifier, isStatic, lineOf, propertyOf, thisClass, unwrapped } from "./syntax.ts";
-import { angularCoreExport, type FileNames } from "./angular-injection.ts";
+import { angularCoreExport, ANGULAR_CORE, type FileNames } from "./angular-injection.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 
 /** A name as written: `Foo`, or `ns.Foo` for a member of a namespace import. */
@@ -116,6 +116,16 @@ export interface RawAngularFile {
 const KINDS: Readonly<Record<string, RawAngularClass["kind"]>> = { Component: "component", Directive: "directive", Pipe: "pipe", NgModule: "module" };
 /** The decorators whose classes the framework constructs with their constructor parameters. */
 const CONSTRUCTED = new Set([...Object.keys(KINDS), "Injectable"]);
+
+/**
+ * Whether the `@angular/core` a file's imports name is outside the snapshot: both readings of a file pass this answer to
+ * `readAngularMetadataFile`, so they never disagree about which decorators the file declares. A file that imports nothing
+ * from `@angular/core` is not external, and `isExternal` answers the resolution for a specifier.
+ */
+export async function coreExternalOf(shape: Pick<RawRouteFile, "imports">, isExternal: (specifier: string) => Promise<boolean>): Promise<boolean> {
+  const usesCore = [...shape.imports.values()].some((binding) => binding.module === ANGULAR_CORE);
+  return usesCore && (await isExternal(ANGULAR_CORE));
+}
 
 /** The Angular decorators, injection calls and top-level arrays of one parsed file. `shape` tells which names come from `@angular/core`. */
 export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteFile, "imports">, proveMembers = false, coreExternal = true): RawAngularFile {

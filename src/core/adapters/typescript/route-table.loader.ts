@@ -2,10 +2,12 @@ import type { Handler } from "../../domain/entrypoints/http-route.ts";
 import type { RouteGuard } from "../../domain/entrypoints/ui-route.ts";
 import { declarationSpan } from "../../domain/shared/fact.ts";
 import type { UnknownReason } from "../../domain/shared/fact.ts";
-import type { RawChildRef, RawComponent, RawEntry, RawGuard, RawRouteFile, RawTable, RawValue } from "./angular-router.extractor.ts";
-import type { RawOperand } from "./angular-metadata.extractor.ts";
+import type { RawChildRef, RawBootstrap, RawComponent, RawEntry, RawGuard, RawRouteFile, RawTable, RawValue } from "./angular-router.extractor.ts";
+import type { RawOperand, RawReference } from "./angular-metadata.extractor.ts";
 import { createDeclarationLookup, type Declaration } from "./declaration-lookup.ts";
 import { createModuleResolver, type ManifestPackages, type SourceReader } from "./module-resolver.ts";
+
+const ANGULAR_ROUTER = "@angular/router";
 
 /** What the Angular metadata reading states about one file, projected to what the route graph needs. */
 export interface AngularModuleReading {
@@ -80,8 +82,8 @@ export interface UnresolvedReference {
 
 export interface LoadedRouteTables {
   /**
-   * The tables the router is configured with (`provideRouter` and `RouterModule.forRoot`) when the sources declare any;
-   * otherwise the tables no table loads, then one table of each group that only loads itself or each other.
+   * The tables the router is configured with (`provideRouter` and `RouterModule.forRoot`) and the module graphs the
+   * application boots, in file and line order.
    */
   roots: RouteTable[];
   /** The sources configure the router, so a table no root reaches is not an entrypoint. */
@@ -93,30 +95,44 @@ export interface LoadedRouteTables {
   unresolvedReferences: UnresolvedReference[];
   /** The root configurations among them, with why each is unresolved. */
   unresolvedConfigurations: Array<UnresolvedReference & { reason: UnknownReason }>;
+  /** Every `@NgModule` import that does not come down to a module class, or whose graph holds an `unreadable` operand, sorted. */
+  unresolvedModuleImports: UnresolvedReference[];
 }
 
-type ChildTable = { file: string; raw: RawRouteFile; table: RawTable };
+/** A module-graph name as the reading answers it: a top-level array to expand, a module class to visit, or nothing to follow. */
+type OperandTarget =
+  | { kind: "module"; file: string; name: string }
+  | { kind: "array"; file: string; name: string }
+  | { kind: "skip" }
+  | { kind: "unresolved"; line: number }
+  | { kind: "unreadable"; line: number };
+
+/** A child reference read: the table it loads, or why the sources do not come down to one. */
+type ChildResolution = { table: RouteTable } | { reason: UnknownReason };
 
 /**
  * Builds the route tables of the parsed files: each file is read and parsed once, a module specifier is resolved with the
  * module resolver, and what a path, an outlet, a component or a guard names is followed through re-exports and renames to
  * the file and the name that declare it (a guard is placed only there, never at a barrel). A child table that is not
- * inline (a lazily loaded module, a named array) is attached under the entry that loads it. A chain that does not come
- * down to exactly one declaration is unresolved. Each table is built once and shared by the entries that load it.
- * Returns the root tables, the candidates that do not parse and the unresolved child references.
+ * inline (a lazily loaded module, a named array) is attached under the entry that loads it. A module class answers the
+ * aggregate of its `@NgModule({ imports })` graph, so a `forChild` table is served under the root that boots the graph or
+ * under the route that loads it. A chain that does not come down to exactly one declaration is unresolved. Each table is
+ * built once and shared by the entries that load it. Returns the root tables, the candidates that do not parse, the
+ * unresolved child references and the unresolved module imports.
  */
 export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedRouteTables> {
   const { candidates, read, packages, reading } = inputs;
   const resolver = createModuleResolver(read, packages);
-  const parsed = new Map<string, Promise<RawRouteFile | undefined>>();
-  const parse = (file: string): Promise<RawRouteFile | undefined> => {
-    let held = parsed.get(file);
+  const readings = new Map<string, Promise<RouteFileReading | undefined>>();
+  const readOf = (file: string): Promise<RouteFileReading | undefined> => {
+    let held = readings.get(file);
     if (held === undefined) {
-      held = reading(file).then((one) => one?.routes);
-      parsed.set(file, held);
+      held = reading(file);
+      readings.set(file, held);
     }
     return held;
   };
+  const parse = (file: string): Promise<RawRouteFile | undefined> => readOf(file).then((one) => one?.routes);
   const fileOf = async (from: string, specifier: string): Promise<string | undefined> => {
     const resolution = await resolver.resolve(from, specifier);
     return "file" in resolution ? resolution.file : undefined;
@@ -211,33 +227,10 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
   };
   const tableOf = (raw: RawRouteFile, name: string | undefined): RawTable | undefined =>
     name !== undefined && name !== "default" ? raw.tables.find((t) => t.name === name) : raw.tables.find((t) => t.exported) ?? raw.tables[0];
-  /* The table of the one router configuration inside the decorator of a class, the routes of that NgModule. */
-  const moduleTableOf = async (file: string, raw: RawRouteFile, className: string): Promise<ChildTable | undefined> => {
-    const configs = raw.routerConfigs.filter((config) => config.owner === className);
-    const config = configs.length === 1 ? configs[0] : undefined;
-    if (config === undefined) return undefined;
-    return config.table !== undefined ? { file, raw, table: config.table } : config.ref === undefined ? undefined : childTableOf(file, raw, config.ref);
-  };
-  /* The file and the table a reference comes down to: a table by name, the routes of a module class, or the first table of a module. */
-  const childTableOf = async (file: string, raw: RawRouteFile, ref: RawChildRef): Promise<ChildTable | undefined> => {
-    if (ref.unresolved) return undefined;
-    if (ref.module === undefined) {
-      const table = tableOf(raw, ref.name);
-      return table !== undefined ? { file, raw, table } : ref.name === undefined ? undefined : moduleTableOf(file, raw, ref.name);
-    }
-    const target = await fileOf(file, ref.module);
-    if (target === undefined) return undefined;
-    const named = ref.name !== undefined && ref.name !== "default";
-    const declaration = named ? await declarationOf(target, ref.name!) : await declarationOf(target, "default");
-    const declaring = await parse(declaration?.file ?? target);
-    if (declaring === undefined) return undefined;
-    const table = named ? (declaration === undefined ? undefined : tableOf(declaring, declaration.name)) : tableOf(declaring, undefined);
-    if (table !== undefined) return { file: declaration?.file ?? target, raw: declaring, table };
-    return declaration === undefined ? undefined : moduleTableOf(declaration.file, declaring, declaration.name);
-  };
   const nodes = new Map<RawTable, RouteTable>();
   const loads = new Map<RouteTable, Set<RouteTable>>();
   const unresolvedReferences = new Map<string, UnresolvedReference>();
+  const unresolvedModuleImports = new Map<string, UnresolvedReference>();
   const noteUnresolved = (file: string, at: { line: number; endLine: number }): void => {
     unresolvedReferences.set(`${file}:${at.line}:${at.endLine}`, { path: file, line: at.line, endLine: at.endLine });
   };
@@ -249,6 +242,130 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
     nodes.set(table, node);
     node.entries = await build(node, file, raw, table.entries);
     return node;
+  };
+  /* The name a module-graph reference comes down to, in the file that declares it; a declaration of this file shadows an import of the same name. */
+  const moduleNameOf = async (file: string, raw: RawRouteFile, reference: RawReference): Promise<{ file: string; name: string } | "external" | "unresolved" | undefined> => {
+    if (reference.member === undefined && raw.declared.has(reference.name)) return { file, name: reference.name };
+    const binding = raw.imports.get(reference.name);
+    if (binding === undefined || binding.typeOnly === true) return undefined;
+    const resolution = await resolver.resolve(file, binding.module);
+    if ("external" in resolution) return "external";
+    if (!("file" in resolution)) return "unresolved";
+    const name = reference.member ?? (binding.imported === "*" ? undefined : binding.imported);
+    return name === undefined ? undefined : declarationOf(resolution.file, name);
+  };
+  /* What one operand of an `imports` list names; an external package, the router's own `RouterModule` and a class that composes no table are nothing to follow. */
+  const operandTarget = async (file: string, raw: RawRouteFile, operand: RawOperand): Promise<OperandTarget> => {
+    if ("unreadable" in operand) return { kind: "unreadable", line: operand.line };
+    const reference = operand.reference;
+    const binding = raw.imports.get(reference.name);
+    const routerModule = binding?.module === ANGULAR_ROUTER && (binding.imported === "RouterModule" || (binding.imported === "*" && reference.member === "RouterModule"));
+    if (routerModule) return { kind: "skip" };
+    const named = await moduleNameOf(file, raw, reference);
+    if (named === undefined || named === "external") return { kind: "skip" };
+    if (named === "unresolved") return { kind: "unresolved", line: operand.line };
+    const held = await readOf(named.file);
+    if (held === undefined) return { kind: "unresolved", line: operand.line };
+    if (held.modules.arrays.has(named.name)) return { kind: "array", file: named.file, name: named.name };
+    return held.modules.modules.some((module) => module.name === named.name) ? { kind: "module", file: named.file, name: named.name } : { kind: "skip" };
+  };
+  /* One aggregate per module graph, memoized by class: its own `forChild` tables then its `imports`, depth first, each class and each array once. */
+  const aggregates = new Map<string, RouteTable | undefined>();
+  const aggregating = new Set<string>();
+  const aggregateOf = async (file: string, className: string): Promise<RouteTable | undefined> => {
+    const key = `${file}\0${className}`;
+    if (aggregating.has(key)) return undefined;
+    if (aggregates.has(key)) return aggregates.get(key);
+    aggregating.add(key);
+    const table = await buildAggregate(file, className);
+    aggregating.delete(key);
+    aggregates.set(key, table);
+    return table;
+  };
+  const buildAggregate = async (file: string, className: string): Promise<RouteTable | undefined> => {
+    const readAt = await readOf(file);
+    if (readAt === undefined || !readAt.modules.modules.some((one) => one.name === className)) return undefined;
+    const entries: RouteEntry[] = [];
+    const held: RouteTable[] = [];
+    const visitedClasses = new Set<string>();
+    const visitedArrays = new Set<string>();
+    let readable = true;
+    let conditional = false;
+    const unclear = (path: string, line: number): void => {
+      readable = false;
+      unresolvedModuleImports.set(`${path}:${line}`, { path, line, endLine: line });
+    };
+    const follow = async (at: string, raw: RawRouteFile, operand: RawOperand): Promise<void> => {
+      const target = await operandTarget(at, raw, operand);
+      if (target.kind === "unreadable" || target.kind === "unresolved") {
+        unclear(at, target.line);
+        return;
+      }
+      if (target.kind === "array") await expand(target.file, target.name);
+      else if (target.kind === "module") await visit(target.file, target.name);
+    };
+    const expand = async (at: string, name: string): Promise<void> => {
+      const key = `${at}\0${name}`;
+      if (visitedArrays.has(key)) return;
+      visitedArrays.add(key);
+      const readingAt = await readOf(at);
+      const operands = readingAt?.modules.arrays.get(name);
+      if (readingAt === undefined || operands === undefined) return;
+      for (const operand of operands) await follow(at, readingAt.routes, operand);
+    };
+    const visit = async (at: string, name: string): Promise<void> => {
+      const key = `${at}\0${name}`;
+      if (visitedClasses.has(key)) return;
+      visitedClasses.add(key);
+      const readingAt = await readOf(at);
+      if (readingAt === undefined) return;
+      for (const config of readingAt.routes.routerConfigs.filter((one) => one.kind === "child" && one.owner === name)) {
+        const resolution = config.table !== undefined ? { table: await tableNode(config.table, at, readingAt.routes) } : config.ref === undefined ? undefined : await childTableOf(at, readingAt.routes, config.ref);
+        if (resolution === undefined || !("table" in resolution)) continue;
+        entries.push(...resolution.table.entries);
+        held.push(resolution.table);
+        conditional ||= resolution.table.conditional;
+      }
+      const module = readingAt.modules.modules.find((one) => one.name === name);
+      for (const operand of module?.imports ?? []) await follow(at, readingAt.routes, operand);
+    };
+    await visit(file, className);
+    if (!readable) return undefined;
+    const node: RouteTable = { entries, conditional };
+    loads.set(node, new Set(held));
+    return node;
+  };
+  /* The aggregate a module class answers; an empty one is a reading gap, never "no routes beneath". */
+  const aggregateResolution = async (file: string, className: string): Promise<ChildResolution> => {
+    const aggregate = await aggregateOf(file, className);
+    if (aggregate === undefined) return { reason: "unresolved" };
+    return aggregate.entries.length === 0 ? { reason: "no-extractor" } : { table: aggregate };
+  };
+  /* The table a reference comes down to: a table by name, the routes of a module class, or the aggregate of its graph. */
+  const childTableOf = async (file: string, raw: RawRouteFile, ref: RawChildRef): Promise<ChildResolution> => {
+    if (ref.unresolved) return { reason: ref.reason ?? "unresolved" };
+    if (ref.module === undefined) {
+      const table = tableOf(raw, ref.name);
+      if (table !== undefined) return { table: await tableNode(table, file, raw) };
+      return ref.name === undefined ? { reason: "unresolved" } : aggregateResolution(file, ref.name);
+    }
+    const target = await fileOf(file, ref.module);
+    if (target === undefined) return { reason: "unresolved" };
+    const named = ref.name !== undefined && ref.name !== "default";
+    const declaration = named ? await declarationOf(target, ref.name!) : await declarationOf(target, "default");
+    const at = declaration?.file ?? target;
+    const declaring = await parse(at);
+    if (declaring === undefined) return { reason: "unresolved" };
+    const table = named ? (declaration === undefined ? undefined : tableOf(declaring, declaration.name)) : tableOf(declaring, undefined);
+    if (table !== undefined) return { table: await tableNode(table, at, declaring) };
+    return declaration === undefined ? { reason: "unresolved" } : aggregateResolution(declaration.file, declaration.name);
+  };
+  /* The aggregate a `bootstrapModule(...)` call boots: the module graph the root injector seeds. */
+  const bootstrapModuleOf = async (file: string, boot: RawBootstrap): Promise<RouteTable | undefined> => {
+    if (boot.module === undefined) return aggregateOf(file, boot.className);
+    const target = await fileOf(file, boot.module);
+    const declaration = target === undefined ? undefined : await declarationOf(target, boot.imported ?? boot.className);
+    return declaration === undefined ? undefined : aggregateOf(declaration.file, declaration.name);
   };
   const unreadableEntry = (file: string, entry: RawEntry, reason: UnknownReason): RouteEntry => ({
     file,
@@ -303,12 +420,12 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
       };
       if (entry.childRef !== undefined) {
         const child = await childTableOf(file, raw, entry.childRef);
-        if (child === undefined) {
-          built.unresolvedLoad = entry.childRef.reason ?? "unresolved";
-          noteUnresolved(file, entry);
+        if ("table" in child) {
+          built.loaded = child.table;
+          loads.set(owner, (loads.get(owner) ?? new Set()).add(child.table));
         } else {
-          built.loaded = await tableNode(child.table, child.file, child.raw);
-          loads.set(owner, (loads.get(owner) ?? new Set()).add(built.loaded));
+          built.unresolvedLoad = child.reason;
+          noteUnresolved(file, entry);
         }
       }
       out.push(built);
@@ -327,21 +444,32 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
     files.set(file, raw);
     for (const table of raw.tables) built.push(await tableNode(table, file, raw));
   }
-  const declaredRoots = new Set<RouteTable>();
+  const declaredRoots: RouteTable[] = [];
+  const heldRoots = new Set<RouteTable>();
+  const seed = (table: RouteTable): void => {
+    if (heldRoots.has(table)) return;
+    heldRoots.add(table);
+    declaredRoots.push(table);
+  };
   const unresolvedConfigurations: LoadedRouteTables["unresolvedConfigurations"] = [];
   let declared = false;
   for (const [file, raw] of files) {
     for (const config of raw.routerConfigs.filter((c) => c.kind === "root")) {
       declared = true;
-      const root = config.table !== undefined ? { file, raw, table: config.table } : config.ref === undefined ? undefined : await childTableOf(file, raw, config.ref);
-      if (root !== undefined) declaredRoots.add(await tableNode(root.table, root.file, root.raw));
-      else {
+      const resolution = config.table !== undefined ? { table: await tableNode(config.table, file, raw) } : config.ref === undefined ? undefined : await childTableOf(file, raw, config.ref);
+      if (resolution === undefined || !("table" in resolution)) {
         noteUnresolved(file, config);
         unresolvedConfigurations.push({ path: file, line: config.line, endLine: config.endLine, reason: config.ref?.reason ?? "unresolved" });
-      }
+      } else seed(resolution.table);
+    }
+    for (const boot of raw.bootstraps) {
+      const root = await bootstrapModuleOf(file, boot);
+      if (root === undefined) continue;
+      declared = true;
+      seed(root);
     }
   }
-  const roots = declared ? built.filter((table) => declaredRoots.has(table)) : [];
+  const roots = declared ? declaredRoots : [];
   const reached = new Set<RouteTable>();
   const reach = (table: RouteTable): void => {
     if (reached.has(table)) return;
@@ -356,5 +484,6 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
     unparsed,
     unresolvedReferences: [...unresolvedReferences.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.line - b.line)),
     unresolvedConfigurations,
+    unresolvedModuleImports: [...unresolvedModuleImports.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.line - b.line)),
   };
 }
