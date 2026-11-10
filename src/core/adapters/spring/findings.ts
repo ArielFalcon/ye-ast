@@ -56,9 +56,9 @@ export function placed(site: CallSite, node: { startPosition: { column: number }
 /** Records the source bodies and leaf occurrences that produced a propagated call site, outside its public fact. */
 export function fromBodies(site: CallSite, groups: readonly { leaf: { invocation: { type: { file: { path: string } }; node: Node } }; bodies: ReadonlySet<MethodDecl> }[]): CallSite {
   const origins = groups.flatMap(({ leaf, bodies }) => [
-    ...[...bodies].map((method) => ({ file: method.owner.file.path, node: method.node.childForFieldName("name") ?? method.node })),
-    { file: leaf.invocation.type.file.path, node: leaf.invocation.node },
-  ]).map(({ file, node }) => ({ file, line: node.startPosition.row + 1, column: node.startPosition.column }));
+    ...[...bodies].map((method) => ({ kind: "body" as const, file: method.owner.file.path, node: method.node.childForFieldName("name") ?? method.node })),
+    { kind: "leaf" as const, file: leaf.invocation.type.file.path, node: leaf.invocation.node },
+  ]).map(({ kind, file, node }) => ({ kind, file, line: node.startPosition.row + 1, column: node.startPosition.column }));
   CALL_PLACES.set(site, { ...CALL_PLACES.get(site), origins });
   return site;
 }

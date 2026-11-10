@@ -188,7 +188,10 @@ Units 1 to 3 landed as designed, with these choices the design left open:
   placed call the propagated sites at the link's place reach for the asked operation. One issuing call starts the
   carrier there, with the call the link was reached from as the second step of the chain. Several issuing calls start no
   carrier: one `ambiguous-caller` frontier names each of them as a chain step, and the link's own call site is its
-  final place, so each link's frontier stays distinct when two roots reach the same implementations.
+  final place, so each link's frontier stays distinct when two roots reach the same implementations. A link starts at
+  its own call site only when no reported site came through owned bodies; placed sites the session did not read, an
+  owned leaf no placed call stands at, and owned bodies with no owned leaf start no carrier either: each is an
+  `ambiguous-caller` frontier (detail `not-read` or `unplaced`) naming the owned origins it knows (ADR-0051 decision 7).
 
 ## Open questions
 

@@ -1,7 +1,7 @@
 import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
-import { compareCallSites, type CallSite, type CallSiteDiagnostic, type CallSiteReader, type HttpTarget, type PlacedCallSite, type PlacedCallSiteReader, type StatedRequest } from "../../domain/topology/call-site.ts";
+import { compareCallSites, type CallSite, type CallSiteDiagnostic, type CallSiteReader, type HttpTarget, type PlacedCallSite, type PlacedCallSiteReader, type PlacedOrigin, type StatedRequest } from "../../domain/topology/call-site.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import { requestMethodOf } from "../../domain/entrypoints/http-route.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -27,7 +27,7 @@ const WRITTEN_FIELDS = new WeakMap<ts.ClassDeclaration, ReadonlySet<string>>();
 const VARIABLE_WRITES = new WeakMap<ts.Node, ReadonlyMap<string, readonly ts.Expression[] | null>>();
 /** The request call through which a wrapper method forwards its parameters, by the method; set where the wrapper fixpoint settles it. */
 const FORWARDING_CALLS = new WeakMap<ts.Node, ts.CallExpression>();
-const CALL_ORIGINS = new WeakMap<CallSite, NonNullable<PlacedCallSite["origins"]>>();
+const CALL_ORIGINS = new WeakMap<CallSite, readonly PlacedOrigin[]>();
 
 /** What one file declares at its top level, and the classes and enums it holds, as the reader needs them. */
 interface FileShape {
@@ -492,7 +492,7 @@ class Reader {
     const site: CallSite = { repo, file: shape.source.fileName, line: start, endLine: end, symbol: symbolOf(call) ?? "(top level)", ancestors: ancestorsOf(call, shape.source), transport: "http", target: read.target, ...(read.diagnostic === undefined ? {} : { diagnostic: read.diagnostic }), ...(read.stated === undefined ? {} : { stated: read.stated }) };
     if (includeForwarding && read.throughWrapper === true) {
       const body = await this.requestBody(shape, call);
-      CALL_ORIGINS.set(site, body?.wrappers.flatMap((wrapper) => [originOf(wrapper.function), originOf(wrapper.forwarded)]) ?? []);
+      CALL_ORIGINS.set(site, body?.wrappers.flatMap((wrapper) => [originOf(wrapper.function, "body"), originOf(wrapper.forwarded, "leaf")]) ?? []);
     }
     return [site];
   }
@@ -1332,8 +1332,8 @@ export function symbolOf(node: ts.Node): string | undefined {
   return member === undefined ? className : `${className}.${member}`;
 }
 
-function originOf(node: ts.Node): NonNullable<PlacedCallSite["origins"]>[number] {
+function originOf(node: ts.Node, kind: PlacedOrigin["kind"]): PlacedOrigin {
   const source = node.getSourceFile();
   const at = source.getLineAndCharacterOfPosition(node.getStart(source));
-  return { file: source.fileName, line: at.line + 1, column: at.character };
+  return { kind, file: source.fileName, line: at.line + 1, column: at.character };
 }

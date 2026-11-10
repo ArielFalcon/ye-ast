@@ -72,6 +72,8 @@ export interface ConsumerSourcesDeps {
   callSites?: PlacedCallSiteReader;
 }
 
+const NOT_READ: ConsumerPlacedSites = { kind: "not-read" };
+
 type ReadPlan = Extract<WorkspaceSnapshotContext["plans"][number], { kind: "read" }>;
 
 interface Reading {
@@ -191,8 +193,8 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             const owned = new Set(sources.map((file) => file.path));
             let placed: Promise<ConsumerPlacedSites> | undefined;
             const placedSites = (): Promise<ConsumerPlacedSites> => (placed ??= deps.callSites === undefined
-              ? Promise.resolve({ sites: [], owned })
-              : deps.callSites.placed(sources, plan.at.repoId, context.librarySources?.get(plan.at.repoId) ?? []).then((sites) => ({ sites, owned })));
+              ? Promise.resolve(NOT_READ)
+              : deps.callSites.placed(sources, plan.at.repoId, context.librarySources?.get(plan.at.repoId) ?? []).then((sites) => ({ kind: "read", sites, owned })));
             return {
               ok: true,
               value: {
@@ -298,7 +300,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
                 },
                 flow: { follow: (carrier) => reached.get(carrier.site.repo)?.flow.follow(carrier) ?? sourceUnreadable(carrier.site) },
                 templates: { follow: (carrier) => reached.get(carrier.site.repo)?.templates.follow(carrier) ?? sourceUnreadable(carrier.site) },
-                placedSites: (repo) => reached.get(repo)?.placedSites() ?? Promise.resolve({ sites: [], owned: new Set<string>() }),
+                placedSites: (repo) => reached.get(repo)?.placedSites() ?? Promise.resolve(NOT_READ),
                 requestOrigins: (repo) => reached.get(repo)?.origins,
                 excludes: excludedFrom(operation, entrypointsOfWorkspace(), fact.value.workspace.gateways),
               },
