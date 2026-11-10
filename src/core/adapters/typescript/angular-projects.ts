@@ -61,3 +61,20 @@ export function pathsByProject(paths: readonly string[], files: readonly SourceF
   }
   return { byProject, orphaned };
 }
+
+/** Source roots explicitly declared by Angular workspace files above the source. */
+export async function legacyRoots(file: string, read: (path: string) => Promise<string | undefined>): Promise<string[]> {
+  const directories = file.split("/").slice(0, -1);
+  for (let length = directories.length; length >= 0; length--) {
+    const prefix = directories.slice(0, length).join("/");
+    for (const name of ["angular.json", ".angular-cli.json"]) {
+      const content = await read(prefix === "" ? name : `${prefix}/${name}`);
+      if (content === undefined) continue;
+      let workspace: { projects?: Record<string, { sourceRoot?: string }>; apps?: { root?: string }[] };
+      try { workspace = JSON.parse(content); } catch { return []; }
+      const roots = [...Object.values(workspace.projects ?? {}).map((project) => project.sourceRoot), ...(workspace.apps ?? []).map((app) => app.root)];
+      return [...new Set(roots.filter((root): root is string => typeof root === "string").map((root) => [prefix, root].filter(Boolean).join("/")))].sort();
+    }
+  }
+  return [];
+}

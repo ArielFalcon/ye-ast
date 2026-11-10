@@ -767,3 +767,27 @@ test("each nested route records only its own guards when components and guards a
     ["/group", ["guard"]], ["/group", ["guard"]], ["/group/:id", []], ["/group/:id/detail", []],
   ]);
 });
+
+for (const exported of ['FeatureModule', 'FEATURE_ROUTES']) {
+  test(exported === 'FeatureModule' ? 'the legacy <path>#<Export> form resolves through the workspace source root' : 'the legacy form whose export names a Routes constant resolves to its table', async () => {
+    const files = {
+      ...table(`{ path: 'legacy', loadChildren: 'app/feature#${exported}' },`),
+      'angular.json': JSON.stringify({ projects: { app: { sourceRoot: 'src' } } }),
+      'src/app/feature.ts': `${HEADER}import { NgModule } from '@angular/core';\nimport { RouterModule } from '@angular/router';\nexport const FEATURE_ROUTES: Routes = [{ path: 'leaf', component: Leaf }];\n@NgModule({ imports: [RouterModule.forChild(FEATURE_ROUTES)] })\nexport class FeatureModule {}`,
+    };
+    assert.deepEqual(names(await extract(files)), ['/legacy/leaf']);
+    const { 'angular.json': workspace, ...withoutWorkspace } = files;
+    assert.deepEqual(names(await extract(withoutWorkspace)), []);
+    assert.equal(unknowns(await extract(withoutWorkspace)).some((item) => item.startsWith('unresolved@')), true);
+  });
+}
+
+test("lazy await and destructuring resolve while calls with arguments name no-extractor", async () => {
+  const leaf = { 'src/app/leaf.ts': `${HEADER}export const CHILDREN: Routes = [{ path: 'leaf', component: Leaf }];` };
+  for (const form of ["async () => (await import('./leaf')).CHILDREN", "() => import('./leaf').then(({ CHILDREN }) => CHILDREN)"]) {
+    assert.deepEqual(names(await extract({ ...leaf, ...table(`{ path: 'parent', loadChildren: ${form} },`) })), ['/parent/leaf']);
+  }
+  const findings = await extract(table("{ path: 'parent', loadChildren: factory(1) },"));
+  assert.deepEqual(names(findings), []);
+  assert.equal(unknowns(findings).some((item) => item.startsWith('no-extractor@')), true);
+});

@@ -26,6 +26,7 @@ export interface RawChildRef {
   name?: string;
   unresolved?: true;
   reason?: "no-extractor";
+  legacy?: true;
 }
 
 export interface RawEntry {
@@ -195,8 +196,12 @@ export function readAngularRouteFile(sf: ts.SourceFile): RawRouteFile | undefine
    * `x.loadChildren`, where `x` is a top-level const) is read at the binding's initializer, whatever call builds it.
    * Either way it must hold exactly one dynamic `import()`, and with a static specifier; anything else is unresolved.
    */
-  const lazyOf = (init: ts.Expression): { module: string; name?: string } | undefined => {
+  const lazyOf = (init: ts.Expression): { module: string; name?: string; legacy?: true } | undefined => {
     const b = unwrapped(init);
+    if (ts.isStringLiteral(b)) {
+      const parts = b.text.split("#");
+      if (parts.length === 2 && parts[0] && parts[1]) return { module: parts[0], name: parts[1], legacy: true };
+    }
     const bound = ts.isIdentifier(b) ? b : ts.isPropertyAccessExpression(b) && ts.isIdentifier(b.expression) ? b.expression : undefined;
     const source = bound === undefined ? init : initializers.get(bound.text);
     if (source === undefined) return undefined;
@@ -306,7 +311,7 @@ export function readAngularRouteFile(sf: ts.SourceFile): RawRouteFile | undefine
     const lazyChildren = init("loadChildren");
     if (lazyChildren !== undefined) {
       const lazy = lazyOf(lazyChildren);
-      entry.childRef = lazy === undefined ? { unresolved: true } : lazy;
+      entry.childRef = lazy === undefined ? { unresolved: true, ...(ts.isCallExpression(unwrapped(lazyChildren)) && (unwrapped(lazyChildren) as ts.CallExpression).arguments.length > 0 ? { reason: "no-extractor" as const } : {}) } : lazy;
     }
     return entry;
   };

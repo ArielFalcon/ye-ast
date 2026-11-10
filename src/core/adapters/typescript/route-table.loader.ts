@@ -1,3 +1,4 @@
+import { legacyRoots } from "./angular-projects.ts";
 import type { Handler } from "../../domain/entrypoints/http-route.ts";
 import type { RouteGuard } from "../../domain/entrypoints/ui-route.ts";
 import { declarationSpan } from "../../domain/shared/fact.ts";
@@ -354,7 +355,11 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
       if (table !== undefined) return { table: await tableNode(table, file, raw) };
       return ref.name === undefined ? { reason: "unresolved" } : aggregateResolution(file, ref.name);
     }
-    const target = await fileOf(file, ref.module);
+    const targets = ref.legacy === true
+      ? await Promise.all((await legacyRoots(file, read)).map((root) => fileOf(`${root === "" ? "." : root}/__legacy__.ts`, `./${ref.module}`)))
+      : [await fileOf(file, ref.module)];
+    const unique = [...new Set(targets.filter((target): target is string => target !== undefined))];
+    const target = unique.length === 1 ? unique[0] : undefined;
     if (target === undefined) return { reason: "unresolved" };
     const named = ref.name !== undefined && ref.name !== "default";
     const declaration = named ? await declarationOf(target, ref.name!) : await declarationOf(target, "default");
