@@ -61,7 +61,7 @@ async function extractProject(sources: readonly string[], packages: ManifestPack
     }
     return held;
   };
-  const loaded = await loadRouteTables({ candidates: sources, read, packages, reading });
+  const loaded = await loadRouteTables({ candidates: sources, read, listing: [...contents.keys()], packages, reading });
   const { roots, unparsed, unresolvedReferences } = loaded;
   const walk: Walk = { findings: [], blockers: loaded.declared ? [] : unresolvedReferences };
   for (const root of roots) routesOf(root, enter(root, { segments: [], conditional: false, above: new Set() }), walk);
@@ -69,11 +69,16 @@ async function extractProject(sources: readonly string[], packages: ManifestPack
   const noRoot: UnknownReason | undefined = loaded.declared ? undefined : "unresolved";
   for (const table of loaded.unreached) unreachedRoutesOf(table.entries, unresolvedReferences, walk.findings, noRoot);
   for (const path of unparsed) walk.findings.push(unknown("source-unreadable", { path, line: 1 }));
-  return { findings: walk.findings, readingCuts: loaded.unresolvedReferences.map(frontierOf) };
+  const importCuts = loaded.unresolvedModuleImports.flatMap((reference) => (reference.specifier === undefined ? [] : [importFrontierOf(reference.path, reference.line, reference.specifier, reference.namesNoFile)]));
+  return { findings: walk.findings, readingCuts: [...loaded.unresolvedReferences.map(frontierOf), ...importCuts] };
 }
 
 function frontierOf(reference: UnresolvedReference): Cut {
   return { kind: "unresolved-link", at: [reference.path, `${reference.path}:${reference.line}`], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } };
+}
+
+function importFrontierOf(path: string, line: number, specifier: string, namesNoFile: boolean): Cut {
+  return { kind: "unresolved-link", at: [path, `${path}:${line}`], reason: "specifier", reach: { kind: "module", importer: path, specifiers: [{ specifier, ...(namesNoFile ? { namesNoFile: true as const } : {}) }] } };
 }
 
 /**

@@ -163,3 +163,14 @@ test("the same place never yields two cuts: a root configuration that is both an
     { kind: "unresolved-link", at: ["src/main.ts", "src/main.ts:3"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } },
   ]);
 });
+
+test("an @NgModule import that names no file is one cut with the module reach", async () => {
+  const extracted = await extraction({
+    "src/main.ts": "import { AppModule } from './app/app.module';\nplatformBrowserDynamic().bootstrapModule(AppModule);\n",
+    "src/app/app.module.ts": `${NG_MODULE}import { MissingModule } from './missing.module';\n@NgModule({ imports: [MissingModule] })\nexport class AppModule {}\n`,
+  });
+
+  assert.deepEqual(extracted.readingCuts, [
+    { kind: "unresolved-link", at: ["src/app/app.module.ts", "src/app/app.module.ts:3"], reason: "specifier", reach: { kind: "module", importer: "src/app/app.module.ts", specifiers: [{ specifier: "./missing.module", namesNoFile: true }] } },
+  ]);
+});
