@@ -1,9 +1,10 @@
 import type { RemovedDeclaration } from "../change/seeds.ts";
 import { CALL_EDGE_KINDS } from "./call-kinds.ts";
 import { fileReach, mayRunDeclarationOf, sharesRuntime } from "../languages/call-targets.ts";
+import { JAVA_PROFILE, profileOf } from "../languages/profiles.ts";
 import { nameTail } from "../shared/call-place.ts";
 import { compareText } from "../shared/code-node.ts";
-import type { Cut, CutReach, CutReason } from "../shared/fact.ts";
+import { CAPABILITY_ABSENT, type Cut, type CutReach, type CutReason } from "../shared/fact.ts";
 
 /** A reference the index could not resolve to a declaration. */
 export interface UnresolvedUse {
@@ -272,6 +273,26 @@ export function removedDeclarationCuts(
     }
   }
   return [...places].map(([declaration, at]) => unresolvedLinkAt(declaration, at, "removed-declaration", callersOf([declaration])));
+}
+
+/**
+ * The Java type kinds codegraph emits: an annotation type arrives as `interface`, a record as `class` (java-symbols.ts
+ * maps `record_declaration` to `class`). A record is therefore covered by `class`, with no rule of its own.
+ */
+const JAVA_TYPE_KINDS: ReadonlySet<string> = new Set(["class", "interface", "enum"]);
+
+/** Whether a declaration of `kind` in `file` is a Java type target (RFC-0027 U0 condition a). */
+export function isJavaTypeKind(kind: string, file: string): boolean {
+  return JAVA_TYPE_KINDS.has(kind) && profileOf(file) === JAVA_PROFILE;
+}
+
+/**
+ * A Java type target whose type references no stage reads (ADR-0042 decision 1, RFC-0027 U0): the answer about its
+ * dependents is partial at the target, reached by its callers, never complete with zero dependents.
+ */
+export function unreadTypeReferenceCut(target: { file: string; name: string }): Cut {
+  const anchor = declarationAnchor(target.file, target.name);
+  return { kind: "unresolved-link", at: [anchor], reason: "relation-unread", subReason: CAPABILITY_ABSENT, reach: callersOf([anchor]) };
 }
 
 /** An injection or template use the relation reader named but could not place: where, and why. */

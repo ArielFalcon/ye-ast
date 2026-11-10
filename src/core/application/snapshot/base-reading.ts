@@ -4,6 +4,7 @@ import type { BuildOutputInput, Cut, FactBase, SnapshotRef } from "../../domain/
 import type { ScopeRequest } from "../../domain/shared/scope.ts";
 import type { CodeGraphReader, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
+import type { AbsentCapability } from "../../ports/language-pack.port.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { RevisionSources } from "../../ports/revision-sources.port.ts";
@@ -58,7 +59,11 @@ export interface BaseReadingDeps {
   checkerInputs?: RevisionSources | undefined;
   /** The build outputs a host declared for the repository at a root, for a request that declares none itself. */
   declaredOutputs?: ((repo: string) => readonly DeclaredBuildOutput[] | undefined) | undefined;
+  /** The stages each language pack declares it cannot implement, by path (ADR-0045 decision 12); none declared without it. */
+  absentCapabilities?: ((path: string) => ReadonlySet<AbsentCapability>) | undefined;
 }
+
+const NO_ABSENT: ReadonlySet<AbsentCapability> = new Set();
 
 /** The request one reading answers. */
 export interface ReadingRequest {
@@ -133,6 +138,8 @@ export interface BaseReading {
   reverseCalls(targets: EdgeTargets): ReverseCalls | undefined;
   /** The member calls through the relations' field and `inject()` local origins into reached declarations; absent without bindings. */
   originCalls(targets: EdgeTargets): OriginCalls | undefined;
+  /** The stages the language pack of `path` declares absent (ADR-0045 decision 12); none where no pack reads it. */
+  absentCapabilitiesOf(path: string): ReadonlySet<AbsentCapability>;
 }
 
 export interface BaseReadings {
@@ -287,6 +294,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
         },
         declarationUses,
         originCalls: (targets) => (targets.bindings === undefined ? undefined : createOriginCalls(targets.bindings, throughOrigins)),
+        absentCapabilitiesOf: (path) => deps.absentCapabilities?.(path) ?? NO_ABSENT,
         reverseCalls(targets) {
           const reconciled = reconciledCalls(targets, declarationUses());
           if (targets.bindings === undefined || reconciled === undefined || syntaxOf === undefined) return undefined;

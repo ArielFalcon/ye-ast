@@ -30,6 +30,12 @@ function unlessAbsent(owner: LanguagePack, capability: AbsentCapability, sites: 
   return owner.absent?.includes(capability) === true ? Promise.resolve(sites.map(() => ABSENT)) : undefined;
 }
 
+/** The stages the pack owning `path` declares absent, none where no pack reads it: the one owner of "which pack owns a path". */
+export function absentCapabilitiesOf(packs: readonly Pick<LanguagePack, "profile" | "absent">[]): (path: string) => ReadonlySet<AbsentCapability> {
+  const none: ReadonlySet<AbsentCapability> = new Set();
+  return (path) => new Set(packs.find((pack) => pack.profile.reads(path))?.absent ?? none);
+}
+
 export function routedReaders(packs: readonly LanguagePack[]): RoutedReaders {
   const ownerOf = (path: string): LanguagePack | undefined => packs.find((pack) => pack.profile.reads(path));
   const routedLists = new WeakMap<readonly SourceFile[], ReadonlyMap<LanguagePack, readonly SourceFile[]>>();
