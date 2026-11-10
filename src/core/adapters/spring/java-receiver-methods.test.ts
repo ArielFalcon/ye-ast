@@ -272,3 +272,55 @@ test("given derived facts, a second reader over the same sources answers the sam
   assert.deepEqual(again, first);
   assert.equal(parsed, afterFirst);
 });
+
+const OVERLOADED_PORT = java("Port.java", ["package app;", "public interface Port {", "  void save(String value);", "  void save(String value, int times);", "}"]);
+const OVERLOADING_IMPL = java("Impl.java", ["package app;", "public class Impl implements Port {", "  public void save(String value) {}", "  public void save(String value, int times) {}", "}"]);
+const GENERIC_BOX = java("Box.java", ["package app;", "public interface Box<T> {", "  void put(T value);", "}"]);
+const GENERIC_CRATE = java("Crate.java", ["package app;", "public class Crate implements Box<String> {", "  public void put(String value) {}", "}"]);
+
+test("a Java method names the supertype declaration of its own signature, and a generic contract stays unknown", async () => {
+  const answers = await createJavaNameBindings(createJavaParser, [OVERLOADED_PORT, OVERLOADING_IMPL, GENERIC_BOX, GENERIC_CRATE]).implementedDeclarations([
+    { file: OVERLOADING_IMPL.path, start: 3, name: "save" },
+    { file: OVERLOADING_IMPL.path, start: 4, name: "save" },
+    { file: GENERIC_CRATE.path, start: 3, name: "put" },
+  ]);
+  assert.deepEqual(answers, [
+    { kind: "declarations", declarations: [{ file: OVERLOADED_PORT.path, start: 3, nameLine: 3 }] },
+    { kind: "declarations", declarations: [{ file: OVERLOADED_PORT.path, start: 4, nameLine: 4 }] },
+    { kind: "unknown" },
+  ]);
+});
+
+const NARROWING_IMPL = java("Narrow.java", ["package app;", "public class Narrow implements Port {", "  public void save(int value) {}", "}"]);
+const REMOTE_IMPL = java("RemoteImpl.java", ["package app;", "import com.acme.Remote;", "public class RemoteImpl implements Remote {", "  public void save(int value) {}", "}"]);
+const REPOSITORY = java("UserRepository.java", ["package app;", "import org.springframework.data.jpa.repository.JpaRepository;", "public interface UserRepository extends JpaRepository<String, Long> {", "  int count(int value);", "}"]);
+
+test("a method whose complete hierarchy holds no member of its signature answers an established empty list", async () => {
+  const answers = await createJavaNameBindings(createJavaParser, [OVERLOADED_PORT, NARROWING_IMPL]).implementedDeclarations([
+    { file: NARROWING_IMPL.path, start: 3, name: "save" },
+  ]);
+  assert.deepEqual(answers, [{ kind: "declarations", declarations: [] }]);
+});
+
+test("a method whose hierarchy names a type the sources do not declare is unknown, since that type may declare the contract", async () => {
+  const answers = await createJavaNameBindings(createJavaParser, [OVERLOADED_PORT, REMOTE_IMPL]).implementedDeclarations([
+    { file: REMOTE_IMPL.path, start: 4, name: "save" },
+  ]);
+  assert.deepEqual(answers, [{ kind: "unknown" }]);
+});
+
+test("a repository method whose supertypes are framework interfaces names no contract, since no library type extends a repository type", async () => {
+  const answers = await createJavaNameBindings(createJavaParser, [OVERLOADED_PORT, REPOSITORY]).implementedDeclarations([
+    { file: REPOSITORY.path, start: 4, name: "count" },
+  ]);
+  assert.deepEqual(answers, [{ kind: "declarations", declarations: [] }]);
+});
+
+const WILDCARD_IMPL = java("WildcardImpl.java", ["package web;", "import app.*;", "public class WildcardImpl implements Port {", "  public void save(int value) {}", "}"]);
+
+test("a method whose repository contract is reached through a wildcard import is unknown, not an empty answer", async () => {
+  const answers = await createJavaNameBindings(createJavaParser, [OVERLOADED_PORT, WILDCARD_IMPL]).implementedDeclarations([
+    { file: WILDCARD_IMPL.path, start: 3, name: "save" },
+  ]);
+  assert.deepEqual(answers, [{ kind: "unknown" }]);
+});

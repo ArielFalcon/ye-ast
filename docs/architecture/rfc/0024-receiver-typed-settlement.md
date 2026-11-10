@@ -220,7 +220,7 @@ Searched the whole `src/` for the broad form — a settlement of a member call o
 | `navigation/call-binding.ts:155-158` | own-member overload set | U1 |
 | `navigation/edge-targets.ts:257-262` + `:299-317` | an index edge's receiver, and a homonym edge judged with `[target]` as its only candidate | U2, U3 |
 | `navigation/reverse-calls.ts:184`, `:202` | which recovered calls may reach a declaration, and the cut per attributed one | no code change; shrinks with U2, U3 |
-| `impact/inbound-edges.ts:135-143` | the contract a method implements | U4 |
+| `impact/inbound-edges.ts:139-156` | the contract a method implements | U4 |
 | `impact/impact-cuts.ts:203`, `:217-226` | the reach of an unattributed cut (M5) | no code change; shrinks with U3, U4 (OQ7 open) |
 | `trace/trace-walk.ts:376-386`, `:456` | the candidates a cut prints | U3 (through `CallBinding.candidates`) |
 | `trace/trace-walk.ts:251-264` | a second Java receiver rule (M7) | U5 |
@@ -591,17 +591,17 @@ Each unit is one commit, failing fixture first, `npm run check`, and the corpus 
 - **Files:** `src/core/ports/import-origins.port.ts` (`ImplementedDeclarations`),
   `src/core/application/impact/inbound-edges.ts` (`bridgesOf` asks the port), `src/core/application/impact/inbound-origins.ts`
   (`inboundEdgesOf` takes the port and passes it), `src/core/application/impact/impact-queries.ts` (the
-  `inboundEdgesOf(...)` call at `:537` passes the read's origins),
+  `inboundEdgesOf(...)` `build` closure at `:659` passes the read's corrections, with the precomputed `implemented` map),
   `src/core/adapters/spring/java-receiver-methods.ts` (`implementedDeclarations`, reusing `readSignature`,
   `sameSignature`, `JavaProject.hierarchy`), `src/core/adapters/typescript/import-origins.adapter.ts` (answers
-  `{kind:"unknown"}`), `src/composition/*` (wire the new port member). **Must not touch:** `walk.ts`,
+  `{kind:"unknown"}`), `src/core/application/snapshot/language-packs.ts` (routes the new port member), `src/core/application/navigation/implemented-contracts.ts` (the precompute; a module of its own, not `inbound-origins.ts`, because `base-reading.ts` imports it and `inbound-origins.ts` imports `base-reading.ts`), `src/core/application/snapshot/base-reading.ts` (`implementedContracts`, memoised per reading; Resolved questions 6). **Must not touch:** `walk.ts`,
   `impact-queries.ts`'s traversal, `edge-targets.ts`.
 - **RED test:** `src/core/application/impact/inbound-edges.test.ts`, "a method bridges to the contract declaration of its
   own signature". Fixture with the existing fake reader: `interface Port { save(x: string); save(x: string, y: number) }`
   at `src/port.ts:2`, `:3`; `class Impl implements Port` with `save(x: string, y: number)` at `src/impl.ts:4`; the port
   answers `{kind:"declarations", declarations:[{file:"src/port.ts",start:3,nameLine:3}]}`. Assert
   `callersOf(Impl.save)` bridges to exactly `Port.save@3`. Why it fails today: the bridge filters by
-  `candidate.name === method.name` (`inbound-edges.ts:141`) and returns both. **Variant beyond the observed case:** the
+  `candidate.name === method.name` (`inbound-edges.ts:151`) and returns both. **Variant beyond the observed case:** the
   port answers `{kind:"unknown"}` → the bridge keeps today's by-name set, pinned by a test so the fallback cannot be
   dropped silently.
 - **GREEN:** both tests pass. Real probe (expected): `repro/p-java-homonym.json` steps 1-2 — the two `reached
@@ -612,6 +612,11 @@ Each unit is one commit, failing fixture first, `npm run check`, and the corpus 
   fixtures), ADR-0044 decision 1's placement table (one row).
 - **Risks / high-risk item:** none by the global list; the new port member is additive and the `unknown` fallback keeps
   today's answers for a language that cannot answer.
+- **Totality (ADR-0051 decision 7):** the bridge is a total function over the port's two states: `unknown` (and a method
+  nobody asked about) keeps the by-name set; `declarations` keeps the members the answer lists. The Java adapter decides
+  which state applies, and `declarations`, possibly empty, is reached only from a hierarchy it read in full: a supertype
+  the sources do not declare (a platform type aside) answers `unknown`. An unread hierarchy can therefore never produce
+  "no implementor".
 
 ### U5 — trace's second Java receiver rule is deleted
 
@@ -661,6 +666,7 @@ figures are the baseline (`23 routes / 48 cuts` for one `CustomerService.getByNi
 | 3 | Does ADR-0041 open question 7 (index unresolved references lose the unattributed homonym cut) get decided by this RFC? | **Not here.** U3 and U4 shrink its volume causally (the reach no longer contains sibling overloads, M4's attributed cuts fall to the receiver's members), and U2 supplies the receiver-typed candidates OQ7 says the decision needs. OQ7 is decided on the M5 report re-run after U4, with the bound that no answer's size grows and ADR-0045 M1 holds. |
 | 4 | Is the overload collapse a new derivation value for dependence (`overload`)? | **No.** Keep ADR-0036's `proven`; record the collapse in the binding's internal `link`. A new value would be vocabulary under RFC-0002 rule 6 with no consumer that reads it. |
 | 5 | Who owns `CallBinder.memberOf`/`declares` and in which order do the drafts land? | **RFC-0024 owns them, `GraphSymbol`-based and asynchronous; U1–U4 land before RFC-0027's U1, and RFC-0027 extends the contract afterwards** (lead decision). `membersAbove` is part of the same contract. No unit of either draft offers two contracts for one question. |
+| 6 | How does the contract bridge learn a method's signature without making the walk asynchronous (U4)? | **Precompute at snapshot level, never an async bridge** (lead decision, 2026-11-10). `implementedContracts()` asks the port once per reading for every method of a class with a repository supertype, and `bridgesOf` reads that answer synchronously, as it reads `EdgeCorrections`. An async bridge would change `walk.ts`, which U4 must not touch; precomputing only the seeds would leave bridges unresolved on nodes reached deeper, a false "no impact". |
 
 ## Review responses
 

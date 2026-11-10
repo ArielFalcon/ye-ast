@@ -655,7 +655,8 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const selection = selectRoots(store, changes, requested, componentsByResource);
 
   const { seeds } = selection;
-  const build = (corrections: EdgeCorrections): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, corrections);
+  const implemented = await input.reading.implementedContracts();
+  const build = (corrections: EdgeCorrections): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, { ...corrections, implemented });
   const targets = input.reading.edgeTargets(input.typed);
   const typedReferences = input.typed === undefined ? undefined : typedReferencesOf(store, unresolved, input.typed);
   const originCalls = targets === undefined ? undefined : input.reading.originCalls(targets);

@@ -240,6 +240,7 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
   dispatchTargets: async (sites) => sites.map(() => ({ kind: "unknown" })),
   /** For the same reason a declared type does not name the class whose method a call runs. */
   receiverMethods: async (sites) => sites.map(() => ({ kind: "unknown" })),
+  implementedDeclarations: async (sites) => sites.map(() => ({ kind: "unknown" })),
   declaredTypes: async (sites, signal) => {
     const results: DeclaredType[] = sites.map(() => UNKNOWN_TYPE);
     for (const [file, group] of Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file)) {
