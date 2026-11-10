@@ -10,7 +10,7 @@ import type { SourceTokens } from "./source-tokens.port.ts";
  * so a reader never tells its language's files apart itself.
  */
 /** The stage contracts a pack may declare it cannot implement: the line answers each site `capability-absent` for it. */
-export type AbsentCapability = "dispatchTargets" | "receiverMethods" | "tokens";
+export type AbsentCapability = "dispatchTargets" | "receiverMethods" | "tokens" | "relations";
 
 export interface LanguagePack {
   profile: LanguageProfile;

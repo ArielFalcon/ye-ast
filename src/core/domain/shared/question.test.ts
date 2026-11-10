@@ -46,6 +46,15 @@ test("a specifier is out of what depends on the asked files only when its import
   assert.equal(inQuestion(module({ specifier: "@/x", namesNoFile: true }, { specifier: "@/y" }), DEPENDENTS), true);
 });
 
+test("a Java type target's unread-relation cut stays in question for a walk of its runtime, and leaves a TypeScript-only walk (RFC-0027 U0)", () => {
+  const typeCut = at("unresolved-link", "relation-unread", { kind: "callers-of", declarations: ["src/app/Target.java::Target"] }, "src/app/Target.java::Target");
+  assert.equal(inQuestion(typeCut, { kind: "walk", files: ["src/app/Target.java"] }), true);
+  assert.equal(inQuestion(typeCut, { kind: "walk", files: ["src/app/Holder.java"] }), true);
+  assert.equal(inQuestion(typeCut, { kind: "walk", files: ["src/ts/page.ts"] }), false);
+  const base = { schema: SCHEMA, snapshot: { repo: "r", kind: "sha", sha: "a".repeat(40) }, producer: { name: "p", version: "1" }, inputs: {}, evidence: [] } as unknown as FactBase;
+  assert.equal(withCuts(base, "value", [typeCut], { kind: "walk", files: ["src/app/Target.java"] }).status, "partial");
+});
+
 test("a walk keeps every cut at a place sharing a walked file's runtime and drops a specifier that names no file (ADR-0042 fixtures 8, 12)", () => {
   const walk: Asserted = { kind: "walk", files: ["src/flow.ts", "src/a.ts"] };
   const javaWalk: Asserted = { kind: "walk", files: ["src/Flow.java"] };

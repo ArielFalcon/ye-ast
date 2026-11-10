@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { referenceKey, removedDeclarationCuts, unreadRelationCuts, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
+import { isJavaTypeKind, referenceKey, removedDeclarationCuts, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
 
 const SAVE: WalkedDeclaration = { file: "src/Repo.java", name: "save", kind: "method", qualifiedName: "Repo::save" };
 
@@ -11,6 +11,22 @@ function use(name: string, kind: string, file = "src/Use.java", line = 3): Unres
 function qualified(name: string, kind: string, candidates: readonly string[], file = "src/Use.java", line = 3): UnresolvedUse {
   return { name, kind, file, line, from: "caller", column: 0, candidates };
 }
+
+test("a Java type target with unread type references is one cut at its declaration, reached by its callers (RFC-0027 U0, ADR-0042 decision 1)", () => {
+  assert.deepEqual(unreadTypeReferenceCut({ file: "src/app/Target.java", name: "Target" }), {
+    kind: "unresolved-link",
+    at: ["src/app/Target.java::Target"],
+    reason: "relation-unread",
+    subReason: "capability-absent",
+    reach: { kind: "callers-of", declarations: ["src/app/Target.java::Target"] },
+  });
+});
+
+test("the Java type kinds codegraph emits are the targets, a record among them as a class, and a method or a TypeScript class is not (RFC-0027 U0)", () => {
+  for (const kind of ["class", "interface", "enum"]) assert.equal(isJavaTypeKind(kind, "src/app/Target.java"), true, kind);
+  assert.equal(isJavaTypeKind("method", "src/app/Target.java"), false);
+  assert.equal(isJavaTypeKind("class", "src/app/target.ts"), false);
+});
 
 test("a bare call that never resolved and shares a declared method's name is a cut at it, with every place", () => {
   const cuts = unresolvedLinkCuts([use("save", "calls", "src/Repo.java", 9), use("save", "calls", "src/Repo.java", 4)], [SAVE], []);

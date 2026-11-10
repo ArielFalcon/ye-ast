@@ -6,7 +6,7 @@ import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { LanguagePack } from "../../ports/language-pack.port.ts";
-import { routedReaders } from "./language-packs.ts";
+import { absentCapabilitiesOf, routedReaders } from "./language-packs.ts";
 
 const TS = "src/a.ts";
 const JAVA = "src/main/java/A.java";
@@ -102,4 +102,11 @@ test("one list of sources reaches a pack as one list, however many times it is r
 
   assert.equal(lists.length, 2);
   assert.equal(lists[0], lists[1]);
+});
+
+test("a path reports the absent stages of the one pack that reads it, and a path no pack reads reports none (RFC-0027 U0)", () => {
+  const absent = absentCapabilitiesOf([{ profile: TYPESCRIPT_PROFILE, absent: ["dispatchTargets"] }, { profile: JAVA_PROFILE, absent: ["relations"] }]);
+  assert.deepEqual([...absent(JAVA)], ["relations"]);
+  assert.deepEqual([...absent(TS)], ["dispatchTargets"]);
+  assert.deepEqual([...absent(MANIFEST)], []);
 });

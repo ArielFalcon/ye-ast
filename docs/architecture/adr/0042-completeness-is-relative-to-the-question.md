@@ -173,6 +173,7 @@ implement as absent capabilities. Four of its effects reach this ADR:
    | `module-impact.ts:41` | `unresolved-link` | `dynamic-load` |
    | `removedDeclarationCuts`, `impact-cuts.ts:193` | `unresolved-link` | `removed-declaration` |
    | `unreadRelationCuts`, `impact-cuts.ts:231` | `unresolved-link` | `relation-unread` |
+   | `unreadTypeReferenceCut`, `impact-cuts.ts` (RFC-0027 U0): a Java type target whose pack declares `relations` absent, reached by `callers-of` its declaration | `unresolved-link` | `relation-unread`, sub-reason `capability-absent` |
    | `unprovedUseCuts`, `src/core/domain/outline/outline-uses.ts:36-42` | `unresolved-link` | `use-unproven` |
    | Trace call no rule settles: `trace-walk.ts:215-218` at `:386,452,459,462,564`; by name only `:392`; a receiver held by a value `:537-543` | `unresolved-link` | `receiver-unproven` when candidates are listed, `callee-unknown` when none; the call site decides which |
    | Trace construction whose class has not exactly one constructor with a body: `trace-walk.ts:532` | `unresolved-link` | `constructor-unsettled` |

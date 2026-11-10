@@ -27,6 +27,8 @@ export interface SeedSelection<S extends SeedSymbol> {
   withoutSymbols: string[];
   /** The names the removed lines declared, whether or not a symbol held the removal: a seed never walks to their users. */
   removed: RemovedDeclaration[];
+  /** The seeds a removal's place holds and nothing else does: the walk's start, never the change's target (RFC-0027 U0). */
+  removalHolders: S[];
 }
 
 export interface RemovedDeclaration {
@@ -59,9 +61,14 @@ export function selectSeeds<S extends SeedSymbol>(
   const chosen = new Map<S, SeedBasis>();
   const withoutSymbols: string[] = [];
   const removed: RemovedDeclaration[] = [];
-  const take = (symbol: S, basis: SeedBasis): void => {
+  /** The seeds a resource or an added line picked: the change's targets, never a mere removal holder. */
+  const targets = new Set<S>();
+  const holders = new Set<S>();
+  const take = (symbol: S, basis: SeedBasis, holdsRemoval = false): void => {
     const held = chosen.get(symbol);
     if (held === undefined || BASIS_ORDER.indexOf(basis) < BASIS_ORDER.indexOf(held)) chosen.set(symbol, basis);
+    if (holdsRemoval) holders.add(symbol);
+    else targets.add(symbol);
   };
   for (const change of radius.files) {
     for (const component of componentsByResource.get(change.path) ?? []) {
@@ -73,13 +80,13 @@ export function selectSeeds<S extends SeedSymbol>(
     for (const removal of change.removals) {
       const holder = innermostHolding(symbols, removal.after, removal.after + 1);
       if (holder !== undefined) {
-        take(holder, "lines");
+        take(holder, "lines", true);
         continue;
       }
       const place: LineRange = { start: removal.after + 1, end: removal.after + 1 };
       const owners = symbols.filter((symbol) => intersects(ownLines(symbol, symbols), [place]));
-      if (owners.length > 0) for (const symbol of owners) take(symbol, "lines");
-      else for (const symbol of topLevelOf(symbols)) take(symbol, "top-level");
+      if (owners.length > 0) for (const symbol of owners) take(symbol, "lines", true);
+      else for (const symbol of topLevelOf(symbols)) take(symbol, "top-level", true);
     }
     removed.push(...change.removedNames.map((name): RemovedDeclaration => ({ file: change.path, name })));
     const touched = change.binary ? [WHOLE_FILE] : change.added;
@@ -91,7 +98,7 @@ export function selectSeeds<S extends SeedSymbol>(
     const top = topLevelOf(symbols);
     if (subtract(touched, top.map(spanOf)).length > 0) for (const symbol of top) take(symbol, "top-level");
   }
-  return { seeds: [...chosen].map(([symbol, basis]) => ({ symbol, basis })), withoutSymbols: withoutSymbols.toSorted(), removed };
+  return { seeds: [...chosen].map(([symbol, basis]) => ({ symbol, basis })), withoutSymbols: withoutSymbols.toSorted(), removed, removalHolders: [...holders].filter((symbol) => !targets.has(symbol)) };
 }
 
 function spanOf(symbol: SeedSymbol): LineRange {

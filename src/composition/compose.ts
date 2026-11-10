@@ -60,7 +60,7 @@ import { composeConsumerSources, composeContractConsequences } from "./consumer-
 import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
 import { compareCallPlaces, type CallSiteReader, type PlacedCallSiteReader } from "../core/domain/topology/call-site.ts";
 import type { EntrypointExtractor, SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
-import { routedReaders } from "../core/application/snapshot/language-packs.ts";
+import { absentCapabilitiesOf, routedReaders } from "../core/application/snapshot/language-packs.ts";
 import { composeLanguagePacks } from "./language-packs.ts";
 import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
@@ -207,7 +207,8 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const moduleDependencies = staged(createModuleDependenciesReader(), { extract: "module-dependencies" });
   let javaImportsReader: Promise<ModuleDependenciesReader> | undefined;
   const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => (await (javaImportsReader ??= javaParser().then(createJavaImportsReader))).extract(sources, options) }, { extract: "java-imports" });
-  const merged = routedReaders(composeLanguagePacks(javaParser, { typescript: moduleDependencies, java: javaImports }));
+  const packs = composeLanguagePacks(javaParser, { typescript: moduleDependencies, java: javaImports });
+  const merged = routedReaders(packs);
   const { sourceTokens, modules: moduleReader } = merged;
   const memberNames = measurement === undefined ? merged.memberNames : measuredTalliedStages(merged.memberNames, { memberNames: "member-names" }, measurement);
   const importOrigins = (sources: readonly SourceFile[], paths?: readonly string[], facts?: DerivedFacts, hold?: ParseHold) => {
@@ -243,6 +244,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     moduleReader,
     declarationEvidence: createDeclarationEvidenceReader(),
     unmodelled,
+    absentCapabilities: absentCapabilitiesOf(packs),
     sourceSelection: isWritten,
     typeBindings: createTypeBindings({ trees: createDeclaredTrees(), digest, shutdown: options.signal }),
     ...(options.buildOutputs === undefined ? {} : { declaredOutputs: options.buildOutputs }),

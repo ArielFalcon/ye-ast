@@ -11,10 +11,10 @@ import { settledOf } from "../../domain/change/hunk-settling.ts";
 import type { TokenReading } from "../../domain/change/source-tokens.ts";
 import { triviaLinesOf } from "../../domain/change/token-lines.ts";
 import type { SettledHunkChange } from "../../domain/impact/impact-fact.ts";
-import type { ComponentRef } from "../../domain/change/seeds.ts";
+import type { ComponentRef, SelectedSeed } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
-import { attributedCallCuts, contradictedCallCuts, fileCut, removedDeclarationCuts, unheldCut, unreadRelationCuts, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
+import { attributedCallCuts, contradictedCallCuts, fileCut, isJavaTypeKind, removedDeclarationCuts, unheldCut, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
 import { impactFact, impactWalk, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
@@ -69,6 +69,7 @@ import type { UnmodelledConstructsReader } from "../../ports/unmodelled-construc
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 import { buildOutputCuts, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
 import type { TypeBindings, TypeTarget } from "../../ports/type-bindings.port.ts";
+import type { AbsentCapability } from "../../ports/language-pack.port.ts";
 import { createRevisionSources } from "../snapshot/revision-sources.ts";
 import { createBaseReadings, withOutputs, type BaseReading, type ContradictedCall, type ContradictedCalls, type ReadingRequest } from "../snapshot/base-reading.ts";
 
@@ -112,6 +113,8 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
   typeBindings?: TypeBindings;
   /** The build outputs a host declared for the repository at a root, for a request that declares none itself. */
   declaredOutputs?: (repo: string) => readonly DeclaredBuildOutput[] | undefined;
+  /** The stages each language pack declares it cannot implement, by path (ADR-0045 decision 12). */
+  absentCapabilities?: (path: string) => ReadonlySet<AbsentCapability>;
 }
 
 type Answer = Result<Fact<ImpactValue>, OfChangeFault>;
@@ -630,6 +633,18 @@ interface ImpactRead {
 }
 
 
+/**
+ * The Java type targets among `seeds` whose language pack declares type references absent (RFC-0027 U0): each is one
+ * cut at the declaration, so its dependents are never asserted complete while no stage reads them. A seed that only
+ * holds a removed member starts the walk at that member's place and is no target: the removal is cut on its own.
+ */
+function unreadTypeReferenceCuts(seeds: readonly SelectedSeed<GraphSymbol>[], removalHolders: readonly GraphSymbol[], reading: BaseReading): Cut[] {
+  const held = new Set(removalHolders);
+  return seeds
+    .filter(({ symbol }) => !held.has(symbol) && isJavaTypeKind(symbol.kind, symbol.file) && reading.absentCapabilitiesOf(symbol.file).has("relations"))
+    .map(({ symbol }) => unreadTypeReferenceCut(symbol));
+}
+
 async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const { store, changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved } = input;
   const selection = selectRoots(store, changes, requested, componentsByResource);
@@ -650,6 +665,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
 
   const cuts: Cut[] = [
     ...walk.cuts,
+    ...unreadTypeReferenceCuts(seeds, selection.removalHolders, input.reading),
     ...contradictedCuts,
     ...attributedCallCuts(attributed.map(({ node, call: { reference } }) => ({ declaration: node, place: { ...reference, name: compactSpelling(reference.name) } }))),
     ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(walk.expanded, reachedIds), knownPlaces, input.proofs?.bound, inbound.memberProofs(walk.expanded)),

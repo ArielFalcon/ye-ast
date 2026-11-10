@@ -1,4 +1,5 @@
-import { TYPESCRIPT_PROFILE } from "../../domain/languages/profiles.ts";
+import { JAVA_PROFILE, TYPESCRIPT_PROFILE } from "../../domain/languages/profiles.ts";
+import { absentCapabilitiesOf } from "../snapshot/language-packs.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
@@ -88,6 +89,8 @@ interface Options {
   cache?: true | CodeGraphFault;
   /** With `cache`, the kept index is absent: the cache asks the caller to prepare the snapshot, as it does before a build. */
   buildIndex?: true;
+  /** The stages each pack declares absent, by path, as composition derives them from the packs. */
+  absentCapabilities?: ImpactQueriesDeps["absentCapabilities"];
   /** The Vcs lists and writes apart; `materialize` answers the fault when given. */
   lazy?: { list?: VcsFault; materialize?: VcsFault };
   trust?: TrustRecordReader;
@@ -201,6 +204,7 @@ function setup(options: Options = {}) {
     angularEngines: {},
     ...(options.exportBudget && { budget: options.exportBudget }),
     ...(options.trust && { trust: options.trust }),
+    ...(options.absentCapabilities && { absentCapabilities: options.absentCapabilities }),
     ...(options.live && { live: options.live.deps }),
     ...(options.declarationEvidence && { declarationEvidence: options.declarationEvidence }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
@@ -995,6 +999,76 @@ test("callers removes every temporary directory and closes the store, also when 
     assert.equal(log.closed, 1);
   }
   assert.equal(answered.log.created.length, 2);
+});
+
+const TARGET_JAVA = "src/app/Target.java";
+const HOLDER_JAVA = "src/app/Holder.java";
+const TYPE_TARGET_NODES = [fakeNode("Target", "class", TARGET_JAVA, 1, 3), fakeNode("Holder", "class", HOLDER_JAVA, 1, 5)];
+/** The Java pack's declaration as composition makes it: it reads no type references, so `relations` is absent for its files. */
+const JAVA_PACK_ABSENT = absentCapabilitiesOf([{ profile: JAVA_PROFILE, absent: ["relations"] }]);
+
+test("a Java class target with no B4 reader is partial: its type references are unread, so no dependent is complete", async () => {
+  const { callers } = setup({ nodes: TYPE_TARGET_NODES, exports: listingOf([TARGET_JAVA, HOLDER_JAVA]), absentCapabilities: JAVA_PACK_ABSENT });
+  const answer = callersFact(await callers({ targets: [{ file: TARGET_JAVA, symbol: "Target" }] }));
+  assert.equal(answer.status, "partial");
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [
+    { kind: "unresolved-link", at: [`${TARGET_JAVA}::Target`], reason: "relation-unread", subReason: "capability-absent", reach: { kind: "callers-of", declarations: [`${TARGET_JAVA}::Target`] } },
+  ]);
+  assert.deepEqual(answer.value.symbols.filter((symbol) => symbol.depth > 0), []);
+});
+
+test("a change that seeds a Java class is partial for the same unread type references, and the seed it names is the class", async () => {
+  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change(TARGET_JAVA, { added: [{ start: 2, end: 2 }] })] };
+  const answer = fact(await setup({ changes, nodes: TYPE_TARGET_NODES, exports: listingOf([TARGET_JAVA, HOLDER_JAVA]), absentCapabilities: JAVA_PACK_ABSENT }).ask());
+  assert.equal(answer.status, "partial");
+  assert.deepEqual(answer.status === "partial" && answer.cuts.filter((cut) => cut.reason === "relation-unread"), [
+    { kind: "unresolved-link", at: [`${TARGET_JAVA}::Target`], reason: "relation-unread", subReason: "capability-absent", reach: { kind: "callers-of", declarations: [`${TARGET_JAVA}::Target`] } },
+  ]);
+});
+
+test("a Java record, interface and enum target are partial for the same unread type references, each as its own kind", async () => {
+  const kinds = [
+    { kind: "class", label: "record", file: "src/app/Record.java", symbol: "Target" },
+    { kind: "interface", label: "interface", file: "src/app/Iface.java", symbol: "Target" },
+    { kind: "enum", label: "enum", file: "src/app/Kind.java", symbol: "Target" },
+  ] as const;
+  for (const { kind, label, file, symbol } of kinds) {
+    const nodes = [fakeNode(symbol, kind, file, 1, 3), fakeNode("Holder", "class", HOLDER_JAVA, 1, 5)];
+    const answer = callersFact(await setup({ nodes, exports: listingOf([file, HOLDER_JAVA]), absentCapabilities: JAVA_PACK_ABSENT }).callers({ targets: [{ file, symbol }] }));
+    assert.equal(answer.status, "partial", label);
+    assert.deepEqual(answer.status === "partial" && answer.cuts, [
+      { kind: "unresolved-link", at: [`${file}::${symbol}`], reason: "relation-unread", subReason: "capability-absent", reach: { kind: "callers-of", declarations: [`${file}::${symbol}`] } },
+    ], label);
+  }
+});
+
+test("the type-reference cut changes only the status: the same callers and impact symbols answer with and without it", async () => {
+  const ask = async (absentCapabilities?: ImpactQueriesDeps["absentCapabilities"]) => {
+    const answer = callersFact(await setup({ nodes: TYPE_TARGET_NODES, exports: listingOf([TARGET_JAVA, HOLDER_JAVA]), absentCapabilities }).callers({ targets: [{ file: TARGET_JAVA, symbol: "Target" }] }));
+    assert.notEqual(answer.status, "unknown");
+    return { symbols: answer.status === "unknown" ? [] : answer.value.symbols, status: answer.status };
+  };
+  const without = await ask();
+  const withCut = await ask(JAVA_PACK_ABSENT);
+  assert.equal(without.status, "complete");
+  assert.equal(withCut.status, "partial");
+  assert.deepEqual(withCut.symbols, without.symbols);
+});
+
+test("a Java method target is not cut for unread type references, and a TypeScript class target is not either", async () => {
+  const javaMethod = setup({ nodes: [fakeNode("run", "method", TARGET_JAVA, 2, 2), fakeNode("Holder", "class", HOLDER_JAVA, 1, 5)], exports: listingOf([TARGET_JAVA, HOLDER_JAVA]), absentCapabilities: JAVA_PACK_ABSENT });
+  assert.equal(callersFact(await javaMethod.callers({ targets: [{ file: TARGET_JAVA, symbol: "run" }] })).status, "complete");
+  const tsPath = "src/app/target.ts";
+  const tsClass = setup({ nodes: [fakeNode("Target", "class", tsPath, 1, 3)], exports: listingOf([tsPath]), absentCapabilities: JAVA_PACK_ABSENT });
+  assert.equal(callersFact(await tsClass.callers({ targets: [{ file: tsPath, symbol: "Target" }] })).status, "complete");
+});
+
+test("a change that only removes a member of a Java class seeds the class as the removal's holder, not as the type target", async () => {
+  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change(TARGET_JAVA, { added: [], removals: [{ after: 2 }], removedNames: ["gone"] })] };
+  const answer = fact(await setup({ changes, nodes: TYPE_TARGET_NODES, exports: listingOf([TARGET_JAVA, HOLDER_JAVA]), absentCapabilities: JAVA_PACK_ABSENT }).ask());
+  assert.notEqual(answer.status, "unknown");
+  assert.deepEqual((answer.status === "unknown" ? [] : answer.value.seeds).map((seed) => [seed.symbol, seed.basis]), [["Target", "lines"]]);
+  assert.equal(answer.status, "complete", JSON.stringify(answer.status === "partial" ? answer.cuts : undefined));
 });
 
 function importersFact(answer: Result<Fact<ImportersValue>, OfChangeFault>): Fact<ImportersValue> {

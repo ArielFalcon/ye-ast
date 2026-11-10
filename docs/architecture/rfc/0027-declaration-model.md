@@ -404,6 +404,13 @@ Prerequisites: ADR-0045 L2 on `main` (the families read the line); ADR-0042's re
 
 - **Why**: `callers`/`impact` assert "the declarations that depend on this type"; a Java field, parameter or return type
   is a dependence no stage reads (M4), so the answer must be `partial`, never `complete` with zero dependents.
+- **Kinds (decided with the owner)**: the condition (a) is the kind codegraph emits for a Java type. An annotation type
+  (`@interface`) arrives as `interface` (codegraph `java.js:241`, `annotation_type_declaration` in `interfaceTypes`), an
+  enum as `enum`, and a record as `class` (ye-ast maps `record_declaration` to `class`, `java-symbols.ts:165`). A record
+  is therefore covered by `class` with no rule of its own; the record `callers` answer is the same false `complete` U0
+  fixes, and the RED variants pin it (`impact-queries.test.ts`, "a Java record, interface and enum target").
+- **Status**: the cut is status-only. It adds no symbol and removes none; `callers` and `impact` keep their values and
+  their `status` moves from `complete` to `partial` for each Java type target with unread references.
 - **Files**: `src/core/ports/language-pack.port.ts` (`AbsentCapability` gains `"relations"`), the Java pack's `absent`
   in `src/composition/compose.ts`, `src/core/application/snapshot/base-reading.ts` (`absentCapabilitiesOf`),
   `src/core/application/impact/impact-queries.ts` (the cut where the cuts are assembled, near `:554`, and the `ofChange`
@@ -414,7 +421,9 @@ Prerequisites: ADR-0045 L2 on `main` (the families read the line); ADR-0042's re
   reach is the target's callers, not a whole file: a file-level cut would repeat `unreadRelationCuts`' shape
   (`impact-cuts.ts:267-277`) and would not be the absent stage. It is emitted only when (a) the requested or seeded
   declaration is a Java type (class, interface, enum, record, annotation) and (b) the Java pack declares `relations`
-  absent. A Java method target is untouched.
+  absent. A Java method target is untouched, and so is a class a removal's place holds only because the member it held
+  is gone at head: that holder starts the walk at the removal, whose own cut already names what the change broke
+  (`removalHolders`, `seeds.ts`).
 - **RED**: `src/core/application/impact/impact-queries.test.ts`, "a Java class target with no B4 reader is partial":
   a fixture (written under `os.tmpdir()`) with `class Target` and `class Holder { private Target t; }`; `callers` of
   `Target` answers `partial` with exactly that cut and no impacted symbol. Fails today: the answer is `complete`.

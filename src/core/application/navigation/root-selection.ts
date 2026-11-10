@@ -132,7 +132,7 @@ export function selectRoots(
   const symbols = store.symbolsInFiles([...new Set([...sourceChanges, ...componentFiles, ...requested.map(({ file }) => file)])]);
   const symbolsByFile = Map.groupBy(symbols, (symbol) => symbol.file);
   const missing = [...missingTargets(store, requested, isRoot), ...uncovered];
-  if (missing.length > 0) return { seeds: [], withoutSymbols: [], removed: [], missing, settled };
+  if (missing.length > 0) return { seeds: [], withoutSymbols: [], removed: [], removalHolders: [], missing, settled };
 
   const trees = new Map([...new Set(requested.map(({ file }) => file))].map((file) => [file, containmentTree(store, symbolsByFile.get(file) ?? [])]));
   const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource, isRoot);
