@@ -150,8 +150,9 @@ export function createJavaImplementedDeclarations(parser: () => Promise<JavaPars
       return signatures.get(method);
     };
     return sites.map((site) => {
-      const method = methods.get(`${site.file}:${site.start}:${site.name}`);
-      if (method === undefined || method === "ambiguous") return UNKNOWN_DECLARATIONS;
+      const named = methods.get(`${site.file}:${site.start}:${site.name}`) ?? [];
+      const method = named.length === 1 ? named[0] : undefined;
+      if (method === undefined) return UNKNOWN_DECLARATIONS;
       const signature = signatureOf(method);
       if (signature === undefined || signature.some(isVariable)) return UNKNOWN_DECLARATIONS;
       const { types, gaps } = hierarchyOf(method.owner);
@@ -181,13 +182,15 @@ export function createJavaImplementedDeclarations(parser: () => Promise<JavaPars
   };
 }
 
-/** The methods of a project by file, first line and name; a place two declarations share is `ambiguous`. */
-function methodsByPlace(project: JavaProject): ReadonlyMap<string, MethodDecl | "ambiguous"> {
-  const methods = new Map<string, MethodDecl | "ambiguous">();
+/** The methods of a project by file, first line and name, each place with every declaration it names. */
+function methodsByPlace(project: JavaProject): ReadonlyMap<string, readonly MethodDecl[]> {
+  const methods = new Map<string, MethodDecl[]>();
   for (const type of project.types) {
     for (const method of type.methods) {
       const key = `${type.file.path}:${placeOf(method).start}:${method.name}`;
-      methods.set(key, methods.has(key) ? "ambiguous" : method);
+      const named = methods.get(key) ?? [];
+      named.push(method);
+      methods.set(key, named);
     }
   }
   return methods;
