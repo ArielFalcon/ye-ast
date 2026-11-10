@@ -10,7 +10,7 @@ export function generateJdkSignatures(archive: JdkArchive, expectedDigest = arch
  const types = new Map<string,JdkType>();
  for (const name of archive.names('')) {
  const parts = name.split('/');
- if (!parts[0]?.includes('N') || !parts[1]?.startsWith('java.') || !name.endsWith('.sig')) continue;
+ if (!parts[0]?.includes('N') || !parts[1]?.startsWith('java.') || !name.endsWith('.sig') || name.endsWith('module-info.sig')) continue;
  const entry = archive.entry(name);
  if (entry.kind !== 'entry') throw new JdkSignaturesFault('archive');
  const declaration = readClassFile(entry.bytes);
