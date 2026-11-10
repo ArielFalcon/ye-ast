@@ -1,3 +1,20 @@
+# JDK signatures
+
+Generate with `node --import tsx scripts/jdk-signatures.ts --jdk <home> --out <table> [--digest <sha256>]`.
+Nothing is redistributed; generated tables are not committed.
+
+The pin is Java SE 23.0.1, release 23. Only java.* modules and release sets containing N are selected.
+Directory entries and .jmod archives are excluded. Every selected declaration must decode.
+
+Accepted whole ct.sym SHA-256 digests:
+
+- Oracle JDK 23.0.1+11-39 (10744455 bytes): e47b50ac58efc23859ade811e266307a3fc9d9b9b65fff01b830b0e9d8aae263
+- OpenJDK 23.0.1+11-39 (10157226 bytes): 4a8cfcd91fd9156268e350f8473168927c4ccca21fd5c87285153f4934f0e1c6
+
+Both contain identical release-23 java.* content: 4848 entries, zero undefined decodes, content hash d55db8f757663be8.
+Accepting both widens the generating host, never the asserted table. Other digests produce no output.
+Release directory names are sets (A=10 through N=23), including shared directories such as LMN.
+Canonical JSON sorts object keys and members, preserves parameter order, and contains no timestamps.
 # JDK archives
 
 `jdk-archive.adapter.ts` reads a JDK's `lib/ct.sym` as data: the central directory on open, one member inflated on demand
