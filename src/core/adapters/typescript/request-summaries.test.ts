@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import ts from "typescript";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import { summariesOf, type SummaryResolver } from "./request-summaries.ts";
+import { requestCallOf, requestFileShapeOf, summariesOf, type RequestCall, type SummaryResolver } from "./request-summaries.ts";
 
 /** A path the fake states: its text, and the parameter index each `{}` reads (undefined when it is not a parameter). */
 type FakePath = string | { text: string; holes: readonly (number | undefined)[] };
@@ -212,7 +212,7 @@ test("a request verb an argument fills is resolved from that argument at the cal
 });
 
 test("a client the summary does not state yet is a gap, never a silent absence", async () => {
-  const crud = file("crud.ts", ["class Crud {", "  load(path) { return httpResource(() => this.url + path) } }"]);
+  const crud = file("crud.ts", ["import { httpResource } from '@angular/common/http'; class Crud {", "  load(path) { return httpResource(() => this.url + path) } }"]);
   const summaries = await summariesOf([crud], resolverOf({}));
   assert.deepEqual(summaries.get("crud.ts\0Crud.load")?.shapes, []);
   assert.deepEqual(summaries.get("crud.ts\0Crud.load")?.gaps.map((gap) => gap.cause), ["destination-undecidable"]);
@@ -235,7 +235,7 @@ test("a brace the code writes in any literal segment is a gap, a concatenation a
 });
 
 test("an httpResource whose function writes a brace in its literal path is a gap, never a substituted path", async () => {
-  const crud = file("crud.ts", ["class Crud {", "  load() { return httpResource(() => '/x/{}') } }"]);
+  const crud = file("crud.ts", ["import { httpResource } from '@angular/common/http'; class Crud {", "  load() { return httpResource(() => '/x/{}') } }"]);
   const summaries = await summariesOf([crud], resolverOf({ clients: ["this.http"] }));
   assert.deepEqual(summaries.get("crud.ts\0Crud.load")?.shapes, []);
   assert.deepEqual(summaries.get("crud.ts\0Crud.load")?.gaps, [{ cause: "destination-undecidable", evidence: [{ path: "crud.ts", line: 2, via: "literal /x/{}" }] }]);
@@ -250,7 +250,7 @@ test("a request inside a forwarding callback is a request of the declaration, an
 
 test("the result names the container the client and the forwarding row give it", async () => {
   const api = file("api.ts", [
-    "class Api {",
+    "import { httpResource } from '@angular/common/http'; class Api {",
     "  constructor(private http: HttpClient) {}",
     "  resource() { return httpResource(() => '/x') }",
     "  plain() { return firstValueFrom(this.http.get('/x')) }",
@@ -329,4 +329,40 @@ test("one read states the same summaries for its files and its resolver", async 
   const files = [api];
   const resolver = resolverOf({ paths: { "'/x'": "/x" }, clients: ["this.http"] });
   assert.equal(summariesOf(files, resolver), summariesOf(files, resolver));
+});
+
+/** What the owner answers for the first call whose callee the source spells as `callee`. */
+function requestCallIn(lines: readonly string[], callee: string): RequestCall {
+  const tree = ts.createSourceFile("probe.ts", lines.join("\n"), ts.ScriptTarget.Latest, true);
+  let found: ts.CallExpression | undefined;
+  const visit = (node: ts.Node): void => {
+    if (found === undefined && ts.isCallExpression(node) && node.expression.getText(tree) === callee) found = node;
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  assert.ok(found !== undefined);
+  return requestCallOf(requestFileShapeOf(tree), found);
+}
+
+test("a fetch whose init states a method and a body is a request with that method established and that body", () => {
+  const call = requestCallIn(["function save(x) { return fetch('/orders', { method: 'POST', body: x }) }"], "fetch");
+  assert.equal(call.kind, "request");
+  assert.deepEqual(call.kind === "request" ? call.method : undefined, { kind: "established", verb: "POST" });
+  assert.equal(call.kind === "request" && call.body.kind === "established" ? call.body.expression.getText() : undefined, "x");
+});
+
+test("a fetch or an httpResource the file binds itself is not a request, and the global fetch and the imported httpResource are", () => {
+  assert.deepEqual(requestCallIn(["function load(fetch) { return fetch('/orders') }"], "fetch"), { kind: "not-request" });
+  assert.deepEqual(requestCallIn(["function httpResource(f) { return f }", "const r = httpResource(() => '/orders')"], "httpResource"), { kind: "not-request" });
+  assert.deepEqual(requestCallIn(["import { httpResource } from './local'", "const r = httpResource(() => '/orders')"], "httpResource"), { kind: "not-request" });
+  const global = requestCallIn(["function load() { return fetch('/orders') }"], "fetch");
+  assert.deepEqual(global.kind === "request" ? [global.client, global.method, global.body, global.path?.getText()] : global, ["fetch", { kind: "established", verb: "GET" }, { kind: "none" }, "'/orders'"]);
+  assert.equal(requestCallIn(["import { httpResource } from '@angular/common/http'", "const r = httpResource(() => '/orders')"], "httpResource").kind, "request");
+});
+
+test("the summary of a fetch states the method and the body its init writes", async () => {
+  const api = file("api.ts", ["function save(x) { return fetch('/orders', { method: 'POST', body: x }) }", "function load(fetch) { return fetch('/orders') }"]);
+  const summaries = await summariesOf([api], resolverOf({ paths: { "'/orders'": "/orders" } }));
+  assert.deepEqual(summaries.get("api.ts\0save")?.shapes.map(({ method, body }) => [method, body]), [["POST", { kind: "parameter", index: 0 }]]);
+  assert.deepEqual(summaries.get("api.ts\0load")?.shapes, []);
 });

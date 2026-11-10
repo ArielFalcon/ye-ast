@@ -5,10 +5,11 @@ import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { requestMethodOf } from "../../domain/entrypoints/http-route.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import { propertyOf } from "./syntax.ts";
+import { objectOf, ownBindings, propertyOf, sourceBindings } from "./syntax.ts";
+import { recoveredModuleShape, type ModuleShape } from "./module-shape.ts";
+import { known, undecided, type Evaluated } from "../../domain/topology/evaluated.ts";
 import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 import type { BodySource, ForwardingRow, PathCondition, RequestShape, RequestSummary, ResultShape, SummaryCause, SummaryGap } from "../../domain/topology/request-summary.ts";
-import { VERBS } from "./http-call-sites.adapter.ts";
 import { sourceTree } from "./source-tree.ts";
 
 export type DeclarationKey = string;
@@ -80,6 +81,132 @@ interface Edge {
   /** The callee is a declaration of the snapshot whose body the snapshot could not read. */
   unread: boolean;
   node: ts.CallExpression;
+}
+
+/** The verbs a client receiver is called with to make a request: `HttpClient`'s, and `fetch` of a client wrapper. */
+export const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
+const MEMBER_FETCH = "fetch";
+const HTTP_CLIENT_PACKAGE = "@angular/common/http";
+/** What a file's syntax states that decides which client a call names: its imports, and the names it binds itself. */
+export interface RequestFileShape {
+  imports: ModuleShape["imports"];
+  bindings: ReadonlySet<string>;
+}
+
+/** The verb a request states: established by what the code writes, or undecided, with the expression that states it when one does. */
+export type RequestMethod = { kind: "established"; verb: HttpMethod } | { kind: "undecided"; stated?: ts.Expression };
+
+/** The body a request sends, with the call argument that carries it: the expression, no body, or a carrier the syntax does not read. */
+export type RequestBodyRead = { kind: "established"; expression: ts.Expression; argument: number } | { kind: "none" } | { kind: "unknown"; argument: number };
+
+/**
+ * Whether a call is a request of the client vocabulary. A global `fetch` and an `httpResource` imported from Angular are
+ * requests; a call that spells a client verb on a receiver is undecided until the receiver's type is known, which is a
+ * fact of its own; every other call, a `fetch` or an `httpResource` the file binds itself included, is not a request.
+ */
+export type RequestCall =
+  | { kind: "request"; client: "fetch" | "resource"; path: ts.Expression | undefined; method: RequestMethod; body: RequestBodyRead }
+  | { kind: "not-request" }
+  | { kind: "undecided"; reason: "receiver-type"; verb: string; path: ts.Expression | undefined; method: RequestMethod; body: RequestBodyRead };
+
+const NOT_REQUEST: RequestCall = { kind: "not-request" };
+const NO_BODY: RequestBodyRead = { kind: "none" };
+const GET: RequestMethod = { kind: "established", verb: "GET" };
+const FILE_SHAPES = new WeakMap<ts.SourceFile, RequestFileShape>();
+
+export function requestFileShapeOf(tree: ts.SourceFile): RequestFileShape {
+  let shape = FILE_SHAPES.get(tree);
+  if (shape === undefined) {
+    shape = { imports: recoveredModuleShape(tree).imports, bindings: sourceBindings(tree) };
+    FILE_SHAPES.set(tree, shape);
+  }
+  return shape;
+}
+
+/** The one answer to "is this call a request", with its method and body, read against the shape of the file that writes it. */
+export function requestCallOf(shape: RequestFileShape, call: ts.CallExpression): RequestCall {
+  const callee = call.expression;
+  if (ts.isIdentifier(callee) && callee.text === "fetch") return isGlobalAt(shape, call, callee.text) ? fetchRequest(call) : NOT_REQUEST;
+  if (isHttpResource(shape, callee)) return { kind: "request", client: "resource", path: undefined, method: resourceMethod(call), body: NO_BODY };
+  if (!ts.isPropertyAccessExpression(callee)) return NOT_REQUEST;
+  const verb = callee.name.text;
+  if (verb === MEMBER_FETCH) return { kind: "undecided", reason: "receiver-type", verb, path: call.arguments[0], method: GET, body: NO_BODY };
+  if (!VERBS.has(verb)) return NOT_REQUEST;
+  if (verb !== "request") return { kind: "undecided", reason: "receiver-type", verb, path: call.arguments[0], method: literalMethod(undefined, verb), body: BODY_VERBS.has(verb) ? argumentBody(call, 1) : NO_BODY };
+  const [first, second] = call.arguments;
+  const sent = first !== undefined && ts.isNewExpression(first) && isHttpPackageName(shape, first.expression, "HttpRequest") ? first.arguments : undefined;
+  const [method, path] = sent ?? [first, second];
+  return { kind: "undecided", reason: "receiver-type", verb, path, method: method === undefined ? { kind: "undecided" } : literalMethod(method, undefined), body: NO_BODY };
+}
+
+/** `fetch(url, init)`: the method and the body the init object states; GET with no body without an init. */
+function fetchRequest(call: ts.CallExpression): RequestCall {
+  const [path, init] = call.arguments;
+  if (init === undefined) return { kind: "request", client: "fetch", path, method: GET, body: NO_BODY };
+  const object = objectOf(init);
+  if (object === undefined) return { kind: "request", client: "fetch", path, method: { kind: "undecided" }, body: { kind: "unknown", argument: 1 } };
+  const method = memberOf(object, "method");
+  const body = memberOf(object, "body");
+  return {
+    kind: "request",
+    client: "fetch",
+    path,
+    method: method === undefined ? GET : method.status === "undecided" ? { kind: "undecided" } : literalMethod(method.value, undefined),
+    body: body === undefined ? NO_BODY : body.status === "undecided" ? { kind: "unknown", argument: 1 } : { kind: "established", expression: body.value, argument: 1 },
+  };
+}
+
+/** `httpResource(() => url)` is a GET; a function that returns anything else states its method in what it returns. */
+function resourceMethod(call: ts.CallExpression): RequestMethod {
+  const [first] = call.arguments;
+  return first !== undefined && ts.isArrowFunction(first) && !ts.isBlock(first.body) && objectOf(first.body) === undefined ? GET : { kind: "undecided" };
+}
+
+/** The verb a literal or a verb name states; undecided, with the expression, when the code writes a value. */
+function literalMethod(expression: ts.Expression | undefined, verbName: string | undefined): RequestMethod {
+  const node = expression === undefined ? undefined : unwrap(expression);
+  const text = verbName ?? (node !== undefined && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined);
+  const verb = text === undefined ? undefined : requestMethodOf(text.toUpperCase());
+  return verb !== undefined ? { kind: "established", verb } : expression === undefined ? { kind: "undecided" } : { kind: "undecided", stated: expression };
+}
+
+function argumentBody(call: ts.CallExpression, argument: number): RequestBodyRead {
+  const expression = call.arguments[argument];
+  return expression === undefined ? NO_BODY : { kind: "established", expression, argument };
+}
+
+/** Whether a name is the global of that name where a node reads it: nothing around it, in its file or its imports binds it. */
+function isGlobalAt(shape: RequestFileShape, node: ts.Node, name: string): boolean {
+  if (shape.imports.has(name) || shape.bindings.has(name)) return false;
+  for (let scope = node.parent; scope !== undefined && !ts.isSourceFile(scope); scope = scope.parent) if (ownBindings(scope).has(name)) return false;
+  return true;
+}
+
+/** Whether an expression names `httpResource` or one of its variants (`httpResource.text`), imported from Angular. */
+function isHttpResource(shape: RequestFileShape, callee: ts.Expression): boolean {
+  const named = ts.isPropertyAccessExpression(callee) ? callee.expression : callee;
+  return isHttpPackageName(shape, named, "httpResource");
+}
+
+function isHttpPackageName(shape: RequestFileShape, expression: ts.Expression, name: string): boolean {
+  if (!ts.isIdentifier(expression)) return false;
+  const imported = shape.imports.get(expression.text);
+  return imported?.module === HTTP_CLIENT_PACKAGE && imported.imported === name;
+}
+
+/**
+ * The expression an object literal states for a member, a shorthand's name included; undecided when a spread or a
+ * computed name after it may state the member instead.
+ */
+export function memberOf(object: ts.ObjectLiteralExpression, name: string): Evaluated<ts.Expression> | undefined {
+  let found: Evaluated<ts.Expression> | undefined;
+  for (const property of object.properties) {
+    if (ts.isSpreadAssignment(property) || (property.name !== undefined && ts.isComputedPropertyName(property.name))) found = undecided("destination-undecidable");
+    else if (property.name !== undefined && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) && property.name.text === name) {
+      found = ts.isPropertyAssignment(property) ? known(property.initializer) : ts.isShorthandPropertyAssignment(property) ? known(property.name) : undecided("destination-undecidable");
+    }
+  }
+  return found;
 }
 
 /** The call each shape states at its leaf, so a hop names the leaf's call and not the caller's. */
@@ -251,13 +378,10 @@ async function bodyOf(expression: ts.Expression, scope: ReturnScope): Promise<Re
 
 /** The body a client leaf carries, with the container and the way the response is observed; undefined when it is no leaf. */
 async function leafResultOf(file: string, call: ts.CallExpression, resolver: SummaryResolver): Promise<ResultShape | undefined> {
-  const callee = call.expression;
-  if (ts.isIdentifier(callee) && callee.text === "httpResource") return { kind: "body", container: "resource", observed: "body" };
-  const isFetch = ts.isIdentifier(callee) && callee.text === "fetch";
-  const isMember = ts.isPropertyAccessExpression(callee);
-  if (!isFetch && !(isMember && VERBS.has(callee.name.text))) return undefined;
-  if (isMember && !(await resolver.clientReceiver(file, call))) return undefined;
-  if (isFetch) return { kind: "body", container: "promise", observed: "body" };
+  const recognized = requestCallOf(requestFileShapeOf(call.getSourceFile()), call);
+  if (recognized.kind === "not-request") return undefined;
+  if (recognized.kind === "request") return { kind: "body", container: recognized.client === "resource" ? "resource" : "promise", observed: "body" };
+  if (!(await resolver.clientReceiver(file, call))) return undefined;
   const observed = observedOf(call);
   if (observed === undefined) return { kind: "unknown", cause: "destination-undecidable", evidence: [placeOf(file, call)] };
   return { kind: "body", container: "observable", observed };
@@ -590,24 +714,14 @@ type Leaf = { kind: "shapes"; shapes: readonly RequestShape[] } | { kind: "gap";
  * splits on a parameter, or a gap at the call when the path is undecided or writes a brace the code wrote.
  */
 async function leafOf(declaration: Declaration, call: ts.CallExpression, resolver: SummaryResolver): Promise<Leaf> {
-  const callee = call.expression;
-  const isFetch = ts.isIdentifier(callee) && callee.text === "fetch";
-  const isMember = ts.isPropertyAccessExpression(callee);
-  if (ts.isIdentifier(callee) && callee.text === "httpResource") return resourceLeaf(declaration, call, resolver);
-  if (!isFetch && !(isMember && VERBS.has(callee.name.text))) return { kind: "none" };
-  if (isMember && !(await resolver.clientReceiver(declaration.file, call))) return { kind: "none" };
-  const verbName = ts.isPropertyAccessExpression(callee) ? callee.name.text : undefined;
-  const pathArgument = verbName === "request" ? call.arguments[1] : call.arguments[0];
-  if (pathArgument === undefined) return { kind: "none" };
-  let method: HttpMethod | undefined;
-  let methodParameter: number | undefined;
-  if (verbName === "request") {
-    method = methodArgument(call.arguments[0]);
-    if (method === undefined && call.arguments[0] !== undefined) methodParameter = parameterIndexOf(declaration, call.arguments[0]);
-  } else {
-    method = isFetch ? "GET" : requestMethodOf((verbName ?? "").toUpperCase());
-  }
-  return shapesOfCall(declaration, call, pathArgument, method, methodParameter, bodyOfArgument(declaration, call), resolver);
+  const recognized = requestCallOf(requestFileShapeOf(call.getSourceFile()), call);
+  if (recognized.kind === "not-request") return { kind: "none" };
+  if (recognized.kind === "request" && recognized.client === "resource") return resourceLeaf(declaration, call, resolver);
+  if (recognized.kind === "undecided" && !(await resolver.clientReceiver(declaration.file, call))) return { kind: "none" };
+  if (recognized.path === undefined) return { kind: "none" };
+  const { method } = recognized;
+  const methodParameter = method.kind === "undecided" && method.stated !== undefined ? parameterIndexOf(declaration, method.stated) : undefined;
+  return shapesOfCall(declaration, call, recognized.path, method.kind === "established" ? method.verb : undefined, methodParameter, bodySourceOf(declaration, recognized.body), resolver);
 }
 
 /**
@@ -765,25 +879,18 @@ function writtenBrace(expression: ts.Expression): string | undefined {
   return undefined;
 }
 
-/** The verb a `request(method, url)` call states: a literal method name, undefined when the method is a value the code fills. */
-function methodArgument(argument: ts.Expression | undefined): HttpMethod | undefined {
-  const node = argument === undefined ? undefined : unwrap(argument);
-  return node !== undefined && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? requestMethodOf(node.text.toUpperCase()) : undefined;
-}
-
 const BODY_VERBS: ReadonlySet<string> = new Set(["post", "put", "patch"]);
 
 /**
- * The body a request call sends: the second argument of a verb that takes one, read as the declaration's own parameter when
- * it is one, no body for a literal or an absent argument, and unknown for any other expression.
+ * The body a request sends as the summary states it: the declaration's own parameter when the body is one, no body for a
+ * literal or an absent body, and unknown for any other expression.
  */
-function bodyOfArgument(declaration: Declaration, call: ts.CallExpression): BodySource {
-  const callee = call.expression;
-  if (!ts.isPropertyAccessExpression(callee) || !BODY_VERBS.has(callee.name.text)) return { kind: "none" };
-  const argument = call.arguments[1];
-  if (argument === undefined || ts.isLiteralExpression(argument) || argument.kind === ts.SyntaxKind.NullKeyword || argument.kind === ts.SyntaxKind.TrueKeyword || argument.kind === ts.SyntaxKind.FalseKeyword) return { kind: "none" };
+function bodySourceOf(declaration: Declaration, body: RequestBodyRead): BodySource {
+  if (body.kind !== "established") return body.kind === "none" ? body : { kind: "unknown", index: body.argument };
+  const argument = body.expression;
+  if (ts.isLiteralExpression(argument) || argument.kind === ts.SyntaxKind.NullKeyword || argument.kind === ts.SyntaxKind.TrueKeyword || argument.kind === ts.SyntaxKind.FalseKeyword) return { kind: "none" };
   const parameter = parameterIndexOf(declaration, argument);
-  return parameter === undefined ? { kind: "unknown", index: 1 } : { kind: "parameter", index: parameter };
+  return parameter === undefined ? { kind: "unknown", index: body.argument } : { kind: "parameter", index: parameter };
 }
 
 /** The index of the declaration's parameter a condition is, or undefined when the condition reads something else. */

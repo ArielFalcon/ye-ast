@@ -12,11 +12,11 @@ import { known, undecided, undecidedTarget, type Evaluated, type Undecided } fro
 import { injectedClass } from "./angular-injection.ts";
 import { declarationCounts } from "./syntax-names.ts";
 import { defaultExportOf } from "./import-bindings.ts";
-import { bindingNames, constructorParameters, hasModifier, lineOf, propertyOf, thisClass, typeName } from "./syntax.ts";
+import { bindingNames, constructorParameters, lineOf, objectOf, ownBindings, propertyOf, sourceBindings, thisClass, typeName } from "./syntax.ts";
+import { memberOf, requestCallOf, VERBS, type RequestCall, type RequestMethod } from "./request-summaries.ts";
 import { ANONYMOUS_DEFAULT, recoveredModuleShape, type ModuleShape } from "./module-shape.ts";
 import { createDeclarationLookup, type DeclarationLookup } from "./declaration-lookup.ts";
 
-export const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
 const HTTP_CLIENT_PACKAGE = "@angular/common/http";
 /** A value the snapshot does not decide for no cause more specific than that. */
 const UNDECIDABLE: Undecided = undecided("destination-undecidable");
@@ -53,7 +53,6 @@ interface Scope {
 
 const NO_SCOPE: Scope = { names: new Set(), locals: new Map() };
 const LEXICAL_SCOPES = new WeakMap<ts.Node, Scope>();
-const OWN_BINDINGS = new WeakMap<ts.Node, ReadonlyMap<string, Binding>>();
 const LOCAL_INITIALIZERS = new WeakMap<ts.Node, ReadonlyMap<string, ts.Expression>>();
 const REBOUND_NAMES = new WeakMap<ts.Node, ReadonlySet<string>>();
 
@@ -284,18 +283,6 @@ function injectsAngularHttpClient(shape: FileShape, expression: ts.Expression): 
   return isAngularHttpClientName(shape, injectedClass(expression, shape));
 }
 
-/** Whether an expression names `httpResource` or one of its variants (`httpResource.text`), imported from Angular. */
-function isHttpResource(shape: FileShape, callee: ts.Expression): boolean {
-  const named = ts.isPropertyAccessExpression(callee) ? callee.expression : callee;
-  return isHttpPackageName(shape, named, "httpResource");
-}
-
-function isHttpPackageName(shape: FileShape, expression: ts.Expression, name: string): boolean {
-  if (!ts.isIdentifier(expression)) return false;
-  const imported = shape.imports.get(expression.text);
-  return imported?.module === HTTP_CLIENT_PACKAGE && imported.imported === name;
-}
-
 /** Whether a name is Angular's `HttpClient`: the name alone is not enough, its import decides. */
 function isAngularHttpClientName(shape: FileShape, name: string | undefined): boolean {
   if (name === undefined) return false;
@@ -367,9 +354,10 @@ function forwardsAsTail(node: ts.Node, member: ts.Node, parameters: ReadonlySet<
   });
 }
 
-/** The argument that carries the body of a request through the verb of its `HttpClient` call; the others carry none, or (`request`) an options object. */
-function bodyArgument(verb: string, call: ts.CallExpression): ts.Expression | undefined {
-  return verb === "post" || verb === "put" || verb === "patch" ? call.arguments[1] : undefined;
+/** The expression the owner of the request vocabulary reads as the body a client call sends; undefined when it states none. */
+function bodyExpressionOf(shape: FileShape, call: ts.CallExpression): ts.Expression | undefined {
+  const recognized = requestCallOf(shape, call);
+  return recognized.kind !== "not-request" && recognized.body.kind === "established" ? recognized.body.expression : undefined;
 }
 
 function memberNamed(declaration: ts.ClassDeclaration, name: string): ts.ClassElement | undefined {
@@ -448,51 +436,6 @@ function lexicalScope(point: ts.Node): Scope {
   return scope;
 }
 
-/** A name a node itself binds: the declaration that binds it, and what it is initialized to when a variable states it. */
-interface Binding {
-  declaration: ts.Node;
-  initializer?: ts.Expression;
-}
-
-/**
- * The names a node itself binds, the first declaration of each winning: a block's `let`, `const`, functions and
- * classes, a function's parameters and the `var`s of its body, a named function or class expression, a catch clause's
- * variable, a loop's variables.
- */
-function ownBindings(node: ts.Node): ReadonlyMap<string, Binding> {
-  const cached = OWN_BINDINGS.get(node);
-  if (cached !== undefined) return cached;
-  const own = new Map<string, Binding>();
-  const bind = (name: ts.BindingName, declaration: ts.Node, initializer?: ts.Expression): void => {
-    for (const text of bindingNames(name)) {
-      if (!own.has(text)) own.set(text, ts.isIdentifier(name) && initializer !== undefined ? { declaration, initializer } : { declaration });
-    }
-  };
-  if (ts.isBlock(node) || ts.isCaseBlock(node)) {
-    const statements = ts.isBlock(node) ? node.statements : node.clauses.flatMap((clause) => [...clause.statements]);
-    for (const statement of statements) {
-      if (ts.isVariableStatement(statement) && (statement.declarationList.flags & ts.NodeFlags.BlockScoped) !== 0) for (const declaration of statement.declarationList.declarations) bind(declaration.name, declaration, declaration.initializer);
-      if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name !== undefined) bind(statement.name, statement);
-    }
-  }
-  if ((ts.isFunctionExpression(node) || ts.isClassExpression(node)) && node.name !== undefined) bind(node.name, node);
-  if ((ts.isFunctionLike(node) && "parameters" in node) || ts.isClassStaticBlockDeclaration(node)) {
-    if ("parameters" in node) for (const parameter of node.parameters) bind(parameter.name, parameter);
-    const visitVar = (child: ts.Node): void => {
-      if (ts.isFunctionLike(child) || ts.isClassLike(child) || ts.isModuleDeclaration(child)) return;
-      if (ts.isVariableDeclarationList(child) && (child.flags & ts.NodeFlags.BlockScoped) === 0) for (const declaration of child.declarations) bind(declaration.name, declaration);
-      ts.forEachChild(child, visitVar);
-    };
-    if ("body" in node && node.body !== undefined) visitVar(node.body);
-  }
-  if (ts.isCatchClause(node) && node.variableDeclaration !== undefined) bind(node.variableDeclaration.name, node.variableDeclaration);
-  if ((ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node)) && node.initializer !== undefined && ts.isVariableDeclarationList(node.initializer)) {
-    for (const declaration of node.initializer.declarations) bind(declaration.name, declaration, declaration.initializer);
-  }
-  OWN_BINDINGS.set(node, own);
-  return own;
-}
-
 /** A call's target, and the request the code states when the snapshot cannot decide where it goes. */
 interface ReadTarget {
   throughWrapper?: true;
@@ -556,10 +499,10 @@ class Reader {
 
   async requestBody(shape: FileShape, call: ts.CallExpression): Promise<RequestBody | undefined> {
     const callee = call.expression;
-    if (!ts.isPropertyAccessExpression(callee) || !VERBS.has(callee.name.text)) return undefined;
+    if (requestCallOf(shape, call).kind !== "undecided" || !ts.isPropertyAccessExpression(callee) || !VERBS.has(callee.name.text)) return undefined;
     const owner = await this.ownerClass(shape, callee.expression);
     if (owner === undefined) return undefined;
-    if (isAngularHttpClientName(owner.shape, owner.name)) return { expression: bodyArgument(callee.name.text, call), wrappers: [] };
+    if (isAngularHttpClientName(owner.shape, owner.name)) return { expression: bodyExpressionOf(shape, call), wrappers: [] };
     const held = await this.classOf(owner.shape, owner.name);
     const wrappers: WrapperCall[] = [];
     let entering = call;
@@ -570,7 +513,7 @@ class Reader {
       const entered = member === undefined ? undefined : functionOf(member);
       if (forwarded === undefined || entered === undefined || !ts.isPropertyAccessExpression(forwarded.expression) || wrappers.some((wrapper) => wrapper.function === entered)) return undefined;
       wrappers.push({ function: entered, call: entering, forwarded });
-      if (forwarded.expression.expression.kind !== ts.SyntaxKind.ThisKeyword) return { expression: bodyArgument(forwarded.expression.name.text, forwarded), wrappers };
+      if (forwarded.expression.expression.kind !== ts.SyntaxKind.ThisKeyword) return { expression: bodyExpressionOf(held.shape, forwarded), wrappers };
       entering = forwarded;
       name = forwarded.expression.name.text;
     }
@@ -590,28 +533,27 @@ class Reader {
 
   /** The target of the call when it is a request the project makes out of itself; undefined for every other call. */
   private async target(shape: FileShape, call: ts.CallExpression): Promise<ReadTarget | undefined> {
-    const callee = call.expression;
-    if (ts.isIdentifier(callee) && callee.text === "fetch") return isGlobalName(shape, scopeOfCall(call), "fetch") ? this.fetched(shape, call) : undefined;
-    if (isHttpResource(shape, callee)) return this.resource(shape, call);
-    if (!ts.isPropertyAccessExpression(callee)) return undefined;
-    const name = callee.name.text;
-    if (!VERBS.has(name) && name !== "fetch") return undefined;
-    const owner = await this.ownerClass(shape, callee.expression);
+    const recognized = requestCallOf(shape, call);
+    if (recognized.kind === "not-request") return undefined;
+    if (recognized.kind === "request") return recognized.client === "resource" ? this.resource(shape, call) : this.stated(shape, call, recognized);
+    if (!ts.isPropertyAccessExpression(call.expression)) return undefined;
+    const owner = await this.ownerClass(shape, call.expression.expression);
     if (owner === undefined) return undefined;
     const isHttpClient = isAngularHttpClientName(owner.shape, owner.name);
-    const wrapped = isHttpClient ? undefined : this.wrappers.get(owner.name)?.get(name === "fetch" ? "request" : name);
+    const wrapped = isHttpClient ? undefined : this.wrappers.get(owner.name)?.get(recognized.verb === "fetch" ? "request" : recognized.verb);
     if (!isHttpClient && wrapped === undefined) return undefined;
-    const verb = wrapped === undefined || wrapped === "request" ? name : wrapped;
-    const read = name === "request" ? await this.explicitRequest(shape, call) : await this.request(shape, call, call.arguments[0], verb === "fetch" ? "GET" : verbOf(verb));
+    const read = wrapped === undefined || wrapped === "request" ? await this.stated(shape, call, recognized) : await this.request(shape, call, call.arguments[0], verbOf(wrapped));
     return wrapped === undefined ? read : { ...read, throughWrapper: true };
   }
 
-  /** `fetch(url, init)`: the method is the one the init object states, GET without an init. */
-  private async fetched(shape: FileShape, call: ts.CallExpression): Promise<ReadTarget> {
-    const [resource, init] = call.arguments;
-    const stated = init === undefined ? undefined : objectOf(init);
-    const method = init === undefined ? "GET" : stated === undefined ? undefined : await this.requestMethod(shape, stated, scopeOfCall(call));
-    return this.request(shape, call, resource, method);
+  /** The request the owner of the request vocabulary reads at the call, its method folded where the code writes a value. */
+  private async stated(shape: FileShape, call: ts.CallExpression, recognized: Exclude<RequestCall, { kind: "not-request" }>): Promise<ReadTarget> {
+    return this.request(shape, call, recognized.path, await this.methodRead(shape, recognized.method, scopeOfCall(call)));
+  }
+
+  private async methodRead(shape: FileShape, method: RequestMethod, scope: Scope): Promise<HttpTarget["method"] | undefined> {
+    if (method.kind === "established") return method.verb;
+    return method.stated === undefined ? undefined : this.methodOf(shape, method.stated, scope);
   }
 
   /** The method a request object states, GET when it states none; undefined when the snapshot does not decide it. */
@@ -619,14 +561,6 @@ class Reader {
     const method = memberOf(object, "method");
     if (method === undefined) return "GET";
     return method.status === "undecided" ? undefined : this.methodOf(shape, method.value, scope);
-  }
-
-  /** `request(method, url)`, or `request(new HttpRequest(method, url))`: the method is an argument, never assumed. */
-  private async explicitRequest(shape: FileShape, call: ts.CallExpression): Promise<ReadTarget> {
-    const [first, second] = call.arguments;
-    const sent = first !== undefined && ts.isNewExpression(first) && isHttpPackageName(shape, first.expression, "HttpRequest") ? first.arguments : undefined;
-    const [method, path] = sent ?? [first, second];
-    return this.request(shape, call, path, method === undefined ? undefined : await this.methodOf(shape, method));
   }
 
   /**
@@ -1089,27 +1023,6 @@ function baseClassName(declaration: ts.ClassDeclaration): string | undefined {
   return base !== undefined && ts.isIdentifier(base) ? base.text : undefined;
 }
 
-/** The names the file binds at run time; an ambient `declare` binds none. */
-function sourceBindings(source: ts.SourceFile): ReadonlySet<string> {
-  const names = new Set<string>();
-  for (const statement of source.statements) {
-    if (isAmbient(statement)) continue;
-    if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) for (const name of bindingNames(declaration.name)) names.add(name);
-    if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isModuleDeclaration(statement)) && statement.name !== undefined) names.add(statement.name.text);
-  }
-  const visit = (node: ts.Node): void => {
-    if (ts.isFunctionLike(node) || ts.isClassLike(node) || ts.isModuleDeclaration(node) || isAmbient(node)) return;
-    if (ts.isVariableDeclarationList(node) && (node.flags & ts.NodeFlags.BlockScoped) === 0) for (const declaration of node.declarations) for (const name of bindingNames(declaration.name)) names.add(name);
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return names;
-}
-
-function isAmbient(node: ts.Node): boolean {
-  return hasModifier(node, ts.SyntaxKind.DeclareKeyword);
-}
-
 function mayOverrideEncoder(source: ts.SourceFile): boolean {
   const globalNames = new Set(["globalThis", "window", "global", "self"]);
   const globalObject = (node: ts.Node): node is ts.Expression => {
@@ -1268,21 +1181,6 @@ function isGlobalName(shape: FileShape, scope: Scope, name: string): boolean {
   return !scope.names.has(name) && !shape.imports.has(name) && !shape.bindings.has(name);
 }
 
-/**
- * The expression an object literal states for a member, a shorthand's name included; undecided when a spread or a
- * computed name after it may state the member instead.
- */
-function memberOf(object: ts.ObjectLiteralExpression, name: string): Evaluated<ts.Expression> | undefined {
-  let found: Evaluated<ts.Expression> | undefined;
-  for (const property of object.properties) {
-    if (ts.isSpreadAssignment(property) || (property.name !== undefined && ts.isComputedPropertyName(property.name))) found = UNDECIDABLE;
-    else if (property.name !== undefined && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) && property.name.text === name) {
-      found = ts.isPropertyAssignment(property) ? known(property.initializer) : ts.isShorthandPropertyAssignment(property) ? known(property.name) : UNDECIDABLE;
-    }
-  }
-  return found;
-}
-
 function functionNamed(shape: FileShape, name: string): ts.FunctionDeclaration | undefined {
   return shape.source.statements.find((statement): statement is ts.FunctionDeclaration => ts.isFunctionDeclaration(statement) && statement.name?.text === name);
 }
@@ -1329,13 +1227,6 @@ function enumMember(shape: FileShape, declaration: ts.EnumDeclaration, name: str
   const member = declaration.members.find((candidate) => (ts.isIdentifier(candidate.name) || ts.isStringLiteral(candidate.name)) && candidate.name.text === name);
   const initializer = member?.initializer;
   return initializer !== undefined && ts.isStringLiteralLike(initializer) ? { shape, expression: initializer, trail } : undefined;
-}
-
-/** The object literal an initializer is, through the wrappers TypeScript lets an author write around it. */
-function objectOf(expression: ts.Expression): ts.ObjectLiteralExpression | undefined {
-  if (ts.isObjectLiteralExpression(expression)) return expression;
-  if (ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression) || ts.isParenthesizedExpression(expression) || ts.isTypeAssertionExpression(expression)) return objectOf(expression.expression);
-  return undefined;
 }
 
 function verbOf(name: string): HttpTarget["method"] {
