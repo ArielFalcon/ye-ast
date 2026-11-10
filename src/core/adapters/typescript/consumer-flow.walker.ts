@@ -37,7 +37,8 @@ import {
   type FunctionNode,
   type NamedFunction,
 } from "./consumer-flow.syntax.ts";
-import { symbolOf, VERBS } from "./http-call-sites.adapter.ts";
+import { symbolOf } from "./http-call-sites.adapter.ts";
+import { VERBS } from "./request-summaries.ts";
 import { FUNCTIONS, isModule, METHODS, type MethodResult, type MethodRow } from "./consumer-flow.callees.ts";
 import { resolveFunction, type Resolved } from "./consumer-flow.resolution.ts";
 import { injectedClass } from "./angular-injection.ts";

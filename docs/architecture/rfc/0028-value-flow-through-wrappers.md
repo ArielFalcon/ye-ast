@@ -368,6 +368,27 @@ combines that vocabulary with `SummaryResolver.clientReceiver`, which answers re
 `HttpClient`, through the B11 reader's fields, parameters and inherited fields); the reader answers the typing and the
 rule decides what a request is.
 
+**The owner's answer (amended 2026-11-10, ADR-0051 decision 7).** The rule is one function of
+`request-summaries.ts`, `requestCallOf(shape, call)`, where `shape` is the import shape of the file that writes the
+call (`requestFileShapeOf(tree)`: its imports and the names it binds itself). It returns a sum type that separates what
+is established from what is not:
+
+```ts
+type RequestCall =
+  | { kind: "request"; client: "fetch" | "resource"; path; method: RequestMethod; body: RequestBodyRead }
+  | { kind: "not-request" }
+  | { kind: "undecided"; reason: "receiver-type"; verb; path; method: RequestMethod; body: RequestBodyRead };
+type RequestMethod = { kind: "established"; verb } | { kind: "undecided"; stated? };
+type RequestBodyRead = { kind: "established"; expression; argument } | { kind: "none" } | { kind: "unknown"; argument };
+```
+
+A global `fetch` (nothing in the file, its imports or the code around the call binds the name) and an `httpResource`
+imported from `@angular/common/http` are requests; `fetch(url, { method, body })` states its method and its body from
+the init object. A call that spells a client verb on a receiver is `undecided` until receiver typing (`clientReceiver`,
+the B11 reader) answers. A new client grows this contract, never an `if` in a consumer.
+`src/composition/request-vocabulary.single-rule.test.ts` holds the rule: the concept may appear only in the owner and in
+the `pending` copies listed there, a list that only shrinks.
+
 The adapter already owns the one URL evaluator and exports the two seams the flow readers use (`createRequestBodies` at
 `:141`, `VERBS` at `:19`), so the lookup is created there, from `readerOf(files)`, with no second evaluator and no new
 port.
@@ -413,6 +434,7 @@ already is (`request-origins.adapter.ts:18-19`).
 |---|---|---|---|
 | `namesRequest` | `request-origins.adapter.ts:62-66`, used at `:26` | **S2** | `createRequestCallLookup(files).at(site)` in `ofBody` |
 | `requestKind` | `consumer-flow.walker.ts:1005-1011`, used at `:136` | **S3** | `createRequestCallLookup(files).at(site)` in `startCallSite`; `startCallResult` (`:147-156`) keeps its own column logic, because a call result is not a request |
+| `Reader.target`, `fetched`, `explicitRequest`, `isHttpResource`, `bodyArgument` (the copy that held the shadowing and import guards the owner lacked) | `http-call-sites.adapter.ts` | **audit P0-1** (done) | `requestCallOf(shape, call)`; the adapter keeps reading URLs, base URLs, wrapper verbs and bodies, and asks the owner whether the call is a request |
 | ADR-0044 V5.2's `createRequestCallLookup` | `briefs-adr-0044/units.md` V5.2, steps 1-2 | **S2** | this factory; V5.2 keeps its column-first fallback (step 2) and its deletions (step 3), and its predicate body (step 1) moves here |
 
 `VERBS` stays exported as the vocabulary `request-summaries.ts` reads. **S2 adds the one-owner row to
@@ -709,6 +731,7 @@ Owner decision 2026-11-09: every question is resolved as recommended here. No un
 | 4 | S1: how does the leaf rule type a receiver (`this.http`, an inherited field, a parameter) without a second owner of "what is a request", given that the B11 receiver reader is private to its adapter? | **Receiver typing stays with the B11 adapter's reader; the port gains `clientReceiver`; the vocabulary stays in the rule module.** `SummaryResolver.clientReceiver(file, call)` answers only whether the receiver is an `HttpClient`, using `Reader.ownerClass`/`memberType` (inject fields, typed parameters, inherited fields of a base class in another file, `http-call-sites.adapter.ts:692-721`). The rule module keeps `VERBS`, the global `fetch` and `httpResource` by import, and combines them with that answer; no other file applies `VERBS`. A call whose receiver is not an `HttpClient` (a custom service with a `get()`) is not a leaf. S1 tests use a fake that answers the question; S2 implements it on the reader. |
 | 5 | S1: how is a hole bound to the parameter it reads, when the path is read in a branch or out of order? | **Hole → parameter binding comes from the reader's `evaluate`, and S2's `Evaluation` tracks the parameter source per hole.** `evaluate` returns `holes`, one entry per `{}` in order, the declaration parameter index that value is (undefined for a run-time value that is not a parameter). Substitution fills each hole by its parameter, never by argument order. |
 | 6 | S1: what does a path that writes a brace (`'/x/{}'`) do, when the rule cannot tell it from a run-time hole? | **Conservative: no substitution through it.** A literal path text the code writes that contains `{` or `}` yields a gap at the call with the existing cause `destination-undecidable`, naming the literal in its evidence, never a substituted path. No new vocabulary. |
+| 7 | What does the owner of "is this call a request" receive? | **The file's import shape with the call, never a bare node.** A bare node cannot tell a global `fetch` from a parameter or a local function named `fetch`, nor Angular's `httpResource` from a local one; the audit of 2026-11-10 reproduced both, and `fetch('/orders', { method: 'POST', body: x })` read as a GET with no body. `requestCallOf(shape, call)` reads the shape (`requestFileShapeOf`) and the lexical bindings around the call, and answers the sum type of "One owner for 'is this call a request'". |
 
 ## Review responses
 
