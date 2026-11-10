@@ -228,39 +228,66 @@ async function placedSitesOf(session: ConsumerSession, links: readonly Link[]): 
   return new Map(await Promise.all(repos.map(async (repo) => [repo, await session.placedSites(repo)] as const)));
 }
 
-/** Where a qualified link's value is followed from: one boundary, or an ambiguity frontier when several issuing calls hold it. */
+/** Where a qualified link's value is followed from: one boundary, or an ambiguity frontier when its issuing call is not established. */
 type Start = { kind: "start"; pending: Pending } | { kind: "ambiguous"; finding: ConsequenceFinding<UseConsequence> };
 
+interface IssuingCall {
+  file: string;
+  line: number;
+  symbol: string;
+}
+
 /**
- * The boundary a link's value is followed from (ADR-0044 decision 7): a propagated link starts at its one issuing owned
- * call, with the call it was reached from as the second step of the chain, and a direct site starts where the join reported
- * it. Several issuing calls are not one of them: none is picked, and every one is evidence of an ambiguity frontier.
+ * The issuing calls a link's reported sites establish (ADR-0044 decision 7): `direct` when no site came through owned
+ * bodies, the one or several owned placed calls its owned leaves are, or `unplaced` when an owned leaf is no placed call
+ * or no owned leaf ends the owned bodies, which names every owned origin and never stands for `direct`.
+ */
+type Issuing =
+  | { kind: "direct" }
+  | { kind: "one"; call: IssuingCall }
+  | { kind: "several"; calls: readonly IssuingCall[] }
+  | { kind: "unplaced"; origins: readonly { file: string; line: number }[] };
+
+/**
+ * The boundary a link's value is followed from (ADR-0044 decision 7, ADR-0051 decision 7): a propagated link starts at
+ * its one issuing owned call, with the call it was reached from as the second step of the chain, and a direct site starts
+ * where the join reported it. Several issuing calls, placed sites the session did not read and origins no placed call
+ * stands at start no carrier: each is an ambiguity frontier at the link's call naming what is known.
  */
 function startOf(link: Link, hypothesis: ResponseHypothesis, placed: ReadonlyMap<string, ConsumerPlacedSites>, excludes: ConsumerSession["excludes"]): Start {
   const { from } = link;
-  const read = placed.get(from.repo);
-  const reported = read === undefined ? [] : sitesAt(from, read.sites, excludes);
-  const issuing = read === undefined ? [] : issuingCallsOf(reported, read.sites, read.owned);
-  if (issuing.length > 1) {
-    const hops = issuing.map((call): Hop => ({ step: "http-call", evidence: { path: call.file, line: call.line } }));
-    return { kind: "ambiguous", finding: frontierItem({ at: { path: from.file, line: from.line }, cause: "ambiguous-caller", reason: "unresolved", hops }, [], from.repo) };
+  const placing = placed.get(from.repo) ?? { kind: "not-read" };
+  if (placing.kind === "not-read") return ambiguous(from, [], "not-read");
+  const issuing = issuingOf(sitesAt(from, placing.sites, excludes), placing.sites, placing.owned);
+  switch (issuing.kind) {
+    case "several":
+      return ambiguous(from, issuing.calls);
+    case "unplaced":
+      return ambiguous(from, issuing.origins, "unplaced");
+    case "direct":
+      return { kind: "start", pending: { carrier: { site: { kind: "call-site", ...from }, path: hypothesis.property }, chain: [{ step: "http-call", evidence: { path: from.file, line: from.line, via: `basis:${link.basis}` } }], link, entries: [] } };
+    case "one": {
+      const { call } = issuing;
+      return {
+        kind: "start",
+        pending: {
+          carrier: { site: { kind: "call-site", repo: from.repo, ...call }, path: hypothesis.property },
+          chain: [
+            { step: "http-call", evidence: { path: call.file, line: call.line } },
+            { step: "caller", evidence: { path: from.file, line: from.line } },
+          ],
+          link,
+          entries: [],
+        },
+      };
+    }
   }
-  const [only] = issuing;
-  if (only === undefined) {
-    return { kind: "start", pending: { carrier: { site: { kind: "call-site", ...from }, path: hypothesis.property }, chain: [{ step: "http-call", evidence: { path: from.file, line: from.line, via: `basis:${link.basis}` } }], link, entries: [] } };
-  }
-  return {
-    kind: "start",
-    pending: {
-      carrier: { site: { kind: "call-site", repo: from.repo, file: only.file, line: only.line, symbol: only.symbol }, path: hypothesis.property },
-      chain: [
-        { step: "http-call", evidence: { path: only.file, line: only.line } },
-        { step: "caller", evidence: { path: from.file, line: from.line } },
-      ],
-      link,
-      entries: [],
-    },
-  };
+}
+
+/** The ambiguity frontier of a link whose issuing call is not one: each place known to issue it is a chain step, and the link's own call site is its final place. */
+function ambiguous(from: Link["from"], places: readonly { file: string; line: number }[], detail?: string): Start {
+  const hops = places.map((place): Hop => ({ step: "http-call", evidence: { path: place.file, line: place.line } }));
+  return { kind: "ambiguous", finding: frontierItem({ at: { path: from.file, line: from.line }, cause: "ambiguous-caller", reason: "unresolved", ...(detail === undefined ? {} : { detail }), hops }, [], from.repo) };
 }
 
 /**
@@ -280,14 +307,22 @@ const reachOf = (site: PlacedCallSite["site"]): CallSiteReach => {
   return { kind: "call-site", transport: site.transport, ...(target === undefined ? {} : { method: target.method, template: target.path }) };
 };
 
-/** The owned calls that issue the sites a link reaches: each owned origin that is a placed call of its own, once, in file then line order. */
-function issuingCallsOf(sites: readonly PlacedCallSite[], placed: readonly PlacedCallSite[], owned: ReadonlySet<string>): { file: string; line: number; symbol: string }[] {
-  const issuing = sites.flatMap((site) => (site.origins ?? []).filter((origin) => owned.has(origin.file))).flatMap((leaf) => {
-    const at = placed.find((candidate) => candidate.site.file === leaf.file && candidate.site.line === leaf.line && candidate.column === leaf.column);
-    return at === undefined ? [] : [{ file: at.site.file, line: at.site.line, symbol: at.site.symbol }];
-  });
-  return [...new Map(issuing.map((call) => [canonicalJson(call), call])).values()].sort((a, b) => compareText(a.file, b.file) || a.line - b.line);
+/** The issuing calls of the sites a link reaches: each owned leaf as the placed call at its place, once, in file then line order. */
+function issuingOf(sites: readonly PlacedCallSite[], placed: readonly PlacedCallSite[], owned: ReadonlySet<string>): Issuing {
+  const origins = sites.flatMap((site) => (site.origins ?? []).filter((origin) => owned.has(origin.file)));
+  if (origins.length === 0) return { kind: "direct" };
+  const leaves = origins.filter((origin) => origin.kind === "leaf");
+  if (leaves.length === 0) return unplaced(origins);
+  const calls = leaves.flatMap((leaf) => placed.filter((candidate) => candidate.site.file === leaf.file && candidate.site.line === leaf.line && candidate.column === leaf.column).slice(0, 1));
+  if (calls.length < leaves.length) return unplaced(leaves);
+  const issuing = inFileOrder(calls.map(({ site }) => ({ file: site.file, line: site.line, symbol: site.symbol })));
+  return issuing.length === 1 ? { kind: "one", call: issuing[0]! } : { kind: "several", calls: issuing };
 }
+
+const unplaced = (origins: readonly { file: string; line: number }[]): Issuing => ({ kind: "unplaced", origins: inFileOrder(origins.map(({ file, line }) => ({ file, line }))) });
+
+const inFileOrder = <Place extends { file: string; line: number }>(places: readonly Place[]): Place[] =>
+  [...new Map(places.map((place) => [canonicalJson(place), place])).values()].sort((a, b) => compareText(a.file, b.file) || a.line - b.line);
 
 const linkOf = (link: Link): UseConsequence["link"] => ({ id: link.id, basis: link.basis, call: { file: link.from.file, line: link.from.line, symbol: link.from.symbol }, handler: { repo: link.to.repo, ...link.to.handler } });
 

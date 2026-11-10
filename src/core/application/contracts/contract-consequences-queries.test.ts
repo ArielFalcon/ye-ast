@@ -6,7 +6,7 @@ import { type HypothesisInput } from "../../domain/contracts/hypothesis.ts";
 import type { Predicate } from "../../domain/contracts/use-operation.ts";
 import type { TestedGuard, UseOperation } from "../../domain/contracts/verdict.ts";
 import type { CallSiteReach, Cut, FactBase } from "../../domain/shared/fact.ts";
-import type { PlacedCallSite } from "../../domain/topology/call-site.ts";
+import type { PlacedCallSite, PlacedOrigin } from "../../domain/topology/call-site.ts";
 import { excludedFrom } from "../../domain/topology/link-match.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import type { HypothesesRequest, ContractConsequencesQueries } from "../../ports/contract-consequences-queries.port.ts";
@@ -103,7 +103,7 @@ function setup(options: Setup = {}) {
     memberOccurrences: ({ member }) => options.members?.[member] ?? { kind: "found", occurrences: [] },
     flow: { follow: (carrier) => (followed.push(carrier), options.flow?.[carrierKey(carrier.site)] ?? NO_FLOW) },
     templates: { follow: (carrier) => (templated.push(carrier), options.templates?.[carrierKey(carrier.site)] ?? NO_FLOW) },
-    placedSites: async (repo) => options.placed?.[repo] ?? { sites: [], owned: new Set<string>() },
+    placedSites: async (repo) => options.placed?.[repo] ?? { kind: "read", sites: [], owned: new Set<string>() },
     requestOrigins: (repo) => options.origins?.[repo],
     excludes: (site) => (options.operationSites ? matcherExcludes(site) : false) || (site.template !== undefined && (options.excluded ?? []).includes(site.template)),
   };
@@ -640,20 +640,20 @@ test("a boundary reached through two links is followed under each, so each link 
 });
 
 /** A placed call site the extraction wrote at `file:line` of `symbol`, the way a propagated Java call is placed (ADR-0044 decision 7). */
-const placedAt = (method: string, path: string, origins: readonly { file: string; line: number; column: number }[], file = "src/owner.service.ts", line = 10): PlacedCallSite => ({
+const placedAt = (method: string, path: string, origins: readonly PlacedOrigin[], file = "src/owner.service.ts", line = 10): PlacedCallSite => ({
   site: { repo: "web", file, line, symbol: "find", ancestors: [], transport: "http", target: { status: "complete", value: { method: method as "GET", path }, evidence: [] } },
   column: 5,
   origins,
 });
 
-const OWNERS_ORIGINS = [{ file: "src/adapter.ts", line: 4, column: 3 }, { file: "src/owners.ts", line: 6, column: 9 }];
-const INVOICES_ORIGINS = [{ file: "src/adapter.ts", line: 4, column: 3 }, { file: "src/invoices.ts", line: 7, column: 9 }];
+const OWNERS_ORIGINS = [{ kind: "body" as const, file: "src/adapter.ts", line: 4, column: 3 }, { kind: "leaf" as const, file: "src/owners.ts", line: 6, column: 9 }];
+const INVOICES_ORIGINS = [{ kind: "body" as const, file: "src/adapter.ts", line: 4, column: 3 }, { kind: "leaf" as const, file: "src/invoices.ts", line: 7, column: 9 }];
 
 test("a link follows the placed call site of its own operation, never the first site at its place (ADR-0044 decision 7)", async () => {
   // Two operations are written at one place: the link for /owners/{id} must start at the /owners site, though the /invoices site is listed first.
   // The leaf each operation's origins end at is itself a placed call of the owned adapter, as the extraction writes it.
   const leafOf = (file: string, path: string, line: number) => ({ ...placedAt("GET", path, [], file, line), column: 9 });
-  const placed = { web: { sites: [placedAt("GET", "/invoices", INVOICES_ORIGINS), placedAt("GET", "/owners/{}", OWNERS_ORIGINS), leafOf("src/invoices.ts", "/invoices", 7), leafOf("src/owners.ts", "/owners/{}", 6)], owned: new Set(["src/adapter.ts", "src/owners.ts", "src/invoices.ts", "src/owner.service.ts"]) } };
+  const placed = { web: { kind: "read" as const, sites: [placedAt("GET", "/invoices", INVOICES_ORIGINS), placedAt("GET", "/owners/{}", OWNERS_ORIGINS), leafOf("src/invoices.ts", "/invoices", 7), leafOf("src/owners.ts", "/owners/{}", 6)], owned: new Set(["src/adapter.ts", "src/owners.ts", "src/invoices.ts", "src/owner.service.ts"]) } };
   const { ask, followed } = setup({ links: [link({ name: OPERATION })], placed, operationSites: true });
 
   await ask();
@@ -665,8 +665,8 @@ test("two issuing calls of one operation are an ambiguity frontier naming both, 
   // Two implementations of the same port each issue the operation: the propagated site has one leaf per implementation.
   const leafA = { ...placedAt("GET", "/owners/{}", [], "src/first.ts", 6), column: 9 };
   const leafB = { ...placedAt("GET", "/owners/{}", [], "src/second.ts", 9), column: 9 };
-  const origins = [{ file: "src/adapter.ts", line: 4, column: 3 }, { file: "src/first.ts", line: 6, column: 9 }, { file: "src/second.ts", line: 9, column: 9 }];
-  const placed = { web: { sites: [placedAt("GET", "/owners/{}", origins), leafA, leafB], owned: new Set(["src/adapter.ts", "src/first.ts", "src/second.ts", "src/owner.service.ts"]) } };
+  const origins = [{ kind: "body" as const, file: "src/adapter.ts", line: 4, column: 3 }, { kind: "leaf" as const, file: "src/first.ts", line: 6, column: 9 }, { kind: "leaf" as const, file: "src/second.ts", line: 9, column: 9 }];
+  const placed = { web: { kind: "read" as const, sites: [placedAt("GET", "/owners/{}", origins), leafA, leafB], owned: new Set(["src/adapter.ts", "src/first.ts", "src/second.ts", "src/owner.service.ts"]) } };
   const { ask, followed } = setup({ links: [link({ name: OPERATION })], placed });
 
   const fact = await ask();
@@ -680,10 +680,10 @@ test("two calls of the asked operation in one body are both issuing calls: one b
   // A body writes the request twice on two paths: the extraction places one site per path, at one line and symbol.
   const first = { ...placedAt("GET", "/owners/{}", [], "src/first.ts", 6), column: 9 };
   const second = { ...placedAt("GET", "/owners/{}", [], "src/second.ts", 9), column: 9 };
-  const pathA = [{ file: "src/adapter.ts", line: 4, column: 3 }, { file: "src/first.ts", line: 6, column: 9 }];
-  const pathB = [{ file: "src/adapter.ts", line: 4, column: 3 }, { file: "src/second.ts", line: 9, column: 9 }];
+  const pathA = [{ kind: "body" as const, file: "src/adapter.ts", line: 4, column: 3 }, { kind: "leaf" as const, file: "src/first.ts", line: 6, column: 9 }];
+  const pathB = [{ kind: "body" as const, file: "src/adapter.ts", line: 4, column: 3 }, { kind: "leaf" as const, file: "src/second.ts", line: 9, column: 9 }];
   const sites = [placedAt("GET", "/owners/{}", pathA), placedAt("GET", "/owners/{}", pathB), first, second];
-  const placed = { web: { sites, owned: new Set(["src/adapter.ts", "src/first.ts", "src/second.ts", "src/owner.service.ts"]) } };
+  const placed = { web: { kind: "read" as const, sites, owned: new Set(["src/adapter.ts", "src/first.ts", "src/second.ts", "src/owner.service.ts"]) } };
   const { ask, followed } = setup({ links: [link({ name: OPERATION })], placed, operationSites: true });
 
   const fact = await ask();
@@ -698,8 +698,8 @@ test("two roots that reach the same two issuing calls are two distinguishable fr
   const issuingA = { ...placedAt("GET", "/owners/{}", [], "src/first.ts", 6), column: 9 };
   const issuingB = { ...placedAt("GET", "/owners/{}", [], "src/second.ts", 9), column: 9 };
   // Each root's propagated site reaches both implementations, so its origins name both leaves.
-  const reachesBoth = (root: string, line: number) => placedAt("GET", "/owners/{}", [{ file: "src/adapter.ts", line: 4, column: 3 }, { file: "src/first.ts", line: 6, column: 9 }, { file: "src/second.ts", line: 9, column: 9 }], root, line);
-  const placed = { web: { sites: [reachesBoth("src/listener-a.ts", 3), reachesBoth("src/listener-b.ts", 7), issuingA, issuingB], owned: new Set(["src/adapter.ts", "src/first.ts", "src/second.ts", "src/listener-a.ts", "src/listener-b.ts"]) } };
+  const reachesBoth = (root: string, line: number) => placedAt("GET", "/owners/{}", [{ kind: "body" as const, file: "src/adapter.ts", line: 4, column: 3 }, { kind: "leaf" as const, file: "src/first.ts", line: 6, column: 9 }, { kind: "leaf" as const, file: "src/second.ts", line: 9, column: 9 }], root, line);
+  const placed = { web: { kind: "read" as const, sites: [reachesBoth("src/listener-a.ts", 3), reachesBoth("src/listener-b.ts", 7), issuingA, issuingB], owned: new Set(["src/adapter.ts", "src/first.ts", "src/second.ts", "src/listener-a.ts", "src/listener-b.ts"]) } };
   const roots = [link({ file: "src/listener-a.ts", line: 3, name: OPERATION }), link({ file: "src/listener-b.ts", line: 7, name: OPERATION })];
   const { ask } = setup({ links: roots, placed, operationSites: true });
 
@@ -716,13 +716,49 @@ test("two roots that reach the same two issuing calls are two distinguishable fr
 test("a single issuing call of the asked operation still starts the carrier there, with the call it was reached from in the chain", async () => {
   // One implementation issues the operation: the carrier starts at that call, exactly as before the frontier existed.
   const leaf = { ...placedAt("GET", "/owners/{}", [], "src/first.ts", 6), column: 9 };
-  const origins = [{ file: "src/adapter.ts", line: 4, column: 3 }, { file: "src/first.ts", line: 6, column: 9 }];
-  const placed = { web: { sites: [placedAt("GET", "/owners/{}", origins), leaf], owned: new Set(["src/adapter.ts", "src/first.ts", "src/owner.service.ts"]) } };
+  const origins = [{ kind: "body" as const, file: "src/adapter.ts", line: 4, column: 3 }, { kind: "leaf" as const, file: "src/first.ts", line: 6, column: 9 }];
+  const placed = { web: { kind: "read" as const, sites: [placedAt("GET", "/owners/{}", origins), leaf], owned: new Set(["src/adapter.ts", "src/first.ts", "src/owner.service.ts"]) } };
   const { ask, followed } = setup({ links: [link({ name: OPERATION })], placed });
 
   await ask();
 
   assert.deepEqual(followed.map((carrier) => carrier.site.kind === "call-site" && [carrier.site.file, carrier.site.line]), [["src/first.ts", 6]]);
+});
+
+test("a link whose placed sites the session did not read starts no carrier: an ambiguity frontier at the link's call, never a direct start (ADR-0051 decision 7)", async () => {
+  const { ask, followed } = setup({ links: [link({ name: OPERATION })], placed: { web: { kind: "not-read" } } });
+
+  const fact = await ask();
+
+  assert.deepEqual(followed, []);
+  assert.deepEqual(verdictsOf(fact), ["ambiguous-caller:not-read"]);
+  assert.deepEqual(fact.value.findings.map((finding) => finding.evidence.map((place) => [place.path, place.line])), [[["src/owner.service.ts", 10]]]);
+});
+
+test("a leaf the placed sites do not place is not an issuing call left out: two leaves with one unplaced are an ambiguity frontier naming both (ADR-0051 decision 7)", async () => {
+  // The leaf at src/second.ts:9 is an owned origin of the propagated site, but no placed call stands at its place.
+  const leaf = { ...placedAt("GET", "/owners/{}", [], "src/first.ts", 6), column: 9 };
+  const origins: PlacedOrigin[] = [{ kind: "body", file: "src/adapter.ts", line: 4, column: 3 }, { kind: "leaf", file: "src/first.ts", line: 6, column: 9 }, { kind: "leaf", file: "src/second.ts", line: 9, column: 9 }];
+  const placed = { web: { kind: "read" as const, sites: [placedAt("GET", "/owners/{}", origins), leaf], owned: new Set(["src/adapter.ts", "src/first.ts", "src/second.ts", "src/owner.service.ts"]) } };
+  const { ask, followed } = setup({ links: [link({ name: OPERATION })], placed });
+
+  const fact = await ask();
+
+  assert.deepEqual(followed, []);
+  assert.deepEqual(verdictsOf(fact), ["ambiguous-caller:unplaced"]);
+  assert.deepEqual(fact.value.findings.map((finding) => finding.evidence.map((place) => [place.path, place.line])), [[["src/first.ts", 6], ["src/second.ts", 9], ["src/owner.service.ts", 10]]]);
+});
+
+test("owned bodies with no owned leaf do not establish the root as the issuing call: an ambiguity frontier naming the bodies (ADR-0051 decision 7)", async () => {
+  // The request is written in a library the propagation passed into: the only owned origin is the adapter body.
+  const origins: PlacedOrigin[] = [{ kind: "body", file: "src/adapter.ts", line: 4, column: 3 }, { kind: "leaf", file: "lib/client.ts", line: 2, column: 1 }];
+  const placed = { web: { kind: "read" as const, sites: [placedAt("GET", "/owners/{}", origins)], owned: new Set(["src/adapter.ts", "src/owner.service.ts"]) } };
+  const { ask, followed } = setup({ links: [link({ name: OPERATION })], placed });
+
+  const fact = await ask();
+
+  assert.deepEqual(followed, []);
+  assert.deepEqual(fact.value.findings.map((finding) => [finding.evidence.at(-1)?.via, finding.evidence.map((place) => [place.path, place.line])]), [["ambiguous-caller:unplaced", [["src/adapter.ts", 4], ["src/owner.service.ts", 10]]]]);
 });
 
 const TEMPLATE_CALL = { kind: "template-call-result" as const, repo: "web", resource: "src/page.html", start: 4, end: 20, callee: "label", argument: 0 };

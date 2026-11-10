@@ -48,12 +48,18 @@ export interface ConsumerMemberOccurrence {
 
 export type ConsumerMemberOccurrences = { kind: "unavailable" } | { kind: "unresolved" } | { kind: "found"; occurrences: readonly ConsumerMemberOccurrence[] };
 
-/** A repository's call sites with their places and, where the extraction propagated one, the bodies and the leaf it came through. */
-export interface ConsumerPlacedSites {
-  sites: readonly PlacedCallSite[];
-  /** The read's own sources: an origin in any other path is not an owned call of the repository. */
-  owned: ReadonlySet<string>;
-}
+/**
+ * A repository's call sites with their places and, where the extraction propagated one, the bodies and the leaf it came
+ * through; `not-read` when the session holds no placed sites of the repository, which never stands for "none".
+ */
+export type ConsumerPlacedSites =
+  | {
+      kind: "read";
+      sites: readonly PlacedCallSite[];
+      /** The read's own sources: an origin in any other path is not an owned call of the repository. */
+      owned: ReadonlySet<string>;
+    }
+  | { kind: "not-read" };
 
 /** The answers of a workspace to one hypothesis: what the hypothesis selects, and what the workspace holds whatever the hypothesis. */
 export interface ConsumerSession {
@@ -78,7 +84,7 @@ export interface ConsumerSession {
   memberOccurrences(member: { repo: string; file: string; owner: string; member: string }): ConsumerMemberOccurrences;
   flow: ConsumerFlowReader;
   templates: ConsumerTemplateReader;
-  /** The repository's call sites with their places; empty when the session does not read the repository. */
+  /** The repository's call sites with their places; `not-read` when the session does not read the repository or has no reader of placed sites. */
   placedSites(repo: string): Promise<ConsumerPlacedSites>;
   /** The reader of request bodies of a repository the session reads; a repository it does not read has none. */
   requestOrigins(repo: string): RequestOriginReader | undefined;

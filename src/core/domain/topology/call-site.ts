@@ -83,8 +83,18 @@ export interface PlacedCallSite {
   site: CallSite;
   column?: number;
   declaration?: true;
-  /** Source bodies and occurrences used by extraction; empty means no propagated proof, absent means a direct site. */
-  origins?: readonly { file: string; line: number; column: number }[];
+  /**
+   * Source bodies and occurrences used by extraction; empty means no propagated proof, absent means a direct site. A
+   * `body` is a method or function the request passed through, a `leaf` the call in a body that issues it.
+   */
+  origins?: readonly PlacedOrigin[];
+}
+
+export interface PlacedOrigin {
+  kind: "body" | "leaf";
+  file: string;
+  line: number;
+  column: number;
 }
 
 /** The call sites of a snapshot with their exact places, read as `CallSiteReader.of` reads them. */
