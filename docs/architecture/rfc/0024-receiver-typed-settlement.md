@@ -326,8 +326,8 @@ export interface CallBinder {
    */
   memberOf(type: GraphSymbol, member: string, place: CallPlace): Promise<GraphSymbol | undefined>;
   /**
-   * Every declaration of `member` the type `type` and its hierarchy declare, nearest first, sorted: the candidate set a
-   * cut names for a call on a value of that type.
+   * Every declaration of `member` that `type` and its hierarchy declare, as one group per declaring type in nearest-type
+   * order, each group sorted by `(file, startLine)`: the candidate set a cut names for a call on a value of that type.
    */
   membersAbove(type: GraphSymbol, member: string): readonly GraphSymbol[];
   /** Whether `type`, or a type above it, declares `member`. */
@@ -420,11 +420,14 @@ export function isOwnerKind(kind: string): boolean; // (EDGE_POLICY.ownerKinds a
    `binder.membersAbove(type, member)`.
 4. **`CallBinder.memberOf`, structural reading**, per type, nearest first over `above(type)`:
    1. The declaring chain is every `isOwnerKind` — a class, a component, or an **interface**.
-   2. `own = membersOf(declaring).filter(kind member && name)`; exactly one → it. More than one → read the declaring
-      type's source once: `implementations = callables.filter(c => c.name === member && c.body)`; exactly one
-      `implementations` → the index symbol `placedBetween(implementation.start, implementation.nameLine)`; else
-      `undefined` (fail closed; signatures are never guessed from arity). Continue up only while the name is absent from
-      the declaring type.
+   2. `own = membersOf(declaring).filter(kind member && name)`; exactly one → it. More than one → read the source of every
+      file that declares a member of the set: `implementations = callables.filter(c => c.name === member && c.body)`;
+      exactly one `implementations` → the index symbol `placedBetween(implementation.start, implementation.nameLine)`; else
+      `undefined` (fail closed; signatures are never guessed from arity). The one body may sit in any file that declares
+      the member — a type merged across files by module augmentation writes its signature in one and its body in another —
+      not only in the declaring type's file. This collapse is the structural language's rule alone: a nominal language's
+      overloads are distinct methods, so several of the name bind none here and U2's arity rule decides. Continue up only
+      while the name is absent from the declaring type.
 5. **An index edge's receiver** (`EdgeTargets.receiverVerdict`): the same `memberOfReceiver`, asked with the edge's
    place. The verdict is `redirect` to a different target; `proven` when the answer's target is the edge's own target,
    or when the receiver's type offers exactly that one declaration; `name-match` when the type offers several and none
@@ -433,9 +436,10 @@ export function isOwnerKind(kind: string): boolean; // (EDGE_POLICY.ownerKinds a
    `declarations` → those; `none` → no bridge; `unknown` (with or without `capability-absent`) → today's same-named
    members above, at the existing confidence (Resolved questions 2). A structural language answers `unknown` because its
    typing makes every same-named member above a contract the method satisfies, so its answers do not move.
-7. **Determinism.** Every set above is sorted by `(file, startLine, name)` before it leaves the use case; candidates,
-   attributed declarations, cuts and their `reach.declarations` are `sortedUnique` as today. Identical inputs give
-   identical bytes.
+7. **Determinism.** `membersAbove` keeps one group per declaring type, nearest type first, each group sorted by
+   `(file, startLine, name)`; every other set above is sorted by `(file, startLine, name)` before it leaves the use case;
+   candidates, attributed declarations, cuts and their `reach.declarations` are `sortedUnique` as today. Identical inputs
+   give identical bytes.
 
 ### Completeness (ADR-0042)
 
@@ -494,7 +498,10 @@ Each unit is one commit, failing fixture first, `npm run check`, and the corpus 
   arity-independent). Why it fails today: `own.length === 4` returns `undefined` at `call-binder.ts:157`.
   **Variant beyond the observed case:** two same-named members **both with bodies** (declaration merging across files,
   `src/a.ts` and `src/b.ts`) answer `undefined`, and a type whose source the reader did not read answers `undefined` —
-  both fail closed, pinned one test each.
+  both fail closed, pinned one test each. **The collapse's guards, one test each:** a body of another class of the same
+  file never stands for the member (the set binds none), and a nominal language's overload set — an interface's abstract
+  `getByNick(String)` and its default `getByNick(String, boolean)`, both real methods — binds none, because the arity
+  rule is U2's.
 - **RED test 2:** same file, "an interface is a declaring type". Fixture: `interface Strategy { expire(): void }` at
   `src/strategy.ts:1-4` and a receiver annotated with it; assert `memberOf(Strategy, "expire", place)` answers
   `Strategy.expire`. Why it fails today: `isClassKind` is `["class", "component"]` (`edge-policy.ts:17`) and line 155
@@ -507,8 +514,9 @@ Each unit is one commit, failing fixture first, `npm run check`, and the corpus 
   `nname`; `±` because a dependence previously `name-match` becomes `proven` (ADR-0036) and one attributed cut per
   overload becomes one step. Report every moved answer with its cause.
 - **Docs:** RFC-0010 (an overload set binds to its implementation, and no signature is selected without a declared build
-  output — the limitation of Resolved questions 1), RFC-0013 R6 (the cut lists the receiver's declarations), ADR-0029's
-  lexical-binding rule untouched.
+  output — the limitation of Resolved questions 1; an interface and a component are declaring types too), RFC-0013's cut
+  text unchanged: U1 narrows no candidate list, U3 does, and its amendment lands with U3; ADR-0029's lexical-binding rule
+  untouched.
 - **Risks / high-risk item:** none by the global list (no stored data, security, public contract, concurrency or
   delivery surface); only `core/application` signatures move.
 

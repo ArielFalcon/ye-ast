@@ -126,7 +126,7 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
     }
     return held;
   };
-  const binder = syntaxOf === undefined || proofs === undefined ? undefined : createCallBinder({ store, navigation, syntaxIn: (file) => syntaxIn(syntaxOf, file), proofs, importedDeclarations: (file) => bindingsOf(file) });
+  const binder = syntaxOf === undefined || proofs === undefined ? undefined : createCallBinder({ store, navigation, syntaxIn: (file) => syntaxIn(syntaxOf, file), proofs, importedDeclarations: (file) => bindingsOf(file), callablesIn: async (file) => (await syntaxOf(file)).callables });
   const bindings = binder === undefined ? undefined : createCallBindings({ store, navigation, origins, binder, importedDeclarations: (file) => bindingsOf(file), ...(inScope === undefined ? {} : { inScope }) });
   /** Per file, the declaration each local name its imports bind reaches, when the join proves exactly one. */
   const bound = new Map<string, ReadonlyMap<string, GraphSymbol>>();
@@ -263,8 +263,9 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
    * type proves it even where what runs is unproven.
    */
   async function receiverVerdict({ edge, source, target }: FollowedEdge, receiver: string, settle: CallBinder, bind: CallBindings): Promise<EdgeTarget> {
-    const proof = await settle.receiverOf({ body: source, line: edge.line!, column: edge.column! + 1, member: target.name, receiver });
-    const binding = bind.ofReceiver(proof, target.name, [target]);
+    const place = { file: source.file, line: edge.line!, column: edge.column! + 1 };
+    const proof = await settle.receiverOf({ body: source, ...place, member: target.name, receiver });
+    const binding = await bind.ofReceiver(proof, target.name, [target], place);
     if (binding.target !== undefined && binding.target.id !== target.id) return { kind: "redirect", to: binding.target, receiver };
     return { kind: "keep", receiver, derivation: binding.target !== undefined || binding.attributed.length > 0 ? "proven" : "name-match" };
   }

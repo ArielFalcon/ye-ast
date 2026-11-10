@@ -1,10 +1,11 @@
-import { EDGE_POLICY, isClassKind } from "../../domain/impact/edge-policy.ts";
+import { EDGE_POLICY, isClassKind, isOwnerKind } from "../../domain/impact/edge-policy.ts";
+import { hasTyping } from "../../domain/languages/profiles.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { ExternalMemberUseOrigin, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import { joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
-import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredCallable, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { GraphNavigation } from "./graph-navigation.ts";
 import { provenCallsOf, provenKey, spelledKey, type ProvenCalls } from "./proven-calls.ts";
 
@@ -73,14 +74,32 @@ export type ReceiverProof =
   | { link: "syntax"; holds: ReceiverBinding["holds"]; type?: GraphSymbol; replaceable?: true; unspelled?: true }
   | { link: "none"; replaceable?: true };
 
+/** A member call's place, which a nominal language reads its arguments from. */
+export interface CallPlace {
+  file: string;
+  /** 1-based. */
+  line: number;
+  /** 1-based UTF-16. */
+  column: number;
+}
+
 /**
  * The one owner of the static binding of a member call's receiver for every family (ADR-0041 decisions 1, 4 and 6): a
  * family reads the proof and its binding and may refuse it, never bind the call elsewhere.
  */
 export interface CallBinder {
   receiverOf(site: MemberCallSite): Promise<ReceiverProof>;
-  /** The method named `member` an instance of the class `type` has at compile time: its own, or the nearest class above it declares. */
-  memberOf(type: GraphSymbol, member: string): GraphSymbol | undefined;
+  /**
+   * The member a call of `member` written at `place` binds to on a value whose type is `type` (ADR-0041 decision 4): the one
+   * declaration the language's signature rule places, or the overload set's one implementation. `undefined` when the type
+   * offers several and the language singles none out, or when its source was not read.
+   */
+  memberOf(type: GraphSymbol, member: string, place: CallPlace): Promise<GraphSymbol | undefined>;
+  /**
+   * Every declaration of `member` that `type` and its hierarchy declare, as one group per declaring type in nearest-type
+   * order, each group sorted by `(file, startLine)`: the candidate set a cut names.
+   */
+  membersAbove(type: GraphSymbol, member: string): readonly GraphSymbol[];
   /** Whether `type`, or a type above it, declares `member`. */
   declares(type: GraphSymbol | undefined, member: GraphSymbol): boolean;
 }
@@ -92,9 +111,14 @@ export interface CallBinderDeps {
   proofs: () => Promise<ReceiverProofs>;
   /** Per local name a file's imports bind, the declaration the join proves it reaches. */
   importedDeclarations: (file: string) => Promise<ReadonlyMap<string, GraphSymbol>>;
+  /**
+   * The callable declarations of a file, with the one body an overload set has: the reading `memberOf` needs to collapse a
+   * structural language's overload set (ADR-0029's reader, already read by every family).
+   */
+  callablesIn: (file: string) => Promise<readonly DeclaredCallable[]>;
 }
 
-export function createCallBinder({ store, navigation, syntaxIn, proofs, importedDeclarations }: CallBinderDeps): CallBinder {
+export function createCallBinder({ store, navigation, syntaxIn, proofs, importedDeclarations, callablesIn }: CallBinderDeps): CallBinder {
   let read: Promise<{ held: ReceiverProofs; calls: ProvenCalls }> | undefined;
   const proven = () => (read ??= proofs().then((held) => ({ held, calls: provenCallsOf(held.memberUses, held.externalUses) })));
 
@@ -149,14 +173,35 @@ export function createCallBinder({ store, navigation, syntaxIn, proofs, imported
 
   const above = (type: GraphSymbol): GraphSymbol[] => [type, ...navigation.typesAround(type, "up").map((around) => around.type)];
 
+  /**
+   * A structural language's overload set's one implementation: the only body of `member` among the files that declare it,
+   * placed on the member the index holds there. Several bodies, or none, bind nothing: signatures are never guessed from
+   * arity. A nominal language has no such collapse — its overloads are distinct methods — so `memberOf` never asks this.
+   */
+  async function implementationOf(members: readonly GraphSymbol[], member: string): Promise<GraphSymbol | undefined> {
+    const files = [...new Set(members.map((symbol) => symbol.file))];
+    const bodies = await Promise.all(files.map(async (file) => (await callablesIn(file)).filter((callable) => callable.name === member && callable.body).map((callable) => ({ file, callable }))));
+    const found = bodies.flat();
+    if (found.length !== 1) return undefined;
+    const { file, callable } = found[0]!;
+    const placed = members.filter((symbol) => symbol.file === file && callable.start <= symbol.startLine && symbol.startLine <= callable.nameLine);
+    return placed.length === 1 ? placed[0] : undefined;
+  }
+
   return {
     receiverOf,
-    memberOf(type, member) {
-      for (const declaring of above(type).filter((candidate) => isClassKind(candidate.kind))) {
+    async memberOf(type, member) {
+      for (const declaring of above(type).filter((candidate) => isOwnerKind(candidate.kind))) {
         const own = navigation.methodsOf(declaring).filter((method) => method.name === member);
-        if (own.length > 0) return own.length === 1 ? own[0] : undefined;
+        if (own.length === 1) return own[0];
+        if (own.length > 1) return hasTyping(declaring.file, "structural") ? implementationOf(own, member) : undefined;
       }
       return undefined;
+    },
+    membersAbove(type, member) {
+      return above(type)
+        .filter((candidate) => isOwnerKind(candidate.kind))
+        .flatMap((candidate) => navigation.methodsOf(candidate).filter((method) => method.name === member).sort((a, b) => a.file.localeCompare(b.file) || a.startLine - b.startLine));
     },
     declares(type, member) {
       if (type === undefined) return false;
