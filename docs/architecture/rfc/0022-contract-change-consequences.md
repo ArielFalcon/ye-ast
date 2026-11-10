@@ -26,7 +26,10 @@ value reaches each one.
   non-null" and the answer states that assumption. Changes are data: a change is the set of values it introduces,
   normalized once per hypothesis (see "Change algebra"), never a code path per case.
 - **Chain.** Operation → qualified link → call site → flow steps → use. Each step carries its evidence and its path
-  rewrite. The chain is the provenance. A declared type is never provenance: `http.get<T>` is an unchecked assertion,
+  rewrite. The chain is the provenance. A call site the extraction reached by propagating a request through other
+  bodies starts at the issuing owned call, the innermost owned invocation whose expansion reaches the request, and the
+  call it was reached from stays in the chain beside it: a value is consumed where the request is issued, not where a
+  listener or a use case passed it on. A declared type is never provenance: `http.get<T>` is an unchecked assertion,
   and two declarations that share a type are not connected by it.
 - **Use.** An operation applied to the value at the property path, described as its steps past the changed segment and
   how it ends. Each concrete value standing for a class the change introduces is decided on its own: the guards it

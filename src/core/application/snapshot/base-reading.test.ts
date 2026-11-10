@@ -19,6 +19,7 @@ import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 const SHA: SnapshotRef = { repo: "shop", kind: "sha", sha: "a".repeat(40) };
 const LIVE: SnapshotRef = { repo: "shop", kind: "live", head: "h", stateId: "s" };
 const OUTPUTS = [{ kind: "node-modules" as const, at: "", path: "/host/node_modules" }];
+const SOURCES = [{ kind: "java-sources" as const, at: "target/generated-sources/openapi", path: "/host/generated" }];
 
 function typedOf(snapshot: SnapshotRef, answer: TypeBindingsAnswer, inputs: "read" | "fault" = "read") {
   const checkerInputs: RevisionSources = {
@@ -29,6 +30,45 @@ function typedOf(snapshot: SnapshotRef, answer: TypeBindingsAnswer, inputs: "rea
   const source = { tree: { export: { files: [], skipped: [] }, sources: [] }, prepared: undefined, store: {} as CodeGraphReader, snapshot, request: { repo: "/work/shop", buildOutputs: OUTPUTS } };
   return readings.of(source, {}).typed();
 }
+
+test("a declared generated-source directory never reaches the type bindings, and the node-modules declaration beside it does", async () => {
+  const asked: (readonly { kind: string }[])[] = [];
+  const checkerInputs: RevisionSources = {
+    resolve: async () => ({ ok: true, value: "a".repeat(40) }),
+    filesAt: async () => ({ ok: true, value: { files: [], cuts: [] } }),
+  };
+  const readings = createBaseReadings({
+    relations: {} as RelationExtractor,
+    typeBindings: { of: async (_sources, outputs) => { asked.push(outputs); return { status: "unused", outputs: [] }; } },
+    checkerInputs,
+  });
+  const source = { tree: { export: { files: [], skipped: [] }, sources: [] }, prepared: undefined, store: {} as CodeGraphReader, snapshot: SHA, request: { repo: "/work/shop", buildOutputs: [...OUTPUTS, ...SOURCES] } };
+
+  await readings.of(source, {}).typed();
+
+  assert.deepEqual(asked, [OUTPUTS]);
+});
+
+test("a reading that declares only generated sources answers as one that declares none, and node-modules alone answers byte-identically", async () => {
+  const asked: (readonly { kind: string }[])[] = [];
+  const checkerInputs: RevisionSources = {
+    resolve: async () => ({ ok: true, value: "a".repeat(40) }),
+    filesAt: async () => ({ ok: true, value: { files: [], cuts: [] } }),
+  };
+  const answer: TypeBindingsAnswer = { status: "unused", outputs: [{ kind: "node-modules", at: "", stale: [{ path: "kit" } as never] }] };
+  const readings = createBaseReadings({ relations: {} as RelationExtractor, typeBindings: { of: async (_sources, outputs) => (asked.push(outputs), answer) }, checkerInputs });
+  const readOf = (buildOutputs: readonly { kind: "node-modules" | "java-sources"; at: string; path: string }[] | undefined) =>
+    readings.of({ tree: { export: { files: [], skipped: [] }, sources: [] }, prepared: undefined, store: {} as CodeGraphReader, snapshot: SHA, request: { repo: "/work/shop", ...(buildOutputs === undefined ? {} : { buildOutputs }) } }, {}).typed();
+
+  const none = await readOf(undefined);
+  assert.deepEqual(none, { inputsLeftOut: [] });
+  assert.deepEqual(await readOf(SOURCES), none);
+  assert.deepEqual(asked, [], "a generated-sources-only declaration never reaches the checker");
+
+  const nodeModules = await readOf(OUTPUTS);
+  assert.deepEqual(await readOf([...OUTPUTS, ...SOURCES]), nodeModules);
+  assert.deepEqual(asked, [OUTPUTS, OUTPUTS], "node-modules alone is asked of the checker exactly as before");
+});
 
 test("the typed reading answers evidence and builds no cut, whatever kept it from reading the declared outputs", async () => {
   const answers: [SnapshotRef, TypeBindingsAnswer, ("read" | "fault")?][] = [

@@ -6,14 +6,14 @@ import { createMcpServer } from "../mcp/server.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import type { ProcessHost } from "./process-host.ts";
 import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
-import { nodeModulesDeclared, type DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
+import { javaSourcesDeclared, nodeModulesDeclared, type DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
 
-const USAGE = "usage: ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]...";
+const USAGE = "usage: ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]...";
 
 /**
- * `ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]...`: serves declared repositories
- * over stdio. Only the launch repository is warmed; each request retains its own trust check. A `--node-modules`
- * declares a build output of the launch repository (ADR-0037).
+ * `ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]...`:
+ * serves declared repositories over stdio. Only the launch repository is warmed; each request retains its own trust
+ * check. A `--node-modules` or `--java-sources` declares a build output of the launch repository (ADR-0037, ADR-0044).
  */
 export async function runMcp(args: readonly string[], host: ProcessHost): Promise<number> {
   let index = 0;
@@ -22,8 +22,9 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
   const outputs: DeclaredBuildOutput[] = [];
   while (index < args.length) {
     const flag = args[index++];
-    if (flag === "--node-modules") {
-      const declared = nodeModulesDeclared(args[index++] ?? "");
+    if (flag === "--node-modules" || flag === "--java-sources") {
+      const spec = args[index++] ?? "";
+      const declared = flag === "--node-modules" ? nodeModulesDeclared(spec) : javaSourcesDeclared(spec);
       if (declared === undefined) {
         host.err(USAGE);
         return EXIT_CODE.usage;

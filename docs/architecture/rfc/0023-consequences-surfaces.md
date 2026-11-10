@@ -184,6 +184,11 @@ Units 1 to 3 landed as designed, with these choices the design left open:
   open question 1.
 - A hypothesis `path` is the route as the workspace links it (with any context prefix the handler's route carries); a
   bare contract path no repository serves answers `unknown`.
+- A propagated request is consumed where it is issued (RFC-0022 "Chain"). The issuing calls of a link are every owned
+  placed call the propagated sites at the link's place reach for the asked operation. One issuing call starts the
+  carrier there, with the call the link was reached from as the second step of the chain. Several issuing calls start no
+  carrier: one `ambiguous-caller` frontier names each of them as a chain step, and the link's own call site is its
+  final place, so each link's frontier stays distinct when two roots reach the same implementations.
 
 ## Open questions
 

@@ -1211,3 +1211,35 @@ test("init with --node-modules registers the MCP server with that declaration, r
   const refused = setupInstall();
   assert.equal(await run(["init", "--trust", "untrusted", "--node-modules", "../up=/x", "/work/shop"], refused.io, refused.deps), EXIT_CODE.usage);
 });
+
+test("--java-sources declares a generated source directory for callers and impact, and a spec without an at is a usage error", async () => {
+  const at = "target/generated-sources/openapi";
+  const generated = "/host/generated-openapi";
+  const callers = setupCallers();
+  assert.equal(await run(["callers", "--java-sources", `${at}=${generated}`, ".", "src/A.ts:load"], callers.io, callers.deps), EXIT_CODE.ok);
+  assert.deepEqual(callers.requests[0]?.buildOutputs, [{ kind: "java-sources", at, path: generated }]);
+  const impact = setupImpact();
+  assert.equal(await run(["impact", "--base", "main", "--java-sources", `${at}=${generated}`, "."], impact.io, impact.deps), EXIT_CODE.ok);
+  assert.deepEqual(impact.requests[0]?.buildOutputs, [{ kind: "java-sources", at, path: generated }]);
+  for (const wrong of [generated, `=${generated}`, `${at}=`, `../up=${generated}`]) {
+    const refused = setupCallers();
+    assert.equal(await run(["callers", "--java-sources", wrong, ".", "src/A.ts:load"], refused.io, refused.deps), EXIT_CODE.usage, wrong);
+    assert.deepEqual(refused.requests, []);
+  }
+});
+
+test("init carries every declared output into the registration: node modules as given, then java sources sorted by at", async () => {
+  const { io, deps } = setupInstall();
+
+  assert.equal(await run(["init", "--trust", "untrusted", "--java-sources", "z/late=/host/late", "--node-modules", "web=/host/web/node_modules", "--java-sources", "a/early=/host/early", "/work/shop"], io, deps), EXIT_CODE.ok);
+
+  assert.ok(io.stdout.includes(`claude mcp add ye-ast -- npx --yes tsx ${MCP_ENTRYPOINT} mcp /work/shop --node-modules web=/host/web/node_modules --java-sources a/early=/host/early --java-sources z/late=/host/late`), io.stdout.join("\n"));
+});
+
+test("init prints node-modules declarations in the order the user gave them, as before java sources existed", async () => {
+  const { io, deps } = setupInstall();
+
+  assert.equal(await run(["init", "--trust", "untrusted", "--node-modules", "web=/host/web/node_modules", "--node-modules", "api=/host/api/node_modules", "/work/shop"], io, deps), EXIT_CODE.ok);
+
+  assert.ok(io.stdout.includes(`claude mcp add ye-ast -- npx --yes tsx ${MCP_ENTRYPOINT} mcp /work/shop --node-modules web=/host/web/node_modules --node-modules api=/host/api/node_modules`), io.stdout.join("\n"));
+});

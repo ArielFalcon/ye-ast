@@ -29,3 +29,13 @@ test("declared build outputs reach callers and impact as typed values, and a rel
     assert.throws(() => readCallers({ ...callers, buildOutputs: [wrong] }), InvalidParamsError, JSON.stringify(wrong));
   }
 });
+
+test("a java-sources declaration reaches callers with the directory it stands for, and a relative path or a missing at is refused", () => {
+  const callers = { repo: "/r", repoId: "r", revision: "HEAD", targets: [{ file: "a.ts", symbol: "f" }] };
+  const output = { kind: "java-sources", at: "target/generated-sources/openapi", path: "/host/generated" };
+
+  assert.deepEqual(readCallers({ ...callers, buildOutputs: [output] }).buildOutputs, [output]);
+  for (const wrong of [{ ...output, path: "generated" }, { ...output, at: "" }]) {
+    assert.throws(() => readCallers({ ...callers, buildOutputs: [wrong] }), InvalidParamsError, JSON.stringify(wrong));
+  }
+});

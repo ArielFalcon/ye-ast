@@ -172,7 +172,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
   async function typedReading({ request, snapshot, tree, prepared }: ReadingSource): Promise<TypedReading | "aborted"> {
     const bindings = deps.typeBindings;
     const inputs = deps.checkerInputs;
-    const outputs = request.buildOutputs ?? deps.declaredOutputs?.(request.repo) ?? [];
+    const outputs = (request.buildOutputs ?? deps.declaredOutputs?.(request.repo) ?? []).filter(({ kind }) => kind === "node-modules");
     if (bindings === undefined || inputs === undefined || outputs.length === 0) return NOT_TYPED;
     const { signal } = request;
     const unread = (reason: UnreadOutputReason, named?: ReadonlyMap<string, readonly string[]>): BuildOutputEvidence => ({ used: false, outputs, reason, ...(named === undefined ? {} : { named }) });
