@@ -20,6 +20,7 @@ export interface ExportStop {
   limit: number;
 }
 
+/** The paths a commit holds, and what a target's presence is decided from: an accepted file and a skipped entry both exist. */
 export interface CommitExport {
   /** Every regular file the export accepted, in git's order, whether it was written or not. */
   files: readonly ExportedFile[];

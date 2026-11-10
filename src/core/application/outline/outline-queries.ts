@@ -21,7 +21,7 @@ import type { DeclaredMemberNamesReader } from "../../ports/declared-member-name
 import { buildOutputCuts } from "../../domain/shared/build-outputs.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import { createBaseReadings, withOutputs, type BaseReadingDeps } from "../snapshot/base-reading.ts";
-import { snapshotFiles } from "../navigation/snapshot-files.ts";
+import { absentFileEntries, heldPaths, snapshotFiles } from "../navigation/snapshot-files.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 
 export interface OutlineQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, "typeBindings" | "checkerInputs" | "declaredOutputs"> {
@@ -56,6 +56,11 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
         const content = contentFingerprint(headTree.export);
         const outside = files.filter((file) => !head.selected(file));
         if (outside.length > 0) return { ok: true, value: { ...head.base(content), evidence: outside.map((path): Evidence => ({ path, line: 1 })), status: "unknown", reason: "out-of-scope" } };
+        const listing = heldPaths(headTree.export);
+        if (listing !== undefined) {
+          const absent = absentFileEntries(files, listing);
+          if (absent.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no file at the revision for ${absent.map((entry) => entry.file).join(", ")}`, entries: absent } };
+        }
         const asserted: Asserted = { kind: "local", files };
         const fixed = [...exportCuts(headTree.export), ...files.filter((file) => !isReadableFile(file)).map((file) => fileCut("no-extractor", file, "language"))];
         const covered = files.filter(isReadableFile);
@@ -70,7 +75,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
         if ("fault" in index) return { ok: false, fault: index.fault };
         const { store, summary } = index;
         try {
-          const held = new Set(headTree.export.files.map((file) => file.path));
+          const held = new Set(listing ?? headTree.export.files.map((file) => file.path));
           const snapshot = snapshotFiles(store, [...held]);
           const focused = focus === undefined ? undefined : readFocus(store, focus.filter(({ file }) => isReadableFile(file)), snapshot);
           const unknown = focused === undefined ? [] : snapshot.describe(focused.unknown);

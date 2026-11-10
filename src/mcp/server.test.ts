@@ -8,7 +8,7 @@ import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import { SCHEMA, type Cut, type Fact, type FactBase, type PartialFact, type Finding } from "../core/domain/shared/fact.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
-import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries, OfChangeFault } from "../core/ports/impact-queries.port.ts";
+import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries, OfChangeFault, UnknownSymbolFault } from "../core/ports/impact-queries.port.ts";
 import type { OutlineFault, OutlineQueries, OutlineRequest } from "../core/ports/outline-queries.port.ts";
 import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import type { TraceFault, TraceQueries, TraceRequest } from "../core/ports/trace-queries.port.ts";
@@ -244,7 +244,7 @@ interface Answers {
   map: (request: MapRequest) => Promise<Result<EntrypointMapFact, VcsFault | LiveFault>>;
   ofChange: (request: ImpactOfChangeRequest) => Promise<Result<Fact<ImpactValue>, OfChangeFault>>;
   callers: (request: ImpactCallersRequest) => Promise<Result<Fact<ImpactValue>, ImpactFault>>;
-  importers: (request: ImpactImportersRequest) => Promise<Result<Fact<ImportersValue>, VcsFault | LiveFault>>;
+  importers: (request: ImpactImportersRequest) => Promise<Result<Fact<ImportersValue>, OfChangeFault | UnknownSymbolFault>>;
   outline: (request: OutlineRequest) => Promise<Result<Fact<OutlineValue>, OutlineFault>>;
   trace: (request: TraceRequest) => Promise<Result<Fact<TraceValue>, TraceFault>>;
   outwardNames: (request: WorkspaceRequest) => Promise<Result<FactRead<WorkspaceValue>, WorkspaceFault>>;
@@ -2111,8 +2111,9 @@ test("an unknown-change-path fault names the globs that selected no changed path
 
 test("fault guidance names only the arguments of the tool that faulted", async () => {
   const unknownSymbol: ImpactFault = { kind: "unknown-symbol", detail: "no such symbol", entries: [{ file: "src/A.java", symbol: "gone", absent: false, candidates: ["A.used"] }] };
+  const absentFile: ImpactFault = { kind: "unknown-symbol", detail: "no file at the revision for src/gone.ts", entries: [{ file: "src/gone.ts", wholeFile: true, absent: true, candidates: ["src/held.ts"] }] };
   const unknownRevision = { kind: "unknown-revision" as const, detail: "does not resolve" };
-  const { session } = await setup({ outline: async () => ({ ok: false, fault: unknownSymbol }), callers: async () => ({ ok: false, fault: unknownSymbol }) });
+  const { session } = await setup({ outline: async () => ({ ok: false, fault: unknownSymbol }), callers: async () => ({ ok: false, fault: unknownSymbol }), importers: async () => ({ ok: false, fault: absentFile }) });
   const revisions = await setup({ outline: async () => ({ ok: false, fault: unknownRevision }), ofChange: async () => ({ ok: false, fault: unknownRevision }) });
   try {
     const outline = textOf(await session.callTool("ye_ast_outline", { focus: [{ file: "src/A.java", symbol: "gone" }] }));
@@ -2121,6 +2122,9 @@ test("fault guidance names only the arguments of the tool that faulted", async (
     const callers = textOf(await session.callTool("ye_ast_callers", { targets: [{ file: "src/A.java", symbol: "gone" }] }));
     assert.doesNotMatch(callers, /\bfocus\b/);
     assert.match(callers, /\btargets\b/);
+    const importers = textOf(await session.callTool("ye_ast_importers", { files: ["src/gone.ts"] }));
+    assert.doesNotMatch(importers, /\btargets\b|\bfocus\b/);
+    assert.match(importers, /as files:/);
     assert.doesNotMatch(stepOf(await revisions.session.callTool("ye_ast_outline", { files: ["src/A.java"], revision: "nope" })), /\b(base|head)\b/);
     assert.doesNotMatch(stepOf(await revisions.session.callTool("ye_ast_impact", { base: "nope" })), /\brevision\b/);
   } finally {

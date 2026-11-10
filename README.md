@@ -277,9 +277,9 @@ flowchart TD
 |---|---|---|
 | `ye_ast_entrypoints` | Find supported HTTP/UI routes, listeners and jobs | `revision`, `live`, `scope`, `mode`, `select`, `page`, `expect` |
 | `ye_ast_callers` | Find dependents and reached entrypoints for a declaration or line range | `targets`, `revision`, `live`, `scope`, `budget`, `workspace`, `offline`, `replay`, `mode`, `select`, `page`, `expect` |
-| `ye_ast_importers` | Investigate file moves, renames and export changes | `files`, `revision`, `live`, `scope`, `mode` |
+| `ye_ast_importers` | Investigate file moves, renames and export changes; a requested file no entry of the revision holds is a fault that names the snapshot paths and the index is never opened | `files`, `revision`, `live`, `scope`, `mode` |
 | `ye_ast_impact` | Investigate consequences of a diff | `base`, `head`, `live`, `changed`, `scope`, `budget`, `workspace`, `mode`, `select`, `page`, `expect` |
-| `ye_ast_outline` | Find declarations, spans and imports in selected files, members nested under their container; or focus on declarations by dotted path or line, each with what its body uses (declaration, package or global, with lines) | `files` or `focus`, `revision`, `live`, `scope`, `mode` |
+| `ye_ast_outline` | Find declarations, spans and imports in selected files, members nested under their container; or focus on declarations by dotted path or line, each with what its body uses (declaration, package or global, with lines); a requested file no entry of the revision holds is a fault, never an empty listing | `files` or `focus`, `revision`, `live`, `scope`, `mode` |
 | `ye_ast_trace` | Follow what declarations execute, in source order, with their HTTP, message and data effects and a reading plan of the spans to open; branches are not evaluated | `targets`, `revision`, `live`, `scope`, `budget` (`depth`, `expansions`), `workspace`, `offline`, `mode` |
 | `ye_ast_workspace` | Discover outward names and candidate local repositories | `repos`, `gateways`, `revision`, `live`, `offline`, `scope`, `mode` |
 | `ye_ast_decisions` | Find workspace configuration gaps and evidence-backed options | `repos`, `gateways`, `revision`, `live`, `offline`, `scope`, `mode` |
@@ -558,7 +558,7 @@ names the kind and whose `_meta["ye-ast/fault"]` holds `{ kind, detail, entries?
 | `git-failed`, `export-write-failed` | git or the snapshot export failed | Report the detail; do not retry in a loop |
 | `live-requires-trusted` | `live` used without a `trusted` declaration | Ask the user, or answer from a revision |
 | `unsupported-object-format`, `live-mirror-failed` | The live mirror could not be built or read | Answer from a revision; report the detail |
-| `unknown-symbol` | Nothing declares that symbol at that revision, or a line range covers no declaration and no code (past the end of the file, or only blank and comment lines) | The error lists the symbols each file declares; use one, or a line range inside a declaration (`ye_ast_outline` lists their spans) |
+| `unknown-symbol` | Nothing declares that symbol at that revision, a line range covers no declaration and no code (past the end of the file, or only blank and comment lines), or a requested file is no entry the revision holds | The error lists the symbols each file declares and, for a file the snapshot does not hold, the snapshot paths that could be asked instead; use one, or a line range inside a declaration (`ye_ast_outline` lists their spans) |
 | `unknown-change-path` | A `changed` glob selected no changed path | Correct the globs (`globs` lists the ones that matched nothing) |
 | `invalid-hypothesis`, `contradictory-revisions` | A `ye_ast_contract_consequences` hypothesis is malformed or unsupported (`index` names it), or the bound revision contradicts `head` | Fix that hypothesis, or bind the repository to `head`. An operation no repository serves is not a fault: it is an `unknown` answer |
 | `unknown-repository`, `ambiguous-repository` | `repo` is not a declared ID (or is declared twice); `available` lists the IDs | Use a declared ID, or update the host registration |
