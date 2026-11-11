@@ -7,7 +7,7 @@ import { resolve, supertypesOf } from "./java-declared-types.ts";
 import { enclosingType } from "./java-project.ts";
 import type { Hierarchy } from "./java-dispatch-targets.ts";
 import { scopeOf, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
-import { annotationUses, isScannedBean, type SpringAnnotations } from "./request-mapping.ts";
+import { annotationUses, isScannedBean, type SpringAnnotations, type AnnotationUse } from "./request-mapping.ts";
 import type { InvokedContract, Registration } from "./invoked-contracts.ts";
 
 function registered(type: TypeDecl, registration: Registration, annotations: SpringAnnotations): boolean {
@@ -47,7 +47,42 @@ export function callbacksOf(project: JavaProject, contracts: readonly InvokedCon
   const findings: Finding<FrameworkCallback>[] = [];
   const grouped = new Map<string, { value: FrameworkCallback; evidence: Evidence[] }>();
   for (const row of contracts) {
-    if (row.by !== "supertype") continue;
+    if (row.by === "annotation") {
+      const includes = (use: AnnotationUse, visiting: ReadonlySet<TypeDecl>): boolean => {
+        if (annotations.keyOf(use) === row.type) return true;
+        const declared = project.lookupType(use.name, use.scope);
+        if (typeof declared !== "object" || declared.kind !== "annotation" || visiting.has(declared)) return false;
+        const inner = new Set(visiting).add(declared);
+        return annotationUses(declared.node, scopeOf(declared)).some((meta) => includes(meta, inner));
+      };
+      for (const type of project.types) {
+        try {
+          const at = (node: TypeDecl["node"]) => ({ ...spanOf(type.file.path, node), via: row.type });
+          for (const use of annotationUses(type.node, scopeOf(type))) {
+            if (includes(use, new Set())) findings.push(unknown("no-extractor", [at(use.node)]));
+          }
+          for (const method of type.methods) {
+            for (const use of annotationUses(method.node, scopeOf(type))) {
+              if (!includes(use, new Set())) continue;
+              if (annotations.keyOf(use) !== row.type || !method.hasBody || type.kind !== "class" || type.isAbstract) {
+                findings.push(unknown("no-extractor", [at(use.node)]));
+              } else if (!registered(type, row.registration, annotations)) {
+                findings.push(unknown("no-extractor", [at(type.node)]));
+              } else {
+                const value: FrameworkCallback = { kind: "callback", name: callbackName(row.type), contract: { type: row.type }, handler: methodSite(method).handler };
+                const key = JSON.stringify(value);
+                const candidate = grouped.get(key) ?? { value, evidence: [] };
+                candidate.evidence.push(spanOf(type.file.path, use.node));
+                grouped.set(key, candidate);
+              }
+            }
+          }
+        } catch {
+          findings.push(unknown("unresolved", [spanOf(type.file.path, type.node)]));
+        }
+      }
+      continue;
+    }
     const simple = row.type.split(".").at(-1);
     for (const [type, names] of hierarchy.unsettledSupertypes) {
       if (!names.includes(simple ?? "")) continue;

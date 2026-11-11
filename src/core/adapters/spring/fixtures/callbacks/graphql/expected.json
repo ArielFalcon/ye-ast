@@ -1,0 +1,9 @@
+[
+  { "status": "complete", "kind": "callback", "name": "com.netflix.graphql.dgs.DgsData", "symbol": "Me.first", "path": "src/main/java/app/Example.java", "line": 5 },
+  { "status": "complete", "kind": "callback", "name": "com.netflix.graphql.dgs.DgsData", "symbol": "Me.second", "path": "src/main/java/app/Example.java", "line": 6 },
+  { "status": "unknown", "reason": "no-extractor" },
+  { "status": "unknown", "reason": "no-extractor" },
+  { "status": "unknown", "reason": "no-extractor" },
+  { "status": "unknown", "reason": "no-extractor" },
+  { "status": "unknown", "reason": "no-extractor" }
+]

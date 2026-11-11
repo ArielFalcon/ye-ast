@@ -392,7 +392,8 @@ Row S4 as built (`core/adapters/spring`, over `core/adapters/tree-sitter`):
     implementing class. An unresolved supertype or ambiguous member is `unknown/unresolved`; a missing body outside
     the repository or an implementation without a proven scanned bean is `unknown/no-extractor`. Factory-registered
     beans, XML beans and library auto-configuration are not proven by this reader. Anonymous and function-value
-    implementations are not yet detected.
+    implementations are not yet detected. DGS `@DgsData` methods on `@DgsComponent` classes are callbacks;
+    type-level uses, composed annotations, abstract methods and unproven registration remain `unknown/no-extractor`.
   - One `listener` per destination of `@KafkaListener` (`topics`), `@RabbitListener` (`queues`) and `@JmsListener`
     (`destination`), on a method or, for Kafka and Rabbit, on the class, whose handler is then the class that
     dispatches to its `@KafkaHandler` or `@RabbitHandler` methods; the containers `@KafkaListeners`,
@@ -472,7 +473,7 @@ Angular and of Java with Spring must be added solidly".
 
 | # | Question | Recommendation |
 |---|---|---|
-| 1 | v1 scope: TypeScript/JavaScript and Java (qayaba's declared scope), with Java marked partial? | Decided: v1 covers Angular on TypeScript and Spring on Java, both completely. The approach and the definition of done are [ADR-0014](../adr/0014-angular-and-spring-from-own-extractors.md); the design per gap is above. Java starts with no statement syntax, no decision syntax and no module syntax in qayaba (`decisions: null`, `statements: null` and no entry among the module syntaxes: qayaba@4105c582 `qa-engine/src/shared-kernel/language-id.ts:27,37-40`), which row S1 adds |
+| 1 | v1 scope: TypeScript/JavaScript and Java (qayaba's declared scope), with Java marked partial? | Decided: v1 covers Angular on TypeScript and Spring on Java, both completely. The DGS annotation row is admitted on one measured application with a conformance fixture; a second measured application is the trigger to retain it ([RFC-0026](0026-framework-invoked-entrypoints.md), resolved question 1). The approach and the definition of done are [ADR-0014](../adr/0014-angular-and-spring-from-own-extractors.md); the design per gap is above. Java starts with no statement syntax, no decision syntax and no module syntax in qayaba (`decisions: null`, `statements: null` and no entry among the module syntaxes: qayaba@4105c582 `qa-engine/src/shared-kernel/language-id.ts:27,37-40`), which row S1 adds |
 | 2 | Are plugins in-repo packages or separately published? | In-repo until a third party needs to publish one |
 
 

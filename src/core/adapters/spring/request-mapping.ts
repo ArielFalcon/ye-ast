@@ -113,6 +113,8 @@ const KNOWN: ReadonlySet<string> = new Set([
   ...VERBS.keys(),
   ...EXCHANGES,
   ALIAS_FOR,
+  "com.netflix.graphql.dgs.DgsData",
+  "com.netflix.graphql.dgs.DgsComponent",
   ...SCANNED_STEREOTYPES,
   ...FOREIGN_TYPE_ENDPOINTS,
   ...FOREIGN_METHOD_ENDPOINTS,

@@ -9,4 +9,5 @@ export const INVOKED_CONTRACTS: readonly InvokedContract[] = [
   { by: "supertype", type: "org.springframework.security.core.userdetails.UserDetailsService", member: { name: "loadUserByUsername", arity: 1 }, registration: "scanned-bean" },
   { by: "supertype", type: "jakarta.validation.ConstraintValidator", member: { name: "isValid", arity: 2 }, registration: "none" },
   { by: "supertype", type: "javax.validation.ConstraintValidator", member: { name: "isValid", arity: 2 }, registration: "none" },
+  { by: "annotation", type: "com.netflix.graphql.dgs.DgsData", registration: { annotation: "com.netflix.graphql.dgs.DgsComponent" } },
 ];

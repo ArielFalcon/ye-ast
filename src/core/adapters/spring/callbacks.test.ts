@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { createSpringRoutesExtractor } from "./spring-routes.adapter.ts";
 
-for (const name of ["security/bean-implements", "security/no-stereotype", "security/inherited-body", "security/wildcard-import", "security/same-simple-name", "validation/jakarta", "validation/javax", "validation/overloads"]) {
+for (const name of ["security/bean-implements", "security/no-stereotype", "security/inherited-body", "security/wildcard-import", "security/same-simple-name", "validation/jakarta", "validation/javax", "validation/overloads", "graphql"]) {
   test(`callback conformance: ${name}`, async () => {
     const dir = new URL(`./fixtures/callbacks/${name}/`, import.meta.url);
     const source = await readFile(new URL("Example.java", dir), "utf8");
@@ -12,6 +12,9 @@ for (const name of ["security/bean-implements", "security/no-stereotype", "secur
     const parser = await createJavaParser();
     const findings = (await createSpringRoutesExtractor(parser).extract([{ path: "src/main/java/app/Example.java", content: source }])).findings;
     const actual = findings.map((f) => f.status === "unknown" ? { status: f.status, reason: f.reason } : f.value.kind === "callback" ? { status: f.status, kind: f.value.kind, name: f.value.name, symbol: f.value.handler.symbol, path: f.value.handler.path, line: f.value.handler.line } : f);
+    if (name === "graphql") {
+      assert.deepEqual(findings.filter((f) => f.status === "unknown").map((f) => f.evidence[0]?.line), [8, 10, 12, 14, 16]);
+    }
     assert.deepEqual(actual, expected);
     if (name === "security/inherited-body") assert.deepEqual(findings[0]?.evidence.map((e) => e.line), [5, 6]);
     if (name === "validation/overloads") assert.deepEqual(findings[0]?.evidence.map((e) => e.line), [3, 4, 5]);
