@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { createSpringRoutesExtractor } from "./spring-routes.adapter.ts";
 
-for (const name of ["security/bean-implements", "security/no-stereotype", "security/inherited-body", "security/wildcard-import", "security/same-simple-name", "validation/jakarta", "validation/javax", "validation/overloads"]) {
+for (const name of ["security/bean-implements", "security/no-stereotype", "security/inherited-body", "security/wildcard-import", "security/same-simple-name", "validation/jakarta", "validation/javax", "validation/overloads", "security/lambda-bean", "validation/anonymous"]) {
   test(`callback conformance: ${name}`, async () => {
     const dir = new URL(`./fixtures/callbacks/${name}/`, import.meta.url);
     const source = await readFile(new URL("Example.java", dir), "utf8");
@@ -13,6 +13,12 @@ for (const name of ["security/bean-implements", "security/no-stereotype", "secur
     const findings = (await createSpringRoutesExtractor(parser).extract([{ path: "src/main/java/app/Example.java", content: source }])).findings;
     const actual = findings.map((f) => f.status === "unknown" ? { status: f.status, reason: f.reason } : f.value.kind === "callback" ? { status: f.status, kind: f.value.kind, name: f.value.name, symbol: f.value.handler.symbol, path: f.value.handler.path, line: f.value.handler.line } : f);
     assert.deepEqual(actual, expected);
+    if (name === "security/lambda-bean" || name === "validation/anonymous") {
+      const unknowns = findings.filter((f) => f.status === "unknown");
+      const via = name === "security/lambda-bean" ? "org.springframework.security.core.userdetails.UserDetailsService" : "jakarta.validation.ConstraintValidator";
+      const lines = name === "security/lambda-bean" ? [[10, 10], [11, 11]] : [[8, 10]];
+      assert.deepEqual(unknowns.map((f) => f.evidence.map(({ line, endLine, via: contract }) => [line, endLine, contract])), lines.map(([line, endLine]) => [[line, endLine, via]]));
+    }
     if (name === "security/inherited-body") assert.deepEqual(findings[0]?.evidence.map((e) => e.line), [5, 6]);
     if (name === "validation/overloads") assert.deepEqual(findings[0]?.evidence.map((e) => e.line), [3, 4, 5]);
     if (name === "security/wildcard-import") assert.ok(findings[0]?.evidence.some((e) => e.via === "org.springframework.security.core.userdetails.UserDetailsService"));
@@ -82,4 +88,20 @@ interface A extends ConstraintValidator<Object,Object> { default boolean isValid
 interface B extends ConstraintValidator<Object,Object> { default boolean isValid(Object v, Object c) { return false; } }
 class Test implements A, B {}` }])).findings;
   assert.deepEqual(findings.map((f) => f.status === "unknown" ? [f.reason, ...f.evidence.map((e) => e.line)] : f.status), [["unresolved", 5, 3, 4]]);
+});
+
+test("function values require the framework annotation and contract identities", async () => {
+  const parser = await createJavaParser();
+  const sources = [
+    { path: "app/Other.java", content: `package app;
+import org.springframework.security.core.userdetails.UserDetailsService;
+@interface Bean {}
+class Config { @Bean UserDetailsService fake() { return name -> null; } UserDetailsService ordinary() { return name -> null; } }` },
+    { path: "app/Shadow.java", content: `package app;
+import org.springframework.context.annotation.Bean;
+interface UserDetailsService {}
+class Shadow { @Bean UserDetailsService fake() { return name -> null; } }` },
+  ];
+  const findings = (await createSpringRoutesExtractor(parser).extract(sources)).findings;
+  assert.deepEqual(findings, []);
 });

@@ -36,7 +36,7 @@ export interface Hierarchy {
   invokedSupertypes: ReadonlyMap<string, readonly TypeDecl[]>;
   unsettledSupertypes: ReadonlyMap<TypeDecl, readonly string[]>;
   /** Anonymous and local classes, which the project does not place: the repository types they extend or implement and the unsettled names. */
-  unplaced: readonly { types: readonly TypeDecl[]; names: readonly string[]; fqns: readonly string[] }[];
+  unplaced: readonly { file: JavaFile; node: Node; types: readonly TypeDecl[]; names: readonly string[]; fqns: readonly string[] }[];
   /** Whether a source holds a lambda or a method reference, which implements a functional interface no declaration names. */
   functionValues: boolean;
   /** A method's parameter types as the strict reading settles them; `undefined` when one of them is not settled. */
@@ -330,7 +330,7 @@ export function readHierarchy(files: readonly JavaFile[], project: JavaProject):
   const superclasses = new Map<TypeDecl, Superclass>();
   const outside = new Set<TypeDecl>();
   const unsettled = new Set<string>();
-  const unplaced: { types: TypeDecl[]; names: string[]; fqns: string[] }[] = [];
+  const unplaced: { file: JavaFile; node: Node; types: TypeDecl[]; names: string[]; fqns: string[] }[] = [];
   const invokedSupertypes = new Map<string, TypeDecl[]>();
   const unsettledSupertypes = new Map<TypeDecl, string[]>();
   let functionValues = false;
@@ -356,7 +356,7 @@ export function readHierarchy(files: readonly JavaFile[], project: JavaProject):
           if (declared !== undefined && supertype.id === superclass?.id) superclasses.set(declared, type ?? "outside");
           if (declared !== undefined && type === undefined) outside.add(declared);
         }
-        if (declared === undefined) unplaced.push({ types, names, fqns });
+        if (declared === undefined) unplaced.push({ file, node, types, names, fqns });
         else {
           for (const fqn of fqns) {
             const holders = invokedSupertypes.get(fqn) ?? [];

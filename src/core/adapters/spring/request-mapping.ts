@@ -113,6 +113,7 @@ const KNOWN: ReadonlySet<string> = new Set([
   ...VERBS.keys(),
   ...EXCHANGES,
   ALIAS_FOR,
+  "org.springframework.context.annotation.Bean",
   ...SCANNED_STEREOTYPES,
   ...FOREIGN_TYPE_ENDPOINTS,
   ...FOREIGN_METHOD_ENDPOINTS,

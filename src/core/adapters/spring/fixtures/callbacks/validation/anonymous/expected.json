@@ -1,0 +1,4 @@
+[
+  { "status": "complete", "kind": "callback", "name": "jakarta.validation.ConstraintValidator.isValid", "symbol": "Validator.isValid", "path": "src/main/java/app/Example.java", "line": 4 },
+  { "status": "unknown", "reason": "no-extractor" }
+]
