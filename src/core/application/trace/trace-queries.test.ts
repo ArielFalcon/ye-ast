@@ -921,6 +921,12 @@ test("an entrypoint target roots at the handler of each map entrypoint of its ki
   assert.deepEqual(valueOf(fact).roots, [{ target: "http-route POST /orders", steps: [0] }]);
 });
 
+test("a callback target roots at its handler's line", async () => {
+  const finding = { status: "complete", value: { kind: "callback", name: "a.b.A", contract: { type: "a.b.A" }, handler: handlerAt(A, "Api.handle", 7) }, evidence: [{ path: A, line: 7 }] } as Finding<Entrypoint>;
+  const fact = await factOf({ nodes: API, edges: API_EDGES, findings: [finding] }, [{ kind: "callback", name: "a.b.A" } as TraceTarget]);
+  assert.deepEqual(valueOf(fact).steps.map((step) => [step.symbol, step.line]), [["handle", 7]]);
+});
+
 test("a UI route target roots at its component", async () => {
   const fact = await factOf({ nodes: API, edges: API_EDGES, findings: [page("/orders", handlerAt(A, "Api", 1))] }, [{ kind: "ui-route", name: "/orders" }]);
   assert.deepEqual(valueOf(fact).roots, [{ target: "ui-route /orders", steps: [0] }]);

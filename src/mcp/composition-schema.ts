@@ -52,6 +52,7 @@ const entryIdentity = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("ui-route"), path: z.string(), outlet: z.string().exactOptional(), component: z.union([ids.entity, z.literal("unknown")]) }),
   z.strictObject({ kind: z.literal("listener"), protocol: z.enum(["kafka", "rabbit", "jms", "event", "nats"]), destination: z.string(), handler: ids.entity }),
   z.strictObject({ kind: z.literal("job"), trigger: z.strictObject({ attribute: z.string(), value: z.string() }), handler: ids.entity }),
+  z.strictObject({ kind: z.literal("callback"), contract: z.strictObject({ type: z.string(), member: z.string().exactOptional() }), handler: ids.entity }),
 ]);
 const entityRecord = z.discriminatedUnion("kind", [
   z.strictObject({ id: ids.entity, kind: z.literal("declaration"), file: ids.file, anchors: z.array(ids.anchor).min(1), declarations: z.array(ids.part) }),

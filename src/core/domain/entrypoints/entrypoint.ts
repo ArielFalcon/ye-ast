@@ -19,4 +19,17 @@ export interface Job {
   handler: Handler;
 }
 
-export type Entrypoint = HttpRoute | UiRoute | Listener | Job;
+/** Code invoked by a framework through a library contract. */
+export interface FrameworkCallback {
+  kind: "callback";
+  name: string;
+  contract: { type: string; member?: string };
+  handler: Handler;
+}
+
+/** The fully qualified contract label, with its member when present. */
+export function callbackName(type: string, member?: string): string {
+  return member === undefined ? type : `${type}.${member}`;
+}
+
+export type Entrypoint = HttpRoute | UiRoute | Listener | Job | FrameworkCallback;

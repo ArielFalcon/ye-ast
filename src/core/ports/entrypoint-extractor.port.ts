@@ -18,7 +18,7 @@ export interface EntrypointExtraction {
 
 export interface EntrypointExtractor {
   /**
-   * Reads the entrypoints the in-scope sources declare: HTTP routes, UI routes, listeners and jobs. An entrypoint is a `complete`
+   * Reads the entrypoints the in-scope sources declare: HTTP routes, UI routes, listeners, jobs and callbacks. An entrypoint is a `complete`
    * finding; a construct the sources name but cannot resolve is an `unknown` finding with its location. Findings are
    * sorted by evidence location, then by kind and name, so the same sources give the same output.
    * `libraries` are the sources of repositories the files depend on: a listener the files inherit from a class they

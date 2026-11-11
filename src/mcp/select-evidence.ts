@@ -20,7 +20,7 @@ export type EvidenceSelection =
 export type EvidenceSource = { kind: "entrypoints"; fact: Fact<EntrypointMap> } | { kind: "local"; fact: Fact<ImpactValue> } | { kind: "workspace"; fact: Fact<WorkspaceImpactValue> };
 export type SourceRead = { owner: CutOwner; schema: SchemaVersion; snapshot: SnapshotRef; producer: Producer; inputs: FactInputs; analysis: Analysis };
 export type SourceSummary = Omit<SourceRead, "owner"> & { reads: readonly SourceRead[]; limits: readonly { owner: CutOwner; kind: Cut["kind"]; cuts: number; places: number; limit?: number }[] };
-export type EntrypointEvidenceIdentity = Pick<Extract<Entrypoint, { kind: "http-route" }>, "kind" | "name" | "method" | "path" | "version" | "handler"> | Pick<Extract<Entrypoint, { kind: "ui-route" }>, "kind" | "name" | "path" | "outlet" | "component"> | Pick<Extract<Entrypoint, { kind: "listener" }>, "kind" | "name" | "protocol" | "destination" | "handler"> | Pick<Extract<Entrypoint, { kind: "job" }>, "kind" | "name" | "trigger" | "handler">;
+export type EntrypointEvidenceIdentity = Pick<Extract<Entrypoint, { kind: "http-route" }>, "kind" | "name" | "method" | "path" | "version" | "handler"> | Pick<Extract<Entrypoint, { kind: "ui-route" }>, "kind" | "name" | "path" | "outlet" | "component"> | Pick<Extract<Entrypoint, { kind: "listener" }>, "kind" | "name" | "protocol" | "destination" | "handler"> | Pick<Extract<Entrypoint, { kind: "job" }>, "kind" | "name" | "trigger" | "handler"> | Pick<Extract<Entrypoint, { kind: "callback" }>, "kind" | "name" | "contract" | "handler">;
 export type HandlerOriginsContext = { owner: ImpactOwner; snapshot: SnapshotRef; handler: Handler; matchedEntrypointCount: number; interpretation: "recorded-origin-union" };
 export type ModuleOriginsContext = { owner: ImpactOwner; snapshot: SnapshotRef; module: Omit<ReachedModule, "origins">; originCount: number };
 export type EntrypointEvidenceContext = { findingIndex: number; section: Analysis; finding: { status: "complete"; identity: EntrypointEvidenceIdentity } | { status: "unknown"; reason: UnknownReason } };
@@ -75,6 +75,7 @@ function identity(entry: Entrypoint): EntrypointEvidenceIdentity {
     case "ui-route": return { kind: entry.kind, name: entry.name, path: entry.path, ...(entry.outlet === undefined ? {} : { outlet: entry.outlet }), component: entry.component };
     case "listener": return { kind: entry.kind, name: entry.name, protocol: entry.protocol, destination: entry.destination, handler: entry.handler };
     case "job": return { kind: entry.kind, name: entry.name, trigger: entry.trigger, handler: entry.handler };
+    case "callback": return { kind: entry.kind, name: entry.name, contract: entry.contract, handler: entry.handler };
   }
 }
 function validIndex(index: number): boolean { return Number.isSafeInteger(index) && index >= 0; }

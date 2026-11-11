@@ -11,6 +11,7 @@ import { cutLabel } from "./presentation-context.ts";
  * interpretation: every statement is a projection of the materialized tables.
  */
 import type { Cut, Evidence } from "../core/domain/shared/fact.ts";
+import { callbackName } from "../core/domain/entrypoints/entrypoint.ts";
 import type { BasePath, BasePathKeys } from "../core/domain/entrypoints/http-route.ts";
 import type { ResponseMode } from "./presentation.ts";
 import { shareExactContext } from "./presentation-sharing.ts";
@@ -457,6 +458,8 @@ class CompactView {
         return `listener ${entry.protocol} ${entry.destination}, handler ${this.anchor(entry.handler)}`;
       case "job":
         return `job ${entry.trigger.attribute}=${entry.trigger.value}, handler ${this.anchor(entry.handler)}`;
+      case "callback":
+        return `callback ${callbackName(entry.contract.type, entry.contract.member)}, handler ${this.anchor(entry.handler)}`;
     }
   }
 
@@ -851,7 +854,7 @@ function ownerText(owner: ReadOwner | CutOwner): string {
 
 /** `name: ` unless the name is exactly the method and path, path or destination the entry text already states. */
 function entryName(entry: EntryData): string {
-  const stated = entry.kind === "http-route" ? `${entry.method} ${entry.path}` : entry.kind === "ui-route" ? entry.path : entry.kind === "listener" ? entry.destination : undefined;
+  const stated = entry.kind === "http-route" ? `${entry.method} ${entry.path}` : entry.kind === "ui-route" ? entry.path : entry.kind === "listener" ? entry.destination : entry.kind === "callback" ? `${callbackName(entry.contract.type, entry.contract.member)}` : undefined;
   return entry.name === stated ? "" : `${entry.name}: `;
 }
 

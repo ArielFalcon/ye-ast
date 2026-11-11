@@ -739,6 +739,8 @@ function entryIdentity(entry: Extract<Part, { kind: "entrypoint" }>["entry"], ha
       return handler === undefined ? undefined : { kind: "listener", protocol: entry.protocol, destination: entry.destination, handler };
     case "job":
       return handler === undefined ? undefined : { kind: "job", trigger: entry.trigger, handler };
+    case "callback":
+      return handler === undefined ? undefined : { kind: "callback", contract: entry.contract, handler };
   }
 }
 

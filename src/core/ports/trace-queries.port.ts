@@ -15,7 +15,7 @@ export const TRACE_BOUND_FIELDS = ["depth", "expansions"] as const;
 export type TraceBudget = Pick<WalkBounds, (typeof TRACE_BOUND_FIELDS)[number]>;
 
 /** Every kind of entrypoint the map reads, in the map's own spelling. */
-export const ENTRYPOINT_KINDS = ["http-route", "ui-route", "listener", "job"] as const satisfies readonly Entrypoint["kind"][];
+export const ENTRYPOINT_KINDS = ["http-route", "ui-route", "listener", "job", "callback"] as const satisfies readonly Entrypoint["kind"][];
 
 /** An entrypoint of the map, by its kind and its name as the map spells it (`POST /orders`, `/orders/:id`). */
 export interface EntrypointTarget {

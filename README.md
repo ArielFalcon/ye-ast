@@ -264,7 +264,7 @@ A non-zero exit code is a query problem, not a registration problem: read [step 
 ```mermaid
 flowchart TD
     Q{"What are you about to do?"}
-    Q -->|"Orient in an unfamiliar repo,<br/>find a route/listener/job handler"| E["ye_ast_entrypoints"]
+    Q -->|"Orient in an unfamiliar repo,<br/>find a route/listener/job/callback handler"| E["ye_ast_entrypoints"]
     Q -->|"Change, move or delete<br/>a symbol or line range"| C["ye_ast_callers"]
     Q -->|"Move, rename or delete a file,<br/>or change its exports"| I["ye_ast_importers"]
     Q -->|"Follow what a declaration executes<br/>before reading the flow file by file"| T["ye_ast_trace"]
@@ -275,7 +275,7 @@ flowchart TD
 
 | Tool | Call it when | Key arguments |
 |---|---|---|
-| `ye_ast_entrypoints` | Find supported HTTP/UI routes, listeners and jobs | `revision`, `live`, `scope`, `mode`, `select`, `page`, `expect` |
+| `ye_ast_entrypoints` | Find supported HTTP/UI routes, listeners, jobs and callbacks | `revision`, `live`, `scope`, `mode`, `select`, `page`, `expect` |
 | `ye_ast_callers` | Find dependents and reached entrypoints for a declaration or line range | `targets`, `revision`, `live`, `scope`, `budget`, `workspace`, `offline`, `replay`, `mode`, `select`, `page`, `expect` |
 | `ye_ast_importers` | Investigate file moves, renames and export changes; a requested file no entry of the revision holds is a fault that names the snapshot paths and the index is never opened | `files`, `revision`, `live`, `scope`, `mode` |
 | `ye_ast_impact` | Investigate consequences of a diff | `base`, `head`, `live`, `changed`, `scope`, `budget`, `workspace`, `mode`, `select`, `page`, `expect` |

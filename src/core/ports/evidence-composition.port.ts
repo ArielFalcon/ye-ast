@@ -2,7 +2,7 @@
  * The contract of evidence composition (ADR-0038): the executed sources it reads, its identifiers, normalized tables,
  * the `Part` union, the evidence set, the materialized graph and its issues. No I/O and no behaviour.
  */
-import type { Entrypoint, Job, Listener } from "../domain/entrypoints/entrypoint.ts";
+import type { Entrypoint, FrameworkCallback, Job, Listener } from "../domain/entrypoints/entrypoint.ts";
 import type { BasePath, HttpMethod, HttpRoute } from "../domain/entrypoints/http-route.ts";
 import type { UiRoute } from "../domain/entrypoints/ui-route.ts";
 import type { SeedBasis } from "../domain/change/seeds.ts";
@@ -171,7 +171,8 @@ export type EntryData =
   | (Omit<HttpRoute, "handler" | "basePath"> & { handler: AnchorId; basePath: EvidenceFinding<BasePath> })
   | (Omit<UiRoute, "component"> & { component: AnchorId | "unknown" })
   | (Omit<Listener, "handler"> & { handler: AnchorId })
-  | (Omit<Job, "handler"> & { handler: AnchorId });
+  | (Omit<Job, "handler"> & { handler: AnchorId })
+  | (Omit<FrameworkCallback, "handler"> & { handler: AnchorId });
 
 export type ViaData = { target: SymbolNameRef; lines?: readonly number[]; basis: DependenceBasis };
 
@@ -318,7 +319,8 @@ export type EntryIdentity =
   | { kind: "http-route"; method: HttpMethod; path: string; version?: string; handler: EntityId }
   | { kind: "ui-route"; path: string; outlet?: string; component: EntityId | "unknown" }
   | { kind: "listener"; protocol: Listener["protocol"]; destination: string; handler: EntityId }
-  | { kind: "job"; trigger: Job["trigger"]; handler: EntityId };
+  | { kind: "job"; trigger: Job["trigger"]; handler: EntityId }
+  | { kind: "callback"; contract: { type: string; member?: string }; handler: EntityId };
 
 export type EntityRecord =
   | { id: EntityId; kind: "declaration"; file: FileId; anchors: readonly AnchorId[]; declarations: readonly PartId[] }

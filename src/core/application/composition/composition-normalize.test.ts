@@ -104,7 +104,8 @@ function rebuildEntry(t: Tables, part: PartOf<"entrypoint">): Entrypoint {
     case "http-route": return { ...entry, handler: t.handler(entry.handler), basePath: t.finding(entry.basePath) };
     case "ui-route": return { ...entry, component: entry.component === "unknown" ? "unknown" : t.handler(entry.component) };
     case "listener": return { ...entry, handler: t.handler(entry.handler) };
-    case "job": return { ...entry, handler: t.handler(entry.handler) };
+    case "job":
+    case "callback": return { ...entry, handler: t.handler(entry.handler) };
   }
 }
 

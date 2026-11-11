@@ -109,7 +109,7 @@ const changedOperation = {
   document: z.string(), line: int, parts: z.array(z.enum(["request", "response"])).exactOptional(),
 };
 const protocol = z.enum(["kafka", "rabbit", "jms", "event", "nats"]);
-export const entrypointKind = z.enum(["http-route", "ui-route", "listener", "job"]);
+export const entrypointKind = z.enum(["http-route", "ui-route", "listener", "job", "callback"]);
 const basePathKeys = z.strictObject({ contextPath: z.string().exactOptional(), servletPath: z.string().exactOptional(), webfluxBasePath: z.string().exactOptional() });
 const entryData = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -123,6 +123,7 @@ const entryData = z.discriminatedUnion("kind", [
   }),
   z.strictObject({ kind: z.literal("listener"), name: z.string(), protocol, destination: z.string(), handler: ids.anchor }),
   z.strictObject({ kind: z.literal("job"), name: z.string(), trigger: z.strictObject({ attribute: z.string(), value: z.string() }), handler: ids.anchor }),
+  z.strictObject({ kind: z.literal("callback"), name: z.string(), contract: z.strictObject({ type: z.string(), member: z.string().exactOptional() }), handler: ids.anchor }),
 ]);
 export const comparisonRef = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("available"), value: z.strictObject({ repo: z.string(), mergeBase: z.string(), head: ids.snapshot }) }),

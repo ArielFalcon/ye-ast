@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderEntrypointMap } from "./render.ts";
+import { TOOL_INPUTS } from "./query-schema.ts";
+import { entrypointKind } from "./composition-schema-parts.ts";
 import { validRecoveryControls } from "./evidence-schema.ts";
 
 const base = { schema: "0.12.0", snapshot: { repo: "shop", kind: "sha", sha: "a".repeat(40) }, producer: { name: "ye-ast", version: "1" }, inputs: { trust: "untrusted", scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "k", declaredConfig: {}, engines: {} }, evidence: [] };
@@ -67,4 +69,19 @@ test("an entrypoints row for a UI route prints the place its route entry is decl
   const text = render([uiRoute, httpRoute], "details");
   assert.match(text, /^  - ui-route \/orders -> src\/orders\.page\.ts:5 OrdersPage at src\/routes\.ts:12 \[findingIndex 0\]$/m);
   assert.match(text, /^  - http-route GET \/orders -> src\/orders\.ts:3 list \[findingIndex 1\]$/m);
+});
+
+test("callback rows render bare contract names and class handlers", () => {
+  const items = [
+    { status: "complete", evidence: [], value: { kind: "callback", name: "a.b.C.m", contract: { type: "a.b.C", member: "m" }, handler: { path: "src/A.java", line: 7, symbol: "A.run" } } },
+    { status: "complete", evidence: [], value: { kind: "callback", name: "a.b.A", contract: { type: "a.b.A" }, handler: { path: "src/B.java", line: 2, symbol: "B" } } },
+  ];
+  const text = render(items, "details");
+  assert.match(text, /^  - callback a\.b\.C\.m -> src\/A\.java:7 A\.run/m);
+  assert.match(text, /^  - callback a\.b\.A -> src\/B\.java:2 B/m);
+});
+
+test("published entrypoint kind accepts callbacks", () => {
+  assert.equal(entrypointKind.safeParse("callback").success, true);
+  assert.equal(TOOL_INPUTS.trace.safeParse({ targets: [{ kind: "callback", name: "a.b.C.m" }] }).success, true);
 });

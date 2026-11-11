@@ -171,6 +171,7 @@ export function selectedOutputFor(tool: Tool, deps: SelectedOutputDeps) {
     z.strictObject({kind:z.literal('ui-route'),name:z.string(),path:z.string(),outlet:z.string().optional(),component:z.union([handler,z.literal('unknown')])}),
     z.strictObject({kind:z.literal('listener'),name:z.string(),protocol:z.enum(['kafka','rabbit','jms','event','nats']),destination:z.string(),handler}),
     z.strictObject({kind:z.literal('job'),name:z.string(),trigger:z.strictObject({attribute:z.string(),value:z.string()}),handler}),
+    z.strictObject({kind:z.literal('callback'),name:z.string(),contract:z.strictObject({type:z.string(),member:z.string().optional()}),handler}),
   ]);
   const finding = z.discriminatedUnion('status', [z.strictObject({status:z.literal('complete'),identity}),z.strictObject({status:z.literal('unknown'),reason})]);
   const link = z.strictObject({id:z.string(),from:z.strictObject({repo:z.string(),file:z.string(),line:z.number(),symbol:z.string()}),to:z.strictObject({repo:z.string(),kind:z.enum(['http-route','ui-route','listener','job']),name:z.string(),handler}),transport:z.enum(['http','event']),basis:z.enum(['exact','base-path','suffix','event-destination','gateway-prefix','route-overlap']),profiles:z.array(z.string()).optional(),confidence:z.number()});

@@ -382,11 +382,11 @@ Row S4 as built (`core/adapters/spring`, over `core/adapters/tree-sitter`):
     of an application the sources do not tie to it. A file the parser rejects (a duplicate key, a malformed `\u` escape) is `unknown` with reason
     `source-unreadable` at its error. YAML is read with `yaml` 2.9.1, `.properties` as `java.util.Properties` does.
   - Not built: `spring.application.name`, gateway routes and client base URLs of the same row.
-- Row S7, as built for the entrypoints only. The `entrypoints` section holds `HttpRoute | Listener | Job` items told
+- Row S7, as built for the entrypoints only. The `entrypoints` section holds `HttpRoute | Listener | Job | Callback` items told
   apart by `kind`, each with the `name` of [RFC-0001](0001-architecture-and-layers.md): a route `METHOD path` with
   ` v<version>`, a listener `kafka <topic>`, `rabbit <queue>`, `jms <destination>` or `event <qualified type name>`, a
   job `scheduled <attribute>=<value>`. Listeners and jobs carry no base path. Findings at one location are ordered by
-  kind, then by name.
+  kind, then by name. The `callback` entrypoint kind is specified by RFC-0026; no callback producer is implemented yet.
   - One `listener` per destination of `@KafkaListener` (`topics`), `@RabbitListener` (`queues`) and `@JmsListener`
     (`destination`), on a method or, for Kafka and Rabbit, on the class, whose handler is then the class that
     dispatches to its `@KafkaHandler` or `@RabbitHandler` methods; the containers `@KafkaListeners`,

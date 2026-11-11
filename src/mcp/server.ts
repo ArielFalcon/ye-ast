@@ -55,7 +55,7 @@ export function instructionsFor(repository: McpDeps["repository"], available: re
   return `ye-ast: deterministic read-only code, Git and declared contract facts for ${repository.path} (id ${repository.repoId}). Use for dependencies/reach, not quality or approval. Reuse identical snapshot queries.
 
 When to call:
-- ye_ast_entrypoints: orient, or find the handler of a route, listener or job.
+- ye_ast_entrypoints: orient or find route, listener, job or callback handlers.
 - ye_ast_callers: declaration dependents and reaching entrypoints.
 - ye_ast_impact: diff dependents; added/removed/altered entrypoints.
 - ye_ast_importers: who imports or names a file.
@@ -229,7 +229,7 @@ const decision = z.looseObject({
   required: z.boolean(),
 });
 const entrypoint = z.discriminatedUnion("kind", [
-  z.looseObject({ kind: z.enum(["http-route", "listener", "job"]), name: z.string(), handler }),
+  z.looseObject({ kind: z.enum(["http-route", "listener", "job", "callback"]), name: z.string(), handler }),
   z.looseObject({ kind: z.literal("ui-route"), name: z.string(), component: z.union([handler, z.literal("unknown")]) }),
 ]);
 const finding = z.discriminatedUnion("status", [
@@ -605,7 +605,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_entrypoints",
     {
       title: "Entrypoints of a revision",
-      description: "Entrypoints with handler locations: HTTP/UI routes, listeners and jobs. A route reference the sources do not resolve is listed as unknown and as a cut. For dependents use callers; for diffs use impact.",
+      description: "Entrypoints with handler locations: HTTP/UI routes, listeners, jobs and callbacks. A route reference the sources do not resolve is listed as unknown and as a cut. For dependents use callers; for diffs use impact.",
       inputSchema: compactInput(TOOL_INPUTS.entrypoints),
       annotations,
     },

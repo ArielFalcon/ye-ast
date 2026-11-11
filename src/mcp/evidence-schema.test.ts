@@ -32,6 +32,12 @@ test('selected output requires concrete items and unavailable has no page', () =
   const common = { text: 'Selection', projectionSchema: 1, source, select: {kind:'entrypoint-evidence', findingIndex:0}, recovery: {status:'available'} };
   const available = { ...common, kind:'projection', availability:'available', context: {findingIndex:0, section:{status:'complete'}, finding:{status:'unknown',reason:'unresolved'}}, items:[{evidenceIndex:0,evidence:{path:'a',line:1}}], page:{limit:1,offset:0,returned:1,total:1} };
   assert.equal(schema.safeParse(available).success, true);
+  for (const contract of [{ type: 'a.b.C', member: 'run' }, { type: 'a.b.C' }]) {
+    const identity = { kind: 'callback', name: 'a.b.C.run', contract, handler: { path: 'callback.ts', symbol: 'Worker.run', line: 7 } };
+    const callback = { ...available, context: { ...available.context, finding: { status: 'complete', identity } } };
+    assert.equal(schema.safeParse(callback).success, true);
+    assert.equal(schema.safeParse({ ...callback, context: { ...callback.context, finding: { status: 'complete', identity: { ...identity, contract: {} } } } }).success, false);
+  }
   assert.equal(schema.safeParse({...available, items:[{evidenceIndex:0}]}).success, false);
   assert.equal(schema.safeParse({...common,kind:'projection',availability:'unavailable',reason:'unresolved',evidence:[]}).success, true);
   assert.equal(schema.safeParse({...common,kind:'projection',availability:'unavailable',evidence:[]}).success, false);

@@ -323,7 +323,8 @@ function entryData(b: Builder, read: ReadContext, entry: Entrypoint, pointer: st
       const { handler, ...rest } = entry;
       return { ...rest, handler: handlerOf(handler, "handler") };
     }
-    case "job": {
+    case "job":
+    case "callback": {
       const { handler, ...rest } = entry;
       return { ...rest, handler: handlerOf(handler, "handler") };
     }

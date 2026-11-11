@@ -167,7 +167,7 @@ const INPUT_CONSTRAINTS: Record<string, string> = {
   ye_ast_callers: "cc59bfb6e7d7192dc6f402b7b58ac5284addca3be01cb104ae9af036f81a6a16",
   ye_ast_importers: "741b3552da816fb505b0233d6dc90540a1718fd4d970edd245d7b14524914305",
   ye_ast_outline: "600966e8b24d42a72ff5fe5046cc5901c7d59f170c7fc5c4d07135100753660e",
-  ye_ast_trace: "0018c3e316361ad5a6e0b3d049ac2fa45f9329f4b908270acf95858627175086",
+  ye_ast_trace: "257aaa769d7f5f00ea6cdb85a7b061ded977729f53ca6eea07eb6040c3c7ad8e",
   ye_ast_workspace: "f31e2522a431e74895b431d8c65884b2d1288cd57f70afd9ac0433dd00699fbc",
   ye_ast_decisions: "f31e2522a431e74895b431d8c65884b2d1288cd57f70afd9ac0433dd00699fbc",
   ye_ast_contract_consequences: "ee5aff31b88d53260cbfb40c45e0c5578f6339d77202518fe4a955897b80baea",
