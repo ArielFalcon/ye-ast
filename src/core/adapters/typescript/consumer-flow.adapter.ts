@@ -13,7 +13,11 @@ import { declaredInput, memberSite, Walker, type Held } from "./consumer-flow.wa
  * through the snapshot's own imports, fields, `inject()` calls and constructor parameters.
  */
 export async function createConsumerFlowReader(files: readonly SourceFile[], repo: string): Promise<ConsumerFlowReader> {
-  const program = await buildProgram(files);
+  return consumerFlowReader(await buildProgram(files), repo);
+}
+
+/** Builds a flow reader over a program held by the repository reading. */
+export function consumerFlowReader(program: Program, repo: string): ConsumerFlowReader {
   return { follow: (carrier) => follow(program, repo, carrier) };
 }
 

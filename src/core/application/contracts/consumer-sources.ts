@@ -46,10 +46,8 @@ export interface ConsumerSourcesDeps {
   operation: WorkspaceReadOperation;
   heads: HeadReaderDeps;
   digest: Digest;
-  /** Reads the TypeScript sources of one repository and follows a value through them. */
-  flow(files: readonly SourceFile[], repo: string): Promise<ConsumerFlowReader>;
-  /** Reads the TypeScript sources of one repository and follows a request body back to what builds it. */
-  origins(files: readonly SourceFile[]): RequestOriginReader;
+  /** Readers sharing the preparation of one repository reading. */
+  consumerReaders(files: readonly SourceFile[], repo: string): Promise<{ flow: ConsumerFlowReader; origins: RequestOriginReader }>;
   metadata: AngularMetadataReader;
   templateFlow: TemplateFlowReader;
   /** The injection and template relations, fields and locals that let the callers of a function see calls made through `inject()`. */
@@ -198,8 +196,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             return {
               ok: true,
               value: {
-                flow: await deps.flow(sources, plan.at.repoId),
-                origins: deps.origins(sources),
+                ...await deps.consumerReaders(sources, plan.at.repoId),
                 templates: await createConsumerTemplateReader({ metadata: deps.metadata, flow: deps.templateFlow }, sources),
                 placedSites,
                 graph: indexed === "unavailable" ? undefined : indexed.store,

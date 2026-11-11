@@ -15,9 +15,9 @@ import { OriginWalker } from "./request-origins.walker.ts";
  * program, the request resolution and the walker's answers are held for as long as the reader is, which is the life of
  * the prepared workspace that holds it.
  */
-export function createRequestOriginReader(files: readonly SourceFile[]): RequestOriginReader {
+export function createRequestOriginReader(files: readonly SourceFile[], programOf: () => ReturnType<typeof buildProgram> = () => buildProgram(files), bodiesOf: typeof createRequestBodies = createRequestBodies): RequestOriginReader {
   let prepared: Promise<{ program: Awaited<ReturnType<typeof buildProgram>>; bodyOf: ReturnType<typeof createRequestBodies>; walker: OriginWalker; replacements: Origin[] }> | undefined;
-  const prepare = () => (prepared ??= buildProgram(files).then((program) => ({ program, bodyOf: createRequestBodies(files), walker: new OriginWalker(program), replacements: bodyReplacements(program) })));
+  const prepare = () => (prepared ??= programOf().then((program) => ({ program, bodyOf: bodiesOf(files), walker: new OriginWalker(program), replacements: bodyReplacements(program) })));
 
   return {
     async ofBody(site, path) {

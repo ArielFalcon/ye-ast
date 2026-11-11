@@ -100,13 +100,12 @@ function workbench(layout: { routes: Record<string, Entrypoint[]>; calls: Record
       producer: { name: "test", version: "0" },
     } as never,
     digest: { of: () => "d" },
-    flow: async (_files, repo) => {
+    consumerReaders: async (_files, repo) => {
       flowReads.push(repo);
-      return { follow: () => ({ uses: [], next: [], frontiers: [] }) };
+      return { flow: { follow: () => ({ uses: [], next: [], frontiers: [] }) }, origins: { ofBody: async () => [], ofArgument: async () => ({ kind: "omitted" }) } };
     },
     metadata: { read: async () => ({ classes: [] }) } as never,
     templateFlow: { follow: () => ({ uses: [], next: [], frontiers: [] }) },
-    origins: () => ({ ofBody: async () => [], ofArgument: async () => ({ kind: "omitted" }) }),
     relations: { extract: async () => assert.fail("the code graph is unavailable here") } as never,
     engines: {},
   });
@@ -321,10 +320,9 @@ function readingWorkbench(layout: ReadingLayout): { withWorkspace: Workbench["wi
       producer: { name: "test", version: "0" },
     } as never,
     digest: { of: () => "d" },
-    flow: async () => ({ follow: () => ({ uses: [], next: [], frontiers: [] }) }),
+    consumerReaders: async () => ({ flow: { follow: () => ({ uses: [], next: [], frontiers: [] }) }, origins: { ofBody: async () => [], ofArgument: async () => ({ kind: "omitted" }) } }),
     metadata: { read: async () => ({ classes: [] }) } as never,
     templateFlow: { follow: () => ({ uses: [], next: [], frontiers: [] }) },
-    origins: () => ({ ofBody: async () => [], ofArgument: async () => ({ kind: "omitted" }) }),
     relations,
     engines: {},
     importOrigins: () => importOrigins,
