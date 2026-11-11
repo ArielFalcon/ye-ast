@@ -403,8 +403,9 @@ const reading = extracted.value.readingCuts?.filter((cut) => cut.at[0] !== undef
 
 A finding's own span is where it is declared; a reference is never the reason a finding is kept or dropped. With an
 empty `include` and no `exclude`, `pathSelection` selects every path and both filters are the identity. `exportCuts`
-are **not** filtered: they describe the export, and the widened export adds only `isTypeScriptSource` paths, which are in
-map scope and readable, so no new export cut can appear.
+are **not** filtered: they describe the export. An added regular TypeScript source does not itself add a
+`no-extractor` cut, but a skipped path can add a `not-exported` cut and the wider reading can exhaust a host export
+budget earlier. Those cuts remain visible outside the caller's selection.
 
 ### Algorithm
 
@@ -647,9 +648,11 @@ narrowed answer `partial`.
   `exclude: ["src/app/owners/routes/**"]` reports nothing from that directory and no cut claims it was read.
 - **GREEN**: the two tests pass; the probes `repro/p2`, `p4`, `p5` name the selected routes with their full paths. The
   reading cuts are filtered with the same `selected` predicate as the findings (`cut.at[0]`), so an unresolved
-  `loadChildren` in a file the caller did not select never turns a narrowed answer `partial`. **No export cut can appear
-  from the widening**: it adds only `isTypeScriptSource` paths, which `isInMapScope` accepts (`entrypoint-map.ts:43`) and
-  `cutsCompleteness` classifies as readable, so `exportCuts` (`:96-110`) answers exactly what it answered before.
+  `loadChildren` in a file the caller did not select never turns a narrowed answer `partial`. The widening adds only
+  `isTypeScriptSource` paths, which `isInMapScope` accepts (`entrypoint-map.ts:43`) and
+  `cutsCompleteness` classifies as readable, so an added regular TypeScript source does not itself add a
+  `no-extractor` cut. An added path that the export skips can produce a `not-exported` cut, and a host export budget
+  can stop earlier during the wider reading. Export cuts remain visible even outside the caller's selection.
 - **Corpus gate**: `<entrypoints>:+` — the scoped answers gain routes; the reading cost rises for a narrowed Angular
   scope (see Risks).
 - **Docs**: RFC-0006 (what a narrowing `include` keeps out), RFC-0002 rule 4 (what completeness is relative to), and the
@@ -763,7 +766,7 @@ Against `engine-gaps/designs/review-entrypoints.md`, findings 1–9. Every line 
 | 7 | "tool text" claimed unchanged while U4 changes it | **Fixed.** The invariant now says the tool text gains one sentence in U4 and no schema changes. |
 | 8 | U3 says "the three tests pass" over two RED and two guards | **Fixed.** U3 now says the two RED tests pass and the two guards stay green. |
 | 10 | U1 duplicates the "is `@angular/core` external" rule | **Accepted as debt, fixed in U2.** `angular-routes.adapter.ts` repeats the flag `angular-metadata.adapter.ts:135-136` computes, because U1's fence forbids that adapter. The values agree today, so no answer differs; they could drift when U2 walks the projection. U2 extends its fence to `angular-metadata.extractor.ts` and consumes one exported `coreExternalOf` from both adapters. Passing the owner default instead would make the projection see modules the owner denies, a false graph U2 would turn into false routes. |
-| 9 | U5 leaves reading cuts from outside the selection, so a narrowed answer can be `partial` for a place never asked about | **Fixed.** U5 filters reading cuts with the same `selected` predicate by `cut.at[0]`, and states that no export cut can appear from the widening (`isInMapScope` accepts every widened path, `entrypoint-map.ts:43`). |
+| 9 | U5 leaves reading cuts from outside the selection, so a narrowed answer can be `partial` for a place never asked about | **Fixed.** U5 filters reading cuts with the same `selected` predicate by `cut.at[0]`. Export cuts remain unfiltered: added readable TypeScript sources do not themselves add `no-extractor` cuts, but skipped paths and host export budgets can add cuts during the wider reading. |
 
 Cross-draft seams this draft now states: `spring-routes.adapter.ts` (U4 lands first; RFC-0026 U3 returns
 `{ findings: [...callbacks], cuts: [] }`), the `entrypoints` fact's renderers (U4 adds no schema), and `include`

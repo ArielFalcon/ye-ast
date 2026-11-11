@@ -26,6 +26,10 @@ The manifest names no snapshot: the sha or `live` is a parameter of each call
 ([RFC-0001](0001-architecture-and-layers.md)). qayaba generates it from `config/apps/<app>.yaml` (its `services[]`,
 `openapi` hint and `boundaries[]`), one way.
 
+For an entrypoints map, `include` bounds the answer, while TypeScript sources outside it are also read as routing
+configuration; `exclude` still wins. An export budget applies to that wider reading and can produce a caller-budget
+cut outside the selected paths.
+
 Where the manifest and the profile come from follows the trust mode ([ADR-0010](../adr/0010-trust-modes.md)).
 Under `trusted` ye-ast honours the repository's own manifest. Under `untrusted` the manifest and the profile come from
 the host, never from the repository, so the repository cannot raise a limit.

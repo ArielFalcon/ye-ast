@@ -1,7 +1,7 @@
 import { isJvmBuildFile } from "./jvm-build.ts";
 import { isContractDocument } from "./openapi.ts";
 import { isSpringConfigFile } from "./spring-config.ts";
-import { isAngularWorkspace, isModuleConfigFile, isPackageManifest } from "./typescript.ts";
+import { isAngularWorkspace, isModuleConfigFile, isPackageManifest, isTypeScriptSource } from "./typescript.ts";
 
 /**
  * A file that interprets other files instead of declaring an entrypoint: the manifest that names a project's framework,
@@ -12,4 +12,8 @@ import { isAngularWorkspace, isModuleConfigFile, isPackageManifest } from "./typ
  */
 export function isExtractorConfiguration(path: string): boolean {
   return isPackageManifest(path) || isModuleConfigFile(path) || isAngularWorkspace(path) || isJvmBuildFile(path) || isSpringConfigFile(path) || isContractDocument(path);
+}
+
+export function isEntrypointReadingInput(path: string): boolean {
+  return isExtractorConfiguration(path) || isTypeScriptSource(path);
 }

@@ -143,7 +143,10 @@ names are settled in the first slice; the union, the cuts and the inputs are the
    content — the manifest that names a project's framework, the compiler configuration that resolves a module specifier,
    the JVM build file that declares a source generator, the Spring configuration that declares a base path, the contract
    document the code implements — is read whatever the scope selects, because without it an extractor cannot place what
-   it reads. `exclude` wins over both, and the export's content digest covers that configuration. A `callers` or
+   it reads. An entrypoints map also reads TypeScript sources outside a narrowing `include` to resolve route
+   configuration; findings and framework reading cuts remain bounded by the caller's selection. `exclude` wins over
+   both, and the export's content digest covers that reading. An export budget can stop this wider reading and its
+   caller-budget cut remains visible even outside the selection. A `callers` or
    `importers` request naming a target outside the declared scope is answered `unknown` with reason `out-of-scope` and
    evidence naming each such target (`path:line`, line 1 for a file or symbol, the range for a line range), with no
    partial answer for the others, even for a configuration file the export read; a file inside the scope in a language

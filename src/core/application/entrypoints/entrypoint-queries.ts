@@ -1,15 +1,16 @@
 import { buildEntrypointMap, contentFingerprint, declaredScope } from "../../domain/map/entrypoint-map.ts";
-import { isExtractorConfiguration } from "../../domain/languages/configuration.ts";
-import { exportSelection } from "../../domain/shared/scope.ts";
+import { isEntrypointReadingInput } from "../../domain/languages/configuration.ts";
+import { exportSelection, pathSelection, type PathSelection } from "../../domain/shared/scope.ts";
 import { liveScope } from "../../domain/snapshot/live-export.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { EntrypointQueries } from "../../ports/entrypoint-queries.port.ts";
-import type { EntrypointMapFact } from "../../domain/map/entrypoint-map.ts";
+import type { EntrypointMapFact, MapBase } from "../../domain/map/entrypoint-map.ts";
+import type { DeclaredScope } from "../../domain/shared/fact.ts";
 import type { LiveFault } from "../../ports/live-queries.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import type { VcsFault } from "../../ports/vcs.port.ts";
 import { asFault, openLive, type LiveDeps } from "../live/live-tree.ts";
-import { extractExport, factBaseOf, LIVE_REQUIRES_TRUSTED, trustOf, withScratch, type SnapshotReaderDeps } from "../snapshot/read-snapshot.ts";
+import { factBaseOf, LIVE_REQUIRES_TRUSTED, trustOf, withScratch, type CommitExtraction, type SnapshotReaderDeps } from "../snapshot/read-snapshot.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import { liveSnapshotReaders } from "../snapshot/live-snapshot.ts";
 
@@ -21,6 +22,16 @@ export interface EntrypointQueriesDeps extends SnapshotReaderDeps {
   live?: LiveDeps;
 }
 
+function mapReading(scope: DeclaredScope, matches: PathMatcher["matches"]): PathSelection {
+  return exportSelection(scope, matches, isEntrypointReadingInput);
+}
+
+function scopedMap(base: MapBase, extracted: CommitExtraction, selected: PathSelection): EntrypointMapFact {
+  const findings = extracted.findings.filter((finding) => finding.evidence[0] !== undefined && selected(finding.evidence[0].path));
+  const readingCuts = extracted.readingCuts.filter((cut) => cut.at[0] !== undefined && selected(cut.at[0]));
+  return buildEntrypointMap(base, findings, extracted.export, readingCuts);
+}
+
 export function createEntrypointQueries(deps: EntrypointQueriesDeps): EntrypointQueries {
   const { vcs } = deps;
 
@@ -30,7 +41,8 @@ export function createEntrypointQueries(deps: EntrypointQueriesDeps): Entrypoint
     const head = await vcs.resolveCommit(repo, "HEAD", signal);
     if (!head.ok) return head;
     const scope = liveScope(requested);
-    const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
+    const selected = pathSelection(scope, deps.matcher.matches);
+    const exported = mapReading(scope, deps.matcher.matches);
     const opened = await openLive(deps.live, { repo, scope, selected: exported, store: false, signal, onStale }, async (tree) => {
       const extracted = await liveSnapshotReaders(deps, { repo, scope, trust, root: tree.root, export: tree.export }).extract(signal);
       if (!extracted.ok) return extracted;
@@ -38,7 +50,7 @@ export function createEntrypointQueries(deps: EntrypointQueriesDeps): Entrypoint
         ...factBaseOf(deps, { repoId, sha: head.value, trust, scope, content: contentFingerprint(extracted.value.export), declaredConfig: {}, engines: deps.engines }),
         snapshot: { repo: repoId, kind: "live" as const, head: head.value, stateId: tree.stateId },
       };
-      const map: Result<EntrypointMapFact, VcsFault> = { ok: true, value: buildEntrypointMap(base, extracted.value.findings, extracted.value.export, extracted.value.readingCuts) };
+      const map: Result<EntrypointMapFact, VcsFault> = { ok: true, value: scopedMap(base, extracted.value, selected) };
       return map;
     });
     return opened.ok ? opened.value : { ok: false, fault: asFault(opened.fault) };
@@ -54,16 +66,17 @@ export function createEntrypointQueries(deps: EntrypointQueriesDeps): Entrypoint
 
       return withScratch(deps, async (readScope) => {
         const scope = declaredScope(requested);
-        const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
+        const selected = pathSelection(scope, deps.matcher.matches);
+        const exported = mapReading(scope, deps.matcher.matches);
         const trust = await trustOf(deps, repo);
         const prepared = await prepareCommit(deps, repo, sha, readScope, exported, { scope, trust }, signal);
         if (!prepared.ok) return prepared;
         const extracted = await prepared.value.extract(signal);
         if (!extracted.ok) return extracted;
-        const { export: mapExport, findings, readingCuts } = extracted.value;
+        const { export: mapExport } = extracted.value;
         const declaredConfig = deps.budget === undefined ? {} : { exportBudget: { maxEntries: deps.budget.maxEntries, maxBytes: deps.budget.maxBytes } };
         const base = factBaseOf(deps, { repoId, sha, trust, scope, content: contentFingerprint(mapExport), declaredConfig, engines: deps.engines });
-        return { ok: true, value: buildEntrypointMap(base, findings, mapExport, readingCuts) };
+        return { ok: true, value: scopedMap(base, extracted.value, selected) };
       });
     },
   };

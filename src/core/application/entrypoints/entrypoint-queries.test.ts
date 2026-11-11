@@ -193,6 +193,30 @@ test("an export stopped by the host's budget makes the section partial with a ca
   assert.deepEqual(readPaths, ["src/Orders.java"]);
 });
 
+test("a narrowed map preserves an export budget cut outside the selection and reads only written sources", async () => {
+  const selected = { path: "src/app/owners/routes.ts", blob: "b1" };
+  const context = { path: "src/app/pets/routes.ts", blob: "b2" };
+  const stopped = { path: "src/app/root.ts", blob: "b3" };
+  const { deps, readPaths } = setup({ files: [selected, context, stopped], stopped: { at: stopped.path, limit: 7 } });
+  const result = await createEntrypointQueries(deps).map({ ...REQUEST, scope: { include: ["src/app/owners/**"] } });
+
+  assert.ok(result.ok && result.value.status === "partial");
+  const section = result.value.value.entrypoints;
+  assert.ok(section.status === "partial");
+  assert.deepEqual(section.cuts, [{ kind: "caller-budget", at: [stopped.path], limit: 7, reason: "export-budget", reach: { kind: "anything" } }]);
+  assert.deepEqual(readPaths, [selected.path, context.path]);
+});
+
+test("a narrowed map preserves a skipped routing source cut outside the selection", async () => {
+  const skipped = "src/app/pets/link.ts";
+  const { deps } = setup({ skipped: [{ path: skipped, reason: "symlink" }] });
+  const result = await createEntrypointQueries(deps).map({ ...REQUEST, scope: { include: ["src/app/owners/**"] } });
+  assert.ok(result.ok);
+  const section = result.value.value.entrypoints;
+  assert.ok(section.status === "partial");
+  assert.ok(section.cuts.some((cut) => cut.kind === "not-exported" && cut.at[0] === skipped));
+});
+
 test("the export budget is a profile value of the fact: another budget is another config digest", async () => {
   async function configOf(budget: ExportBudget): Promise<string> {
     const result = await createEntrypointQueries(setup({ files: [ORDERS], budget }).deps).map(REQUEST);
@@ -585,6 +609,61 @@ test("an include reads the configuration that interprets the sources it selects,
     assert.ok(section.status === "complete");
     assert.deepEqual(section.value.map((item) => item.status), ["complete"]);
   }
+});
+
+test("a narrowed map reads routing context but reports only selected findings and reading cuts", async () => {
+  const owner = "src/app/owners/routes.ts";
+  const other = "src/app/pets/routes.ts";
+  const root = "src/app/app.routes.ts";
+  const files = [owner, other, root].map((path, index) => ({ path, blob: `b${index}` }));
+  const cut = (path: string): Cut => ({ kind: "unresolved-link", at: [path], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } });
+  const extract: EntrypointExtractor["extract"] = async (sources) => ({
+    findings: sources.some((file) => file.path === root) ? [
+      { ...route("/owners", 1), evidence: [{ path: owner, line: 1 }] },
+      { ...route("/pets", 1), evidence: [{ path: other, line: 1 }] },
+    ] : [],
+    readingCuts: [cut(other)],
+  });
+  const scope = { include: ["src/app/owners/**"] };
+  const live = fakeLive(Object.fromEntries(files.map(({ path, blob }) => [path, blob])), DIGEST);
+  const revision = await createEntrypointQueries(setup({ files, extract }).deps).map({ ...REQUEST, scope });
+  const current = await createEntrypointQueries(setup({ files, extract, live, trust: TRUSTED }).deps).map({ ...LIVE_REQUEST, scope });
+  for (const result of [revision, current]) {
+    assert.ok(result.ok);
+    const section = result.value.value.entrypoints;
+    assert.equal(section.status, "complete");
+    assert.deepEqual(entrypointsOf(result.value).map((item) => (item as HttpRoute).path), ["/owners"]);
+  }
+});
+
+test("a narrowed map never reads excluded TypeScript routing context", async () => {
+  const selected = { path: "src/app/owners/routes.ts", blob: "b1" };
+  const excluded = { path: "src/app/private/routes.ts", blob: "b2" };
+  const { deps, readPaths } = setup({ files: [selected, excluded] });
+  const result = await createEntrypointQueries(deps).map({ ...REQUEST, scope: { include: ["src/app/owners/**"], exclude: ["src/app/private/**"] } });
+  assert.ok(result.ok);
+  assert.deepEqual(readPaths, [selected.path]);
+});
+
+test("a map retains only located findings and reading cuts in scope without mutating extraction", async () => {
+  const inside = "src/app/owners/routes.ts";
+  const outside = "src/app/pets/routes.ts";
+  const findings = [
+    { ...route("/owners", 1), evidence: [{ path: inside, line: 1 }] },
+    { ...route("/pets", 1), evidence: [{ path: outside, line: 1 }] },
+    { ...route("/unknown", 1), evidence: [] },
+  ];
+  const cut = (at: string[]): Cut => ({ kind: "unresolved-link", at, reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } });
+  const cuts = [cut([inside]), cut([outside]), cut([])];
+  const original = structuredClone({ findings, cuts });
+  const { deps } = setup({ files: [{ path: inside, blob: "b1" }], extract: async () => ({ findings, readingCuts: cuts }) });
+  const result = await createEntrypointQueries(deps).map({ ...REQUEST, scope: { include: ["src/app/owners/**"] } });
+  assert.ok(result.ok);
+  const section = result.value.value.entrypoints;
+  assert.ok(section.status === "partial");
+  assert.deepEqual(section.cuts, [cuts[0]]);
+  assert.deepEqual(entrypointsOf(result.value).map((item) => (item as HttpRoute).path), ["/owners"]);
+  assert.deepEqual({ findings, cuts }, original);
 });
 
 test("an exclude leaves the configuration out, so the sources it interprets are unknown", async () => {
