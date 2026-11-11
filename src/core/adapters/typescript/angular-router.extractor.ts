@@ -2,7 +2,9 @@ import ts from "typescript";
 import { moduleShape, type ModuleShape, type RawSpan } from "./module-shape.ts";
 import { sourceTree } from "./source-tree.ts";
 import { hasModifier, propertyOf, unwrapped } from "./syntax.ts";
-import type { ImportedName, RouterVocabulary } from "../../ports/router-vocabulary.port.ts";
+import type { RouterVocabulary } from "../../ports/router-vocabulary.port.ts";
+import { importedNameOf } from "./imported-name.ts";
+import { declarationCounts } from "./syntax-names.ts";
 
 /** A value the loader resolves: a literal, or a reference to a constant (`RoutePath.Home`, or a plain identifier), with the module it is imported from when it is. */
 export type RawValue = { literal: string } | { ref: string; member?: string; module?: string; imported?: string } | { template: RawValue[] } | { opaque: true };
@@ -33,6 +35,8 @@ export interface RawChildRef {
 export interface RawEntry {
   line: number;
   endLine: number;
+  resolvers?: readonly { key: string; name?: string; member?: string; line: number; offset: number }[];
+  resolversUnreadable?: true;
   path?: RawValue;
   outlet?: RawValue;
   matcher: boolean;
@@ -65,6 +69,7 @@ export interface RawRouterConfig {
   kind: "root" | "child";
   line: number;
   endLine: number;
+  offset?: number;
   /** The class whose decorator `imports` operand holds the call: the only place Angular registers the configuration. */
   owner?: string;
   /** The array literal passed inline. */
@@ -79,6 +84,7 @@ export interface RawBootstrap {
   imported?: string;
   line: number;
   endLine: number;
+  offset?: number;
 }
 
 export interface RawRouteFile extends ModuleShape {
@@ -297,6 +303,25 @@ export function readAngularRouteFile(sf: ts.SourceFile, router?: RouterVocabular
       guards: guardsOfKeys(GUARD_KEYS),
       childGuards: guardsOfKeys([CHILD_GUARD_KEY]),
     };
+    const resolve = init("resolve");
+    if (resolve !== undefined && ts.isObjectLiteralExpression(resolve)) {
+      const resolverName = (property: ts.ObjectLiteralElementLike): string | undefined => {
+        if (property.name !== undefined && ts.isComputedPropertyName(property.name)) {
+          const value = unwrapped(property.name.expression);
+          return ts.isStringLiteralLike(value) || ts.isNumericLiteral(value) ? value.text : undefined;
+        }
+        return propName(property, sf);
+      };
+      if (resolve.properties.some((property) => resolverName(property) === undefined)) entry.resolversUnreadable = true;
+      entry.resolvers = resolve.properties.flatMap((property) => {
+        const key = resolverName(property);
+        if (key === undefined) return [];
+        const value = ts.isPropertyAssignment(property) ? property.initializer : ts.isShorthandPropertyAssignment(property) ? property.name : undefined;
+        const named = value !== undefined ? unwrapped(value) : undefined;
+        const namespace = named !== undefined && ts.isPropertyAccessExpression(named) && ts.isIdentifier(named.expression) ? named : undefined;
+        return [{ key, ...(named !== undefined && ts.isIdentifier(named) ? { name: named.text } : namespace !== undefined && ts.isIdentifier(namespace.expression) ? { name: namespace.expression.text, member: namespace.name.text } : {}), line: line(property.getStart(sf)), offset: property.getStart(sf) }];
+      });
+    } else if (resolve !== undefined) entry.resolversUnreadable = true;
     const component = init("component");
     const lazyComponent = init("loadComponent");
     if (component !== undefined) entry.component = componentOf(component);
@@ -366,14 +391,11 @@ export function readAngularRouteFile(sf: ts.SourceFile, router?: RouterVocabular
   };
   visit(sf, { name: "", exported: false });
   const routerConfigs: RawRouterConfig[] = [];
-  const importedNameOf = (expression: ts.Expression): ImportedName => {
-    const members: string[] = [];
-    let at = expression;
-    for (; ts.isPropertyAccessExpression(at); at = at.expression) members.unshift(at.name.text);
-    const binding = ts.isIdentifier(at) ? imports.get(at.text) : undefined;
-    return { ...(binding !== undefined ? { binding } : {}), members };
+  const declaredNames = declarationCounts(sf);
+  const routerKind = (call: ts.CallExpression): "root" | "child" | undefined => {
+    const name = importedNameOf(unwrapped(call.expression), imports, declaredNames);
+    return name === undefined ? undefined : router?.configurationOf(name);
   };
-  const routerKind = (call: ts.CallExpression): "root" | "child" | undefined => router?.configurationOf(importedNameOf(unwrapped(call.expression)));
   const bootstraps: RawBootstrap[] = [];
   /* `bootstrapModuleFactory(...)` is not matched: its argument is a factory, not a class. */
   const bootstrapOf = (call: ts.CallExpression): RawBootstrap | undefined => {
@@ -388,6 +410,7 @@ export function readAngularRouteFile(sf: ts.SourceFile, router?: RouterVocabular
       ...(bound !== undefined ? { module: bound.module, imported: bound.imported } : {}),
       line: line(call.getStart(sf)),
       endLine: line(call.end),
+      offset: call.getStart(sf),
     };
   };
   /* The `imports` operand of each decorator of a class: the one place a `forChild` call of its body is registered. */
@@ -414,7 +437,7 @@ export function readAngularRouteFile(sf: ts.SourceFile, router?: RouterVocabular
       const table = ts.isArrayLiteralExpression(b) ? tableOfNode.get(b) : undefined;
       const target = table !== undefined ? { table } : { ref: ts.isArrayLiteralExpression(b) ? { unresolved: true as const } : refOf(b) };
       const owner = configOwnerOf(node);
-      routerConfigs.push({ kind, line: line(node.getStart(sf)), endLine: line(node.end), ...(owner !== undefined ? { owner } : {}), ...target });
+      routerConfigs.push({ kind, line: line(node.getStart(sf)), endLine: line(node.end), offset: node.getStart(sf), ...(owner !== undefined ? { owner } : {}), ...target });
     }
     if (ts.isCallExpression(node)) {
       const boot = bootstrapOf(node);

@@ -355,7 +355,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     } });
     return measurement === undefined ? operationImpact : measuredImpact(operationImpact, measurement);
   } });
-  const consumerSources = composeConsumerSources({ operation, heads: headDeps, digest, engines: { ...headDeps.engines, ...impactDeps.angularEngines }, importOrigins, memberNames, modules: moduleReader, callSites: placedCallSites, ...(impactDeps.typeBindings === undefined ? {} : { typeBindings: impactDeps.typeBindings }), checkerInputs: createRevisionSources({ ...headDeps, sourceSelection: isTypeCheckerInput }), ...(options.buildOutputs === undefined ? {} : { declaredOutputs: options.buildOutputs }) });
+  const consumerSources = composeConsumerSources({ operation, heads: headDeps, digest, engines: { ...headDeps.engines, ...impactDeps.angularEngines }, importOrigins, memberNames, modules: moduleReader, callSites: placedCallSites, frameworks, ...(impactDeps.typeBindings === undefined ? {} : { typeBindings: impactDeps.typeBindings }), checkerInputs: createRevisionSources({ ...headDeps, sourceSelection: isTypeCheckerInput }), ...(options.buildOutputs === undefined ? {} : { declaredOutputs: options.buildOutputs }) });
   const bareContractConsequences = composeContractConsequences({ sources: consumerSources, heads: headDeps, contracts, javaParser });
   const contractConsequences = measurement === undefined ? bareContractConsequences : measuredContractConsequences(bareContractConsequences, measurement);
   const bareDecisions = createCapturedDecisionQueries({ operation, defaults, vcs, digest });

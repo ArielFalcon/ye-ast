@@ -1,4 +1,4 @@
-import { CUT_REASONS, CUT_SUB_REASONS } from "../core/domain/shared/fact.ts";
+import { CUT_REASONS, CUT_SUB_REASONS, UNKNOWN_REASONS } from "../core/domain/shared/fact.ts";
 import { dependencyDiagnostic } from "./dependency-schema.ts";
 import { z } from 'zod';
 import { RESULT_IDENTITY_PATTERN } from './evidence-cursor.ts';
@@ -7,7 +7,7 @@ import type { CrossField } from './compact-schema.ts';
 type Tool = 'entrypoints' | 'callers' | 'impact';
 const index = z.int().nonnegative();
 const positive = z.int().positive();
-const reason = z.enum(['no-extractor','no-project','out-of-scope','index-unavailable','source-unreadable','unresolved','revision-unavailable','deadline']);
+const reason = z.enum(UNKNOWN_REASONS);
 const cutKind = z.enum(['depth','hub','caller-budget','node-cap','unresolved-link','deadline','section','not-exported','no-extractor']);
 const text = z.string().min(1);
 const local = z.strictObject({kind: z.literal('local')});

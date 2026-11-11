@@ -7,7 +7,7 @@ import { dependencyDiagnostic } from "./dependency-schema.ts";
 import { z } from "zod";
 import { HTTP_METHODS } from "../core/domain/entrypoints/http-route.ts";
 import { CALL_SITE_CAUSES } from "../core/domain/topology/call-site.ts";
-import { CUT_REASONS, CUT_SUB_REASONS, TRUST_MODES, type DeclaredConfig } from "../core/domain/shared/fact.ts";
+import { CUT_REASONS, CUT_SUB_REASONS, TRUST_MODES, UNKNOWN_REASONS, type DeclaredConfig } from "../core/domain/shared/fact.ts";
 import type { Part } from "../core/ports/evidence-composition.port.ts";
 import { compositionIdSchema as idOf } from "./composition-id-schema.ts";
 
@@ -22,7 +22,7 @@ const count = z.int().min(0);
 const strings = z.array(z.string());
 const recordedCollectionState = z.discriminatedUnion("state", [z.strictObject({ state: z.literal("absent") }), z.strictObject({ state: z.literal("present"), count })]);
 
-export const unknownReason = z.enum(["no-extractor", "no-project", "out-of-scope", "index-unavailable", "source-unreadable", "unresolved", "revision-unavailable", "deadline"]);
+export const unknownReason = z.enum(UNKNOWN_REASONS);
 const cutReach = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("anything"), runtime: z.enum(["java", "typescript"]).exactOptional() }),
   z.strictObject({ kind: z.literal("callers-of"), declarations: strings }),

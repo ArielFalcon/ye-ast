@@ -180,6 +180,76 @@ test("each use gets its verdict, with the chain from the call site that proves i
   assert.equal(fact.status, "complete");
 });
 
+test("convergent cyclic flow derives each carrier and member lookup once while retaining both chains", async () => {
+  const target = { kind: "member" as const, repo: "web", file: "src/card.ts", owner: "Card", member: "order" };
+  const flow = {
+    [carrierKey(siteOf())]: { uses: [], next: [21, 22].map((line) => ({ carrier: { site: target, path: path("address") }, hops: [{ step: "assign" as const, evidence: { path: "src/page.ts", line } }] })), frontiers: [] },
+    [carrierKey(target)]: { uses: [use(30, { operation: READ })], next: [{ carrier: { site: siteOf(), path: path("address") }, hops: [] }], frontiers: [] },
+  };
+  const { ask, followed, session } = setup({ flow });
+  const memberOccurrences = session.memberOccurrences;
+  let memberReads = 0;
+  session.memberOccurrences = (site) => (memberReads++, memberOccurrences(site));
+
+  const fact = await ask();
+
+  const chains = fact.value.findings.flatMap((finding) => finding.status === "complete" ? [finding.value.chain.map((hop) => hop.evidence.line)] : []);
+  assert.deepEqual(chains.map((chain) => chain.includes(21) ? 21 : chain.includes(22) ? 22 : 0).sort(), [21, 22]);
+  assert.equal(followed.length, 2);
+  assert.equal(memberReads, 1);
+});
+
+test("convergent returns reuse caller lookup and retain both frontier chains", async () => {
+  const target = returnOf();
+  const flow = {
+    [carrierKey(siteOf())]: { uses: [], next: [21, 22].map((line) => ({ carrier: { site: target, path: path("address") }, hops: [{ step: "assign" as const, evidence: { path: "src/page.ts", line } }] })), frontiers: [] },
+  };
+  const { ask, asked, followed } = setup({ flow });
+  const fact = await ask();
+
+  const chains = fact.value.findings.flatMap((finding) => finding.status === "unknown" ? [finding.evidence.map((place) => place.line)] : []);
+  assert.deepEqual(chains.map((chain) => chain.includes(21) ? 21 : chain.includes(22) ? 22 : 0).sort(), [21, 22]);
+  assert.equal(followed.length, 2);
+  assert.deepEqual(asked, ["find"]);
+});
+
+test("the same site with different paths is derived separately for each link", async () => {
+  const target = { kind: "member" as const, repo: "web", file: "src/card.ts", owner: "Card", member: "order" };
+  const first = siteOf("src/first.ts");
+  const second = siteOf("src/second.ts");
+  const flow = {
+    [carrierKey(first)]: { uses: [], next: [{ carrier: { site: target, path: path("address") }, hops: [] }], frontiers: [] },
+    [carrierKey(second)]: { uses: [], next: [{ carrier: { site: target, path: path("address.city") }, hops: [] }], frontiers: [] },
+  };
+  const { ask, session, followed } = setup({ flow, links: [link({ file: first.file }), link({ file: second.file })] });
+  const follow = session.flow.follow;
+  session.flow.follow = (carrier) => carrier.site.kind === "member"
+    ? (followed.push(carrier), { uses: [use(carrier.path.length === 1 ? 30 : 31, { operation: READ })], next: [], frontiers: [] })
+    : follow(carrier);
+
+  const fact = await ask();
+
+  assert.deepEqual(fact.value.findings.flatMap((finding) => finding.status === "complete" ? [finding.evidence[0]!.line] : []).sort(), [30, 31]);
+  assert.equal(followed.filter((carrier) => carrier.site.kind === "member").length, 2);
+});
+
+test("distinct evidence for the same carrier survives into consequence findings", async () => {
+  const target = { kind: "member" as const, repo: "web", file: "src/card.ts", owner: "Card", member: "order" };
+  const flow = {
+    [carrierKey(siteOf())]: { uses: [], next: [21, 22].map((line) => ({ carrier: { site: target, path: path("address") }, hops: [], evidence: [{ path: "src/routes.ts", line }] })), frontiers: [] },
+    [carrierKey(target)]: { uses: [use(30, { operation: READ })], next: [], frontiers: [] },
+  };
+  const fact = await setup({ flow }).ask();
+  const lines = fact.value.findings.flatMap((finding) => finding.status === "complete" ? finding.evidence.filter((place) => place.path === "src/routes.ts").map((place) => place.line) : []);
+  assert.deepEqual(lines.sort(), [21, 22]);
+});
+
+test("a declared absent capability remains distinct in consequence findings", async () => {
+  const flow = { [carrierKey(siteOf())]: { uses: [], next: [], frontiers: [{ at: { path: "src/page.ts", line: 30 }, cause: "unmodelled-flow" as const, reason: "capability-absent" as const, hops: [] }] } };
+  const fact = await setup({ flow }).ask();
+  assert.ok(fact.value.findings.some((finding) => finding.status === "unknown" && finding.reason === "capability-absent"));
+});
+
 test("the answer echoes the normalized hypothesis and the old guarantee it assumed", async () => {
   const fact = await setup({ property: "[].address" }).ask();
 

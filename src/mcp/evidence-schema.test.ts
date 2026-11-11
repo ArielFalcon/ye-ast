@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { z } from 'zod';
+import { CAPABILITY_ABSENT } from '../core/domain/shared/fact.ts';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/server/validators/ajv';
 
 const validator = (schema: unknown) => new AjvJsonSchemaValidator().getValidator(schema as Parameters<AjvJsonSchemaValidator['getValidator']>[0]);
@@ -106,9 +107,10 @@ test('entrypoint identities retain UI component and unknown finding evidence in 
     {kind:'ui-route',name:'n',path:'/a',component:{path:'a',symbol:'C',line:3,endLine:5}},
     {kind:'job',name:'j',trigger:{attribute:'cron',value:'*'},handler:{path:'a',symbol:'h',line:1}},
   ];
-  const candidates = [value,...identities.map(identity => ({...value,context:{...value.context,finding:{status:'complete',identity}}})),{...value,items:[{evidenceIndex:0}]}];
-  for (const [i, candidate] of candidates.entries()) {
-    assert.equal(schema.safeParse(candidate).success,i < 4);
-    assert.equal(validate(candidate).valid,i < 4);
+  const accepted = [value,{...value,context:{...value.context,finding:{status:'unknown',reason:CAPABILITY_ABSENT}}},...identities.map(identity => ({...value,context:{...value.context,finding:{status:'complete',identity}}}))];
+  const cases = [...accepted.map(candidate => [candidate,true] as const),[{...value,items:[{evidenceIndex:0}]},false] as const];
+  for (const [candidate, expected] of cases) {
+    assert.equal(schema.safeParse(candidate).success,expected);
+    assert.equal(validate(candidate).valid,expected);
   }
 });

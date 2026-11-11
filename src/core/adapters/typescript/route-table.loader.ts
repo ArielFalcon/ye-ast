@@ -41,6 +41,7 @@ export interface RouteEntry {
   file: string;
   line: number;
   endLine: number;
+  resolvers?: RawEntry["resolvers"];
   /** The path as text; absent when the entry has none or the sources do not give it as text. */
   path?: string;
   matcher: boolean;
@@ -96,6 +97,8 @@ export interface LoadedRouteTables {
    * application boots, in file and line order.
    */
   roots: RouteTable[];
+  rootConfigurations: readonly { table: RouteTable; file: string; config: import("./angular-router.extractor.ts").RawRouterConfig }[];
+  bootstrapRoots: readonly { file: string; bootstrap: RawBootstrap; modules: ReadonlySet<string> }[];
   /** The sources configure the router, so a table no root reaches is not an entrypoint. */
   declared: boolean;
   /** With declared roots, the tables no root reaches. */
@@ -103,6 +106,7 @@ export interface LoadedRouteTables {
   unparsed: string[];
   /** Every `loadChildren`, `children`, spread and root configuration of the repository that does not come down to one table, sorted. */
   unresolvedReferences: UnresolvedReference[];
+  resolverIssues: UnresolvedReference[];
   /** The root configurations among them, with why each is unresolved. */
   unresolvedConfigurations: Array<UnresolvedReference & { reason: UnknownReason }>;
   /**
@@ -253,6 +257,7 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
   const nodes = new Map<RawTable, RouteTable>();
   const loads = new Map<RouteTable, Set<RouteTable>>();
   const unresolvedReferences = new Map<string, UnresolvedReference>();
+  const resolverIssues = new Map<string, UnresolvedReference>();
   const unresolvedModuleImports = new Map<string, UnresolvedModuleImport>();
   const noteUnresolved = (file: string, at: { line: number; endLine: number }): void => {
     unresolvedReferences.set(`${file}:${at.line}:${at.endLine}`, { path: file, line: at.line, endLine: at.endLine });
@@ -297,6 +302,7 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
   };
   /* One aggregate per module graph, memoized by class: its own `forChild` tables then its `imports`, depth first, each class and each array once. */
   const aggregates = new Map<string, RouteTable | undefined>();
+  const aggregateModules = new Map<RouteTable, ReadonlySet<string>>();
   const aggregating = new Set<string>();
   const aggregateOf = async (file: string, className: string): Promise<RouteTable | undefined> => {
     const key = `${file}\0${className}`;
@@ -363,6 +369,7 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
     if (!readable) return undefined;
     const node: RouteTable = { entries, conditional };
     loads.set(node, new Set(held));
+    aggregateModules.set(node, visitedClasses);
     return node;
   };
   /* The aggregate a module class answers; an empty one is a reading gap, never "no routes beneath". */
@@ -435,10 +442,12 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
       const outlet = entry.outlet === undefined ? undefined : await textOf(file, raw, entry.outlet);
       const own = await guardsOf(file, raw, entry.guards);
       const beneath = await guardsOf(file, raw, entry.childGuards);
+      if (entry.resolversUnreadable === true || entry.resolvers?.some((one) => one.name === undefined) === true) resolverIssues.set(`${file}:${entry.line}:${entry.endLine}`, { path: file, line: entry.line, endLine: entry.endLine });
       const built: RouteEntry = {
         file,
         line: entry.line,
         endLine: entry.endLine,
+        ...(entry.resolvers === undefined ? {} : { resolvers: entry.resolvers }),
         ...(path !== undefined ? { path } : {}),
         matcher: entry.matcher,
         redirect: entry.redirect,
@@ -479,6 +488,8 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
     for (const table of raw.tables) built.push(await tableNode(table, file, raw));
   }
   const declaredRoots: RouteTable[] = [];
+  const rootConfigurations: { table: RouteTable; file: string; config: import("./angular-router.extractor.ts").RawRouterConfig }[] = [];
+  const bootstrapRoots: { file: string; bootstrap: RawBootstrap; modules: ReadonlySet<string> }[] = [];
   const heldRoots = new Set<RouteTable>();
   const seed = (table: RouteTable): void => {
     if (heldRoots.has(table)) return;
@@ -494,13 +505,14 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
       if (resolution === undefined || !("table" in resolution)) {
         noteUnresolved(file, config);
         unresolvedConfigurations.push({ path: file, line: config.line, endLine: config.endLine, reason: config.ref?.reason ?? "unresolved" });
-      } else seed(resolution.table);
+      } else { seed(resolution.table); rootConfigurations.push({ table: resolution.table, file, config }); }
     }
     for (const boot of raw.bootstraps) {
       const root = await bootstrapModuleOf(file, boot);
       if (root === undefined) continue;
       declared = true;
       seed(root);
+      bootstrapRoots.push({ file, bootstrap: boot, modules: aggregateModules.get(root) ?? new Set() });
     }
   }
   const roots = declared ? declaredRoots : [];
@@ -513,10 +525,13 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
   for (const root of roots) reach(root);
   return {
     roots,
+    rootConfigurations,
+    bootstrapRoots,
     declared,
     unreached: declared ? built.filter((table) => !reached.has(table)) : built,
     unparsed,
     unresolvedReferences: [...unresolvedReferences.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.line - b.line)),
+    resolverIssues: [...resolverIssues.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.line - b.line)),
     unresolvedConfigurations,
     unresolvedModuleImports: [...unresolvedModuleImports.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.line - b.line)),
   };

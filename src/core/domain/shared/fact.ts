@@ -130,15 +130,9 @@ export function declarationSpan(line: number, endLine: number | undefined): { en
   return endLine === undefined || endLine === line ? {} : { endLine };
 }
 
-export type UnknownReason =
-  | "no-extractor"
-  | "no-project"
-  | "out-of-scope"
-  | "index-unavailable"
-  | "source-unreadable"
-  | "unresolved"
-  | "revision-unavailable"
-  | "deadline";
+export const CAPABILITY_ABSENT = "capability-absent";
+export const UNKNOWN_REASONS = ["no-extractor", CAPABILITY_ABSENT, "no-project", "out-of-scope", "index-unavailable", "source-unreadable", "unresolved", "revision-unavailable", "deadline"] as const;
+export type UnknownReason = (typeof UNKNOWN_REASONS)[number];
 
 export const DEPENDENCY_SELECTION_REASONS = ["ambiguous", "unproven-coordinates"] as const;
 
@@ -149,9 +143,6 @@ export type ExportSkipReason = (typeof EXPORT_SKIP_REASONS)[number];
 /** Why a dispatch port could not name the bodies a call runs, when it says; the dispatch port owns the vocabulary. */
 const DISPATCH_UNKNOWN_REASONS = ["aspect may replace the body", "generated implementation", "dispatch not proven"] as const;
 export type DispatchUnknownReason = (typeof DISPATCH_UNKNOWN_REASONS)[number];
-
-/** A stage the language pack of the site's file declares it cannot implement (ADR-0045 decision 12). */
-export const CAPABILITY_ABSENT = "capability-absent";
 
 /** Why a cut exists: one member per emitter situation (ADR-0042 decision 1). */
 export const CUT_REASONS = [

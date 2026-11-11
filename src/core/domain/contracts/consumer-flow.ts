@@ -109,6 +109,7 @@ export interface FlowUse {
 export interface FlowNext {
   carrier: Carrier;
   hops: readonly Hop[];
+  evidence?: readonly Evidence[];
   /** Where the value comes back when the method it enters returns it and no graph edge knows the call: the template expression that called a component method. */
   returnsTo?: Extract<CarrierSite, { kind: "template-call-result" }>;
 }

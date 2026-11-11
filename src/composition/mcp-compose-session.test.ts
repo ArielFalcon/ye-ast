@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
-import { entrypointsValue, factOf, inputsOf, outlineValue } from "../core/application/composition/composition-fixtures.testing.ts";
-import type { Cut, Fact } from "../core/domain/shared/fact.ts";
+import { entrypointsValue, factOf, inputsOf, outlineValue, unknownFactOf } from "../core/application/composition/composition-fixtures.testing.ts";
+import { CAPABILITY_ABSENT, type Cut, type Fact } from "../core/domain/shared/fact.ts";
 import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import type { EntrypointMapFact } from "../core/domain/map/entrypoint-map.ts";
 import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
@@ -37,6 +37,18 @@ async function setup(outline: OutlineQueries["outline"] = async () => ({ ok: tru
 
 const focusFact = (value: OutlineValue, cuts?: [Cut]): Fact<OutlineValue> =>
   factOf(value, { inputs: inputsOf({ declaredConfig: { focus: ["src/Api.ts:get"] } }), ...(cuts === undefined ? {} : { cuts }) });
+
+test("compose preserves declared capability absence as distinct from no extractor", async () => {
+  for (const reason of [CAPABILITY_ABSENT, "no-extractor"] as const) {
+    const { session } = await setup(async () => ({ ok: true, value: unknownFactOf<OutlineValue>(reason) }));
+    try {
+      const result = await session.callTool("ye_ast_compose", { queries: [{ name: "ye_ast_outline", arguments: { files: ["src/a.ts"] } }], mode: "full" });
+      assert.notEqual(result.isError, true, textOf(result));
+      const fields = resultFields(result) as { coverage: { unknowns: { reason: string }[] } };
+      assert.deepEqual(fields.coverage.unknowns.map((unknown) => unknown.reason), [reason]);
+    } finally { await session.close(); }
+  }
+});
 
 test("compose records an outline focus read whole, as the outline tool answers it", async () => {
   const value: OutlineValue = {

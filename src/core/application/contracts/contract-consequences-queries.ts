@@ -46,6 +46,8 @@ interface Pending {
   chain: readonly Hop[];
   link: Link;
   entries: readonly Entry[];
+  trail?: readonly string[];
+  evidence?: readonly Evidence[];
 }
 
 const located = (evidence: Evidence, repo: string): RepositoryEvidence => ({ ...evidence, repo });
@@ -170,18 +172,35 @@ async function consequencesOf(session: ConsumerSession, selected: CallSelection,
   let silent = 0;
 
   const seen = new Map<string, AccessPath>();
+  const seenChains = new Set<string>();
+  const flows = new Map<string, FlowResult>();
+  const members = new Map<string, ReturnType<ConsumerSession["memberOccurrences"]>>();
+  const callers = new Map<string, ReturnType<ConsumerSession["callers"]>>();
+  const readCallers: ConsumerSession["callers"] = (declaration) => {
+    const key = canonicalJson(declaration);
+    const found = callers.get(key) ?? session.callers(declaration);
+    callers.set(key, found);
+    return found;
+  };
   for (let index = 0; index < queue.length; index++) {
-    const { carrier, chain, link, entries } = queue[index]!;
+    const { carrier, chain, link, entries, trail = [], evidence: carried = [] } = queue[index]!;
     const repo = link.from.repo;
     const key = `${link.id}\0${carrierKey(carrier.site)}\0${canonicalJson(entries)}`;
     const before = seen.get(key);
-    if (before !== undefined) {
-      if (relatePaths(before, carrier.path) !== "exact") findings.push(frontierItem({ at: placeOf(carrier, chain), cause: "path-conflict", reason: "unresolved", hops: [] }, chain, repo));
+    if (before !== undefined && relatePaths(before, carrier.path) !== "exact") {
+      findings.push(frontierItem({ at: placeOf(carrier, chain), cause: "path-conflict", reason: "unresolved", hops: [] }, chain, repo, carried));
       continue;
     }
+    if (trail.includes(key)) continue;
+    const chainKey = `${key}\0${canonicalJson([chain, carried])}`;
+    if (seenChains.has(chainKey)) continue;
+    seenChains.add(chainKey);
     seen.set(key, carrier.path);
+    const nextTrail = [...trail, key];
 
-    const result = read(session, carrier);
+    const flowKey = canonicalJson(carrier);
+    const result = flows.get(flowKey) ?? read(session, carrier);
+    flows.set(flowKey, result);
     for (const use of result.uses) {
       const verdict = decideUse(use, hypothesis.change);
       if (verdict === undefined) continue;
@@ -189,7 +208,7 @@ async function consequencesOf(session: ConsumerSession, selected: CallSelection,
         silent++;
         continue;
       }
-      const evidence = [use.site, ...(verdict.kind === "admits" ? verdict.guards.map((guard) => guard.evidence) : [])].map((place) => located(place, repo));
+      const evidence = [use.site, ...(verdict.kind === "admits" ? verdict.guards.map((guard) => guard.evidence) : []), ...carried].map((place) => located(place, repo));
       const value: UseConsequence = {
         repo,
         link: linkOf(link),
@@ -201,21 +220,24 @@ async function consequencesOf(session: ConsumerSession, selected: CallSelection,
       };
       findings.push({ status: "complete", evidence, value });
     }
-    for (const frontier of result.frontiers) findings.push(frontierItem(frontier, chain, repo));
+    for (const frontier of result.frontiers) findings.push(frontierItem(frontier, chain, repo, carried));
     for (const next of result.next) {
       const entered = entriesAfter(carrier, next, entries);
-      if (entered === "recursion") findings.push(frontierItem({ at: next.hops.at(-1)?.evidence ?? placeOf(carrier, chain), cause: "unmodelled-flow", reason: "unresolved", detail: "recursion", hops: [] }, chain, repo));
-      else queue.push({ carrier: next.carrier, chain: [...chain, ...next.hops], link, entries: entered });
+      if (entered === "recursion") findings.push(frontierItem({ at: next.hops.at(-1)?.evidence ?? placeOf(carrier, chain), cause: "unmodelled-flow", reason: "unresolved", detail: "recursion", hops: [] }, chain, repo, [...carried, ...(next.evidence ?? [])]));
+      else queue.push({ carrier: next.carrier, chain: [...chain, ...next.hops], link, entries: entered, trail: nextTrail, evidence: [...carried, ...(next.evidence ?? [])] });
     }
     if (carrier.site.kind === "member") {
-      const readers = readersOfMember(session, carrier.site, carrier.path, chain);
-      for (const frontier of readers.frontiers) findings.push(frontierItem(frontier, chain, repo));
-      queue.push(...readers.next.map((next) => ({ ...next, link })));
+      const memberKey = canonicalJson(carrier.site);
+      const found = members.get(memberKey) ?? session.memberOccurrences(carrier.site);
+      members.set(memberKey, found);
+      const readers = readersOfMember(found, carrier.site, carrier.path, chain);
+      for (const frontier of readers.frontiers) findings.push(frontierItem(frontier, chain, repo, carried));
+      queue.push(...readers.next.map((next) => ({ ...next, link, trail: nextTrail, evidence: carried })));
     }
     if (carrier.site.kind === "return") {
-      const returned = returnsOf(session, carrier.site, carrier.path, chain, entries, result);
-      for (const frontier of returned.frontiers) findings.push(frontierItem(frontier, chain, repo));
-      queue.push(...returned.next.map((next) => ({ ...next, link })));
+      const returned = returnsOf(readCallers, carrier.site, carrier.path, chain, entries, result);
+      for (const frontier of returned.frontiers) findings.push(frontierItem(frontier, chain, repo, carried));
+      queue.push(...returned.next.map((next) => ({ ...next, link, trail: nextTrail, evidence: carried })));
     }
   }
 
@@ -410,9 +432,8 @@ function read(session: ConsumerSession, carrier: Carrier): FlowResult {
  * The places outside the declaring class that read a member holding the value. The reads in a template are the template
  * reader's; one through any receiver the graph did not resolve is lost, since two instances of a class share no field.
  */
-function readersOfMember(session: ConsumerSession, site: Extract<CarrierSite, { kind: "member" }>, path: AccessPath, chain: readonly Hop[]): { next: Omit<Pending, "link">[]; frontiers: FlowFrontier[] } {
+function readersOfMember(found: ReturnType<ConsumerSession["memberOccurrences"]>, site: Extract<CarrierSite, { kind: "member" }>, path: AccessPath, chain: readonly Hop[]): { next: Omit<Pending, "link">[]; frontiers: FlowFrontier[] } {
   const declaration = { path: site.file, line: site.line ?? 1 };
-  const found = session.memberOccurrences(site);
   if (found.kind === "unavailable") return { next: [], frontiers: [{ at: declaration, cause: "graph-unavailable", reason: "index-unavailable", detail: "member-readers", hops: [] }] };
   if (found.kind === "unresolved") return { next: [], frontiers: [{ at: declaration, cause: "unresolved-caller", reason: "unresolved", detail: "member-readers", hops: [] }] };
   const next: Omit<Pending, "link">[] = [];
@@ -429,7 +450,7 @@ function readersOfMember(session: ConsumerSession, site: Extract<CarrierSite, { 
  * Where a value goes when its function returns it. A value that entered the function through an argument leaves at the
  * result of that very call; any other return continues at the places that depend on the function, each occurrence on its own.
  */
-function returnsOf(session: ConsumerSession, site: Extract<CarrierSite, { kind: "return" }>, path: AccessPath, chain: readonly Hop[], entries: readonly Entry[], flowed: FlowResult): { next: Omit<Pending, "link">[]; frontiers: FlowFrontier[] } {
+function returnsOf(callers: ConsumerSession["callers"], site: Extract<CarrierSite, { kind: "return" }>, path: AccessPath, chain: readonly Hop[], entries: readonly Entry[], flowed: FlowResult): { next: Omit<Pending, "link">[]; frontiers: FlowFrontier[] } {
   const declaration = { path: site.file, line: site.line };
   const entry = entries.at(-1);
   if (entry?.returnsTo !== undefined) {
@@ -441,7 +462,7 @@ function returnsOf(session: ConsumerSession, site: Extract<CarrierSite, { kind: 
     const call = { kind: "call-result" as const, repo: entry.repo, file: entry.at.path, line: entry.at.line, callee: site.symbol };
     return { next: [{ carrier: { site: call, path }, chain: [...chain, { step: "caller", evidence: { path: entry.at.path, line: entry.at.line } }], entries: entries.slice(0, -1) }], frontiers: [] };
   }
-  const found = session.callers(site);
+  const found = callers(site);
   if (found.kind === "unavailable") return { next: [], frontiers: [{ at: declaration, cause: "graph-unavailable", reason: "index-unavailable", hops: [] }] };
   if (found.kind === "unresolved") return { next: [], frontiers: [{ at: declaration, cause: "unresolved-caller", reason: "unresolved", hops: [] }] };
   if (found.callers.length === 0) return { next: [], frontiers: flowed.next.length > 0 ? [] : [{ at: declaration, cause: "no-caller", reason: "unresolved", hops: [] }] };
@@ -481,18 +502,18 @@ function entriesAfter({ site }: Carrier, { carrier, hops, returnsTo }: FlowNext,
   return entries.some((held) => canonicalJson(held) === canonicalJson(entry)) ? "recursion" : [...entries, entry];
 }
 
-function frontierItem(frontier: FlowFrontier, chain: readonly Hop[], repo: string): ConsequenceFinding<UseConsequence> {
+function frontierItem(frontier: FlowFrontier, chain: readonly Hop[], repo: string, evidence: readonly Evidence[] = []): ConsequenceFinding<UseConsequence> {
   const via = frontier.detail === undefined ? frontier.cause : `${frontier.cause}:${frontier.detail}`;
-  return { status: "unknown", reason: frontier.reason, evidence: chainEvidence([...chain, ...frontier.hops], { ...frontier.at, via }, repo) };
+  return { status: "unknown", reason: frontier.reason, evidence: chainEvidence([...chain, ...frontier.hops], { ...frontier.at, via }, repo, evidence) };
 }
 
 /**
  * The places a chain passed through on its way to `at`, which stays last: each place once, at its last pass, with the
  * label a pass gave it; two different labels at one place stay apart.
  */
-function chainEvidence(hops: readonly Hop[], at: Evidence, repo: string): RepositoryEvidence[] {
+function chainEvidence(hops: readonly Hop[], at: Evidence, repo: string, evidence: readonly Evidence[] = []): RepositoryEvidence[] {
   const places: RepositoryEvidence[] = [];
-  for (const place of [...hops.map((hop) => hop.evidence), at].map((evidence) => located(evidence, repo))) {
+  for (const place of [...hops.map((hop) => hop.evidence), ...evidence, at].map((place) => located(place, repo))) {
     const earlier = places.findIndex((kept) => samePlace(kept, place) && (kept.via === undefined || place.via === undefined || kept.via === place.via));
     const via = place.via ?? (earlier === -1 ? undefined : places[earlier]!.via);
     if (earlier !== -1) places.splice(earlier, 1);

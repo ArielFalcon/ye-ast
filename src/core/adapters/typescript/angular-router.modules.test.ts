@@ -38,7 +38,7 @@ test("the class a bootstrapModule call boots is read, and bootstrapModuleFactory
     "import { AppModule } from './app.module';\nplatformBrowserDynamic().bootstrapModule(AppModule);\nplatformBrowserDynamic().bootstrapModuleFactory(factory);",
   );
 
-  assert.deepEqual(raw?.bootstraps, [{ className: "AppModule", module: "./app.module", imported: "AppModule", line: 2, endLine: 2 }]);
+  assert.deepEqual(raw?.bootstraps, [{ className: "AppModule", module: "./app.module", imported: "AppModule", line: 2, endLine: 2, offset: 42 }]);
 });
 
 test("the module composition is projected from the Angular metadata reading, never re-read", () => {

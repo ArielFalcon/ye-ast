@@ -1,11 +1,12 @@
 import { createAngularPlugin } from "../core/adapters/frameworks/angular/angular.plugin.ts";
 import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
+import { createAngularConsumerSyntax } from "../core/adapters/typescript/angular-consumer-syntax.ts";
 import type { EntrypointExtraction, SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
 import type { FrameworkPlugin } from "../core/ports/framework-plugin.port.ts";
 
 /** Every framework plugin, each over the readers of its language it wraps: the one place a plugin is registered. */
 export function composeFrameworkPlugins(): readonly FrameworkPlugin[] {
-  return [createAngularPlugin({ routes: createAngularRoutesExtractor })];
+  return [createAngularPlugin({ routes: createAngularRoutesExtractor, consumer: createAngularConsumerSyntax })];
 }
 
 /** The entrypoints every plugin that reads them contributes, in registration order; the caller sorts the union. */

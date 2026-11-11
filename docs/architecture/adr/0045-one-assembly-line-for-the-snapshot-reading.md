@@ -409,6 +409,12 @@ retention silently becomes a per-call cost.
       explicit `unknown` with both as evidence, never a choice by registration order. A second framework of a
       language enters as one plugin with its signal, its stages and its conformance fixtures, including one where it
       shares files with the first; the line, the packs and the families stay unedited.
+    - **Consumer continuation delivery.** The registered framework collection also prepares consumer contributions over
+      the TypeScript reading held by the paired flow and origin readers. Angular resolves inputs and route continuations
+      through a bounded projection of those same source trees. Route configurations retain their own bootstrap and table
+      provenance; an unproved association or unread setting is a frontier. Claims are compared only for the same carrier
+      occurrence and root context, while independent destinations remain branches. The corpus comparison for this unit
+      is pending integration.
     - **Adding a language** is one pack, one profile, its registration in composition and in the profile list of
       `domain/languages`, and the conformance fixtures of each stage it implements (ADR-0013, RFC-0007 Conformance). The
       line, `navigation` and every family stay unedited. Two limits are stated, not hidden: the index (B0) covers a

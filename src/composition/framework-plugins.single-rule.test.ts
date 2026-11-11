@@ -12,8 +12,10 @@ const REGISTRY = "composition/framework-plugins.ts";
 /** Each word of a framework's vocabulary, with its one owner, the plugin (ADR-0045 decision 12); `pending` only shrinks. */
 const VOCABULARY: readonly { concept: string; pattern: RegExp; pending: readonly string[] }[] = [
   { concept: "the Angular router's package", pattern: /["']@angular\/router["']/, pending: ["core/adapters/typescript/angular-projects.ts"] },
-  { concept: "the Angular router's configuration calls", pattern: /["'](?:RouterModule\.)?(?:provideRouter|forRoot|forChild)["']/, pending: ["core/adapters/typescript/consumer-flow.index.ts"] },
-  { concept: "the Angular router's module", pattern: /["']RouterModule["']/, pending: ["core/adapters/typescript/consumer-flow.index.ts"] },
+  { concept: "the Angular router's configuration calls", pattern: /["'](?:RouterModule\.)?(?:provideRouter|forRoot|forChild)["']/, pending: [] },
+  { concept: "the Angular router's module", pattern: /["']RouterModule["']/, pending: [] },
+  { concept: "the Angular router's input binding feature", pattern: /["'](?:withComponentInputBinding|bindToComponentInputs)["']/, pending: [] },
+  { concept: "the Angular route data holder", pattern: /["']ActivatedRoute["']/, pending: [] },
 ];
 
 function sourceFiles(directory: string): string[] {
@@ -42,4 +44,5 @@ test("framework code is imported only by the registry: never by a language adapt
 
 test("a reader a plugin wraps is built only by the registry", () => {
   assert.deepEqual(holders(ALL.filter(isProduction), /\bcreateAngularRoutesExtractor\b/), [REGISTRY, "core/adapters/typescript/angular-routes.adapter.ts"].sort());
+  assert.deepEqual(holders(ALL.filter(isProduction), /\bcreateAngularConsumerSyntax\b/), [REGISTRY, "core/adapters/typescript/angular-consumer-syntax.ts"].sort());
 });

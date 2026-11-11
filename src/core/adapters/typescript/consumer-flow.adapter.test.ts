@@ -4,7 +4,8 @@ import { formatAccessPath, parseAccessPath } from "../../domain/contracts/access
 import { siteLine, type Carrier, type CarrierSite, type FlowResult } from "../../domain/contracts/consumer-flow.ts";
 import type { Predicate } from "../../domain/contracts/use-operation.ts";
 import type { Guard } from "../../domain/contracts/verdict.ts";
-import { createConsumerFlowReader } from "./consumer-flow.adapter.ts";
+import { consumerFlowReader } from "./consumer-flow.adapter.ts";
+import { buildProgram } from "./consumer-flow.index.ts";
 
 const COMMON = "import { HttpClient } from '@angular/common/http'\nimport { map, tap, switchMap, catchError } from 'rxjs'\nimport { firstValueFrom, of } from 'rxjs'\nimport { toSignal } from '@angular/core/rxjs-interop'\nimport { httpResource } from '@angular/common/http'\nimport { resource, signal, computed, input } from '@angular/core'\n";
 const HEADER_LINES = COMMON.split("\n").length - 1;
@@ -17,7 +18,7 @@ function source(path: string, lines: readonly string[]) {
 const at = (line: number) => line + HEADER_LINES;
 
 async function follow(files: readonly { path: string; content: string }[], site: CarrierSite, path: string): Promise<FlowResult> {
-  const reader = await createConsumerFlowReader(files, "repo");
+  const reader = consumerFlowReader(await buildProgram(files), "repo");
   const carrier: Carrier = { site, path: parseAccessPath(path)! };
   return reader.follow(carrier);
 }
@@ -590,48 +591,6 @@ test("a site kind this reader does not follow yet is a frontier at its place, ne
   }
 });
 
-const ROUTES = (extra: string) => [
-  source("order.resolver.ts", ["export const orderResolver = () => inject(OrderService).find(1)"]),
-  source("order.component.ts", [
-    "import { inject } from '@angular/core'",
-    "import { ActivatedRoute } from '@angular/router'",
-    "export class OrderComponent {",
-    "  order = input<Order>()",
-    "  route = inject(ActivatedRoute)",
-    "  constructor() { this.route.data.subscribe(({ order }) => show(order.owner.name)) }",
-    "}",
-  ]),
-  source("app.routes.ts", [
-    "import { orderResolver } from './order.resolver'",
-    "import { OrderComponent } from './order.component'",
-    "export const routes = [{ path: 'orders/:id', component: OrderComponent, resolve: { order: orderResolver } }]",
-    extra,
-  ]),
-];
-
-const resolverReturn = { kind: "return" as const, repo: "repo", file: "order.resolver.ts", symbol: "orderResolver", line: at(1) };
-
-test("a route resolver continues to the component input when input binding is enabled, and to its route data reads", async () => {
-  const files = ROUTES("import { provideRouter, withComponentInputBinding } from '@angular/router'\nexport const config = [provideRouter(routes, withComponentInputBinding())]");
-  const result = await follow(files, resolverReturn, "owner");
-  assert.deepEqual(next(result), ["input order@- owner"]);
-  assert.deepEqual(steps(result), ["resolver-input"]);
-  assert.deepEqual(uses(result), ["6 owner.name|owner []"]);
-  assert.deepEqual(result.uses[0]!.hops.map((hop) => hop.step), ["resolver-input", "route-data", "subscribe", "assign"]);
-});
-
-test("without input binding the component input is a frontier with its reason, route data is still read", async () => {
-  const result = await follow(ROUTES(""), resolverReturn, "owner");
-  assert.deepEqual(next(result), []);
-  assert.equal(result.frontiers[0]!.cause, "unsupported-binding");
-  assert.deepEqual(uses(result), ["6 owner.name|owner []"]);
-});
-
-test("a function that no route registers adds nothing at its return", async () => {
-  const result = await follow(ROUTES(""), { kind: "return", repo: "repo", file: "order.resolver.ts", symbol: "other", line: at(1) }, "owner");
-  assert.deepEqual(result, { uses: [], next: [], frontiers: [] });
-});
-
 test("results are in source order and identical across runs", async () => {
   const file = guarded(["show(order.owner.name)", "show(order.owner.id)", "show(order.owner.name)"]);
   const first = await follow([file], parameterOrder, "owner");
@@ -1189,68 +1148,6 @@ test("destructuring the changed value is a dereference even with an empty patter
   const file = plain(["const {} = o.owner", "const [] = o.owner"]);
   const result = await follow([file], paramO, "owner");
   assert.deepEqual(uses(result), ["2 []|[] []", "3 []|[] []"]);
-});
-
-const INPUTS = [
-  "import { Input, model } from '@angular/core'",
-  "export class OrderComponent {",
-  "  @Input() plain: Order",
-  "  @Input('aliased') renamed: Order",
-  "  @Input({ alias: 'objAlias' }) objRenamed: Order",
-  "  sig = input<Order>()",
-  "  req = input.required<Order>({ alias: 'reqAlias' })",
-  "  both = model<Order>(undefined, { alias: 'modelAlias' })",
-  "  field: any",
-  "}",
-];
-
-const inputSite = (name: string): CarrierSite => ({ kind: "input", repo: "repo", file: "order.component.ts", owner: "OrderComponent", name });
-
-test("an input carrier resolves its public name to the member that declares the input", async () => {
-  const file = source("order.component.ts", INPUTS);
-  const names: Record<string, string> = { plain: "plain", aliased: "renamed", objAlias: "objRenamed", sig: "sig", reqAlias: "req", modelAlias: "both" };
-  for (const [publicName, member] of Object.entries(names)) {
-    const result = await follow([file], inputSite(publicName), "owner");
-    assert.deepEqual(next(result).map((line) => line.split("@")[0]), [`member OrderComponent.${member}`], publicName);
-    assert.deepEqual(steps(result), ["input"], publicName);
-    assert.deepEqual(frontiers(result), [], publicName);
-  }
-});
-
-test("a name that no input declares is a frontier at the class, the original name of an aliased input included", async () => {
-  const file = source("order.component.ts", INPUTS);
-  for (const name of ["field", "renamed", "missing"]) {
-    const result = await follow([file], inputSite(name), "owner");
-    assert.deepEqual(next(result), [], name);
-    assert.deepEqual(frontiers(result), [`2 unsupported-binding:not-an-input:${name}`], name);
-  }
-});
-
-test("input binding is router-wide: proven when every root router turns it on, through a feature argument, a spread of features or forRoot's option", async () => {
-  const unused = ROUTES("import { provideRouter, withComponentInputBinding } from '@angular/router'\nconst unused = withComponentInputBinding()\nexport const config = [provideRouter(routes)]");
-  const refused = await follow(unused, resolverReturn, "owner");
-  assert.deepEqual(next(refused), []);
-  assert.equal(refused.frontiers[0]!.cause, "unsupported-binding");
-  const spread = ROUTES("import { provideRouter, withComponentInputBinding } from '@angular/router'\nconst features = [withComponentInputBinding()]\nexport const config = [provideRouter(lazyRoot, ...features)]");
-  assert.deepEqual(next(await follow(spread, resolverReturn, "owner")), ["input order@- owner"]);
-  const module = ROUTES("import { RouterModule } from '@angular/router'\nexport const config = [RouterModule.forRoot(lazyRoot, { bindToComponentInputs: true })]");
-  assert.deepEqual(next(await follow(module, resolverReturn, "owner")), ["input order@- owner"]);
-  const mixed = ROUTES("import { provideRouter, withComponentInputBinding } from '@angular/router'\nexport const config = [provideRouter(routes, withComponentInputBinding())]\nexport const other = [provideRouter(lazyRoot)]");
-  assert.deepEqual(next(await follow(mixed, resolverReturn, "owner")), []);
-});
-
-test("a resolver key reaches the input carrier by its public name, not a member", async () => {
-  const files = ROUTES("import { provideRouter, withComponentInputBinding } from '@angular/router'\nexport const config = [provideRouter(routes, withComponentInputBinding())]");
-  const result = await follow(files, resolverReturn, "owner");
-  assert.deepEqual(next(result), ["input order@- owner"]);
-  assert.deepEqual(steps(result), ["resolver-input"]);
-});
-
-test("input binding registered in another file reaches the routes it imports", async () => {
-  const [resolver, component, routes] = ROUTES("");
-  const main = source("main.ts", ["import { provideRouter, withComponentInputBinding } from '@angular/router'", "import { routes } from './app.routes'", "export const config = [provideRouter(routes, withComponentInputBinding())]"]);
-  const result = await follow([resolver!, component!, routes!, main], resolverReturn, "owner");
-  assert.deepEqual(next(result), ["input order@- owner"]);
 });
 
 test("an assignment inside a loop reports that earlier reads of the name may follow it", async () => {

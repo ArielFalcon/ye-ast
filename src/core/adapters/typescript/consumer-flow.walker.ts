@@ -41,9 +41,8 @@ import { symbolOf } from "./http-call-sites.adapter.ts";
 import { VERBS } from "./request-summaries.ts";
 import { FUNCTIONS, isModule, METHODS, type MethodResult, type MethodRow } from "./consumer-flow.callees.ts";
 import { resolveFunction, type Resolved } from "./consumer-flow.resolution.ts";
-import { injectedClass } from "./angular-injection.ts";
 import { baseOf, injectedInstance, lineage, memberDeclaration, type ClassRef } from "./consumer-flow.classes.ts";
-import { lineOf, propertyOf, thisClass, typeName, unwrapped } from "./syntax.ts";
+import { lineOf, propertyOf, thisClass, unwrapped } from "./syntax.ts";
 
 /** A value being followed: where the changed property sits in it, the steps taken, and the guards that hold on it. */
 interface Trail {
@@ -97,7 +96,6 @@ const KEEPING_OPERATORS: ReadonlySet<string> = new Set([
 const CALLBACK_OPERATORS: ReadonlySet<string> = new Set(["tap", "filter"]);
 const STREAM_WRITES: ReadonlySet<string> = new Set(["set", "next"]);
 const ACCESSORS: ReadonlySet<string> = new Set(["value", "json"]);
-const ROUTE_HOLDER = "ActivatedRoute";
 
 function translate(guards: readonly Guard[], mappings: readonly PathMapping[]): Guard[] {
   return guards.flatMap((guard) => {
@@ -232,18 +230,8 @@ export class Walker {
     this.track({ kind: "member", name: site.member, scope: cls }, start);
   }
 
-  /** The reads of `ActivatedRoute` data of a component class, for the resolver key that feeds it. */
-  startRouteData(className: string, key: string, path: AccessPath, hops: readonly Hop[]): void {
-    const cls = this.classNamed(className);
-    if (cls === undefined) return;
-    const holders = this.routeHolders(cls);
-    const visit = (node: ts.Node): void => {
-      if (ts.isPropertyAccessExpression(node) && node.name.text === "data" && this.isRouteData(node, holders)) {
-        this.read(node, { origin: [key, ...path], hops: [...hops, { step: "route-data", evidence: this.at(node) }], guards: [] });
-      }
-      node.forEachChild(visit);
-    };
-    visit(cls);
+  startExpression(node: ts.Expression, path: AccessPath, hops: readonly Hop[]): void {
+    this.read(node, { origin: path, hops, guards: [] });
   }
 
   at(node: ts.Node): Evidence {
@@ -951,24 +939,6 @@ export class Walker {
     return resolveFunction(this.program, this.unit, callee);
   }
 
-  private routeHolders(cls: ts.ClassLikeDeclaration): ReadonlySet<string> {
-    const names = new Set<string>();
-    const holdsRoute = (type: ts.TypeNode | undefined, initializer: ts.Expression | undefined): boolean =>
-      (type !== undefined && typeName(type) === ROUTE_HOLDER) || (initializer !== undefined && injectedClass(initializer, this.unit) === ROUTE_HOLDER);
-    for (const member of cls.members) {
-      if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name) && holdsRoute(member.type, member.initializer)) names.add(member.name.text);
-      if (ts.isConstructorDeclaration(member)) for (const parameter of member.parameters) if (ts.isIdentifier(parameter.name) && holdsRoute(parameter.type, undefined)) names.add(parameter.name.text);
-    }
-    return names;
-  }
-
-  /** `this.route.data` or `this.route.snapshot.data`, for a field that holds the `ActivatedRoute`. */
-  private isRouteData(node: ts.PropertyAccessExpression, holders: ReadonlySet<string>): boolean {
-    const owner = unwrapped(node.expression);
-    const route = ts.isPropertyAccessExpression(owner) && owner.name.text === "snapshot" ? unwrapped(owner.expression) : owner;
-    return ts.isPropertyAccessExpression(route) && route.expression.kind === ts.SyntaxKind.ThisKeyword && holders.has(route.name.text);
-  }
-
   private classNamed(name: string): ts.ClassLikeDeclaration | undefined {
     let found: ts.ClassLikeDeclaration | undefined;
     const visit = (node: ts.Node): void => {
@@ -1138,35 +1108,6 @@ function nextHandler(observer: ts.ObjectLiteralExpression): ts.Expression | unde
     if (ts.isMethodDeclaration(property) && ts.isIdentifier(property.name) && property.name.text === "next") return property as unknown as ts.Expression;
   }
   return undefined;
-}
-
-/** The member that declares the component input whose public name is `publicName`. */
-export function declaredInput(unit: Unit, cls: ts.ClassLikeDeclaration, publicName: string): ts.ClassElement | undefined {
-  return cls.members.find((member) => inputName(unit, member) === publicName);
-}
-
-function inputName(unit: Unit, member: ts.ClassElement): string | undefined {
-  if (member.name === undefined || !ts.isIdentifier(member.name)) return undefined;
-  const own = member.name.text;
-  for (const decorator of ts.canHaveDecorators(member) ? (ts.getDecorators(member) ?? []) : []) {
-    const call = decorator.expression;
-    const callee = ts.isCallExpression(call) ? call.expression : call;
-    if (ts.isIdentifier(callee) && unit.imports.get(callee.text)?.imported === "Input") return aliasIn(ts.isCallExpression(call) ? call.arguments : [], own, true);
-  }
-  const initializer = ts.isPropertyDeclaration(member) && member.initializer !== undefined ? unwrapped(member.initializer) : undefined;
-  if (initializer === undefined || !ts.isCallExpression(initializer)) return undefined;
-  const callee = ts.isPropertyAccessExpression(initializer.expression) && initializer.expression.name.text === "required" ? initializer.expression.expression : initializer.expression;
-  const imported = ts.isIdentifier(callee) ? unit.imports.get(callee.text)?.imported : undefined;
-  return imported === "input" || imported === "model" ? aliasIn(initializer.arguments, own, false) : undefined;
-}
-
-function aliasIn(args: readonly ts.Expression[], own: string, stringAlias: boolean): string {
-  for (const argument of args) {
-    if (stringAlias && ts.isStringLiteralLike(argument)) return argument.text;
-    const alias = ts.isObjectLiteralExpression(argument) ? propertyOf(argument, "alias") : undefined;
-    if (alias !== undefined && ts.isStringLiteralLike(alias)) return alias.text;
-  }
-  return own;
 }
 
 export function memberSite(repo: string, unit: Unit, cls: ts.ClassLikeDeclaration, owner: string, member: string): CarrierSite {
