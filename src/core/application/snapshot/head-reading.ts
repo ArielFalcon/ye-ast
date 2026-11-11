@@ -56,9 +56,9 @@ export function createHeldLive(input: { repo: string; repoId: string; scope: Dec
 }
 
 /** The held capture as the readers of a snapshot take it: nothing to write, since the mirror already holds the files. */
-export function preparedLive(held: Pick<HeldLive, "tree" | "sources" | "extract" | "retained" | "facts">): PreparedCommit {
-  const { tree, sources, extract, retained, facts } = held;
-  return { root: tree.root, materialize: async () => ({ ok: true, value: undefined }), tree: { export: tree.export }, sources, extract, ...(retained === undefined ? {} : { retained }), ...(facts === undefined ? {} : { facts }) };
+export function preparedLive(held: Pick<HeldLive, "tree" | "sources" | "extract" | "retained" | "facts" | "hold">): PreparedCommit {
+  const { tree, sources, extract, retained, facts, hold } = held;
+  return { root: tree.root, materialize: async () => ({ ok: true, value: undefined }), tree: { export: tree.export }, sources, extract, hold, ...(retained === undefined ? {} : { retained }), ...(facts === undefined ? {} : { facts }) };
 }
 
 export interface LiveCaptureSelection {
@@ -315,7 +315,7 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
       return read({
         tree: headTree,
         prepared: prepared.value,
-        hold: readScope.hold,
+        hold: prepared.value.hold,
         selected,
         base: (content, store = false) => factBase(trust, snapshot, content, spec, scope, store ? { kind: "full" } : undefined),
         open: () => indexHead(prepared.value, readScope.directory, signal),

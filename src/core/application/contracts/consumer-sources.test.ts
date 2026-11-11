@@ -9,7 +9,10 @@ import type { HypothesisAnswer } from "../../domain/contracts/consequence-fact.t
 import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
 import type { DeclaredMemberNames } from "../../ports/declared-member-names.port.ts";
-import type { ImportOrigins } from "../../ports/import-origins.port.ts";
+import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
+import type { ParseHold, ParseHolds } from "../../ports/parse-holds.port.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import { withSnapshotPreparation } from "../snapshot/prepared-snapshot.ts";
 import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
 import type { TypeBindingsAnswer } from "../../ports/type-bindings.port.ts";
 import type { ConsumerCallers, ConsumerSession, ConsumerSources, ServingWorkspace } from "../../ports/consumer-sources.port.ts";
@@ -245,6 +248,9 @@ interface ReadingLayout {
   memberUses?: readonly MemberUseOrigin[];
   typeAnswer?: TypeBindingsAnswer;
   declaredOutputs?: readonly DeclaredBuildOutput[];
+  holds?: ParseHolds;
+  sharedPreparation?: true;
+  importOrigins?: ImportOriginsReader;
 }
 
 /** A workspace read that reaches a real line over a fake index: the sources, their syntax and the graph it holds. */
@@ -277,7 +283,8 @@ function readingWorkbench(layout: ReadingLayout): { withWorkspace: Workbench["wi
   const perRepo = new Map<string, CodeGraphReader>();
   const opened = new Map<string, CodeGraphReader>();
   let scratches = 0;
-  const repoOf = (root: string): string => ((JSON.parse(root) as { repo?: string }).repo ?? "").replace(/^\//, "");
+  const roots = new Map<string, string>();
+  const repoOf = (root: string): string => roots.get(root) ?? ((JSON.parse(root) as { repo?: string }).repo ?? "").replace(/^\//, "");
   const graphFor = (repo: string): CodeGraphReader => {
     const spec = layout.graphs?.[repo];
     if (spec === undefined) return store;
@@ -294,38 +301,41 @@ function readingWorkbench(layout: ReadingLayout): { withWorkspace: Workbench["wi
     language: { reads: () => true },
     extract: async (files: readonly { path: string }[]) => ({ relations: [], fields: [], locals: [], memberUses: (layout.memberUses ?? [MEMBER_USE]).filter((use) => files.some((file) => file.path === use.reference.file)) }),
   } as unknown as RelationExtractor;
+  const heads = {
+    vcs: { exportCommit: async (repo: string, _sha: string, root: string) => (roots.set(root, repo.replace(/^\//, "")), { ok: true as const, value: { files: (layout.repos?.[repo.replace(/^\//, "")] ?? sources.map(({ path }) => path)).map((path) => ({ path, written: true })), skipped: [] } }) },
+    reader: { read: async (_root: string, paths: readonly string[]) => sources.filter((source) => paths.includes(source.path)) },
+    scratch: { create: async () => `/scratch-${++scratches}`, remove: async () => undefined },
+    graph: {
+      index: async (root: string, directory: string) => {
+        opened.set(directory, graphFor(repoOf(root)));
+        return { ok: true, value: { filesNotIndexed: [] } };
+      },
+      open: (directory: string) => {
+        const found = opened.get(directory);
+        return found === undefined ? { ok: false, fault: { kind: "stage-failed", detail: "no index opened" } } : { ok: true, value: found };
+      },
+    },
+    digest: { of: () => "d" },
+    matcher: { matches: () => true },
+    producer: { name: "test", version: "0" },
+    ...(layout.holds === undefined ? {} : { holds: layout.holds }),
+  };
   const consumer = createConsumerSources({
     operation: {
       withRead: async (_request: unknown, use: (read: unknown, context: unknown) => Promise<{ ok: boolean; value?: unknown }>) => {
-        const result = await use({ fact }, context);
+        const run = (preparation: unknown) => use({ fact }, { ...context, preparation });
+        const result = layout.sharedPreparation ? await withSnapshotPreparation(heads, (preparation) => run(preparation)) : await run(context.preparation);
         return result.ok ? { ok: true, value: { value: result.value } } : result;
       },
     } as never,
-    heads: {
-      vcs: { exportCommit: async (repo: string) => ({ ok: true, value: { files: (layout.repos?.[repo.replace(/^\//, "")] ?? sources.map(({ path }) => path)).map((path) => ({ path, written: true })), skipped: [] } }) },
-      reader: { read: async (_root: string, paths: readonly string[]) => sources.filter((source) => paths.includes(source.path)) },
-      scratch: { create: async () => `/scratch-${++scratches}`, remove: async () => undefined },
-      graph: {
-        index: async (root: string, directory: string) => {
-          opened.set(directory, graphFor(repoOf(root)));
-          return { ok: true, value: { filesNotIndexed: [] } };
-        },
-        open: (directory: string) => {
-          const found = opened.get(directory);
-          return found === undefined ? { ok: false, fault: { kind: "stage-failed", detail: "no index opened" } } : { ok: true, value: found };
-        },
-      },
-      digest: { of: () => "d" },
-      matcher: { matches: () => true },
-      producer: { name: "test", version: "0" },
-    } as never,
+    heads: heads as never,
     digest: { of: () => "d" },
     consumerReaders: async () => ({ flow: { follow: () => ({ uses: [], next: [], frontiers: [] }) }, origins: { ofBody: async () => [], ofArgument: async () => ({ kind: "omitted" }) } }),
     metadata: { read: async () => ({ classes: [] }) } as never,
     templateFlow: { follow: () => ({ uses: [], next: [], frontiers: [] }) },
     relations,
     engines: {},
-    importOrigins: () => importOrigins,
+    importOrigins: layout.importOrigins ?? (() => importOrigins),
     memberNames: { memberNames: async (file) => layout.syntax[file.path] ?? NOTHING_DECLARED },
     ...(layout.typeAnswer === undefined ? {} : { typeBindings: { of: async () => layout.typeAnswer! } }),
     checkerInputs: { resolve: async () => ({ ok: true, value: sha }), filesAt: async () => ({ ok: true, value: { files: [], cuts: [] } }) },
@@ -540,4 +550,52 @@ test("a record whose target only shares a frontier declaration's name is no cut"
   });
 
   assert.deepEqual(await bench.withWorkspace(async (workspace) => (await settled(workspace.session(hypothesis("/orders")))).cutsAfterWalk()), []);
+});
+
+test("consumer sources uses the shared preparation's source hold until the workspace read ends", async () => {
+  for (const throws of [false, true]) {
+    const owners = new WeakMap<SourceFile, ParseHold>();
+    const created: ParseHold[] = [];
+    const released: ParseHold[] = [];
+    const observed: { owner: ParseHold | undefined; hold: ParseHold | undefined; open: boolean | undefined }[] = [];
+    const holds: ParseHolds = {
+      open() {
+        let open = true;
+        const hold: ParseHold = {
+          keep: (files) => files.map((file) => { const kept = { ...file }; owners.set(kept, hold); return kept; }),
+          open: () => open,
+          release: () => { released.push(hold); open = false; },
+        };
+        created.push(hold);
+        return hold;
+      },
+    };
+    const unknown = async (sites: readonly unknown[]) => sites.map(() => ({ status: "unknown", reason: "unresolved", evidence: [] }));
+    const importOrigins: ImportOriginsReader = (files, _paths, _facts, hold) => {
+      observed.push({ owner: owners.get(files[0]!), hold, open: hold?.open() });
+      return { origins: unknown, rootOrigins: unknown, rootBindings: async (sites: readonly unknown[]) => sites.map(() => ({ kind: "unknown" })), receiverMethods: async (sites: readonly unknown[]) => sites.map(() => ({ kind: "unknown" })) } as unknown as ImportOrigins;
+    };
+    const bench = readingWorkbench({ nodes: GRAPH, edges: CONTAINS, syntax: { [STORE_FILE]: { ...NOTHING_DECLARED, calls: [WRITTEN_CALL] } }, calls: { web: [CALL_SITE] }, holds, sharedPreparation: true, importOrigins });
+    const run = () => bench.withWorkspace(async (workspace) => {
+      await settled(workspace.session(hypothesis("/orders")));
+      await settled(workspace.session(hypothesis("/items")));
+      assert.equal(observed.length, 1);
+      const owner = observed[0]!.owner;
+      assert.ok(owner);
+      assert.notEqual(observed[0]!.hold, undefined);
+      assert.equal(observed[0]!.hold, owner);
+      assert.equal(observed[0]!.open, true);
+      assert.equal(owner.open(), true);
+      assert.ok(created.some((hold) => hold !== owner));
+      assert.equal(released.includes(owner), false);
+      if (throws) throw new RangeError("stop");
+    });
+    if (throws) await assert.rejects(run, RangeError);
+    else await run();
+    const owner = observed[0]!.owner;
+    assert.ok(owner);
+    assert.equal(owner.open(), false);
+    for (const hold of created) assert.equal(released.filter((entry) => entry === hold).length, 1);
+    assert.equal(released.at(-1), owner);
+  }
 });

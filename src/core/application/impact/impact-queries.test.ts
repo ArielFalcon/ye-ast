@@ -29,6 +29,8 @@ import { NOTHING_DECLARED } from "../navigation/edge-targets.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
+import { withSnapshotPreparation } from "../snapshot/prepared-snapshot.ts";
+import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { SnapshotDataCache } from "../snapshot/read-snapshot.ts";
 import type { TypeBindings, TypeBindingsAnswer, TypeTarget } from "../../ports/type-bindings.port.ts";
 import type { DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
@@ -2613,4 +2615,158 @@ test("a plain top-level deletion with no trivia seeds the declaration beside it"
   const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
 
   assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["x"]);
+});
+
+test("ofChange keeps the head parse hold open through Java contract and receiver readings", async () => {
+  for (const [liveMode, end] of [[false, "success"], [true, "success"], [false, "throw"], [true, "throw"], [false, "abort"], [true, "abort"]] as const) {
+    const path = "src/A.java";
+    const source = { path, content: "class Base {\n}\nclass Child extends Base {\n void go() {}\n\n}\nclass Use {\n void run() { obj.go(); }\n}" };
+    const events: string[] = [];
+    const controller = new AbortController();
+    const ownership = new WeakMap<SourceFile, number>();
+    const ids = new WeakMap<object, number>();
+    let next = 0;
+    let selected: number | undefined;
+    const holds: NonNullable<ImpactQueriesDeps["holds"]> = {
+      open() {
+        const id = ++next;
+        let open = true;
+        const hold = {
+          keep: (sources: readonly SourceFile[]) => sources.map((file) => { const copy = { ...file }; ownership.set(copy, id); return copy; }),
+          open: () => open,
+          release: () => { events.push(`release:${id}`); open = false; },
+        };
+        ids.set(hold, id);
+        return hold;
+      },
+    };
+    const importOrigins: ImportOriginsReader = (sources, _paths, _facts, hold) => ({
+      ...origins(() => undefined)(sources),
+      implementedDeclarations: async (sites) => {
+        selected = ownership.get(sources[0]!);
+        events.push(`implemented:${ownership.get(sources[0]!)}:${hold === undefined ? "absent" : ids.get(hold)}:${hold?.open()}`);
+        return sites.map(() => ({ kind: "unknown" }));
+      },
+      receiverMethods: async (sites) => {
+        events.push(`receiver:${ownership.get(sources[0]!)}:${hold === undefined ? "absent" : ids.get(hold)}:${hold?.open()}`);
+        if (end === "throw") throw new RangeError("receiver failed");
+        if (end === "abort") controller.abort();
+        return sites.map(() => ({ kind: "unknown" }));
+      },
+    });
+    const live = fakeLive({ [path]: "2" });
+    const changes = { ok: true as const, value: [change(path, { added: [{ start: 4, end: 4 }] })] };
+    const { deps, queries, ask } = setup({
+      trust: TRUSTED, live, sources: [source], changes, directoryChanges: changes, signal: controller.signal,
+      nodes: [fakeNode("Base", "class", path, 1, 2), fakeNode("Child", "class", path, 3, 6), fakeNode("go", "method", path, 4, 4), fakeNode("run", "method", path, 8, 9)],
+      edges: [{ from: "Child", to: "Base", kind: "extends" }, { from: "Child", to: "go", kind: "contains" }, { from: "run", to: "go", kind: "calls", line: 8, column: 14 }],
+      exports: { [HEAD]: { files: [{ path, blob: "2", written: true }], skipped: [] }, [FORK]: { files: [{ path, blob: "1", written: true }], skipped: [] } },
+      importOrigins, written: { [path]: [{ kind: "calls", line: 8, column: 15, name: "obj.go", owners: [] }] },
+    });
+    deps.holds = holds;
+    const read = () => liveMode ? queries.ofChange({ ...LIVE_BASE, base: "base", live: true, signal: controller.signal }) : ask();
+    if (end === "throw") await assert.rejects(read, RangeError);
+    else {
+      const answer = await read();
+      if (end === "abort") assert.ok(!answer.ok && answer.fault.kind === "aborted");
+      else assert.ok(answer.ok);
+    }
+    assert.notEqual(selected, undefined);
+    assert.deepEqual(events.filter((event) => event.startsWith("implemented:") || event.startsWith("receiver:")), [`implemented:${selected}:${selected}:true`, `receiver:${selected}:${selected}:true`]);
+    assert.equal(events.filter((event) => event === `release:${selected}`).length, 1);
+    assert.ok(events.indexOf(`release:${selected}`) > events.indexOf(`receiver:${selected}:${selected}:true`));
+  }
+});
+
+test("shared preparation gives each impact reading the hold that owns its head sources", async () => {
+  for (const [liveMode, throws] of [[false, false], [true, false], [false, true], [true, true]] as const) {
+    const path = "src/A.java";
+    const source = { path, content: "class Base {\n}\nclass Child extends Base {\n void go() {}\n\n}\nclass Use {\n void run() { obj.go(); }\n}" };
+    const owners = new WeakMap<SourceFile, ParseHold>();
+    const created: ParseHold[] = [];
+    const releases: ParseHold[] = [];
+    const kept = new Set<ParseHold>();
+    const stages: { stage: string; owner: ParseHold | undefined; received: ParseHold | undefined; open: boolean | undefined }[] = [];
+    const holds: NonNullable<ImpactQueriesDeps["holds"]> = {
+      open() {
+        let open = true;
+        const hold: ParseHold = {
+          keep: (files) => files.map((file) => { const copy = { ...file }; owners.set(copy, hold); kept.add(hold); return copy; }),
+          open: () => open,
+          release: () => { releases.push(hold); open = false; },
+        };
+        created.push(hold);
+        return hold;
+      },
+    };
+    const importOrigins: ImportOriginsReader = (sources, _paths, _facts, hold) => {
+      const record = (stage: string) => stages.push({ stage, owner: owners.get(sources[0]!), received: hold, open: hold?.open() });
+      return {
+        ...origins(() => undefined)(sources),
+        implementedDeclarations: async (sites) => { record("implemented"); return sites.map(() => ({ kind: "unknown" })); },
+        receiverMethods: async (sites) => { record("receiver"); if (throws) throw new RangeError("stop"); return sites.map(() => ({ kind: "unknown" })); },
+      };
+    };
+    const changes = { ok: true as const, value: [change(path, { added: [{ start: 4, end: 4 }] })] };
+    const { deps, log } = setup({
+      trust: TRUSTED, live: fakeLive({ [path]: "2" }), sources: [source], changes, directoryChanges: changes,
+      nodes: [fakeNode("Base", "class", path, 1, 2), fakeNode("Child", "class", path, 3, 6), fakeNode("go", "method", path, 4, 4), fakeNode("run", "method", path, 8, 9)],
+      edges: [{ from: "Child", to: "Base", kind: "extends" }, { from: "Child", to: "go", kind: "contains" }, { from: "run", to: "go", kind: "calls", line: 8, column: 14 }],
+      exports: { [HEAD]: { files: [{ path, blob: "2", written: true }], skipped: [] }, [FORK]: { files: [{ path, blob: "1", written: true }], skipped: [] } },
+      importOrigins, written: { [path]: [{ kind: "calls", line: 8, column: 15, name: "obj.go", owners: [] }] },
+    });
+    deps.holds = holds;
+    let outer: ParseHold | undefined;
+    const operation = () => withSnapshotPreparation(deps, async (preparation) => {
+      outer = created.at(-1)!;
+      const queries = createImpactQueries({ ...deps, preparation });
+      const read = () => liveMode
+        ? queries.ofChange({ ...LIVE_BASE, base: "base", live: true })
+        : queries.ofChange({ repo: "/repo", repoId: "repo", base: "base", head: "head" });
+      const count = throws ? 1 : 2;
+      let readsAfterFirst = 0;
+      for (let i = 0; i < count; i++) {
+        const start = stages.length;
+        await read();
+        if (i === 0) readsAfterFirst = log.reads;
+        else if (!liveMode) assert.equal(log.reads, readsAfterFirst);
+        const current = stages.slice(start);
+        assert.deepEqual(current.map(({ stage }) => stage), ["implemented", "receiver"]);
+        for (const { owner, received, open } of current) {
+          assert.ok(owner);
+          assert.equal(received, owner);
+          assert.equal(open, true);
+          assert.equal(owner === outer, !liveMode);
+        }
+        assert.equal(outer.open(), true);
+        assert.equal(releases.includes(outer), false);
+      }
+      if (!liveMode) {
+        const start = stages.length;
+        const result = await queries.callers({ repo: "/repo", repoId: "repo", revision: "head", targets: [{ file: path, symbol: "go" }] });
+        assert.ok(result.ok);
+        const current = stages.slice(start);
+        assert.ok(current.some(({ stage }) => stage === "receiver"));
+        for (const { owner, received, open } of current) {
+          assert.equal(owner, outer);
+          assert.equal(received, owner);
+          assert.equal(open, true);
+        }
+      }
+    });
+    if (throws) await assert.rejects(operation, RangeError);
+    else await operation();
+    assert.ok(outer);
+    assert.equal(releases.filter((hold) => hold === outer).length, 1);
+    assert.equal(outer.open(), false);
+    assert.ok(kept.has(outer));
+    for (const hold of created) assert.equal(releases.filter((released) => released === hold).length, 1);
+    assert.ok(stages.length >= 2);
+    for (const { owner, received, open } of stages) {
+      assert.ok(owner);
+      assert.equal(received, owner);
+      assert.equal(open, true);
+      assert.equal(owner === outer, !liveMode);
+    }
+  }
 });

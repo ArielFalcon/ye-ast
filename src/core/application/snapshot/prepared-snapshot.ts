@@ -13,13 +13,13 @@ type Sources = Pick<CommitExtraction, "export" | "sources">;
 
 /** Retains only successful preparations, and the trees parsed from their sources, until every consumer of the operation has finished. */
 export function withSnapshotPreparation<T>(deps: Pick<SnapshotReaderDeps, "scratch" | "holds">, use: (preparation: SnapshotPreparation) => Promise<T>): Promise<T> {
-  return withScratch(deps, async ({ directory, keep }) => {
+  return withScratch(deps, async ({ directory, keep, hold }) => {
     const held = new Map<string, { deps: SnapshotReaderDeps; value: PreparedCommit }>();
     return use({
       async obtain(key, deps, build) {
         const previous = held.get(key);
         if (previous && previous.deps.vcs === deps.vcs && previous.deps.reader === deps.reader && previous.deps.extractor === deps.extractor && (previous.deps.sourceSelection ?? isInMapScope) === (deps.sourceSelection ?? isInMapScope)) return { ok: true, value: previous.value };
-        const answer = await build(await directory(), keep);
+        const answer = await build(await directory(), keep, hold);
         if (answer.ok) held.set(key, { deps, value: answer.value });
         return answer;
       },
@@ -88,7 +88,7 @@ export async function prepareCommit(
   if (signal?.aborted) return ABORTED;
   const key = canonicalJson({ repo, sha, ...context, budget: deps.budget ?? null });
   const identity = canonicalJson({ ...context, budget: deps.budget ?? null });
-  const build = async (root: string, keep: ReadScope["keep"]): Promise<Result<PreparedCommit, VcsFault>> => {
+  const build = async (root: string, keep: ReadScope["keep"], hold?: ReadScope["hold"]): Promise<Result<PreparedCommit, VcsFault>> => {
     const listed = await listExport(deps, repo, sha, root, selected, signal);
     if (!listed.ok) return listed;
     const exported = { ok: true as const, value: listed.value.export };
@@ -127,6 +127,7 @@ export async function prepareCommit(
       ok: true,
       value: {
         root,
+        hold,
         materialize,
         tree: { export: exported.value },
         sources,
@@ -148,6 +149,6 @@ export async function prepareCommit(
       },
     };
   };
-  const answer = await (deps.preparation === undefined ? build(await scope.directory(), scope.keep) : deps.preparation.obtain(key, deps, build));
+  const answer = await (deps.preparation === undefined ? build(await scope.directory(), scope.keep, scope.hold) : deps.preparation.obtain(key, deps, build));
   return signal?.aborted ? ABORTED : answer;
 }

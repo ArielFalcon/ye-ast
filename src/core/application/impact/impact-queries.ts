@@ -323,6 +323,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       const reading: HeadReading = {
         tree: headTree.value,
         prepared: preparedHead.value,
+        hold: preparedHead.value.hold,
         selected,
         base: (content, store = false) => (store ? changeReader.factBase(trust, snapshot, content, spec, scope, { kind: "full" }) : baseOfHead(content)),
         open: () => changeReader.indexHead(preparedHead.value, readScope.directory, signal),
@@ -347,7 +348,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         if (!preparedBase.ok) return preparedBase;
         const baseTree = await preparedBase.value.extract(signal);
         if (!baseTree.ok) return baseTree;
-        const reading = { ...headReader.liveReading(tree, liveTree.value, "trusted", scope, selected, head, repoId, spec), prepared: preparedLive(held) };
+        const reading = { ...headReader.liveReading(tree, liveTree.value, "trusted", scope, selected, head, repoId, spec), prepared: preparedLive(held), hold: held.hold };
 
         const changed = changedPaths(baseTree.value.export.files, tree.export.files).filter((path) => !isEngineConfiguration(path));
         const [before, after] = [await readScope.directory(), await readScope.directory()];

@@ -88,6 +88,8 @@ export interface SnapshotDataCache {
 }
 
 export interface PreparedCommit {
+  /** The hold that owns the prepared sources, for the lifetime of this preparation. */
+  hold?: ParseHold | undefined;
   /** Holds the exported files once `materialize` answered `ok`; before that it may be empty. */
   root: string;
   /**
@@ -108,7 +110,7 @@ export interface PreparedCommit {
 }
 
 export interface SnapshotPreparation {
-  obtain(key: string, deps: SnapshotReaderDeps, build: (root: string, keep: ReadScope["keep"]) => Promise<Result<PreparedCommit, VcsFault>>): Promise<Result<PreparedCommit, VcsFault>>;
+  obtain(key: string, deps: SnapshotReaderDeps, build: (root: string, keep: ReadScope["keep"], hold?: ParseHold) => Promise<Result<PreparedCommit, VcsFault>>): Promise<Result<PreparedCommit, VcsFault>>;
 }
 
 /** What one snapshot read holds until it ends: the temporary directories it makes and the trees parsed from the sources it keeps. */
