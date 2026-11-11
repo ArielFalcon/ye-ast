@@ -305,12 +305,14 @@ export function callbacksOf(
      `type` as `via`, exactly as `listeners.ts:83` answers for a listener that needs a bean. The proof is
      `isScannedBean(type, annotations)` for `scanned-bean`, and the resolved FQN of one of the type's own annotations
      for `{ annotation }` (resolved like the contract, never by simple name);
-   - find the invoked member: breadth-first over the type's repository supertypes (classes and interfaces, nearest
-     first), the methods named `row.member.name` with `parameterTypes.length === row.member.arity`. Exactly one with a
-     body at the nearest level → that body is the candidate handler. More than one at that level →
-     `unknown("unresolved", [type span, each competitor's span])`. None, and the type or a repository type above it is
-     in `hierarchy.outside` → `unknown("no-extractor", [type span])`. None, and the whole chain is inside the
-     repository → `unknown("unresolved", [type span])`;
+   - find the invoked member by name and arity: first walk the class and its superclass chain nearest first, because
+     a class declaration takes precedence over an interface default. The nearest class level with matching methods
+     decides the candidate. If no class declares one and its superclass chain leaves the repository, the body is
+     `unknown("no-extractor", [type span])`: an unread superclass may take precedence. Otherwise search repository
+     interfaces breadth-first, nearest first. Exactly one matching method with a body at the first level is the
+     candidate; multiple matches there give `unknown("unresolved", [type span, each competitor's span])`. If no body
+     is found, an outside supertype gives `unknown("no-extractor", [type span])`; otherwise it is
+     `unknown("unresolved", [type span])`;
    - otherwise emit a candidate `{ status: "complete", value: { kind: "callback", name:
      callbackName(row.type, row.member.name), contract: { type: row.type, member: row.member.name },
      handler: methodSite(body) }, evidence: [supertype span] }`.

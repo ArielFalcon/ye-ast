@@ -310,3 +310,12 @@ export function isAnnotation(use: AnnotationUse, names: ReadonlySet<string> | st
   const wanted = typeof names === "string" ? [names] : [...names];
   return externalNames(use.name, use.scope.file, false).some((candidate) => wanted.includes(candidate));
 }
+
+/**
+ * Component scanning reads only the class's own annotations (`@Component` is not `@Inherited`), so a class that
+ * inherits its stereotype is a bean only if something the sources may not show registers it.
+ */
+export function isScannedBean(type: TypeDecl, annotations: SpringAnnotations): boolean {
+  const own = annotationUses(type.node, scopeOf(type));
+  return annotations.stereotypeIn(own) === "controller" || own.some((use) => SCANNED_STEREOTYPES.has(annotations.keyOf(use) ?? ""));
+}

@@ -14,6 +14,9 @@ import { delegateMethodsOf, sourceGeneratorIn } from "./api-delegates.ts";
 import { basePathOf, configurationsOf } from "./application-config.ts";
 import { spanOf, unknown, unknownAt, type MappedEntrypoint, type MappedRoute } from "./findings.ts";
 import { foreignEndpointsOf } from "./foreign-endpoints.ts";
+import { callbacksOf } from "./callbacks.ts";
+import { INVOKED_CONTRACTS } from "./invoked-contracts.ts";
+import { readHierarchy } from "./java-dispatch-targets.ts";
 import { listenersOf } from "./listeners.ts";
 import { natsListenersOf } from "./nats-listeners.ts";
 import { basePathConfigurations, pathPrefixConfigurations } from "./path-prefix.ts";
@@ -37,7 +40,7 @@ import {
   annotationUses,
   createSpringAnnotations,
   pathExpressions,
-  SCANNED_STEREOTYPES,
+  isScannedBean,
   SPRING_BOOT_APPLICATION,
   type Attributes,
   type Mapping,
@@ -121,7 +124,7 @@ export function extractRoutes(parser: JavaParser, files: readonly SourceFile[], 
     findings.push(...natsListeners(project, text, parsed, libraries, files, parse));
     const readable = parsed.filter((file) => !project.unreadable.includes(file));
     const entrypoints = sortFindings(withPathPrefixes(findings, pathPrefixConfigurations(project, readable)));
-    return withBasePaths(entrypoints, files, applicationModules(project, annotations), basePathConfigurations(project, readable, annotations), index.undecided);
+    return sortFindings([...withBasePaths(entrypoints, files, applicationModules(project, annotations), basePathConfigurations(project, readable, annotations), index.undecided), ...callbacksOf(project, INVOKED_CONTRACTS, annotations, readHierarchy(parsed, project))]);
   });
 }
 
@@ -255,15 +258,6 @@ function controllerOf(type: TypeDecl, project: JavaProject, annotations: SpringA
     (library && { reason: "no-extractor" as const, file: library.scope.file, node: library.node }) ??
     gapOf(hierarchy.gaps.find((gap) => gap.kind === "missing"), "no-extractor");
   return blocking === undefined ? undefined : { ...controller, blocking, speculative: true };
-}
-
-/**
- * Component scanning reads only the class's own annotations (`@Component` is not `@Inherited`), so a class that
- * inherits its stereotype is a bean only if something the sources may not show registers it.
- */
-function isScannedBean(type: TypeDecl, annotations: SpringAnnotations): boolean {
-  const own = annotationUses(type.node, scopeOf(type));
-  return annotations.stereotypeIn(own) === "controller" || own.some((use) => SCANNED_STEREOTYPES.has(annotations.keyOf(use) ?? ""));
 }
 
 function gapOf(gap: SupertypeGap | undefined, reason: GapReason): Gap | undefined {

@@ -1,0 +1,10 @@
+[
+  {
+    "status": "complete",
+    "kind": "callback",
+    "name": "org.springframework.security.core.userdetails.UserDetailsService.loadUserByUsername",
+    "symbol": "Users.loadUserByUsername",
+    "line": 5,
+    "path": "src/main/java/app/Example.java"
+  }
+]

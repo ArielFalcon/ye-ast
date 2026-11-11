@@ -386,7 +386,13 @@ Row S4 as built (`core/adapters/spring`, over `core/adapters/tree-sitter`):
   apart by `kind`, each with the `name` of [RFC-0001](0001-architecture-and-layers.md): a route `METHOD path` with
   ` v<version>`, a listener `kafka <topic>`, `rabbit <queue>`, `jms <destination>` or `event <qualified type name>`, a
   job `scheduled <attribute>=<value>`. Listeners and jobs carry no base path. Findings at one location are ordered by
-  kind, then by name. The `callback` entrypoint kind is specified by RFC-0026; no callback producer is implemented yet.
+  kind, then by name. Framework callbacks carry no base path.
+  - Framework-invoked callbacks: `UserDetailsService.loadUserByUsername` requires a scanned bean; Jakarta and
+    Javax `ConstraintValidator.isValid` require no bean. Each placed body gives one callback, with evidence for each
+    implementing class. An unresolved supertype or ambiguous member is `unknown/unresolved`; a missing body outside
+    the repository or an implementation without a proven scanned bean is `unknown/no-extractor`. Factory-registered
+    beans, XML beans and library auto-configuration are not proven by this reader. Anonymous and function-value
+    implementations are not yet detected.
   - One `listener` per destination of `@KafkaListener` (`topics`), `@RabbitListener` (`queues`) and `@JmsListener`
     (`destination`), on a method or, for Kafka and Rabbit, on the class, whose handler is then the class that
     dispatches to its `@KafkaHandler` or `@RabbitHandler` methods; the containers `@KafkaListeners`,

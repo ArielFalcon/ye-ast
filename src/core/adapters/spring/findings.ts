@@ -1,7 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import type { Job, Listener } from "../../domain/entrypoints/entrypoint.ts";
-import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
-import { distinctEvidence, spanCovers, type Evidence, type Finding, type UnknownReason } from "../../domain/shared/fact.ts";
+import type { Handler, HttpRoute } from "../../domain/entrypoints/http-route.ts";
+import { declarationSpan, distinctEvidence, spanCovers, type Evidence, type Finding, type UnknownReason } from "../../domain/shared/fact.ts";
 import type { Gap, MethodDecl } from "./java-symbols.ts";
 import type { CallSite, PlacedCallSite } from "../../domain/topology/call-site.ts";
 
@@ -61,4 +61,9 @@ export function fromBodies(site: CallSite, groups: readonly { leaf: { invocation
   ]).map(({ kind, file, node }) => ({ kind, file, line: node.startPosition.row + 1, column: node.startPosition.column }));
   CALL_PLACES.set(site, { ...CALL_PLACES.get(site), origins });
   return site;
+}
+
+export function methodSite(method: MethodDecl): { span: Evidence; handler: Handler; method: MethodDecl } {
+  const span = spanOf(method.owner.file.path, method.node);
+  return { span, handler: { path: span.path, symbol: `${method.owner.qualifiedName}.${method.name}`, line: span.line, ...declarationSpan(span.line, span.endLine) }, method };
 }

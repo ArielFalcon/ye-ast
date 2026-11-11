@@ -3,7 +3,7 @@ import type { Job, Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../../domain/entrypoints/http-route.ts";
 import { declarationSpan } from "../../domain/shared/fact.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
-import { spanOf, unknown } from "./findings.ts";
+import { methodSite, spanOf, unknown } from "./findings.ts";
 import { namedChildren, qualifiedTypeName, scopeOf, type Evaluation, type Expr, type JavaProject, type MethodDecl, type Scope, type TypeDecl } from "./java-symbols.ts";
 import {
   annotationUseOf,
@@ -149,11 +149,6 @@ function jobsOf(use: AnnotationUse, site: Site, project: JavaProject): Finding<J
 function valued<T>(evaluation: Evaluation, expr: Expr, site: Site, item: (value: string) => T): Finding<T> {
   if ("gap" in evaluation) return unknown(evaluation.gap, [site.span, spanOf(expr.scope.file.path, expr.node)]);
   return { status: "complete", value: item(evaluation.value), evidence: [site.span] };
-}
-
-function methodSite(method: MethodDecl): Site {
-  const span = spanOf(method.owner.file.path, method.node);
-  return { span, handler: { path: span.path, symbol: `${method.owner.qualifiedName}.${method.name}`, line: span.line, ...declarationSpan(span.line, span.endLine) }, method };
 }
 
 function classSite(type: TypeDecl): Site {

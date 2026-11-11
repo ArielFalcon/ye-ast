@@ -1,0 +1,10 @@
+[
+  {
+    "status": "complete",
+    "kind": "callback",
+    "name": "javax.validation.ConstraintValidator.isValid",
+    "symbol": "Validator.isValid",
+    "line": 3,
+    "path": "src/main/java/app/Example.java"
+  }
+]
