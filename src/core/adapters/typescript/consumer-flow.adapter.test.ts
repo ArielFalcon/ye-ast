@@ -6,6 +6,7 @@ import type { Predicate } from "../../domain/contracts/use-operation.ts";
 import type { Guard } from "../../domain/contracts/verdict.ts";
 import { consumerFlowReader } from "./consumer-flow.adapter.ts";
 import { buildProgram } from "./consumer-flow.index.ts";
+import { createRequestCallLookup } from "./http-call-sites.adapter.ts";
 
 const COMMON = "import { HttpClient } from '@angular/common/http'\nimport { map, tap, switchMap, catchError } from 'rxjs'\nimport { firstValueFrom, of } from 'rxjs'\nimport { toSignal } from '@angular/core/rxjs-interop'\nimport { httpResource } from '@angular/common/http'\nimport { resource, signal, computed, input } from '@angular/core'\n";
 const HEADER_LINES = COMMON.split("\n").length - 1;
@@ -18,12 +19,13 @@ function source(path: string, lines: readonly string[]) {
 const at = (line: number) => line + HEADER_LINES;
 
 async function follow(files: readonly { path: string; content: string }[], site: CarrierSite, path: string): Promise<FlowResult> {
-  const reader = consumerFlowReader(await buildProgram(files), "repo");
+  const [program, lookup] = await Promise.all([buildProgram(files), createRequestCallLookup(files)]);
+  const reader = consumerFlowReader(program, "repo", lookup);
   const carrier: Carrier = { site, path: parseAccessPath(path)! };
   return reader.follow(carrier);
 }
 
-const callSite = (file: string, line: number, symbol: string): CarrierSite => ({ kind: "call-site", repo: "repo", file, line: at(line), symbol });
+const callSite = (file: string, line: number, symbol: string): Extract<CarrierSite, { kind: "call-site" }> => ({ kind: "call-site", repo: "repo", file, line: at(line), symbol });
 
 const dotted = (path: readonly string[]) => formatAccessPath(path) || "[]";
 const uses = (result: FlowResult) => result.uses.map((use) => `${use.site.line - HEADER_LINES} ${dotted(use.path)}|${dotted(use.changed)} [${use.guards.map((guard) => guard.kind).join(",")}]`);
@@ -48,6 +50,169 @@ const SERVICE = (body: string) => [
   `  find() { return ${body} }`,
   "}",
 ];
+
+test("a wrapper response keeps the changed property under body", async () => {
+  const file = source("a.ts", [
+    "class Api {",
+    "  constructor(private http: HttpClient) {}",
+    "  identity(id: string) { return this.http.get('/users/' + id, { observe: 'response' }) }",
+    "}",
+    "class Page {",
+    "  constructor(private api: Api) {}",
+    "  load() { this.api.identity('1').subscribe((response) => { show(response.body.owner.name); show(response.owner.name) }) }",
+    "}",
+  ]);
+  const result = await follow([file], callSite("a.ts", 7, "Page.load"), "owner");
+  assert.deepEqual(uses(result), ["7 body.owner.name|body.owner []"]);
+  assert.deepEqual(frontiers(result), []);
+});
+
+test("a wrapper that does not return the request body cuts the flow", async () => {
+  const file = source("a.ts", [
+    "class Api {",
+    "  constructor(private http: HttpClient) {}",
+    "  send(id: string) { this.http.get('/users/' + id); }",
+    "}",
+    "class Page {",
+    "  constructor(private api: Api) {}",
+    "  load() { const response = this.api.send('1'); show(response.owner.name) }",
+    "}",
+  ]);
+  const result = await follow([file], callSite("a.ts", 7, "Page.load"), "owner");
+  assert.deepEqual(result.uses, []);
+  assert.deepEqual(frontiers(result), ["7 unmodelled-flow:request-summary:no-body"]);
+});
+
+test("the supplied column selects one custom wrapper call among siblings", async () => {
+  const calls = "  load() { this.api.identity('a').subscribe((a) => show(a.owner.left)); this.api.identity('b').subscribe((b) => show(b.owner.right)) }";
+  const file = source("a.ts", [
+    "class Api {",
+    "  constructor(private http: HttpClient) {}",
+    "  identity(id: string) { return this.http.get('/users/' + id) }",
+    "}",
+    "class Page {",
+    "  constructor(private api: Api) {}",
+    calls,
+    "}",
+  ]);
+  const second = calls.indexOf("this.api.identity", calls.indexOf("this.api.identity") + 1) + 1;
+  const result = await follow([file], { ...callSite("a.ts", 7, "Page.load"), column: second }, "owner");
+  assert.deepEqual(uses(result), ["7 owner.right|owner []"]);
+  assert.deepEqual(frontiers(result), []);
+});
+
+test("a cross-file custom wrapper returns the body to its subscriber", async () => {
+  const api = source("api.ts", [
+    "export class Api {",
+    "  constructor(private http: HttpClient) {}",
+    "  identity(id: string) { return this.http.get('/users/' + id) }",
+    "}",
+  ]);
+  const page = source("page.ts", [
+    "import { Api } from './api'",
+    "class Page {",
+    "  constructor(private api: Api) {}",
+    "  load() { this.api.identity('1').subscribe((value) => show(value.owner.name)) }",
+    "}",
+  ]);
+  const result = await follow([api, page], callSite("page.ts", 4, "Page.load"), "owner");
+  assert.deepEqual(uses(result), ["4 owner.name|owner []"]);
+  assert.deepEqual(frontiers(result), []);
+});
+
+test("an undecided wrapper result cuts the flow instead of guessing a body", async () => {
+  const file = source("a.ts", [
+    "class Api {",
+    "  constructor(private http: HttpClient) {}",
+    "  identity(id: string, observe: string) { return this.http.get('/users/' + id, { observe }) }",
+    "}",
+    "class Page {",
+    "  constructor(private api: Api) {}",
+    "  load() { this.api.identity('1', 'body').subscribe((response) => show(response.owner.name)) }",
+    "}",
+  ]);
+  const result = await follow([file], callSite("a.ts", 7, "Page.load"), "owner");
+  assert.deepEqual(result.uses, []);
+  assert.equal(result.frontiers.length, 1);
+  assert.equal(result.frontiers[0]?.cause, "unmodelled-flow");
+  assert.equal(result.frontiers[0]?.detail, "request-summary:destination-undecidable");
+});
+
+test("a wrapper's projected result follows only the projected part of the body", async () => {
+  const file = source("a.ts", [
+    "class Api {",
+    "  constructor(private http: HttpClient) {}",
+    "  identity(id: string) { return this.http.get('/users/' + id).pipe(map((response) => response.data)) }",
+    "}",
+    "class Page {",
+    "  constructor(private api: Api) {}",
+    "  load() { this.api.identity('1').subscribe((data) => show(data.owner.name)) }",
+    "}",
+  ]);
+  const site = callSite("a.ts", 7, "Page.load");
+  assert.deepEqual(uses(await follow([file], site, "data.owner")), ["7 owner.name|owner []"]);
+  const dropped = await follow([file], site, "other");
+  assert.deepEqual(dropped.uses, []);
+  assert.deepEqual(dropped.frontiers, []);
+});
+
+test("a resource returned by a wrapper keeps the body under value", async () => {
+  const file = source("a.ts", [
+    "class Api {",
+    "  identity(id: string) { return httpResource(() => '/users/' + id) }",
+    "}",
+    "class Page {",
+    "  constructor(private api: Api) {}",
+    "  load() { const result = this.api.identity('1'); show(result.value().owner.name) }",
+    "}",
+  ]);
+  const result = await follow([file], callSite("a.ts", 6, "Page.load"), "owner");
+  assert.deepEqual(uses(result), ["6 value.owner.name|value.owner []"]);
+  assert.deepEqual(frontiers(result), []);
+});
+
+test("a fetch returned by a wrapper follows its parsed response body", async () => {
+  const file = source("a.ts", [
+    "class Api {",
+    "  identity(id: string) { return fetch('/users/' + id) }",
+    "}",
+    "class Page {",
+    "  constructor(private api: Api) {}",
+    "  load() { this.api.identity('1').then((r) => { show(r.owner.name); return r.json() }).then((value) => show(value.owner.name)) }",
+    "}",
+  ]);
+  const result = await follow([file], callSite("a.ts", 6, "Page.load"), "owner");
+  assert.deepEqual(uses(result), ["6 owner.name|owner []"]);
+  assert.deepEqual(frontiers(result), []);
+});
+
+test("a resource wrapping fetch parses the body inside the resource value", async () => {
+  const file = source("a.ts", [
+    "class Api {",
+    "  identity(id: string) { return resource({ loader: () => fetch('/users/' + id) }) }",
+    "}",
+    "class Page {",
+    "  constructor(private api: Api) {}",
+    "  load() { const r = this.api.identity('1'); r.value().json().then((value) => show(value.owner.name)) }",
+    "}",
+  ]);
+  const result = await follow([file], callSite("a.ts", 6, "Page.load"), "owner");
+  assert.deepEqual(uses(result), ["6 owner.name|owner []"]);
+  assert.deepEqual(frontiers(result), []);
+});
+
+test("a resource body's json method is not inferred to be a fetch accessor", async () => {
+  const file = source("a.ts", [
+    "class Api { identity(id: string) { return httpResource(() => '/users/' + id) } }",
+    "class Page {",
+    "  constructor(private api: Api) {}",
+    "  load() { const r = this.api.identity('1'); show(r.value().json().owner.name) }",
+    "}",
+  ]);
+  const result = await follow([file], callSite("a.ts", 4, "Page.load"), "json.owner");
+  assert.equal(result.uses.some((use) => use.path.includes("owner")), false);
+  assert.ok(result.frontiers.length > 0);
+});
 
 test("a subscribe callback reading below the changed property is a dereference with the longest path read", async () => {
   const file = source("a.ts", [

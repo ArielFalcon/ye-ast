@@ -87,7 +87,7 @@ test("framework applicability requires project dependency and file evidence, inc
   assert.deepEqual(called, ["yes/a.ts"]);
 });
 
-test("each repository reading shares one program and prepares origins only on demand", async () => {
+test("each repository reading shares request preparation between flow and origins", async () => {
   let builds = 0;
   let bodies = 0;
   const deps = {
@@ -98,12 +98,13 @@ test("each repository reading shares one program and prepares origins only on de
   const first = await createConsumerReaders(files, "one", deps);
   first.flow.follow({ site: { kind: "call-site", repo: "one", file: "a.ts", line: 1, symbol: "send" }, path: ["id"] });
   assert.equal(builds, 1);
-  assert.equal(bodies, 0);
+  assert.equal(bodies, 1);
   await first.origins.ofBody({ file: "a.ts", line: 1, symbol: "send" }, ["id"]);
   await first.origins.ofBody({ file: "a.ts", line: 1, symbol: "send" }, ["id"]);
   assert.equal(builds, 1);
   assert.equal(bodies, 1);
   const second = await createConsumerReaders(files, "two", deps);
+  assert.equal(bodies, 2);
   await second.origins.ofBody({ file: "a.ts", line: 1, symbol: "send" }, ["id"]);
   assert.equal(builds, 2);
   assert.equal(bodies, 2);

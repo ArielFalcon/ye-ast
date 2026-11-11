@@ -13,11 +13,11 @@ import { injectedClass } from "./angular-injection.ts";
 import { declarationCounts } from "./syntax-names.ts";
 import { defaultExportOf } from "./import-bindings.ts";
 import { bindingNames, constructorParameters, lineOf, objectOf, ownBindings, propertyOf, sourceBindings, thisClass, typeName, unwrapped } from "./syntax.ts";
-import { memberOf, requestCallOf, requestGapCalls, requestShapeTrace, summariesOf, type RequestCall, type RequestMethod, type SummaryResolver } from "./request-summaries.ts";
+import { leafResultOf, memberOf, requestCallOf, requestGapCalls, requestShapeTrace, resultBodyAccess, summariesOf, type RequestCall, type RequestMethod, type SummaryResolver } from "./request-summaries.ts";
 import { requestValueSyntax } from "./request-value-syntax.ts";
 import { readRequestValue, valueHasParameter, valueUnknown, type RequestValue } from "./request-values.ts";
 import { addWrittenRoots, type WrittenRoots } from "./written-roots.ts";
-import type { RequestShape, RequestSummary, SummaryGap } from "../../domain/topology/request-summary.ts";
+import type { RequestShape, RequestSummary, ResultShape, SummaryGap } from "../../domain/topology/request-summary.ts";
 import { ANONYMOUS_DEFAULT, recoveredModuleShape, type ModuleShape } from "./module-shape.ts";
 import { createDeclarationLookup, type DeclarationLookup } from "./declaration-lookup.ts";
 
@@ -144,7 +144,7 @@ export interface RequestBody {
 export interface RequestCallLookup {
   at(site: { file: string; line: number; column?: number; symbol: string }): ts.CallExpression | undefined;
   isRequest(call: ts.CallExpression): boolean;
-  of(call: ts.CallExpression): RequestSummary | undefined;
+  of(call: ts.CallExpression): ((RequestSummary | { kind: "direct"; result: ResultShape }) & { bodyAccess?: "json" }) | undefined;
   bodyOf(call: ts.CallExpression): RequestBody | undefined;
   bodiesOf(call: ts.CallExpression): readonly RequestBody[];
 }
@@ -162,6 +162,7 @@ async function prepareRequestCalls(files: readonly SourceFile[]) {
   const { shapes, reader } = readerOf(files);
   const summaries = await summariesOf(files, reader.summaryResolver);
   const callSummaries = new Map<ts.CallExpression, RequestSummary>();
+  const directResults = new Map<ts.CallExpression, { kind: "direct"; result: ResultShape; bodyAccess?: "json" }>();
   const groups = new Map<ts.CallExpression, readonly { key: string; body: ts.Node | undefined; summary: RequestSummary | undefined }[]>();
   const direct = new Set<ts.CallExpression>();
   const allCalls = [...shapes.values()].flatMap((shape) => calls(shape.source));
@@ -173,7 +174,11 @@ async function prepareRequestCalls(files: readonly SourceFile[]) {
     onLine.push(call);
     byLine.set(key, onLine);
     const recognized = requestCallOf(shapes.get(file)!, call);
-    if (recognized.kind === "request" || (recognized.kind === "undecided" && await reader.summaryResolver.clientReceiver(file, call))) direct.add(call);
+    if (recognized.kind === "request" || (recognized.kind === "undecided" && await reader.summaryResolver.clientReceiver(file, call))) {
+      direct.add(call);
+      const result = await leafResultOf(file, call, reader.summaryResolver);
+      if (result !== undefined) directResults.set(call, { kind: "direct", result, ...(resultBodyAccess(result) === "json" ? { bodyAccess: "json" as const } : {}) });
+    }
     else {
       const callee = await reader.summaryResolver.calleeOf(file, call);
       if (callee !== undefined && !("gap" in callee)) {
@@ -231,8 +236,10 @@ async function prepareRequestCalls(files: readonly SourceFile[]) {
     },
     isRequest(call) { const summary = callSummaries.get(call); const group = groups.get(call); return direct.has(call) || (summary !== undefined && (summary.shapes.length > 0 || summary.gaps.length > 0)) || (group?.some((candidate) => candidate.body === undefined || candidate.summary === undefined || candidate.summary.shapes.length > 0 || candidate.summary.gaps.length > 0) ?? false); },
     of(call) {
+      const directResult = directResults.get(call);
+      if (directResult !== undefined) return directResult;
       const single = callSummaries.get(call);
-      if (single !== undefined) return single;
+      if (single !== undefined) return { ...single, ...(resultBodyAccess(single.result) === "json" ? { bodyAccess: "json" as const } : {}) };
       const group = groups.get(call);
       const selections = placed.get(call);
       if (group === undefined || selections === undefined) return undefined;
@@ -240,8 +247,8 @@ async function prepareRequestCalls(files: readonly SourceFile[]) {
       const gaps = group.flatMap((candidate) => candidate.body === undefined || candidate.summary === undefined ? [{ cause: "source-not-read" as const, evidence: [at] }] : [...candidate.summary.gaps]);
       if (gaps.length === 0 && groupDisagrees(call, selections, group, destinations)) gaps.push({ cause: "dispatch-disagreement", evidence: [at] });
       const results = group.flatMap((candidate) => candidate.summary === undefined ? [] : [candidate.summary.result]);
-      const result = results.length === group.length && results.every((item) => JSON.stringify(item) === JSON.stringify(results[0])) ? results[0] : { kind: "unknown" as const, cause: "dispatch-disagreement" as const, evidence: [at] };
-      return { shapes: selections.map((item) => item.shape), result: result ?? { kind: "none" }, gaps };
+      const result = results.length === group.length && results.every((item) => JSON.stringify(item) === JSON.stringify(results[0]) && resultBodyAccess(item) === resultBodyAccess(results[0]!)) ? results[0] : { kind: "unknown" as const, cause: "dispatch-disagreement" as const, evidence: [at] };
+      return { shapes: selections.map((item) => item.shape), result: result ?? { kind: "none" }, gaps, ...(result !== undefined && resultBodyAccess(result) === "json" ? { bodyAccess: "json" as const } : {}) };
     },
     bodyOf(call) { const bodies = lookup.bodiesOf(call); return bodies.length === 1 ? bodies[0] : undefined; },
     bodiesOf(call) {
@@ -297,7 +304,7 @@ async function readPlaced(files: readonly SourceFile[], repo: string): Promise<r
         const dependencies: SummaryGap[] = [];
         for (const node of nodes) {
           const summary = lookup.of(node);
-          const matching = summary?.gaps.filter((item) => item.cause === frame.gap.cause) ?? [];
+          const matching = summary !== undefined && !("kind" in summary) ? summary.gaps.filter((item) => item.cause === frame.gap.cause) : [];
           if (matching.length === 0) { gapCoverage.set(frame.gap, false); break; }
           if (!placed.has(node)) dependencies.push(...matching);
         }
@@ -318,7 +325,8 @@ async function readPlaced(files: readonly SourceFile[], repo: string): Promise<r
       const column = shape.source.getLineAndCharacterOfPosition(call.getStart(shape.source)).character;
       const selections = placed.get(call);
       if (direct.has(call) && selections === undefined && forwardedLeaves.has(call)) continue;
-      const summary = lookup.of(call);
+      const callSummary = direct.has(call) ? undefined : lookup.of(call);
+      const summary = callSummary !== undefined && !("kind" in callSummary) ? callSummary : undefined;
       const group = groups.get(call);
       const groupGap = group?.some((candidate) => candidate.body === undefined || candidate.summary === undefined || candidate.summary.gaps.length > 0) ?? false;
       const outstanding = summary?.gaps.some((gap) => !gapAtSite(gap)) ?? false;
