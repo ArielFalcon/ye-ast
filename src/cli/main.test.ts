@@ -1283,3 +1283,20 @@ test("init prints node-modules declarations in the order the user gave them, as 
 
   assert.ok(io.stdout.includes(`claude mcp add ye-ast -- npx --yes tsx ${MCP_ENTRYPOINT} mcp /work/shop --node-modules web=/host/web/node_modules --node-modules api=/host/api/node_modules`), io.stdout.join("\n"));
 });
+
+test("init rejects repeated answer byte limits before installing", async () => {
+  for (const flags of [["--answer-bytes", "0", "--answer-bytes", "99"], ["--answer-bytes=0", "--answer-bytes=99"]]) {
+    const { io, deps, installs } = setupInstall();
+    assert.equal(await run(["init", "--trust", "untrusted", ...flags, "/work/shop"], io, deps), EXIT_CODE.usage);
+    assert.equal(installs.length, 0);
+  }
+});
+
+test("init carries a nonnegative answer byte limit into its registration", async () => {
+  const { io, deps } = setupInstall();
+  assert.equal(await run(["init", "--trust", "untrusted", "--answer-bytes", "0", "/work/shop"], io, deps), EXIT_CODE.ok);
+  assert.ok(io.stdout.some((line) => line.includes("--answer-bytes 0")));
+  const invalid = setupInstall();
+  assert.equal(await run(["init", "--trust", "untrusted", "--answer-bytes", "-1", "/work/shop"], invalid.io, invalid.deps), EXIT_CODE.usage);
+  assert.equal(invalid.installs.length, 0);
+});

@@ -269,7 +269,7 @@ const traceTarget = z.union([
 const traceFields = { repo, revision, live, workspace, offline, targets: z.array(traceTarget).min(1).refine((targets) => !mixesTargetKinds(targets as TraceTarget[]), "declarations or entrypoints, not both").describe("Declarations, or entrypoints, to start from; every declaration a target selects is a root."), scope, budget: traceBudget };
 const workspaceFields = { repo, revision: workspaceRevision, live: z.literal(true).optional(), offline, scope, repos: workspaceRepos, gateways };
 
-/** The semantic inputs: what the analysis reads, without `mode`, `select`, `page` or `expect`. */
+/** The semantic inputs: what the analysis reads, without presentation or recovery controls. */
 export const SEMANTIC_INPUTS = {
   entrypoints: liveSchema(entrypointFields, ["revision"]),
   callers: liveSchema({ ...callersFields, ...crossingFields }, ["revision"])
@@ -287,24 +287,26 @@ export const SEMANTIC_INPUTS = {
 } satisfies Record<QueryFamily, z.ZodType>;
 
 /** The inputs each original tool publishes and validates: the semantic fields plus presentation and recovery controls. */
+const answerBytes = z.int().nonnegative().optional().describe("Pass your client limit as UTF-8 answerBytes; without a request or host limit the answer text is unbounded.");
+
 export const TOOL_INPUTS = {
-  entrypoints: liveSchema({ ...entrypointFields, mode, ...recoveryControlShapeFor("entrypoints") }, ["revision"])
+  entrypoints: liveSchema({ ...entrypointFields, mode, answerBytes, ...recoveryControlShapeFor("entrypoints") }, ["revision"])
     .superRefine(reportIssues((value) => controlIssues("entrypoints", value)))
     .meta(crossField(liveExclusion("revision"), recoveryControlConstraintsFor("entrypoints"))),
-  callers: liveSchema({ ...callersFields, mode, ...crossingFields, ...recoveryControlShapeFor("callers") }, ["revision"])
+  callers: liveSchema({ ...callersFields, mode, answerBytes, ...crossingFields, ...recoveryControlShapeFor("callers") }, ["revision"])
     .superRefine(reportIssues((value) => controlIssues("callers", value)))
     .superRefine(reportIssues(traversalIssues))
     .meta(crossField(liveExclusion("revision"), traversalConstraints("revision"), recoveryControlConstraintsFor("callers"))),
-  impact: liveSchema({ ...impactFields, mode, ...crossingFields, ...recoveryControlShapeFor("impact") }, ["head"])
+  impact: liveSchema({ ...impactFields, mode, answerBytes, ...crossingFields, ...recoveryControlShapeFor("impact") }, ["head"])
     .superRefine(reportIssues((value) => controlIssues("impact", value)))
     .superRefine(reportIssues(traversalIssues))
     .meta(crossField(liveExclusion("head"), traversalConstraints("head"), recoveryControlConstraintsFor("impact"))),
-  importers: liveSchema({ ...fileFields, mode }, ["revision"]),
-  outline: liveSchema({ ...outlineFields, mode }, ["revision"]).refine(exactlyOneSubject, ONE_SUBJECT).meta(crossField(liveExclusion("revision"), subjectConstraint)),
-  trace: liveSchema({ ...traceFields, mode }, ["revision"]).superRefine(reportIssues(traversalIssues)).meta(crossField(liveExclusion("revision"), traversalConstraints("revision"))),
-  workspace: liveSchema({ ...workspaceFields, mode }, ["revision"]),
-  decisions: liveSchema({ ...workspaceFields, mode }, ["revision"]),
-  contract_consequences: consequencesInput({ mode }),
+  importers: liveSchema({ ...fileFields, mode, answerBytes }, ["revision"]),
+  outline: liveSchema({ ...outlineFields, mode, answerBytes }, ["revision"]).refine(exactlyOneSubject, ONE_SUBJECT).meta(crossField(liveExclusion("revision"), subjectConstraint)),
+  trace: liveSchema({ ...traceFields, mode, answerBytes }, ["revision"]).superRefine(reportIssues(traversalIssues)).meta(crossField(liveExclusion("revision"), traversalConstraints("revision"))),
+  workspace: liveSchema({ ...workspaceFields, mode, answerBytes }, ["revision"]),
+  decisions: liveSchema({ ...workspaceFields, mode, answerBytes }, ["revision"]),
+  contract_consequences: consequencesInput({ mode, answerBytes }),
 } satisfies Record<QueryFamily, z.ZodType>;
 
 export type QueryName = `ye_ast_${QueryFamily}`;

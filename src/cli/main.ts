@@ -91,6 +91,7 @@ const USAGE = [
   "changed: [--changed <glob>]...   (impact only: globs over the changed paths; only the change's paths they select seed the walk, while the repository is read whole, so callers outside them are known; a glob that selects no changed path is an error)",
   "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default; trace takes no --hub-fan-in, which counts callers)",
   "outputs: [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]...   (a node_modules directory your own install produced, standing for <at>/node_modules in the repository, the root's without <at>=; read as data, never run, checked against the commit's lockfile, and used at a revision only, never with --live; each answer that used one lists it in inputs.buildOutputs, and one it could not use is a build-output cut. Write =<path> for a path that holds =. --java-sources names the repository directory <at> its generated Java sources stand for, both required; no answer reads it yet and it never appears in inputs.buildOutputs)",
+  "--answer-bytes: init and mcp, once: nonnegative UTF-8 text byte limit; init includes it in the registration; requests may override it",
   "jdk: init and mcp, once: --jdk <path>   (a host JDK home whose lib/ct.sym is read as data, accepted only at a pinned digest (ADR-0044 decision 10); init prints it into the MCP registration; no answer reads the table yet, so every obligation that needs it stays unsettled)",
   "workspace: --workspace <file>   (the workspace init persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\", \"remote\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository, and a remote is the source of truth a trusted repository's queries refresh into ye-ast's own mirror)",
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
@@ -159,7 +160,7 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promi
       io.err(USAGE);
       return EXIT_CODE.usage;
     }
-    const { workspaceFile, buildOutputs, jdkPath, ...request } = parsed;
+    const { workspaceFile, buildOutputs, jdkPath, answerBytes, ...request } = parsed;
     const workspace = workspaceFile === undefined ? undefined : await readWorkspaceFile(workspaceFile);
     if (workspace !== undefined && !workspace.ok) {
       io.err(deps.redaction.redact(`ye-ast: ${workspace.fault.kind}: ${workspace.fault.detail}`));
@@ -171,7 +172,7 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promi
       io.err(`ye-ast: ${result.fault.kind}: ${deps.redaction.redact(result.fault.detail.trim())}`);
       return result.fault.kind === "aborted" ? EXIT_CODE.interrupted : EXIT_CODE.queryFailed;
     }
-    for (const line of initReport(result.value, request.repo, deps.mcpCommand, buildOutputs ?? [], jdkPath)) io.out(line);
+    for (const line of initReport(result.value, request.repo, deps.mcpCommand, buildOutputs ?? [], jdkPath, answerBytes)) io.out(line);
     return EXIT_CODE.ok;
   } catch (error) {
     io.err(`ye-ast: internal fault: ${deps.redaction.redact(firstLine(error))}`);
@@ -182,12 +183,17 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promi
 async function runBatchInit(args: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {
   let trust: string | undefined;
   let workspaceFile: string | undefined;
+  let answerBytes: number | undefined;
   let launchPath: string | undefined;
   const repositories: { path: string; id: string }[] = [];
   const operand = (value: string | undefined): value is string => value !== undefined && value.trim() !== "" && !value.startsWith("-");
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
-    if (arg === "--repo") {
+    if (arg === "--answer-bytes") {
+      const value = args[++i];
+      if (answerBytes !== undefined || value === undefined || !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) { io.err(USAGE); return EXIT_CODE.usage; }
+      answerBytes = Number(value);
+    } else if (arg === "--repo") {
       const id = args[++i];
       const path = args[++i];
       if (!operand(id) || !operand(path)) { io.err(USAGE); return EXIT_CODE.usage; }
@@ -271,7 +277,7 @@ async function runBatchInit(args: readonly string[], io: CliIo, deps: CliDeps): 
   if (report.targets.length === 0 || report.targets.some((target) => target.status !== "completed" || !target.canonicalRoot || !target.outcome || target.outcome.layer.outcome === "not-written")) return EXIT_CODE.queryFailed;
   const launchTarget = report.targets.find((target) => target.id === launch.id && target.requestedPaths.includes(launch.path));
   if (!launchTarget?.canonicalRoot || !deps.mcpCommand[0]) return EXIT_CODE.internalFault;
-  const registration = { command: deps.mcpCommand[0], args: [...deps.mcpCommand.slice(1), "mcp", launchTarget.canonicalRoot, ...report.targets.flatMap((target) => ["--repo", target.id, target.canonicalRoot!])] };
+  const registration = { command: deps.mcpCommand[0], args: [...deps.mcpCommand.slice(1), "mcp", launchTarget.canonicalRoot, ...report.targets.flatMap((target) => ["--repo", target.id, target.canonicalRoot!]), ...(answerBytes === undefined ? [] : ["--answer-bytes", String(answerBytes)])] };
   io.out(JSON.stringify(deps.redaction.redactValue(registration)));
   return EXIT_CODE.ok;
 }
@@ -292,7 +298,7 @@ function registrationDeclarations(outputs: readonly DeclaredBuildOutput[]): stri
   return [...nodeModules, ...javaSources].flatMap(({ kind, at, path }) => [`--${kind}`, shellWord(kind === "node-modules" && at === "" && !path.includes("=") ? path : `${at}=${path}`)]);
 }
 
-function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo: string, mcpCommand: readonly string[], outputs: readonly DeclaredBuildOutput[], jdkPath: string | undefined): string[] {
+function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo: string, mcpCommand: readonly string[], outputs: readonly DeclaredBuildOutput[], jdkPath: string | undefined, answerBytes: number | undefined): string[] {
   const declared = registrationDeclarations(outputs);
   const layerLines =
     layer.outcome === "not-written"
@@ -304,7 +310,7 @@ function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo:
     ...layerLines,
     ...(workspace === undefined ? [] : [`${FIXED_LAYER_DIRECTORY}/${WORKSPACE_MANIFEST_FILE}: ${workspace.outcome}`]),
     "register the MCP server with Claude Code:",
-    `claude mcp add ye-ast -- ${[...mcpCommand.map(shellWord), "mcp", shellWord(repo), ...declared, ...(jdkPath === undefined ? [] : ["--jdk", shellWord(jdkPath)])].join(" ")}`,
+    `claude mcp add ye-ast -- ${[...mcpCommand.map(shellWord), "mcp", shellWord(repo), ...declared, ...(jdkPath === undefined ? [] : ["--jdk", shellWord(jdkPath)]), ...(answerBytes === undefined ? [] : ["--answer-bytes", String(answerBytes)])].join(" ")}`,
   ];
 }
 
@@ -404,16 +410,19 @@ interface ParsedInit extends Omit<InstallRequest, "signal" | "workspace"> {
   buildOutputs?: readonly DeclaredBuildOutput[];
   /** The host JDK home the printed MCP registration names (ADR-0044 decision 10); `init` reads no table from it. */
   jdkPath?: string;
+  answerBytes?: number;
 }
 
 async function parseInitRequest(args: readonly string[], deps: RepositoryNaming): Promise<ParsedInit | undefined> {
   try {
-    const { values, positionals } = parseArgs({ args: [...args], options: { trust: { type: "string" }, workspace: { type: "string" }, jdk: { type: "string" }, ...NODE_MODULES_OPTION }, allowPositionals: true });
+    const { values, positionals, tokens } = parseArgs({ args: [...args], options: { trust: { type: "string" }, workspace: { type: "string" }, jdk: { type: "string" }, "answer-bytes": { type: "string" }, ...NODE_MODULES_OPTION }, allowPositionals: true, tokens: true });
+    if (tokens.filter((token) => token.kind === "option" && token.name === "answer-bytes").length > 1) return undefined;
     const [path = ".", ...extra] = positionals;
     const outputs = parseBuildOutputs(values);
+    if (values["answer-bytes"] !== undefined && (!/^\d+$/.test(values["answer-bytes"]) || !Number.isSafeInteger(Number(values["answer-bytes"])))) return undefined;
     if (!isTrustMode(values.trust) || extra.length > 0 || values.workspace === "" || values.jdk === "" || outputs === undefined) return undefined;
     if (values.jdk !== undefined && !(await isJdkHome(resolve(values.jdk)))) return undefined;
-    return { ...(await repositoryOf(deps, path, undefined)), trust: values.trust, ...(values.workspace === undefined ? {} : { workspaceFile: resolve(values.workspace) }), ...(values.jdk === undefined ? {} : { jdkPath: resolve(values.jdk) }), ...outputs };
+    return { ...(await repositoryOf(deps, path, undefined)), trust: values.trust, ...(values["answer-bytes"] === undefined ? {} : { answerBytes: Number(values["answer-bytes"]) }), ...(values.workspace === undefined ? {} : { workspaceFile: resolve(values.workspace) }), ...(values.jdk === undefined ? {} : { jdkPath: resolve(values.jdk) }), ...outputs };
   } catch {
     return undefined;
   }

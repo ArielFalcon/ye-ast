@@ -25,7 +25,7 @@ const accepts = (family: QueryFamily, args: unknown, schemas = SEMANTIC_INPUTS) 
 test("every family has one semantic and one tool schema with the same fields apart from the controls", () => {
   assert.deepEqual(FAMILIES.toSorted(), (Object.keys(TOOL_INPUTS) as QueryFamily[]).toSorted());
   for (const family of FAMILIES) {
-    const controls = (RECOVERABLE as readonly string[]).includes(family) ? ["mode", "select", "page", "expect"] : ["mode"];
+    const controls = (RECOVERABLE as readonly string[]).includes(family) ? ["mode", "answerBytes", "select", "page", "expect"] : ["mode", "answerBytes"];
     const tool = Object.keys(TOOL_INPUTS[family].shape).filter((key) => !controls.includes(key));
     assert.deepEqual(tool, Object.keys(SEMANTIC_INPUTS[family].shape), family);
     assert.ok(accepts(family, MINIMAL[family]), family);
@@ -34,7 +34,7 @@ test("every family has one semantic and one tool schema with the same fields apa
 
 test("semantic queries reject presentation and recovery controls", () => {
   for (const family of FAMILIES) {
-    assert.equal(accepts(family, { ...MINIMAL[family], mode: "full" }), false, `${family} mode`);
+    for (const control of [{ mode: "full" }, { answerBytes: 0 }]) assert.equal(accepts(family, { ...MINIMAL[family], ...control }), false, `${family} ${Object.keys(control)[0]}`);
     assert.ok(accepts(family, { ...MINIMAL[family], mode: "full" }, TOOL_INPUTS), `${family} tool keeps mode`);
   }
   const select = { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 };

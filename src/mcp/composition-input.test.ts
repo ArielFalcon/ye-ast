@@ -50,7 +50,7 @@ test("rejects unknown families, recursive compose and every nested control", () 
   rejects({ queries: [{ name: "ye_ast_compose", arguments: { queries: [outline] } }] });
   rejects({ queries: [{ name: "ye_ast_unknown", arguments: {} }] });
   rejects({ queries: [{ name: "ye_ast_outline" }] });
-  for (const control of [{ mode: "full" }, { select: { kind: "entrypoint-evidence", findingIndex: 0 } }, { page: { limit: 1 } }, { expect: R1 }]) {
+  for (const control of [{ mode: "full" }, { answerBytes: 0 }, { select: { kind: "entrypoint-evidence", findingIndex: 0 } }, { page: { limit: 1 } }, { expect: R1 }]) {
     rejects({ queries: [{ ...entrypoints, arguments: { ...entrypoints.arguments, ...control } }] });
     rejects({ queries: [{ ...consequences, arguments: { ...consequences.arguments, ...control } }] });
   }

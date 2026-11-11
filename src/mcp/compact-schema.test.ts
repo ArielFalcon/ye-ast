@@ -162,15 +162,15 @@ test("input guide publishes declared cross-field constraints on a plain root and
 });
 
 const INPUT_CONSTRAINTS: Record<string, string> = {
-  ye_ast_entrypoints: "8f421b1b0957fe152f97695f9271762b4987b909127280814f624915062bc9c3",
-  ye_ast_impact: "e8762e053413754ce955349bcd9b47ba18bdda46a269ac2b6508d605983c994b",
-  ye_ast_callers: "7ee67eedc7880c1bf1e5b7beb1d3f65de5d1ef7440de26963cc554ac217f8259",
-  ye_ast_importers: "5c8a30a8565d803f111f7c0878aab0c64f902e7b58f1bb9731a7ae2c75781022",
-  ye_ast_outline: "2f1a5187e37a9f464453fcc2adb15c02b469b798a37de7c5c32f6cf81a612109",
-  ye_ast_trace: "cec9068dd718abdb2063d804a53907ac8a34e98eedcf50f123dc35a0968b4567",
-  ye_ast_workspace: "a3eb1c0ee1dbf6c86080e0215b48283bcd1d26de492fbd78d558ba49b2ee7cda",
-  ye_ast_decisions: "a3eb1c0ee1dbf6c86080e0215b48283bcd1d26de492fbd78d558ba49b2ee7cda",
-  ye_ast_contract_consequences: "6e05e8d94599268d755e79a4df04adfc3340e1140c84f0b32b31d968a93baf4d",
+  ye_ast_entrypoints: "647121c8746689c115833d07093b35e3ee032ce95596f365484863efdfc18bc8",
+  ye_ast_impact: "c1341f610113d96ee9178899266e0a4d7c08f775008b66a93d3e914f3c179cef",
+  ye_ast_callers: "cc59bfb6e7d7192dc6f402b7b58ac5284addca3be01cb104ae9af036f81a6a16",
+  ye_ast_importers: "741b3552da816fb505b0233d6dc90540a1718fd4d970edd245d7b14524914305",
+  ye_ast_outline: "600966e8b24d42a72ff5fe5046cc5901c7d59f170c7fc5c4d07135100753660e",
+  ye_ast_trace: "0018c3e316361ad5a6e0b3d049ac2fa45f9329f4b908270acf95858627175086",
+  ye_ast_workspace: "f31e2522a431e74895b431d8c65884b2d1288cd57f70afd9ac0433dd00699fbc",
+  ye_ast_decisions: "f31e2522a431e74895b431d8c65884b2d1288cd57f70afd9ac0433dd00699fbc",
+  ye_ast_contract_consequences: "ee5aff31b88d53260cbfb40c45e0c5578f6339d77202518fe4a955897b80baea",
 };
 const COMPOSE_CONSTRAINTS = "cf30af8869c71cce82a747af796866e15b0fdc365b5abf678ef8c5a63831fc06";
 function canonicalConstraints(value: unknown): unknown {

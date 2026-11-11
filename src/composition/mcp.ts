@@ -8,7 +8,7 @@ import type { ProcessHost } from "./process-host.ts";
 import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
 import { javaSourcesDeclared, nodeModulesDeclared, type DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
 
-const USAGE = "usage: ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]... [--jdk <path>]";
+const USAGE = "usage: ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]... [--jdk <path>] [--answer-bytes <n>]";
 
 /**
  * `ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]...`:
@@ -21,8 +21,15 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
   const declarations: { repoId: string; path: string }[] = [];
   const outputs: DeclaredBuildOutput[] = [];
   let jdkPath: string | undefined;
+  let answerBytes: number | undefined;
   while (index < args.length) {
     const flag = args[index++];
+    if (flag === "--answer-bytes") {
+      const value = args[index++];
+      if (answerBytes !== undefined || value === undefined || !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) { host.err(USAGE); return EXIT_CODE.usage; }
+      answerBytes = Number(value);
+      continue;
+    }
     if (flag === "--jdk") {
       const path = args[index++];
       if (!path || path.startsWith("-") || jdkPath !== undefined) {
@@ -94,7 +101,7 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
   });
   const handle = serveStdio(() => {
     const digest = createSha256Digest();
-    return createMcpServer({ ...queries, digest, evidenceComposition: createEvidenceComposition(digest), repository, repositories: bindings });
+    return createMcpServer({ ...queries, digest, evidenceComposition: createEvidenceComposition(digest), repository, repositories: bindings, ...(answerBytes === undefined ? {} : { answerBytes }) });
   }, {
     transport: wire,
     onerror: (error) => host.err(`ye-ast: ${queries.redaction.redactError(error)}`),

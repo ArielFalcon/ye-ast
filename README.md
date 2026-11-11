@@ -750,3 +750,5 @@ Trace can read explicitly declared client-library sources with `trace --workspac
 repositories; artifact-proven dependency closures determine which library sources extraction reads. Omit workspace
 for the unchanged local-only answer. Undecidable runtime URL policies remain cuts. Compose relates trace effects to
 other observations through shared call-place evidence, without implying causality.
+
+MCP query tools accept optional `answerBytes`, a nonnegative UTF-8 text byte limit. A request overrides the host limit. Without either the text is unbounded. When needed the server uses a summary or returns an `answer-over-bound` error; its metadata includes status and narrowing inputs even when no text fits. Structured content remains complete. Set the host limit with `ye-ast mcp --answer-bytes <n>` or include it in the registration printed by `ye-ast init --answer-bytes <n>`.

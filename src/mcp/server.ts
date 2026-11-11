@@ -1,3 +1,4 @@
+import { boundedText } from "./render-budget.ts";
 import { dependencyDiagnostic } from "./dependency-schema.ts";
 import { callSiteDiagnostic, unresolvedCallSiteSchema } from "./composition-schema-parts.ts";
 import { compactInput } from "./compact-schema.ts";
@@ -43,6 +44,7 @@ function delivered(text: string, fields: Record<string, unknown>, meta: Record<s
 
 export interface McpDeps extends QueryExecutionDeps {
   version: string;
+  answerBytes?: number;
   /** Default repository binding, plus additional host-declared targets. */
   repository: RepositoryBinding;
   repositories?: readonly RepositoryBinding[];
@@ -50,7 +52,7 @@ export interface McpDeps extends QueryExecutionDeps {
 
 /** Common interpretation rules and a short routing guide, also useful before individual tools are loaded. */
 export function instructionsFor(repository: McpDeps["repository"], available: readonly string[] = [repository.repoId]): string {
-  return `ye-ast: deterministic, read-only facts about code, Git and declared contracts of ${repository.path} (id ${repository.repoId}). Use for dependencies/reach, not quality or approval. Reuse identical snapshot queries.
+  return `ye-ast: deterministic read-only code, Git and declared contract facts for ${repository.path} (id ${repository.repoId}). Use for dependencies/reach, not quality or approval. Reuse identical snapshot queries.
 
 When to call:
 - ye_ast_entrypoints: orient, or find the handler of a route, listener or job.
@@ -59,14 +61,15 @@ When to call:
 - ye_ast_importers: who imports or names a file.
 - ye_ast_outline: declaration spans/imports; focus by dotted path or line.
 - ye_ast_trace: forward calls, effects and reading plan; workspace supplies declared library sources.
-- ye_ast_workspace: which other repositories this one names (HTTP, messaging, dependencies), to choose clones.
-- ye_ast_decisions: workspace configuration gaps with evidence-backed options; it writes nothing.
+- ye_ast_workspace: named repositories (HTTP, messaging, dependencies); choose clones.
+- ye_ast_decisions: evidence-backed options for workspace gaps; read-only.
 - ye_ast_contract_consequences: consumers/producers affected by a contract hypothesis or diff.
-- ye_ast_compose: 1..16 queries, merging identities. Reruns; stores nothing; captures non-atomic. Obtain dependent coordinates first.
+- ye_ast_compose: 1..16 queries merge identities; reruns, no storage, non-atomic captures. Obtain dependent coordinates first.
 
-Reading answers: complete is relative to declared scope, supported constructs and change selection; partial keeps findings and lists cuts (where coverage stopped, sections and file reads too); complete (N undecided): N unknown; unknown never means no impact. callers/impact skip TypeScript test dependents and Angular template bindings (importers lists tests; trace UI routes; contract_consequences reads templates). A Java type target is partial with a relation-unread cut: type references are unread, so dependents are unknown, never none. References need not be calls or edits; confidence is resolution, not safety; entrypoint origins are associations, not chains. Content carries presentation text: summary and details findings, full navigation; a "result JSON:" line holds the fields. Recovery is the recovery field.
+answerBytes bounds UTF-8 text (request overrides host; unset: unbounded); structuredContent stays complete.
+Reading answers: complete is relative to declared scope, supported constructs and change selection; partial keeps findings and lists cuts (where coverage stopped, sections and file reads too); complete (N undecided): N unknown; unknown never means no impact. callers/impact skip TypeScript test dependents and Angular template bindings (importers lists tests; trace UI routes; contract_consequences reads templates). A Java type target is partial with a relation-unread cut: type references are unread, so dependents are unknown, never none. References need not be calls or edits; confidence is resolution, not safety; entrypoint origins are associations, not chains. Content carries presentation text: summary and details findings, full navigation; fields: bounded structuredContent, otherwise "result JSON:". Recovery is the recovery field.
 
-Repositories and snapshots: declared repository IDs: ${available.join(", ")}. repo selects one (default ${repository.repoId}); registration grants no trust or membership. Reads use HEAD unless revision (impact: head) names a commit. live reads staged, unstaged and untracked changes of a repository the user declared trusted (repository content cannot grant trust), excludes revision/head and recaptures per call; head and stateId identify the captured working-tree state, so compare them between answers. For cross-repository reads, set workspace on ye_ast_callers, ye_ast_impact or ye_ast_trace: {} uses the persisted membership, workspace.repos replaces defaults with existing local Git roots (never downloaded); stable IDs default to root basename and must match across clone/worktrees; declared gateways override inference, never guess them; untrusted repositories cannot supply defaults. offline skips refreshing trusted remotes; live repositories never refresh. Paths are relative to their owner's snapshot; locate clones via repositoryRoots, not cwd. Base-side line numbers come from the merge-base commit, so they may not match your working copy.
+Repositories and snapshots: declared repository IDs: ${available.join(", ")}. repo selects one (default ${repository.repoId}); registration grants no trust or membership. Reads use HEAD unless revision (impact: head) names a commit. live reads staged/unstaged/untracked changes only in repositories the user declared trusted (repository content grants no trust); it excludes revision/head and recaptures per call. Compare head and stateId across answers. For cross-repository reads, set workspace on ye_ast_callers, ye_ast_impact or ye_ast_trace: {} uses the persisted membership, workspace.repos replaces defaults with existing local Git roots (never downloaded); stable IDs default to root basename and must match across clone/worktrees; declared gateways override inference, never guess them; untrusted repositories cannot supply defaults. offline skips refreshing trusted remotes; live repositories never refresh. Paths are relative to their owner's snapshot; locate clones via repositoryRoots, not cwd. Base-side line numbers come from the merge-base commit, so they may not match your working copy.
 
 Narrowing and paging: scope globs limit coverage (exclude wins); omitted=all. Include retains manifests, exclude may remove them; outside-scope callers/entrypoints are unknown. mode changes presentation only. impact changed picks the diff paths that start the walk (the seeds); unlike scope, it does not limit where consequences are found. Unmatched globs are errors. budget limits traversal, not response length; raise a bound only when a cut names it. Entrypoints, callers and impact page evidence the text omits: supply select and page together, page.limit required; a cursor needs the same selection and limit. Answers give the coordinates and owner each selection needs; select lists the kinds per tool. expect asserts the recovery identity; replay reruns the query and fails if the result changed (no old capture is kept) and requires workspace.
 
@@ -342,11 +345,11 @@ export const CONTRACT_CONSEQUENCES_OUTPUT = outputFor(shapes.contract_consequenc
 const OUTPUTS: Readonly<Record<QueryFamily, z.ZodType>> = { entrypoints: ENTRYPOINTS_OUTPUT, impact: IMPACT_OUTPUT, callers: CALLERS_OUTPUT, importers: IMPORTERS_OUTPUT, outline: OUTLINE_OUTPUT, trace: TRACE_OUTPUT, workspace: WORKSPACE_OUTPUT, decisions: DECISIONS_OUTPUT, contract_consequences: CONTRACT_CONSEQUENCES_OUTPUT };
 
 type Refusal = (fault: CodedFault) => CallToolResult;
-type Controls = { tool: "entrypoints" | "impact" | "callers"; select?: EvidenceSelection | undefined; page?: { limit: number; cursor?: string | undefined } | undefined; expect?: string | undefined };
+type Controls = { tool: "entrypoints" | "impact" | "callers"; select?: EvidenceSelection | undefined; page?: { limit: number; cursor?: string | undefined } | undefined; expect?: string | undefined; answerBytes?: number | undefined };
 
 /** The semantic query an original tool's arguments ask for: its own fields without presentation or recovery controls. */
-function semanticOf<A extends { mode: ResponseMode; select?: unknown; page?: unknown; expect?: unknown }>(args: A): Omit<A, "mode" | "select" | "page" | "expect"> {
-  const { mode: _mode, select: _select, page: _page, expect: _expect, ...semantic } = args;
+function semanticOf<A extends { mode: ResponseMode; select?: unknown; page?: unknown; expect?: unknown; answerBytes?: unknown }>(args: A): Omit<A, "mode" | "select" | "page" | "expect" | "answerBytes"> {
+  const { mode: _mode, select: _select, page: _page, expect: _expect, answerBytes: _answerBytes, ...semantic } = args;
   return semantic;
 }
 
@@ -361,9 +364,15 @@ export function createMcpServer(deps: McpDeps): McpServer {
    * summary/details carry a minimal receipt and convey response-level limits in their text. Every success is validated
    * before delivery in content.
    */
-  async function answer(query: SemanticQuery, mode: ResponseMode, signal: AbortSignal, controls?: Controls): Promise<CallToolResult> {
+  async function answer(query: SemanticQuery, mode: ResponseMode, signal: AbortSignal, controls?: Controls, requestedBytes?: number): Promise<CallToolResult> {
     const context = faultContext(query, controls);
-    const selectionFailure = (fault: CodedFault): CallToolResult => failure(controlFault(fault), context);
+    const limit = requestedBytes ?? controls?.answerBytes ?? deps.answerBytes;
+    const boundedFailure = (result: CallToolResult): CallToolResult => {
+      if (limit === undefined) return result;
+      const size = result.content.reduce((total, part) => total + (part.type === "text" ? Buffer.byteLength(part.text) : 0), 0);
+      return size <= limit ? result : { ...result, content: [] };
+    };
+    const selectionFailure = (fault: CodedFault): CallToolResult => boundedFailure(failure(controlFault(fault), context));
     try {
       if (controls?.select !== undefined && canonicalJson(redaction.redactValue(controls.select)) !== canonicalJson(controls.select)) {
         return selectionFailure({ code: "replay-unavailable", reason: "redacted-context" });
@@ -377,35 +386,35 @@ export function createMcpServer(deps: McpDeps): McpServer {
         cursor = checked.value;
       }
       const executed = await executeQuery(query, { deps, catalog, signal });
-      if (!executed.ok) return failure(executed.fault, context);
-      return present(executed.value, mode, controls, cursor, selectionFailure);
+      if (!executed.ok) return boundedFailure(failure(executed.fault, context));
+      return present(executed.value, mode, controls, cursor, selectionFailure, limit);
     } catch (error) {
-      return failure({ kind: "internal-fault", detail: redaction.redactError(error) }, context);
+      return boundedFailure(failure({ kind: "internal-fault", detail: redaction.redactError(error) }, context));
     }
   }
 
   /** The renderer and selection source of each public payload; the dispatch itself lives in the runner. */
-  function present(source: ExecutedSource, mode: ResponseMode, controls: Controls | undefined, cursor: CursorV1 | undefined, selectionFailure: Refusal): CallToolResult {
+  function present(source: ExecutedSource, mode: ResponseMode, controls: Controls | undefined, cursor: CursorV1 | undefined, selectionFailure: Refusal, answerBytes: number | undefined): CallToolResult {
     switch (source.family) {
       case "entrypoints":
-        return respond(source, source.read, true, renderEntrypointMap, mode, controls, cursor, selectionFailure, (fact) => ({ kind: "entrypoints", fact }));
+        return respond(source, source.read, true, renderEntrypointMap, mode, controls, cursor, selectionFailure, answerBytes, (fact) => ({ kind: "entrypoints", fact }));
       case "impact":
       case "callers":
         return source.branch === "local"
-          ? respond(source, source.read, true, renderImpact, mode, controls, cursor, selectionFailure, (fact) => ({ kind: "local", fact }))
-          : respond(source, source.read, false, renderWorkspaceImpact, mode, controls, cursor, selectionFailure, (fact) => ({ kind: "workspace", fact }));
+          ? respond(source, source.read, true, renderImpact, mode, controls, cursor, selectionFailure, answerBytes, (fact) => ({ kind: "local", fact }))
+          : respond(source, source.read, false, renderWorkspaceImpact, mode, controls, cursor, selectionFailure, answerBytes, (fact) => ({ kind: "workspace", fact }));
       case "importers":
-        return respond(source, source.read, true, renderImporters, mode, controls, cursor, selectionFailure);
+        return respond(source, source.read, true, renderImporters, mode, controls, cursor, selectionFailure, answerBytes);
       case "outline":
-        return respond(source, source.read, true, renderOutline, mode, controls, cursor, selectionFailure);
+        return respond(source, source.read, true, renderOutline, mode, controls, cursor, selectionFailure, answerBytes);
       case "trace":
-        return respond(source, source.read, true, renderTrace, mode, controls, cursor, selectionFailure);
+        return respond(source, source.read, true, renderTrace, mode, controls, cursor, selectionFailure, answerBytes);
       case "workspace":
-        return respond(source, source.read, false, renderWorkspace, mode, controls, cursor, selectionFailure);
+        return respond(source, source.read, false, renderWorkspace, mode, controls, cursor, selectionFailure, answerBytes);
       case "decisions":
-        return respond(source, source.read, false, renderDecisions, mode, controls, cursor, selectionFailure);
+        return respond(source, source.read, false, renderDecisions, mode, controls, cursor, selectionFailure, answerBytes);
       case "contract_consequences":
-        return respond(source, source.read, false, renderContractConsequences, mode, controls, cursor, selectionFailure);
+        return respond(source, source.read, false, renderContractConsequences, mode, controls, cursor, selectionFailure, answerBytes);
     }
   }
 
@@ -418,6 +427,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     controls: Controls | undefined,
     cursor: CursorV1 | undefined,
     selectionFailure: Refusal,
+    answerBytes: number | undefined,
     sourceFor?: (fact: Fact<V>) => EvidenceSource,
   ): CallToolResult {
     const { fact, repositoryRoots, refresh, workspaceLive } = read;
@@ -431,9 +441,16 @@ export function createMcpServer(deps: McpDeps): McpServer {
     }
     const recoveryText = recovery === undefined ? [] : [recoveryReference(recovery)];
     const meta = { ...(stale === undefined ? {} : { [LIVE_META]: stale }), ...(workspaceLive === undefined ? {} : { [WORKSPACE_LIVE_META]: workspaceLive }) };
-    const emit = (text: string, fields: Record<string, unknown>): CallToolResult => {
+    const emit = (text: string, fields: Record<string, unknown>, summary: () => string): CallToolResult => {
       OUTPUTS[tool].parse({ text, ...fields });
-      return delivered(text, fields, meta);
+      if (answerBytes === undefined) return delivered(text, fields, meta);
+      const bounded = boundedText((_fact, candidate) => `${candidate === mode ? text : summary()}\nResult JSON fields are in structuredContent.`, fact, mode, renderContext, { bytes: answerBytes });
+      if (bounded.kind === "refused") {
+        const { bound, status, narrow } = bounded;
+        const explanation = `answer-over-bound: ${bound} bytes; requested ${mode}; status ${status}; narrow: ${narrow.join(", ")}`;
+        return { isError: true, content: Buffer.byteLength(explanation) <= bound ? [{ type: "text", text: explanation }] : [], _meta: { ...meta, kind: "answer-over-bound", bound, mode, status, narrow } };
+      }
+      return { content: [{ type: "text", text: bounded.text }], structuredContent: fields, ...(Object.keys(meta).length ? { _meta: meta } : {}) };
     };
     if (controls?.select !== undefined && controls.page !== undefined && recovery !== undefined && sourceFor !== undefined) {
       if (recovery.status === "unavailable" && recovery.reason === "deadline") return selectionFailure({ code: "replay-unavailable", reason: recovery.reason });
@@ -484,18 +501,22 @@ export function createMcpServer(deps: McpDeps): McpServer {
         ...(refresh === undefined ? [] : renderRefresh(refresh)),
         ...(repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`),
       ];
-      return emit([...sidecar, renderEvidenceSelection({ mode, select: controls.select, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n"), fields);
+      return emit([...sidecar, renderEvidenceSelection({ mode, select: controls.select, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n"), fields, () => [...sidecar, renderEvidenceSelection({ mode: "summary", select: controls.select!, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n"));
     }
     if (mode === "full") {
+      const location = "full result: the result JSON";
+      const guidance = [
+        ...recoveryText,
+        ...(repositoryRoots === undefined ? [] : ["Repository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot."]),
+        ...(refresh === undefined ? [] : ["Remote context: inspect freshness and resolution for the repositories used; pinned revisions do not imply verified freshness."]),
+        ...(stale === undefined ? [] : ["Live context: inspect live.stateId and live.changed before comparing this result with the current working tree."]),
+        ...(workspaceLive === undefined ? [] : ["Workspace live context: inspect workspaceLive for captured snapshots and stale or unavailable checks. Captures are not an atomic workspace instant."]),
+      ];
       return emit(
         [
-          `status: ${fact.status}\nfull result: the result JSON`,
+          `status: ${fact.status}\n${location}`,
           render(fact, mode, renderContext),
-          ...recoveryText,
-          ...(repositoryRoots === undefined ? [] : ["Repository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot."]),
-          ...(refresh === undefined ? [] : ["Remote context: inspect freshness and resolution for the repositories used; pinned revisions do not imply verified freshness."]),
-          ...(stale === undefined ? [] : ["Live context: inspect live.stateId and live.changed before comparing this result with the current working tree."]),
-          ...(workspaceLive === undefined ? [] : ["Workspace live context: inspect workspaceLive for captured snapshots and stale or unavailable checks. Captures are not an atomic workspace instant."]),
+          ...guidance,
         ].filter((part) => part !== "").join("\n"),
         {
           ...fact,
@@ -506,6 +527,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           ...(stale === undefined ? {} : { live: stale }),
           ...(workspaceLive === undefined ? {} : { workspaceLive }),
         },
+        () => [render(fact, "summary", renderContext), location, ...guidance].filter((part) => part !== "").join("\n"),
       );
     }
     const sidecar = [
@@ -523,6 +545,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         ...(recovery === undefined ? {} : { recovery }),
         ...(fact.status === "unknown" ? { reason: fact.reason } : {}),
       },
+      () => [...sidecar, render(fact, "summary", renderContext), ...recoveryText, ...(local ? (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`) : [])].join("\n"),
     );
   }
 
@@ -587,7 +610,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       annotations,
     },
     (args: ToolArguments<"entrypoints">, ctx) =>
-      answer({ name: "ye_ast_entrypoints", arguments: semanticOf(args) }, args.mode, ctx.mcpReq.signal, { tool: "entrypoints", select: args.select, page: args.page, expect: args.expect }),
+      answer({ name: "ye_ast_entrypoints", arguments: semanticOf(args) }, args.mode, ctx.mcpReq.signal, { tool: "entrypoints", select: args.select, page: args.page, expect: args.expect, answerBytes: args.answerBytes }),
   );
 
   server.registerTool(
@@ -599,7 +622,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       annotations,
     },
     (args: ToolArguments<"impact">, ctx) =>
-      answer({ name: "ye_ast_impact", arguments: semanticOf(args) }, args.mode, ctx.mcpReq.signal, { tool: "impact", select: args.select, page: args.page, expect: args.expect }),
+      answer({ name: "ye_ast_impact", arguments: semanticOf(args) }, args.mode, ctx.mcpReq.signal, { tool: "impact", select: args.select, page: args.page, expect: args.expect, answerBytes: args.answerBytes }),
   );
 
   server.registerTool(
@@ -611,7 +634,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       annotations,
     },
     (args: ToolArguments<"callers">, ctx) =>
-      answer({ name: "ye_ast_callers", arguments: semanticOf(args) }, args.mode, ctx.mcpReq.signal, { tool: "callers", select: args.select, page: args.page, expect: args.expect }),
+      answer({ name: "ye_ast_callers", arguments: semanticOf(args) }, args.mode, ctx.mcpReq.signal, { tool: "callers", select: args.select, page: args.page, expect: args.expect, answerBytes: args.answerBytes }),
   );
 
   server.registerTool(
@@ -622,7 +645,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       inputSchema: compactInput(TOOL_INPUTS.importers),
       annotations,
     },
-    ({ mode, ...semantic }: ToolArguments<"importers">, ctx) => answer({ name: "ye_ast_importers", arguments: semantic }, mode, ctx.mcpReq.signal),
+    ({ mode, answerBytes, ...semantic }: ToolArguments<"importers">, ctx) => answer({ name: "ye_ast_importers", arguments: semantic }, mode, ctx.mcpReq.signal, undefined, answerBytes),
   );
 
   server.registerTool(
@@ -633,7 +656,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       inputSchema: compactInput(TOOL_INPUTS.outline),
       annotations,
     },
-    ({ mode, ...semantic }: ToolArguments<"outline">, ctx) => answer({ name: "ye_ast_outline", arguments: semantic }, mode, ctx.mcpReq.signal),
+    ({ mode, answerBytes, ...semantic }: ToolArguments<"outline">, ctx) => answer({ name: "ye_ast_outline", arguments: semantic }, mode, ctx.mcpReq.signal, undefined, answerBytes),
   );
 
   server.registerTool(
@@ -644,7 +667,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       inputSchema: compactInput(TOOL_INPUTS.trace),
       annotations,
     },
-    ({ mode, ...semantic }: ToolArguments<"trace">, ctx) => answer({ name: "ye_ast_trace", arguments: semantic }, mode, ctx.mcpReq.signal),
+    ({ mode, answerBytes, ...semantic }: ToolArguments<"trace">, ctx) => answer({ name: "ye_ast_trace", arguments: semantic }, mode, ctx.mcpReq.signal, undefined, answerBytes),
   );
 
   server.registerTool(
@@ -655,7 +678,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       inputSchema: compactInput(TOOL_INPUTS.workspace),
       annotations,
     },
-    ({ mode, ...semantic }: ToolArguments<"workspace">, ctx) => answer({ name: "ye_ast_workspace", arguments: semantic }, mode, ctx.mcpReq.signal),
+    ({ mode, answerBytes, ...semantic }: ToolArguments<"workspace">, ctx) => answer({ name: "ye_ast_workspace", arguments: semantic }, mode, ctx.mcpReq.signal, undefined, answerBytes),
   );
 
   server.registerTool(
@@ -666,7 +689,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       inputSchema: compactInput(TOOL_INPUTS.decisions),
       annotations,
     },
-    ({ mode, ...semantic }: ToolArguments<"decisions">, ctx) => answer({ name: "ye_ast_decisions", arguments: semantic }, mode, ctx.mcpReq.signal),
+    ({ mode, answerBytes, ...semantic }: ToolArguments<"decisions">, ctx) => answer({ name: "ye_ast_decisions", arguments: semantic }, mode, ctx.mcpReq.signal, undefined, answerBytes),
   );
 
   server.registerTool(
@@ -677,7 +700,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       inputSchema: compactInput(TOOL_INPUTS.contract_consequences),
       annotations,
     },
-    ({ mode, ...semantic }: ToolArguments<"contract_consequences">, ctx) => answer({ name: "ye_ast_contract_consequences", arguments: semantic }, mode, ctx.mcpReq.signal),
+    ({ mode, answerBytes, ...semantic }: ToolArguments<"contract_consequences">, ctx) => answer({ name: "ye_ast_contract_consequences", arguments: semantic }, mode, ctx.mcpReq.signal, undefined, answerBytes),
   );
 
   return server;

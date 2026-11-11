@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { CallToolResultSchema } from "@modelcontextprotocol/core";
 import assert from "node:assert/strict";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import type { EntrypointMapFact } from "../core/domain/map/entrypoint-map.ts";
@@ -254,7 +255,7 @@ interface Answers {
   consequences: (request: HypothesesRequest | ChangeRequest) => Promise<Result<Fact<ConsequencesValue>, ConsequencesFault>>;
 }
 
-async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh, repositories?: readonly { path: string; repoId: string }[], repository = REPOSITORY, redaction: Redaction = fakeRedaction): Promise<{ session: Session; calls: Calls }> {
+async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh, repositories?: readonly { path: string; repoId: string }[], repository = REPOSITORY, redaction: Redaction = fakeRedaction, answerBytes?: number): Promise<{ session: Session; calls: Calls }> {
   const calls: Calls = { map: [], ofChange: [], callers: [], importers: [], outline: [], trace: [], workspaceCallers: [], workspaceOfChange: [], workspaceReads: [], decisions: [], hypotheses: [], changes: [] };
   /** A fact with the sidecar a read that refreshed something carries, and without one when it refreshed nothing. */
   const read = <T>(fact: Fact<T>): FactRead<T> => (refresh === undefined ? { fact } : { fact, refresh });
@@ -318,7 +319,7 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh,
     ofHypotheses: (request) => (calls.hypotheses.push(request), consequences(forRepo({ ...base(), status: "complete", value: { repositorySnapshots: [], answers: [] } }, request.repo.id!))(request)),
     ofChange: (request) => (calls.changes.push(request), consequences(forRepo({ ...base(), status: "complete", value: { repositorySnapshots: [], answers: [] } }, request.repo.id!))(request)),
   };
-  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, outline, trace, workspace, workspaceImpact, decisions, contractConsequences, digest: { of: (value) => createHash("sha256").update(value).digest("hex") }, evidenceComposition: {} as EvidenceComposition, redaction, repository, ...(repositories === undefined ? {} : { repositories }) });
+  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, outline, trace, workspace, workspaceImpact, decisions, contractConsequences, digest: { of: (value) => createHash("sha256").update(value).digest("hex") }, evidenceComposition: {} as EvidenceComposition, redaction, repository, ...(answerBytes === undefined ? {} : { answerBytes }), ...(repositories === undefined ? {} : { repositories }) });
   return { session: await openSession(server), calls };
 }
 
@@ -4442,5 +4443,85 @@ test("contract consequences full mode delivers every answer with its chains and 
     const summary = resultFields(await session.callTool("ye_ast_contract_consequences", { hypotheses: [HYPOTHESIS] }));
     assert.equal(summary.value, undefined);
     assert.match(summary.text, /unknown \(no-project\)/);
+  } finally { await session.close(); }
+});
+
+test("bounded responses identify their structured output location across delivery paths", async () => {
+  const { session } = await setup();
+  try {
+    const selection = { select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } };
+    for (const args of [{ mode: "full" }, { mode: "summary" }, { mode: "details" }, { mode: "full", ...selection }, { mode: "summary", ...selection }]) {
+      const result = await session.callTool("ye_ast_entrypoints", { ...args, answerBytes: 100000 });
+      assert.notEqual(result.isError, true, textOf(result));
+      assert.ok(result.structuredContent);
+      assert.match(textOf(result), /structuredContent/);
+    }
+  } finally { await session.close(); }
+});
+
+test("a full fallback retains context guidance or explicitly refuses", async () => {
+  const live = { repo: "shop-web", kind: "live" as const, head: "c".repeat(40), stateId: "web-state" };
+  const { session } = await setup({
+    map: async (request) => {
+      if (request.live === true) request.onStale?.({ stateId: "s1", changed: ["src/A.java"] });
+      return { ok: true, value: mapFact() };
+    },
+    workspaceCallers: async () => ({ ok: true, value: { fact: workspaceImpactFact(), refresh: REFRESH, repositoryRoots: [{ repo: "shop-web", path: "/clones/frontend" }], workspaceLive: [{ kind: "stale", repo: "shop-web", snapshot: live, notice: { stateId: "web-state", changed: ["src/web-change.ts"] } }] } }),
+  });
+  try {
+    const cases: [string, Record<string, unknown>, string[]][] = [
+      ["ye_ast_entrypoints", { live: true }, ["live", "repositoryRoots", "recovery"]],
+      ["ye_ast_callers", { targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }], workspace: {} }, ["freshness", "workspaceLive", "repositoryRoots", "recovery"]],
+    ];
+    for (const [tool, args, context] of cases) {
+      const full = await session.callTool(tool, { ...args, mode: "full", answerBytes: 100000 });
+      for (const key of context) assert.ok(key in (full.structuredContent as Record<string, unknown>));
+      const bound = Buffer.byteLength(textOf(full)) - 1;
+      const smaller = await session.callTool(tool, { ...args, mode: "full", answerBytes: bound });
+      assert.ok(Buffer.byteLength(textOf(smaller)) <= bound);
+      if (smaller.isError) assert.equal(smaller._meta?.kind, "answer-over-bound");
+      else for (const key of context) assert.ok(textOf(smaller).includes(key), key);
+    }
+  } finally { await session.close(); }
+});
+
+test("answerBytes limits the MCP text and preserves full facts or refusal metadata", async () => {
+  const { session } = await setup();
+  try {
+    const original = await session.callTool("ye_ast_entrypoints", { mode: "full" });
+    const bounded = await session.callTool("ye_ast_entrypoints", { mode: "full", answerBytes: 100000 });
+    assert.equal(bounded.isError, undefined);
+    assert.equal(CallToolResultSchema.safeParse(bounded).success, true);
+    assert.deepEqual((bounded.structuredContent as Record<string, unknown>).value, resultFields(original).value);
+    assert.ok(Buffer.byteLength(bounded.content[0]!.text) <= 100000);
+    const refused = await session.callTool("ye_ast_entrypoints", { mode: "details", answerBytes: 0 });
+    assert.equal(refused.isError, true);
+    assert.equal(refused.content.length, 0);
+    assert.equal(refused._meta?.kind, "answer-over-bound");
+    assert.equal(refused._meta?.bound, 0);
+    assert.equal(refused._meta?.status, "complete");
+    assert.ok(Array.isArray(refused._meta?.narrow));
+    assert.equal(CallToolResultSchema.safeParse(refused).success, true);
+    const small = await session.callTool("ye_ast_entrypoints", { mode: "full", answerBytes: 150 });
+    assert.equal(small.isError, true);
+    assert.equal(small.content.length, 1);
+    assert.ok(Buffer.byteLength(small.content[0]!.text) <= 150);
+    assert.equal(CallToolResultSchema.safeParse(small).success, true);
+    const selected = await session.callTool("ye_ast_entrypoints", { mode: "full", answerBytes: 0, select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } });
+    assert.equal(selected.isError, true);
+    assert.equal(selected.content.length, 0);
+    assert.equal(selected._meta?.kind, "answer-over-bound");
+    assert.equal(CallToolResultSchema.safeParse(selected).success, true);
+    for (const invalid of [-1, 1.5]) {
+      const rejected = await session.callTool("ye_ast_entrypoints", { answerBytes: invalid });
+      assert.equal(rejected.isError, true);
+    }
+    const limitedHost = await setup({}, undefined, undefined, REPOSITORY, fakeRedaction, 0);
+    try {
+      const hostRefusal = await limitedHost.session.callTool("ye_ast_entrypoints", {});
+      assert.equal(hostRefusal.isError, true);
+      const override = await limitedHost.session.callTool("ye_ast_entrypoints", { answerBytes: 100000 });
+      assert.equal(override.isError, undefined);
+    } finally { await limitedHost.session.close(); }
   } finally { await session.close(); }
 });

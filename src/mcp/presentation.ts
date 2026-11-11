@@ -11,7 +11,7 @@ export const responseModeSchema = z
   .describe("Presentation: summary=findings, details=evidence, full=result JSON+navigation. Coverage unchanged.");
 
 export type ResponseMode = z.infer<typeof responseModeSchema>;
-export type RenderContext = { tool: QueryFamily; recovery?: Recovery };
+export type RenderContext = { tool: QueryFamily; recovery?: Recovery; answerBytes?: number };
 export type ResponseRenderer<T> = (fact: Fact<T>, mode: ResponseMode, context?: RenderContext) => string;
 
 export function unresolvedLabel(site: UnresolvedCallSite): string {

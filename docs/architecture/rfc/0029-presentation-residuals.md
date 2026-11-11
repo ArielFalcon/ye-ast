@@ -266,6 +266,8 @@ Algorithm:
    (resolved question 1). When the full text exceeds the bound, step 2 applies; when summary does too, step 3. A client
    whose cap covers the whole message must ask a narrower query or a smaller mode; the answer says so in the refusal.
 
+The bound is a nonnegative integer; zero is valid. All UTF-8 text bytes, including the downgrade note and refusal, count. If the complete refusal text cannot fit, the MCP result uses an empty content array and carries its kind, status, bound, requested mode and narrowing inputs in `_meta`; it is still an error, not an empty fact. A bounded successful response carries its complete existing structured fields in `structuredContent`; a refusal carries no fact or structured output. The bound never applies to metadata or structured content.
+
 The bound is applied once, inside `respond`, around every text it emits (selection receipt, full, summary/details), so a
 new family inherits it. Determinism: pure comparison of `Buffer.byteLength`; no clock, no tokenizer (RFC-0017:141).
 
