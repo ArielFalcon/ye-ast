@@ -13,7 +13,7 @@ const RULES: readonly { concept: string; pattern: RegExp; owner: string; pending
     concept: "a call is a request by the client name its callee spells",
     pattern: /\.text === "(?:fetch|httpResource)"|"httpResource"\)/,
     owner: OWNER,
-    pending: ["core/adapters/typescript/consumer-flow.walker.ts"],
+    pending: [],
   },
   { concept: "the verbs of the client vocabulary", pattern: /new Set\(\["get", "head", "post"/, owner: OWNER, pending: [] },
 ];
@@ -33,19 +33,12 @@ function importsVerbs(source: string): boolean {
   return named || namespaces.some((match) => new RegExp(`\\b${match[1]}\\s*(?:\\.\\s*VERBS\\b|\\[\\s*["']VERBS["']\\s*\\])`).test(source));
 }
 
-function unlistedVerbImporters(files: readonly { path: string; text: string }[]): string[] {
-  const pending = new Set(["core/adapters/typescript/consumer-flow.walker.ts"]);
-  return files.filter((file) => importsVerbs(file.text) && !pending.has(file.path)).map((file) => file.path).sort();
-}
-
-test("only the pending walker imports the request verb vocabulary", () => {
+test("the request verb vocabulary has no external importers", () => {
   const importers = sourceFiles(SOURCE).filter((file) => importsVerbs(readFileSync(file, "utf8"))).map((file) => relative(SOURCE, file));
-  assert.deepEqual(importers, ["core/adapters/typescript/consumer-flow.walker.ts"]);
+  assert.deepEqual(importers, []);
   assert.equal(importsVerbs('import { VERBS as methods } from "./request-summaries.ts";'), true);
   assert.equal(importsVerbs('import { other as VERBS } from "./request-summaries.ts";'), false);
   assert.equal(importsVerbs('import * as requests from "./request-summaries.ts"; requests.VERBS.has("get");'), true);
-  assert.deepEqual(unlistedVerbImporters([{ path: "other.ts", text: 'import { VERBS as methods } from "./request-summaries.ts";' }]), ["other.ts"]);
-  assert.deepEqual(unlistedVerbImporters(sourceFiles(SOURCE).map((file) => ({ path: relative(SOURCE, file), text: readFileSync(file, "utf8") }))), []);
 });
 
 for (const { concept, pattern, owner, pending } of RULES) {

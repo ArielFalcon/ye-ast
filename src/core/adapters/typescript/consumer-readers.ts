@@ -59,7 +59,9 @@ export async function createConsumerReaders(files: readonly SourceFile[], repo: 
   let held: ReturnType<typeof buildProgram> | undefined;
   const program = () => (held ??= deps.buildProgram(files));
   const reading = new TypeScriptReading(program(), files);
-  const built = await reading.program();
+  let heldLookup: ReturnType<typeof createRequestCallLookup> | undefined;
+  const lookupOf: typeof createRequestCallLookup = () => (heldLookup ??= (deps.createRequestCallLookup ?? createRequestCallLookup)(files));
+  const [built, lookup] = await Promise.all([reading.program(), lookupOf(files)]);
   const manifests = manifestsOf(files);
   const projectAllows = (dependency: string, file: string): boolean => {
     const project = projectOf(file, manifests);
@@ -71,7 +73,7 @@ export async function createConsumerReaders(files: readonly SourceFile[], repo: 
   };
   const applicable = plugins?.filter((plugin) => plugin.languages.includes(reading.language) && [...built.index.units.keys()].some((file) => applies(plugin, file))) ?? [];
   const prepared = await Promise.all(applicable.map(async (plugin) => ({ plugin, stage: plugin.absent?.includes("consumer") === true ? undefined : await plugin.consumer?.prepare(reading, repo) })));
-  const base = consumerFlowReader(built, repo);
+  const base = consumerFlowReader(built, repo, lookup);
   return {
     flow: { follow: (carrier: Carrier): FlowResult => {
       const file = siteFile(carrier.site);
@@ -88,6 +90,6 @@ export async function createConsumerReaders(files: readonly SourceFile[], repo: 
       if (!absent) return result;
       return { ...result, frontiers: [...result.frontiers.filter((one) => one.reason !== "no-extractor"), { at: { path: file, line: siteLine(carrier.site) ?? 1 }, cause: "unmodelled-flow" as const, reason: CAPABILITY_ABSENT, hops: [] }] };
     } },
-    origins: createRequestOriginReader(files, program, deps.createRequestCallLookup ?? createRequestCallLookup),
+    origins: createRequestOriginReader(files, program, lookupOf),
   };
 }

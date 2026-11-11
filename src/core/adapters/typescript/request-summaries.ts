@@ -92,7 +92,7 @@ interface Edge {
 }
 
 /** The verbs a client receiver is called with to make a request: `HttpClient`'s, and `fetch` of a client wrapper. */
-export const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
+const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
 const MEMBER_FETCH = "fetch";
 const HTTP_CLIENT_PACKAGE = "@angular/common/http";
 /** What a file's syntax states that decides which client a call names: its imports, and the names it binds itself. */
@@ -427,11 +427,27 @@ async function bodyOf(expression: ts.Expression, scope: ReturnScope): Promise<Re
   return { kind: "none" };
 }
 
+/** Equal result shapes can differ in whether the body is behind a fetch response's json accessor. */
+const FETCH_RESULTS = new WeakSet<ResultShape>();
+
+export function resultBodyAccess(result: ResultShape): "json" | undefined {
+  return FETCH_RESULTS.has(result) ? "json" : undefined;
+}
+
+function withResultBodyAccess(result: ResultShape, source: ResultShape): ResultShape {
+  if (FETCH_RESULTS.has(source)) FETCH_RESULTS.add(result);
+  return result;
+}
+
 /** The body a client leaf carries, with the container and the way the response is observed; undefined when it is no leaf. */
-async function leafResultOf(file: string, call: ts.CallExpression, resolver: SummaryResolver): Promise<ResultShape | undefined> {
+export async function leafResultOf(file: string, call: ts.CallExpression, resolver: SummaryResolver): Promise<ResultShape | undefined> {
   const recognized = requestCallOf(requestFileShapeOf(call.getSourceFile()), call);
   if (recognized.kind === "not-request") return undefined;
-  if (recognized.kind === "request") return { kind: "body", container: recognized.client === "resource" ? "resource" : "promise", observed: "body" };
+  if (recognized.kind === "request") {
+    const result: ResultShape = { kind: "body", container: recognized.client === "resource" ? "resource" : "promise", observed: "body" };
+    if (recognized.client === "fetch") FETCH_RESULTS.add(result);
+    return result;
+  }
   if (!(await resolver.clientReceiver(file, call))) return undefined;
   const observed = observedOf(call);
   if (observed === undefined) return { kind: "unknown", cause: "destination-undecidable", evidence: [placeOf(file, call)] };
@@ -467,6 +483,7 @@ async function projectionOf(call: ts.CallExpression, scope: ReturnScope): Promis
   const source = await bodyOf(call.expression.expression, scope);
   if (source === undefined) return undefined;
   if (source.kind !== "body") return source;
+  if (resultBodyAccess(source) !== undefined) return { kind: "unknown", cause: "destination-undecidable", evidence: [placeOf(scope.file, call)] };
   const projection = projectionPathOf(callback);
   if (projection === undefined) return { kind: "unknown", cause: "destination-undecidable", evidence: [placeOf(scope.file, callback)] };
   return { ...source, projection };
@@ -526,9 +543,9 @@ async function forwardingResult(call: ts.CallExpression, row: ForwardingRow, sco
   if (carried === undefined) return { kind: "unknown", cause: "destination-undecidable", evidence: [placeOf(scope.file, call)] };
   const outcome = await carriedOutcome(carried, row, scope);
   if (outcome === undefined) return undefined;
-  if (row.returns.kind === "same") return outcome.kind === "body" ? { ...outcome, container: "plain" } : outcome;
+  if (row.returns.kind === "same") return outcome.kind === "body" ? withResultBodyAccess({ ...outcome, container: "plain" }, outcome) : outcome;
   if (row.returns.container === "signal") return { kind: "unknown", cause: "destination-undecidable", evidence: [placeOf(scope.file, call)] };
-  return outcome.kind === "body" ? { ...outcome, container: row.returns.container } : outcome;
+  return outcome.kind === "body" ? withResultBodyAccess({ ...outcome, container: row.returns.container }, outcome) : outcome;
 }
 
 /** The outcome of the expression a row carries: a callback's body for the rows that carry one, the expression otherwise. */
@@ -585,7 +602,7 @@ function recordGap(gaps: Map<DeclarationKey, SummaryGap[]>, key: DeclarationKey,
 
 function distinctResults(results: readonly ResultShape[]): ResultShape[] {
   const seen = new Map<string, ResultShape>();
-  for (const result of results) seen.set(JSON.stringify(result), result);
+  for (const result of results) seen.set(JSON.stringify([result, resultBodyAccess(result)]), result);
   return [...seen.values()];
 }
 

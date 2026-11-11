@@ -37,12 +37,11 @@ import {
   type FunctionNode,
   type NamedFunction,
 } from "./consumer-flow.syntax.ts";
-import { symbolOf } from "./http-call-sites.adapter.ts";
-import { VERBS } from "./request-summaries.ts";
+import type { RequestCallLookup } from "./http-call-sites.adapter.ts";
 import { FUNCTIONS, isModule, METHODS, type MethodResult, type MethodRow } from "./consumer-flow.callees.ts";
 import { resolveFunction, type Resolved } from "./consumer-flow.resolution.ts";
 import { baseOf, injectedInstance, lineage, memberDeclaration, type ClassRef } from "./consumer-flow.classes.ts";
-import { lineOf, propertyOf, thisClass, unwrapped } from "./syntax.ts";
+import { lineOf, thisClass, unwrapped } from "./syntax.ts";
 
 /** A value being followed: where the changed property sits in it, the steps taken, and the guards that hold on it. */
 interface Trail {
@@ -129,20 +128,24 @@ export class Walker {
     private readonly repo: string,
     private readonly program: Program,
     readonly unit: Unit,
+    private readonly requests?: RequestCallLookup,
   ) {}
 
   startCallSite(site: { line: number; column?: number; symbol: string }, path: AccessPath): void {
-    const candidates = this.calls().filter((candidate) => lineOf(this.unit.tree, candidate) === site.line && symbolOf(candidate) === site.symbol);
-    const placed = site.column === undefined ? [] : candidates.filter((candidate) => this.unit.tree.getLineAndCharacterOfPosition(candidate.getStart()).character + 1 === site.column).sort((a, b) => a.getEnd() - b.getEnd());
-    const call = placed[0] ?? (site.column === undefined ? candidates.find((candidate) => this.requestKind(candidate) !== undefined) ?? (candidates.length === 1 ? candidates[0] : undefined) : undefined);
+    const call = this.requests?.at({ file: this.unit.file, ...site });
     if (call === undefined) return this.lostAt(site.line, "no call at the reported site");
-    const kind = this.requestKind(call);
-    const start: Trail = { origin: path, hops: [], guards: [] };
-    if (kind === "resource") return this.read(call, this.hopped(this.rewrapped(start, ["value"]), "resource", call));
-    if (kind === "fetch") return this.read(call, this.hopped(this.rewrapped(start, ["json"]), "response-body", call, [{ from: [], to: ["json"] }]));
-    const observed = this.observed(call);
-    if (observed === "events") return this.frontier(call, "unmodelled-flow", "observe events", start);
-    if (observed === "response") return this.read(call, this.hopped(this.rewrapped(start, ["body"]), "response-body", call, [{ from: [], to: ["body"] }]));
+    const summary = this.requests?.of(call);
+    const result = summary?.result;
+    let start: Trail = { origin: path, hops: [], guards: [] };
+    if (result === undefined || result.kind === "unknown") return this.frontier(call, "unmodelled-flow", `request-summary:${result?.cause ?? "unknown"}`, start);
+    if (result.kind === "none") return this.frontier(call, "unmodelled-flow", "request-summary:no-body", start);
+    if (result.observed === "response") start = this.hopped(this.rewrapped(start, ["body"]), "response-body", call, [{ from: [], to: ["body"] }]);
+    if (result.projection !== undefined) {
+      if (relatePaths(result.projection, start.origin) === "disjoint") return;
+      start = { ...start, origin: startsWith(start.origin, result.projection) ? start.origin.slice(result.projection.length) : [] };
+    }
+    if (summary?.bodyAccess === "json") start = this.hopped(this.rewrapped(start, ["json"]), "response-body", call, [{ from: [], to: ["json"] }]);
+    if (result.container === "resource") start = this.hopped(this.rewrapped(start, ["value"]), "resource", call);
     this.read(call, start);
   }
 
@@ -364,7 +367,10 @@ export class Walker {
 
   /** `value()` of a resource or `json()` of a fetch response: the change sits under the accessor the carrier was wrapped in. */
   private readsAccessor(access: ts.PropertyAccessExpression, call: ts.CallExpression, q: AccessPath, t: Trail): boolean {
-    return call.arguments.length === 0 && q.length === 0 && ACCESSORS.has(access.name.text) && t.origin[0] === access.name.text;
+    const nestedFetch = q.length === 1 && q[0] === "value" && access.name.text === "json"
+      && t.hops.some((hop) => hop.step === "resource")
+      && t.hops.some((hop) => hop.step === "response-body" && hop.rewrite?.some(({ from, to }) => from.length === 0 && to.length === 1 && to[0] === "json"));
+    return call.arguments.length === 0 && (q.length === 0 || nestedFetch) && startsWith(t.origin, q) && ACCESSORS.has(access.name.text) && t.origin[q.length] === access.name.text;
   }
 
   /** A call of a method of the value at `q`, as opposed to a call of a property on the way to the changed value. */
@@ -973,23 +979,6 @@ export class Walker {
     };
     visit(this.unit.tree);
     return found;
-  }
-
-  private requestKind(call: ts.CallExpression): "verb" | "resource" | "fetch" | undefined {
-    const callee = call.expression;
-    if (ts.isIdentifier(callee)) return callee.text === "fetch" ? "fetch" : callee.text === "httpResource" ? "resource" : undefined;
-    if (!ts.isPropertyAccessExpression(callee)) return undefined;
-    if (ts.isIdentifier(callee.expression) && callee.expression.text === "httpResource") return "resource";
-    return VERBS.has(callee.name.text) || callee.name.text === "fetch" ? "verb" : undefined;
-  }
-
-  private observed(call: ts.CallExpression): "response" | "events" | undefined {
-    for (const argument of call.arguments) {
-      if (!ts.isObjectLiteralExpression(argument)) continue;
-      const observe = propertyOf(argument, "observe");
-      if (observe !== undefined && ts.isStringLiteralLike(observe)) return observe.text === "response" ? "response" : observe.text === "events" ? "events" : undefined;
-    }
-    return undefined;
   }
 
   private startLine(node: ts.Node): number {

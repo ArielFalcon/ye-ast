@@ -54,6 +54,7 @@ A value is followed only through these steps; anything else it flows into is a f
 | Step | Path effect |
 |---|---|
 | HTTP call site on a qualified link; `observe: 'response'` | the body; with `observe: 'response'` the body sits under `body` |
+| a call whose declaration's summary states a response body | the body, through the container the summary names |
 | a conditional inside the path a request writes, on one of the function's own parameters (`all ? '/items' : '/items/' + id`) | one request shape per branch, each carrying the test it holds under; a literal argument decides it, and an undecided one keeps both |
 | `return` of the value; each proven call occurrence continues, and a function entered through an argument returns only to the call that passed it | none |
 | `pipe(...)`: pass-through operators listed as data (`catchError`, `tap`, `filter`, `take`, `first`, `finalize`, `shareReplay`, `takeUntil`, ...) | none |
