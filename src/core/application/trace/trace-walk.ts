@@ -11,7 +11,7 @@ import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import type { DeclaredType, DispatchTargets, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { DispatchTargets, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, placedBetween, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
@@ -236,32 +236,12 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   };
   const dispatchCut = (symbol: GraphSymbol, implementations: readonly GraphSymbol[], subReason: CutSubReason): Cut =>
     callCut(placeAt(symbol.file, symbol.startLine, symbol.name), sortedUnique(implementations.map(candidateOf)), "dispatch", subReason);
-  /** Whether the index resolves every supertype of `type` and of each type above it to a type declaration. */
-  const heritageResolved = (type: GraphSymbol): boolean =>
-    [type, ...[...ancestorsOf(type)].flatMap((id) => navigation.symbolOf(id) ?? [])].every(
-      (above) =>
-        !unresolvedIn(above.file).some((reference) => reference.from === above.id && SUPERTYPE_EDGES.includes(reference.kind) && !reference.name.includes("<")) &&
-        navigation.supertypeEdgesOf(above).every((edge) => TYPE_KINDS.includes(navigation.symbolOf(edge.target)?.kind ?? "")),
-    );
-  /**
-   * The method named `member` an instance of the nominal class `type` runs, unless a subclass replaces it (the step's
-   * dispatch cut): the one the class or the nearest class it extends declares. None when the index does not place the
-   * class, a class on the way extends no single class, or a class outside that line declares `member` with heritage the
-   * index does not resolve, since it may extend the class unseen.
-   */
-  const nominalMethod = (type: Extract<DeclaredType, { kind: "nominal" }>, member: string): GraphSymbol | undefined => {
-    const classes = store.symbolsInFiles([type.file]).filter((symbol) => symbol.kind === "class" && joinsFact(symbol, { path: type.file, line: type.line, symbol: type.name }));
-    const line = new Set<GraphNodeId>();
-    let method: GraphSymbol | undefined;
-    for (let declaring = classes.length === 1 ? classes[0] : undefined; declaring !== undefined && method === undefined && !line.has(declaring.id); ) {
-      line.add(declaring.id);
-      const own = navigation.methodsOf(declaring).filter((candidate) => candidate.name === member);
-      if (own.length > 1) return undefined;
-      const above = supertypesOf(declaring).filter((supertype) => isClassKind(supertype.kind));
-      [method, declaring] = [own[0], above.length === 1 ? above[0] : undefined];
-    }
-    const hidden = store.declarationsNamed([member]).some((declared) => declared.kind === "method" && navigation.ownersOf(declared).some((owner) => !line.has(owner.id) && !heritageResolved(owner)));
-    return hidden ? undefined : method;
+  /** Unresolved heritage may hide a runtime override, even when the binding identifies a declaration. */
+  const executionProven = (type: GraphSymbol, member: string): boolean => {
+    const lineage = new Set([type.id, ...ancestorsOf(type)]);
+    return !store.declarationsNamed([member]).some((declared) => declared.kind === "method" && navigation.ownersOf(declared).some((owner) => !lineage.has(owner.id) && [owner, ...[...ancestorsOf(owner)].flatMap((id) => navigation.symbolOf(id) ?? [])].some((above) =>
+      unresolvedIn(above.file).some((reference) => reference.from === above.id && SUPERTYPE_EDGES.includes(reference.kind) && !reference.name.includes("<")) ||
+      navigation.supertypeEdgesOf(above).some((edge) => !TYPE_KINDS.includes(navigation.symbolOf(edge.target)?.kind ?? "")))));
   };
   /**
    * The method bodies the proof names, each the one method the index places there; none when one is not placed so.
@@ -384,14 +364,14 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     };
     /** Constructed receivers whose class the binder places in no repository declaration: a global's instance is a leaf. */
     const constructed: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; holds: Extract<ReceiverBinding["holds"], { kind: "constructed" }> }[] = [];
-    const annotated: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; holds: Extract<ReceiverBinding["holds"], { kind: "annotated" }>; type: GraphSymbol | undefined }[] = [];
+    const annotated: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; holds: Extract<ReceiverBinding["holds"], { kind: "annotated" }>; type: GraphSymbol | undefined; target: GraphSymbol | undefined; unspelled: boolean }[] = [];
     /** Member calls no other proof settles, which the type the sources declare the receiver to hold may (R3, R5). */
     const typed: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; declared?: DeclaredBinding }[] = [];
     /**
      * The method `member` names on what a call returns, when the call is a resolved edge of this body whose own receiver
      * needs no proof and whose declaration states a nominal class as its return type (RFC-0013 R5).
      */
-    const returnedMethod = async (head: Extract<ReceiverBinding["holds"], { kind: "returned" }>, member: string): Promise<GraphSymbol | undefined> => {
+    const returnedMethod = async (head: Extract<ReceiverBinding["holds"], { kind: "returned" }>, member: string, reference: GraphUnresolvedReference): Promise<GraphSymbol | undefined> => {
       const placed = called.flatMap(({ edge, target }, index) => {
         const verdict = verdicts[index]!;
         const at = edge.line === head.line && edge.column !== null && edge.column + 1 === head.column && target.name === head.name;
@@ -401,14 +381,16 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       const returns = callee === undefined ? undefined : (await syntaxIndexOf(callee.file)).callables.get(callee.name)?.find(({ start, nameLine }) => start <= callee.startLine && callee.startLine <= nameLine)?.returns;
       if (callee === undefined || returns === undefined) return undefined;
       const [type] = await origins.declaredTypes([{ file: callee.file, line: returns.line, column: returns.column, spelled: returns.type, owner: { name: callee.name, line: callee.startLine, endLine: callee.endLine } }], signal);
-      return type?.kind === "nominal" ? nominalMethod(type, member) : undefined;
+      if (type?.kind !== "nominal") return undefined;
+      const candidates = store.symbolsInFiles([type.file]).filter((symbol) => isClassKind(symbol.kind) && joinsFact(symbol, { path: type.file, line: type.line, symbol: type.name }));
+      return candidates.length === 1 && executionProven(candidates[0]!, member) ? (await bindings.memberOfReceiver(candidates[0]!, member, placeOf(reference))).target : undefined;
     };
     /**
      * A member call settled by what the binder proves its receiver holds (ADR-0041 decision 4), narrowed by execution: a
      * receiver a provider may replace runs no proven class, and an annotation binds only a nominal class (ADR-0029
      * decision 11). `unproved` decides a call the binder proves nothing about.
      */
-    const settleReceiver = async (reference: GraphUnresolvedReference, name: string, named: readonly GraphSymbol[], proof: ReceiverProof, returned: boolean, unproved: () => void): Promise<void> => {
+    const settleReceiver = async (reference: GraphUnresolvedReference, name: string, named: readonly GraphSymbol[], proof: ReceiverProof, target: GraphSymbol | undefined, returned: boolean, unproved: () => void): Promise<void> => {
       const step = (method: GraphSymbol | undefined) => (method === undefined ? settleByName(reference, name, named) : void children.push(childAt(method, reference.line, reference.column, reference.name, "call")));
       const outside = (holds: string) => leafUnlessReplaced(externalOf(holds, reference.name), rootOfHolds(holds, name), () => settleByName(reference, name, named, true));
       if (proof.link === "member") return step(proof.method);
@@ -421,9 +403,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       if (proof.link === "none") return unproved();
       if (proof.link !== "syntax") return;
       const { holds, type } = proof;
-      if (holds.kind === "returned" && returned) return step(await returnedMethod(holds, name));
+      if (holds.kind === "returned" && returned) return step(await returnedMethod(holds, name, reference));
       if (holds.kind === "literal") return leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(holds.type, name), () => settleByName(reference, name, named, true));
-      if (holds.kind === "annotated") return void annotated.push({ reference, name, named, holds, type });
+      if (holds.kind === "annotated") return void annotated.push({ reference, name, named, holds, type, target, unspelled: returned && proof.unspelled === true });
       if (holds.kind === "constructed" && type === undefined) return void constructed.push({ reference, name, named, holds });
       if (holds.kind === "constructed" || holds.kind === "declared") return step(type === undefined ? undefined : await binder?.memberOf(type, name, placeOf(reference)));
       return settleByName(reference, name, named);
@@ -444,7 +426,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         if (constructors.length !== 1) return void cuts.push(unresolvedAt(reference, constructors.length > 0 ? constructors : [binding.target], "constructor-unsettled"));
         return void children.push(childAt(constructors[0]!, reference.line, reference.column, reference.name, "call"));
       }
-      if (binding.kind === "receiver") return settleReceiver(reference, name, binding.candidates, binding.proof, false, () => undefined);
+      if (binding.kind === "receiver") return settleReceiver(reference, name, binding.candidates, binding.proof, binding.target, false, () => undefined);
       if (binding.kind === "outside") {
         const { origin } = binding;
         const cut = binding.form === "bare" ? () => void cuts.push(unresolvedAt(reference, declarationsNamed(name, reference.file))) : () => settleByName(reference, name, membersNamed(name, reference.file), true);
@@ -462,7 +444,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       const reference: GraphUnresolvedReference = { from: node.id, file: node.file, line: edge.line!, column: edge.column!, kind: edge.kind, name: target.name, candidates: [] };
       const members = membersNamed(target.name, node.file);
       const named = members.length > 0 ? members : [target];
-      await settleReceiver(reference, target.name, named, await receiverAt(node, reference, target.name, receiver), true, () => void cuts.push(unresolvedAt(reference, named)));
+      const proof = await receiverAt(node, reference, target.name, receiver);
+      const binding = await bindings.ofReceiver(proof, target.name, named, placeOf(reference));
+      await settleReceiver(reference, target.name, named, proof, binding.target, true, () => void cuts.push(unresolvedAt(reference, named)));
     }
     for (const reference of ambiguous) cuts.push(unresolvedAt(reference, [], "unowned"));
     const unsettled = unsettledBy([...indexed, ...missing], called);
@@ -491,10 +475,11 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     if (annotated.length > 0) {
       const owner = { name: node.name, line: node.startLine, endLine: node.endLine };
       const types = await origins.declaredTypes(annotated.map(({ reference, holds }) => ({ file: reference.file, line: holds.line, column: holds.column, spelled: holds.type, owner })), signal);
-      for (const [index, { reference, name, named, type: bound }] of annotated.entries()) {
+      for (const [index, { reference, name, named, type: bound, target, unspelled }] of annotated.entries()) {
         const type = types[index];
-        const nominal = type?.kind === "nominal" && bound !== undefined && joinsFact(bound, { path: type.file, line: type.line, symbol: type.name }) ? nominalMethod(type, name) : undefined;
+        const nominal = type?.kind === "nominal" && bound !== undefined && joinsFact(bound, { path: type.file, line: type.line, symbol: type.name }) && executionProven(bound, name) ? target ?? (unspelled ? (await bindings.memberOfReceiver(bound, name, placeOf(reference))).target : undefined) : undefined;
         if (nominal !== undefined) children.push(childAt(nominal, reference.line, reference.column, reference.name, "call"));
+        else if (type?.kind === "nominal") await settleByName(reference, name, named);
         else if (type?.kind === "global") await leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(type.name, name), () => settleByName(reference, name, named, true));
         else if (type?.kind === "package") await leafUnlessReplaced({ kind: "import", module: type.module, name: reference.name }, { module: type.module }, () => settleByName(reference, name, named, true));
         else typed.push({ reference, name, named });

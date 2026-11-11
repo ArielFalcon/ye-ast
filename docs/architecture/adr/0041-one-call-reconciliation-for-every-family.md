@@ -154,6 +154,8 @@ refuse a binding or add facts the base does not model, so one call never has two
    into it, and its reading of `references`, `extends` and `implements` stays. No family aligns or binds calls itself,
    and a fitness test over imports holds it. The pure rules it shares with trace (owning body, call place, column
    comparability) move from `core/domain/trace/` to `core/domain/shared/`.
+   Delivered (RFC-0024 U5): trace reads receiver targets from the base binding and retains its execution checks; it no
+   longer selects a nominal receiver method independently.
 2. **Inputs and coverage.** A file's call-bearing records are the `calls` and `instantiates` edges of its declarations,
    the calls a resolver retyped into an edge of another kind, read back as references (`declaration-uses.ts:46-54`), and
    its unresolved references of those two kinds. Only they are aligned, and only they can be `contradicted`: a
