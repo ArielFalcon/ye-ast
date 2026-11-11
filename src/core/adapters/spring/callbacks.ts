@@ -1,12 +1,13 @@
+import type { Node } from "web-tree-sitter";
 import { callbackName, type FrameworkCallback } from "../../domain/entrypoints/entrypoint.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import { methodSite, spanOf, unknown } from "./findings.ts";
-import { resolve, supertypesOf } from "./java-declared-types.ts";
+import { FUNCTION_VALUES, isAnonymous, resolve, supertypesOf } from "./java-declared-types.ts";
 import { enclosingType } from "./java-project.ts";
 import type { Hierarchy } from "./java-dispatch-targets.ts";
-import { scopeOf, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { isTypeDeclaration, scopeOf, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 import { annotationUses, isScannedBean, type SpringAnnotations, type AnnotationUse } from "./request-mapping.ts";
 import type { InvokedContract, Registration } from "./invoked-contracts.ts";
 
@@ -41,6 +42,23 @@ function memberOf(type: TypeDecl, name: string, arity: number, hierarchy: Hierar
     frontier = level.flatMap((t) => hierarchy.supertypes.get(t) ?? []);
   }
   return { methods: [], outside };
+}
+
+function returnedValues(method: MethodDecl): Node[] {
+  const body = method.node.childForFieldName("body");
+  if (body === null) return [];
+  const values: Node[] = [];
+  const pending = [body];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (FUNCTION_VALUES.has(node.type) || isTypeDeclaration(node) || isAnonymous(node)) continue;
+    if (node.type === "return_statement") {
+      const value = node.namedChildren[0];
+      if (value !== undefined && FUNCTION_VALUES.has(value.type)) values.push(value);
+      continue;
+    }
+    pending.push(...node.namedChildren);
+  }
+  return values;
 }
 
 export function callbacksOf(project: JavaProject, contracts: readonly InvokedContract[], annotations: SpringAnnotations, hierarchy: Hierarchy): Finding<FrameworkCallback>[] {
@@ -82,6 +100,19 @@ export function callbacksOf(project: JavaProject, contracts: readonly InvokedCon
         }
       }
       continue;
+    }
+    for (const { file, node, fqns } of hierarchy.unplaced) {
+      if (isAnonymous(node) && fqns.includes(row.type)) findings.push(unknown("no-extractor", [{ ...spanOf(file.path, node), via: row.type }]));
+    }
+    for (const type of project.types) {
+      for (const method of type.methods) {
+        if (!annotationUses(method.node, scopeOf(type)).some((use) => annotations.keyOf(use) === "org.springframework.context.annotation.Bean")) continue;
+        const written = method.node.childForFieldName("type");
+        if (written === null) continue;
+        const resolved = resolve(written, type.file, project, type, written, true);
+        if ((resolved?.kind !== "platform" && resolved?.kind !== "library") || resolved.fqn !== row.type) continue;
+        for (const value of returnedValues(method)) findings.push(unknown("no-extractor", [{ ...spanOf(type.file.path, value), via: row.type }]));
+      }
     }
     const simple = row.type.split(".").at(-1);
     for (const [type, names] of hierarchy.unsettledSupertypes) {

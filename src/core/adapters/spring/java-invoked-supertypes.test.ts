@@ -36,6 +36,7 @@ class Ambiguous implements UserDetailsService {}` },
     const ambiguous = project.types.find((type) => type.name === "Ambiguous")!;
     assert.deepEqual(hierarchy.unsettledSupertypes.get(ambiguous), ["UserDetailsService"]);
     assert.ok([...hierarchy.invokedSupertypes.values()].every((types) => !types.includes(ambiguous)));
-    assert.ok(hierarchy.unplaced.some(({ fqns }) => fqns.includes(contract)));
+    const unplaced = hierarchy.unplaced.find(({ fqns }) => fqns.includes(contract));
+    assert.deepEqual([unplaced?.file.path, unplaced?.node.type, unplaced?.node.startPosition.row], ["app/Types.java", "object_creation_expression", 10]);
   });
 });

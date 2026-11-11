@@ -1,0 +1,5 @@
+[
+  { "status": "complete", "kind": "callback", "name": "org.springframework.security.core.userdetails.UserDetailsService.loadUserByUsername", "symbol": "Users.loadUserByUsername", "path": "src/main/java/app/Example.java", "line": 6 },
+  { "status": "unknown", "reason": "no-extractor" },
+  { "status": "unknown", "reason": "no-extractor" }
+]

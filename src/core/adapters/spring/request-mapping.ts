@@ -113,6 +113,7 @@ const KNOWN: ReadonlySet<string> = new Set([
   ...VERBS.keys(),
   ...EXCHANGES,
   ALIAS_FOR,
+  "org.springframework.context.annotation.Bean",
   "com.netflix.graphql.dgs.DgsData",
   "com.netflix.graphql.dgs.DgsComponent",
   ...SCANNED_STEREOTYPES,

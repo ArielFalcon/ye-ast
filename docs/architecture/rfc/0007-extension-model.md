@@ -391,9 +391,11 @@ Row S4 as built (`core/adapters/spring`, over `core/adapters/tree-sitter`):
     Javax `ConstraintValidator.isValid` require no bean. Each placed body gives one callback, with evidence for each
     implementing class. An unresolved supertype or ambiguous member is `unknown/unresolved`; a missing body outside
     the repository or an implementation without a proven scanned bean is `unknown/no-extractor`. Factory-registered
-    beans, XML beans and library auto-configuration are not proven by this reader. Anonymous and function-value
-    implementations are not yet detected. DGS `@DgsData` methods on `@DgsComponent` classes are callbacks;
-    type-level uses, composed annotations, abstract methods and unproven registration remain `unknown/no-extractor`.
+    beans, XML beans and library auto-configuration are not proven by this reader. An anonymous implementation and
+    a function value returned by a `@Bean` method with the contract as its written return type are `unknown/no-extractor`
+    at the creation or value; their bodies are not placed as callbacks.
+    DGS `@DgsData` methods on `@DgsComponent` classes are callbacks; type-level uses, composed annotations, abstract
+    methods and unproven registration remain `unknown/no-extractor`.
   - One `listener` per destination of `@KafkaListener` (`topics`), `@RabbitListener` (`queues`) and `@JmsListener`
     (`destination`), on a method or, for Kafka and Rabbit, on the class, whose handler is then the class that
     dispatches to its `@KafkaHandler` or `@RabbitHandler` methods; the containers `@KafkaListeners`,
