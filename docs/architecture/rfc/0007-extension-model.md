@@ -453,6 +453,27 @@ and returned by the MCP status tool, so an agent knows what is not covered. Once
 RFC records the parity results of its measured applications
 ([ADR-0013](../adr/0013-coverage-grows-only-with-evidence.md) rule 4).
 
+### Measured Java callback parity (RFC-0026 U6)
+
+The fixed-revision counterfactuals now expose the framework entrypoint independently of HTTP routes:
+
+| Application | Observable result | Study scope |
+|---|---|---|
+| JHipster | `callers createSpringSecurityUser` reaches `UserDetailsService.loadUserByUsername` at depth 1; callback trace selects its handler | CF-JHIPSTER-J-BUG |
+| Petclinic | `callers PetAgeValidator.isValid` reaches `jakarta.validation.ConstraintValidator.isValid` at depth 0; callback trace is complete | CF-PETCLINIC-J-BUG |
+| RealWorld | `callers JwtService.toToken` reaches the DGS resolver at depth 1; the map contains 22 DGS callbacks, including both `MeDatafetcher` methods. `callers DuplicatedArticleValidator.isValid` reaches the Javax validation callback at depth 0 | N-realworld-J-CONFIG.A2-N2 and the callback-discovery part of N-realworld-J-FLOW.A1-N4 |
+| Shopizer | The Javax validation trace selects four placed validator bodies | Additional row coverage; N-shopizer-J-FLOW.A2-N2 remains with ADR-0044 |
+
+The external corpus adds four callback traces and four counterfactual caller queries, preserving its original 105
+answers. All eight new answers differ from the pre-producer baseline: four formerly unknown trace targets now enter
+handler bodies, and each caller answer gains the expected callback. The caller facts also cross the schema
+0.21-to-0.22 boundary; this version change is separate from callback discovery.
+
+At the declared trace depth of 1, Petclinic is complete; JHipster, RealWorld and Shopizer remain partial with explicit
+cuts. Discovering a validation callback does not establish an execution edge from an HTTP validation site to it.
+The anonymous-class body mechanism in N-realworld-J-FLOW.A1-N4 remains open. Lambda, method-reference and anonymous
+implementations retain U4's explicit unknown evidence; their bodies are not placed by this RFC.
+
 ## Conformance
 
 - Every plugin ships fixtures: a minimal repository and the expected facts.
