@@ -33,8 +33,10 @@ export interface Hierarchy {
   outside: ReadonlySet<TypeDecl>;
   /** The simple names of supertypes the strict reading leaves unsettled, anywhere in the sources. */
   unsettled: ReadonlySet<string>;
+  invokedSupertypes: ReadonlyMap<string, readonly TypeDecl[]>;
+  unsettledSupertypes: ReadonlyMap<TypeDecl, readonly string[]>;
   /** Anonymous and local classes, which the project does not place: the repository types they extend or implement and the unsettled names. */
-  unplaced: readonly { types: readonly TypeDecl[]; names: readonly string[] }[];
+  unplaced: readonly { types: readonly TypeDecl[]; names: readonly string[]; fqns: readonly string[] }[];
   /** Whether a source holds a lambda or a method reference, which implements a functional interface no declaration names. */
   functionValues: boolean;
   /** A method's parameter types as the strict reading settles them; `undefined` when one of them is not settled. */
@@ -321,14 +323,16 @@ export function hierarchyOf(files: readonly JavaFile[], project: JavaProject): H
   return "reason" in globalVeto(files, project) ? undefined : readHierarchy(files, project);
 }
 
-function readHierarchy(files: readonly JavaFile[], project: JavaProject): Hierarchy {
+export function readHierarchy(files: readonly JavaFile[], project: JavaProject): Hierarchy {
   const placed = new Map(project.types.map((type) => [type.node.id, type]));
   const subtypes = new Map<TypeDecl, TypeDecl[]>();
   const supertypes = new Map<TypeDecl, TypeDecl[]>();
   const superclasses = new Map<TypeDecl, Superclass>();
   const outside = new Set<TypeDecl>();
   const unsettled = new Set<string>();
-  const unplaced: { types: TypeDecl[]; names: string[] }[] = [];
+  const unplaced: { types: TypeDecl[]; names: string[]; fqns: string[] }[] = [];
+  const invokedSupertypes = new Map<string, TypeDecl[]>();
+  const unsettledSupertypes = new Map<TypeDecl, string[]>();
   let functionValues = false;
   for (const file of files) {
     const pending: Node[] = [file.root];
@@ -340,16 +344,26 @@ function readHierarchy(files: readonly JavaFile[], project: JavaProject): Hierar
         const superclass = node.type === "class_declaration" ? node.childForFieldName("superclass")?.namedChildren[0] : undefined;
         const types: TypeDecl[] = [];
         const names: string[] = [];
+        const fqns: string[] = [];
+        const unresolved: string[] = [];
         for (const supertype of supertypesOf(node)) {
-          const resolved = resolve(supertype, file, project, scope, supertype);
+          const resolved = resolve(supertype, file, project, scope, supertype, true);
           const type = resolved?.kind === "repository" ? resolved.type : undefined;
           if (type !== undefined) types.push(type);
           else if (resolved?.kind !== "platform") names.push(simpleName(supertype));
+          if (resolved?.kind === "platform" || resolved?.kind === "library") fqns.push(resolved.fqn);
+          else if (resolved === undefined || (resolved.kind === "repository" && type === undefined)) unresolved.push(simpleName(supertype));
           if (declared !== undefined && supertype.id === superclass?.id) superclasses.set(declared, type ?? "outside");
           if (declared !== undefined && type === undefined) outside.add(declared);
         }
-        if (declared === undefined) unplaced.push({ types, names });
+        if (declared === undefined) unplaced.push({ types, names, fqns });
         else {
+          for (const fqn of fqns) {
+            const holders = invokedSupertypes.get(fqn) ?? [];
+            holders.push(declared);
+            invokedSupertypes.set(fqn, holders);
+          }
+          if (unresolved.length > 0) unsettledSupertypes.set(declared, unresolved);
           if (!superclasses.has(declared)) superclasses.set(declared, "none");
           for (const type of types) subtypes.set(type, [...(subtypes.get(type) ?? []), declared]);
           supertypes.set(declared, types);
@@ -359,12 +373,17 @@ function readHierarchy(files: readonly JavaFile[], project: JavaProject): Hierar
       for (const child of node.namedChildren) if (child !== null) pending.push(child);
     }
   }
+  for (const [fqn, types] of invokedSupertypes) {
+    const all = new Set(types);
+    for (const type of all) for (const below of subtypes.get(type) ?? []) all.add(below);
+    invokedSupertypes.set(fqn, [...all].sort(comparePlaces));
+  }
   const signatures = new Map<MethodDecl, Signature | undefined>();
   const signatureOf = (method: MethodDecl): Signature | undefined => {
     if (!signatures.has(method)) signatures.set(method, readSignature(method, project));
     return signatures.get(method);
   };
-  return { subtypes, supertypes, superclasses, outside, unsettled, unplaced, functionValues, signatureOf };
+  return { subtypes, supertypes, superclasses, outside, unsettled, unplaced, invokedSupertypes, unsettledSupertypes, functionValues, signatureOf };
 }
 
 function isAnnotated(declaration: Node): boolean {
