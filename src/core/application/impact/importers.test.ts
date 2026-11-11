@@ -35,5 +35,21 @@ test("a call the base binds into the file makes its file a user, and one it only
 
   const result = await readImporters(store, ["src/target.ts"], [], undefined, undefined, into as never);
 
-  assert.deepEqual(result.files.map(({ users, unresolvedNamers }) => ({ users, unresolvedNamers })), [{ users: ["src/bound.ts"], unresolvedNamers: ["src/guess.ts"] }]);
+  assert.deepEqual(result.files.map(({ users, unresolvedNamers, places }) => ({ users, unresolvedNamers, places })), [{ users: ["src/bound.ts"], unresolvedNamers: ["src/guess.ts"], places: [{ file: "src/bound.ts", line: 2 }, { file: "src/guess.ts", line: 2 }] }]);
+});
+
+test("every relationship keeps the line it was read at", async () => {
+  const store = fakeCodeGraph([fakeNode("target", "function", "src/target.ts", 1), fakeNode("caller", "function", "src/caller.ts", 1), fakeNode("missing", "function", "src/missing.ts", 1)], [
+    { from: "caller", to: "target", kind: "calls", line: 12 }, { from: "caller", to: "target", kind: "calls", line: 12 },
+    { from: "missing", to: "target", kind: "calls" }, { from: "missing", to: "target", kind: "calls", line: 0 },
+  ]);
+  const references = [{ file: "src/caller.ts", name: "target", kind: "calls", line: 11 }, { file: "src/missing.ts", name: "target", kind: "calls", line: null as unknown as number }];
+  const modules = { files: [], unread: [], dependencies: [{ file: "src/caller.ts", line: 8, endLine: 8, specifier: "./target", kind: "import" as const, typeOnly: false, target: { kind: "repository" as const, file: "src/target.ts" }, bindings: [] }] };
+  const result = await readImporters(store, ["src/target.ts"], references, modules);
+  assert.deepEqual(result.files[0]?.places, [{ file: "src/caller.ts", line: 8 }, { file: "src/caller.ts", line: 11 }, { file: "src/caller.ts", line: 12 }]);
+  assert.deepEqual(result.files[0]?.unresolvedNamers, ["src/caller.ts", "src/missing.ts"]);
+  const empty = await readImporters(store, ["src/target.ts"], references.slice(1));
+  const withoutLines = fakeCodeGraph([fakeNode("target", "file", "src/target.ts", 1), fakeNode("missing", "function", "src/missing.ts", 1)], [{ from: "missing", to: "target", kind: "calls" }]);
+  assert.equal((await readImporters(withoutLines, ["src/target.ts"], references.slice(1))).files[0]?.places, undefined);
+  assert.ok(empty.files[0]?.users.includes("src/missing.ts"));
 });

@@ -1,5 +1,6 @@
 import { isJsonModuleResource } from "../../domain/languages/typescript.ts";
-import { NOT_DECLARED_KINDS, sortedUnique, unresolvedNamersOf, type ImportedFile } from "../../domain/impact/importers-fact.ts";
+import { NOT_DECLARED_KINDS, sortedUnique, unresolvedNamersOf, unresolvedPlacesOf, type ImportedFile, type ImportPlace } from "../../domain/impact/importers-fact.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 import type { UnresolvedUse } from "../../domain/impact/impact-cuts.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
@@ -65,8 +66,19 @@ export async function readImporters(store: CodeGraphReader, requested: readonly 
     const boundUsers = bound.edges.flatMap(({ source, target }) => (target.file === file ? [source.file] : []));
     const users = sortedUnique([...from((edge) => edge.kind !== CONTAINMENT && !matched.has(edge)), ...boundUsers, ...imports, ...reexports, ...dynamic, ...types].filter((source) => source !== file));
     const matchers = [...from((edge) => matched.has(edge)), ...bound.attributed.map(({ call }) => call.reference.file)].filter((source) => source !== file && !users.includes(source));
+    const candidates: { file: string; line: number | null }[] = [
+      ...edges.filter((edge) => edge.kind !== CONTAINMENT).flatMap((edge) => { const source = sourceFiles.get(edge.source); return source === undefined ? [] : [{ file: source, line: edge.line }]; }),
+      ...bound.edges.filter(({ target }) => target.file === file).map(({ source, edge }) => ({ file: source.file, line: edge.line })),
+      ...bound.attributed.map(({ call }) => ({ file: call.reference.file, line: call.reference.line })),
+      ...(modules?.dependencies ?? []).filter((edge) => edge.target.kind === "repository" && edge.target.file === file).map(({ file, line }) => ({ file, line })),
+      ...unresolvedPlacesOf(file, declared, qualified, references),
+    ];
+    const unique = new Map<string, ImportPlace>();
+    for (const place of candidates) if (place.file !== file && place.line !== null && Number.isInteger(place.line) && place.line > 0) unique.set(`${place.file}\0${place.line}`, { file: place.file, line: place.line });
+    const places = [...unique.values()].sort((a, b) => compareText(a.file, b.file) || a.line - b.line);
     files.push({
       file,
+      ...(places.length === 0 ? {} : { places }),
       importers: sortedUnique([...from((edge) => edge.kind === IMPORT).filter((source) => !(reexports.has(source) || dynamic.has(source) || types.has(source)) || imports.has(source)), ...imports].filter((source) => source !== file)),
       ...(modules === undefined ? {} : { reexporters: sortedUnique([...reexports].filter((source) => source !== file)) }),
       ...(modules === undefined ? {} : { dynamicImporters: sortedUnique([...dynamic].filter((source) => source !== file)), typeImporters: sortedUnique([...types].filter((source) => source !== file)) }),

@@ -63,3 +63,13 @@ test("summary counts full memberships and shares recovery for multiple targets",
   assert.equal((text.match(/users \(20; 0 additional\)/g) ?? []).length, 2);
   assert.equal((text.match(/unresolved name matches \(3\)/g) ?? []).length, 2);
 });
+
+test("recorded, mixed and legacy relationship places are presented honestly", () => {
+  const entry = { file: "target", importers: ["a", "b"], users: [], unresolvedNamers: [] };
+  const render = (places?: readonly { file: string; line: number }[]) => renderImporters({ ...base, status: "complete", value: { files: [{ ...entry, ...(places ? { places } : {}) }] } }, "details");
+  const recorded = render([{ file: "a", line: 11 }, { file: "a", line: 8 }, { file: "b", line: 4 }]);
+  assert.match(recorded, /"a": importers\[0\] at 8, 11/);
+  assert.doesNotMatch(recorded, /paths only|no recorded line/);
+  assert.match(render([{ file: "a", line: 8 }]), /no recorded line/);
+  assert.match(render(), /These relationships are paths only; no relationship line locations were recorded\./);
+});

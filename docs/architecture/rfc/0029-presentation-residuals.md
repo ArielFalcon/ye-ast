@@ -371,8 +371,9 @@ export interface ImportedFile {
 export function unresolvedPlacesOf(file: string, declared: ReadonlySet<string>, qualified: ReadonlySet<string>, references: readonly UnresolvedUse[]): ImportPlace[];
 ```
 
-`unresolvedNamersOf` becomes `sortedUnique(unresolvedPlacesOf(...).map(({ file }) => file))`, so the predicate that
-decides a name match has one owner. `readImporters` collects the same places it already filters, from three sources:
+`unresolvedNamersOf` and `unresolvedPlacesOf` share one predicate over unresolved references. The former retains every
+matching file, including references without a valid line; the latter keeps only positive integer lines. `readImporters`
+collects the same places it already filters, from three sources:
 `GraphEdge.line` when it is a positive integer, `ModuleDependency.line` for the `direct` categories, and
 `AttributedCall.reference.line` for the base-bound calls. Places are sorted by `compareText(file)` then `line`, deduped
 by `${file}\0${line}`, and the field is omitted when the list is empty. An edge or reference with no line (`line: null`)
@@ -541,7 +542,7 @@ U1 precedes U2 (U2 uses the moved text); the rest are independent. Each is one w
 - Prerequisites: none.
 - Files: `src/core/domain/impact/importers-fact.ts` (`ImportPlace`, `ImportedFile.places`, `unresolvedPlacesOf`;
   `unresolvedNamersOf` delegates), `src/core/application/impact/importers.ts` (`readImporters` collects and sorts the
-  places; `from` and `unresolvedNamers` derive from them), `src/mcp/render.ts` (`importerFiles` `:1080-1105` and
+  places without dropping relationships whose lines were not recorded), `src/mcp/render.ts` (`importerFiles` `:1080-1105` and
   `renderImporters` `:1106-1128`, the `full` guide text `:1107`), `src/mcp/server.ts:257` (output schema), their tests.
 - Must not touch: `module-dependency.ts`/`module-dependencies` readers (they already carry `line`), `unresolvedNamersOf`'s
   predicate (it gains one call site, not a second rule), `impact`/`callers` values, `edge-policy.ts`.

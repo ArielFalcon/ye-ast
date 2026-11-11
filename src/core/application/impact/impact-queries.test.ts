@@ -1159,6 +1159,7 @@ test("importers tells importing files from using files from files that only name
       importers: ["src/Cart.java", "src/test/java/CartTest.java"],
       users: ["src/Beta.java", "src/Cart.java", "src/Svc.java", "src/test/java/CartTest.java"],
       unresolvedNamers: ["src/Late.java", "src/Quiet.java"],
+      places: [{ file: "src/Late.java", line: 4 }, { file: "src/Quiet.java", line: 5 }],
     },
   ]);
 });

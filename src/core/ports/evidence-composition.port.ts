@@ -176,7 +176,7 @@ export type EntryData =
 export type ViaData = { target: SymbolNameRef; lines?: readonly number[]; basis: DependenceBasis };
 
 /** The six optional or required categories of `ImportedFile`, by their original names. */
-export type FileCategory = keyof Omit<ImportedFile, "file">;
+export type FileCategory = keyof Omit<ImportedFile, "file" | "places">;
 export type FileDependencyCategory = "importer" | "reexporter" | "dynamic-importer" | "type-importer" | "user" | "unresolved-namer" | "outline-import";
 
 /** A call-site location: never a declaration start. */

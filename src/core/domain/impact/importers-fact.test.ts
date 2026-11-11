@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { unresolvedNamersOf } from "./importers-fact.ts";
+import { unresolvedNamersOf, unresolvedPlacesOf } from "./importers-fact.ts";
 import type { UnresolvedUse } from "./impact-cuts.ts";
 
 function use(name: string, file = "src/app/other.ts", line = 3): UnresolvedUse {
@@ -50,4 +50,11 @@ test("a file never names itself", () => {
 test("the namers of one file are sorted and unique", () => {
   const namers = unresolvedNamersOf("src/app/order.ts", new Set(["Order"]), new Set(["Order"]), [use("Order", "src/app/b.ts"), use("Order", "src/app/a.ts"), use("Order", "src/app/a.ts", 9)]);
   assert.deepEqual(namers, ["src/app/a.ts", "src/app/b.ts"]);
+});
+
+test("unresolved places require positive integer lines without losing namers that have none", () => {
+  const references = [use("Order", "src/app/zero.ts", 0), use("Order", "src/app/fraction.ts", 1.5), use("Order", "src/app/a.ts", 2), use("Order", "src/app/a.ts", 1), use("Order", "src/app/a.ts", 1)];
+  const declared = new Set(["Order"]);
+  assert.deepEqual(unresolvedPlacesOf("src/app/order.ts", declared, declared, references), [{ file: "src/app/a.ts", line: 1 }, { file: "src/app/a.ts", line: 2 }]);
+  assert.deepEqual(unresolvedNamersOf("src/app/order.ts", declared, declared, references), ["src/app/a.ts", "src/app/fraction.ts", "src/app/zero.ts"]);
 });

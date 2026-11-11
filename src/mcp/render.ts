@@ -1110,7 +1110,10 @@ function importerFiles(entry: ImportedFile, detail: ResponseMode): { lines: stri
   entry.users.forEach((path, index) => add(path, modulePaths.has(path) ? "users" : "additional users", index));
   entry.unresolvedNamers.forEach((path, index) => add(path, "unresolved name matches", index));
   const heading = `    related files (${memberships.size} distinct)`;
-  const listing = [...memberships].map(([path, labels]) => `    ${JSON.stringify(path)}: ${labels.join(", ")}`);
+  const listing = [...memberships].map(([path, labels]) => {
+    const lines = [...new Set(entry.places?.filter((place) => place.file === path).map((place) => place.line) ?? [])].sort((a, b) => a - b);
+    return `    ${JSON.stringify(path)}: ${labels.join(", ")}${lines.length ? ` at ${lines.join(", ")}` : ""}`;
+  });
   const counts = [
     ...modules.flatMap(([label, files]) => files === undefined ? [] : [`    ${label} (${files.length})`]),
     `    users (${entry.users.length}; ${entry.users.filter((path) => !modulePaths.has(path)).length} additional)`,
@@ -1122,7 +1125,7 @@ function importerFiles(entry: ImportedFile, detail: ResponseMode): { lines: stri
 }
 
 export function renderImporters(fact: Fact<ImportersValue>, detail: ResponseMode = "summary"): string {
-  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.files by file; inspect importers and users for recorded links and unresolvedNamers for unconfirmed matches. These are paths only, with no relationship line locations; inspect cuts for partial results.";
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.files by file; inspect importers and users for recorded links and unresolvedNamers for unconfirmed matches. Inspect places for recorded relationship lines; related files without a place have no recorded line. Inspect cuts for partial results.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   let omitted = false;
@@ -1137,7 +1140,11 @@ export function renderImporters(fact: Fact<ImportersValue>, detail: ResponseMode
     omitted ||= block.omitted;
   }
   if (omitted) lines.push(importerPathRecovery());
-  if (fact.value.files.some((entry) => entry.importers.length + entry.users.length + entry.unresolvedNamers.length > 0)) lines.push("  These relationships are paths only; no relationship line locations were recorded.");
+  const entries = fact.value.files;
+  const hasPlaces = entries.some((entry) => (entry.places?.length ?? 0) > 0);
+  const paths = (entry: ImportedFile): string[] => [...entry.importers, ...(entry.reexporters ?? []), ...(entry.dynamicImporters ?? []), ...(entry.typeImporters ?? []), ...entry.users, ...entry.unresolvedNamers];
+  if (!hasPlaces && entries.some((entry) => paths(entry).length > 0)) lines.push("  These relationships are paths only; no relationship line locations were recorded.");
+  else if (hasPlaces && entries.some((entry) => paths(entry).some((path) => !entry.places?.some((place) => place.file === path)))) lines.push("  Relationship lines are recorded where a place was read; a related file without one names no recorded line.");
   lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");
 }

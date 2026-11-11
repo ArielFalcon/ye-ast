@@ -254,7 +254,7 @@ const shapes = {
   entrypoints: z.looseObject({ entrypoints: factOf(z.array(finding)) }),
   impact: z.union([impact, workspaceImpact]),
   importers: z.looseObject({
-    files: z.array(z.looseObject({ file: z.string(), importers: strings, users: strings, unresolvedNamers: strings })),
+    files: z.array(z.looseObject({ file: z.string(), importers: strings, users: strings, unresolvedNamers: strings, places: z.array(z.looseObject({ file: z.string(), line: z.number() })).optional() })),
   }),
   outline: z.union([
     z.looseObject({
@@ -618,7 +618,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_importers",
     {
       title: "Importers of files",
-      description: "Static/reexport/dynamic/type importers, users and unresolved names. Details: paths once, categories/positions; uncategorized users are additional. Imports do not prove declaration use; unresolved names prove neither dependency nor impact. TS: aliases/barrels and exported test consumers; omitted live tests=partial. For declarations use callers.",
+      description: "Static/reexport/dynamic/type importers, users and unresolved names. Details: paths once, categories/positions and recorded relationship lines; a path without a place has no recorded line. Uncategorized users are additional. Imports do not prove declaration use; unresolved names prove neither dependency nor impact. TS: aliases/barrels and exported test consumers; omitted live tests=partial. For declarations use callers.",
       inputSchema: compactInput(TOOL_INPUTS.importers),
       annotations,
     },

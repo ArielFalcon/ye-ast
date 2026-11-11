@@ -2,9 +2,12 @@ import { isBareName, type UnresolvedUse } from "./impact-cuts.ts";
 import { sharesRuntime } from "../languages/call-targets.ts";
 import { compareText } from "../shared/code-node.ts";
 
+export interface ImportPlace { readonly file: string; readonly line: number }
+
 /** Who depends on one file, as repo-relative paths sorted by code unit; the file itself is never listed. */
 export interface ImportedFile {
   file: string;
+  places?: readonly ImportPlace[];
   /** Direct static imports and indexed imports into the file or its declarations, test files included when exported. */
   importers: readonly string[];
   reexporters?: readonly string[];
@@ -44,9 +47,17 @@ function segmentsOf(name: string): string[] {
  * candidate names none of them, so a homonym elsewhere is never a namer. A reference of another runtime names no file.
  */
 export function unresolvedNamersOf(file: string, declared: ReadonlySet<string>, qualified: ReadonlySet<string>, references: readonly UnresolvedUse[]): string[] {
+  return sortedUnique(unresolvedReferencesOf(file, declared, qualified, references).map((reference) => reference.file));
+}
+
+export function unresolvedPlacesOf(file: string, declared: ReadonlySet<string>, qualified: ReadonlySet<string>, references: readonly UnresolvedUse[]): ImportPlace[] {
+  const places = unresolvedReferencesOf(file, declared, qualified, references).filter(({ line }) => Number.isInteger(line) && line > 0).map(({ file, line }) => ({ file, line }));
+  return [...new Map(places.map((place) => [`${place.file}\0${place.line}`, place])).values()].sort((a, b) => compareText(a.file, b.file) || a.line - b.line);
+}
+
+function unresolvedReferencesOf(file: string, declared: ReadonlySet<string>, qualified: ReadonlySet<string>, references: readonly UnresolvedUse[]): UnresolvedUse[] {
   const stem = stemOf(file);
-  const namers = references.filter((reference) => reference.file !== file && sharesRuntime(reference.file, file) && namesIt(reference, declared, qualified, stem));
-  return sortedUnique(namers.map((reference) => reference.file));
+  return references.filter((reference) => reference.file !== file && sharesRuntime(reference.file, file) && namesIt(reference, declared, qualified, stem));
 }
 
 function namesIt(reference: UnresolvedUse, declared: ReadonlySet<string>, qualified: ReadonlySet<string>, stem: string): boolean {
