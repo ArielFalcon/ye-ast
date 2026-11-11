@@ -1,6 +1,6 @@
 import type { Handler, HttpMethod } from "../domain/entrypoints/http-route.ts";
 import type { Hypothesis } from "../domain/contracts/hypothesis.ts";
-import type { CallSiteReach, Cut, DeclaredConfig, FactBase, SnapshotRef } from "../domain/shared/fact.ts";
+import type { CallSiteReach, Cut, DeclaredConfig, Evidence, FactBase, SnapshotRef } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { PlacedCallSite } from "../domain/topology/call-site.ts";
 import type { Link } from "../domain/topology/link.ts";
@@ -69,13 +69,13 @@ export interface ConsumerSession {
   cutsAfterWalk(): readonly Cut[];
   /** The repositories that serve the operation asked about, with the handler that does. */
   serving: readonly { repo: string; handler: Handler }[];
-  /** The HTTP call sites of the workspace whose target no read could evaluate: any of them may call the operation. */
-  unresolvedCalls: readonly { repo: string; file: string; line: number; symbol: string }[];
+  /** The HTTP call sites whose destination remains uncertain, with any independently established reach and causal evidence. */
+  unresolvedCalls: readonly { repo: string; file: string; line: number; symbol: string; reach?: CallSiteReach; evidence?: readonly Evidence[] }[];
   /** The HTTP call sites that reach a route of the operation in more than one repository, which the join does not pick between. */
   ambiguousCalls: readonly { from: Link["from"]; repos: readonly string[] }[];
   /**
    * Whether the join's ladder, over the routes of the operation asked about and the workspace's gateways, links no call
-   * with that reach to it; a reach without a method or a template is never excluded.
+   * with that reach to it. A known method may exclude incompatible operations without a template.
    */
   excludes(site: CallSiteReach): boolean;
   /** The callers of a function of a repository: the code graph's, with the calls made through injected fields and locals. */

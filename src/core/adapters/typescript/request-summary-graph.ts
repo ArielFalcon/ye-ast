@@ -10,6 +10,7 @@ interface CauseWork {
 
 interface RequestSummaryGraph {
   isRecursive(caller: string, callee: string): boolean;
+  requestReachable(seeds: ReadonlySet<string>, work?: { visits: number }): ReadonlySet<string>;
   causeIndex(own: ReadonlyMap<string, readonly SummaryCause[]>, work?: CauseWork): {
     forCaller(caller: string): (callee: string) => ReadonlySet<SummaryCause>;
   };
@@ -79,6 +80,20 @@ export function requestSummaryGraph(edges: ReadonlyMap<string, readonly { callee
   }
   return {
     isRecursive: (caller, callee) => members.has(caller) && members.get(caller) === members.get(callee),
+    requestReachable: (seeds, work) => {
+      const reachable = new Set([...seeds].filter((key) => sources.has(key)));
+      const queue = [...reachable];
+      for (let i = 0; i < queue.length; i++) {
+        for (const caller of reverse.get(queue[i]!) ?? []) {
+          if (work) work.visits++;
+          if (!reachable.has(caller)) {
+            reachable.add(caller);
+            queue.push(caller);
+          }
+        }
+      }
+      return reachable;
+    },
     causeIndex: (own, work) => {
       const global = new Map<string, Set<SummaryCause>>();
       const queue: [string, SummaryCause][] = [];

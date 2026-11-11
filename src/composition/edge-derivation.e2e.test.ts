@@ -187,7 +187,7 @@ const API = {
  */
 const WEB = {
   "package.json": JSON.stringify({ dependencies: { "@angular/core": "^21.0.0", "@angular/common": "^21.0.0" } }),
-  "src/app/order.service.ts": "import { HttpClient } from '@angular/common/http';\nimport { Injectable, inject } from '@angular/core';\n\n@Injectable({ providedIn: 'root' })\nexport class OrderService {\n  private http = inject(HttpClient);\n\n  fetchOrder(id: number) {\n    return this.http.get<{ customer: { name: string } }>(`/api/orders/${id}`);\n  }\n}\n",
+  "src/app/order.service.ts": "import { HttpClient } from '@angular/common/http';\nimport { Injectable, inject } from '@angular/core';\n\n@Injectable({ providedIn: 'root' })\nexport class OrderService {\n  private http = inject(HttpClient);\n\n  fetchOrder(id: number) {\n    return this.http.get<{ customer: { name: string } }>('/api/orders/1');\n  }\n}\n",
   "src/app/order-view.ts": "import { OrderService } from './order.service';\n\nexport class OrderView {\n  constructor(private orders: OrderService) {}\n\n  show(): void {\n    this.orders.fetchOrder(1).subscribe((order) => console.log(order.customer.name));\n  }\n}\n",
   "src/app/special-orders.ts": "import { Injectable } from '@angular/core';\nimport { OrderService } from './order.service';\n\n@Injectable({ providedIn: 'root' })\nexport class SpecialOrders extends OrderService {}\n",
   "src/app/order-page.ts": "import { Component, inject } from '@angular/core';\nimport { SpecialOrders } from './special-orders';\n\n@Component({ selector: 'app-order-page', template: '' })\nexport class OrderPage {\n  private orders = inject(SpecialOrders);\n\n  show(): void {\n    this.orders.fetchOrder(3).subscribe((order) => console.log(order.customer.name));\n  }\n}\n",

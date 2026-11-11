@@ -196,6 +196,9 @@ names are settled in the first slice; the union, the cuts and the inputs are the
    `unheld`) or a focus (`focus`, `unheld`): each `OutlineFocus` names the `file`, the `selector` asked, the
    declaration's dotted `path`, its `ancestors` outermost first, the `declaration` with its subtree and `omitted`,
    the count of the file's declarations left out; `inputs.declaredConfig.focus` records the selectors.
+   `0.22.0` lets an unresolved HTTP site's `stated` retain its established method without a path. An omitted path is
+   unknown, never empty; an incompatible method can exclude the site from another operation while a compatible method
+   with no path keeps it in question.
 7. **Redaction at egress.** Values and evidence pass redaction when they leave ye-ast's process toward a host: the
    patterns always, by-value secrets only in the process that already holds them
    ([ADR-0010](../adr/0010-trust-modes.md)). The success report `ye-ast init` writes for the user who ran it is not

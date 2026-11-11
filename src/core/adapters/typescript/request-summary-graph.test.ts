@@ -76,6 +76,18 @@ function diamonds(n: number) {
   return { edges, leaf: current };
 }
 
+test("request reachability propagates once through reverse edges and includes the seed's component", () => {
+  const { edges, leaf } = diamonds(32);
+  edges.set("a", [{ callee: "b" }, { callee: "root" }]);
+  edges.set("b", [{ callee: "a" }]);
+  edges.set("isolated", [{ callee: "isolated" }]);
+  const work = { visits: 0 };
+  const reachable = requestSummaryGraph(edges).requestReachable(new Set([leaf]), work);
+  assert.ok(reachable.has("a") && reachable.has("b") && reachable.has("root"));
+  assert.equal(reachable.has("isolated"), false);
+  assert.equal(work.visits, 131);
+});
+
 test("shares global propagation across convergent DAGs without caller rows", () => {
   for (const n of [4, 8, 16, 32]) {
     const { edges, leaf } = diamonds(n);

@@ -623,6 +623,21 @@ test("no call site linked lists the call sites of the workspace whose target cou
   ]);
 });
 
+test("unresolved request findings retain the destination's causal evidence once, qualified by repository", async () => {
+  const unresolvedCalls = [
+    { repo: "web", file: "src/request.ts", line: 4, symbol: "load", reach: { kind: "call-site" as const, transport: "http" as const, method: "GET" }, evidence: [{ path: "src/config.ts", line: 19 }, { path: "src/request.ts", line: 4 }] },
+    { repo: "web", file: "src/other.ts", line: 2, symbol: "remove", reach: { kind: "call-site" as const, transport: "http" as const, method: "DELETE" }, evidence: [{ path: "src/unrelated-config.ts", line: 3 }] },
+  ];
+  const fact = await setup({ links: [], unresolvedCalls, operationSites: true }).ask();
+  const finding = fact.value.findings[0];
+  assert.ok(finding?.status === "unknown");
+  assert.deepEqual(finding.evidence.map((place) => [place.path, place.line, "repo" in place && place.repo, place.via]), [
+    ["src/config.ts", 19, "web", undefined],
+    ["src/request.ts", 4, "web", "unresolved-call-site"],
+    ["Owners.java", 5, "api", "no-call-site"],
+  ]);
+});
+
 test("call sites whose target could not be evaluated are listed even when others link, since any of them may call the operation", async () => {
   const unresolvedCalls = [{ repo: "web", file: "src/x.service.ts", line: 4, symbol: "load" }];
 
@@ -793,6 +808,19 @@ test("a single issuing call of the asked operation still starts the carrier ther
   await ask();
 
   assert.deepEqual(followed.map((carrier) => carrier.site.kind === "call-site" && [carrier.site.file, carrier.site.line]), [["src/first.ts", 6]]);
+});
+
+test("a proven selected boundary starts at that occurrence without hiding competing unplaced sites", async () => {
+  const origins: PlacedOrigin[] = [{ kind: "leaf", file: "src/first.ts", line: 6, column: 9 }];
+  const marked = { ...placedAt("GET", "/owners/{}", origins), column: 2, issuingBoundary: "site" as const };
+  const owned = new Set(["src/first.ts", "src/owner.service.ts"]);
+  const direct = setup({ placed: { web: { kind: "read", sites: [marked], owned } } });
+  await direct.ask();
+  assert.deepEqual(direct.followed.map((carrier) => carrier.site.kind === "call-site" && carrier.site.line), [10]);
+  const competing = setup({ placed: { web: { kind: "read", sites: [marked, { ...placedAt("GET", "/owners/{}", origins), column: 8 }], owned } } });
+  const fact = await competing.ask();
+  assert.deepEqual(competing.followed, []);
+  assert.deepEqual(verdictsOf(fact), ["ambiguous-caller:unplaced"]);
 });
 
 test("a link whose placed sites the session did not read starts no carrier: an ambiguity frontier at the link's call, never a direct start (ADR-0051 decision 7)", async () => {

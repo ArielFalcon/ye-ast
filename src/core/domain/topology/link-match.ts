@@ -1,5 +1,6 @@
 import type { Entrypoint, Listener } from "../entrypoints/entrypoint.ts";
 import type { HttpMethod, HttpRoute } from "../entrypoints/http-route.ts";
+import { requestMethodOf } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
 import type { CallSiteReach } from "../shared/fact.ts";
 import { callPlaceOf, type CallSite, type EventTarget, type HttpTarget } from "./call-site.ts";
@@ -263,12 +264,18 @@ function mayLink(target: HttpTarget, repositories: readonly RepositoryEntrypoint
 
 /**
  * The call sites the ladder cannot link to one operation, over that operation's routes and the gateways: one it finds no
- * route for, or one that names another host (ADR-0042 decision 4). A site whose reach states no method or no template is
- * never excluded.
+ * route for, or one that names another host (ADR-0042 decision 4). An established incompatible method needs no path
+ * proof; otherwise an absent method or template keeps the site in question.
  */
 export function excludedFrom(operation: string, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): (site: CallSiteReach) => boolean {
   const routes = repositories.map((repository) => ({ ...repository, entrypoints: repository.entrypoints.filter((entrypoint) => entrypoint.kind === "http-route" && entrypoint.name === operation) }));
-  return (site) => site.method !== undefined && site.template !== undefined && !mayLink({ method: site.method as HttpMethod, path: site.template }, routes, gateways);
+  const candidates = routes.flatMap(httpRoutes);
+  return (site) => {
+    const method = site.method === undefined ? undefined : requestMethodOf(site.method);
+    if (method === undefined) return false;
+    if (candidates.length > 0 && candidates.every((route) => !accepts(route, method))) return true;
+    return site.template !== undefined && !mayLink({ method, path: site.template }, routes, gateways);
+  };
 }
 
 function ladder(target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[], linked: (repo: string, match: Match) => JoinResult): JoinResult {

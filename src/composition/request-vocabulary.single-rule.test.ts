@@ -13,7 +13,7 @@ const RULES: readonly { concept: string; pattern: RegExp; owner: string; pending
     concept: "a call is a request by the client name its callee spells",
     pattern: /\.text === "(?:fetch|httpResource)"|"httpResource"\)/,
     owner: OWNER,
-    pending: ["core/adapters/typescript/consumer-flow.walker.ts", "core/adapters/typescript/request-origins.adapter.ts"],
+    pending: ["core/adapters/typescript/consumer-flow.walker.ts"],
   },
   { concept: "the verbs of the client vocabulary", pattern: /new Set\(\["get", "head", "post"/, owner: OWNER, pending: [] },
 ];
@@ -25,6 +25,28 @@ function sourceFiles(directory: string): string[] {
     return entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts") && !entry.name.endsWith(".testing.ts") ? [path] : [];
   });
 }
+
+function importsVerbs(source: string): boolean {
+  const named = [...source.matchAll(/\bimport\s+(?:type\s+)?\{([^}]*)\}\s+from\s+["'][^"']*request-summaries(?:\.ts)?["']/gs)]
+    .some((match) => (match[1] ?? "").split(",").some((binding) => /^\s*(?:type\s+)?VERBS(?:\s+as\s+\w+)?\s*$/.test(binding)));
+  const namespaces = [...source.matchAll(/\bimport\s+\*\s+as\s+(\w+)\s+from\s+["'][^"']*request-summaries(?:\.ts)?["']/g)];
+  return named || namespaces.some((match) => new RegExp(`\\b${match[1]}\\s*(?:\\.\\s*VERBS\\b|\\[\\s*["']VERBS["']\\s*\\])`).test(source));
+}
+
+function unlistedVerbImporters(files: readonly { path: string; text: string }[]): string[] {
+  const pending = new Set(["core/adapters/typescript/consumer-flow.walker.ts"]);
+  return files.filter((file) => importsVerbs(file.text) && !pending.has(file.path)).map((file) => file.path).sort();
+}
+
+test("only the pending walker imports the request verb vocabulary", () => {
+  const importers = sourceFiles(SOURCE).filter((file) => importsVerbs(readFileSync(file, "utf8"))).map((file) => relative(SOURCE, file));
+  assert.deepEqual(importers, ["core/adapters/typescript/consumer-flow.walker.ts"]);
+  assert.equal(importsVerbs('import { VERBS as methods } from "./request-summaries.ts";'), true);
+  assert.equal(importsVerbs('import { other as VERBS } from "./request-summaries.ts";'), false);
+  assert.equal(importsVerbs('import * as requests from "./request-summaries.ts"; requests.VERBS.has("get");'), true);
+  assert.deepEqual(unlistedVerbImporters([{ path: "other.ts", text: 'import { VERBS as methods } from "./request-summaries.ts";' }]), ["other.ts"]);
+  assert.deepEqual(unlistedVerbImporters(sourceFiles(SOURCE).map((file) => ({ path: relative(SOURCE, file), text: readFileSync(file, "utf8") }))), []);
+});
 
 for (const { concept, pattern, owner, pending } of RULES) {
   test(`${concept} lives only in its owner`, () => {

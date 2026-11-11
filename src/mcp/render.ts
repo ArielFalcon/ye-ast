@@ -1393,7 +1393,7 @@ function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Respon
 }
 
 export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: ResponseMode = "summary", context?: RenderContext): string {
-  if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide(fact, detail, context) : workspaceImpactGuide(fact, context)).join("\n");
+  if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide(fact, detail, context) : [...workspaceImpactGuide(fact, context), REQUEST_SITE_GUIDE]).join("\n");
   const lines = headerLines(fact, fact.status === "unknown" ? {} : { unknownSection: unknownSectionIn(fact.value.sections) });
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide(fact, detail, context)].join("\n");
   const { value } = fact;
@@ -1518,21 +1518,23 @@ function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: Respo
   return size(summarized) <= size(listing) ? summarized : listing;
 }
 
+const REQUEST_SITE_GUIDE = "A wrapper request is sited at the call supplying its parameters; the stated request names the path written in code. For a suffix-only match, inspect the gateway prefix or server configuration that would declare the full path.";
+
 /** The unresolved call sites under the file that holds them, sorted, each with the request it writes when the code states it. */
 function unresolvedListing(sites: readonly UnresolvedCallSite[], detail: ResponseMode): string[] {
   const sorted = [...sites].toSorted(compareUnresolvedCallSites);
-  return [...Map.groupBy(sorted, (site) => site.path)].flatMap(([path, inFile]) => [
+  return [...[...Map.groupBy(sorted, (site) => site.path)].flatMap(([path, inFile]) => [
     `    ${path}`,
     ...[...Map.groupBy(inFile, (site) => `${site.reason}${site.diagnostic === undefined ? "" : `/${site.diagnostic.cause}`}${site.diagnostic?.source === undefined ? "" : ` source=${site.diagnostic.source}`}`)].flatMap(([reason, group]) => [
       ...(detail === "details" ? [`      ${reason}:`] : []),
       ...group.map((site) => unresolvedLine(site, detail)),
     ]),
-  ]);
+  ]), ...(sites.length === 0 ? [] : [`    ${REQUEST_SITE_GUIDE}`])];
 }
 
 function unresolvedLine(site: UnresolvedCallSite, detail: ResponseMode): string {
   const through = site.via === undefined ? "" : `, through ${site.via}`;
-  const stated = site.stated === undefined ? "" : ` ${site.stated.method} ${site.stated.path}`;
+  const stated = site.stated === undefined ? "" : ` ${site.stated.method}${site.stated.path === undefined ? "" : ` ${site.stated.path}`}`;
   const evidence = detail === "details" ? ` <- ${site.evidence.map(evidenceText).join(", ")}${site.diagnostic?.unreadableSources === undefined ? "" : `; unreadable libraries: ${site.diagnostic.unreadableSources.map(evidenceText).join(", ")}`}${site.diagnostic?.alternatives === undefined ? "" : `; chosen at run time, declared alternatives: ${site.diagnostic.alternatives.join(", ")}`}` : ` ${unresolvedLabel(site)}`;
   return `      ${spanText(site.line, site.endLine)} ${site.symbol} (${site.transport}${through})${stated}${evidence}`;
 }
@@ -1551,7 +1553,7 @@ function unresolvedBlock(value: Omit<WorkspaceValue, "repositories">, detail: Re
 }
 
 export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>, detail: ResponseMode = "summary"): string {
-  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Match value.sections by repository and check each section status, reason and cuts; value.repositorySnapshots identifies each revision. Inspect value.candidates by name and repo for basis and evidence, value.unserved for unmatched names, value.links for the links between repositories and value.unlinked for the call sites without one.";
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Match value.sections by repository and check each section status, reason and cuts; value.repositorySnapshots identifies each revision. Inspect value.candidates by name and repo for basis and evidence, value.unserved for unmatched names, value.links for the links between repositories and value.unlinked for the call sites without one. " + REQUEST_SITE_GUIDE;
   const lines = headerLines(fact, fact.status === "unknown" ? {} : {
     undecided: Object.values(fact.value.sections).reduce((total, section) => total + (section.status === "unknown" ? 0 : section.value.unresolved.length), 0),
     unknownSection: unknownSectionIn(fact.value.sections),
@@ -1705,7 +1707,7 @@ function decisionsBlock(decisions: readonly Decision[], detail: ResponseMode): s
 }
 
 export function renderDecisions(fact: Fact<DecisionValue>, detail: ResponseMode = "summary"): string {
-  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.decisions by kind and subject; inspect evidence, options[].basis and options[].recommended. Match evidence repositories to value.repositories snapshots. value.unresolved lists the undecided call sites by repository.";
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.decisions by kind and subject; inspect evidence, options[].basis and options[].recommended. Match evidence repositories to value.repositories snapshots. value.unresolved lists the undecided call sites by repository. " + REQUEST_SITE_GUIDE;
   const lines = headerLines(fact, fact.status === "unknown" ? {} : { undecided: fact.value.unresolved.length });
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;

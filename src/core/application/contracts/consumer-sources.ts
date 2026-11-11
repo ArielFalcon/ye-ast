@@ -7,7 +7,7 @@ import { nameTail } from "../../domain/shared/call-place.ts";
 import { contradictedCallCuts } from "../../domain/impact/impact-cuts.ts";
 import { followedEdge } from "../../domain/impact/edge-policy.ts";
 import type { Result } from "../../domain/shared/result.ts";
-import { callPlaceOf, compareCallPlaces, httpTargetOf, type PlacedCallSite, type PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
+import { callPlaceOf, callSiteReach, compareCallPlaces, httpTargetOf, type PlacedCallSite, type PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import { excludedFrom, matchCallSite, matchDeclaredOperation, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
@@ -352,7 +352,7 @@ function joinHttpCalls(repositories: readonly WorkspaceRepository[], entrypoints
     const target = httpTargetOf(site);
     const from = callPlaceOf(site);
     if (target === undefined) {
-      if (site.target.status === "unknown") unresolvedCalls.push(from);
+      if (site.target.status === "unknown") unresolvedCalls.push({ ...from, reach: callSiteReach(site), evidence: site.target.evidence });
       continue;
     }
     const joined = matchCallSite(site, target, entrypoints, gateways);

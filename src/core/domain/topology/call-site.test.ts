@@ -6,6 +6,12 @@ function site(overrides: Partial<CallSite> = {}): CallSite {
   return { repo: "shop", file: "src/app/order.api.ts", line: 4, symbol: "OrderApi.create", transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [{ path: "src/app/order.api.ts", line: 4 }] }, ...overrides };
 }
 
+test("an unresolved call cut retains its established method without claiming a path", () => {
+  const call = site({ stated: { method: "DELETE" } });
+  assert.deepEqual(unsettledCallSiteCut(call).reach, { kind: "call-site", transport: "http", method: "DELETE" });
+  assert.deepEqual(unresolvedCallSite(call).stated, { method: "DELETE" });
+});
+
 test("an unresolved call site names its declaration, its transport and the request the code states", () => {
   assert.deepEqual(unresolvedCallSite(site({ endLine: 6, stated: { method: "GET", path: "/orders" } })), {
     path: "src/app/order.api.ts",

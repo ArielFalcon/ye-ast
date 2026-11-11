@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import ts from "typescript";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { requestCallOf, requestFileShapeOf, summariesOf, type RequestCall, type SummaryResolver } from "./request-summaries.ts";
+import { createHttpSummaryResolver } from "./http-call-sites.adapter.ts";
 
 /** A path the fake states: its text, and the parameter index each `{}` reads (undefined when it is not a parameter). */
 type FakePath = string | { text: string; holes: readonly (number | undefined)[] };
@@ -35,6 +36,43 @@ function resolverOf(options: { paths?: Record<string, FakePath>; clients?: reado
 function file(path: string, lines: readonly string[]): SourceFile {
   return { path, content: lines.join("\n") };
 }
+
+test("recursive applicability preserves represented requests and uncertainties but excludes a closed request-free cycle", async () => {
+  const graph = file("cycles.ts", [
+    "class Closed { a() { this.dep.b() } b() { this.dep.a() } up() { this.dep.a() } }",
+    "class Known { ka() { this.dep.kb() } kb() { this.dep.ka(); fetch('/known') } }",
+    "class Unknown { ua() { this.dep.ub() } ub() { this.dep.ua(); fetch() } }",
+    "class Unread { ia() { this.dep.ib() } ib() { this.dep.ia(); this.dep.missing() } }",
+    "class Plain { leaf() { fetch() } caller() { this.dep.leaf() } }",
+  ]);
+  const resolve = resolverOf({ paths: { "'/known'": "/known" }, callees: {
+    a: "cycles.ts\0Closed.a", b: "cycles.ts\0Closed.b", kb: "cycles.ts\0Known.kb", ka: "cycles.ts\0Known.ka",
+    ub: "cycles.ts\0Unknown.ub", ua: "cycles.ts\0Unknown.ua", ib: "cycles.ts\0Unread.ib", ia: "cycles.ts\0Unread.ia",
+    missing: "missing.ts\0Missing.run", leaf: "cycles.ts\0Plain.leaf",
+  }, unreadable: ["missing.ts\0Missing.run"] });
+  const summaries = await summariesOf([graph], resolve);
+  for (const key of ["Closed.a", "Closed.b", "Closed.up"]) assert.deepEqual(summaries.get(`cycles.ts\0${key}`)?.gaps, []);
+  assert.deepEqual(summaries.get("cycles.ts\0Plain.leaf")?.gaps, [{ cause: "destination-undecidable", evidence: [{ path: "cycles.ts", line: 5 }] }]);
+  assert.deepEqual(summaries.get("cycles.ts\0Plain.caller")?.gaps, [{ cause: "destination-undecidable", evidence: [{ path: "cycles.ts", line: 5 }] }]);
+  assert.ok(summaries.get("cycles.ts\0Unknown.ub")?.gaps.some((gap) => gap.cause === "destination-undecidable"));
+  assert.ok(summaries.get("cycles.ts\0Unread.ib")?.gaps.some((gap) => gap.cause === "source-not-read"));
+  for (const key of ["Known.ka", "Known.kb", "Unknown.ua", "Unknown.ub", "Unread.ia", "Unread.ib"]) assert.ok(summaries.get(`cycles.ts\0${key}`)?.gaps.some((gap) => gap.cause === "recursive"));
+});
+
+test("a dispatch uncertainty inside a cycle retains the immediate caller and leaf evidence", async () => {
+  const files = [file("dispatch-cycle.ts", [
+    "class Dep { read() { return 'a' } }",
+    "class Derived extends Dep { constructor() { super(); this.read = unknown } }",
+    "class Loop { constructor(private dep: Dep) {}",
+    "  a() { return this.b() }",
+    "  b() { this.a(); return this.dep.read() }",
+    "  up() { return this.a() } }",
+  ])];
+  const summaries = await summariesOf(files, createHttpSummaryResolver(files));
+  assert.ok(summaries.get("dispatch-cycle.ts\0Loop.b")?.gaps.some((gap) => gap.cause === "dispatch-disagreement" && gap.evidence.some((at) => at.line === 5)));
+  assert.ok(summaries.get("dispatch-cycle.ts\0Loop.a")?.gaps.some((gap) => gap.cause === "recursive" && gap.evidence.some((at) => at.line === 4)));
+  assert.ok(summaries.get("dispatch-cycle.ts\0Loop.up")?.gaps.some((gap) => gap.cause === "dispatch-disagreement" && gap.evidence.some((at) => at.line === 6)));
+});
 
 test("cycle projection excludes the caller's own unread gap and retains known requests", async () => {
   const a = file("a.ts", ["class A {", " a() { this.dep.b();", "  this.dep.missing();", "  this.http.get('/known');", " }", "}"]);
@@ -105,6 +143,82 @@ test("opaque and represented targets retain resolver evidence without creating a
   assert.equal(summaries.has("absent.ts\0Missing.missing"), false);
   assert.equal(summaries.has("absent.ts\0Provided.body"), false);
   assert.equal(summaries.size, 7);
+});
+
+test("the HTTP reader supplies summaries with their resolved base and parameter positions", async () => {
+  const files = [file("nested.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "const environment = { apiUrl: 'http://h/api/v1' }",
+    "class Crud { constructor(private http: HttpClient) {}",
+    "  get(ignored: string, path: string) { return this.http.get(`${environment.apiUrl}/${path}`) } }",
+    "class Svc { constructor(private crud: Crud) {}",
+    "  item(unused: string, id: string) { return this.crud.get('unused', `items/${id}`) } }",
+  ])];
+  const summaries = await summariesOf(files, createHttpSummaryResolver(files));
+  assert.deepEqual(summaries.get("nested.ts\0Crud.get")?.shapes.map(({ path, holes }) => [path, holes]), [["http://h/api/v1/{}", [1]]]);
+  assert.deepEqual(summaries.get("nested.ts\0Svc.item")?.shapes.map(({ path, holes }) => [path, holes]), [["http://h/api/v1/items/{}", [1]]]);
+});
+
+test("the HTTP resolver retains the potential shapes of overridden wrappers", async () => {
+  const files = [file("virtual.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Crud { constructor(private http: HttpClient) {} get(path: string) { return this.http.get(path) } }",
+    "class Other extends Crud { override get(path: string) { return this.http.get('/other/' + path) } }",
+    "class Svc { constructor(private crud: Crud) {} item(id: string) { return this.crud.get(id) } }",
+  ])];
+  const summaries = await summariesOf(files, createHttpSummaryResolver(files));
+  assert.deepEqual(summaries.get("virtual.ts\0Svc.item")?.shapes.map((shape) => shape.path).sort(), ["/other/{}", "{}"]);
+  assert.equal(summaries.get("virtual.ts\0Svc.item")?.result.kind, "body");
+});
+
+test("virtual request candidates compare their result shapes independently", async () => {
+  const files = [file("results.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Base { constructor(protected http: HttpClient) {} get(id: string) { return this.http.get(`/items/${id}`) } }",
+    "class Child extends Base { override get(id: string) { return this.http.get(`/items/${id}`, { observe: 'response' }) } }",
+    "class Page { constructor(private service: Base) {} load(id: string) { return this.service.get(id) } }",
+  ])];
+  const summaries = await summariesOf(files, createHttpSummaryResolver(files));
+  const result = summaries.get("results.ts\0Page.load")?.result;
+  assert.ok(result?.kind === "unknown" && result.cause === "dispatch-disagreement");
+});
+
+test("the HTTP resolver preserves ordered parameter holes and an unread declaration", async () => {
+  const files = [file("holes.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Client { constructor(private http: HttpClient) {} get(first: string, second: string) { return this.http.get(`/api/${second}/${first}`) } }",
+    "abstract class Unread { abstract get(path: string): unknown }",
+    "class Svc { constructor(private unread: Unread) {} item(id: string) { return this.unread.get(id) } }",
+  ])];
+  const resolver = createHttpSummaryResolver(files);
+  const summaries = await summariesOf(files, resolver);
+  assert.strictEqual(await summariesOf(files, resolver), summaries);
+  assert.deepEqual(summaries.get("holes.ts\0Client.get")?.shapes.map(({ path, holes }) => [path, holes]), [["/api/{}/{}", [1, 0]]]);
+  assert.ok(summaries.get("holes.ts\0Svc.item")?.gaps.some(({ cause }) => cause === "source-not-read"));
+});
+
+test("the HTTP resolver reaches the one implementation behind overloaded method signatures", async () => {
+  const files = [file("overload.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Crud { constructor(private http: HttpClient) {}",
+    "get(path: string): unknown;",
+    "get(path: number): unknown;",
+    "get(path: string | number) { return this.http.get('/api/' + path) } }",
+    "class Svc { constructor(private crud: Crud) {} item(id: string) { return this.crud.get(id) } }",
+  ])];
+  const summaries = await summariesOf(files, createHttpSummaryResolver(files));
+  assert.deepEqual(summaries.get("overload.ts\0Svc.item")?.shapes.map(({ path, holes }) => [path, holes]), [["/api/{}", [0]]]);
+  assert.deepEqual(summaries.get("overload.ts\0Svc.item")?.gaps, []);
+});
+
+test("the HTTP resolver does not choose between duplicate method implementations", async () => {
+  const files = [file("duplicate.ts", [
+    "class Crud { get(path: string) { return fetch('/a/' + path) } get(path: string) { return fetch('/b/' + path) } }",
+    "class Svc { constructor(private crud: Crud) {} item(id: string) { return this.crud.get(id) } }",
+  ])];
+  const summaries = await summariesOf(files, createHttpSummaryResolver(files));
+  assert.ok(summaries.get("duplicate.ts\0Svc.item")?.gaps.some(({ cause }) => cause === "dispatch-disagreement"));
+  assert.deepEqual(summaries.get("duplicate.ts\0Svc.item")?.shapes, []);
 });
 
 test("a wrapper's parameter is substituted into its callee's path, the prefix is kept and the argument's own holes flow", async () => {

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildProgram } from "./consumer-flow.index.ts";
-import { createRequestBodies } from "./http-call-sites.adapter.ts";
+import { createRequestCallLookup } from "./http-call-sites.adapter.ts";
 import { createConsumerReaders } from "./consumer-readers.ts";
 import type { FrameworkPlugin } from "../../ports/framework-plugin.port.ts";
 
@@ -92,7 +92,7 @@ test("each repository reading shares one program and prepares origins only on de
   let bodies = 0;
   const deps = {
     buildProgram: (files: Parameters<typeof buildProgram>[0]) => { builds++; return buildProgram(files); },
-    createRequestBodies: (files: Parameters<typeof createRequestBodies>[0]) => { bodies++; return createRequestBodies(files); },
+    createRequestCallLookup: (files: Parameters<typeof createRequestCallLookup>[0]) => { bodies++; return createRequestCallLookup(files); },
   };
   const files = [{ path: "a.ts", content: "function send() { fetch('/x', { method: 'POST', body: JSON.stringify({ id: 1 }) }); }" }];
   const first = await createConsumerReaders(files, "one", deps);

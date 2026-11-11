@@ -7,7 +7,7 @@ import type { EntrypointExtraction } from "../core/ports/entrypoint-extractor.po
 import { composeFrameworkPlugins, frameworkEntrypoints } from "./framework-plugins.ts";
 import { createConsumerReaders } from "../core/adapters/typescript/consumer-readers.ts";
 import { buildProgram } from "../core/adapters/typescript/consumer-flow.index.ts";
-import { createRequestBodies } from "../core/adapters/typescript/http-call-sites.adapter.ts";
+import { createRequestCallLookup } from "../core/adapters/typescript/http-call-sites.adapter.ts";
 
 test("core-only projects read Angular inputs but cannot claim router continuations", async () => {
   const files = [{ path: "package.json", content: '{"dependencies":{"@angular/core":"1"}}' }, { path: "a.ts", content: "import { input } from '@angular/core'; import { provideRouter, withComponentInputBinding } from '@angular/router'; import { bootstrapApplication } from '@angular/platform-browser'; export function load() {} class Page { order = input(); } const routes = [{ path: '', component: Page, resolve: { order: load } }]; bootstrapApplication(Page, { providers: [provideRouter(routes, withComponentInputBinding())] });" }];
@@ -73,7 +73,7 @@ test("input declarations sharing a proven public name remain separate destinatio
 test("the registered Angular contribution and origins share one program in a reading", async () => {
   let builds = 0;
   const files = [{ path: "a.ts", content: "import { input } from '@angular/core';\nclass Page { value = input(); }\nfunction send() { fetch('/x', { method: 'POST', body: JSON.stringify({ id: 1 }) }); }" }];
-  const readers = await createConsumerReaders(files, "repo", { buildProgram: (sources) => { builds++; return buildProgram(sources); }, createRequestBodies }, composeFrameworkPlugins());
+  const readers = await createConsumerReaders(files, "repo", { buildProgram: (sources) => { builds++; return buildProgram(sources); }, createRequestCallLookup }, composeFrameworkPlugins());
   readers.flow.follow({ site: { kind: "input", repo: "repo", file: "a.ts", owner: "Page", name: "value" }, path: [] });
   await readers.origins.ofBody({ file: "a.ts", line: 3, symbol: "send" }, ["id"]);
   assert.equal(builds, 1);

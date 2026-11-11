@@ -3,9 +3,120 @@ import assert from "node:assert/strict";
 import type { Seed, ReachedEntrypoint } from "../../domain/impact/impact-fact.ts";
 import { handlerKey, reachedBy } from "../../domain/topology/link-graph.ts";
 import type { CallSite } from "../../domain/topology/call-site.ts";
-import { createHttpCallSites } from "./http-call-sites.adapter.ts";
+import { createHttpCallSites, createRequestCallLookup } from "./http-call-sites.adapter.ts";
 
 const reader = createHttpCallSites();
+
+test("a recognized request retains its method when its URL cannot be established", async () => {
+  const found = await reader.of([source("unknown-url.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Client { constructor(private http: HttpClient) {}",
+    "remove() { return this.http.delete(opaque()) }",
+    "load() { return fetch(opaque()) }",
+    "request(verb: string) { return this.http.request(verb, opaque()) } }",
+  ].join("\n"))], "repo");
+  assert.deepEqual(found.map((site) => [site.target.status, site.stated]), [["unknown", { method: "DELETE" }], ["unknown", { method: "GET" }], ["unknown", undefined]]);
+});
+
+test("guarded helper returns retain a supplied path without inventing identity for a replacement", async () => {
+  for (const [early, supplied] of [["path", true], ["'/other'", false]] as const) {
+    const files = [source("guarded.ts", [
+      "import { HttpClient } from '@angular/common/http'; import { base } from './unread'",
+      "class Client { constructor(private http: HttpClient) {}",
+      `transform(path: string, params: unknown) { if (!params) return ${early}; return opaque(path, params) }`,
+      "post(path: string, options: any) { const url = '/api/' + base + this.transform(path, options?.params); return this.http.post(url, {}) }",
+      "}",
+      "class Api { constructor(private client: Client) {} send() { return this.client.post('/orders', {}) } }",
+    ].join("\n"))];
+    const found = await reader.of(files, "repo");
+    assert.equal(found.some((site) => site.line === 6), supplied);
+    assert.ok(found.every((site) => site.target.status === "unknown"));
+    if (supplied) assert.equal(found.some((site) => site.line === 4), false);
+  }
+});
+
+test("guarded path facts distinguish omitted options from mutable or opaque objects", async () => {
+  const fixture = (before: string, argument: string, extra = ""): string => [
+    "import { HttpClient } from '@angular/common/http'; import { base } from './unread'",
+    extra,
+    "class Client { constructor(private http: HttpClient) {}",
+    "transform(path: string, params: unknown) { if (!params) return path; return opaque(path, params) }",
+    `post(path: string, options: any = {}) { ${before} const url = base + this.transform(path, options?.params); return this.http.post(url, {}) }`,
+    "}",
+    `class Api { constructor(private client: Client) {} send() { return this.client.post('/orders'${argument}) } }`,
+  ].join("\n");
+  for (const [before, argument, extra, selected] of [
+    ["", "", "", true],
+    ["", ", { params: { id: 'known' } }", "", false],
+    ["options.params = { id: 1 };", ", {}", "", false],
+    ["const alias = options; alias.params = { id: 1 };", ", {}", "", false],
+    ["escape(options);", ", {}", "", false],
+    ["const mutate = () => { options.params = { id: 1 } }; mutate();", ", {}", "", false],
+    ["", ", { ...dynamic }", "", false],
+    ["", ", { get params() { return dynamic } }", "", false],
+    ["", ", {}", "Object.prototype.params = dynamic;", false],
+  ] as const) {
+    const found = await reader.of([source("options.ts", fixture(before, argument, extra))], "repo");
+    assert.equal(found.some((site) => site.line === 7), selected, before || argument || extra);
+    assert.ok(found.every((site) => site.target.status === "unknown"));
+  }
+});
+
+test("caller-local object facts are withdrawn after mutation or escape", async () => {
+  for (const [change, selected] of [
+    ["", true],
+    ["options.params = { id: 1 };", false],
+    ["const alias = options; alias.params = { id: 1 };", false],
+    ["escape(options);", false],
+    ["const mutate = () => { options.params = { id: 1 } }; mutate();", false],
+  ] as const) {
+    const files = [source("local-options.ts", [
+      "import { HttpClient } from '@angular/common/http'; import { base } from './unread'",
+      "class Client { constructor(private http: HttpClient) {}",
+      "transform(path: string, params: unknown) { if (!params) return path; return opaque(path, params) }",
+      "post(path: string, options: any) { const url = base + this.transform(path, options?.params); return this.http.post(url, {}) }",
+      "}",
+      `class Api { constructor(private client: Client) {} send() { const options: any = {}; ${change} return this.client.post('/orders', options) } }`,
+    ].join("\n"))];
+    const found = await reader.of(files, "repo");
+    assert.equal(found.some((site) => site.line === 6), selected, change);
+    assert.ok(found.every((site) => site.target.status === "unknown"));
+  }
+});
+
+test("guarded URL operations retain uncertainty when their builtin is replaced", async () => {
+  const fixture = (write: string): string => [
+    "import { HttpClient } from '@angular/common/http'; import { base } from './unread'",
+    write,
+    "class Client { constructor(private http: HttpClient) {}",
+    "path(value: string) { if (value.startsWith('https://')) return value; return base + '/' + value.replace(/^\\/+/, '') }",
+    "get(path: string) { return this.http.get(this.path(path)) } }",
+    "class Api { constructor(private client: Client) {} send() { return this.client.get('/orders') } }",
+  ].join("\n");
+  for (const [write, selected] of [["", true], ["String.prototype.startsWith = other;", false]] as const) {
+    const found = await reader.of([source("builtin.ts", fixture(write))], "repo");
+    assert.equal(found.some((site) => site.line === 6), selected);
+    assert.ok(found.every((site) => site.target.status === "unknown"));
+  }
+});
+
+test("helper return agreement preserves encoding and parameter identity", async () => {
+  for (const statements of [
+    "if (flag) return encodeURIComponent(id); return id",
+    "if (flag) return id; return encodeURIComponent(id)",
+    "if (flag) return id; return other",
+  ]) {
+    const files = [source("merge.ts", [
+      `class Client { path(id: string, other: string) { ${statements} }`,
+      "get(id: string, other: string) { return fetch('/items/' + this.path(id, other)) }",
+      "load() { return this.get('a/b', 'different') } }",
+    ].join("\n"))];
+    const found = await reader.of(files, "repo");
+    const caller = found.find((site) => site.symbol === "Client.load");
+    assert.ok(caller);
+    assert.equal(caller.target.status, "unknown");
+  }
+});
 
 test("lexical bindings include destructuring and exclude sibling scopes", async () => {
   const file = source("scope.ts", [
@@ -529,10 +640,10 @@ test("a path held as a member of a constant object literal still resolves", asyn
 test("a call through a wrapper the repository declares is a call site: the wrapper's own parameter is the path", async () => {
   const component = source(
     "src/app/order/order.api.ts",
-    ["import { inject } from '@angular/core'", "import { RestClientService } from '@core/rest'", "export const ORDERS_PATH = 'orders-api/orders'", "export class OrderApi {", "  private readonly rest = inject(RestClientService)", "  create(): void {", "    this.rest.post(ORDERS_PATH, {})", "  }", "}"].join("\n"),
+    ["import { inject } from '@angular/core'", "import { RestClientService } from '../core/rest/services/client/rest-client.service'", "export const ORDERS_PATH = 'orders-api/orders'", "export class OrderApi {", "  private readonly rest = inject(RestClientService)", "  create(): void {", "    this.rest.post(ORDERS_PATH, {})", "  }", "}"].join("\n"),
   );
 
-  assert.deepEqual(sites(await reader.of([source(API, REST_CLIENT), component], "shop-web")), ["POST /orders-api/orders@src/app/order/order.api.ts:7"]);
+  assert.deepEqual(sites(await reader.of([source(API, REST_CLIENT), component], "shop-web")), [`unknown unresolved@${API}:7`, "POST /orders-api/orders@src/app/order/order.api.ts:7"]);
 });
 
 test("a path the snapshot does not decide is an unknown target at the call, never a guessed path", async () => {
@@ -769,13 +880,27 @@ test("a path function that calls itself is undecided, never a hang", async () =>
   assert.deepEqual(sites(await reader.of([pathFunction(" return orderPath(!open)")], "shop-web")), ["unknown unresolved@paths.ts:6"]);
 });
 
+test("a request without a URL and its caller stay unknown while a recursive URL helper is not a request", async () => {
+  const file = source("missing-url.ts", [
+    "function path() { return path() }",
+    "function empty() { return fetch() }",
+    "function use() { return empty() }",
+    "function direct() { return fetch(path()) }",
+  ].join("\n"));
+  const found = await reader.of([file], "repo");
+  assert.ok(found.some((site) => site.line === 2 && site.target.status === "unknown" && site.diagnostic?.cause === "destination-undecidable"));
+  assert.ok(found.some((site) => site.line === 3 && site.target.status === "unknown" && site.diagnostic?.cause === "destination-undecidable"));
+  assert.ok(found.some((site) => site.line === 4 && site.target.status === "unknown" && site.diagnostic?.cause === "recursive"));
+  assert.equal(found.some((site) => site.line === 1), false);
+});
+
 test("an undecided call carries its cause: a path function that calls itself, overrides that disagree, or a base the snapshot does not decide", async () => {
   const routes = source("src/app/routes.ts", ["export class Route { value(): string { return '/a' } }", "export class OtherRoute extends Route { value(): string { return '/b' } }"].join("\n"));
   const service = source("src/app/devices.service.ts", ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "import { Route } from './routes'", "export class DevicesService { private readonly http = inject(HttpClient)", "  load(route: Route) { this.http.get(`/api${route.value()}`) } }"].join("\n"));
   const causes = async (files: readonly { path: string; content: string }[]) => (await reader.of(files, "shop-web")).map((site) => [site.target.status, site.diagnostic?.cause, site.stated]);
 
-  assert.deepEqual(await causes([pathFunction(" return orderPath(!open)")]), [["unknown", "recursive", undefined]]);
-  assert.deepEqual(await causes([routes, service]), [["unknown", "dispatch-disagreement", undefined]]);
+  assert.deepEqual(await causes([pathFunction(" return orderPath(!open)")]), [["unknown", "recursive", { method: "GET" }]]);
+  assert.deepEqual(await causes([routes, service]), [["unknown", "dispatch-disagreement", { method: "GET" }]]);
   assert.deepEqual(await causes([component("    this.http.get('/route', { baseUrl: method })")]), [["unknown", "destination-undecidable", { method: "GET", path: "/route" }]]);
 });
 
@@ -821,21 +946,21 @@ test("a class another class injects that makes its requests with paths it states
   assert.deepEqual(sites(await reader.of([api, page], "shop-web")), ["GET /items/featured@src/app/items/items.api.ts:7"]);
 });
 
-test("a wrapper's path may be computed from its parameter; a method whose name is no verb keeps its own call site, since a call to it is not read as a request", async () => {
+test("wrapper paths computed by a helper and non-verb methods are placed at their callers", async () => {
   const client = source(
     API,
     ["import { HttpClient } from '@angular/common/http'", "import { inject, Injectable } from '@angular/core'", "@Injectable({ providedIn: 'root' })", "export class RestClientService {", "  private readonly http = inject(HttpClient)", "  get(path: string): void {", "    const url = this.resolve(path)", "    this.http.get(url)", "  }", "  item(id: string): void {", "    this.http.get(`/items/${id}`)", "  }", "  private resolve(path: string): string {", "    return this.base + '/' + path", "  }", "  private readonly base = 'api'", "}"].join("\n"),
   );
   const page = source("src/app/items/items.page.ts", ["import { inject } from '@angular/core'", "import { RestClientService } from '../core/rest/services/client/rest-client.service'", "export class ItemsPage {", "  private readonly rest = inject(RestClientService)", "  load(): void {", "    this.rest.get('/items')", "    this.rest.item('7')", "  }", "}"].join("\n"));
 
-  assert.deepEqual(sites(await reader.of([client, page], "shop-web")), [`GET /items/{}@${API}:11`, "GET /items@src/app/items/items.page.ts:6"]);
+  assert.deepEqual(sites(await reader.of([client, page], "shop-web")), ["GET /api/items@src/app/items/items.page.ts:6", "GET /items/7@src/app/items/items.page.ts:7"]);
 });
 
-test("a method that puts its parameter inside a path segment is no wrapper, so its own request is the call site and a call to it is none", async () => {
+test("calls supplying wrapper parameters own sites even when the parameter is inside the path", async () => {
   const service = source("src/app/items.service.ts", ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class ItemsService {", "  private readonly http = inject(HttpClient)", "  delete(name: string) { return this.http.delete(`/items/${encodeURIComponent(name)}`) }", "  put(id: string) { return this.http.put(`/items/${id}/details`, {}) }", "  get(id: string) { return this.http.get(this.itemUrl(id)) }", "  itemUrl(id: string) { return `/items/${encodeURIComponent(id)}` }", "}"].join("\n"));
   const dialog = source("src/app/items.dialog.ts", ["import { inject } from '@angular/core'", "import { ItemsService } from './items.service'", "export class ItemsDialog {", "  private readonly items = inject(ItemsService)", "  confirm(name: string) { this.items.delete(name); this.items.put(name); this.items.get(name) }", "}"].join("\n"));
 
-  assert.deepEqual(sites(await reader.of([service, dialog], "shop-web")), ["DELETE /items/{}@src/app/items.service.ts:5", "PUT /items/{}/details@src/app/items.service.ts:6", "unknown unresolved@src/app/items.service.ts:7"]);
+  assert.deepEqual(sites(await reader.of([service, dialog], "shop-web")), ["DELETE /items/{}@src/app/items.dialog.ts:5", "PUT /items/{}/details@src/app/items.dialog.ts:5", "GET /items/{}@src/app/items.dialog.ts:5"]);
 });
 
 test("a call through a wrapper takes the method of the request the wrapper makes, not the wrapper's name", async () => {
@@ -981,4 +1106,318 @@ test("an httpResource whose url is a field resolves, as an object's url or as th
 test("a name imported from a module the snapshot does not hold is not replaced by a define of the same name", async () => {
   const imported = source(CONSTANTS, ["import { SERVER_API_URL } from './missing'", "export const serverApiUrl = SERVER_API_URL;"].join("\n"));
   assert.deepEqual(sites(await reader.of([workspace({ SERVER_API_URL: "''" }), imported, orderService("this.http.get(this.resourceUrl)")], "shop-web")), [`unknown unresolved@${SERVICE}:7`]);
+});
+
+test("a nested wrapper places its request at the nearest call supplying the path", async () => {
+  const file = source("nested.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "const environment = { apiUrl: 'http://h/api/v1' }",
+    "class Crud {",
+    "  constructor(private http: HttpClient) {}",
+    "  get(path: string) { return this.http.get(`${environment.apiUrl}/${path}`) }",
+    "}",
+    "class Svc {",
+    "  constructor(private crud: Crud) {}",
+    "  item(id: string) { return this.crud.get(`items/${id}`) }",
+    "}",
+    "class Page {",
+    "  constructor(private svc: Svc) {}",
+    "  load() { return this.svc.item('42') }",
+    "}",
+  ].join("\n"));
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["GET http://h/api/v1/items/{}@nested.ts:9"]);
+  const [placed] = await reader.placed([file], "repo");
+  assert.deepEqual(placed?.origins?.map(({ kind, file: path, line }) => [kind, path, line]), [["body", "nested.ts", 5], ["leaf", "nested.ts", 5]]);
+  assert.equal(placed?.column, file.content.split("\n")[8]!.indexOf("this.crud.get"));
+});
+
+test("encoded wrapper parameters never become unescaped literal path segments", async () => {
+  const file = source("encoded-wrapper.ts", [
+    "function get(id: string) { return fetch('/items/' + encodeURIComponent(id)) }",
+    "function slash() { return get('a/b') }",
+    "function query() { return get('a?b') }",
+    "function fragment() { return get('a#b') }",
+    "function plain() { return get('abc') }",
+    "function direct() { return fetch('/items/' + encodeURIComponent('a/b')) }",
+    "function raw(id: string) { return fetch('/other/' + id) }",
+    "function relay(id: string) { return raw(encodeURIComponent(id)) }",
+    "function caller() { return relay('a/b') }",
+  ].join("\n"));
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /items/{}@encoded-wrapper.ts:2", "GET /items/{}@encoded-wrapper.ts:3", "GET /items/{}@encoded-wrapper.ts:4", "GET /items/{}@encoded-wrapper.ts:5", "GET /items/a%2Fb@encoded-wrapper.ts:6", "GET /other/{}@encoded-wrapper.ts:8"]);
+});
+
+test("only a proven external factory without project callbacks leaves the represented request graph", async () => {
+  const manifest = source("package.json", JSON.stringify({ dependencies: { "external-package": "1" } }));
+  const make = (initializer: string, prefix = "import { factory } from 'external-package'\n") => source("factory.ts", `${prefix}class App { view = ${initializer}; run() { this.view() } start() { this.run() } }`);
+  const external = await reader.placed([manifest, make("factory('token')")], "repo");
+  assert.deepEqual(external, []);
+  const inherited = source("factory.ts", "import { factory } from 'external-package'\nclass Token {} class Base { view = factory.required(Token) } class App extends Base { run() { this.view() } start() { this.run() } }");
+  assert.deepEqual(await reader.placed([manifest, inherited], "repo"), []);
+  for (const files of [
+    [make("factory('token')")],
+    [manifest, make("factory(callback)", "import { factory } from 'external-package'\nfunction callback() { return fetch('/x') }\n")],
+    [manifest, make("factory()", "function factory() { return () => fetch('/x') }\n")],
+    [manifest, make("factory('token')", "import type { factory } from 'external-package'\n")],
+    [manifest, source("factory.ts", "import { factory } from 'external-package'\nclass App { get view() { return factory('x') } run() { this.view() } start() { this.run() } }")],
+    [manifest, source("factory.ts", "import { factory } from 'external-package'\nclass App { view = factory('x'); swap() { this.view = () => fetch('/x') } run() { this.view() } start() { this.run() } }")],
+    [manifest, source("factory.ts", "import { factory } from 'external-package'\nclass App { view = factory('x'); run() { this.view() } start() { this.run() } } class Child extends App { override view = () => fetch('/x') }")],
+    [manifest, source("factory.ts", "import { factory } from 'external-package'\nfactory.required = () => () => fetch('/x'); class App { view = factory.required('x'); run() { this.view() } start() { this.run() } }")],
+    [manifest, source("factory.ts", "import { factory } from 'external-package'\nconst factory = () => () => fetch('/x'); class App { view = factory(); run() { this.view() } start() { this.run() } }")],
+  ]) {
+    const sites = await reader.placed(files, "repo");
+    assert.ok(sites.some(({ site }) => site.diagnostic?.cause === "dispatch-disagreement"));
+  }
+  const arrow = await reader.placed([source("factory.ts", "class App { view = (url: string) => fetch(url); run() { this.view('/x') } }")], "repo");
+  assert.deepEqual(sites(arrow.map(({ site }) => site)), ["GET /x@factory.ts:1"]);
+});
+
+test("the first caller supplying any reordered hole owns the site even when another hole remains", async () => {
+  const file = source("nearest.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Crud { constructor(private http: HttpClient) {}",
+    "  get(left: string, right?: string) { return this.http.get(`/api/${right}/${left}`) } }",
+    "class Svc { constructor(private crud: Crud) {}",
+    "  item(id: string) { return this.crud.get(`id/${id}`) } }",
+    "class Page { constructor(private svc: Svc) {}",
+    "  load() { return this.svc.item('42') } }",
+  ].join("\n"));
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/{}/id/{}@nearest.ts:5"]);
+});
+
+test("request lookup requires a column when two requests share a line", async () => {
+  const file = source("same-line.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Client { constructor(private http: HttpClient) {}",
+    "load() { this.http.get('/a'); this.http.get('/b') } }",
+  ].join("\n"));
+  const lookup = await createRequestCallLookup([file]);
+  const at = { file: file.path, line: 3, symbol: "Client.load" };
+  assert.equal(lookup.at(at), undefined);
+  const column = file.content.split("\n")[2]!.indexOf("this.http.get('/b')") + 1;
+  const call = lookup.at({ ...at, column });
+  assert.equal(call?.getText(), "this.http.get('/b')");
+  assert.ok(call !== undefined && lookup.isRequest(call));
+});
+
+test("two identical wrapper calls on the same line remain distinct sites", async () => {
+  const file = source("same-wrapper.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Crud { constructor(private http: HttpClient) {} get(path: string) { return this.http.get(path) } }",
+    "class Page { constructor(private crud: Crud) {} load() { this.crud.get('/items'); this.crud.get('/items') } }",
+  ].join("\n"));
+  const found = await reader.of([file], "repo");
+  assert.equal(found.length, 2);
+  assert.notEqual(found[0]?.column, found[1]?.column);
+});
+
+test("a wrapper with an unread callee does not assert its known request as the only possible request", async () => {
+  const file = source("gap.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "abstract class Unread { abstract load(): unknown }",
+    "class Crud { constructor(private http: HttpClient, private unread: Unread) {}",
+    "  get(path: string) { this.unread.load(); return this.http.get(path) } }",
+    "class Svc { constructor(private crud: Crud) {}",
+    "  load() { return this.crud.get('/items') } }",
+    "class Root { constructor(private svc: Svc) {} run() { return this.svc.load() } }",
+  ].join("\n"));
+  const found = await reader.of([file], "repo");
+  const site = found.find((item) => item.symbol === "Svc.load");
+  assert.equal(site?.target.status, "unknown");
+  assert.equal(site?.diagnostic?.cause, "source-not-read");
+  assert.equal(site?.stated, undefined);
+  assert.ok(site?.target.evidence.some((item) => item.path === "gap.ts" && item.line === 4));
+  assert.equal(found.some((item) => item.symbol === "Root.run"), false);
+});
+
+test("a conditional wrapper keeps alternatives unless the caller decides the condition", async () => {
+  const file = source("conditional.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Crud { constructor(private http: HttpClient) {}",
+    "  get(all: boolean, id: string) { return this.http.get(all ? `/all/${id}` : `/one/${id}`) } }",
+    "class Svc { constructor(private crud: Crud) {}",
+    "  undecided(all: boolean, id: string) { return this.crud.get(all, id) }",
+    "  literal(id: string) { return this.crud.get(true, id) } }",
+  ].join("\n"));
+  const found = await reader.of([file], "repo");
+  const undecided = found.find((site) => site.symbol === "Svc.undecided");
+  assert.equal(undecided?.target.status, "unknown");
+  assert.equal(undecided?.diagnostic?.cause, "destination-undecidable");
+  assert.deepEqual(undecided?.diagnostic?.alternatives, ["/all/{}", "/one/{}"]);
+  assert.deepEqual(sites(found.filter((site) => site.symbol === "Svc.literal")), ["GET /all/{}@conditional.ts:6"]);
+});
+
+test("conditional wrapper alternatives include the branch without a hole", async () => {
+  const file = source("conditional-empty.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Crud { constructor(private http: HttpClient) {}",
+    "  get(all: boolean, id: string) { return this.http.get('/items' + (all ? '' : '/' + id)) } }",
+    "class Svc { constructor(private crud: Crud) {}",
+    "  load(all: boolean, id: string) { return this.crud.get(all, id) }",
+    "  all(id: string) { return this.crud.get(true, id) } }",
+  ].join("\n"));
+  const found = await reader.of([file], "repo");
+  const site = found.find((item) => item.symbol === "Svc.load");
+  assert.equal(site?.target.status, "unknown");
+  assert.deepEqual(site?.diagnostic?.alternatives, ["/items", "/items/{}"]);
+  assert.deepEqual(sites(found.filter((item) => item.symbol === "Svc.all")), ["GET /items@conditional-empty.ts:6"]);
+});
+
+test("a wrapper preserves the base URL stated in request options", async () => {
+  const file = source("base-option.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Crud { constructor(private http: HttpClient) {}",
+    "  get(path: string) { return this.http.get(path, { baseUrl: 'http://h/api' }) } }",
+    "class Svc { constructor(private crud: Crud) {}",
+    "  load() { return this.crud.get('/items') } }",
+  ].join("\n"));
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["GET http://h/api/items@base-option.ts:5"]);
+});
+
+test("agreeing virtual wrapper implementations retain both leaves at the first eligible caller", async () => {
+  const file = source("dispatch.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Base { constructor(protected http: HttpClient) {} get(id: string) { return this.http.get(`/items/${id}`) } }",
+    "class Child extends Base { override get(id: string) { return this.http.get(`/items/${id}`) } }",
+    "class Page { constructor(private service: Base) {} load(id: string) { return this.service.get(id) } }",
+    "class Root { constructor(private page: Page) {} run() { return this.page.load('7') } }",
+  ].join("\n"));
+  const found = await reader.placed([file], "repo");
+  assert.deepEqual(sites(found.map(({ site }) => site)), ["GET /items/{}@dispatch.ts:4"]);
+  assert.deepEqual([...new Set(found[0]?.origins?.filter((item) => item.kind === "leaf").map((item) => item.line))].sort(), [2, 3]);
+  const lookup = await createRequestCallLookup([file]);
+  const call = lookup.at({ file: "dispatch.ts", line: 4, symbol: "Page.load" });
+  assert.ok(call !== undefined && lookup.of(call)?.shapes.length === 2);
+});
+
+test("virtual candidates that differ or issue no request never agree by union", async () => {
+  for (const implementation of ["return this.http.get(`/other/${id}`)", "return undefined"]) {
+    const file = source("dispatch-different.ts", [
+      "import { HttpClient } from '@angular/common/http'",
+      "class Base { constructor(protected http: HttpClient) {} get(id: string) { return this.http.get(`/items/${id}`) } }",
+      `class Child extends Base { override get(id: string) { ${implementation} } }`,
+      "class Page { constructor(private service: Base) {} load(id: string) { return this.service.get(id) } }",
+    ].join("\n"));
+    const site = (await reader.of([file], "repo")).find((item) => item.symbol === "Page.load");
+    assert.equal(site?.target.status, "unknown");
+    assert.equal(site?.diagnostic?.cause, "dispatch-disagreement");
+  }
+});
+
+test("virtual candidates may agree on a path pattern while retaining different caller parameters", async () => {
+  const file = source("dispatch-parameters.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Base { constructor(protected http: HttpClient) {} get(a: string, b: string) { return this.http.get(`/items/${a}`) } }",
+    "class Child extends Base { override get(a: string, b: string) { return this.http.get(`/items/${b}`) } }",
+    "class Page { constructor(private service: Base) {} load(a: string, b: string) { return this.service.get(a, b) } }",
+    "class Root { constructor(private page: Page) {} run() { return this.page.load('same', 'same') } }",
+  ].join("\n"));
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /items/{}@dispatch-parameters.ts:4"]);
+});
+
+test("super calls resolve the inherited body without virtual candidates", async () => {
+  const file = source("dispatch-super.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Base { constructor(protected http: HttpClient) {} get(id: string) { return this.http.get(`/items/${id}`) } }",
+    "class Child extends Base { override get(id: string) { return super.get(id) } }",
+    "class Page { constructor(private service: Child) {} load(id: string) { return this.service.get(id) } }",
+  ].join("\n"));
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /items/{}@dispatch-super.ts:3"]);
+});
+
+test("virtual candidates compare the final URL after applying each request base", async () => {
+  const file = source("dispatch-base.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Base { constructor(protected http: HttpClient) {} get(id: string) { return this.http.get(`/api/items/${id}`) } }",
+    "class Child extends Base { override get(id: string) { return this.http.get(`/items/${id}`, { baseUrl: '/api' }) } }",
+    "class Page { constructor(private service: Base) {} load(id: string) { return this.service.get(id) } }",
+  ].join("\n"));
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/items/{}@dispatch-base.ts:4"]);
+});
+
+test("an unread virtual candidate retains a source-not-read gap at the caller", async () => {
+  const file = source("dispatch-unread.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Base { constructor(protected http: HttpClient) {} get(id: string) { return this.http.get(`/items/${id}`) } }",
+    "abstract class Child extends Base { abstract override get(id: string): any }",
+    "class Page { constructor(private service: Base) {} load(id: string) { return this.service.get(id) } }",
+    "class Root { constructor(private page: Page) {} run() { return this.page.load('7') } }",
+  ].join("\n"));
+  const found = await reader.of([file], "repo");
+  const site = found.find((item) => item.symbol === "Page.load");
+  assert.equal(site?.target.status, "unknown");
+  assert.equal(site?.diagnostic?.cause, "source-not-read");
+  assert.equal((await reader.placed([file], "repo")).find(({ site: placed }) => placed.symbol === "Page.load")?.issuingBoundary, undefined);
+  assert.equal(found.some((item) => item.symbol === "Root.run"), false);
+});
+
+test("an independent unread call on the same line is not hidden by a handled virtual gap", async () => {
+  const file = source("dispatch-separate.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Base { constructor(protected http: HttpClient) {} get(id: string) { return this.http.get(`/items/${id}`) } }",
+    "abstract class Child extends Base { abstract override get(id: string): any }",
+    "abstract class Other { abstract run(): any }",
+    "class Page { constructor(private service: Base, private other: Other) {} load(id: string) { this.service.get(id); return this.other.run() } }",
+    "class Root { constructor(private page: Page) {} run() { return this.page.load('7') } }",
+  ].join("\n"));
+  const found = await reader.of([file], "repo");
+  const outer = found.find((item) => item.symbol === "Root.run");
+  assert.equal(outer?.target.status, "unknown");
+  assert.equal(outer?.diagnostic?.cause, "source-not-read");
+});
+
+test("a request-relevant cycle in one virtual candidate keeps the caller unresolved", async () => {
+  const file = source("dispatch-cycle.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Base { constructor(protected http: HttpClient) {} get(id: string) { return this.http.get(`/items/${id}`) } }",
+    "class Child extends Base { override get(id: string) { this.loop(); return this.http.get(`/items/${id}`) }",
+    "  loop() { this.loop(); return this.http.get('/other') } }",
+    "class Page { constructor(private service: Base) {} load(id: string) { return this.service.get(id) } }",
+  ].join("\n"));
+  const site = (await reader.of([file], "repo")).find((item) => item.symbol === "Page.load");
+  assert.equal(site?.target.status, "unknown");
+  assert.equal(site?.diagnostic?.cause, "recursive");
+  assert.ok(site?.target.evidence.some((at) => at.path === "dispatch-cycle.ts" && at.line === 3));
+});
+
+test("virtual candidates agreeing on conditional alternatives retain the runtime choice", async () => {
+  const file = source("dispatch-choice.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Base { constructor(protected http: HttpClient) {} get(all: boolean, id: string) { return this.http.get(all ? `/all/${id}` : `/one/${id}`) } }",
+    "class Child extends Base { override get(all: boolean, id: string) { return this.http.get(all ? `/all/${id}` : `/one/${id}`) } }",
+    "class Page { constructor(private service: Base) {} load(all: boolean, id: string) { return this.service.get(all, id) } }",
+  ].join("\n"));
+  const site = (await reader.of([file], "repo")).find((item) => item.symbol === "Page.load");
+  assert.equal(site?.target.status, "unknown");
+  assert.equal(site?.diagnostic?.cause, "destination-undecidable");
+  assert.deepEqual(site?.diagnostic?.alternatives, ["/all/{}", "/one/{}"]);
+});
+
+test("equal paths with unprovable different body sources do not establish virtual agreement", async () => {
+  const file = source("dispatch-body.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Base { constructor(protected http: HttpClient) {} post(id: string) { return this.http.post(`/items/${id}`, { x: 1 }) } }",
+    "class Child extends Base { override post(id: string) { return this.http.post(`/items/${id}`, { x: 2 }) } }",
+    "class Page { constructor(private service: Base) {} load(id: string) { return this.service.post(id) } }",
+  ].join("\n"));
+  const site = (await reader.of([file], "repo")).find((item) => item.symbol === "Page.load");
+  assert.equal(site?.target.status, "unknown");
+  assert.equal(site?.diagnostic?.cause, "dispatch-disagreement");
+});
+
+test("callback request boundaries stay local to their own function bodies", async () => {
+  const file = source("callbacks.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Crud { constructor(private http: HttpClient) {} delete(path: string) { return this.http.delete('https://host/api' + path) } }",
+    "class Page { constructor(private crud: Crud) {}",
+    " run(event: any) { dialog.subscribe(ok => { if (ok) this.crud.delete('/arrow/' + event.id + '?id=' + event.id) }) }",
+    " other() { dialog.subscribe(function (crud: Crud) { crud.delete('/function/1') }) }",
+    "}",
+    "function invoke(page: Page, event: any) { page.run(event) }",
+  ].join("\n"));
+  const sites = await reader.of([file], "repo");
+  assert.deepEqual(sites.filter((site) => site.target.status === "complete").map((site) => [site.line, site.target.status === "complete" && "path" in site.target.value && site.target.value.path]).sort(), [
+    [4, "https://host/api/arrow/{}"],
+    [5, "https://host/api/function/1"],
+  ]);
+  assert.ok(!sites.some((site) => site.symbol === "invoke"));
 });

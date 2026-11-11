@@ -437,11 +437,14 @@ test("a call may reach an operation through a gateway prefix, a configured base 
   assert.equal(reaches("GET", "https://pay.example.test/orders/x", route("GET", "/orders"), [], "shop"), false);
 });
 
-test("a call site is excluded from an operation only by that operation's routes, and never without a method and a template", () => {
+test("a call site is excluded only by positive route proof, keeping an unknown path for a compatible method", () => {
   const routes = repositories([route("GET", "/orders"), route("GET", "/invoices")]);
   const excludes = excludedFrom("GET /orders", routes, []);
   assert.equal(excludes({ kind: "call-site", transport: "http", method: "GET", template: "/invoices" }), true);
   assert.equal(excludes({ kind: "call-site", transport: "http", method: "GET", template: "/orders" }), false);
   assert.equal(excludes({ kind: "call-site", transport: "http", method: "GET" }), false);
+  assert.equal(excludes({ kind: "call-site", transport: "http", method: "POST" }), true);
+  assert.equal(excludedFrom("GET /absent", routes, [])({ kind: "call-site", transport: "http", method: "POST" }), false);
+  assert.equal(excludedFrom("ANY /orders", repositories([route("ANY", "/orders")]), [])({ kind: "call-site", transport: "http", method: "POST" }), false);
   assert.equal(excludes({ kind: "call-site", transport: "http", template: "/invoices" }), false);
 });

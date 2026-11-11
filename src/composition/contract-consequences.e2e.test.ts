@@ -191,9 +191,7 @@ test("a response property that becomes nullable is incompatible where a template
   const unguarded = used(fact.value, lineOf(TEMPLATE, "order.customer.name"));
   assert.equal(unguarded?.verdict.kind, "incompatible");
   assert.deepEqual(unguarded?.chain.map(({ step, evidence }) => [step, evidence.path, evidence.line]), [
-    ["http-call", SERVICE_FILE, lineOf(SERVICE, "this.http.get")],
-    ["return", SERVICE_FILE, lineOf(SERVICE, "return this.http.get")],
-    ["caller", "src/app/order.component.ts", lineOf(COMPONENT, "this.service.find")],
+    ["http-call", "src/app/order.component.ts", lineOf(COMPONENT, "this.service.find")],
     ["subscribe", "src/app/order.component.ts", lineOf(COMPONENT, "subscribe(")],
     ["assign", "src/app/order.component.ts", lineOf(COMPONENT, "this.order = order")],
     ["template-read", TEMPLATE_FILE, lineOf(TEMPLATE, "order.customer.name")],
@@ -310,7 +308,8 @@ test("a call site whose URL no read can evaluate is listed beside the missing li
   const [item] = fact.value.findings;
   assert.ok(item?.status === "unknown");
   assert.deepEqual(item.evidence.map((place) => [place.path, place.line, place.via, "repo" in place && place.repo]), [
-    [SERVICE_FILE, lineOf(dynamic, "this.http.get"), "unresolved-call-site", "web"],
+    ["src/app/order.component.ts", lineOf(COMPONENT, "this.service.find"), "unresolved-call-site", "web"],
+    [SERVICE_FILE, lineOf(dynamic, "this.http.get"), undefined, "web"],
     ["src/main/java/shop/OrdersController.java", lineOf(CONTROLLER, "@GetMapping("), "no-call-site", "api"],
   ]);
 });

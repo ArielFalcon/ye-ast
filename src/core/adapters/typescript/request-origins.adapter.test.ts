@@ -4,6 +4,7 @@ import { parseAccessPath } from "../../domain/contracts/access-path.ts";
 import { formatOriginValue, type Origin } from "../../domain/contracts/request-origin.ts";
 import type { RequestOriginReader } from "../../ports/request-origins.port.ts";
 import { createRequestOriginReader } from "./request-origins.adapter.ts";
+import { createRequestCallLookup } from "./http-call-sites.adapter.ts";
 
 const COMMON = "import { HttpClient } from '@angular/common/http'\nimport { FormGroup } from '@angular/forms'\n";
 const HEADER_LINES = COMMON.split("\n").length - 1;
@@ -30,6 +31,17 @@ const show = (origins: readonly Origin[]) =>
 
 const PAGE = (...statements: string[]) => ["class Page {", "  constructor(private http: HttpClient) {}", "  save() {", ...statements.map((statement) => `    ${statement}`), "  }", "}"];
 const POST_AT = 4;
+
+test("request origins recognize the Angular resource import alias but reject a foreign import", async () => {
+  const unit = (module: string) => ({ path: "alias.ts", content: `import { httpResource as resource } from '${module}';\nfunction load() { return resource(() => '/items') }` });
+  const selected: string[] = [];
+  const lookupOf: typeof createRequestCallLookup = async (files) => {
+    const lookup = await createRequestCallLookup(files);
+    return { ...lookup, at(site) { const call = lookup.at(site); if (call !== undefined) selected.push(call.getText()); return call; } };
+  };
+  for (const module of ["@angular/common/http", "foreign"]) await createRequestOriginReader([unit(module)], undefined, lookupOf).ofBody({ file: "alias.ts", line: 2, symbol: "load" }, []);
+  assert.deepEqual(selected, ["resource(() => '/items')"]);
+});
 
 test("an object literal writes the property at the end of the path, and a property it does not write is absent", async () => {
   const lines = PAGE("this.http.post('/vets', { id: null, name: 'x', age: 3, ok: false })");
@@ -304,6 +316,58 @@ test("a chain of wrapper methods is followed through every forwarding call down 
   const origins = async (path: string) => show(await reader.ofBody({ file: "a.ts", line: at(8), symbol: "Page.one" }, parseAccessPath(path)!));
   assert.deepEqual(await origins("id"), ["1@4"]);
   assert.deepEqual(await origins("name"), ['"n"@8']);
+});
+
+test("named function wrapper chains follow the body through each call", async () => {
+  const lines = [
+    "function post(url: string, data: unknown) { return fetch(url, { method: 'POST', body: JSON.stringify(data) }) }",
+    "function relay(url: string, data: unknown) { return post(url, data) }",
+    "function first() { return relay('/items', { id: 'known' }) }",
+    "function second() { return relay('/items', { id: 17 }) }",
+  ];
+  const reader = readerOf([source("a.ts", lines)]);
+  assert.deepEqual(show(await reader.ofBody({ file: "a.ts", line: at(3), symbol: "first" }, ["id"])), ['"known"@3']);
+  assert.deepEqual(show(await reader.ofBody({ file: "a.ts", line: at(4), symbol: "second" }, ["id"])), ["17@4"]);
+});
+
+test("agreeing candidates retain both chains through a shared request leaf", async () => {
+  const lines = [
+    "class Base { constructor(protected http: HttpClient) {}",
+    "  shared(url: string, data: any) { return this.http.post(url, data) }",
+    "  post(url: string, data: any) { return this.shared(url, data) } }",
+    "class Child extends Base {",
+    "  override post(url: string, data: any) { return this.shared(url, data) } }",
+    "class Page { constructor(private service: Base) {}",
+    "  save(data: any, flag: boolean) { return this.service.post('/v', flag ? data : { id: 'other' }) } }",
+  ];
+  const files = [source("a.ts", lines)];
+  const lookup = await createRequestCallLookup(files);
+  const call = lookup.at({ file: "a.ts", line: at(7), symbol: "Page.save" });
+  assert.ok(call);
+  const chains = lookup.bodiesOf(call);
+  assert.equal(chains.length, 2);
+  assert.equal(chains[0]?.expression, chains[1]?.expression);
+  assert.notEqual(chains[0]!.wrappers.at(-1)!.call, chains[1]!.wrappers.at(-1)!.call);
+  const origins = await readerOf(files).ofBody({ file: "a.ts", line: at(7), symbol: "Page.save" }, ["id"]);
+  assert.ok(origins.some((origin) => origin.kind === "parameter" && origin.parameter.symbol === "save"));
+  assert.ok(show(origins).includes('"other"@7'));
+  assert.deepEqual([...new Set(origins.flatMap((origin) => origin.conditions.map((condition) => condition.holds)))].sort(), [false, true]);
+  assert.deepEqual([...new Set(origins.flatMap((origin) => origin.hops.map((hop) => hop.evidence.line)))].sort((a, b) => a - b), [at(2), at(3), at(5), at(7)]);
+});
+
+test("agreeing virtual wrappers preserve origins from each real request body", async () => {
+  const lines = [
+    "class Base { constructor(protected http: HttpClient) {}",
+    "  post(url: string, data: any) { return this.http.post(url, data) } }",
+    "class Child extends Base {",
+    "  override post(url: string, data: any) { return this.http.post(url, data) } }",
+    "class Page { constructor(private service: Base) {}",
+    "  save(data: any) { return this.service.post('/v', data) } }",
+  ];
+  const origins = await readerOf([source("a.ts", lines)]).ofBody({ file: "a.ts", line: at(6), symbol: "Page.save" }, parseAccessPath("id")!);
+  assert.ok(origins.length > 0);
+  assert.ok(origins.every((origin) => origin.kind === "parameter" && origin.parameter.symbol === "save"));
+  assert.deepEqual([...new Set(origins.flatMap((origin) => origin.hops.map((hop) => hop.evidence.line)))].sort(), [at(2), at(4), at(6)]);
 });
 
 test("a wrapper's parameter bound to a caller's own parameter continues at the callers of that function", async () => {

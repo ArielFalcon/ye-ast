@@ -2,10 +2,22 @@ import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { z } from 'zod';
 import { CAPABILITY_ABSENT } from '../core/domain/shared/fact.ts';
+import { unresolvedCallSiteSchema } from './composition-schema-parts.ts';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/server/validators/ajv';
 
 const validator = (schema: unknown) => new AjvJsonSchemaValidator().getValidator(schema as Parameters<AjvJsonSchemaValidator['getValidator']>[0]);
 import { recoveryControlShapeFor, validRecoveryControls, recoveryControlConstraintsFor, selectedOutputFor } from './evidence-schema.ts';
+
+test('unresolved request schemas preserve method-only facts and reject unstated methods or undefined keys', () => {
+  const site = { path: 'client.ts', line: 3, symbol: 'Client.send', transport: 'http', reason: 'unresolved', evidence: [] };
+  const advertised = validator(z.toJSONSchema(unresolvedCallSiteSchema));
+  for (const stated of [{ method: 'GET' }, { method: 'POST', path: '/orders' }]) {
+    assert.equal(unresolvedCallSiteSchema.safeParse({ ...site, stated }).success, true);
+    assert.equal(advertised({ ...site, stated }).valid, true);
+  }
+  assert.equal(unresolvedCallSiteSchema.safeParse({ ...site, stated: { path: '/orders' } }).success, false);
+  assert.equal(unresolvedCallSiteSchema.safeParse({ ...site, stated: { method: 'GET', path: undefined } }).success, false);
+});
 
 test('control schemas enforce pairing, branches, safe integers and closed subjects', () => {
   for (const tool of ['entrypoints', 'callers', 'impact'] as const) {

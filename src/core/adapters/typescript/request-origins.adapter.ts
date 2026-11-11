@@ -4,8 +4,7 @@ import type { ArgumentOrigins, RequestOriginReader } from "../../ports/request-o
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { buildProgram } from "./consumer-flow.index.ts";
 import { calleeName } from "./consumer-flow.syntax.ts";
-import { createRequestBodies, symbolOf } from "./http-call-sites.adapter.ts";
-import { VERBS } from "./request-summaries.ts";
+import { createRequestCallLookup } from "./http-call-sites.adapter.ts";
 import { lineOf } from "./syntax.ts";
 import { bodyReplacements } from "./request-interceptors.ts";
 import { OriginWalker } from "./request-origins.walker.ts";
@@ -15,20 +14,25 @@ import { OriginWalker } from "./request-origins.walker.ts";
  * program, the request resolution and the walker's answers are held for as long as the reader is, which is the life of
  * the prepared workspace that holds it.
  */
-export function createRequestOriginReader(files: readonly SourceFile[], programOf: () => ReturnType<typeof buildProgram> = () => buildProgram(files), bodiesOf: typeof createRequestBodies = createRequestBodies): RequestOriginReader {
-  let prepared: Promise<{ program: Awaited<ReturnType<typeof buildProgram>>; bodyOf: ReturnType<typeof createRequestBodies>; walker: OriginWalker; replacements: Origin[] }> | undefined;
-  const prepare = () => (prepared ??= programOf().then((program) => ({ program, bodyOf: bodiesOf(files), walker: new OriginWalker(program), replacements: bodyReplacements(program) })));
+export function createRequestOriginReader(files: readonly SourceFile[], programOf: () => ReturnType<typeof buildProgram> = () => buildProgram(files), lookupOf: typeof createRequestCallLookup = createRequestCallLookup): RequestOriginReader {
+  let prepared: Promise<{ program: Awaited<ReturnType<typeof buildProgram>>; lookup: Awaited<ReturnType<typeof createRequestCallLookup>>; walker: OriginWalker; replacements: Origin[] }> | undefined;
+  const prepare = () => (prepared ??= Promise.all([programOf(), lookupOf(files)]).then(([program, lookup]) => ({ program, lookup, walker: new OriginWalker(program), replacements: bodyReplacements(program) })));
 
   return {
     async ofBody(site, path) {
-      const { program, bodyOf, walker, replacements } = await prepare();
+      const { lookup, walker, replacements } = await prepare();
       if (replacements.length > 0) return replacements;
-      const unit = program.index.units.get(site.file);
-      const call = unit === undefined ? undefined : callsOf(unit.tree).find((candidate) => lineOf(unit.tree, candidate) === site.line && symbolOf(candidate) === site.symbol && namesRequest(candidate));
+      const call = lookup.at(site);
       if (call === undefined) return [unreadable(site.file, site.line, "no call at the reported site")];
-      const request = await bodyOf(call);
-      if (request === undefined) return [unreadable(site.file, site.line, "not a request body of the project")];
-      return walker.ofBody(request, path, call);
+      const requests = lookup.bodiesOf(call);
+      if (requests.length === 0) return [unreadable(site.file, site.line, "not a request body of the project")];
+      const found = requests.flatMap((request) => walker.ofBody(request, path, call).map((origin): Origin => {
+        const expression = request.expression;
+        if (requests.length === 1 || expression === undefined) return origin;
+        const source = expression.getSourceFile();
+        return { ...origin, hops: [...origin.hops, { step: "argument", evidence: { path: source.fileName, line: lineOf(source, expression) } }] };
+      }));
+      return found;
     },
     async ofArgument(site, index, path, body): Promise<ArgumentOrigins> {
       const { program, walker } = await prepare();
@@ -58,10 +62,4 @@ function callsOf(tree: ts.SourceFile): readonly ts.CallExpression[] {
   visit(tree);
   CALLS.set(tree, found);
   return found;
-}
-
-function namesRequest(call: ts.CallExpression): boolean {
-  const callee = call.expression;
-  if (ts.isIdentifier(callee)) return callee.text === "fetch" || callee.text === "httpResource";
-  return ts.isPropertyAccessExpression(callee) && (VERBS.has(callee.name.text) || callee.name.text === "fetch");
 }

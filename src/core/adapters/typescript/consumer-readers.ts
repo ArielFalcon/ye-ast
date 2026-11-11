@@ -2,7 +2,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { buildProgram } from "./consumer-flow.index.ts";
 import { consumerFlowReader } from "./consumer-flow.adapter.ts";
 import { createRequestOriginReader } from "./request-origins.adapter.ts";
-import { createRequestBodies } from "./http-call-sites.adapter.ts";
+import { createRequestCallLookup } from "./http-call-sites.adapter.ts";
 import type { FrameworkPlugin } from "../../ports/framework-plugin.port.ts";
 import type { ConsumerReading, ConsumerContribution, ContinuationClaim } from "../../ports/consumer-contribution.port.ts";
 import type { Carrier, FlowFrontier, FlowResult } from "../../domain/contracts/consumer-flow.ts";
@@ -49,10 +49,10 @@ function contributions(carrier: Carrier, base: FlowResult, stages: readonly Cons
 
 export interface ConsumerReadersDeps {
   buildProgram: typeof buildProgram;
-  createRequestBodies: typeof createRequestBodies;
+  createRequestCallLookup?: typeof createRequestCallLookup;
 }
 
-const defaultDeps: ConsumerReadersDeps = { buildProgram, createRequestBodies };
+const defaultDeps: ConsumerReadersDeps = { buildProgram, createRequestCallLookup };
 
 /** Both readers hold one program for this reading; origin-specific preparation stays lazy. */
 export async function createConsumerReaders(files: readonly SourceFile[], repo: string, deps: ConsumerReadersDeps = defaultDeps, plugins?: readonly FrameworkPlugin[]) {
@@ -88,6 +88,6 @@ export async function createConsumerReaders(files: readonly SourceFile[], repo: 
       if (!absent) return result;
       return { ...result, frontiers: [...result.frontiers.filter((one) => one.reason !== "no-extractor"), { at: { path: file, line: siteLine(carrier.site) ?? 1 }, cause: "unmodelled-flow" as const, reason: CAPABILITY_ABSENT, hops: [] }] };
     } },
-    origins: createRequestOriginReader(files, program, deps.createRequestBodies),
+    origins: createRequestOriginReader(files, program, deps.createRequestCallLookup ?? createRequestCallLookup),
   };
 }

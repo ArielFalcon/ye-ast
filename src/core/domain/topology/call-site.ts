@@ -1,7 +1,7 @@
 import type { LibrarySource } from "./library-source.ts";
 import type { HttpMethod } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
-import { declarationSpan, type Cut, type CutReach, type Evidence, type Finding, type UnknownReason } from "../shared/fact.ts";
+import { declarationSpan, type CallSiteReach, type Cut, type Evidence, type Finding, type UnknownReason } from "../shared/fact.ts";
 
 /** A call one repository makes out of itself: an HTTP request or a published message, with where it is written. */
 export interface CallSite {
@@ -18,7 +18,7 @@ export interface CallSite {
   transport: "http" | "event";
   target: Finding<HttpTarget | EventTarget>;
   diagnostic?: CallSiteDiagnostic;
-  /** The request the code writes, when the snapshot decides everything about it but the base it reaches. */
+  /** The request components the code establishes independently of its undecided target. */
   stated?: StatedRequest;
 }
 
@@ -33,10 +33,10 @@ export interface CallSiteDiagnostic {
   alternatives?: readonly string[];
 }
 
-/** The request an HTTP call writes when the snapshot cannot decide its base: the method and the path. */
+/** The established HTTP method and, when read, its path independently of the destination base. */
 export interface StatedRequest {
   method: HttpMethod;
-  path: string;
+  path?: string;
 }
 
 /**
@@ -83,6 +83,8 @@ export interface PlacedCallSite {
   site: CallSite;
   column?: number;
   declaration?: true;
+  /** This exact occurrence is the proven issuing boundary for its represented alternatives. */
+  issuingBoundary?: "site";
   /**
    * Source bodies and occurrences used by extraction; empty means no propagated proof, absent means a direct site. A
    * `body` is a method or function the request passed through, a `leaf` the call in a body that issues it.
@@ -118,7 +120,7 @@ export interface UnresolvedCallSite {
   diagnostic?: CallSiteDiagnostic;
   /** The library the call goes through, when the snapshot names one. */
   via?: string;
-  /** The request the code writes, when the snapshot decides everything but where it goes. */
+  /** The request components established independently of the undecided destination. */
   stated?: StatedRequest;
 }
 
@@ -162,9 +164,9 @@ export function unsettledCallSiteCut(site: CallSite): Cut {
 }
 
 /** What a call site could reach, as the extractor read it: its transport, and its method and path when the snapshot states them. */
-function callSiteReach(site: CallSite): CutReach {
+export function callSiteReach(site: CallSite): CallSiteReach {
   const request = httpTargetOf(site) ?? site.stated;
-  return request === undefined ? { kind: "call-site", transport: site.transport } : { kind: "call-site", transport: site.transport, method: request.method, template: request.path };
+  return request === undefined ? { kind: "call-site", transport: site.transport } : { kind: "call-site", transport: site.transport, method: request.method, ...(request.path === undefined ? {} : { template: request.path }) };
 }
 
 /** A call site the snapshot cannot decide, as the workspace reports it: what is known, never only its place. */

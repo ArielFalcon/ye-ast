@@ -236,6 +236,8 @@ overloads never decide it. A reached handler or component names its entrypoint; 
 extractor reported `unknown` is reported by its location. A reached guard names every UI route that declares it (its
 own `canMatch`, `canActivate` or `canLoad`, which the route extractor already carries to the routes beneath): a guard
 records no line, and as a top-level declaration it is unique by name in its file, so it joins by file and name.
+For a request through a wrapper, the request site is the first call supplying a path parameter, so `impact` and `trace`
+name that caller's line.
 
 ### Bounds
 

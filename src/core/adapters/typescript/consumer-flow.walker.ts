@@ -131,10 +131,12 @@ export class Walker {
     readonly unit: Unit,
   ) {}
 
-  startCallSite(site: { line: number; symbol: string }, path: AccessPath): void {
-    const call = this.calls().find((candidate) => lineOf(this.unit.tree, candidate) === site.line && symbolOf(candidate) === site.symbol && this.requestKind(candidate) !== undefined);
+  startCallSite(site: { line: number; column?: number; symbol: string }, path: AccessPath): void {
+    const candidates = this.calls().filter((candidate) => lineOf(this.unit.tree, candidate) === site.line && symbolOf(candidate) === site.symbol);
+    const placed = site.column === undefined ? [] : candidates.filter((candidate) => this.unit.tree.getLineAndCharacterOfPosition(candidate.getStart()).character + 1 === site.column).sort((a, b) => a.getEnd() - b.getEnd());
+    const call = placed[0] ?? (site.column === undefined ? candidates.find((candidate) => this.requestKind(candidate) !== undefined) ?? (candidates.length === 1 ? candidates[0] : undefined) : undefined);
     if (call === undefined) return this.lostAt(site.line, "no call at the reported site");
-    const kind = this.requestKind(call)!;
+    const kind = this.requestKind(call);
     const start: Trail = { origin: path, hops: [], guards: [] };
     if (kind === "resource") return this.read(call, this.hopped(this.rewrapped(start, ["value"]), "resource", call));
     if (kind === "fetch") return this.read(call, this.hopped(this.rewrapped(start, ["json"]), "response-body", call, [{ from: [], to: ["json"] }]));

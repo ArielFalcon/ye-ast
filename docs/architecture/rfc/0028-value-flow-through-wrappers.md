@@ -222,7 +222,8 @@ export interface ForwardingRow {
 
 /**
  * What one declaration does with its parameters and its return. `shapes` empty and `gaps` empty is a proof that the
- * body issues no request of the pack's vocabulary; `undefined` from the lookup means "not a snapshot declaration".
+ * represented declaration graph issues no request of the pack's vocabulary; `undefined` from the lookup means "not a
+ * snapshot declaration". This does not establish absence in unresolved runtime code.
  */
 export interface RequestSummary {
   shapes: readonly RequestShape[];
@@ -231,7 +232,11 @@ export interface RequestSummary {
 }
 ```
 
-No other type changes. `CallSite`, `HttpTarget`, `CallSiteDiagnostic`, `CALL_SITE_CAUSES`, `FlowFrontier` and
+The internal `PlacedCallSite` may also carry `issuingBoundary: "site"` when every represented alternative proves the
+same first-binding occurrence and no gap remains. Its body and leaf origins remain evidence for trace. The consequence
+reader starts at that exact occurrence when it has no competitor; without this proof ADR-0044 decision 7 continues to
+identify the issuing owned leaf and preserve unplaced and ambiguous frontiers. This marker does not appear in public facts.
+`CallSite`, `HttpTarget`, `CallSiteDiagnostic`, `CALL_SITE_CAUSES`, `FlowFrontier` and
 `FRONTIER_CAUSES` stay as they are.
 
 ### Algorithm (TypeScript pack, `src/core/adapters/typescript/request-summaries.ts`)
@@ -244,12 +249,14 @@ entry, and S1 needs no edit in `http-call-sites.adapter.ts` to own it.
    snapshot, keyed `file\0` + the declaration's `Class.member` (or its own name at the top level) — the file is part of
    the key, since `symbolOf` returns `Class.member` alone (`http-call-sites.adapter.ts:1426-1441`). Declarations sharing a
    name in one class are one key: its body is the unique member with a body; zero or two bodies is
-   `gaps: [{cause: "dispatch-disagreement"}]` with every signature as evidence.
+   `gaps: [{cause: "dispatch-disagreement"}]` with every signature as evidence. Other arrow functions and function
+   expressions are independent declarations keyed by their captured source offset. Their summaries add no execution
+   edge from the enclosing declaration.
 2. **Leaves.** Walk a declaration's body without entering nested functions (they are declarations of their own). A call
    is a leaf when its callee is in the pack's client vocabulary — Angular `HttpClient` by import, `fetch`,
    `httpResource`, or a client a declared library source names (the same rule as today, `:20,288-304`); a member call's
    receiver must be an `HttpClient` by `SummaryResolver.clientReceiver`, so a custom service with the same verb is not a
-   leaf. The shape's
+   leaf. A recognized request without a usable URL contributes a `destination-undecidable` gap. The shape's
    `path` is `evaluate` of the path argument **in the declaration's own scope**, so `this.url`, a const import and an
    `environment` object member fold to text and a parameter becomes `{}` wherever it sits (`${this.url}${path}` is
    `http://localhost:8080/api{}`). `method` is the verb, or the `method` argument when it is a value. `body` is
@@ -258,6 +265,8 @@ entry, and S1 needs no edit in `http-call-sites.adapter.ts` to own it.
 3. **Edges.** A call whose callee resolves to another declaration is an edge, with its argument expressions. A call
    that resolves to nothing contributes neither a shape nor a gap: the pack cannot claim that an unread callee issues
    a request, and the operation-level `no-call-site` finding already covers it.
+   Virtual calls retain their candidate declarations as one group, including empty or unread bodies; their request
+   alternatives are compared after substitution at the first eligible call, with every candidate's evidence retained.
 4. **Forwarding calls.** The closed table `FORWARDING_ROWS: readonly ForwardingRow[]` (the contract's type) has one row
    per construct: `defer` (carries argument 0, a callback run later, returns a container `observable`), `from` (argument
    0, container `observable`), `firstValueFrom` (argument 0, returns the carried value), `signal` (argument 0, returns a
@@ -273,8 +282,10 @@ entry, and S1 needs no edit in `http-call-sites.adapter.ts` to own it.
    conditional nested in a branch, is a gap `destination-undecidable` with both branch places as evidence. This is the
    one place branch splitting exists; `evaluate` in the adapter keeps no branch handling.
 6. **Fixpoint.** `shapes(f) = leaves(f) ∪ ⋃_{(g,args)} substitute(shapes(g), args)` and `gaps(f)` likewise, iterated to
-   a fixpoint over the finite set of declaration keys, growing monotonically. A declaration met on its own substitution
-   path contributes `{cause: "recursive"}` with its place and is not entered again (RFC-0021 S1, no depth cap).
+   a fixpoint over the finite set of declaration keys, growing monotonically. A recursive component contributes a
+   `{cause: "recursive"}` gap at its call only when it reaches a recognized request or a pre-recursion uncertainty in
+   the represented declaration graph. This does not establish absence in unresolved external runtime code. URL-value
+   recursion at a recognized request remains an independent target diagnostic (RFC-0021 S1, no depth cap).
 7. **Substitution.** For a shape `s` of `g` reached by the call `c` with arguments `a₁…aₙ`: evaluate each `aᵢ` in
    `c`'s scope; replace each of `s`'s holes by the parameter it reads (`holes` gives that index), with the argument written at that parameter, never by argument order (a hole whose source is not a parameter keeps `{}`). `method`
    undefined maps from an argument that states a verb, else the shape becomes a gap `destination-undecidable`.
@@ -297,6 +308,26 @@ entry, and S1 needs no edit in `http-call-sites.adapter.ts` to own it.
 9. **Determinism.** Shapes sorted by transport, method, then path, then `when`; hops in source order; gaps by their first
    evidence `(path, line)`; every path repository-relative. Same snapshot, same bytes.
 
+### Guarded URL values in the TypeScript summary
+
+URL helpers retain declarative return facts inside the same captured reading. Each helper body is compiled once into
+shared value nodes for literals, parameters, plain object fields, early conditional returns, concatenation and supported
+string operations. Applying a request summary reduces those nodes with its arguments; it does not revisit the helper's
+AST or create a summary per caller. An unknown branch is not an identity transformation.
+
+The value reading distinguishes an omitted argument or safely absent property from an opaque property. Property facts
+require a fresh plain object and a read-only parameter path; writes, aliases, escapes, captures, spreads, getters and
+represented prototype replacement withdraw that proof. Supported string operations require the snapshot not to replace
+their builtins. A slash-trimming regex must be a local literal that neither escapes nor is modified. Unsupported
+statements, including loops, stay unknown; an earlier proven return can avoid that branch.
+
+`RequestShape.unresolved` retains an undecidable destination part independently of parameter holes. A known suffix may
+establish the first supplied request boundary while its base remains unknown, with the base's evidence preserved.
+Replacement branches and opaque transformations never gain a parameter hole from merely mentioning an argument.
+Projection memoization lasts for one reduction and ignores arguments the returned value does not use; compiled nodes
+and their application identities last only as long as their captured reading. Separate live captures share no mutable
+value analysis.
+
 ### Applying the summary: two rules, two boundaries
 
 The class of failure has two boundaries and they are separate rules, in separate files, with separate tests.
@@ -311,8 +342,9 @@ declaration with a summary:
   alternative, never a disagreement.
 - two or more shapes that differ with no `when` → `target: {status: "unknown"}`,
   `diagnostic: {cause: "dispatch-disagreement", alternatives: <canonical shapes>}`, evidence = the call and every leaf.
-- `gaps` non-empty → `target: {status: "unknown", reason: "unresolved"}` with the prevailing gap cause, `stated` set to
-  the one stated shape when there is one, evidence = the call and the gap places. **Fail closed**: a call that may also
+- `gaps` non-empty → `target: {status: "unknown", reason: "unresolved"}` with the prevailing retained gap cause and
+  evidence = the call and the gap places. One known shape does not establish the only possible request when another
+  callee remains unread or ambiguous, so it supplies no exclusion proof in `stated`. **Fail closed**: a call that may also
   reach a request the summary could not state is not attributed confidently; the answer names the gap at that call.
 - `shapes` empty and `gaps` empty → no call site (the body was read and issues no request).
 - no summary (not a snapshot declaration) → no call site; the operation's `no-call-site` finding remains the answer.
@@ -389,9 +421,8 @@ the B11 reader) answers. A new client grows this contract, never an `if` in a co
 `src/composition/request-vocabulary.single-rule.test.ts` holds the rule: the concept may appear only in the owner and in
 the `pending` copies listed there, a list that only shrinks.
 
-The adapter already owns the one URL evaluator and exports the two seams the flow readers use (`createRequestBodies` at
-`:141`, `VERBS` at `:19`), so the lookup is created there, from `readerOf(files)`, with no second evaluator and no new
-port.
+The adapter owns the one URL evaluator and `createRequestCallLookup`, including the body lookup used by origins.
+The lookup is created from `readerOf(files)`, with no second evaluator and no new port.
 
 ```ts
 // request-summaries.ts — the rule. No consumer imports this directly except the B11 stage and its test.
@@ -401,11 +432,16 @@ export type DeclarationKey = string; // `file\0` + `Class.member`, or the functi
 export interface SummaryResolver {
   /** What an expression states in a declaration's scope: its text with `{}` per run-time value, `holes` with one entry per `{}` in order (the declaration parameter index that value is, undefined when it is not a parameter), or why not. */
   evaluate(file: string, expression: ts.Expression): Promise<
-    | { status: "known"; text: string }
+    | { status: "known"; text: string; holes: readonly (number | undefined)[] }
     | { status: "undecided"; cause: SummaryCause; evidence: readonly Evidence[] }
   >;
-  /** The declaration a call resolves to, or undefined when it is not a snapshot declaration. */
-  calleeOf(file: string, call: ts.CallExpression): Promise<{ key: DeclarationKey; file: string; body: ts.Node | undefined } | undefined>;
+  /** One declaration, a virtual candidate group, an explicit gap, or undefined outside the snapshot. */
+  calleeOf(file: string, call: ts.CallExpression): Promise<
+    | { key: DeclarationKey; file: string; body: ts.Node | undefined }
+    | { candidates: readonly { key: DeclarationKey; file: string; body: ts.Node | undefined }[] }
+    | { gap: SummaryGap }
+    | undefined
+  >;
   /** Whether the call's receiver is an Angular `HttpClient`, typed by the B11 reader (fields, parameters, inherited fields). It answers receiver typing only; it does not decide what a request is. */
   clientReceiver(file: string, call: ts.CallExpression): Promise<boolean>;
 }
@@ -416,19 +452,18 @@ export function summariesOf(files: readonly SourceFile[], resolver: SummaryResol
 export interface RequestCallLookup {
   /** The request call a placed site states, at its line and, when it has one, its column (ADR-0044 decision 7). */
   at(site: { file: string; line: number; column?: number; symbol: string }): ts.CallExpression | undefined;
-  /** Whether this call issues a request of the project: a client leaf, or a callee whose summary states a shape. */
+  /** Whether this call may issue a represented request: a client leaf, or a callee whose summary has shapes or gaps. */
   isRequest(call: ts.CallExpression): boolean;
   /** The summary of the declaration the call resolves to; undefined when it is not a snapshot declaration. */
   of(call: ts.CallExpression): RequestSummary | undefined;
 }
 
 // http-call-sites.adapter.ts — the one owner every reader calls.
-export function createRequestCallLookup(files: readonly SourceFile[]): RequestCallLookup;
+export function createRequestCallLookup(files: readonly SourceFile[]): Promise<RequestCallLookup>;
 ```
 
 `at` keeps ADR-0044 V5.2's exact contract, so the brief calls this factory without retyping anything. The two
-consumers hold the lookup for their reader's life (one `Promise` per `files` array), exactly as `createRequestBodies`
-already is (`request-origins.adapter.ts:18-19`).
+consumers hold the lookup for their reader's life, with one lazy preparation promise per reading.
 
 | Copy of the predicate | Where | Deleted by | What replaces it |
 |---|---|---|---|
@@ -502,11 +537,15 @@ an ambiguous candidate set is a cut, never a merge.
 
 ### What does not change
 
-Answer shapes (MCP text, `result JSON`, the facts schemas); the join's ladder and `QUALIFIED_BASES`; `HttpTarget`,
-`CallSite`, `UnresolvedCallSite`; `consumer-flow.ts`'s carriers and `FLOW_STEPS`; the request-origin walker's backward
+The join's ladder and `QUALIFIED_BASES`; complete `HttpTarget` values; `consumer-flow.ts`'s carriers and `FLOW_STEPS`; the request-origin walker's backward
 reading and its `Origin` vocabulary (`request-origins.walker.ts` keeps its frames; the summary hands
-`createRequestBodies` the same three places `WrapperCall` already carries: the function, the call and the forwarded
+the lookup's body methods the same three places `WrapperCall` already carries: the function, the call and the forwarded
 call); every other family; the mode/size policy.
+
+The unresolved request statement retains a proven method independently of an unknown path (fact schema `0.22.0`).
+`StatedRequest.path` is optional; omitted paths never become templates. The operation matcher may exclude an incompatible
+method only against the operation's known routes; compatible methods, `ANY` routes and absent route proof keep an
+unknown path in question. This preserves request knowledge across persistence and MCP without inventing a URL.
 
 ## Delivery units
 
@@ -577,7 +616,8 @@ rewrite
 instead of `FORWARDING_CALLS`; the rule keeps, beside the domain `RequestShape`, an adapter-internal chain of those hops as
 `ts` nodes, which is what `RequestBody.wrappers` is filled from. A public signature changes in none of `of`, `placed`,
 `requestBody` or the `CallSite` types. **`placed` after the change:** it answers every site with its exact place and, for every site, `origins` = the
-summary's hop places (the client line inside the wrapper), where today only a forwarding site carries them; the trace
+summary's hop places (the client line inside the wrapper), where today only a forwarding site carries them; the internal
+placement also carries the optional proven boundary described above; the trace
 caller `src/core/application/trace/trace-queries.ts:169` and its wiring `src/composition/compose.ts:175-180` read the
 same port signature and need no edit. In the origin reader: delete `namesRequest` (`:62-66`) and use
 `createRequestCallLookup(files).at(site)` at `:26`. Remove `wrapperMethods`, `injectedClasses`, `reachingMethods`,
@@ -618,7 +658,7 @@ it is right, and no expectation is set by which answers I saw.
 *Docs:* RFC-0021 "Implementation evidence" gains the TypeScript reading; RFC-0010's entrypoint notes gain one sentence
 (a request written inside a wrapper is attributed to the call that supplies its parameters, so `impact` and `trace` name
 the caller's line); `AGENTS.md`'s command block is unchanged; the README row of `contract_consequences` and the tool
-description keep their wording (no new cause) but `recovery` for an unresolved call site
+description keep their wording (no new cause) but presentation guidance for unresolved call sites
 gains: "a request made through a wrapper is a site at the call; the stated request names the path the code writes, and a
 call matched only by a suffix names the gateway prefix or the server configuration that would declare it".
 

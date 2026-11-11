@@ -9,7 +9,7 @@ import type { Guard, UseOperation } from "./verdict.ts";
  */
 export type CarrierSite =
   /** The value an HTTP call written at this call site returns, as the workspace join reports the site. */
-  | { kind: "call-site"; repo: string; file: string; line: number; symbol: string }
+  | { kind: "call-site"; repo: string; file: string; line: number; column?: number; symbol: string }
   /** The value of the call of `callee` (a function's own name, as on a return carrier) at a resolved caller's edge. */
   | { kind: "call-result"; repo: string; file: string; line: number; column?: number; callee: string }
   /** The value a function or method returns. */

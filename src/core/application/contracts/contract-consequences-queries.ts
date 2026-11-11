@@ -11,7 +11,7 @@ import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { type CallSiteReach, type Evidence, type Fact, type FactBase, type UnknownReason } from "../../domain/shared/fact.ts";
 import type { Link, LinkBasis } from "../../domain/topology/link.ts";
-import { httpTargetOf, type PlacedCallSite } from "../../domain/topology/call-site.ts";
+import { callSiteReach, type PlacedCallSite } from "../../domain/topology/call-site.ts";
 import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
 import type { ContractConsequencesQueries } from "../../ports/contract-consequences-queries.port.ts";
 import type { ConsumerPlacedSites, ConsumerSession, ConsumerSources, PreparedWorkspace } from "../../ports/consumer-sources.port.ts";
@@ -148,7 +148,13 @@ function selectCalls(session: ConsumerSession, operation: string): Result<CallSe
     findings.push(frontierItem({ at, cause: "link-basis", reason: "unresolved", detail: `ambiguous:${repos.join("|")}`, hops: [] }, [], from.repo));
   }
 
-  const unresolved = session.unresolvedCalls.map((call) => located({ path: call.file, line: call.line, via: "unresolved-call-site" }, call.repo)).sort(compareEvidence);
+  const unresolved = [...new Map(session.unresolvedCalls
+    .filter((call) => call.reach === undefined || !session.excludes(call.reach))
+    .flatMap((call) => [
+      located({ path: call.file, line: call.line, via: "unresolved-call-site" }, call.repo),
+      ...(call.evidence ?? []).filter((place) => place.path !== call.file || place.line !== call.line).map((place) => located(place, call.repo)),
+    ])
+    .map((place) => [canonicalJson(place), place])).values()].sort(compareEvidence);
   if (links.length === 0 && session.ambiguousCalls.length === 0) {
     for (const { repo, handler } of session.serving) {
       const evidence = [...unresolved, located({ path: handler.path, line: handler.line, via: "no-call-site" }, repo)];
@@ -320,17 +326,15 @@ function ambiguous(from: Link["from"], places: readonly { file: string; line: nu
 function sitesAt(from: Link["from"], sites: readonly PlacedCallSite[], excludes: ConsumerSession["excludes"]): PlacedCallSite[] {
   const here = sites.filter(({ site }) => site.file === from.file && site.line === from.line && site.symbol === from.symbol);
   const at = from.column === undefined ? here : here.filter(({ column }) => column !== undefined && column + 1 === from.column);
-  return at.filter(({ site }) => !excludes(reachOf(site)));
+  return at.filter(({ site }) => !excludes(callSiteReach(site)));
 }
-
-/** The request a call site writes, as the matcher's reach states it; a site with no method or template is never excluded. */
-const reachOf = (site: PlacedCallSite["site"]): CallSiteReach => {
-  const target = httpTargetOf(site);
-  return { kind: "call-site", transport: site.transport, ...(target === undefined ? {} : { method: target.method, template: target.path }) };
-};
 
 /** The issuing calls of the sites a link reaches: each owned leaf as the placed call at its place, once, in file then line order. */
 function issuingOf(sites: readonly PlacedCallSite[], placed: readonly PlacedCallSite[], owned: ReadonlySet<string>): Issuing {
+  if (sites.some((site) => site.issuingBoundary === "site")) {
+    if (sites.length === 1) return { kind: "direct" };
+    return unplaced(sites.flatMap((site) => [site.site, ...(site.origins ?? []).filter((origin) => owned.has(origin.file))]));
+  }
   const origins = sites.flatMap((site) => (site.origins ?? []).filter((origin) => owned.has(origin.file)));
   if (origins.length === 0) return { kind: "direct" };
   const leaves = origins.filter((origin) => origin.kind === "leaf");

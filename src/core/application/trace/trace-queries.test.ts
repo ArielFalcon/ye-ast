@@ -1385,6 +1385,18 @@ const at = (line: number, column: number, path = "/x", overrides: Partial<CallSi
 const effectPaths = (fact: Fact<TraceValue>) => valueOf(fact).steps.flatMap((step) => (step.effects ?? []).map((effect) => [step.symbol, effect.kind === "http" ? effect.target.path : effect.kind === "message" ? effect.target.destination : effect.target?.name]));
 const effectCuts = (fact: Fact<TraceValue>) => cutsOf(fact).filter(([, at]) => (at as readonly string[])[0]!.includes(" effect"));
 
+test("a selected issuing boundary does not hide an unreachable trace origin", async () => {
+  const nodes = [PLACED_API, placedNode("run", "method", 9, 1, 9, 60), placedNode("post", "method", 12, 1, 14, 2)];
+  const edges = [{ from: "Api", to: "run", kind: "contains" }, { from: "Api", to: "post", kind: "contains" }, call("post", "Api", 13, 4, { kind: "references" })];
+  const placed: PlacedCallSite = { ...at(9, 13, "/orders"), issuingBoundary: "site", origins: [{ kind: "body", file: A, line: 12, column: 1 }, { kind: "leaf", file: A, line: 13, column: 4 }] };
+  const options: Options = { nodes, edges, sources: [{ path: A, content: `${" ".repeat(80)}\n`.repeat(30) }], syntaxCalls: { [A]: [{ kind: "calls", line: 9, column: 14, name: "this.post", callee: "post", owners: [] }] }, unresolved: [{ from: "run", name: "this.post", kind: "calls", file: A, line: 9, column: 13 }], placedSites: [placed] };
+  const reached = await factOf(options);
+  assert.deepEqual(effectPaths(reached), [["run", "/orders"]]);
+  const missing = await factOf({ ...options, unresolved: [], syntaxCalls: { [A]: [{ kind: "calls", line: 9, column: 14, name: "post", callee: "post", owners: [] }] } });
+  assert.deepEqual(effectPaths(missing), []);
+  assert.deepEqual(effectCuts(missing).map(([, at]) => (at as readonly string[])[0]), [`${A}:9 http effect`]);
+});
+
 test("a call site in a function the walk did not expand is neither an effect nor a cut of the body around it, even on a line that body calls on", async () => {
   const nodes = [PLACED_API, placedNode("run", "method", 6, 1, 6, 71), placedNode("dead", "function", 6, 22, 6, 50)];
   const edges = [{ from: "Api", to: "run", kind: "contains" }];

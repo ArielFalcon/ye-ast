@@ -28,6 +28,8 @@ export interface RequestShape {
   path: string;
   /** One entry per `{}` of `path`, in order: the parameter index that hole reads, or undefined for a run-time value that is not a parameter. */
   holes: readonly (number | undefined)[];
+  /** A part of the destination that the summary cannot establish, independent of parameter holes. */
+  unresolved?: SummaryGap;
   body: BodySource;
   /** Present when the shape holds only under this test of the parameter; several shapes of one leaf split by a conditional. */
   when?: PathCondition;

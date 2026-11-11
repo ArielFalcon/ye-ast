@@ -140,7 +140,7 @@ export const moduleVia = z.strictObject({
   form: z.enum(["dynamic-import", "type-query"]).exactOptional(),
 });
 export const callLocation = z.strictObject({ file: ids.file, line: int, column: int.exactOptional(), endLine: int.exactOptional() });
-const stated = z.strictObject({ method: httpMethod, path: z.string() });
+const stated = z.strictObject({ method: httpMethod, path: z.string().exactOptional() });
 const transport = z.enum(["http", "event"]);
 const httpTarget = z.strictObject({ method: httpMethod, path: z.string(), base: z.string().exactOptional() });
 const eventTarget = z.strictObject({ protocol, destination: z.string(), role: z.literal("publish") });

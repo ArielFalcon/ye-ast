@@ -50,7 +50,8 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, callsO
     }
     return bodies;
   };
-  const byFile = Map.groupBy((await sites()).filter(({ site }) => files.has(site.file)), ({ site }) => site.file);
+  const placedSites = await sites();
+  const byFile = Map.groupBy(placedSites.filter(({ site }) => files.has(site.file)), ({ site }) => site.file);
   for (const [file, inFile] of byFile) {
     const bodies = bodiesOf(file);
     const values = await functionValuesOf(file);
@@ -108,10 +109,23 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, callsO
   for (const item of pending) {
     if (!retained.has(item)) continue;
     if ("effect" in item.read) {
+      coveredOrigins.add(item.at);
       const effects = (item.step.effects ??= []);
       const effect = { ...item.read.effect, column: item.column };
       if (!effects.some((existing) => canonicalJson(existing) === canonicalJson(effect))) effects.push(effect);
     } else markCut(item.step, item.read.cut, cuts);
+  }
+  for (const placed of placedSites) {
+    for (const origin of ("origins" in placed ? placed.origins : undefined) ?? []) {
+      if (origin.kind !== "leaf" || coveredOrigins.has(originKey(origin))) continue;
+      const owner = owningBody(bodiesOf(origin.file), origin);
+      const step = owner === undefined ? undefined : expanded.get(owner.symbol.id);
+      if (step === undefined || owner === undefined) continue;
+      const values = await functionValuesOf(origin.file);
+      if (!countedAlike(origin.column, lineOf(origin.file, origin.line) ?? "") || values === undefined || !executesInBody(owner, values, origin)) continue;
+      markCut(step, unplacedEffect({ ...placed.site, file: origin.file, line: origin.line }), cuts);
+      coveredOrigins.add(originKey(origin));
+    }
   }
   return cuts;
 }
