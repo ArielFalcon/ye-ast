@@ -36,6 +36,77 @@ function file(path: string, lines: readonly string[]): SourceFile {
   return { path, content: lines.join("\n") };
 }
 
+test("cycle projection excludes the caller's own unread gap and retains known requests", async () => {
+  const a = file("a.ts", ["class A {", " a() { this.dep.b();", "  this.dep.missing();", "  this.http.get('/known');", " }", "}"]);
+  const b = file("b.ts", ["class B {", " b() { this.dep.a();", "  this.http.get(unknown);", " }", "}"]);
+  const up = file("up.ts", ["class Up {", " up() {", "  this.dep.a();", " }", "}"]);
+  const self = file("self.ts", ["class Self {", " self() { this.dep.self();", "  this.dep.missing();", " }", "}"]);
+  const isolated = file("isolated.ts", ["class Isolated { empty() {} }"]);
+  const summaries = await summariesOf([a, b, up, self, isolated], resolverOf({
+    paths: { "'/known'": "/known" }, clients: ["this.http"],
+    callees: { a: "a.ts\0A.a", b: "b.ts\0B.b", self: "self.ts\0Self.self", missing: "missing.ts\0Missing.missing" },
+    unreadable: ["missing.ts\0Missing.missing"],
+  }));
+  assert.deepEqual(summaries.get("a.ts\0A.a"), {
+    shapes: [{ transport: "http", method: "GET", path: "/known", holes: [], body: { kind: "none" }, hops: [] }],
+    result: { kind: "none" },
+    gaps: [
+      { cause: "destination-undecidable", evidence: [{ path: "a.ts", line: 2 }] },
+      { cause: "recursive", evidence: [{ path: "a.ts", line: 2 }] },
+      { cause: "source-not-read", evidence: [{ path: "a.ts", line: 3 }] },
+    ],
+  });
+  assert.deepEqual(summaries.get("b.ts\0B.b")?.gaps, [
+    { cause: "recursive", evidence: [{ path: "b.ts", line: 2 }] },
+    { cause: "source-not-read", evidence: [{ path: "b.ts", line: 2 }] },
+    { cause: "destination-undecidable", evidence: [{ path: "b.ts", line: 3 }] },
+  ]);
+  assert.deepEqual(summaries.get("up.ts\0Up.up")?.gaps, [
+    { cause: "destination-undecidable", evidence: [{ path: "up.ts", line: 3 }] },
+    { cause: "recursive", evidence: [{ path: "up.ts", line: 3 }] },
+    { cause: "source-not-read", evidence: [{ path: "up.ts", line: 3 }] },
+  ]);
+  assert.deepEqual(summaries.get("self.ts\0Self.self")?.gaps, [
+    { cause: "recursive", evidence: [{ path: "self.ts", line: 2 }] },
+    { cause: "source-not-read", evidence: [{ path: "self.ts", line: 3 }] },
+  ]);
+  assert.deepEqual(summaries.get("isolated.ts\0Isolated.empty"), { shapes: [], result: { kind: "none" }, gaps: [] });
+});
+
+test("duplicate call places deduplicate projected causes while own multi-place evidence remains ordered", async () => {
+  const dup = file("dup.ts", ["class Dup {", " go() {} go() {}", "}"]);
+  const caller = file("caller.ts", ["class Caller {", " run() { this.dep.go(); this.dep.go(); this.http.get(unknown); }", "}"]);
+  const summaries = await summariesOf([dup, caller], resolverOf({ clients: ["this.http"], callees: { go: "dup.ts\0Dup.go" } }));
+  assert.deepEqual(summaries.get("dup.ts\0Dup.go")?.gaps, [{ cause: "dispatch-disagreement", evidence: [{ path: "dup.ts", line: 2 }, { path: "dup.ts", line: 2 }] }]);
+  assert.deepEqual(summaries.get("caller.ts\0Caller.run")?.gaps, [
+    { cause: "destination-undecidable", evidence: [{ path: "caller.ts", line: 2 }] },
+    { cause: "dispatch-disagreement", evidence: [{ path: "caller.ts", line: 2 }] },
+  ]);
+});
+
+test("opaque and represented targets retain resolver evidence without creating auxiliary summaries", async () => {
+  const caller = file("caller.ts", ["class Caller {", " unread() { this.dep.missing(); }", " provided() { this.dep.providedBody(); }", " external() { this.dep.external(); }", " represented() { this.dep.target(); }", "}"]);
+  const target = file("target.ts", ["class Target {", " target() { this.dep.deep(); }", "}"]);
+  const deep = file("deep.ts", ["class Deep {", " deep() { this.http.get(unknown); }", "}"]);
+  const up = file("up.ts", ["class Up {", " up() {", "  this.dep.unread();", " }", "}"]);
+  const summaries = await summariesOf([caller, target, deep, up], resolverOf({
+    clients: ["this.http"],
+    callees: { missing: "absent.ts\0Missing.missing", providedBody: "absent.ts\0Provided.body", target: "target.ts\0Target.target", deep: "deep.ts\0Deep.deep", unread: "caller.ts\0Caller.unread" },
+    unreadable: ["absent.ts\0Missing.missing", "target.ts\0Target.target"],
+  }));
+  assert.deepEqual(summaries.get("caller.ts\0Caller.unread"), { shapes: [], result: { kind: "none" }, gaps: [{ cause: "source-not-read", evidence: [{ path: "caller.ts", line: 2 }] }] });
+  assert.deepEqual(summaries.get("caller.ts\0Caller.provided"), { shapes: [], result: { kind: "none" }, gaps: [] });
+  assert.deepEqual(summaries.get("caller.ts\0Caller.external"), { shapes: [], result: { kind: "none" }, gaps: [] });
+  assert.deepEqual(summaries.get("caller.ts\0Caller.represented")?.gaps, [
+    { cause: "destination-undecidable", evidence: [{ path: "caller.ts", line: 5 }] },
+    { cause: "source-not-read", evidence: [{ path: "caller.ts", line: 5 }] },
+  ]);
+  assert.deepEqual(summaries.get("up.ts\0Up.up")?.gaps, [{ cause: "source-not-read", evidence: [{ path: "up.ts", line: 3 }] }]);
+  assert.equal(summaries.has("absent.ts\0Missing.missing"), false);
+  assert.equal(summaries.has("absent.ts\0Provided.body"), false);
+  assert.equal(summaries.size, 7);
+});
+
 test("a wrapper's parameter is substituted into its callee's path, the prefix is kept and the argument's own holes flow", async () => {
   const crud = file("crud.ts", ["class Crud {", "  constructor(private http: HttpClient) {}", "  get(", "    path,", "  ) {", "    return this.http.get(this.url + path)", "  }", "}"]);
   const svc = file("svc.ts", ["class Svc {", "  constructor(private crud: Crud) {}", "  item(", "    id,", "  ) {", "    return this.crud.get('/v1/items/' + id)", "  }", "}"]);

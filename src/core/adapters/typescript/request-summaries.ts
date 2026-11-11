@@ -11,6 +11,7 @@ import { known, undecided, type Evaluated } from "../../domain/topology/evaluate
 import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 import type { BodySource, ForwardingRow, PathCondition, RequestShape, RequestSummary, ResultShape, SummaryCause, SummaryGap } from "../../domain/topology/request-summary.ts";
 import { sourceTree } from "./source-tree.ts";
+import { requestSummaryGraph } from "./request-summary-graph.ts";
 
 export type DeclarationKey = string;
 
@@ -259,6 +260,7 @@ async function computeSummaries(files: readonly SourceFile[], resolver: SummaryR
     scanned.set(key, found.gaps);
     returns.set(key, found.returns);
   }
+  const graph = requestSummaryGraph(edges);
   const shapes = new Map<DeclarationKey, RequestShape[]>(own);
   const substitutionGaps = new Map<DeclarationKey, SummaryGap[]>();
   let changed = true;
@@ -289,11 +291,14 @@ async function computeSummaries(files: readonly SourceFile[], resolver: SummaryR
   }
   const ownGaps = new Map<DeclarationKey, SummaryGap[]>();
   for (const key of bodies.keys()) {
-    ownGaps.set(key, [...(disagreements.get(key) ?? []), ...(scanned.get(key) ?? []), ...unreadGaps(edges.get(key) ?? []), ...recursiveGaps(key, edges), ...(substitutionGaps.get(key) ?? [])]);
+    const calls = edges.get(key) ?? [];
+    const recursive = calls.filter((edge) => graph.isRecursive(key, edge.callee)).map((edge): SummaryGap => ({ cause: "recursive", evidence: [edge.call] }));
+    ownGaps.set(key, [...(disagreements.get(key) ?? []), ...(scanned.get(key) ?? []), ...unreadGaps(calls), ...recursive, ...(substitutionGaps.get(key) ?? [])]);
   }
+  const causes = graph.causeIndex(new Map([...ownGaps].map(([key, gaps]) => [key, gaps.map((gap) => gap.cause)])));
   const gapsOf = new Map<DeclarationKey, SummaryGap[]>();
   for (const key of bodies.keys()) {
-    gapsOf.set(key, distinctGaps([...(ownGaps.get(key) ?? []), ...calledGaps(key, edges, ownGaps)]));
+    gapsOf.set(key, distinctGaps([...(ownGaps.get(key) ?? []), ...calledGaps(edges.get(key) ?? [], causes.forCaller(key))]));
   }
   const results = await resultsOf(bodies, returns, edges, resolver);
   const summaries = new Map<DeclarationKey, RequestSummary>();
@@ -495,23 +500,15 @@ function unreadGaps(edges: readonly Edge[]): SummaryGap[] {
 }
 
 /** The gaps a declaration inherits from the declarations it reaches, each at the call that reaches it. */
-function calledGaps(key: DeclarationKey, edges: ReadonlyMap<DeclarationKey, readonly Edge[]>, ownGaps: ReadonlyMap<DeclarationKey, readonly SummaryGap[]>): SummaryGap[] {
+function calledGaps(edges: readonly Edge[], causes: (callee: DeclarationKey) => ReadonlySet<SummaryCause>): SummaryGap[] {
   const inherited = new Map<string, SummaryGap>();
-  for (const edge of edges.get(key) ?? []) {
-    for (const gap of reachableGaps(edge.callee, edges, ownGaps, new Set([key]))) {
-      const at = { cause: gap.cause, evidence: [edge.call] };
-      inherited.set(`${gap.cause}\0${edge.call.path}\0${edge.call.line}`, at);
+  for (const edge of edges) {
+    for (const cause of causes(edge.callee)) {
+      const at = { cause, evidence: [edge.call] };
+      inherited.set(`${cause}\0${edge.call.path}\0${edge.call.line}`, at);
     }
   }
   return [...inherited.values()];
-}
-
-function reachableGaps(from: DeclarationKey, edges: ReadonlyMap<DeclarationKey, readonly Edge[]>, ownGaps: ReadonlyMap<DeclarationKey, readonly SummaryGap[]>, visited: ReadonlySet<DeclarationKey>): SummaryGap[] {
-  if (visited.has(from)) return [];
-  const next = new Set(visited).add(from);
-  const own = ownGaps.get(from) ?? [];
-  const below = (edges.get(from) ?? []).flatMap((edge) => reachableGaps(edge.callee, edges, ownGaps, next));
-  return [...own, ...below];
 }
 
 /** One gap per cause at each place, ordered by the first place it names, so the same snapshot gives the same gaps. */
@@ -534,18 +531,6 @@ function placeKey(gap: SummaryGap): string {
 
 function recordGap(gaps: Map<DeclarationKey, SummaryGap[]>, key: DeclarationKey, gap: SummaryGap): void {
   gaps.set(key, [...(gaps.get(key) ?? []), gap]);
-}
-
-/** A call that closes a cycle, whose callee reaches the caller again, is a recursive gap at that call: the cycle is not entered twice. */
-function recursiveGaps(key: DeclarationKey, edges: ReadonlyMap<DeclarationKey, readonly Edge[]>): SummaryGap[] {
-  return (edges.get(key) ?? []).filter((edge) => reaches(edge.callee, key, edges)).map((edge) => ({ cause: "recursive", evidence: [edge.call] }));
-}
-
-function reaches(from: DeclarationKey, target: DeclarationKey, edges: ReadonlyMap<DeclarationKey, readonly Edge[]>, visited: ReadonlySet<DeclarationKey> = new Set()): boolean {
-  if (from === target) return true;
-  if (visited.has(from)) return false;
-  const next = new Set(visited).add(from);
-  return (edges.get(from) ?? []).some((edge) => reaches(edge.callee, target, edges, next));
 }
 
 function distinctResults(results: readonly ResultShape[]): ResultShape[] {
