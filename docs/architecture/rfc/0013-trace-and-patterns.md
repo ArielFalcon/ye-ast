@@ -213,6 +213,7 @@ cuts:
 ```
 
 The effects come first, since they decide the plan; steps follow the MCP depth summary and `expand` of the latency plan.
+Response-holder continuations retain the source evidence for signal, computed and form-control reads in the reading plan.
 In `summary` the reading plan takes one line per file, files in their first appearance, and the unresolved calls one
 line per trailing name and candidate set, most calls first, with the candidates listed by their containment path or
 counted, whichever is shorter (RFC-0017), and counted when two of them share a path; `details` lists each range and

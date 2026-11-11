@@ -713,14 +713,13 @@ test("iterating a value whose changed path does not continue through its element
 
 test("a value that contains the changed property reaching code outside the repository is a frontier", async () => {
   const file = guarded([
-    "this.form.patchValue(order)",
     "order.items.reduce((total, i) => total + i.owner.id, 0)",
     "const copy = { ...order, ...extra }",
     "Library.use(order)",
     "this.dyn[order.key]",
   ]);
   const result = await follow([file], parameterOrder, "items[].owner");
-  assert.deepEqual(frontiers(result), ["3 unmodelled-sink:this.form.patchValue", "4 unmodelled-flow:method:reduce", "5 unmodelled-flow:later spread", "6 unmodelled-sink:Library.use"]);
+  assert.deepEqual(frontiers(result), ["3 unmodelled-flow:method:reduce", "4 unmodelled-flow:later spread", "5 unmodelled-sink:holder:use"]);
 });
 
 test("an operator the slice does not model is a frontier at the operator", async () => {

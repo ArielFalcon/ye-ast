@@ -255,6 +255,14 @@ collection; object spreads and form writes; conditional reassignment. Not seen o
 conversions and `@let` aliases (three untracked ones in the whole corpus, none on responses), so P3 builds nothing for
 stores, validators or conversions; an untracked alias that holds the change becomes a frontier.
 
+RFC-0028 S4 extends that baseline with an explicit holder table. Imported Angular signals, computed callbacks,
+readonly views and resources preserve their existing paths; form writes consume the supplied control values and
+continue through `value`, `getRawValue()` and individual control values. A returned dependency supplied to a computed
+holder is a use even when its result is later tested; a bare guard remains a test. A function stored by `signal` is
+not treated as an executed computed callback. Known project methods and foreign namespace factories keep their own
+semantics. Unsupported holders retain an explicit frontier. This covers the measured form and signal idioms, not
+arbitrary stores, validators or conversions.
+
 **What a carried value is.** Every step that could replace the followed value with another object ends the chain (a
 construction, a conversion, a call the reader cannot resolve, a write to the path). So the value a carrier holds is the
 parsed response itself or a part of it: an array it holds is an intrinsic `Array`, an object is a plain object, and

@@ -37,6 +37,8 @@ import {
   type FunctionNode,
   type NamedFunction,
 } from "./consumer-flow.syntax.ts";
+import { HOLDER_ROWS, type HolderRow } from "./consumer-flow.holders.ts";
+import { importedNameOf } from "./imported-name.ts";
 import type { RequestCallLookup } from "./http-call-sites.adapter.ts";
 import { FUNCTIONS, isModule, METHODS, type MethodResult, type MethodRow } from "./consumer-flow.callees.ts";
 import { resolveFunction, type Resolved } from "./consumer-flow.resolution.ts";
@@ -49,6 +51,7 @@ interface Trail {
   hops: readonly Hop[];
   guards: readonly Guard[];
   binding?: Binding;
+  controls?: boolean;
   /** The path that was read off the previous value to reach this one, until the next hop records it. */
   projected?: AccessPath;
 }
@@ -93,7 +96,6 @@ const KEEPING_OPERATORS: ReadonlySet<string> = new Set([
   "subscribeOn",
 ]);
 const CALLBACK_OPERATORS: ReadonlySet<string> = new Set(["tap", "filter"]);
-const STREAM_WRITES: ReadonlySet<string> = new Set(["set", "next"]);
 const ACCESSORS: ReadonlySet<string> = new Set(["value", "json"]);
 
 function translate(guards: readonly Guard[], mappings: readonly PathMapping[]): Guard[] {
@@ -123,6 +125,7 @@ export class Walker {
   private readonly reportedFrontiers = new Set<string>();
   private readonly clauseTests = new WeakMap<ts.CaseOrDefaultClause, ClauseTest>();
   private readonly callbackResults = new Map<FunctionNode, MethodResult>();
+  private readonly controlMembers = new WeakMap<ts.ClassLikeDeclaration, ReadonlySet<string>>();
 
   constructor(
     private readonly repo: string,
@@ -247,6 +250,51 @@ export class Walker {
     this.frontiers.push({ file: this.unit.file, pos: node.getStart(this.unit.tree), value: { at: this.at(node), cause, reason, ...(detail === undefined ? {} : { detail }), hops } });
   }
 
+  private holderOfCall(call: ts.CallExpression): HolderRow | undefined {
+    const name = importedNameOf(call.expression, this.unit.imports, this.unit.declared);
+    const binding = name?.binding;
+    if (name === undefined || binding === undefined) return undefined;
+    const imported = binding.imported === "*" && name.members.length === 1 ? name.members[0] : name.members.length === 0 ? binding.imported : undefined;
+    return HOLDER_ROWS.find((row) => row.module !== undefined && isModule(binding.module, row.module) && row.name === imported);
+  }
+
+  private isHolderDependency(node: ts.Node): boolean {
+    const fn = enclosingFunction(node);
+    if (fn === undefined || !ts.isCallExpression(fn.parent)) return false;
+    const call = fn.parent;
+    const row = this.holderOfCall(call);
+    if (row?.callback !== true || row.binds.kind !== "argument" || call.arguments[row.binds.index] !== fn) return false;
+    if (fn.body === undefined) return false;
+    if (!ts.isBlock(fn.body)) return true;
+    for (let current = node.parent; current !== undefined && current !== fn; current = current.parent) if (ts.isReturnStatement(current)) return true;
+    return false;
+  }
+
+  private isControlMember(reference: ts.Expression): boolean {
+    if (!ts.isPropertyAccessExpression(reference)) return false;
+    const receiver = unwrapped(reference.expression);
+    const cls = receiver.kind === ts.SyntaxKind.ThisKeyword ? thisClass(reference) : undefined;
+    const owner = cls === undefined ? injectedInstance(this.program, this.unit, receiver) : { unit: this.unit, cls };
+    if (owner === undefined) return false;
+    let members = this.controlMembers.get(owner.cls);
+    if (members === undefined) {
+      const names = new Set<string>();
+      const visit = (node: ts.Node): void => {
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+          const method = node.expression;
+          const target = unwrapped(method.expression);
+          const row = HOLDER_ROWS.find((row) => row.name === method.name.text && row.read.kind === "controls");
+          if (row !== undefined && ts.isPropertyAccessExpression(target) && target.expression.kind === ts.SyntaxKind.ThisKeyword && thisClass(node) === owner.cls && resolveFunction(this.program, owner.unit, method)?.kind !== "function") names.add(target.name.text);
+        }
+        node.forEachChild(visit);
+      };
+      visit(owner.cls);
+      members = names;
+      this.controlMembers.set(owner.cls, members);
+    }
+    return members.has(reference.name.text);
+  }
+
   private lostAt(line: number, detail: string): void {
     this.frontiers.push({ file: this.unit.file, pos: 0, value: { at: { path: this.unit.file, line }, cause: "unmodelled-flow", reason: "unresolved", detail, hops: [] } });
   }
@@ -266,7 +314,7 @@ export class Walker {
   private hopped(t: Trail, step: FlowStep, node: ts.Node, rewrite?: readonly PathMapping[]): Trail {
     const mapping = rewrite ?? (t.projected !== undefined && t.projected.length > 0 ? [{ from: t.projected, to: [] }] : undefined);
     const hop: Hop = { step, evidence: this.at(node), ...(mapping === undefined ? {} : { rewrite: mapping }) };
-    return { origin: t.origin, guards: t.guards, hops: [...t.hops, hop], ...(t.binding === undefined ? {} : { binding: t.binding }) };
+    return { origin: t.origin, guards: t.guards, hops: [...t.hops, hop], ...(t.binding === undefined ? {} : { binding: t.binding }), ...(t.controls === undefined ? {} : { controls: t.controls }) };
   }
 
   private rewrapped(t: Trail, prefix: AccessPath): Trail {
@@ -287,6 +335,21 @@ export class Walker {
 
   /** Reads the value `reference` holds, from the chain of reads that start there to what the code does with the result. */
   private read(reference: ts.Expression, t: Trail): void {
+    if (t.controls === undefined && this.isControlMember(reference)) t = { ...t, controls: true };
+    if (t.controls) {
+      const access = reference.parent;
+      if (ts.isPropertyAccessExpression(access) && access.expression === reference) {
+        const call = access.parent;
+        const row = HOLDER_ROWS.find((row) => row.name === access.name.text);
+        if (row?.read.kind === "controls" && row.binds.kind === "argument") return;
+        if (access.name.text === "value") return this.read(access, { ...t, controls: false });
+        if (access.name.text === "controls" && t.origin.length > 0) {
+          const origin = [t.origin[0]!, "value", ...t.origin.slice(1)];
+          return this.read(access, this.hopped({ ...t, controls: false, origin }, "assign", access, [{ from: t.origin, to: origin }]));
+        }
+        if (access.name.text === "getRawValue" && ts.isCallExpression(call) && call.expression === access && call.arguments.length === 0) return this.read(call, { ...t, controls: false });
+      }
+    }
     const key = `${reference.pos}:${reference.end}:${t.origin.join("\0")}:${guardState(t.guards)}`;
     if (this.visited.has(key)) return;
     this.visited.add(key);
@@ -355,7 +418,10 @@ export class Walker {
       this.dereference(site, t, q, chain, { steps, end: this.operatorEnd(top) ?? { kind: "none" } });
       return;
     }
-    if (discardsValue(top) && !(relation === "exact" && isNumericUnary(top.parent))) return;
+    if (discardsValue(top) && !(relation === "exact" && isNumericUnary(top.parent))) {
+      if (relation === "exact" && this.isHolderDependency(top)) this.dereference(top, t, q, chain, { steps, end: { kind: "consume", as: "handed-on" } });
+      return;
+    }
     const attached = this.atTop(t, top, q, chain);
     if (attached !== undefined) this.sink(top, attached);
   }
@@ -383,7 +449,7 @@ export class Walker {
     const held = this.dominating(top, t);
     if (held === undefined) return undefined;
     const guards = translate([...t.guards, ...chain, ...held], [{ from: q, to: [] }]);
-    return { origin: t.origin.slice(q.length), hops: t.hops, guards, projected: q };
+    return { origin: t.origin.slice(q.length), hops: t.hops, guards, projected: q, ...(t.controls === undefined ? {} : { controls: t.controls }) };
   }
 
   private keySegment(access: ts.ElementAccessExpression, q: AccessPath, t: Trail): string | undefined {
@@ -405,7 +471,8 @@ export class Walker {
     const called: UseOperation = { steps: [...steps, accessStep(access), callStep(call)], end: { kind: "none" } };
     if (relation === "beyond") return this.dereference(access.name, t, q, chain, called);
     const name = access.name.text;
-    if (q.length === 0 && STREAM_WRITES.has(name)) return;
+    const holder = HOLDER_ROWS.find((row) => row.name === name);
+    if (q.length === 0 && holder?.module === undefined && holder?.read.kind === "same" && holder.binds.kind === "argument") return;
     const attached = this.atTop(t, receiver, q, chain);
     if (attached === undefined) return;
     if (attached.origin[0] === "value" && RESOURCE_STATE_MEMBERS.has(name)) return;
@@ -418,6 +485,7 @@ export class Walker {
       return;
     }
     if (relation === "exact") this.use(access.name, attached, [], called, attached.guards);
+    if (holder?.binds.kind === "receiver" && this.resolveFunction(access)?.kind !== "function") return this.read(call, this.hopped(attached, "assign", call));
     const row = METHODS.get(name);
     if (row !== undefined && relation === "contains" && this.applyRow(row, call, attached)) return;
     if (attached.origin.length > 0) this.frontier(access.name, "unmodelled-flow", `method:${name}`, attached);
@@ -428,11 +496,8 @@ export class Walker {
    * value holds: an array method on a value whose change is not under its elements.
    */
   private applyRow(row: MethodRow, call: ts.CallExpression, attached: Trail): boolean {
-    if (row.receiver === "array" && attached.origin[0] !== ELEMENT) return false;
-    const element: Trail =
-      row.receiver === "array"
-        ? this.hopped({ origin: attached.origin.slice(1), hops: attached.hops, guards: translate(attached.guards, [{ from: [ELEMENT], to: [] }]) }, "iterate", call, [{ from: [...(attached.projected ?? []), ELEMENT], to: [] }])
-        : attached;
+    if (attached.origin[0] !== ELEMENT) return false;
+    const element = this.hopped({ origin: attached.origin.slice(1), hops: attached.hops, guards: translate(attached.guards, [{ from: [ELEMENT], to: [] }]) }, "iterate", call, [{ from: [...(attached.projected ?? []), ELEMENT], to: [] }]);
     const callback = row.callback === undefined ? undefined : call.arguments[row.callback.argument];
     if (callback !== undefined && row.callback !== undefined) {
       if (isFunctionNode(callback)) this.callbackResults.set(callback, row.result);
@@ -593,6 +658,11 @@ export class Walker {
     }
     const holder = fn.parent;
     if (ts.isCallExpression(holder) && holder.arguments.some((argument) => argument === fn)) {
+      const row = this.holderOfCall(holder);
+      if (row?.callback === true && row.binds.kind === "argument" && holder.arguments[row.binds.index] === fn) {
+        this.read(holder, t);
+        return true;
+      }
       const callee = holder.expression;
       if (ts.isIdentifier(callee)) {
         const imported = this.unit.imports.get(callee.text);
@@ -606,10 +676,6 @@ export class Walker {
           const pipe = holder.parent;
           if (!ts.isCallExpression(pipe) || !isPipe(pipe) || !pipe.arguments.some((argument) => argument === holder)) return false;
           this.applyPipe(pipe, pipe.arguments.indexOf(holder) + 1, t);
-          return true;
-        }
-        if (isModule(imported.module, "@angular/core") && imported.imported === "computed") {
-          this.read(holder, t);
           return true;
         }
         return (isModule(imported.module, "rxjs") && KEEPING_OPERATORS.has(imported.imported)) || (isModule(imported.module, "@angular/core") && imported.imported === "effect");
@@ -628,10 +694,10 @@ export class Walker {
     if (member === undefined || object === undefined || !ts.isObjectLiteralExpression(object) || !ts.isCallExpression(object.parent) || !ts.isIdentifier(member.name)) return false;
     const call = object.parent;
     if (ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === "subscribe") return member.name.text === "next";
-    if (!ts.isIdentifier(call.expression)) return false;
-    const imported = this.unit.imports.get(call.expression.text);
-    if (!isModule(imported?.module, "@angular/core") || (imported?.imported !== "resource" && imported?.imported !== "rxResource") || (member.name.text !== "loader" && member.name.text !== "stream")) return false;
-    this.read(call, this.hopped(this.rewrapped(t, ["value"]), "resource", at, [{ from: [], to: ["value"] }]));
+    const holderRow = this.holderOfCall(call);
+    if (holderRow?.read.kind !== "member" || (member.name.text !== "loader" && member.name.text !== "stream")) return false;
+    const prefix = [holderRow.read.name];
+    this.read(call, this.hopped(this.rewrapped(t, prefix), "resource", at, [{ from: [], to: prefix }]));
     return true;
   }
 
@@ -698,9 +764,29 @@ export class Walker {
     const imported = index === 0 && ts.isIdentifier(callee) ? this.unit.imports.get(callee.text) : undefined;
     const handsOn = imported === undefined ? undefined : FUNCTIONS.find((row) => row.name === imported.imported && isModule(imported.module, row.module));
     if (handsOn !== undefined) return this.read(call, handsOn.step === undefined ? t : this.hopped(t, handsOn.step, call));
-    if (ts.isPropertyAccessExpression(callee) && STREAM_WRITES.has(callee.name.text)) {
-      const receiver = unwrapped(callee.expression);
-      if (ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword) return this.assignedToMember(receiver.name.text, thisClass(call), call, this.hopped(t, "assign", call));
+    const factory = this.holderOfCall(call);
+    const holder = factory?.binds.kind === "argument" && factory.binds.index === index ? factory
+      : ts.isPropertyAccessExpression(callee)
+        ? HOLDER_ROWS.find((row) => row.module === undefined && row.name === callee.name.text && row.binds.kind === "argument" && row.binds.index === index)
+        : undefined;
+    if (holder !== undefined && this.resolveFunction(callee)?.kind !== "function") {
+      if (factory === holder) return this.read(call, this.hopped(t, "assign", call));
+      if (ts.isPropertyAccessExpression(callee)) {
+        const receiver = unwrapped(callee.expression);
+        const held = this.hopped(t, "assign", call);
+        const view = holder.read.kind === "controls" ? { ...held, controls: true } : held;
+        if (holder.read.kind === "controls") {
+          const argument = call.arguments[index]!;
+          const property = ts.isObjectLiteralExpression(argument) && t.origin[0] !== undefined ? argument.properties.find((property) => property.name !== undefined && (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name)) && property.name.text === t.origin[0]) : undefined;
+          this.use(property ?? call, t, t.origin, { steps: [], end: { kind: "consume", as: "handed-on" } }, t.guards);
+        }
+        if (ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword) return this.assignedToMember(receiver.name.text, thisClass(call), call, view);
+        if (ts.isIdentifier(receiver)) {
+          const binding = assignedBinding(receiver);
+          if (binding !== undefined) return this.track(binding, view, call);
+        }
+        return this.frontier(call, "unmodelled-flow", "holder binding", t);
+      }
     }
     this.passTo(callee, index, call, this.hopped(t, "argument", call));
   }
@@ -718,7 +804,7 @@ export class Walker {
     }
     const detail = callee.getText(this.unit.tree).slice(0, 80);
     if (t.origin.length === 0) return this.use(call, t, [], { steps: [], end: { kind: "consume", as: "handed-on", detail } }, t.guards);
-    this.frontier(call, "unmodelled-sink", detail, t);
+    this.frontier(call, "unmodelled-sink", ts.isPropertyAccessExpression(callee) ? `holder:${callee.name.text}` : detail, t);
   }
 
   private bind(name: ts.BindingName, scope: ts.Node, t: Trail, from?: ts.Node): void {
@@ -728,7 +814,7 @@ export class Walker {
 
   /** Follows the reads of `binding`; with `from`, only those the declaration or assignment at `from` can reach. */
   private track(binding: Binding, t: Trail, from?: ts.Node): void {
-    const trail: Trail = { origin: t.origin, hops: t.hops, guards: t.guards, binding };
+    const trail: Trail = { origin: t.origin, hops: t.hops, guards: t.guards, binding, ...(t.controls === undefined ? {} : { controls: t.controls }) };
     const { reads, dynamic } = referencesOf(binding);
     const { reachable, uncertain } = from === undefined ? { reachable: reads, uncertain: undefined } : this.reachedFrom(binding, from, reads, t);
     const altered = reachable.length === 0 ? undefined : this.firstAlteration(binding, from?.end ?? 0, t);
