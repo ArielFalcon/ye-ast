@@ -7,6 +7,39 @@ import { createHttpCallSites, createRequestCallLookup } from "./http-call-sites.
 
 const reader = createHttpCallSites();
 
+test("the lookup carries each direct request's result and fetch body access", async () => {
+  const files = [source("results.ts", [
+    "import { HttpClient, httpResource } from '@angular/common/http'",
+    "class Api { constructor(private http: HttpClient) {}",
+    "response() { return this.http.get('/x', { observe: 'response' }) }",
+    "unknown(observe: string) { return this.http.get('/x', { observe }) }",
+    "resource() { return httpResource(() => '/x') }",
+    "fetch() { return fetch('/x') } }",
+  ].join("\n"))];
+  const lookup = await createRequestCallLookup(files);
+  const at = (line: number, symbol: string) => lookup.at({ file: "results.ts", line, symbol: `Api.${symbol}` })!;
+  assert.deepEqual(lookup.of(at(3, "response"))?.result, { kind: "body", container: "observable", observed: "response" });
+  assert.equal(lookup.of(at(4, "unknown"))?.result.kind, "unknown");
+  assert.deepEqual(lookup.of(at(5, "resource"))?.result, { kind: "body", container: "resource", observed: "body" });
+  assert.deepEqual(lookup.of(at(6, "fetch"))?.result, { kind: "body", container: "promise", observed: "body" });
+  const fetchResult = lookup.of(at(6, "fetch"));
+  assert.ok(fetchResult !== undefined && "bodyAccess" in fetchResult && fetchResult.bodyAccess === "json");
+});
+
+test("virtual wrappers disagree when their response body access differs", async () => {
+  const files = [source("virtual-results.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Base { constructor(protected http: HttpClient) {} load(id: string) { return from(fetch('/users/' + id)) } }",
+    "class Child extends Base { load(id: string) { return this.http.get('/users/' + id) } }",
+    "class Page { constructor(private api: Base) {} load() { return this.api.load('1') } }",
+  ].join("\n"))];
+  const lookup = await createRequestCallLookup(files);
+  const call = lookup.at({ file: "virtual-results.ts", line: 4, symbol: "Page.load" });
+  assert.ok(call !== undefined);
+  const result = lookup.of(call)?.result;
+  assert.ok(result?.kind === "unknown" && result.cause === "dispatch-disagreement");
+});
+
 test("a recognized request retains its method when its URL cannot be established", async () => {
   const found = await reader.of([source("unknown-url.ts", [
     "import { HttpClient } from '@angular/common/http'",
@@ -1286,7 +1319,9 @@ test("agreeing virtual wrapper implementations retain both leaves at the first e
   assert.deepEqual([...new Set(found[0]?.origins?.filter((item) => item.kind === "leaf").map((item) => item.line))].sort(), [2, 3]);
   const lookup = await createRequestCallLookup([file]);
   const call = lookup.at({ file: "dispatch.ts", line: 4, symbol: "Page.load" });
-  assert.ok(call !== undefined && lookup.of(call)?.shapes.length === 2);
+  assert.ok(call !== undefined);
+  const summary = lookup.of(call);
+  assert.ok(summary !== undefined && !("kind" in summary) && summary.shapes.length === 2);
 });
 
 test("virtual candidates that differ or issue no request never agree by union", async () => {

@@ -5,16 +5,17 @@ import type { ConsumerFlowReader } from "../../ports/consumer-flow.port.ts";
 import type { Program, Unit } from "./consumer-flow.index.ts";
 import { lineage, memberDeclaration, methodDeclared } from "./consumer-flow.classes.ts";
 import { Walker, type Held } from "./consumer-flow.walker.ts";
+import type { RequestCallLookup } from "./http-call-sites.adapter.ts";
 
 /** Builds a flow reader over a program held by the repository reading. */
-export function consumerFlowReader(program: Program, repo: string): ConsumerFlowReader {
-  return { follow: (carrier) => follow(program, repo, carrier) };
+export function consumerFlowReader(program: Program, repo: string, requests: RequestCallLookup): ConsumerFlowReader {
+  return { follow: (carrier) => follow(program, repo, requests, carrier) };
 }
 
-function follow(program: Program, repo: string, { site, path }: Carrier): FlowResult {
+function follow(program: Program, repo: string, requests: RequestCallLookup, { site, path }: Carrier): FlowResult {
   const unit = program.index.units.get(siteFile(site));
   if (unit === undefined) return sourceUnreadable(site);
-  const walker = new Walker(repo, program, unit);
+  const walker = new Walker(repo, program, unit, requests);
   if (site.kind === "call-site") walker.startCallSite(site, path);
   else if (site.kind === "call-result") walker.startCallResult(site, path);
   else if (site.kind === "parameter") walker.startParameter(site, path);

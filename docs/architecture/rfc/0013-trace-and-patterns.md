@@ -134,6 +134,8 @@ fallback of a field origin.
 
 ### Declared library sources for effects
 
+A wrapper's request site is its call when the request summary places it there.
+
 Trace accepts optional `workspace` (`repos`, `gateways`) and `offline` inputs on the library port, protocol, MCP
 `ye_ast_trace` and composed trace queries. CLI uses `trace --workspace <manifest.json> [--offline]`. Omission selects only
 root-repository sources; `{}` uses eligible persisted workspace defaults. The existing workspace operation selects snapshots,

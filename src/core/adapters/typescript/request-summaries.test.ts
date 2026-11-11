@@ -183,6 +183,28 @@ test("virtual request candidates compare their result shapes independently", asy
   assert.ok(result?.kind === "unknown" && result.cause === "dispatch-disagreement");
 });
 
+test("return alternatives disagree when only one response requires JSON parsing", async () => {
+  const files = [file("parse.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Api { constructor(private http: HttpClient) {}",
+    "  load(id: string, flag: boolean) {",
+    "    if (flag) return from(fetch('/users/' + id));",
+    "    return this.http.get('/users/' + id);",
+    "  }",
+    "}",
+  ])];
+  const result = (await summariesOf(files, createHttpSummaryResolver(files))).get("parse.ts\0Api.load")?.result;
+  assert.ok(result?.kind === "unknown" && result.cause === "dispatch-disagreement");
+});
+
+test("projecting a raw fetch response does not claim a projected JSON body", async () => {
+  const files = [file("projection.ts", [
+    "class Api { load(id: string) { return from(fetch('/users/' + id)).pipe(map((response) => response.body)) } }",
+  ])];
+  const result = (await summariesOf(files, createHttpSummaryResolver(files))).get("projection.ts\0Api.load")?.result;
+  assert.ok(result?.kind === "unknown" && result.cause === "destination-undecidable");
+});
+
 test("the HTTP resolver preserves ordered parameter holes and an unread declaration", async () => {
   const files = [file("holes.ts", [
     "import { HttpClient } from '@angular/common/http'",
