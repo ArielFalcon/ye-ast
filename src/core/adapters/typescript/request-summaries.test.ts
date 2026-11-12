@@ -86,7 +86,7 @@ test("cycle projection excludes the caller's own unread gap and retains known re
     unreadable: ["missing.ts\0Missing.missing"],
   }));
   assert.deepEqual(summaries.get("a.ts\0A.a"), {
-    shapes: [{ transport: "http", method: "GET", path: "/known", holes: [], body: { kind: "none" }, hops: [] }],
+    shapes: [{ transport: "http", method: "GET", path: "/known", holes: [], body: { kind: "none" }, hops: [], gaps: [] }],
     result: { kind: "none" },
     gaps: [
       { cause: "destination-undecidable", evidence: [{ path: "a.ts", line: 2 }] },

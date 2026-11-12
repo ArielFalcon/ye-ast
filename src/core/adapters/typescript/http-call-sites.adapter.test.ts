@@ -68,15 +68,15 @@ test("uncertainty in a request argument still blocks its target", async () => {
   assert.ok(sites.every((site) => site.target.status === "unknown"));
 });
 
-test("an unresolved earlier argument cannot be proved independent of the request", async () => {
+test("an unresolved earlier argument keeps the identified request and states its uncertainty as a separate unresolved call site", async () => {
   const sites = await reader.of([source("ordered.ts", [
     "import { HttpClient } from '@angular/common/http'",
     "class Api { handler: any; constructor(private http: HttpClient) { this.handler = opaqueFactory() }",
     "remove(id: string) { return combine(this.handler(), this.http.delete('/items/' + id)) }",
     "} class Page { constructor(private api: Api) {} remove() { return this.api.remove('42') } }",
   ].join("\n"))], "repo");
-  assert.ok(sites.some((site) => site.line === 4));
-  assert.ok(sites.filter((site) => site.line === 4).every((site) => site.target.status === "unknown"));
+  const page = sites.filter((site) => site.line === 4);
+  assert.deepEqual(page.map((site) => [site.target.status, site.diagnostic?.cause ?? null]).sort(), [["complete", null], ["unknown", "dispatch-disagreement"]]);
 });
 
 test("request relevance is rebuilt for each captured source generation", async () => {
@@ -89,7 +89,8 @@ test("request relevance is rebuilt for each captured source generation", async (
   const first = reader.of(capture("this.http.delete('/items/' + id).pipe(this.handler())"), "repo");
   const second = reader.of(capture("combine(this.handler(), this.http.delete('/items/' + id))"), "repo");
   assert.ok((await first).some((site) => site.line === 4 && site.target.status === "complete"));
-  assert.ok((await second).filter((site) => site.line === 4).every((site) => site.target.status === "unknown"));
+  assert.ok((await second).some((site) => site.line === 4 && site.target.status === "complete"));
+  assert.ok((await second).some((site) => site.line === 4 && site.target.status === "unknown" && site.diagnostic?.cause === "dispatch-disagreement"));
 });
 
 test("response ambiguity survives outer wrappers and distinct calls of the same leaf", async () => {
@@ -1356,12 +1357,13 @@ test("a wrapper with an unread callee does not assert its known request as the o
     "class Root { constructor(private svc: Svc) {} run() { return this.svc.load() } }",
   ].join("\n"));
   const found = await reader.of([file], "repo");
-  const site = found.find((item) => item.symbol === "Svc.load");
-  assert.equal(site?.target.status, "unknown");
-  assert.equal(site?.diagnostic?.cause, "source-not-read");
-  assert.equal(site?.stated, undefined);
-  assert.ok(site?.target.evidence.some((item) => item.path === "gap.ts" && item.line === 4));
-  assert.equal(found.some((item) => item.symbol === "Root.run"), false);
+  const sites = found.filter((item) => item.symbol === "Svc.load");
+  const complete = sites.find((item) => item.target.status === "complete");
+  assert.ok(complete?.target.status === "complete" && "path" in complete.target.value && complete.target.value.path === "/items");
+  const limit = sites.find((item) => item.target.status === "unknown");
+  assert.equal(limit?.diagnostic?.cause, "source-not-read");
+  assert.equal(limit?.stated, undefined);
+  assert.ok(limit?.target.evidence.some((item) => item.path === "gap.ts" && item.line === 4));
 });
 
 test("a conditional wrapper keeps alternatives unless the caller decides the condition", async () => {
@@ -1709,4 +1711,55 @@ test("a gap names the field read where dispatch is undecided at every caller", a
   const page = (await cellReader.of([CELL_PACKAGE, file], "repo")).find((site) => site.symbol === "Page.click");
   assert.ok(page?.target.status === "unknown");
   assert.ok(page.target.evidence.some((place) => place.path === "cells-leaf.ts" && place.line === 7), JSON.stringify(page.target.evidence));
+});
+
+const ownerService = (base: string) => [
+  "import { HttpClient } from '@angular/common/http'",
+  "declare const BASE: string",
+  "class OwnerService { handler: any; constructor(private http: HttpClient) { this.handler = opaqueFactory() }",
+  `  updateOwner(id: number, owner: any) { return this.http.put(\`${base}/owners/\${id}\`, owner).pipe(this.handler('updateOwner', owner)) } }`,
+].join("\n");
+const ownerPage = (body: string) => `class Page { other: any = opaque(); id: any = opaque(); constructor(private owners: OwnerService) {} save() { ${body} } }`;
+const PUT_OWNER = (sites: readonly CallSite[], line: number) => sites.filter((site) => site.line === line && site.symbol === "Page.save");
+
+test("a gap in a statement or a hole argument of the caller keeps the request the code fully states", async () => {
+  for (const body of [
+    "this.other(); return this.owners.updateOwner(1, {})",
+    "const sent = this.owners.updateOwner(1, {}); this.other(); return sent",
+    "return this.owners.updateOwner(this.id(), {})",
+    "return form({ action: async () => { this.other(); await first(this.owners.updateOwner(this.id(), {})) } })",
+  ]) {
+    const sites = await reader.of([source("owner.ts", [ownerService(""), ownerPage(body)].join("\n"))], "repo");
+    const page = PUT_OWNER(sites, 5);
+    const complete = page.filter((site) => site.target.status === "complete");
+    assert.deepEqual(complete.map((site) => site.target.status === "complete" && "path" in site.target.value ? [site.target.value.method, site.target.value.path] : null), [["PUT", "/owners/{}"]], body);
+  }
+});
+
+test("a gap that is not in the request's own chain stays visible at the callers of the declaration that holds it", async () => {
+  const quiet = ownerService("").replace(".pipe(this.handler('updateOwner', owner))", "");
+  const files = [source("owner.ts", [quiet, ownerPage("this.other(); return this.owners.updateOwner(1, {})"), "class Parent { constructor(private page: Page) {} run() { return this.page.save() } }"].join("\n"))];
+  const sites = await reader.of(files, "repo");
+  assert.deepEqual(sites.filter((site) => site.symbol === "Page.save").map((site) => site.target.status), ["complete"]);
+  assert.deepEqual(sites.filter((site) => site.symbol === "Parent.run").map((site) => [site.target.status, site.diagnostic?.cause]), [["unknown", "dispatch-disagreement"]]);
+});
+
+test("a request whose route is undecided and whose arguments hold gaps stays unknown and states its verb and URL expressions", async () => {
+  const sites = await reader.of([source("owner.ts", [ownerService("${BASE}"), ownerPage("this.other(); return this.owners.updateOwner(this.id(), {})")].join("\n"))], "repo");
+  const page = PUT_OWNER(sites, 5);
+  assert.deepEqual(page.map((site) => site.target.status), ["unknown"]);
+  assert.equal(page[0]?.stated?.method, "PUT");
+  assert.ok(page[0]?.stated?.expressions?.[0]?.some((part) => part.kind === "text" && part.text === "/owners/"));
+});
+
+test("a gap inside the request call itself or the receiver that enters the callee still blocks the target", async () => {
+  const sites = await reader.of([source("owner.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Api { other: any = opaque(); constructor(private http: HttpClient) {}",
+    "  load(id: string) { return this.http.get('/items/' + id, this.other()) } }",
+    "class Page { constructor(private api: Api) {} run() { return this.api.load('1') } }",
+  ].join("\n"))], "repo");
+  const page = sites.filter((site) => site.symbol === "Page.run");
+  assert.ok(page.length > 0 && page.every((site) => site.target.status === "unknown"));
+  assert.ok(page.every((site) => site.stated?.method === "GET"));
 });

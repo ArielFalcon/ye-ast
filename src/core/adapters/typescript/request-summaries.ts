@@ -360,6 +360,14 @@ async function computeSummaries(files: readonly SourceFile[], resolver: SummaryR
   return summaries;
 }
 
+/**
+ * The gaps that can change what an occurrence identifies. Along the occurrence's chain of calls, a gap blocks it only
+ * when it arises inside the request call itself or inside the receiver of a call that enters a callee, since only those
+ * decide which request is issued, or when it names no call (missing relevance fails closed). A gap at the entering call
+ * is judged in the callee. One in another statement, a sibling expression or an argument cannot change the verb or the
+ * route, because an undecided argument already states a run-time or unknown part. Such a gap stays on the declaration's
+ * summary, where it limits the enumeration and execution of the declaration, never the identified request.
+ */
 function occurrenceGaps(key: DeclarationKey, shape: RequestShape, gaps: ReadonlyMap<DeclarationKey, readonly SummaryGap[]>, owners: ReadonlyMap<ts.CallExpression, DeclarationKey>): readonly SummaryGap[] {
   const trace = SHAPE_TRACES.get(shape);
   if (trace === undefined) return gaps.get(key) ?? [];
@@ -367,30 +375,17 @@ function occurrenceGaps(key: DeclarationKey, shape: RequestShape, gaps: Readonly
   for (const [index, occurrence] of trace.allCalls.entries()) {
     const owner = owners.get(occurrence);
     if (owner === undefined) return gaps.get(key) ?? [];
+    const deciding: ts.Node = index === 0 ? occurrence : occurrence.expression;
     for (const gap of gaps.get(owner) ?? []) {
       const calls = GAP_CALLS.get(gap);
-      if (calls === undefined || calls.size === 0) { blocking.push(gap); continue; }
-      if ([...calls].every((call) => (index > 0 && call === occurrence) || evaluatedBefore(occurrence, call))) continue;
-      blocking.push(gap);
+      if (calls === undefined || calls.size === 0 || [...calls].some((call) => within(deciding, call))) blocking.push(gap);
     }
   }
   return distinctGaps(blocking);
 }
 
-/** A call's receiver is evaluated before its arguments; an earlier argument before a later one. */
-function evaluatedBefore(before: ts.CallExpression, after: ts.CallExpression): boolean {
-  if (before.getSourceFile() !== after.getSourceFile()) return false;
-  const contains = (outer: ts.Node, inner: ts.Node): boolean => outer.pos <= inner.pos && inner.end <= outer.end;
-  for (let node: ts.Node = before; node.parent !== undefined; node = node.parent) {
-    const parent = node.parent;
-    if (ts.isFunctionLike(parent) || ts.isStatement(parent) || ts.isConditionalExpression(parent) || ts.isBinaryExpression(parent) || ts.isAwaitExpression(parent)) return false;
-    if (!ts.isCallExpression(parent) || !contains(parent, after)) continue;
-    if (contains(parent.expression, before)) return parent.arguments.some((argument) => contains(argument, after));
-    const left = parent.arguments.findIndex((argument) => contains(argument, before));
-    const right = parent.arguments.findIndex((argument) => contains(argument, after));
-    return left >= 0 && right > left;
-  }
-  return false;
+function within(outer: ts.Node, inner: ts.Node): boolean {
+  return outer.getSourceFile() === inner.getSourceFile() && outer.pos <= inner.pos && inner.end <= outer.end;
 }
 
 /**

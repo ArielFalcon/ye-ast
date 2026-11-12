@@ -41,9 +41,23 @@ The alternatives are:
    relevance information fails closed; an unclassified gap is never silently declared independent.
 4. Unique-target and exclusion consumers require their own sufficient proof. A partial request enumeration cannot
    establish absence, exclusive dispatch or an exact consumer/producer link merely because one request is known.
-5. The language adapter provides syntax and binding evidence through the existing held reading. Domain contracts
+5. Relevance, as clarified 2026-11-12: along an occurrence's chain of calls a gap can change the identified request
+   only when it arises inside the request call itself or inside the receiver of a call that enters a callee, or when it
+   names no call. A gap at the entering call is judged in the callee. A gap in another statement, a sibling expression or
+   an argument cannot change the verb or the route, because an undecided argument already states a run-time or unknown
+   part of the URL. Such a gap does not erase the occurrence; it stays on the declaration's summary as a limit on its
+   enumeration and execution, and its callers see it as an unresolved call site beside the request. An unknown target
+   keeps the verb the code states, and the URL expressions the shape holds.
+6. The language adapter provides syntax and binding evidence through the existing held reading. Domain contracts
    define the conclusions that evidence permits. No consumer derives a second request summary or drops uncertainty
    to recover an effect.
+
+## As built
+
+- `occurrenceGaps` (`request-summaries.ts`) applies decision 5 per occurrence; the ordering rule that cleared only gaps
+  evaluated after the request is replaced by it.
+- `summaryTarget` (`http-call-sites.adapter.ts`) attaches `stated` whenever the occurrence agrees on one verb, also when a
+  gap blocks the target.
 
 ## Consequences
 

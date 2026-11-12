@@ -410,7 +410,7 @@ function summaryTarget(shape: FileShape, call: ts.CallExpression, selections: re
     const alternatives = selections.length > 1 && selections.every((item) => item.conditional && (group !== undefined || item.leaf === selections[0]?.leaf));
     const cause = gap ?? unknown?.cause ?? (methods.length > 1 || (paths.length > 1 && !alternatives) ? "dispatch-disagreement" : "destination-undecidable");
     const path = paths.length === 1 ? paths[0] : unknown !== undefined && first?.unresolved === undefined && first !== undefined && startsSegments(first.path) ? namedHoles(callUrl(first.path).path) : undefined;
-    return { target: { status: "unknown", reason: "unresolved", evidence: [...evidence, ...(unknown?.evidence ?? [])] }, diagnostic: { cause, ...(paths.length > 1 ? { alternatives: paths.sort() } : {}) }, ...(first?.method !== undefined && methods.length === 1 && gap === undefined ? { stated: { method: first.method, ...(path === undefined ? {} : { path }) } } : {}) };
+    return { target: { status: "unknown", reason: "unresolved", evidence: [...evidence, ...(unknown?.evidence ?? [])] }, diagnostic: { cause, ...(paths.length > 1 ? { alternatives: paths.sort() } : {}) }, ...(first?.method !== undefined && methods.length === 1 ? { stated: { method: first.method, ...(path === undefined ? {} : { path }) } } : {}) };
   }
   return { target: { status: "complete", value: { method: first.method, path: paths[0]! }, evidence } };
 }
