@@ -1,11 +1,36 @@
+import { isSeedable } from "../../domain/change/seeds.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { SourceReading } from "../../domain/change/source-tokens.ts";
 import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 import { fakeCodeGraph, fakeNode } from "../navigation/fake-code-graph.testing.ts";
-import { rangeChanges, requestedRanges, selectRoots } from "./root-selection.ts";
+import { rangeChanges, requestedRanges, selectRoots as selectModelRoots } from "./root-selection.ts";
+import { missingTargets } from "./root-selection.ts";
+import { createDeclarationModel } from "./declaration-model.ts";
+
+test("target candidates include a proven syntax-only member", async () => {
+  const file = "src/store.ts";
+  const store = fakeCodeGraph([fakeNode("D", "constant", file, 1, 8)], []);
+  const model = createDeclarationModel({ store, declarationsIn: async () => [{ name: "m", kind: "method", invoked: true, container: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 5, column: 3 } } }] });
+  assert.deepEqual(await missingTargets(model, [{ file, symbol: "absent" }], isSeedable), [{ file, symbol: "absent", candidates: ["D", "D.m"] }]);
+  const selected = await selectModelRoots(model, [], [{ file, symbol: "D.m" }], new Map());
+  assert.deepEqual(selected.missing, []);
+  assert.deepEqual(selected.seeds, []);
+  assert.deepEqual(selected.syntaxSeeds.map(({ symbol }) => symbol.path), ["D.m"]);
+});
+
+test("a requested declaration and a changed declaration join by identity after retained data is deserialized", async () => {
+  const file = "src/store.ts";
+  const store = fakeCodeGraph([fakeNode("D", "constant", file, 1, 8)], []);
+  const model = createDeclarationModel({ store, declarationsIn: async () => [] });
+  const retained = { ...model, list: async (file: string) => JSON.parse(JSON.stringify(await model.list(file))) };
+  const selected = await selectModelRoots(retained, rangeChanges([{ file, start: 3, end: 3 }]), [{ file, symbol: "D" }], new Map());
+  assert.deepEqual(selected.seeds.map(({ symbol, basis }) => [symbol.id, basis]), [["D", "requested"]]);
+});
 import type { RawUnknownEntry } from "./snapshot-files.ts";
 import type { SnapshotFiles } from "./snapshot-files.ts";
+
+const selectRoots = (store: ReturnType<typeof fakeCodeGraph>, changes: Parameters<typeof selectModelRoots>[1], requested: Parameters<typeof selectModelRoots>[2], components: Parameters<typeof selectModelRoots>[3], uncovered?: Parameters<typeof selectModelRoots>[4], isRoot?: Parameters<typeof selectModelRoots>[5], settled?: Parameters<typeof selectModelRoots>[6]) => selectModelRoots(createDeclarationModel({ store, declarationsIn: async () => [] }), changes, requested, components, uncovered, isRoot, settled);
 
 const FILE = "src/A.java";
 const TS_FILE = "src/a.ts";
@@ -26,19 +51,19 @@ const snapshot: SnapshotFiles = { holds: (path) => path === FILE || path === TS_
 
 async function ranges(start: number, end: number, file = FILE, content = SOURCE, quiet: Readonly<Record<string, readonly number[]>> = { [FILE]: [6] }, nodes = NODES) {
   const store = fakeCodeGraph(nodes, []);
-  return { store, read: await requestedRanges(store, rangeChanges([{ file, start, end }]), [{ path: file, content }], tokens(quiet), snapshot) };
+  return { store, read: await requestedRanges(rangeChanges([{ file, start, end }]), [{ path: file, content }], tokens(quiet), snapshot, createDeclarationModel({ store, declarationsIn: async () => [] })) };
 }
 
 test("a range over a token line inside a class selects it, and a range over trivia alone settles with the file's candidates", async () => {
   const control = await ranges(6, 7, FILE, SOURCE, { [FILE]: [6] });
   assert.deepEqual(control.read.settled, []);
   assert.deepEqual(control.read.changes[0]?.added, [{ start: 7, end: 7 }]);
-  assert.deepEqual(selectRoots(control.store, control.read.changes, [], new Map(), control.read.uncovered, undefined, control.read.settled).seeds.map(({ symbol }) => symbol.name), ["A"]);
+  assert.deepEqual((await selectRoots(control.store, control.read.changes, [], new Map(), control.read.uncovered, undefined, control.read.settled)).seeds.map(({ symbol }) => symbol.name), ["A"]);
 
   const trivia = await ranges(6, 7, FILE, SOURCE, { [FILE]: [6, 7] });
   assert.deepEqual(trivia.read.settled, [{ file: FILE, start: 6, end: 7, candidates: ["A", "one", "two"] }]);
   assert.deepEqual(trivia.read.changes[0]?.added, []);
-  const selection = selectRoots(trivia.store, trivia.read.changes, [], new Map(), trivia.read.uncovered, undefined, trivia.read.settled);
+  const selection = await selectRoots(trivia.store, trivia.read.changes, [], new Map(), trivia.read.uncovered, undefined, trivia.read.settled);
   assert.deepEqual(selection.seeds, []);
   assert.deepEqual(selection.missing, []);
   assert.deepEqual(selection.settled, trivia.read.settled);
@@ -48,7 +73,7 @@ test("a range over trivia outside every declaration answers successfully", async
   const { read, store } = await ranges(2, 3, FILE, SOURCE, { [FILE]: [2, 3, 6] });
   assert.deepEqual(read.settled, [{ file: FILE, start: 2, end: 3, candidates: ["A", "one", "two"] }]);
   assert.deepEqual(read.uncovered, []);
-  const selection = selectRoots(store, read.changes, [], new Map(), read.uncovered, undefined, read.settled);
+  const selection = await selectRoots(store, read.changes, [], new Map(), read.uncovered, undefined, read.settled);
   assert.deepEqual(selection.missing, []);
   assert.deepEqual(selection.seeds, []);
 });

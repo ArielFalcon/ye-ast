@@ -75,8 +75,8 @@ export interface OutlineFocus {
   file: string;
   /** What followed the file in the selector: a dotted path or a line. */
   selector: string;
-  /** The declaration's dotted path in its file, its containers outermost first; `callers` resolves it to the same declarations. */
-  path: string;
+  /** The proven dotted path, containers outermost first; absent when no binding proves one. */
+  path?: string;
   /** Its containers, outermost first. */
   ancestors: readonly OutlineAncestor[];
   /** The matched declaration with every declaration nested under it. */

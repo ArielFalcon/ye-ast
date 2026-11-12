@@ -255,7 +255,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       let reconciled: { targets: EdgeTargets; calls: ReconciledCalls } | undefined;
       const reconciledCalls = (targets: EdgeTargets, uses: DeclarationUses): ReconciledCalls | undefined => {
         if (syntaxOf === undefined) return undefined;
-        if (reconciled?.targets !== targets) reconciled = { targets, calls: createReconciledCalls({ store, uses, syntaxOf, lineOf, importedDeclarations: targets.importedDeclarations }) };
+        if (reconciled?.targets !== targets) reconciled = { targets, calls: createReconciledCalls({ store, uses, declarations, syntaxOf, lineOf, importedDeclarations: targets.importedDeclarations }) };
         return reconciled.calls;
       };
 

@@ -269,7 +269,7 @@ const shapes = {
       unheld: strings,
     }),
     z.looseObject({
-      focus: z.array(z.looseObject({ file: z.string(), selector: z.string(), path: z.string(), ancestors: z.array(outlineDeclaration), declaration: outlineDeclaration, omitted: z.number(), uses: z.array(z.looseObject({ relations: strings, at: z.array(z.looseObject({ line: z.number() })) })).optional() })),
+      focus: z.array(z.looseObject({ file: z.string(), selector: z.string(), path: z.string().optional(), ancestors: z.array(outlineDeclaration), declaration: outlineDeclaration, omitted: z.number(), uses: z.array(z.looseObject({ relations: strings, at: z.array(z.looseObject({ line: z.number() })) })).optional() })),
       unheld: strings,
     }),
   ]),

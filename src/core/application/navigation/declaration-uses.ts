@@ -5,8 +5,8 @@ import type { FoundUse, UnprovedUse } from "../../domain/outline/outline-uses.ts
 import { sameOccurrence, type EdgeOccurrence } from "../../domain/shared/call-place.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
-import { containmentTree } from "./containment-tree.ts";
-import { branchesOf, declarationPath, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
+import type { DeclarationModel, ModelDeclaration } from "./declaration-model.ts";
+import { branchesOf, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
 import type { EdgeTargets, FollowedEdge } from "./edge-targets.ts";
 import { ownMembersOf, type GraphNavigation } from "./graph-navigation.ts";
 
@@ -90,13 +90,13 @@ export const USE_EDGE_KINDS: readonly string[] = ["calls", "instantiates", "refe
 const SPELLED = /^[A-Za-z_$][\w$]*/;
 
 export interface UsesInput {
+  declarations: DeclarationModel;
   store: CodeGraphReader;
-  navigation: GraphNavigation;
   uses: DeclarationUses;
   targets: EdgeTargets;
   origins: ImportOrigins;
   /** The calls a body writes that no index record matches; each is a use like an unresolved reference. */
-  writtenCalls?: ((body: GraphSymbol) => Promise<readonly GraphUnresolvedReference[]>) | undefined;
+  writtenCalls?: ((body: ModelDeclaration) => Promise<readonly Omit<GraphUnresolvedReference, "from">[]>) | undefined;
   signal?: AbortSignal;
 }
 
@@ -108,28 +108,28 @@ export interface UsesInput {
  * or not, and neither is a declaration the branch contains; a declaration outside it is the node of its name whose lines
  * hold the line its name is written on; a use nothing proves is unproved, never dropped.
  */
-export async function usesOf(branch: DeclarationBranch<GraphSymbol>, input: UsesInput): Promise<{ found: FoundUse[]; unproved: UnprovedUse[] }> {
-  const { store, navigation, uses, targets, origins, writtenCalls, signal } = input;
+export async function usesOf(branch: DeclarationBranch<ModelDeclaration>, input: UsesInput): Promise<{ found: FoundUse[]; unproved: UnprovedUse[] }> {
+  const { store, declarations, uses, targets, origins, writtenCalls, signal } = input;
   const node = branch.declaration;
-  const nested = new Set(branchesOf([branch]).map(({ declaration }) => declaration.id).filter((id) => id !== node.id));
+  const nested = new Set(branchesOf(branch.children).flatMap(({ declaration }) => [declaration.id, ...(declaration.symbol === undefined ? [] : [declaration.symbol.id])]));
   const owner = { name: node.name, line: node.startLine, endLine: node.endLine };
   const found: FoundUse[] = [];
   const unproved: UnprovedUse[] = [];
   const use = (target: OutlineUseTarget, relation: string, place: OutlinePlace | undefined): void => {
     found.push({ target, relation, ...(place === undefined ? {} : { place }) });
   };
-  const declared = (symbol: GraphSymbol, relation: string, place: OutlinePlace | undefined): void => {
+  const declared = (symbol: GraphSymbol | ModelDeclaration, relation: string, place: OutlinePlace | undefined): void => {
     if (!nested.has(symbol.id)) use({ declaration: { file: symbol.file, name: symbol.name, kind: symbol.kind, line: symbol.startLine, endLine: symbol.endLine } }, relation, place);
   };
 
-  const edges = uses.followed(node, store.outgoingEdges([node.id], USE_EDGE_KINDS).filter((edge) => !isIgnoredEdge(edge)));
+  const edges = node.symbol === undefined ? [] : uses.followed(node.symbol, store.outgoingEdges([node.symbol.id], USE_EDGE_KINDS).filter((edge) => !isIgnoredEdge(edge)));
   const verdicts = await targets.verdictsOf(edges, signal);
   const edgeSites = edges.flatMap(({ edge, target }, index): (UseSite & { index: number })[] => (edge.line === null || edge.column === null ? [] : [{ index, file: node.file, line: edge.line, column: edge.column + 1, spelled: target.name, owner }]));
   const edgeBindings = await origins.rootBindings(edgeSites, signal);
   const edgeBinding = new Map(edgeSites.map(({ index }, k) => [index, edgeBindings[k] ?? ({ kind: "unknown" } as const)]));
   for (const [index, { edge, target }] of edges.entries()) {
     const binding = edgeBinding.get(index);
-    if (binding !== undefined && isLocalRoot(node.file, binding)) continue;
+    if (binding !== undefined && await isLocalRoot(node.file, binding)) continue;
     if (binding?.kind === "ambiguous") {
       unproved.push({ root: binding.root, line: edge.line!, spelling: target.name });
       continue;
@@ -145,7 +145,7 @@ export async function usesOf(branch: DeclarationBranch<GraphSymbol>, input: Uses
     else if (verdict.root.kind === "ambient") use({ global: verdict.root.name }, edge.kind, place);
   }
 
-  const references = [...unsettledBy(uses.referencesFrom(node, USE_EDGE_KINDS), edges), ...((await writtenCalls?.(node)) ?? [])];
+  const references = [...unsettledBy(node.symbol === undefined ? [] : uses.referencesFrom(node.symbol, USE_EDGE_KINDS), edges), ...((await writtenCalls?.(node)) ?? [])];
   const spelled = references.map((reference) => ({ reference, spelled: SPELLED.exec(reference.name)?.[0] }));
   const sites = spelled.flatMap(({ reference, spelled: name }): UseSite[] => (name === undefined ? [] : [{ file: reference.file, line: reference.line, column: reference.column + 1, spelled: name, owner }]));
   const bindings = await origins.rootBindings(sites, signal);
@@ -153,7 +153,7 @@ export async function usesOf(branch: DeclarationBranch<GraphSymbol>, input: Uses
   for (const { reference, spelled: name } of spelled) {
     const binding: RootBinding = name === undefined ? { kind: "unknown" } : bindings[next++] ?? { kind: "unknown" };
     const place = { line: reference.line, column: reference.column + 1 };
-    const settled = isLocalRoot(reference.file, binding) ? "local" : await settle(reference.file, binding);
+    const settled = await isLocalRoot(reference.file, binding) ? "local" : await settle(reference.file, binding);
     if (settled === "local") continue;
     if (settled === undefined) unproved.push({ root: "root" in binding ? binding.root : name ?? reference.name, line: reference.line, spelling: reference.name });
     else if ("id" in settled) declared(settled, reference.kind, place);
@@ -162,29 +162,29 @@ export async function usesOf(branch: DeclarationBranch<GraphSymbol>, input: Uses
   return { found, unproved };
 
   /** A local value: the body's own, or one a function around it declares that the index holds no node of. */
-  function isLocalRoot(file: string, binding: RootBinding): boolean {
-    return binding.kind === "local" || (binding.kind === "declared" && binding.captured && candidatesOf(file, binding).length === 0);
+  async function isLocalRoot(file: string, binding: RootBinding): Promise<boolean> {
+    return binding.kind === "local" || (binding.kind === "declared" && binding.captured && (await candidatesOf(file, binding)).length === 0);
   }
 
-  function candidatesOf(file: string, binding: Extract<RootBinding, { kind: "declared" }>): GraphSymbol[] {
-    return navigation.symbolsInFile(file).filter((symbol) => symbol.name === binding.root && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine));
+  async function candidatesOf(file: string, binding: Extract<RootBinding, { kind: "declared" }>): Promise<ModelDeclaration[]> {
+    return (await declarations.list(file)).filter((symbol) => symbol.name === binding.root && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine));
   }
 
-  async function settle(file: string, binding: RootBinding): Promise<GraphSymbol | OutlineUseTarget | undefined> {
+  async function settle(file: string, binding: RootBinding): Promise<GraphSymbol | ModelDeclaration | OutlineUseTarget | undefined> {
     if (binding.kind === "ambient") return { global: binding.root };
     if (binding.kind === "this") {
-      const members = binding.member === undefined ? [] : uses.ownMembers(node, binding.member, EDGE_POLICY.memberKinds);
+      const members = binding.member === undefined || node.symbol === undefined ? [] : uses.ownMembers(node.symbol, binding.member, EDGE_POLICY.memberKinds);
       return members.length === 1 ? members[0] : undefined;
     }
-    if (binding.kind === "declared") return single(candidatesOf(file, binding));
-    if (binding.kind === "located") return single(branchesOf(containmentTree(store, navigation.symbolsInFile(binding.file))).filter((branch) => declarationPath(branch) === binding.path).map((branch) => branch.declaration));
+    if (binding.kind === "declared") return single(await candidatesOf(file, binding));
+    if (binding.kind === "located") return single((await declarations.select(binding.file, binding.path)).filter(({ path }) => path === binding.path));
     if (binding.kind !== "import") return undefined;
     if (binding.origin.kind === "external") return { module: binding.origin.module };
     return (await targets.importedDeclarations(file)).get(binding.root);
   }
 }
 
-function single(symbols: readonly GraphSymbol[]): GraphSymbol | undefined {
+function single<T extends { id: string }>(symbols: readonly T[]): T | undefined {
   const distinct = [...new Map(symbols.map((symbol) => [symbol.id, symbol])).values()];
   return distinct.length === 1 ? distinct[0] : undefined;
 }

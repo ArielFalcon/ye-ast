@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ModuleBinding, ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge } from "./fake-code-graph.testing.ts";
+import { createDeclarationModel } from "./declaration-model.ts";
 import { importBindings } from "./import-bindings.ts";
 
 const NODES = [
@@ -20,25 +21,26 @@ function dependency(bindings: ModuleBinding[], file = "src/lib/barrel.ts"): Modu
   return { file: "src/use.ts", line: bindings[0]?.line ?? 1, endLine: 1, specifier: "./x", kind: "import", typeOnly: false, target: { kind: "repository", file }, bindings };
 }
 
-function reached(edges: FakeEdge[], dependencies: ModuleDependency[]): (string | undefined)[] {
-  const map = importBindings(fakeCodeGraph(NODES, edges), "src/use.ts", dependencies);
+async function reached(edges: FakeEdge[], dependencies: ModuleDependency[]): Promise<(string | undefined)[]> {
+  const store = fakeCodeGraph(NODES, edges);
+  const map = await importBindings(store, "src/use.ts", dependencies, createDeclarationModel({ store, declarationsIn: async () => [] }));
   return dependencies.flatMap((entry) => entry.bindings.map((item) => map.get(item)?.name));
 }
 
-test("a binding reaches the declaration the imports edge at its own position names, through a re-export of another file", () => {
-  assert.deepEqual(reached([{ from: "use", to: "original", kind: "imports", line: 1, column: 9 }], [dependency([binding()])]), ["original"]);
+test("a binding reaches the declaration the imports edge at its own position names, through a re-export of another file", async () => {
+  assert.deepEqual(await reached([{ from: "use", to: "original", kind: "imports", line: 1, column: 9 }], [dependency([binding()])]), ["original"]);
 });
 
-test("an imports edge at another line or another column than the binding is not the binding's", () => {
+test("an imports edge at another line or another column than the binding is not the binding's", async () => {
   const edges: FakeEdge[] = [{ from: "use", to: "original", kind: "imports", line: 1, column: 20 }, { from: "use", to: "original", kind: "imports", line: 2, column: 9 }];
-  assert.deepEqual(reached(edges, [dependency([binding()])]), [undefined]);
+  assert.deepEqual(await reached(edges, [dependency([binding()])]), [undefined]);
 });
 
-test("an imports edge that reaches a file never becomes a declaration", () => {
-  assert.deepEqual(reached([{ from: "use", to: "widgetFile", kind: "imports", line: 1, column: 9 }], [dependency([binding({ imported: "default" })], "src/widget.ts")]), [undefined]);
+test("an imports edge that reaches a file never becomes a declaration", async () => {
+  assert.deepEqual(await reached([{ from: "use", to: "widgetFile", kind: "imports", line: 1, column: 9 }], [dependency([binding({ imported: "default" })], "src/widget.ts")]), [undefined]);
 });
 
-test("a default binding no edge proves takes the declaration its file exports as default", () => {
+test("a default binding no edge proves takes the declaration its file exports as default", async () => {
   const edges: FakeEdge[] = [{ from: "use", to: "widgetFile", kind: "imports", line: 1, column: 9 }];
-  assert.deepEqual(reached(edges, [dependency([binding({ imported: "default", exportedAs: "Panel" })], "src/widget.ts")]), ["Panel"]);
+  assert.deepEqual(await reached(edges, [dependency([binding({ imported: "default", exportedAs: "Panel" })], "src/widget.ts")]), ["Panel"]);
 });

@@ -4,10 +4,10 @@ import type { OutlineBinding, OutlineDeclaration, OutlineFile, OutlineFocus, Out
 import type { Cut } from "../../domain/shared/fact.ts";
 import { unresolvedPlaceCuts } from "../../domain/impact/impact-cuts.ts";
 import { fileReach } from "../../domain/languages/call-targets.ts";
-import { containmentTree } from "../navigation/containment-tree.ts";
+import type { DeclarationModel, ModelDeclaration } from "../navigation/declaration-model.ts";
 import { importBindings } from "../navigation/import-bindings.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import { branchesOf, declarationPath, innermostAt, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
+import { branchesOf, innermostAt, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { OutlineSelector, TopLevelLineFault } from "../../ports/outline-queries.port.ts";
 import type { SnapshotFiles, RawUnknownEntry } from "../navigation/snapshot-files.ts";
@@ -16,7 +16,6 @@ import { usesOf } from "../navigation/declaration-uses.ts";
 import { unmatchedCalls } from "../navigation/reverse-calls.ts";
 import type { BaseReading } from "../snapshot/base-reading.ts";
 import type { TypeTarget } from "../../ports/type-bindings.port.ts";
-import { createGraphNavigation } from "../navigation/graph-navigation.ts";
 
 export interface ListingRead {
   value: OutlineListing;
@@ -25,7 +24,7 @@ export interface ListingRead {
 }
 
 /** The shape of every requested file: declarations from the graph, imports from the module statements of its sources. */
-export function readOutline(store: CodeGraphReader, requested: readonly string[], modules: ModuleDependencies): ListingRead {
+export async function readOutline(store: CodeGraphReader, requested: readonly string[], modules: ModuleDependencies, declarations: DeclarationModel): Promise<ListingRead> {
   const files: OutlineFile[] = [];
   const unheld: string[] = [];
   const cuts: Cut[] = [];
@@ -35,19 +34,19 @@ export function readOutline(store: CodeGraphReader, requested: readonly string[]
   const unread = new Set(modules.unread.map(({ file }) => file));
   const read = new Set(modules.files.map(({ file }) => file));
   for (const file of sortedUnique(requested)) {
-    const nodes = store.symbolsInFiles([file]);
-    if (nodes.length === 0) {
+    const tree = await declarations.tree(file);
+    if (tree.length === 0 && store.symbolsInFiles([file]).length === 0) {
       unheld.push(file);
       continue;
     }
     if (unread.has(file) || !read.has(file)) cuts.push({ kind: "no-extractor", at: [file], reason: "module-unread", reach: fileReach(file) });
     const dependencies = statements.get(file) ?? [];
-    const reached = importBindings(store, file, dependencies);
+    const reached = await importBindings(store, file, dependencies, declarations);
     unproved.push(...unprovedBindings(dependencies, reached));
     const placed = [...dependencies.map((dependency) => ({ ...dependency, entry: imported(dependency, reached) })), ...(references.get(file) ?? []).map((reference) => ({ ...reference, entry: referenced(reference) }))];
     files.push({
       file,
-      declarations: containmentTree(store, nodes).map(outlined),
+      declarations: tree.map(outlined),
       imports: placed.toSorted((left, right) => left.line - right.line || (left.offset ?? 0) - (right.offset ?? 0)).map(({ entry }) => entry),
     });
   }
@@ -84,7 +83,7 @@ function referenced(reference: UntraversedReference): OutlineImport {
 
 const COMPUTED_SPECIFIER = "a computed expression names the module";
 
-function outlined({ declaration, children }: DeclarationBranch<GraphSymbol>): OutlineDeclaration {
+function outlined({ declaration, children }: DeclarationBranch<ModelDeclaration>): OutlineDeclaration {
   const nested = children.map(outlined);
   return { kind: declaration.kind, name: declaration.name, line: declaration.startLine, endLine: declaration.endLine, ...(nested.length > 0 && { children: nested }) };
 }
@@ -96,18 +95,18 @@ export interface FocusRead {
   /** The line selectors no declaration of their file holds. */
   topLevel: TopLevelLineFault["entries"];
   /** The matched declaration of each entry of `value.focus` with what it contains, in the same order. */
-  matched: readonly DeclarationBranch<GraphSymbol>[];
+  matched: readonly DeclarationBranch<ModelDeclaration>[];
 }
 
 /** The declarations the selectors match, each with its containers and the count of its file's declarations left out. */
-export function readFocus(store: CodeGraphReader, selectors: readonly OutlineSelector[], snapshot: SnapshotFiles): FocusRead {
-  const focus: { entry: OutlineFocus; branch: DeclarationBranch<GraphSymbol> }[] = [];
+export async function readFocus(store: CodeGraphReader, selectors: readonly OutlineSelector[], snapshot: SnapshotFiles, declarations: DeclarationModel): Promise<FocusRead> {
+  const focus: { entry: OutlineFocus; branch: DeclarationBranch<ModelDeclaration> }[] = [];
   const unheld: string[] = [];
   const unknown: FocusRead["unknown"][number][] = [];
   const topLevel: FocusRead["topLevel"][number][] = [];
   for (const [file, asked] of [...Map.groupBy(selectors, (selector) => selector.file)].sort(([a], [b]) => compareText(a, b))) {
-    const nodes = store.symbolsInFiles([file]);
-    if (nodes.length === 0) {
+    const tree = await declarations.tree(file);
+    if (tree.length === 0 && store.symbolsInFiles([file]).length === 0) {
       if (snapshot.holds(file)) {
         unheld.push(file);
         continue;
@@ -117,11 +116,14 @@ export function readFocus(store: CodeGraphReader, selectors: readonly OutlineSel
       if (named.length < asked.length) unheld.push(file);
       continue;
     }
-    const tree = containmentTree(store, nodes);
     const declared = branchesOf(tree);
-    const candidates = sortedUnique(declared.map(declarationPath));
+    const candidates = sortedUnique(declared.flatMap(({ declaration }) => declaration.path ?? []));
     for (const selector of asked) {
-      const matched = "symbol" in selector ? selectedBySymbol(tree, selector.symbol) : innermostAt(tree, selector.line);
+      let matched: readonly DeclarationBranch<ModelDeclaration>[];
+      if ("symbol" in selector) {
+        const selected = new Set((await declarations.select(file, selector.symbol)).map(({ id }) => id));
+        matched = declared.filter(({ declaration }) => selected.has(declaration.id));
+      } else matched = innermostAt(tree, selector.line);
       if (matched.length === 0 && "symbol" in selector) unknown.push({ file, symbol: selector.symbol, candidates });
       if (matched.length === 0 && "line" in selector) topLevel.push({ file, line: selector.line, candidates });
       const text = "symbol" in selector ? selector.symbol : String(selector.line);
@@ -132,9 +134,9 @@ export function readFocus(store: CodeGraphReader, selectors: readonly OutlineSel
   return { value: { focus: ordered.map(({ entry }) => entry), unheld }, unknown, topLevel, matched: ordered.map(({ branch }) => branch) };
 }
 
-function focused(file: string, selector: string, branch: DeclarationBranch<GraphSymbol>, declarations: number): OutlineFocus {
+function focused(file: string, selector: string, branch: DeclarationBranch<ModelDeclaration>, declarations: number): OutlineFocus {
   const ancestors = branch.ancestors.map(({ kind, name, startLine, endLine }) => ({ kind, name, line: startLine, endLine }));
-  return { file, selector, path: declarationPath(branch), ancestors, declaration: outlined(branch), omitted: declarations - ancestors.length - branchesOf([branch]).length };
+  return { file, selector, ...(branch.declaration.path === undefined ? {} : { path: branch.declaration.path }), ancestors, declaration: outlined(branch), omitted: declarations - ancestors.length - branchesOf([branch]).length };
 }
 
 /**
@@ -147,9 +149,11 @@ export async function focusWithUses(store: CodeGraphReader, read: FocusRead, rea
   if (origins === undefined || targets === undefined) throw new Error("a focus binds its uses through the line's import origins");
   const uses = reading.declarationUses();
   const reconciled = reading.reconciledCalls(targets, uses);
-  const writtenCalls = reconciled === undefined ? undefined : async (body: GraphSymbol) => unmatchedCalls(await reconciled.callsOf(body));
-  const input = { store, navigation: createGraphNavigation(store, () => false), uses, targets, origins, writtenCalls, ...(signal === undefined ? {} : { signal }) };
-  const settled = new Map<GraphSymbol["id"], { uses: readonly OutlineUse[]; cuts: Cut[] }>();
+  const writtenCalls = reconciled === undefined ? undefined : async (body: ModelDeclaration) => body.symbol !== undefined
+    ? unmatchedCalls(await reconciled.callsOf(body.symbol))
+    : (await reconciled.ownedIn(body.file)).get(body.id)?.filter(({ deferred }) => !deferred).map((call) => ({ file: body.file, line: call.line, column: call.column - 1, name: call.name, kind: call.kind, candidates: [] })) ?? [];
+  const input = { store, declarations: reading.declarations, uses, targets, origins, writtenCalls, ...(signal === undefined ? {} : { signal }) };
+  const settled = new Map<string, { uses: readonly OutlineUse[]; cuts: Cut[] }>();
   const focus: OutlineFocus[] = [];
   for (const [index, entry] of read.value.focus.entries()) {
     const branch = read.matched[index]!;
@@ -157,7 +161,7 @@ export async function focusWithUses(store: CodeGraphReader, read: FocusRead, rea
     if (answer === undefined) {
       const { found, unproved } = await usesOf(branch, input);
       if (signal?.aborted) return "aborted";
-      answer = { uses: outlineUses(found), cuts: unprovedUseCuts(entry.file, entry.path, unproved) };
+      answer = { uses: outlineUses(found), cuts: unprovedUseCuts(entry.file, entry.path ?? entry.selector, unproved) };
       settled.set(branch.declaration.id, answer);
     }
     focus.push({ ...entry, uses: answer.uses });

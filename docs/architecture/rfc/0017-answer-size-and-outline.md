@@ -89,12 +89,13 @@ question an agent asks after `impact` names twelve files, and it is the one no q
 | `imports[]` | repo-relative file | the strongest single signal for "does this file belong to my change" |
 | `unheld[]` | repo-relative file, at the value level | a requested file the index holds no node of: what it declares cannot be told, which is not "nothing" |
 
-- **Read from the graph, not from a parser.** `CodeGraphReader.symbolsInFiles(files)`
+- **Read from the shared declaration model.** `CodeGraphReader.symbolsInFiles(files)`
   (`src/core/ports/code-graph.port.ts:93`) already answers with `kind`, `name`, `qualifiedName`, `file`, `startLine` and
   `endLine` (`GraphSymbol`, lines 49-58), and `outgoingEdges` (line 99) carries the `imports` edges. The outline is a
-  projection over a port four queries already use, so no reader, no parser and no dependency is added.
-- **Nesting is the graph's, never a span's.** A declaration is a child only when a `contains` edge from another
-  declaration of the same file reaches it; the file node's own `contains` edges place the top level. A declaration no
+  projection over the model supplied by BaseReading (RFC-0027 U2), joining those indexed declarations with B1 syntax
+  declarations from the existing parse; no new parser or dependency is added.
+- **Nesting requires proof, never overlapping spans alone.** Indexed declarations retain their `contains` edges; a
+  syntax declaration uses its proven container in the shared model; the file node's own `contains` edges place the top level. A declaration no
   such edge places (a route or a configuration binding a framework reader adds) stays at the top level even when its span
   lies inside another declaration's. A Java member sits under its class and the class under the file's package
   declaration, because that is what the graph records; a construct the extractor does not emit, such as a Java `record`,
@@ -149,9 +150,10 @@ name and a span. The refusal stands; this is the other half of the same design.
 API inside `core/adapters/typescript/` (ADR-0008), the Angular extractor, `tree-sitter-java`. A language with no reader
 answers `unknown`; coverage grows only with evidence (ADR-0013).
 
-[RFC-0027](0027-declaration-model.md) U1 supplies a shared declaration model that joins B1 syntax and indexed
-declarations without duplicating them. U2 replaces this outline's index-only population with that model; U1 alone
-does not change outline output.
+[RFC-0027](0027-declaration-model.md) U1 supplies the shared declaration model, and U2 uses it for listings, focus, target resolution and call ownership.
+A focused declaration carries `path` only when its binding is proven; otherwise a line selector identifies its span.
+Syntax-only execution and reverse traversal remain explicit `partial` answers with `no-symbols` cuts until their
+consumer stages support them (U4/U5), never a complete empty answer.
 
 **Read-only, and untrusted-safe.** The tool is a read query family like the others: nothing an agent reaches exposes a
 write. Under `untrusted` it reads the export only, never the working tree, and it adds no network request. Paths and

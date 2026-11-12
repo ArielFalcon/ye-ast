@@ -6,27 +6,28 @@ import type { DeclaredMemberNames, SyntaxCall } from "../../ports/declared-membe
 import type { DeclarationUses } from "./declaration-uses.ts";
 import type { FollowedEdge } from "./edge-targets.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { DeclarationModel, ModelDeclaration } from "./declaration-model.ts";
 
 type SyntaxScope = SyntaxCall["owners"][number];
-type PositionedBody = GraphSymbol & SourceSpan & { scope?: SyntaxScope };
+type PositionedBody = ModelDeclaration & SourceSpan & { key: string; scope?: SyntaxScope };
 export type OwnedCall = SyntaxCall & { ambiguous?: true; deferred?: true };
 const BODY_KINDS: readonly string[] = ["function", "method", "class", "component", "property", "field"];
 const scopeSpan = (scope: SyntaxScope): SourceSpan => ({ start: { line: scope.start, column: scope.startColumn }, end: { line: scope.endLine, column: scope.endColumn } });
 const spanKey = (span: SourceSpan): string => `${span.start.line}:${span.start.column}:${span.end.line}:${span.end.column}`;
 const scopeKey = (scope: SyntaxScope): string => spanKey(scopeSpan(scope));
 
-function positionedBodies(declarations: readonly GraphSymbol[], calls: readonly SyntaxCall[]): PositionedBody[] {
+function positionedBodies(declarations: readonly ModelDeclaration[], calls: readonly SyntaxCall[]): PositionedBody[] {
   const scopes = [...new Map(calls.flatMap((call) => call.owners).map((scope) => [scopeKey(scope), { ...scopeSpan(scope), scope }])).values()];
   return declarations.flatMap((symbol): PositionedBody[] => {
-    if (!BODY_KINDS.includes(symbol.kind) && !holdsValue(symbol.kind)) return [];
-    const indexed = { ...symbol, ...declarationSpan(symbol) };
+    if (symbol.symbol !== undefined && !BODY_KINDS.includes(symbol.kind) && !holdsValue(symbol.kind)) return [];
+    const indexed = { ...symbol, key: symbol.symbol?.id ?? symbol.id, ...declarationSpan(symbol) };
     const atStart = owningBody(scopes, { line: symbol.startLine, column: symbol.startColumn });
     const anchors = scopes.filter(({ scope }) => scope.nameLine === symbol.startLine && scope.nameColumn === symbol.startColumn);
     const header = atStart !== undefined && ((atStart.start.line === symbol.startLine && atStart.start.column === symbol.startColumn) ||
       symbol.startLine < atStart.scope.nameLine || (symbol.startLine === atStart.scope.nameLine && symbol.startColumn <= atStart.scope.nameColumn));
     const scope = anchors.length === 1 ? anchors[0] : header ? atStart : symbol.kind === "class" ? classBodyScope(scopes, indexed) : undefined;
     const initializer = holdsValue(symbol.kind) && !declarations.some((other) => other.id !== symbol.id && ["function", "method"].includes(other.kind) && containsPosition(declarationSpan(other), { line: symbol.startLine, column: symbol.startColumn }));
-    if (!BODY_KINDS.includes(symbol.kind) && scope === undefined && !initializer) return [];
+    if (symbol.symbol !== undefined && !BODY_KINDS.includes(symbol.kind) && scope === undefined && !initializer) return [];
     return [{ ...indexed, ...(scope === undefined ? {} : { ...scopeSpan(scope.scope), scope: scope.scope }) }];
   });
 }
@@ -44,10 +45,9 @@ function classBodyScope<T extends SourceSpan>(scopes: readonly T[], indexed: Sou
  * Exact lexical ownership, with uninvoked function-value boundaries retained for reconciliation only. A call no body
  * encloses belongs to its file's top level.
  */
-export function callsByOwner(calls: readonly SyntaxCall[], declarations: readonly GraphSymbol[], functionValues: readonly SourceSpan[]): ReadonlyMap<GraphNodeId, readonly OwnedCall[]> {
-  const found = new Map<GraphNodeId, OwnedCall[]>();
+export function callsByOwner(calls: readonly SyntaxCall[], declarations: readonly ModelDeclaration[], functionValues: readonly SourceSpan[], topLevel?: GraphSymbol): ReadonlyMap<string, readonly OwnedCall[]> {
+  const found = new Map<string, OwnedCall[]>();
   const bodies = positionedBodies(declarations, calls);
-  const topLevel = declarations.find((symbol) => symbol.kind === "file");
   for (const call of calls) {
     const scopeKeys = new Set(call.owners.map(scopeKey));
     const valuesInScope = functionValues.filter((value) => scopeKeys.has(spanKey(value)));
@@ -56,8 +56,14 @@ export function callsByOwner(calls: readonly SyntaxCall[], declarations: readonl
     const enclosing = owner === undefined ? declarations.filter((symbol) => BODY_KINDS.includes(symbol.kind) &&
       ((symbol.startLine <= call.line && call.line <= symbol.endLine) || call.owners.some((scope) => scope.start <= symbol.startLine && symbol.startLine <= scope.endLine))) : [];
     const sole = owner ?? (enclosing.length === 0 && topLevel !== undefined ? { ...topLevel, ...declarationSpan(topLevel) } : undefined);
-    if (sole !== undefined) found.set(sole.id, [...found.get(sole.id) ?? [], executesInBody(sole, valuesInScope, { line: call.line, column: call.column - 1 }) ? call : { ...call, deferred: true }]);
-    else for (const body of enclosing) found.set(body.id, [...found.get(body.id) ?? [], { ...call, ambiguous: true }]);
+    if (sole !== undefined) {
+      const key = "key" in sole ? sole.key : sole.id;
+      found.set(key, [...found.get(key) ?? [], executesInBody(sole, valuesInScope, { line: call.line, column: call.column - 1 }) ? call : { ...call, deferred: true }]);
+    }
+    else for (const body of enclosing) {
+      const key = body.symbol?.id ?? body.id;
+      found.set(key, [...found.get(key) ?? [], { ...call, ambiguous: true }]);
+    }
   }
   return found;
 }
@@ -134,11 +140,12 @@ export interface ReconciledCalls {
   callsOf(body: GraphSymbol): Promise<BodyCalls>;
   /** Every call record of `file` the source contradicts, in the store's order. */
   contradictedIn(file: string): Promise<readonly ContradictedRecord[]>;
-  /** The written calls of `file` by the index body that owns them. */
-  ownedIn(file: string): Promise<ReadonlyMap<GraphNodeId, readonly OwnedCall[]>>;
+  /** The written calls of `file` by their model body key: index handle when available, syntax identity otherwise. */
+  ownedIn(file: string): Promise<ReadonlyMap<string, readonly OwnedCall[]>>;
 }
 
 export interface ReconciledCallsInput {
+  declarations: DeclarationModel;
   store: CodeGraphReader;
   uses: DeclarationUses;
   syntaxOf: (file: string) => Promise<DeclaredMemberNames>;
@@ -160,10 +167,10 @@ export function valueEdgesOf(store: CodeGraphReader, symbol: GraphSymbol): reado
 
 const NO_CALLS: BodyCalls = { edges: [], references: [], contradicted: [], writtenOnly: [], ambiguous: [], deferredOnly: [] };
 
-export function createReconciledCalls({ store, uses, syntaxOf, lineOf, importedDeclarations }: ReconciledCallsInput): ReconciledCalls {
+export function createReconciledCalls({ store, uses, syntaxOf, lineOf, importedDeclarations, declarations }: ReconciledCallsInput): ReconciledCalls {
   const ownedIn = oncePerFile(async (file) => {
     const syntax = await syntaxOf(file);
-    return callsByOwner(syntax.calls ?? [], store.symbolsInFiles([file]), syntax.functionValues);
+    return callsByOwner(syntax.calls ?? [], await declarations.list(file), syntax.functionValues, store.symbolsInFiles([file]).find(({ kind }) => kind === "file"));
   });
   const alignedIn = oncePerFile(async (file): Promise<ReadonlyMap<GraphNodeId, BodyCalls>> => {
     const syntax = await syntaxOf(file);
@@ -232,12 +239,10 @@ export function createReconciledCalls({ store, uses, syntaxOf, lineOf, importedD
  * call a class owns: a decorator and its arguments, which the class's declaration runs. A written call is accounted
  * when a record matches it or is undecided between it and others.
  */
-function alignRecords(records: readonly CallRecord[], syntax: DeclaredMemberNames, owned: ReadonlyMap<GraphNodeId, readonly OwnedCall[]>, declarations: readonly GraphSymbol[], lineOf: (line: number) => string | undefined): { alignments: readonly Alignment[]; accounted: ReadonlySet<string> } {
+function alignRecords(records: readonly CallRecord[], syntax: DeclaredMemberNames, owned: ReadonlyMap<string, readonly OwnedCall[]>, declarations: readonly GraphSymbol[], lineOf: (line: number) => string | undefined): { alignments: readonly Alignment[]; accounted: ReadonlySet<string> } {
   const accounted = new Set<string>();
-  const classes = new Map(declarations.filter((symbol) => isClassKind(symbol.kind)).map((symbol) => [symbol.id, symbol]));
-  const classOwning = new Map([...owned].flatMap(([id, calls]) => (classes.has(id) ? calls.filter((call) => !call.ambiguous).map((call) => [callKey(call), classes.get(id)!] as const) : [])));
-  const byId = new Map(declarations.map((node) => [node.id, node]));
-  const enclosingExecutions = new Map([...owned].flatMap(([id, calls]) => calls.filter((call) => !call.ambiguous && call.owners.some((scope) => scope.runsInEnclosingBody)).map((call) => [callKey(call), byId.get(id)!] as const)));
+  const classOwning = new Map(declarations.flatMap((body) => isClassKind(body.kind) ? (owned.get(body.id) ?? []).filter((call) => !call.ambiguous).map((call) => [callKey(call), body] as const) : []));
+  const enclosingExecutions = new Map(declarations.flatMap((body) => (owned.get(body.id) ?? []).filter((call) => !call.ambiguous && call.owners.some((scope) => scope.runsInEnclosingBody)).map((call) => [callKey(call), body] as const)));
   const { calls } = syntax;
   const alignments = records.map((record): Alignment => {
     if (calls === undefined || record.synthesized) return { kind: "kept" };

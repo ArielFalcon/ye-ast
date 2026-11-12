@@ -41,3 +41,26 @@ test("a constructor missing from the index never merges into its same-named clas
   const model = createDeclarationModel({ store, declarationsIn: async () => [declared("A", 3, 1)] });
   assert.deepEqual((await model.list(FILE)).map(({ path, symbol }) => [path, symbol?.kind]), [["A", "class"], ["A.A", undefined]]);
 });
+
+test("parser headers preceding indexed starts still join the same callable and its container", async () => {
+  const store = fakeCodeGraph([
+    { ...fakeNode("run", "function", FILE, 1, 5), startColumn: 7, endColumn: 1 },
+    { ...fakeNode("nested", "function", FILE, 3, 4, "run"), startColumn: 2, endColumn: 3 },
+    { ...fakeNode("Box", "class", FILE, 7, 12), startColumn: 7, endColumn: 1 },
+  ], [{ from: "run", to: "nested", kind: "contains" }]);
+  const model = createDeclarationModel({ store, declarationsIn: async () => [
+    { name: "run", kind: "function", invoked: true, span: { start: { line: 1, column: 0 }, end: { line: 5, column: 1 } } },
+    { name: "n", kind: "method", invoked: true, container: { line: 7, column: 0 }, span: { start: { line: 9, column: 2 }, end: { line: 10, column: 3 } } },
+  ] });
+  assert.equal((await model.select(FILE, "run"))[0]?.id, "index:run");
+  assert.equal((await model.select(FILE, "run"))[0]?.invoked, true);
+  assert.equal((await model.select(FILE, "Box.n"))[0]?.path, "Box.n");
+});
+
+test("indexed overloads retain the existing declaration-set target semantics", async () => {
+  const store = fakeCodeGraph([fakeNode("A", "class", FILE, 1, 8), fakeNode("first", "method", FILE, 3, 3, "m"), fakeNode("second", "method", FILE, 5, 5, "m")], [
+    { from: "A", to: "first", kind: "contains" }, { from: "A", to: "second", kind: "contains" },
+  ]);
+  const model = createDeclarationModel({ store, declarationsIn: async () => [declared("m", 3, 1), declared("m", 5, 1)] });
+  assert.deepEqual((await model.select(FILE, "A.m")).map(({ symbol }) => symbol?.id), ["first", "second"]);
+});

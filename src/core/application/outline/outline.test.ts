@@ -1,11 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fakeCodeGraph, fakeNode } from "../navigation/fake-code-graph.testing.ts";
-import { readOutline } from "./outline.ts";
+import { readOutline as readOutlineWithModel } from "./outline.ts";
+import { createDeclarationModel } from "../navigation/declaration-model.ts";
+
+const readOutline = (store: Parameters<typeof readOutlineWithModel>[0], files: readonly string[], modules: Parameters<typeof readOutlineWithModel>[2], model = createDeclarationModel({ store, declarationsIn: async () => [] })) => readOutlineWithModel(store, files, modules, model);
 
 const NO_MODULES = { files: [], dependencies: [], unread: [] };
 
-test("a file answers its declarations in line order with their spans, and a file the index does not hold is unheld", () => {
+test("a syntax-only member is outlined with its own span under its proven holder", async () => {
+  const file = "src/store.ts";
+  const store = fakeCodeGraph([fakeNode("D", "constant", file, 1, 8)], []);
+  const model = createDeclarationModel({ store, declarationsIn: async () => [{ name: "m", kind: "method", invoked: true, container: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 5, column: 3 } } }] });
+  const answer = await readOutline(store, [file], NO_MODULES, model);
+  assert.deepEqual(answer.value.files[0]?.declarations, [{ kind: "constant", name: "D", line: 1, endLine: 8, children: [{ kind: "method", name: "m", line: 3, endLine: 5 }] }]);
+});
+
+test("a file answers its declarations in line order with their spans, and a file the index does not hold is unheld", async () => {
   const store = fakeCodeGraph(
     [
       fakeNode("Order.java", "file", "src/Order.java", 1, 40),
@@ -16,7 +27,7 @@ test("a file answers its declarations in line order with their spans, and a file
     ],
     [],
   );
-  const read = readOutline(store, ["src/Order.java", "src/Gone.java"], NO_MODULES).value;
+  const read = (await readOutline(store, ["src/Order.java", "src/Gone.java"], NO_MODULES)).value;
   assert.deepEqual(read.unheld, ["src/Gone.java"]);
   assert.deepEqual(read.files, [
     {
@@ -31,7 +42,7 @@ test("a file answers its declarations in line order with their spans, and a file
   ]);
 });
 
-test("a declaration a contains edge places inside another declaration of the file is listed under it, at any depth", () => {
+test("a declaration a contains edge places inside another declaration of the file is listed under it, at any depth", async () => {
   const store = fakeCodeGraph(
     [
       fakeNode("file", "file", "src/auth.ts", 1, 60),
@@ -47,7 +58,7 @@ test("a declaration a contains edge places inside another declaration of the fil
       { from: "Auth.login", to: "Auth.login.check", kind: "contains" },
     ],
   );
-  assert.deepEqual(readOutline(store, ["src/auth.ts"], NO_MODULES).value.files[0]?.declarations, [
+  assert.deepEqual((await readOutline(store, ["src/auth.ts"], NO_MODULES)).value.files[0]?.declarations, [
     {
       kind: "class",
       name: "AuthService",
@@ -59,7 +70,7 @@ test("a declaration a contains edge places inside another declaration of the fil
   ]);
 });
 
-test("the children of a declaration come in line order, then name order, whatever order the edges come in", () => {
+test("the children of a declaration come in line order, then name order, whatever order the edges come in", async () => {
   const store = fakeCodeGraph(
     [
       fakeNode("Auth", "class", "src/auth.ts", 3, 40, "AuthService"),
@@ -73,11 +84,11 @@ test("the children of a declaration come in line order, then name order, whateve
       { from: "Auth", to: "Auth.id", kind: "contains" },
     ],
   );
-  const [only] = readOutline(store, ["src/auth.ts"], NO_MODULES).value.files[0]?.declarations ?? [];
+  const [only] = (await readOutline(store, ["src/auth.ts"], NO_MODULES)).value.files[0]?.declarations ?? [];
   assert.deepEqual(only?.children?.map((child) => child.name), ["login", "id", "token"]);
 });
 
-test("a declaration no contains edge places inside a declaration of its file stays at the top level, even inside another's span", () => {
+test("a declaration no contains edge places inside a declaration of its file stays at the top level, even inside another's span", async () => {
   const store = fakeCodeGraph(
     [
       fakeNode("Auth", "class", "src/auth.ts", 3, 40, "AuthService"),
@@ -87,5 +98,5 @@ test("a declaration no contains edge places inside a declaration of its file sta
     ],
     [{ from: "other", to: "Auth.login", kind: "contains" }],
   );
-  assert.deepEqual(readOutline(store, ["src/auth.ts"], NO_MODULES).value.files[0]?.declarations.map((declaration) => declaration.name), ["AuthService", "GET /login", "login"]);
+  assert.deepEqual((await readOutline(store, ["src/auth.ts"], NO_MODULES)).value.files[0]?.declarations.map((declaration) => declaration.name), ["AuthService", "GET /login", "login"]);
 });

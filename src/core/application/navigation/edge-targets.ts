@@ -139,7 +139,7 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
     if (held === undefined) {
       const dependencies = modules === undefined ? [] : "dependencies" in modules ? (extracted ??= Map.groupBy(modules.dependencies, (dependency) => dependency.file)).get(file) ?? [] : (await modules.reader.extract(modules.sources, { files: [file] })).dependencies.filter((dependency) => dependency.file === file);
       const byLocal = new Map<string, GraphSymbol[]>();
-      for (const [binding, declaration] of importBindings(store, file, dependencies)) {
+      for (const [binding, declaration] of await importBindings(store, file, dependencies, declarations)) {
         if (binding.local !== undefined) byLocal.set(binding.local, [...(byLocal.get(binding.local) ?? []), declaration]);
       }
       held = new Map([...byLocal].flatMap(([local, declarations]) => (new Set(declarations.map(({ id }) => id)).size === 1 ? [[local, declarations[0]!] as const] : [])));
@@ -175,7 +175,7 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
           verdicts.set(edgeKey(edge), shadowed);
           continue;
         }
-        const proven = root === undefined || root.pastRoot === true || root.status !== "complete" || root.value.kind !== "repository" || root.bare !== true ? undefined : root.value.declared !== undefined ? declarationAt(store, root.value.file, root.value.declared) : (await bindingsOf(source.file)).get(target.name);
+        const proven = root === undefined || root.pastRoot === true || root.status !== "complete" || root.value.kind !== "repository" || root.bare !== true ? undefined : root.value.declared !== undefined ? await declarationAt(declarations, root.value.file, root.value.declared) : (await bindingsOf(source.file)).get(target.name);
         const verdict = root === undefined || root.pastRoot === true ? undefined : edgeVerdict<GraphNodeId>(root, proven?.id, target);
         if (verdict?.kind === "redirect") verdicts.set(edgeKey(edge), { kind: "redirect", to: proven! });
         else if (verdict?.kind === "drop" && root!.status === "complete") verdicts.set(edgeKey(edge), { kind: "drop", root: root!.value });
