@@ -45,5 +45,6 @@ the RealWorld sample:
   answering nothing.
 - Several links can come from one place; the call site's stated expressions say that they are alternatives. No link
   field and no schema version change.
-- A request whose options object is unknown for another reason (a spread of an identifier, a `for...of` over its path
-  parameters) is still absent; that gap needs its own scoped fix.
+- A request whose options object is unknown for another reason (a spread of an identifier) is still absent; that gap
+  needs its own scoped fix. A path rewritten only by `replace`/`replaceAll` calls, in a loop or not, keeps the text
+  before the first character a pattern begins with and is present.

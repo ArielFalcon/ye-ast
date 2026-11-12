@@ -33,7 +33,7 @@ const RUN_TIME: Read = known({ kind: "value" });
 /** A class field the code assigns at run time, so no initializer states its value. */
 const ASSIGNED_AT_RUN_TIME = Symbol("assigned at run time");
 const WRITTEN_FIELDS = new WeakMap<ts.ClassDeclaration, ReadonlySet<string>>();
-const VARIABLE_WRITES = new WeakMap<ts.Node, ReadonlyMap<string, readonly ts.Expression[] | null>>();
+const VARIABLE_WRITES = new WeakMap<ts.Node, ReadonlyMap<string, VariableWrites>>();
 /** What one file declares at its top level, and the classes and enums it holds, as the reader needs them. */
 interface FileShape {
   source: ts.SourceFile;
@@ -677,7 +677,10 @@ class Reader {
               if (!ts.isFunctionLike(parameter.parent) || reboundIn(parameter.parent).has(identifier.text)) return { unsafe: true };
               return { parameter: parameter.parent.parameters.indexOf(parameter), stable: this.stableBinding(parameter), ...(parameter.initializer === undefined ? {} : { initializer: parameter.initializer }) };
             }
-            return binding.initializer === undefined || appendsTo(binding.initializer)?.length !== 0 ? undefined : { expression: binding.initializer, stable: () => this.stableBinding(binding.declaration) };
+            if (binding.initializer === undefined) return undefined;
+            const replacing = replacedBy(binding.initializer);
+            if (replacing !== undefined) return { expression: binding.initializer, replacing, stable: () => this.stableBinding(binding.declaration) };
+            return appendsTo(binding.initializer)?.length !== 0 ? undefined : { expression: binding.initializer, stable: () => this.stableBinding(binding.declaration) };
           }
           return undefined;
         },
@@ -1592,12 +1595,22 @@ function reboundIn(declaration: ts.Node): ReadonlySet<string> {
 
 /** What the code appends with `+=` to the variable an initializer declares; null when it writes the variable any other way. */
 function appendsTo(initializer: ts.Expression): readonly ts.Expression[] | null {
+  const writes = writesOf(initializer);
+  return writes === undefined ? [] : writes.other || writes.replaced.length > 0 ? null : writes.appended;
+}
+
+/** The patterns of the `replace` and `replaceAll` calls through which the code rewrites the variable an initializer declares, when it writes it no other way. */
+function replacedBy(initializer: ts.Expression): readonly ts.Expression[] | undefined {
+  const writes = writesOf(initializer);
+  return writes === undefined || writes.other || writes.appended.length > 0 || writes.replaced.length === 0 ? undefined : writes.replaced;
+}
+
+function writesOf(initializer: ts.Expression): VariableWrites | undefined {
   const declaration = initializer.parent;
-  if (!ts.isVariableDeclaration(declaration) || declaration.initializer !== initializer || !ts.isIdentifier(declaration.name)) return [];
+  if (!ts.isVariableDeclaration(declaration) || declaration.initializer !== initializer || !ts.isIdentifier(declaration.name)) return undefined;
   const list = declaration.parent;
-  if (!ts.isVariableDeclarationList(list) || (list.flags & ts.NodeFlags.Const) !== 0) return [];
-  const writes = writesIn(regionOf(list)).get(declaration.name.text);
-  return writes === undefined ? [] : writes;
+  if (!ts.isVariableDeclarationList(list) || (list.flags & ts.NodeFlags.Const) !== 0) return undefined;
+  return writesIn(regionOf(list)).get(declaration.name.text);
 }
 
 /** Where a declaration's variable is visible: its block or loop for `let`, its function or file for `var`. */
@@ -1608,30 +1621,52 @@ function regionOf(list: ts.VariableDeclarationList): ts.Node {
   }
 }
 
-/** The assignments to each name a region makes, destructuring included: what `+=` appends, or null for any other. */
-function writesIn(region: ts.Node): ReadonlyMap<string, readonly ts.Expression[] | null> {
+interface VariableWrites {
+  appended: ts.Expression[];
+  /** The pattern of each `replace` or `replaceAll` in a chain that rewrites the variable from itself. */
+  replaced: ts.Expression[];
+  other: boolean;
+}
+
+/** The assignments to each name a region makes, destructuring included: what `+=` appends, what `x = x.replace(...)` rewrites, and whether any other write exists. */
+function writesIn(region: ts.Node): ReadonlyMap<string, VariableWrites> {
   const cached = VARIABLE_WRITES.get(region);
   if (cached !== undefined) return cached;
-  const writes = new Map<string, ts.Expression[] | null>();
-  const record = (name: string, appended: ts.Expression | null): void => {
-    const held = writes.get(name);
-    if (appended === null) writes.set(name, null);
-    else if (held !== null) writes.set(name, [...(held ?? []), appended]);
+  const writes = new Map<string, VariableWrites>();
+  const held = (name: string): VariableWrites => {
+    let entry = writes.get(name);
+    if (entry === undefined) { entry = { appended: [], replaced: [], other: false }; writes.set(name, entry); }
+    return entry;
   };
   const names = (node: ts.Node): void => {
-    if (ts.isIdentifier(node)) record(node.text, null);
+    if (ts.isIdentifier(node)) held(node.text).other = true;
     else ts.forEachChild(node, names);
   };
   const visit = (node: ts.Node): void => {
     if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
-      if (ts.isIdentifier(node.left)) record(node.left.text, node.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken ? node.right : null);
-      else if (ts.isObjectLiteralExpression(node.left) || ts.isArrayLiteralExpression(node.left)) names(node.left);
+      if (ts.isIdentifier(node.left)) {
+        const entry = held(node.left.text);
+        const patterns = node.operatorToken.kind === ts.SyntaxKind.EqualsToken ? replacementsOf(node.right, node.left.text) : undefined;
+        if (node.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken) entry.appended.push(node.right);
+        else if (patterns !== undefined) entry.replaced.push(...patterns);
+        else entry.other = true;
+      } else if (ts.isObjectLiteralExpression(node.left) || ts.isArrayLiteralExpression(node.left)) names(node.left);
     }
     ts.forEachChild(node, visit);
   };
   visit(region);
   VARIABLE_WRITES.set(region, writes);
   return writes;
+}
+
+/** The patterns of a chain of `replace` and `replaceAll` calls that starts from the variable `name`. */
+function replacementsOf(chain: ts.Expression, name: string): ts.Expression[] | undefined {
+  const node = unwrapped(chain);
+  if (ts.isIdentifier(node)) return node.text === name ? [] : undefined;
+  if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression) || node.arguments.length !== 2 || node.questionDotToken !== undefined) return undefined;
+  if (node.expression.name.text !== "replace" && node.expression.name.text !== "replaceAll") return undefined;
+  const earlier = replacementsOf(node.expression.expression, name);
+  return earlier === undefined ? undefined : [...earlier, node.arguments[0]!];
 }
 
 const ANY_FIELD = "*";

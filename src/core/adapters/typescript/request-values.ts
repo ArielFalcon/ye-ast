@@ -13,7 +13,7 @@ export type RequestValue =
   | { kind: "object"; fields: ReadonlyMap<string, RequestValue> }
   | { kind: "property"; owner: RequestValue; name: string; optional: boolean }
   | { kind: "choose"; condition: RequestValue; yes: RequestValue; no: RequestValue }
-  | { kind: "operation"; operator: "+" | "!" | "||" | "&&" | "??" | "startsWith" | "trim-start" | "trim-end" | "encode"; operands: readonly RequestValue[] }
+  | { kind: "operation"; operator: "+" | "!" | "||" | "&&" | "??" | "startsWith" | "trim-start" | "trim-end" | "encode" | "substitute"; operands: readonly RequestValue[] }
   | { kind: "apply"; body: RequestValue; arguments: readonly RequestValue[] };
 
 type Value = (
@@ -236,6 +236,10 @@ function reduceRequestValue(root: RequestValue, work: { evaluations: number; ins
           result = decided === undefined ? uncertainty(first, secondTerm === undefined ? unknown() : evaluate(secondTerm, args)) : left ? first : secondTerm === undefined ? unknown() : evaluate(secondTerm, args);
           break;
         }
+        if (term.operator === "substitute") {
+          result = substitutedText(first, term.operands.slice(1).map((pattern) => evaluate(pattern, args)), unknown, uncertainty);
+          break;
+        }
         const second = secondTerm === undefined ? unknown() : evaluate(secondTerm, args);
         if (term.operator === "+") {
           if (first.kind === "literal" && second.kind === "literal" && typeof first.value === "string" && typeof second.value === "string") result = { kind: "literal", value: first.value + second.value, supplied: supplied([first, second]) };
@@ -286,6 +290,25 @@ function reduceRequestValue(root: RequestValue, work: { evaluations: number; ins
   const evidence = [...new Map(gaps.flatMap((gap) => gap.evidence).map((item) => [JSON.stringify(item), item])).values()];
   const unresolved = gaps.length === 0 ? undefined : { cause: prevailingCause(gaps.map((gap) => gap.cause)) ?? "destination-undecidable", evidence };
   return { splits, read: { text, holes, encodings, supplied: value.supplied, url: compactRequestUrl(url), ...(unresolved === undefined ? {} : { unresolved }) } };
+}
+
+/**
+ * The text before the first character any pattern begins with is never matched, whatever the replacements insert after it.
+ * Anything after that character, a hole before it, or a pattern that states no leading text is unknown.
+ */
+function substitutedText(subject: Value, patterns: readonly Value[], unknown: () => Value, uncertainty: (...values: Value[]) => Value): Value {
+  const starts = patterns.map((pattern) => statedPrefix(pattern)?.text[0]);
+  if (subject.kind === "unknown") return subject;
+  if (starts.some((start) => start === undefined) || (subject.kind !== "literal" && subject.kind !== "text")) return { ...uncertainty(subject, ...patterns), supplied: subject.supplied };
+  const kept: Value[] = [];
+  for (const part of flattened(subject)) {
+    if (part.kind !== "literal" || typeof part.value !== "string") return { kind: "text", parts: [...kept, unknown()], supplied: subject.supplied };
+    const text = part.value;
+    const cut = text.split("").findIndex((character) => starts.includes(character));
+    if (cut >= 0) return { kind: "text", parts: [...kept, { ...part, value: text.slice(0, cut) }, unknown()], supplied: subject.supplied };
+    kept.push(part);
+  }
+  return subject;
 }
 
 interface StatedPrefix { text: string; closed: boolean }

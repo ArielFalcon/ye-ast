@@ -1850,9 +1850,41 @@ test("a spread of anything but an object literal, a shorthand member and a proto
     return sites.filter((site) => site.symbol === "Orders.list").map((site) => (site.target.status === "complete" && "path" in site.target.value ? site.target.value.path : site.target.status));
   };
   assert.deepEqual(await target("{ baseUrl }"), ["http://s/orders"]);
-  const unsubstituted = await restExpressions("proto.ts", "class Orders { constructor(private rest: Rest) {} list() { return this.rest.get('/orders', { __proto__: { pathParams: { id: '1' } } }) } }", "Orders.list");
-  assert.notDeepEqual(unsubstituted, [["unknown", "/orders"]]);
+  const unsubstituted = await restExpressions("proto.ts", "class Orders { constructor(private rest: Rest) {} list() { return this.rest.get('/orders/:id', { __proto__: { pathParams: { id: '1' } } }) } }", "Orders.list");
+  assert.notDeepEqual(unsubstituted, [["unknown", "/orders/:id"]]);
   for (const [options, claimed] of [["{ baseUrl: 'http://a', ...extra }", "http://a/orders"], ["{ baseUrl: 'http://a', ...(q ? extra : {}) }", "http://a/orders"], ["{ __proto__: { baseUrl: 'http://x' } }", "http://x/orders"]] as const) {
     assert.ok(!(await target(options)).includes(claimed), options);
+  }
+});
+
+test("a request whose path is rewritten by replace calls stays present with the text no pattern can reach", async () => {
+  const client = (substitution: string) => [
+    "import { HttpClient } from '@angular/common/http'",
+    `function fill(path: string, params: any) { let r = path; ${substitution}; return r }`,
+    "class Rest { constructor(private http: HttpClient) {}",
+    "  get(path: string, options?: any) { return this.http.get(fill(path, options?.pathParams)) } }",
+  ];
+  const sitesOf = async (substitution: string, path: string) => {
+    const member = `class Addresses { constructor(private rest: Rest) {} one(id: string) { return this.rest.get(${path}, { pathParams: { id } }) } }`;
+    return (await reader.of([source("fill.ts", [...client(substitution), member].join("\n"))], "repo")).filter((site) => site.symbol === "Addresses.one");
+  };
+  const stated = async (substitution: string, path: string) => {
+    const sites = await sitesOf(substitution, path);
+    return sites.flatMap((site) => site.target.status === "complete" && "path" in site.target.value ? [[site.target.value.path]] : (site.stated?.expressions ?? []).map((parts) => parts.map((part) => part.kind === "text" ? part.text : part.kind)));
+  };
+  const loop = "for (const [k, v] of Object.entries(params)) { r = r.replaceAll(':' + k, encodeURIComponent(v)) }";
+  assert.deepEqual(await stated(loop, "'/addresses/:id/notes'"), [["/addresses/", "unknown"]]);
+  assert.deepEqual(await stated(loop, "'/addresses'"), [["/addresses"]]);
+  assert.deepEqual(await stated("r = r.replace('#x', 'y').replace(':' + id, 'z')", "'/a#b:c'"), [["/a", "unknown"]]);
+  assert.deepEqual(await stated("while (r.includes(':')) { r = r.replace('#x', 'y') }", "'/a:b#c'"), [["/a:b", "unknown"]]);
+  assert.deepEqual(await stated(loop, "`/addresses/${id}:x`"), [["/addresses/", "unknown"]]);
+  assert.deepEqual(await stated(loop, "`/addresses${id}`"), [["/addresses", "unknown"]]);
+  assert.notDeepEqual(await stated("for (const key of params) { if (key === id) return 'other' }", "'/addresses/1'"), [["/addresses/1"]], "a loop that returns");
+  const claimed = [["/addresses/", "unknown"]];
+  assert.notDeepEqual(await stated(`r = r.trim(); ${loop}`, "'/addresses/:id'"), claimed, "another write to the variable");
+  assert.notDeepEqual(await stated(`String.prototype.replaceAll = (text: string) => text; ${loop}`, "'/addresses/:id'"), claimed, "replaceAll rewritten by the code");
+  for (const pattern of ["/:id/", "''"]) {
+    const [site, ...others] = await sitesOf(`r = r.replace(${pattern}, 'z')`, "'/addresses/:id'");
+    assert.deepEqual([site?.target.status, site?.diagnostic?.cause, others.length], ["unknown", "destination-undecidable", 0], pattern);
   }
 });

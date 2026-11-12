@@ -3,7 +3,7 @@ import { ABSENT_VALUE, UNKNOWN_VALUE, valueMayBeObject, valueUnknown, type Reque
 import { unwrapped } from "./syntax.ts";
 
 interface ValueSyntaxDeps {
-  binding(node: ts.Identifier): { parameter: number; stable: Promise<boolean>; initializer?: ts.Expression } | { expression: ts.Expression; stable: () => Promise<boolean> } | { unsafe: true } | undefined;
+  binding(node: ts.Identifier): { parameter: number; stable: Promise<boolean>; initializer?: ts.Expression } | { expression: ts.Expression; replacing?: readonly ts.Expression[]; stable: () => Promise<boolean> } | { unsafe: true } | undefined;
   callee(node: ts.CallExpression): Promise<readonly (ts.Node | undefined)[] | undefined>;
   constant(node: ts.Expression): Promise<RequestValue>;
   initializer(node: ts.Identifier): Promise<ts.Expression | undefined>;
@@ -36,6 +36,13 @@ export function requestValueSyntax(deps: ValueSyntaxDeps): (node: ts.Expression)
     declarations.set(node, result);
     return result;
   };
+  /** A variable only ever rewritten by `replace` calls holds its initial text up to the first character a pattern can match, and what the calls may change after it. */
+  const substituted = async (initial: RequestValue, patterns: readonly ts.Expression[], trail: ReadonlySet<ts.Node>): Promise<RequestValue> => {
+    const at = unknownAt(patterns[0]!);
+    if (!deps.stringsSafe) return at;
+    const value = operation("substitute", initial, ...(await Promise.all(patterns.map((pattern) => expression(pattern, trail)))));
+    return { kind: "provenance", value, gap: (at as Extract<RequestValue, { kind: "unknown" }>).gap };
+  };
   const hasReturn = (node: ts.Node): boolean => {
     if (ts.isFunctionLike(node) || ts.isClassLike(node)) return false;
     return ts.isReturnStatement(node) || (ts.forEachChild(node, (child) => hasReturn(child) || undefined) ?? false);
@@ -47,6 +54,7 @@ export function requestValueSyntax(deps: ValueSyntaxDeps): (node: ts.Expression)
       if (!hasReturn(node)) return rest;
       return { kind: "choose", condition: await expression(node.expression, trail), yes: await statement(node.thenStatement, rest, trail), no: node.elseStatement === undefined ? rest : await statement(node.elseStatement, rest, trail) };
     }
+    if (ts.isIterationStatement(node, false) && !hasReturn(node)) return rest;
     if (ts.isVariableStatement(node) || ts.isExpressionStatement(node) || ts.isFunctionDeclaration(node) || ts.isEmptyStatement(node)) return rest;
     return unknownAt(node);
   };
@@ -98,6 +106,7 @@ export function requestValueSyntax(deps: ValueSyntaxDeps): (node: ts.Expression)
       if (binding !== undefined && "parameter" in binding) return { kind: "parameter", index: binding.parameter, propertiesSafe: await binding.stable, ...(binding.initializer === undefined ? {} : { fallback: await expression(binding.initializer, trail) }) };
       if (binding !== undefined && "expression" in binding) {
         const value = await expression(binding.expression, trail);
+        if (binding.replacing !== undefined) return substituted(value, binding.replacing, trail);
         return valueMayBeObject(value) && !(await binding.stable()) ? { kind: "opaque", value, gap: { cause: "destination-undecidable", evidence: [{ path: node.getSourceFile().fileName, line: node.getSourceFile().getLineAndCharacterOfPosition(node.getStart()).line + 1 }] } } : value;
       }
       if (node.text === "undefined" && deps.builtin(node)) return ABSENT_VALUE;
