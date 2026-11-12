@@ -350,10 +350,31 @@ test("a value the call fills at run time never stands for a literal segment the 
   assert.equal(joined(matchCallSite(site("/orders/{}"), targetOf(site("/orders/{}")), latest, [])), "none /orders/{}");
 });
 
-test("on the suffix rung a route parameter takes a literal of the call, whichever path is longer", () => {
-  const call = site("/v1/user/DEFAULT/reset/{}");
+test("on the suffix rung a route parameter takes a value of the call, whichever path is longer", () => {
+  const call = site("/v1/user/{}/reset/{}");
 
   assert.equal(joined(matchCallSite(call, targetOf(call), repositories([route("GET", "/api/v1/user/{store}/reset/{token}")]), [])), "suffix 0.5 -> orders GET /api/v1/user/{store}/reset/{token}");
+});
+
+test("on the suffix rung a segment the call states as text never fills a route variable, whichever path is longer; the exact rung still lets it", () => {
+  const served = repositories([route("GET", "/restaurants/{id}"), route("GET", "/files/*"), route("GET", "/api/{store}/reset")]);
+  const longer = site("/name-restaurants-api/restaurants/daily-menus");
+  const shorter = site("/v1/api/DEFAULT/reset");
+
+  assert.equal(joined(matchCallSite(longer, targetOf(longer), served, [])), "none /name-restaurants-api/restaurants/daily-menus");
+  assert.equal(joined(matchCallSite(site("/v1/files/readme"), targetOf(site("/v1/files/readme")), served, [])), "none /v1/files/readme");
+  assert.equal(joined(matchCallSite(shorter, targetOf(shorter), served, [])), "none /v1/api/DEFAULT/reset");
+  const routeLonger = site("/restaurants/daily-menus");
+  assert.equal(joined(matchCallSite(routeLonger, targetOf(routeLonger), repositories([route("GET", "/api/restaurants/{id}")]), [])), "none /restaurants/daily-menus");
+  assert.equal(joined(matchCallSite(site("/restaurants/daily-menus"), targetOf(site("/restaurants/daily-menus")), served, [])), "exact 1 -> orders GET /restaurants/{id}");
+});
+
+test("with an undecided base, a stated text filling a route variable is refused only at the suffix part of the rung", () => {
+  const served = repositories([route("GET", "/restaurants/{id}"), route("GET", "/orders/{id}")]);
+
+  assert.equal(matchHttpCallSite(stating([["text", "/name-restaurants-api/restaurants/daily-menus"]]), served, []), undefined);
+  assert.equal(joined(matchHttpCallSite(stating([["text", "/orders/daily-menus"]]), served, []) ?? {}), "suffix 0.5 -> orders GET /orders/{id}");
+  assert.equal(joined(matchHttpCallSite(stating([["text", "/api/articles/"], ["runtime", ""]]), repositories([route("GET", "/articles/{slug}")]), []) ?? {}), "suffix 0.5 -> orders GET /articles/{slug}");
 });
 
 test("a suffix match needs one literal segment both paths state", () => {
@@ -503,4 +524,14 @@ test("a request with several URL expressions makes one link for alternatives lan
   const users = repositories([route("GET", "/aa/user-admin"), route("GET", "/zz/user-admin")]);
   const could = matchHttpCallSite(stating([["text", "/zz/user-"], ["runtime", ""]], [["text", "/aa/user-"], ["runtime", ""]]), users, []);
   assert.deepEqual(could, { undecided: "/aa/user-{}" });
+});
+
+test("a call that states its origin states its whole path, so the suffix rung never cuts its leading segments; a declared gateway prefix still links", () => {
+  const owners = repositories([route("GET", "/owners")]);
+  const absolute = site("http://localhost:9966/petclinic/api/owners");
+
+  assert.equal(matchCallSite(absolute, targetOf(absolute), owners, []).links, undefined);
+  assert.equal(joined(matchCallSite(absolute, targetOf(absolute), owners, [{ prefix: "petclinic", repo: "orders", basis: "gateway-prefix" }])), "none http://localhost:9966/petclinic/api/owners");
+  const gated = site("http://localhost:9966/orders-api/orders");
+  assert.equal(joined(matchCallSite(gated, targetOf(gated), repositories([route("GET", "/orders")]), [{ prefix: "orders-api", repo: "orders", basis: "gateway-prefix" }])), "gateway-prefix 1 -> orders GET /orders");
 });

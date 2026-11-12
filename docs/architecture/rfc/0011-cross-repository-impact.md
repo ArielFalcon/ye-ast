@@ -208,7 +208,7 @@ profile picked and the keys not joined ([ADR-0014](../adr/0014-angular-and-sprin
 |---|---|---|---|
 | 1 | `exact` | call path equals the route's `path` | link, no `profiles` |
 | 2 | `base-path` | call path equals one key of the base path plus the route's `path`, under the default or a profile expression | link; `profiles` lists every expression under which it holds, so a match that exists under `prod` only is visible as such |
-| 3 | `suffix` | one path ends with the other, the extra leading segments of the longer are all text, and one segment both paths state as text agrees (qayaba's rule, `cross-repo-impact.ts:17-28`, made symmetric); a route longer than a call that states its origin never holds | link, confidence capped at 0.5; for a route whose `basePath` is `unknown`, and for a gateway prefix the workspace declares in `boundaries[]` (RFC-0006) |
+| 3 | `suffix` | one path ends with the other, the extra leading segments of the longer are all text, and one segment both paths state as text agrees (qayaba's rule, `cross-repo-impact.ts:17-28`, made symmetric); a call that states its origin is never cut, and a text it states never fills a route variable ([ADR-0058](../adr/0058-the-suffix-rung-never-lets-a-stated-text-fill-a-route-variable.md)) | link, confidence capped at 0.5; for a route whose `basePath` is `unknown`, and for a gateway prefix the workspace declares in `boundaries[]` (RFC-0006) |
 | 4 | none | no rule holds | no link. A call whose route a run-time value could still decide at an earlier rung is `could-match`, a cut. Otherwise a call that names a host (`scheme://host`, in its path or its base, a host the code fills at run time naming none) is `external`; any other, and one under a declared service prefix, is an item `unmatched` (qayaba's drift): no declared repository serves the path it states, which is drift or a service the workspace does not declare, never proof that it leaves the workspace |
 
 qayaba's pattern also allows up to three unconstrained prefix segments and bounds the source at 200 characters
@@ -649,3 +649,6 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   matches something.
 - A call whose literal segment fills a route's parameter links at full confidence: `GET restaurants/daily-menus` joins
   `GET /restaurants/{id}` because the syntax accepts it. ye-ast cannot know the parameter excludes that value.
+  Only the exact and base-path rungs keep this. The `suffix` rung never lets a segment the call states as text fill a route
+  parameter, and never cuts a call that states its origin; a value the call fills at run time still binds a parameter
+  ([ADR-0058](../adr/0058-the-suffix-rung-never-lets-a-stated-text-fill-a-route-variable.md)).

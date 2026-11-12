@@ -144,7 +144,8 @@ function tailMinimum(segment: TemplateSegment): number {
   return segment.kind === "any-tail" ? (segment.minimum ?? 0) : 0;
 }
 
-function unifyPathSegment(call: TemplateSegment, route: TemplateSegment): Unification {
+/** The default rule of `unify`: a text fills a parameter, a value fills only a parameter or a segment of the same shape. */
+export function unifyPathSegment(call: TemplateSegment, route: TemplateSegment): Unification {
   if (call.kind !== "parts") return CANNOT_MATCH;
   if (route.kind === "any-segment" || route.kind === "any-tail") return { outcome: "matches", literals: 0, parity: holdsValue(call) };
   const callText = literalText(call);

@@ -6,7 +6,7 @@ import type { CallSiteReach } from "../shared/fact.ts";
 import { callPlaceOf, httpTargetOf, undecidedAuthorityTargetsOf, type CallSite, type EventTarget, type HttpTarget } from "./call-site.ts";
 import { consumption, delivers } from "./event-destination.ts";
 import { linkIdentity, type Link, type LinkBasis } from "./link.ts";
-import { callTemplate, CANNOT_MATCH, literalText, looseness, namesHost, prefixText, routeSegments, statedLength, unify, type CallTemplate, type TemplateSegment, type Unification } from "./path-template.ts";
+import { callTemplate, CANNOT_MATCH, isRunTimeValue, literalText, looseness, namesHost, prefixText, routeSegments, statedLength, unify, unifyPathSegment, type CallTemplate, type SegmentRule, type TemplateSegment, type Unification } from "./path-template.ts";
 
 /** A repository's entrypoints, as the join reads them. */
 export interface RepositoryEntrypoints {
@@ -165,17 +165,24 @@ const exactRung: Rung = (call, method, routes) => landingOf(equalPaths(call, met
 
 const basePathRung: Rung = (call, method, routes) => landingOf(underBasePaths(call, method, routes), "base-path");
 
+/** A segment the call states as text never fills a route variable: the route's segment is a parameter, not a name the call chose. */
+const suffixSegment: SegmentRule = (call, route) => {
+  const variable = route.kind === "any-segment" || isRunTimeValue(route);
+  return variable && literalText(call) !== undefined ? CANNOT_MATCH : unifyPathSegment(call, route);
+};
+
 /**
  * One path ends with the other: the extra leading segments of the longer state only text, and one segment both paths
- * state as text agrees. A call that states its origin states its whole path, so a longer route cannot end with it.
+ * state as text agrees. A call that states its origin states its whole path, so neither path is cut. A text the call
+ * states never fills a route variable.
  */
 function suffixUnify(call: CallTemplate, route: readonly TemplateSegment[]): Unification {
+  if (call.origin !== undefined) return CANNOT_MATCH;
   const routeLonger = route.length > call.segments.length;
-  if (routeLonger && call.origin !== undefined) return CANNOT_MATCH;
   const [shorter, longer] = routeLonger ? [call.segments, route] : [route, call.segments];
   const cut = longer.length - shorter.length;
   if (cut === 0 || shorter.length === 0 || !longer.slice(0, cut).every((segment) => literalText(segment) !== undefined)) return CANNOT_MATCH;
-  const unified = routeLonger ? unify(call.segments, route.slice(cut)) : unify(call.segments.slice(cut), route);
+  const unified = routeLonger ? unify(call.segments, route.slice(cut), suffixSegment) : unify(call.segments.slice(cut), route, suffixSegment);
   return unified.outcome === "matches" && unified.literals === 0 ? CANNOT_MATCH : unified;
 }
 

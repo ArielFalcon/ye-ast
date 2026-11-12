@@ -74,6 +74,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0055](adr/0055-uncertainty-reaches-a-call-site-only-where-it-can-reach-a-request.md) | A framework plugin lists the value cells whose read runs nothing or a callback; `calleeOf` answers from that list, a gap names its leaf place, and trace treats package-constructed and package-typed receivers as leaves | Accepted |
 | [0056](adr/0056-requests-in-listed-deferring-combinators-are-owned-deferred-effects.md) | A function value passed to an argument a registered framework deferral vocabulary lists (RxJS `defer`, `switchMap`, ...) is owned by its declaration; requests in it are effects marked `deferred`, and workspace trace matches them with the same mark | Accepted |
 | [0057](adr/0057-partial-request-strings-keep-what-they-state.md) | A partial request string decides `startsWith` and slash-trimming by its stated prefix, request options accept shorthand and conditional spreads, one undecided branch states one URL per outcome, and the join links each expression that states its route | Accepted |
+| [0058](adr/0058-the-suffix-rung-never-lets-a-stated-text-fill-a-route-variable.md) | The `suffix` rung never lets a text the call states fill a route variable and never cuts a call that states its origin; the exact and base-path rungs and a declared gateway prefix are unchanged | Accepted |
 
 ## Designs (RFC)
 
