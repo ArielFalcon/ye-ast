@@ -5,9 +5,9 @@
  * hook looks for it. Nothing is written to the corpus repositories.
  *
  *   node --import tsx scripts/corpus-gate.ts --corpus <manifest> [--base <rev>] [--candidate <rev>]
- *     [--expect none | --expect <family>:<+|-|±>]... [--engine <repo>] [--out <dir>]
+ *     [--expect none | --expect <family>:<+|-|±>]... [--engine <repo>] [--out <dir>] [--concurrency <n>]
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,7 +18,9 @@ import { type Answer, type AnswerComparison, type Expectation, ExpectationError,
 
 export const EXIT = { pass: 0, fail: 1, usage: 2, fault: 3 } as const;
 
-const USAGE = "usage: node --import tsx scripts/corpus-gate.ts --corpus <manifest> [--base <rev>] [--candidate <rev>] [--expect none | --expect <family>:<+|-|±>]... [--engine <repo>] [--out <dir>]";
+const USAGE = "usage: node --import tsx scripts/corpus-gate.ts --corpus <manifest> [--base <rev>] [--candidate <rev>] [--expect none | --expect <family>:<+|-|±>]... [--engine <repo>] [--out <dir>] [--concurrency <n>]";
+/** Repositories are disjoint across groups; queries within one group share an index and run after its init. */
+const DEFAULT_CONCURRENCY = 3;
 const REPO_PLACEHOLDER = /\{repo:([^}]+)\}/gu;
 const RUNNER_DIGEST = createHash("sha256").update(readFileSync(import.meta.filename)).digest("hex");
 
@@ -92,7 +94,7 @@ export function scratchDirectory(store: string): string {
   return join(tmpdir(), `ye-ast-corpus-gate-${sha256(store).slice(0, 16)}`);
 }
 
-export function runGate(args: readonly string[], io: Io): number {
+export async function runGate(args: readonly string[], io: Io): Promise<number> {
   let options: ReturnType<typeof parseOptions>;
   try {
     options = parseOptions(args);
@@ -101,7 +103,7 @@ export function runGate(args: readonly string[], io: Io): number {
     return EXIT.usage;
   }
   try {
-    return gate(options, io);
+    return await gate(options, io);
   } catch (error) {
     if (!(error instanceof GateFault)) throw error;
     io.err(`corpus-gate: ${error.message}`);
@@ -119,14 +121,17 @@ function parseOptions(args: readonly string[]) {
       expect: { type: "string", multiple: true, default: ["none"] },
       engine: { type: "string", default: resolve(import.meta.dirname, "..") },
       out: { type: "string" },
+      concurrency: { type: "string" },
     },
     allowPositionals: true,
   });
   if (values.corpus === undefined || positionals.length > 0) throw new UsageError(USAGE);
-  return { ...values, corpus: resolve(values.corpus), engine: resolve(values.engine), expectations: parseExpectations(values.expect) };
+  const concurrency = Number(values.concurrency ?? DEFAULT_CONCURRENCY);
+  if (!Number.isInteger(concurrency) || concurrency < 1) throw new UsageError(USAGE);
+  return { ...values, concurrency, corpus: resolve(values.corpus), engine: resolve(values.engine), expectations: parseExpectations(values.expect) };
 }
 
-function gate(options: ReturnType<typeof parseOptions>, io: Io): number {
+async function gate(options: ReturnType<typeof parseOptions>, io: Io): Promise<number> {
   const { manifest, digest } = readManifest(options.corpus);
   const engineRoot = git(options.engine, ["rev-parse", "--show-toplevel"]);
   const commonDirectory = realpathSync(resolve(engineRoot, git(engineRoot, ["rev-parse", "--git-common-dir"])));
@@ -143,8 +148,8 @@ function gate(options: ReturnType<typeof parseOptions>, io: Io): number {
     mkdirSync(scratch, { recursive: true });
     const context: Context = { engineRoot, store, scratch, manifest, manifestDirectory: dirname(options.corpus), manifestDigest: digest, io };
     try {
-      const baseResult = runSide(context, base);
-      const candidateResult = runSide(context, candidate);
+      const baseResult = await runSide(context, base, options.concurrency);
+      const candidateResult = await runSide(context, candidate, options.concurrency);
       return report(context, options, commonDirectory, [base, baseResult], [candidate, candidateResult]);
     } finally {
       git(engineRoot, ["worktree", "prune"]);
@@ -237,7 +242,7 @@ function acquireLock(store: string): () => void {
  * The answers of one engine revision: from the store when this revision already answered this manifest on this Node
  * with this runner. Every side runs in the same directory, so both engines see the same paths.
  */
-function runSide(context: Context, side: Revision): SideResult {
+async function runSide(context: Context, side: Revision, concurrency: number): Promise<SideResult> {
   const key = sha256(JSON.stringify({ engine: side.commit, manifest: context.manifestDigest, node: process.version, runner: RUNNER_DIGEST })).slice(0, 32);
   const directory = join(context.store, "answers", key);
   if (existsSync(join(directory, "answers.json"))) {
@@ -250,7 +255,7 @@ function runSide(context: Context, side: Revision): SideResult {
   try {
     symlinkSync(realpathSync(join(context.engineRoot, "node_modules")), join(engine, "node_modules"));
     const started = Date.now();
-    const { answers, timings } = runQueries(context, side, sideDirectory, engine);
+    const { answers, timings } = await runQueries(context, side, sideDirectory, engine, concurrency);
     const wallMs = Date.now() - started;
     const partial = `${directory}.partial-${process.pid}`;
     mkdirSync(partial, { recursive: true });
@@ -264,7 +269,28 @@ function runSide(context: Context, side: Revision): SideResult {
   }
 }
 
-function runQueries(context: Context, side: Revision, sideDirectory: string, engine: string) {
+/** Runs at most `limit` groups at a time, returns manifest order, and starts no new group after failure. */
+export async function runGroups<T, R>(groups: readonly T[], limit: number, work: (group: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(groups.length);
+  let next = 0;
+  let failure: unknown;
+  const workers = Array.from({ length: Math.min(limit, groups.length) }, async () => {
+    while (failure === undefined) {
+      const index = next++;
+      if (index >= groups.length) return;
+      try {
+        results[index] = await work(groups[index]!);
+      } catch (error) {
+        failure = error;
+      }
+    }
+  });
+  await Promise.all(workers);
+  if (failure !== undefined) throw failure;
+  return results;
+}
+
+async function runQueries(context: Context, side: Revision, sideDirectory: string, engine: string, concurrency: number) {
   const home = join(sideDirectory, "home");
   const temporary = join(sideDirectory, "tmp");
   for (const directory of [home, temporary]) mkdirSync(directory, { recursive: true });
@@ -283,19 +309,32 @@ function runQueries(context: Context, side: Revision, sideDirectory: string, eng
   const command = cliCommand(engine);
   const roots = [realpathSync(sideDirectory), sideDirectory].sort((a, b) => b.length - a.length);
   const normalize = (text: string) => roots.reduce((normalized, root) => normalized.split(root).join("<side>"), text);
-  const answers: Answer[] = [];
-  const timings: { id: string; wallMs: number }[] = [];
-  const execute = (id: string, family: string, declaredArgv: readonly string[], argv: readonly string[]) => {
-    const started = Date.now();
-    const result = spawnSync(process.execPath, [...command, ...argv], { cwd: engine, env: environment, encoding: "utf8", maxBuffer: 1 << 30 });
-    const wallMs = Date.now() - started;
-    const stdout = normalize(result.stdout);
-    answers.push({ id, family, argv: declaredArgv, exit: result.status, stdout: parsedJson(stdout), stderr: normalize(result.stderr) });
-    timings.push({ id, wallMs });
-    context.io.err(`${side.label} ${id} exit=${result.status} ${wallMs} ms`);
-  };
+  const runGroup = async (group: Group) => {
+    const answers: Answer[] = [];
+    const timings: { id: string; wallMs: number }[] = [];
+    const execute = (id: string, family: string, declaredArgv: readonly string[], argv: readonly string[]): Promise<void> => {
+      const started = Date.now();
+      return new Promise((done) => {
+        const child = spawn(process.execPath, [...command, ...argv], { cwd: engine, env: environment, stdio: ["ignore", "pipe", "pipe"] });
+        let stdout = "";
+        let stderr = "";
+        let settled = false;
+        const finish = (exit: number | null, out: string, err: string): void => {
+          if (settled) return;
+          settled = true;
+          const wallMs = Date.now() - started;
+          answers.push({ id, family, argv: declaredArgv, exit, stdout: parsedJson(normalize(out)), stderr: normalize(err) });
+          timings.push({ id, wallMs });
+          context.io.err(`${side.label} ${id} exit=${exit} ${wallMs} ms`);
+          done();
+        };
+        child.stdout?.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+        child.stderr?.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+        child.on("error", (error) => finish(null, stdout, `${stderr}${error.message}`));
+        child.on("close", (exit) => finish(exit, stdout, stderr));
+      });
+    };
 
-  for (const group of context.manifest.groups) {
     const untrusted = cloneGroup(context, group, join(sideDirectory, "untrusted", group.id), environment);
     const trusted = group.workspace === undefined ? null : cloneGroup(context, group, join(sideDirectory, "trusted", group.id), environment);
     if (group.workspace !== undefined && trusted !== null) {
@@ -309,15 +348,18 @@ function runQueries(context: Context, side: Revision, sideDirectory: string, eng
         declared.push("--workspace", "{workspace}");
         argv.push("--workspace", workspaceFile);
       }
-      execute(`${group.id}/init`, "init", [...declared, `{repo:${group.workspace.launch}}`], [...argv, trusted.get(group.workspace.launch) as string]);
+      await execute(`${group.id}/init`, "init", [...declared, `{repo:${group.workspace.launch}}`], [...argv, trusted.get(group.workspace.launch) as string]);
     }
     for (const query of group.queries) {
       const clones = query.trusted === true ? (trusted as Map<string, string>) : untrusted;
       const argv = query.argv.map((argument) => argument.replace(REPO_PLACEHOLDER, (_, id: string) => clones.get(id) as string));
-      execute(`${group.id}/${query.id}`, query.family, query.argv, argv);
+      await execute(`${group.id}/${query.id}`, query.family, query.argv, argv);
     }
-  }
-  return { answers, timings };
+    return { answers, timings };
+  };
+
+  const groups = await runGroups(context.manifest.groups, concurrency, runGroup);
+  return { answers: groups.flatMap((group) => group.answers), timings: groups.flatMap((group) => group.timings) };
 }
 
 /** Fresh clones of a group's repositories at their pinned commits; `--shared` writes nothing to the source repository. */
@@ -462,7 +504,7 @@ function sha256(bytes: Buffer | string): string {
 }
 
 if (import.meta.main) {
-  process.exitCode = runGate(process.argv.slice(2), {
+  process.exitCode = await runGate(process.argv.slice(2), {
     out: (line) => process.stdout.write(`${line}\n`),
     err: (line) => process.stderr.write(`${line}\n`),
   });

@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Answer } from "./corpus-gate-diff.ts";
-import { EXIT, passMarkerPath, runGate } from "./corpus-gate.ts";
+import { EXIT, passMarkerPath, runGate, runGroups } from "./corpus-gate.ts";
 
 const GIT_IDENTITY = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" };
 
@@ -51,6 +51,7 @@ describe("corpus gate", () => {
   let engine: string;
   let corpus: string;
   let manifest: string;
+  let parallelManifest: string;
   let store: string;
   const commits: Record<"base" | "same" | "adds" | "lockfile", string> = { base: "", same: "", adds: "", lockfile: "" };
 
@@ -60,6 +61,10 @@ describe("corpus gate", () => {
     mkdirSync(corpus, { recursive: true });
     git(corpus, "init", "--quiet");
     const corpusSha = commit(corpus, { "a.txt": "a", "b.txt": "b" }, "corpus");
+    const second = join(root, "corpus", "second");
+    mkdirSync(second, { recursive: true });
+    git(second, "init", "--quiet");
+    const secondSha = commit(second, { "c.txt": "c" }, "second");
 
     engine = join(root, "engine");
     mkdirSync(engine);
@@ -88,22 +93,32 @@ describe("corpus gate", () => {
         ],
       }],
     }));
+    parallelManifest = join(root, "manifest", "parallel.json");
+    writeFileSync(parallelManifest, JSON.stringify({
+      groups: [
+        { id: "first", repos: [{ id: "app", path: "../corpus/app", sha: corpusSha }], queries: [{ id: "list", family: "files", argv: ["list", "{repo:app}"] }] },
+        { id: "second", repos: [{ id: "b", path: "../corpus/second", sha: secondSha }], queries: [{ id: "list", family: "files", argv: ["list", "{repo:b}"] }] },
+      ],
+    }));
   });
 
   after(() => rmSync(root, { recursive: true, force: true }));
 
-  function gate(...args: string[]) {
+  async function gateWith(corpusManifest: string, ...args: string[]) {
     const out: string[] = [];
-    const code = runGate(["--corpus", manifest, "--engine", engine, ...args], { out: (line) => out.push(line), err: () => {} });
+    const errs: string[] = [];
+    const code = await runGate(["--corpus", corpusManifest, "--engine", engine, ...args], { out: (line) => out.push(line), err: (line) => errs.push(line) });
     const reportFile = out.find((line) => line.startsWith("report: "))?.slice("report: ".length).replace(/report\.md$/u, "report.json");
-    return { code, out, report: reportFile === undefined ? undefined : JSON.parse(readFileSync(reportFile, "utf8")) };
+    return { code, out, errs, report: reportFile === undefined ? undefined : JSON.parse(readFileSync(reportFile, "utf8")) };
   }
+
+  const gate = (...args: string[]) => gateWith(manifest, ...args);
 
   const tree = (rev: string) => git(engine, "rev-parse", `${rev}^{tree}`);
 
-  it("passes engines that answer alike, shows both the same paths, records the pass, and leaves the corpus untouched", () => {
+  it("passes engines that answer alike, shows both the same paths, records the pass, and leaves the corpus untouched", async () => {
     const corpusBefore = [git(corpus, "status", "--porcelain", "--ignored"), git(corpus, "for-each-ref"), git(corpus, "worktree", "list")];
-    const { code, report, out } = gate("--base", commits.base, "--candidate", commits.same);
+    const { code, report, out } = await gate("--base", commits.base, "--candidate", commits.same);
     assert.equal(code, EXIT.pass);
     assert.equal(report.counts.differing, 0);
     assert.ok(existsSync(passMarkerPath(join(engine, ".git"), tree(commits.base), tree(commits.same))));
@@ -118,31 +133,74 @@ describe("corpus gate", () => {
     assert.equal(git(engine, "worktree", "list").split("\n").length, 1);
   });
 
-  it("fails an added element under none and passes it under its family's +, reusing the answers of the base", () => {
-    const failed = gate("--base", commits.base, "--candidate", commits.adds);
+  it("fails an added element under none and passes it under its family's +, reusing the answers of the base", async () => {
+    const failed = await gate("--base", commits.base, "--candidate", commits.adds);
     assert.equal(failed.code, EXIT.fail);
     assert.deepEqual(failed.report.violations.map((violation: { rule: string }) => violation.rule), ["undeclared-family", "undeclared-family"]);
     assert.equal(existsSync(passMarkerPath(join(engine, ".git"), tree(commits.base), tree(commits.adds))), false);
 
-    const passed = gate("--base", commits.base, "--candidate", commits.adds, "--expect", "files:+");
+    const passed = await gate("--base", commits.base, "--candidate", commits.adds, "--expect", "files:+");
     assert.equal(passed.code, EXIT.pass);
     assert.equal(passed.report.base.cached, true);
     assert.equal(passed.report.families[0].added, 2);
   });
 
-  it("refuses a revision whose lockfile is not the installed one, before running anything", () => {
-    const { code, report } = gate("--base", commits.base, "--candidate", commits.lockfile);
+  it("refuses a revision whose lockfile is not the installed one, before running anything", async () => {
+    const { code, report } = await gate("--base", commits.base, "--candidate", commits.lockfile);
     assert.equal(code, EXIT.fault);
     assert.equal(report, undefined);
   });
 
-  it("refuses to run while another run holds the lock", () => {
+  it("refuses to run while another run holds the lock", async () => {
     mkdirSync(store, { recursive: true });
     writeFileSync(join(store, "lock"), "1\n");
     try {
-      assert.equal(gate("--base", commits.base, "--candidate", commits.same).code, EXIT.fault);
+      assert.equal((await gate("--base", commits.base, "--candidate", commits.same)).code, EXIT.fault);
     } finally {
       rmSync(join(store, "lock"));
     }
   });
+
+  it("parallel groups retain manifest order in the answer file", async () => {
+    const { code, report } = await gateWith(parallelManifest, "--base", commits.base, "--candidate", commits.same, "--concurrency", "2");
+    assert.equal(code, EXIT.pass);
+    assert.equal(report.counts.differing, 0);
+    const answers = JSON.parse(readFileSync(join(report.candidate.answers, "answers.json"), "utf8")) as Answer[];
+    assert.deepEqual(answers.map((answer) => answer.id), ["first/list", "second/list"]);
+  });
+
+  it("refuses a concurrency that is not a positive integer", async () => {
+    assert.equal((await gate("--base", commits.base, "--candidate", commits.same, "--concurrency", "0")).code, EXIT.usage);
+    assert.equal((await gate("--base", commits.base, "--candidate", commits.same, "--concurrency", "two")).code, EXIT.usage);
+  });
+});
+
+it("group concurrency is bounded while completion order never reorders results", async () => {
+  const releases = [0, 1, 2].map(() => Promise.withResolvers<string>());
+  const thirdStarted = Promise.withResolvers<void>();
+  const completed = [0, 1, 2].map(() => Promise.withResolvers<void>());
+  const starts: number[] = [];
+  const finishes: number[] = [];
+  const running = runGroups([0, 1, 2], 2, async (index) => {
+    starts.push(index);
+    if (index === 2) thirdStarted.resolve();
+    const value = await releases[index]!.promise;
+    finishes.push(index);
+    completed[index]!.resolve();
+    return value;
+  });
+  try {
+    assert.deepEqual(starts, [0, 1]);
+    releases[1]!.resolve("second");
+    await thirdStarted.promise;
+    assert.deepEqual(starts, [0, 1, 2]);
+    releases[2]!.resolve("third");
+    await completed[2]!.promise;
+    releases[0]!.resolve("first");
+    assert.deepEqual(await running, ["first", "second", "third"]);
+    assert.deepEqual(finishes, [1, 2, 0]);
+  } finally {
+    for (const release of releases) release.resolve("cleanup");
+    await running;
+  }
 });
