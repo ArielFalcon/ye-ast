@@ -16,6 +16,7 @@ import { createDeclarationUses, unresolvedOncePerFile, type DeclarationUses, typ
 import { createEdgeTargets, edgeKey, NOTHING_DECLARED, type EdgeTargets } from "../navigation/edge-targets.ts";
 import { implementedContractsOf } from "../navigation/implemented-contracts.ts";
 import { createGraphNavigation } from "../navigation/graph-navigation.ts";
+import { createDeclarationModel, type DeclarationModel } from "../navigation/declaration-model.ts";
 import { callsThroughOrigins, createOriginCalls, type OriginCalls } from "../navigation/origin-calls.ts";
 import { typedCallsOf } from "../navigation/proven-calls.ts";
 import { createReconciledCalls, linesOncePerFile, type ContradictedRecord, type ReconciledCalls } from "../navigation/reconciled-calls.ts";
@@ -109,6 +110,7 @@ export type ContradictedCalls = (sources: readonly GraphSymbol[]) => Promise<Rea
  * is asked and shared by every consumer of the read.
  */
 export interface BaseReading {
+  declarations: DeclarationModel;
   /** B1: what a source's syntax states, read once per file; absent without a syntax reader. */
   syntaxOf: ((path: string) => Promise<DeclaredMemberNames>) | undefined;
   /** B11: the tokens of a source, read once per read and retained per file; `unread` where no pack tokenizes it. */
@@ -224,6 +226,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
               return read;
             };
       const lineOf = linesOncePerFile(sources);
+      const declarations = createDeclarationModel({ store, declarationsIn: async (file) => (await syntaxOf?.(file))?.declarations ?? [], sources: tree.sources, facts });
       const tokens = new Map<string, Promise<SourceReading>>();
       const tokensOf = (file: SourceFile): Promise<SourceReading> => {
         let read = tokens.get(file.path);
@@ -257,6 +260,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       };
 
       return {
+        declarations,
         syntaxOf,
         tokensOf,
         lineOf,
@@ -269,7 +273,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
         edgeTargets(typed) {
           const read = origins();
           if (read === undefined) return undefined;
-          return createEdgeTargets({ origins: read, store, modules: deps.modules === undefined ? undefined : { reader: deps.modules, sources: tree.sources }, syntaxOf, proofs: relations, typed, inScope: narrowing.inScope });
+          return createEdgeTargets({ origins: read, store, declarations, modules: deps.modules === undefined ? undefined : { reader: deps.modules, sources: tree.sources }, syntaxOf, proofs: relations, typed, inScope: narrowing.inScope });
         },
         reconciledCalls,
         contradictedCalls(targets) {

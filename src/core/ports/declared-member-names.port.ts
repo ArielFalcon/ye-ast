@@ -1,9 +1,11 @@
 import type { DerivedFacts } from "./derived-facts.port.ts";
 import type { SourceFile } from "./entrypoint-extractor.port.ts";
-import type { SourceSpan } from "../domain/shared/owning-body.ts";
+import type { SourcePosition, SourceSpan } from "../domain/shared/owning-body.ts";
 
 /** The member names one source declares where a value can live, and its callable declarations, read from its syntax. */
 export interface DeclaredMemberNames {
+  /** The callable declarations read from the same syntax; dispatch continues to use `callables`. */
+  declarations: readonly DeclaredDeclaration[];
   /**
    * Every syntactic call or construction, at its callee start (1-based UTF-16). Absent when no reader parsed the source:
    * its calls are unknown, never none (ADR-0041 decision 2).
@@ -24,6 +26,17 @@ export interface DeclaredMemberNames {
    * runs only when something runs the value.
    */
   functionValues: readonly SourceSpan[];
+}
+
+export interface DeclaredDeclaration {
+  name: string;
+  kind: "method" | "function" | "accessor" | "initializer" | "anonymous-class";
+  span: SourceSpan;
+  invoked: boolean;
+  /** A proven enclosing declaration, by its source position. */
+  container?: SourcePosition;
+  /** The variable or field proven to hold this value. */
+  binding?: SourcePosition;
 }
 
 /**

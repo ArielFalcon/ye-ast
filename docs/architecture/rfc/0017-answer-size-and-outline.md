@@ -149,6 +149,10 @@ name and a span. The refusal stands; this is the other half of the same design.
 API inside `core/adapters/typescript/` (ADR-0008), the Angular extractor, `tree-sitter-java`. A language with no reader
 answers `unknown`; coverage grows only with evidence (ADR-0013).
 
+[RFC-0027](0027-declaration-model.md) U1 supplies a shared declaration model that joins B1 syntax and indexed
+declarations without duplicating them. U2 replaces this outline's index-only population with that model; U1 alone
+does not change outline output.
+
 **Read-only, and untrusted-safe.** The tool is a read query family like the others: nothing an agent reaches exposes a
 write. Under `untrusted` it reads the export only, never the working tree, and it adds no network request. Paths and
 declaration names are the same exposure the impact answers already carry; the redaction patterns apply as everywhere.

@@ -8,10 +8,27 @@ import type { ImportOrigins, ReceiverMethod, RootBinding } from "../../ports/imp
 import { createCallBinder, type ReceiverSyntax } from "./call-binder.ts";
 import { createCallBindings, type SettledBinding } from "./call-binding.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "./fake-code-graph.testing.ts";
+import { createDeclarationModel } from "./declaration-model.ts";
 import { createGraphNavigation } from "./graph-navigation.ts";
 
 const USE = "src/use.ts";
 const API = "src/api.ts";
+
+test("a proven syntax-only holder binds through the shared model without inventing an index target", async () => {
+  const store = fakeCodeGraph([], []);
+  const navigation = createGraphNavigation(store, () => false);
+  const declarations = createDeclarationModel({ store, declarationsIn: async () => [
+    { name: "Holder", kind: "function", invoked: true, span: { start: { line: 1, column: 0 }, end: { line: 8, column: 1 } } },
+    { name: "send", kind: "method", invoked: true, span: { start: { line: 3, column: 2 }, end: { line: 3, column: 20 } }, container: { line: 1, column: 0 } },
+  ] });
+  const importedDeclarations = async () => new Map();
+  const binder = createCallBinder({ store, navigation, declarations, importedDeclarations, syntaxIn: async () => ({ receiverBindings: new Map(), callees: new Map() }), proofs: async () => ({ fields: [], locals: [] }), callablesIn: async () => [] });
+  const bindings = createCallBindings({ store, navigation, declarations, binder, importedDeclarations, origins: {} as ImportOrigins });
+  const answer = await bindings.ofReceiver({ link: "field", holds: { class: { path: API, symbol: "Holder", line: 1 } } }, "send", [], { file: USE, line: 24, column: 3 });
+  assert.equal(answer.declaration?.path, "Holder.send");
+  assert.equal(answer.target, undefined);
+  assert.equal((await bindings.ofReceiver({ link: "none" }, "send", [], { file: USE, line: 24, column: 3 })).declaration, undefined);
+});
 
 interface World {
   nodes: readonly FakeNode[];
@@ -45,8 +62,9 @@ async function bound(world: World, body: string, calls: readonly Pick<GraphUnres
   } as Pick<ImportOrigins, "origins" | "rootOrigins" | "rootBindings" | "receiverMethods"> as ImportOrigins;
   const imported = new Map(Object.entries(world.imports ?? {}).map(([local, id]) => [local, store.symbolsByIds([id as GraphNodeId])[0]!]));
   const importedDeclarations = async () => imported;
-  const binder = createCallBinder({ store, navigation, syntaxIn: async () => world.syntax ?? { receiverBindings: new Map(), callees: new Map() }, proofs: async () => ({ fields: [], locals: [] }), importedDeclarations, callablesIn: async (file) => world.callables?.[file] ?? [] });
-  const bindings = createCallBindings({ store, navigation, origins, binder, importedDeclarations });
+  const declarations = createDeclarationModel({ store, declarationsIn: async () => [] });
+  const binder = createCallBinder({ store, declarations, navigation, syntaxIn: async () => world.syntax ?? { receiverBindings: new Map(), callees: new Map() }, proofs: async () => ({ fields: [], locals: [] }), importedDeclarations, callablesIn: async (file) => world.callables?.[file] ?? [] });
+  const bindings = createCallBindings({ store, navigation, origins, binder, declarations, importedDeclarations });
   const [from] = store.symbolsByIds([body as GraphNodeId]);
   const file = from!.file;
   return bindings.boundCalls(calls.map((call) => ({ body: from!, reference: { from: from!.id, file, column: 4, candidates: [], ...call } })));

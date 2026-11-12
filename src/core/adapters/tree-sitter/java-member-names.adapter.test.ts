@@ -6,6 +6,16 @@ import { createJavaMemberNames } from "./java-member-names.adapter.ts";
 
 const read = (lines: readonly string[], path = "src/A.java", reader = createJavaMemberNames(createJavaParser)) => reader.memberNames({ path, content: lines.join("\n") });
 
+test("declarations retain method and constructor spans and their exact type containers", async () => {
+  const answer = await read(["class Box {", "  Box() {}", "  void run() {}", "  interface Port { void send(); }", "}"]);
+  assert.deepEqual(answer.declarations.map(({ name, kind, span, container }) => [name, kind, span.start, container]), [
+    ["Box", "method", { line: 2, column: 2 }, { line: 1, column: 0 }],
+    ["run", "method", { line: 3, column: 2 }, { line: 1, column: 0 }],
+    ["send", "method", { line: 4, column: 19 }, { line: 4, column: 2 }],
+  ]);
+  assert.ok(answer.declarations.every(({ invoked, span }) => invoked && span.end.column > span.start.column));
+});
+
 test("methods and fields of classes, interfaces, local and anonymous classes are names", async () => {
   assert.deepEqual((await read([
     "public class A {",
@@ -30,7 +40,7 @@ test("enum constants are names", async () => {
 test("a source that does not parse declares none", async () => {
   let created = 0;
   const reader = createJavaMemberNames(async () => (created += 1, createJavaParser()));
-  assert.deepEqual(await read(["class {"], "src/A.java", reader), { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] });
+  assert.deepEqual(await read(["class {"], "src/A.java", reader), { names: [], functionValueCalls: [], callables: [], declarations: [], receiverBindings: [], functionValues: [] });
   assert.equal(created, 1);
 });
 

@@ -16,13 +16,17 @@ explicit `no-extractor`, never "no impact". v1 covers Angular and Spring, and th
 
 | Kind | Contract | Example |
 |---|---|---|
-| Language | module syntax, statement syntax, decision syntax, test-file rule | TypeScript/JavaScript (compiler API), Java (tree-sitter) |
+| Language | B1 callable declarations and spans; module syntax, statement syntax, decision syntax, test-file rule | TypeScript/JavaScript (compiler API), Java (tree-sitter) |
 | Framework | entrypoints; injection and usage edges; configuration values; roots for unused files; resource declarations | Angular; Spring |
 | Protocol | call-site and operation matchers for the stitcher; HTTP routes of the handlers that implement a contract-generated interface | HTTP + OpenAPI, events (publisher/subscriber), gRPC (proto), GraphQL (SDL) |
 
 Protocols with a schema (OpenAPI, proto, SDL) fix the set of operations: the schema lists them, so that set is
 deterministic. Matching a call site to an operation still carries a confidence, and a call site that matches no
 operation is `unknown`. Pattern-based protocols (events, raw HTTP) are configured through `boundaries[]` data, not code.
+
+B1's `declarations` comes from the existing member-name parse, with exact spans and proven container positions;
+`callables` keeps its dispatch meaning. The shared declaration model joins syntax with index identities and containment
+([RFC-0027](0027-declaration-model.md), U1); family consumption follows in U2.
 
 ### HTTP routes declared in a generated interface
 

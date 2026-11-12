@@ -8,6 +8,8 @@ import type { CodeGraphReader, GraphSymbol, GraphUnresolvedReference } from "../
 import type { ImportOrigins, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
 import type { CallBinder, CallPlace, ReceiverProof } from "./call-binder.ts";
 import { ownMembersOf, placedBetween, type GraphNavigation } from "./graph-navigation.ts";
+import type { DeclarationModel, ModelDeclaration } from "./declaration-model.ts";
+import type { SymbolRef } from "../../domain/relations/relation.ts";
 
 /** A call the index left without a target: its body, and the reference the index or the syntax states for it. */
 export interface UnboundCall {
@@ -35,7 +37,7 @@ type Outside = Extract<ImportOrigin, { kind: "external" | "ambient" }>;
  */
 export type CallBinding =
   | { kind: "declaration"; target: GraphSymbol; link: "own-member" | "chain" | "import" | "file" | "declared-receiver" | "bound-receiver" | "overload" }
-  | { kind: "receiver"; proof: ReceiverProof; target?: GraphSymbol; outside?: true; candidates: readonly GraphSymbol[]; attributed: readonly GraphSymbol[] }
+  | { kind: "receiver"; proof: ReceiverProof; target?: GraphSymbol; declaration?: ModelDeclaration; outside?: true; candidates: readonly GraphSymbol[]; attributed: readonly GraphSymbol[] }
   | { kind: "outside"; form: "bare" | "chain"; origin: Outside }
   | { kind: "unbound"; form: "own" | "computed" | "bare" | "member" | "chain"; candidates: readonly GraphSymbol[]; attributed: readonly GraphSymbol[] }
   | DeclaredBinding;
@@ -85,6 +87,7 @@ export interface CallBindings {
 }
 
 export interface CallBindingsDeps {
+  declarations: DeclarationModel;
   store: CodeGraphReader;
   navigation: GraphNavigation;
   origins: ImportOrigins;
@@ -100,7 +103,7 @@ const PLAIN_CHAIN = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)+$/;
 
 const isOutside = (origin: ImportOrigin | undefined): origin is Outside => origin?.kind === "external" || origin?.kind === "ambient";
 
-export function createCallBindings({ store, navigation, origins, binder, importedDeclarations, inScope = () => true }: CallBindingsDeps): CallBindings {
+export function createCallBindings({ store, navigation, origins, binder, declarations, importedDeclarations, inScope = () => true }: CallBindingsDeps): CallBindings {
   const named = new Map<string, readonly GraphSymbol[]>();
   function namedDeclarations(name: string, from: string, values = false): readonly GraphSymbol[] {
     let found = named.get(name);
@@ -141,14 +144,20 @@ export function createCallBindings({ store, navigation, origins, binder, importe
 
   /** What a member call's receiver proof binds it to: the method the proof places, or the member the proven type has. */
   async function proven(proof: ReceiverProof, name: string, candidates: readonly GraphSymbol[], place: CallPlace): Promise<Extract<CallBinding, { kind: "receiver" }>> {
-    const typed = async (type: GraphSymbol | undefined) => {
-      if (type === undefined) return { attributed: [] };
-      const answer = await memberOfReceiver(type, name, place);
-      return { candidates: answer.candidates, ...(answer.target === undefined ? { attributed: answer.candidates } : { target: answer.target, attributed: [] }) };
+    const typed = async (type: GraphSymbol | undefined, holder?: SymbolRef) => {
+      if (type !== undefined) {
+        const answer = await memberOfReceiver(type, name, place);
+        return { candidates: answer.candidates, ...(answer.target === undefined ? { attributed: answer.candidates } : { target: answer.target, attributed: [] }) };
+      }
+      if (holder === undefined) return { attributed: [] };
+      const found = (await declarations.select(holder.path, holder.symbol)).filter(({ startLine, endLine }) => holder.line === undefined || startLine <= holder.line && holder.line <= endLine);
+      if (found.length !== 1 || found[0]!.symbol !== undefined) return { attributed: [] };
+      const declaration = await binder.memberOfDeclaration(found[0]!, name, place);
+      return { attributed: [], ...(declaration === undefined ? {} : { declaration }) };
     };
     if (proof.link === "member") return { kind: "receiver", proof, candidates, attributed: [], ...(proof.method === undefined ? {} : { target: proof.method }) };
     if (proof.link === "external") return { kind: "receiver", proof, candidates, attributed: [], outside: true };
-    if (proof.link === "field" || proof.link === "local") return "external" in proof.holds ? { kind: "receiver", proof, candidates, attributed: [], outside: true } : { kind: "receiver", proof, candidates, ...(await typed(proof.type)) };
+    if (proof.link === "field" || proof.link === "local") return "external" in proof.holds ? { kind: "receiver", proof, candidates, attributed: [], outside: true } : { kind: "receiver", proof, candidates, ...(await typed(proof.type, proof.holds.class)) };
     if (proof.link === "syntax" && proof.holds.kind === "literal") return { kind: "receiver", proof, candidates, attributed: [], outside: true };
     if (proof.link === "syntax" && proof.unspelled !== true && ["declared", "annotated", "constructed"].includes(proof.holds.kind)) return { kind: "receiver", proof, candidates, ...(await typed(proof.type)) };
     return { kind: "receiver", proof, candidates, attributed: [] };

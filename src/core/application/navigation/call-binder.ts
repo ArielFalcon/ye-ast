@@ -8,6 +8,8 @@ import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.t
 import type { DeclaredCallable, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { GraphNavigation } from "./graph-navigation.ts";
 import { provenCallsOf, provenKey, spelledKey, type ProvenCalls } from "./proven-calls.ts";
+import { branchesOf } from "../../domain/shared/declaration-tree.ts";
+import type { DeclarationModel, ModelDeclaration } from "./declaration-model.ts";
 
 /** What the relations prove a receiver holds: a field's or an `inject()` local's origin, and the member calls they prove. */
 export interface ReceiverProofs {
@@ -88,6 +90,8 @@ export interface CallPlace {
  * family reads the proof and its binding and may refuse it, never bind the call elsewhere.
  */
 export interface CallBinder {
+  /** A syntax holder's unique direct child, or the existing structural binding of an indexed holder. */
+  memberOfDeclaration(holder: ModelDeclaration, member: string, place: CallPlace): Promise<ModelDeclaration | undefined>;
   receiverOf(site: MemberCallSite): Promise<ReceiverProof>;
   /**
    * The member a call of `member` written at `place` binds to on a value whose type is `type` (ADR-0041 decision 4): the one
@@ -105,6 +109,7 @@ export interface CallBinder {
 }
 
 export interface CallBinderDeps {
+  declarations: DeclarationModel;
   store: CodeGraphReader;
   navigation: GraphNavigation;
   syntaxIn: (file: string) => Promise<ReceiverSyntax>;
@@ -118,7 +123,7 @@ export interface CallBinderDeps {
   callablesIn: (file: string) => Promise<readonly DeclaredCallable[]>;
 }
 
-export function createCallBinder({ store, navigation, syntaxIn, proofs, importedDeclarations, callablesIn }: CallBinderDeps): CallBinder {
+export function createCallBinder({ store, navigation, syntaxIn, proofs, importedDeclarations, callablesIn, declarations }: CallBinderDeps): CallBinder {
   let read: Promise<{ held: ReceiverProofs; calls: ProvenCalls }> | undefined;
   const proven = () => (read ??= proofs().then((held) => ({ held, calls: provenCallsOf(held.memberUses, held.externalUses) })));
 
@@ -188,8 +193,17 @@ export function createCallBinder({ store, navigation, syntaxIn, proofs, imported
     return placed.length === 1 ? placed[0] : undefined;
   }
 
-  return {
+  const binder: CallBinder = {
     receiverOf,
+    async memberOfDeclaration(holder, member, place) {
+      if (holder.symbol !== undefined) {
+        const target = await binder.memberOf(holder.symbol, member, place);
+        return target === undefined ? undefined : (await declarations.list(target.file)).find(({ symbol }) => symbol?.id === target.id);
+      }
+      const branch = branchesOf(await declarations.tree(holder.file)).find(({ declaration }) => declaration.id === holder.id);
+      const children = branch?.children.filter(({ declaration }) => declaration.name === member) ?? [];
+      return children.length === 1 ? children[0]!.declaration : undefined;
+    },
     async memberOf(type, member) {
       for (const declaring of above(type).filter((candidate) => isOwnerKind(candidate.kind))) {
         const own = navigation.methodsOf(declaring).filter((method) => method.name === member);
@@ -209,4 +223,5 @@ export function createCallBinder({ store, navigation, syntaxIn, proofs, imported
       return above(type).some((candidate) => owners.some((owner) => owner.id === candidate.id));
     },
   };
+  return binder;
 }
