@@ -22,6 +22,8 @@ const USAGE = "usage: node --import tsx scripts/corpus-gate.ts --corpus <manifes
 /** Repositories are disjoint across groups; queries within one group share an index and run after its init. */
 const DEFAULT_CONCURRENCY = 3;
 const REPO_PLACEHOLDER = /\{repo:([^}]+)\}/gu;
+/** In a trusted query, the workspace `init` declared, with each member at the absolute path of its clone. */
+const WORKSPACE_PLACEHOLDER = "{workspace}";
 const RUNNER_DIGEST = createHash("sha256").update(readFileSync(import.meta.filename)).digest("hex");
 
 export type GateFaultCode = "invalid-manifest" | "missing-revision" | "dependencies-differ" | "no-dependencies" | "no-cli-script" | "busy" | "git-failed";
@@ -43,7 +45,10 @@ const ManifestSchema = z.strictObject({
         repos: z.array(z.strictObject({ id: Id, path: z.string().min(1), sha: z.string().regex(/^[0-9a-f]{40}$/u) })).min(1),
         /** What `init --trust trusted` installs on clones of their own: at `launch`, with `--workspace` naming the members when there are any. */
         workspace: z.strictObject({ launch: Id, members: z.array(Id), gateways: z.array(z.unknown()).optional() }).optional(),
-        /** `trusted` queries run on the workspace's clones, every other one on clones no trust was ever declared for. */
+        /**
+         * `trusted` queries run on the workspace's clones, every other one on clones no trust was ever declared for; only a
+         * trusted query of a workspace with members may name `{workspace}`.
+         */
         queries: z.array(z.strictObject({ id: Id, family: Id, trusted: z.boolean().optional(), argv: z.array(z.string()).min(1) })).min(1),
       }),
     )
@@ -182,6 +187,7 @@ function readManifest(file: string): { manifest: Manifest; digest: string } {
     }
     for (const query of group.queries) {
       if (query.trusted === true && workspace === undefined) throw new GateFault("invalid-manifest", `${group.id}/${query.id}: trusted without a workspace`);
+      if (query.argv.includes(WORKSPACE_PLACEHOLDER) && (query.trusted !== true || workspace === undefined || workspace.members.length === 0)) throw new GateFault("invalid-manifest", `${group.id}/${query.id}: ${WORKSPACE_PLACEHOLDER} outside a trusted query of a workspace with members`);
       for (const [, id] of query.argv.join(" ").matchAll(REPO_PLACEHOLDER)) if (!repos.has(id as string)) throw new GateFault("invalid-manifest", `${group.id}/${query.id}: no repository ${id}`);
     }
   }
@@ -337,6 +343,7 @@ async function runQueries(context: Context, side: Revision, sideDirectory: strin
 
     const untrusted = cloneGroup(context, group, join(sideDirectory, "untrusted", group.id), environment);
     const trusted = group.workspace === undefined ? null : cloneGroup(context, group, join(sideDirectory, "trusted", group.id), environment);
+    let queryWorkspace: string | undefined;
     if (group.workspace !== undefined && trusted !== null) {
       const declared = ["init", "--trust", "trusted"];
       const argv = [...declared];
@@ -345,14 +352,17 @@ async function runQueries(context: Context, side: Revision, sideDirectory: strin
         mkdirSync(dirname(workspaceFile), { recursive: true });
         const members = group.workspace.members.map((id) => ({ path: `../${id}`, id }));
         writeFileSync(workspaceFile, `${JSON.stringify({ repos: members, gateways: group.workspace.gateways ?? [] }, null, 2)}\n`);
-        declared.push("--workspace", "{workspace}");
+        declared.push("--workspace", WORKSPACE_PLACEHOLDER);
         argv.push("--workspace", workspaceFile);
+        queryWorkspace = join(sideDirectory, "work", `${group.id}.query-workspace.json`);
+        const cloned = group.workspace.members.map((id) => ({ path: trusted.get(id) as string, id }));
+        writeFileSync(queryWorkspace, `${JSON.stringify({ repos: cloned, gateways: group.workspace.gateways ?? [] }, null, 2)}\n`);
       }
       await execute(`${group.id}/init`, "init", [...declared, `{repo:${group.workspace.launch}}`], [...argv, trusted.get(group.workspace.launch) as string]);
     }
     for (const query of group.queries) {
       const clones = query.trusted === true ? (trusted as Map<string, string>) : untrusted;
-      const argv = query.argv.map((argument) => argument.replace(REPO_PLACEHOLDER, (_, id: string) => clones.get(id) as string));
+      const argv = query.argv.map((argument) => (argument === WORKSPACE_PLACEHOLDER ? (queryWorkspace as string) : argument.replace(REPO_PLACEHOLDER, (_, id: string) => clones.get(id) as string)));
       await execute(`${group.id}/${query.id}`, query.family, query.argv, argv);
     }
     return { answers, timings };

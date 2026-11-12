@@ -11,8 +11,8 @@ const GIT_IDENTITY = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invali
 
 /**
  * A stand-in engine CLI: lists the repository's files, says whether `init` declared it trusted, echoes the git protocol
- * policy, refuses a workspace without repositories as the engine does, and prints its repository path reversed, a form
- * no normalization recognizes, as an engine that rewrites a path would.
+ * policy, refuses a workspace without repositories as the engine does, prints its repository path reversed, a form
+ * no normalization recognizes, as an engine that rewrites a path would, and the repository paths of a `--workspace` file.
  */
 function engineSource(extra: string): string {
   return `import { execFileSync } from "node:child_process";
@@ -30,7 +30,9 @@ if (command === "init") {
 } else {
   const files = execFileSync("git", ["ls-files"], { cwd: repo, encoding: "utf8" }).split("\\n").filter(Boolean);
   const trusted = existsSync(trustFile) && readFileSync(trustFile, "utf8").split("\\n").includes(repo);
-  console.log(JSON.stringify({ status: "complete", repo, reversed: [...repo].reverse().join(""), trusted, protocols: process.env.GIT_ALLOW_PROTOCOL, files: [...files, ${extra}] }));
+  const workspace = args.indexOf("--workspace");
+  const members = workspace === -1 ? undefined : JSON.parse(readFileSync(args[workspace + 1], "utf8")).repos.map((member) => member.path);
+  console.log(JSON.stringify({ status: "complete", repo, reversed: [...repo].reverse().join(""), trusted, protocols: process.env.GIT_ALLOW_PROTOCOL, members, files: [...files, ${extra}] }));
 }
 `;
 }
@@ -52,6 +54,7 @@ describe("corpus gate", () => {
   let corpus: string;
   let manifest: string;
   let parallelManifest: string;
+  let workspaceManifest: string;
   let store: string;
   const commits: Record<"base" | "same" | "adds" | "lockfile", string> = { base: "", same: "", adds: "", lockfile: "" };
 
@@ -100,6 +103,18 @@ describe("corpus gate", () => {
         { id: "second", repos: [{ id: "b", path: "../corpus/second", sha: secondSha }], queries: [{ id: "list", family: "files", argv: ["list", "{repo:b}"] }] },
       ],
     }));
+
+    workspaceManifest = join(root, "manifest", "workspace.json");
+    const workspaceGroup = (query: object) => ({
+      groups: [{
+        id: "w",
+        repos: [{ id: "app", path: "../corpus/app", sha: corpusSha }, { id: "b", path: "../corpus/second", sha: secondSha }],
+        workspace: { launch: "app", members: ["b"] },
+        queries: [query],
+      }],
+    });
+    writeFileSync(workspaceManifest, JSON.stringify(workspaceGroup({ id: "trace", family: "files", trusted: true, argv: ["list", "--workspace", "{workspace}", "{repo:app}"] })));
+    writeFileSync(join(root, "manifest", "untrusted-workspace.json"), JSON.stringify(workspaceGroup({ id: "trace", family: "files", argv: ["list", "--workspace", "{workspace}", "{repo:app}"] })));
   });
 
   after(() => rmSync(root, { recursive: true, force: true }));
@@ -167,6 +182,16 @@ describe("corpus gate", () => {
     assert.equal(report.counts.differing, 0);
     const answers = JSON.parse(readFileSync(join(report.candidate.answers, "answers.json"), "utf8")) as Answer[];
     assert.deepEqual(answers.map((answer) => answer.id), ["first/list", "second/list"]);
+  });
+
+  it("hands a trusted query the declared workspace with each member at its own clone, and refuses it elsewhere", async () => {
+    const { code, report } = await gateWith(workspaceManifest, "--base", commits.base, "--candidate", commits.same);
+    assert.equal(code, EXIT.pass);
+    const answers = JSON.parse(readFileSync(join(report.candidate.answers, "answers.json"), "utf8")) as Answer[];
+    const traced = answers.find((answer) => answer.id === "w/trace")?.stdout as { members: string[]; trusted: boolean };
+    assert.deepEqual([traced.trusted, traced.members.map((member) => member.split("/").slice(-3).join("/"))], [true, ["trusted/w/b"]]);
+    const refused = await gateWith(join(root, "manifest", "untrusted-workspace.json"), "--base", commits.base, "--candidate", commits.same);
+    assert.equal(refused.code, EXIT.fault);
   });
 
   it("refuses a concurrency that is not a positive integer", async () => {
