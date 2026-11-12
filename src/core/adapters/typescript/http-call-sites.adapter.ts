@@ -32,7 +32,7 @@ const UNDECIDABLE: Undecided = undecided("destination-undecidable");
 const RUN_TIME: Read = known({ kind: "value" });
 /** A class field the code assigns at run time, so no initializer states its value. */
 const ASSIGNED_AT_RUN_TIME = Symbol("assigned at run time");
-const WRITTEN_FIELDS = new WeakMap<ts.ClassDeclaration, ReadonlySet<string>>();
+const WRITTEN_FIELDS = new WeakMap<ts.ClassDeclaration, ReadonlyMap<string, readonly ts.Node[]>>();
 const VARIABLE_WRITES = new WeakMap<ts.Node, ReadonlyMap<string, VariableWrites>>();
 /** What one file declares at its top level, and the classes and enums it holds, as the reader needs them. */
 interface FileShape {
@@ -598,6 +598,7 @@ class Reader {
   private readonly explicitConstructions = new WeakMap<ts.ClassDeclaration, Promise<boolean>>();
   private valueSyntax: ReturnType<typeof requestValueSyntax> | undefined;
   private readonly stableBindings = new WeakMap<ts.Node, Promise<boolean>>();
+  private readonly constructorReading = new Set<ts.Expression>();
   private readonly importedWrites = new WeakMap<ts.SourceFile, Map<string, boolean>>();
   private readonly unsafeEncoder: boolean;
   private readonly fileOf: (from: string, specifier: string) => Promise<string | undefined>;
@@ -820,7 +821,7 @@ class Reader {
   /** The declaration a member read through a receiver runs: a gap when the dispatch is undecided, undefined when it runs no repository code. */
   private async memberCallee(shape: FileShape, call: ts.CallExpression, receiver: HeldClass & { virtual: boolean }, name: string, reading: ReadonlySet<ts.PropertyDeclaration>): Promise<Callee> {
     const gap: Callee = { gap: { cause: "dispatch-disagreement", evidence: [placeOf(shape, call)] } };
-    if (await this.assignedAbove(receiver, name)) return gap;
+    if (await this.assignedAbove(receiver, name)) return (await this.onceWrittenCallee(receiver, name)) ?? gap;
     const method = await this.inheritedMethod(receiver.shape, receiver.declaration, name, new Set());
     const overrides = receiver.virtual ? await this.overrides(receiver.declaration, name, new Set()) : [];
     if (method === "ambiguous" && overrides !== undefined && overrides.length === 0) {
@@ -837,6 +838,53 @@ class Reader {
     if (candidates.some((candidate) => candidate === undefined)) return gap;
     const held = candidates.filter((candidate) => candidate !== undefined);
     return held.length === 1 ? held[0] : { candidates: held };
+  }
+
+  /**
+   * What a function-typed field runs when the constructor of one class of the receiver's hierarchy writes it once, and
+   * nothing else does: the function its one value is, or the one a readable factory call returns. Undefined when the
+   * field is written otherwise, by a subclass, or from a value the snapshot cannot read.
+   */
+  private async onceWrittenCallee(receiver: HeldClass, name: string): Promise<Callee> {
+    if (await this.assignedBelow(receiver.declaration, name, new Set())) return undefined;
+    const seen = new Set<ts.ClassDeclaration>();
+    let writer: HeldClass | undefined;
+    for (let current: HeldClass | undefined = receiver; current !== undefined && !seen.has(current.declaration);) {
+      seen.add(current.declaration);
+      const member = memberNamed(current.declaration, name);
+      if (member !== undefined && !(ts.isPropertyDeclaration(member) && member.initializer === undefined)) return undefined;
+      if (constructorParameters(current.declaration).some((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name && ts.isParameterPropertyDeclaration(parameter, parameter.parent))) return undefined;
+      if (writes(current.declaration, name)) {
+        if (writer !== undefined) return undefined;
+        writer = current;
+      }
+      const base = baseClassName(current.declaration);
+      current = base === undefined ? undefined : await this.classOf(current.shape, base);
+    }
+    const value = writer === undefined ? undefined : constructorWrite(writer.declaration, name);
+    if (writer === undefined || value === undefined || this.constructorReading.has(value)) return undefined;
+    const written = unwrapped(value);
+    if (ts.isArrowFunction(written) || ts.isFunctionExpression(written)) return calleeOfFunction(writer.shape.source.fileName, written);
+    if (!ts.isCallExpression(written)) return undefined;
+    this.constructorReading.add(value);
+    try {
+      const factory = await this.factoryCallee(writer.shape, written);
+      if (factory === undefined || "gap" in factory || "candidates" in factory) return undefined;
+      const returned = returnedFunction(factory.body);
+      return returned === undefined ? undefined : calleeOfFunction(factory.file, returned);
+    } finally {
+      this.constructorReading.delete(value);
+    }
+  }
+
+  /** The declaration a constructor's factory call runs; a receiver that is a never-rewritten local alias of a field of `this` is that field. */
+  private async factoryCallee(shape: FileShape, call: ts.CallExpression): Promise<Callee> {
+    if (!ts.isPropertyAccessExpression(call.expression) || !ts.isIdentifier(call.expression.expression)) return this.summaryResolver.calleeOf(shape.source.fileName, call);
+    const local = lexicalScope(call).locals.get(call.expression.expression.text);
+    const aliased = local === undefined || appendsTo(local)?.length !== 0 ? undefined : unwrapped(local);
+    if (aliased === undefined || !ts.isPropertyAccessExpression(aliased) || aliased.expression.kind !== ts.SyntaxKind.ThisKeyword) return this.summaryResolver.calleeOf(shape.source.fileName, call);
+    const receiver = await this.receiverClass(shape, aliased);
+    return receiver === undefined ? undefined : this.memberCallee(shape, call, receiver, call.expression.name.text, new Set());
   }
 
   /**
@@ -1671,20 +1719,56 @@ function writes(declaration: ts.ClassDeclaration, name: string): boolean {
   return written.has(name) || written.has(ANY_FIELD);
 }
 
-/** The fields a class body writes through `this`, `ANY_FIELD` when it writes one it does not name. */
-function writtenFields(declaration: ts.ClassDeclaration): ReadonlySet<string> {
+/**
+ * The expression a class assigns to a field through `this` when that is its only write: one `=` statement at the top level
+ * of the constructor, which no earlier `return` can skip. Undefined for any other write, or for a write it cannot name.
+ */
+function constructorWrite(declaration: ts.ClassDeclaration, name: string): ts.Expression | undefined {
+  const written = writtenFields(declaration);
+  const own = written.get(name);
+  const body = declaration.members.find(ts.isConstructorDeclaration)?.body;
+  const [assignment] = own ?? [];
+  if (written.has(ANY_FIELD) || own?.length !== 1 || body === undefined || assignment === undefined) return undefined;
+  if (!ts.isBinaryExpression(assignment) || assignment.operatorToken.kind !== ts.SyntaxKind.EqualsToken || !ts.isExpressionStatement(assignment.parent) || assignment.parent.parent !== body) return undefined;
+  const skipped = body.statements.slice(0, body.statements.indexOf(assignment.parent)).some((statement) => containsReturn(statement));
+  return skipped ? undefined : assignment.right;
+}
+
+function calleeOfFunction(file: string, fn: ts.ArrowFunction | ts.FunctionExpression): { key: string; file: string; body: ts.Node } {
+  return { key: `${file}\0@${fn.getStart()}`, file, body: fn.body };
+}
+
+/** The one function a function body returns, when its single return states one. */
+function returnedFunction(body: ts.Node | undefined): ts.ArrowFunction | ts.FunctionExpression | undefined {
+  if (body === undefined) return undefined;
+  const owner = body.parent;
+  if (!ts.isArrowFunction(owner) && !ts.isFunctionExpression(owner) && !ts.isFunctionDeclaration(owner) && !ts.isMethodDeclaration(owner)) return undefined;
+  const returned = returnsOf(owner);
+  const [only] = returned;
+  const value = returned.length === 1 && only !== undefined ? unwrapped(only) : undefined;
+  return value !== undefined && (ts.isArrowFunction(value) || ts.isFunctionExpression(value)) ? value : undefined;
+}
+
+function containsReturn(node: ts.Node): boolean {
+  if (ts.isFunctionLike(node)) return false;
+  return ts.isReturnStatement(node) || ts.forEachChild(node, containsReturn) === true;
+}
+
+/** The fields a class body writes through `this`, with the nodes that write them; `ANY_FIELD` when it writes one it does not name. */
+function writtenFields(declaration: ts.ClassDeclaration): ReadonlyMap<string, readonly ts.Node[]> {
   const cached = WRITTEN_FIELDS.get(declaration);
   if (cached !== undefined) return cached;
-  const written = new Set<string>();
-  const target = (node: ts.Expression): void => {
-    if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) written.add(node.name.text);
-    if (ts.isElementAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) written.add(ts.isStringLiteralLike(node.argumentExpression) ? node.argumentExpression.text : ANY_FIELD);
+  const written = new Map<string, ts.Node[]>();
+  const record = (name: string, writer: ts.Node): void => void written.set(name, [...(written.get(name) ?? []), writer]);
+  const target = (node: ts.Expression, writer: ts.Node): void => {
+    if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) record(node.name.text, writer);
+    if (ts.isElementAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) record(ts.isStringLiteralLike(node.argumentExpression) ? node.argumentExpression.text : ANY_FIELD, writer);
   };
   const visit = (node: ts.Node): void => {
-    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) target(node.left);
-    if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) target(node.operand);
-    if (ts.isDeleteExpression(node)) target(node.expression);
-    if (ts.isCallExpression(node) && node.expression.getText() === "Object.assign" && node.arguments[0]?.kind === ts.SyntaxKind.ThisKeyword) written.add(ANY_FIELD);
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) target(node.left, node);
+    if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) target(node.operand, node);
+    if (ts.isDeleteExpression(node)) target(node.expression, node);
+    if (ts.isCallExpression(node) && node.expression.getText() === "Object.assign" && node.arguments[0]?.kind === ts.SyntaxKind.ThisKeyword) record(ANY_FIELD, node);
     ts.forEachChild(node, visit);
   };
   visit(declaration);

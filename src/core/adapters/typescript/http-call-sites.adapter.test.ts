@@ -1888,3 +1888,57 @@ test("a request whose path is rewritten by replace calls stays present with the 
     assert.deepEqual([site?.target.status, site?.diagnostic?.cause, others.length], ["unknown", "destination-undecidable", 0], pattern);
   }
 });
+
+const FIELD_HEAD = [
+  "import { HttpClient } from '@angular/common/http'",
+  "class Handler { createHandleError = (name = '') => (operation = 'op') => (error: unknown) => this.handle(name, operation); plain() { return opaque() } handle(a: string, b: string) { return a + b } }",
+];
+const FIELD_PAGE = "class Page { constructor(private api: Api) {} load() { return this.api.list('42') } }";
+
+function fieldOwner(constructorBody: string, extra = "", outside = "", field = "private readonly handlerError: any;"): { path: string; content: string }[] {
+  return [source("field.ts", [
+    ...FIELD_HEAD,
+    `class Api { ${field}`,
+    `constructor(private http: HttpClient, private handler: Handler) { ${constructorBody} }`,
+    "list(id: string) { return this.http.get('/owners/' + id).pipe(catchError(this.handlerError('list'))) }",
+    `${extra} }`,
+    FIELD_PAGE,
+    outside,
+  ].join("\n"))];
+}
+
+const unknownTwins = (found: readonly CallSite[]): number => found.filter((site) => site.target.status === "unknown" && site.diagnostic?.cause === "dispatch-disagreement").length;
+
+test("a function-valued field written once in the constructor from a readable factory is a decided callee", async () => {
+  const found = await reader.of(fieldOwner("const handler = this.handler; this.handlerError = handler.createHandleError('Api');"), "repo");
+  assert.equal(unknownTwins(found), 0);
+  assert.ok(found.some((site) => site.line === 7 && site.target.status === "complete" && "path" in site.target.value && site.target.value.path === "/owners/42"));
+});
+
+test("a field written once from an arrow in the constructor is that arrow", async () => {
+  const found = await reader.of(fieldOwner("this.handlerError = (operation: string) => (error: unknown) => operation;"), "repo");
+  assert.equal(unknownTwins(found), 0);
+  assert.ok(found.some((site) => site.line === 7 && site.target.status === "complete" && "path" in site.target.value && site.target.value.path === "/owners/42"));
+});
+
+test("a field with another write, a conditional write, an opaque factory or a write in a method stays undecided", async () => {
+  const cases: [string, string?, string?, string?][] = [
+    ["this.handlerError = this.handler.createHandleError('a'); this.handlerError = this.handler.createHandleError('b');"],
+    ["if (flag()) { this.handlerError = this.handler.createHandleError('a'); }"],
+    ["this.handlerError = opaqueFactory();"],
+    ["this.handlerError = this.handler.createHandleError('a');", "reset() { this.handlerError = opaqueFactory() }"],
+    ["setTimeout(() => { this.handlerError = this.handler.createHandleError('a'); });"],
+    ["if (flag()) return; this.handlerError = this.handler.createHandleError('a');"],
+    ["this.handlerError = this.handler.createHandleError('a');", "", "class Sub extends Api { constructor(h: HttpClient, g: Handler) { super(h, g); this.handlerError = opaqueFactory(); } }"],
+    ["this.handlerError = this.handler.createHandleError('a');", "", "class Sub extends Api { handlerError = opaqueFactory(); }"],
+    ["this.handlerError = this.handler.plain();"],
+    ["this.handlerError = this.handler.createHandleError('a');", "", "", "handlerError = opaqueFactory();"],
+  ];
+  for (const [body, extra, outside, field] of cases) assert.equal(unknownTwins(await reader.of(fieldOwner(body, extra, outside, field), "repo")) > 0, true, `${body} ${extra ?? ""} ${outside ?? ""} ${field ?? ""}`);
+});
+
+test("a field both a class and its base class write in their constructors stays undecided where the subclass reads it", async () => {
+  const outside = "class Sub extends Api { constructor(h: HttpClient, g: Handler) { super(h, g); this.handlerError = opaqueFactory(); } own(id: string) { return this.http.get('/s/' + id).pipe(this.handlerError('x')) } }\nclass Other { constructor(private s: Sub) {} go() { return this.s.own('1') } }";
+  const found = await reader.of(fieldOwner("this.handlerError = this.handler.createHandleError('a');", "", outside), "repo");
+  assert.ok(found.some((site) => site.line === 9 && site.target.status === "unknown" && site.diagnostic?.cause === "dispatch-disagreement"));
+});
