@@ -21,7 +21,7 @@ import type { AnswerBody, ConsequencesValue } from "../domain/contracts/conseque
 import type { Hop } from "../domain/contracts/consumer-flow.ts";
 import type { BranchCondition, ProducerVerdict } from "../domain/contracts/request-origin.ts";
 import type { Guard, UseOperation, Verdict } from "../domain/contracts/verdict.ts";
-import type { Cut, Evidence, FactInputs, Producer, SchemaVersion, SnapshotRef, UnknownReason } from "../domain/shared/fact.ts";
+import type { Cut, Evidence, FactInputs, Producer, SchemaVersion, ScopeSelection, SnapshotRef, UnknownReason } from "../domain/shared/fact.ts";
 import type { FactRead, WorkspaceValue } from "./workspace-queries.port.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "./workspace-impact-queries.port.ts";
 import type { DecisionValue } from "./decision-queries.port.ts";
@@ -124,6 +124,7 @@ export type ReadRecord = {
   schema: SchemaVersion;
   producer: Producer;
   inputs: FactInputs;
+  scopeSelection?: ScopeSelection;
   snapshot: SnapshotId;
   /** The read's own `evidence`, in its original order and multiplicity. */
   evidence: readonly EvidenceId[];

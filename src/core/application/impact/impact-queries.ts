@@ -1,3 +1,5 @@
+import { indexedDeclaration, type ModelDeclaration } from "../navigation/declaration-model.ts";
+import type { FrameworkPlugin } from "../../ports/framework-plugin.port.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
 import type { SourceTokens } from "../../ports/source-tokens.port.ts";
@@ -31,7 +33,7 @@ import { cutsCompleteness } from "../../domain/languages/uncovered.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { declarationSpan, sortedEngines, type Cut, type DeclaredConfig, type Evidence, type Fact, type FactBase, type Finding, type IndexOrigin, type SnapshotRef, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
-import { exportSelection, pathSelection, sortedGlobs, type PathSelection } from "../../domain/shared/scope.ts";
+import { WORKSPACE_SCOPE, exportSelection, pathSelection, sortedGlobs, type PathSelection } from "../../domain/shared/scope.ts";
 import { changedPaths, isWritten } from "../../domain/snapshot/live-export.ts";
 import { contentFingerprint, declaredScope, exportCuts, holdsDeclaredSource, isInMapScope } from "../../domain/map/entrypoint-map.ts";
 import type { Result } from "../../domain/shared/result.ts";
@@ -65,6 +67,7 @@ import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { syntaxRootCuts, distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey } from "../navigation/root-selection.ts";
 import { absentFileEntries, heldPaths, snapshotFiles } from "../navigation/snapshot-files.ts";
+import { scopeNotice } from "../snapshot/scope-selection.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
@@ -75,6 +78,7 @@ import { createRevisionSources } from "../snapshot/revision-sources.ts";
 import { createBaseReadings, withOutputs, type BaseReading, type ContradictedCall, type ContradictedCalls, type ReadingRequest } from "../snapshot/base-reading.ts";
 
 export interface ImpactQueriesDeps extends HeadReaderDeps {
+  frameworks?: readonly FrameworkPlugin[];
   /** The walk reads the change between two revisions, which no other family asks for. */
   vcs: Vcs & VcsChanges;
   angular: AngularDeclarationReader;
@@ -315,6 +319,8 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     return withScratch(deps, async (readScope): Promise<Answer> => {
       const preparedHead = await prepareCommit(changeDeps, repo, head.value, readScope, exported, { scope, trust }, signal);
       if (!preparedHead.ok) return preparedHead;
+      const notice = scopeNotice(scope, deps.matcher.matches, request[WORKSPACE_SCOPE] ? undefined : heldPaths(preparedHead.value.tree.export)?.filter(selected));
+      if (!notice.ok) return notice;
       const headTree = await preparedHead.value.extract(signal);
       if (!headTree.ok) return headTree;
       const preparedBase = mergeBase === head.value ? preparedHead : await prepareCommit(changeDeps, repo, mergeBase, readScope, exported, { scope, trust }, signal);
@@ -326,7 +332,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         prepared: preparedHead.value,
         hold: preparedHead.value.hold,
         selected,
-        base: (content, store = false) => (store ? changeReader.factBase(trust, snapshot, content, spec, scope, { kind: "full" }) : baseOfHead(content)),
+        base: (content, store = false) => ({ ...(store ? changeReader.factBase(trust, snapshot, content, spec, scope, { kind: "full" }) : baseOfHead(content)), ...(notice.value === undefined ? {} : { scopeSelection: notice.value }) }),
         open: () => changeReader.indexHead(preparedHead.value, readScope.directory, signal),
       };
       return readChange({ request, radius, head: reading, baseTree: baseTree.value, basePrepared: preparedBase.value, sameTree: baseTree === headTree, unreadable: JSON.stringify([mergeBase, head.value]) });
@@ -343,13 +349,16 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       const selected = pathSelection(scope, deps.matcher.matches);
       const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
       return withScratch(deps, async (readScope): Promise<Answer> => {
+        const notice = scopeNotice(scope, deps.matcher.matches, request[WORKSPACE_SCOPE] ? undefined : heldPaths(tree.export)?.filter(selected));
+        if (!notice.ok) return notice;
         const liveTree = await held.extract(signal);
         if (!liveTree.ok) return liveTree;
         const preparedBase = await prepareCommit(changeDeps, repo, mergeBase, readScope, exported, { scope: declaredScope(request.scope), trust: "trusted" }, signal);
         if (!preparedBase.ok) return preparedBase;
         const baseTree = await preparedBase.value.extract(signal);
         if (!baseTree.ok) return baseTree;
-        const reading = { ...headReader.liveReading(tree, liveTree.value, "trusted", scope, selected, head, repoId, spec), prepared: preparedLive(held), hold: held.hold };
+        const liveReading = headReader.liveReading(tree, liveTree.value, "trusted", scope, selected, head, repoId, spec);
+        const reading = { ...liveReading, base: (content: string, store?: boolean) => ({ ...liveReading.base(content, store), ...(notice.value === undefined ? {} : { scopeSelection: notice.value }) }), prepared: preparedLive(held), hold: held.hold };
 
         const changed = changedPaths(baseTree.value.export.files, tree.export.files).filter((path) => !isEngineConfiguration(path));
         const [before, after] = [await readScope.directory(), await readScope.directory()];
@@ -665,16 +674,27 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const typedReferences = input.typed === undefined ? undefined : typedReferencesOf(store, unresolved, input.typed);
   const originCalls = targets === undefined ? undefined : input.reading.originCalls(targets);
   const contradictions = targets === undefined ? undefined : input.reading.contradictedCalls(targets);
-  const { inbound, walk, attributed, cuts: contradictedCuts } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls, contradictions);
+  const reverse = targets === undefined ? undefined : input.reading.reverseCalls(targets);
+  const syntax = reverse === undefined ? undefined : await reverse.intoDeclarations(selection.syntaxSeeds.map(({ symbol }) => symbol), input.signal);
+  const syntaxCallers = new Map<string, import("./inbound-edges.ts").InboundEdge[]>();
+  for (const call of syntax?.callers ?? []) {
+    const found = syntaxCallers.get(call.declaration.id) ?? [];
+    const prior = found.find((edge) => edge.from.id === call.from.id && edge.basis === (call.kind === "references" ? "reference" : "call"));
+    if (prior === undefined) found.push({ from: call.from, confidence: 1, lines: [call.line], basis: call.kind === "references" ? "reference" : "call", derivation: "proven", hasCall: call.kind !== "references" });
+    else prior.lines = [...new Set([...prior.lines, call.line])].sort((a, b) => a - b);
+    syntaxCallers.set(call.declaration.id, found);
+  }
+  const syntaxWalk = { seeds: selection.syntaxSeeds.map(({ symbol }) => symbol), callers: syntaxCallers };
+  const { inbound, walk, attributed, cuts: contradictedCuts } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls, contradictions, syntaxWalk);
 
-  const walked = walk.reached.map(({ symbol }) => symbol);
+  const walked = walk.reached.flatMap(({ symbol }) => indexedDeclaration(symbol) ?? []);
   const reachedIds = new Set(walked.map((symbol) => symbol.id));
   /** Both proofs of a known target: an admitted joined settlement and an import that names something outside. */
   const knownPlaces = new Set([...(input.proofs?.external ?? []), ...(typedReferences?.settled ?? [])]);
   const unread = found.flatMap((finding): UnreadRelation[] => (finding.status === "unknown" ? finding.evidence.slice(0, 1).map(({ path, line }) => ({ path, line, reason: finding.reason })) : []));
 
   const cuts: Cut[] = [
-    ...syntaxRootCuts(selection.syntaxSeeds),
+    ...(syntax === undefined ? syntaxRootCuts(selection.syntaxSeeds) : syntax.cuts),
     ...walk.cuts,
     ...input.relationCuts ?? [],
     ...unreadTypeReferenceCuts(seeds, selection.removalHolders, input.reading),
@@ -730,7 +750,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
  * symbol depends on, the walk runs again, because a bound it frees, or an edge it moves, can read edges no earlier walk
  * read. `attributed` holds the unbound written calls attributed to a symbol it reached.
  */
-async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = [], reverse?: ReverseCalls, originCalls?: OriginCalls, contradictions?: ContradictedCalls): Promise<{ inbound: InboundEdges; walk: Walk; attributed: readonly AttributedCall[]; cuts: readonly Cut[] }> {
+async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = [], reverse?: ReverseCalls, originCalls?: OriginCalls, contradictions?: ContradictedCalls, syntax?: { seeds: readonly ModelDeclaration[]; callers: ReadonlyMap<string, readonly import("./inbound-edges.ts").InboundEdge[]> }): Promise<{ inbound: InboundEdges; walk: Walk; attributed: readonly AttributedCall[]; cuts: readonly Cut[] }> {
   const attributed: AttributedCall[] = [];
   const contradictedByEdge = new Map<string, ContradictedCall>();
   const contradicted: ContradictedCall[] = [];
@@ -772,10 +792,10 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
   const cuts = (): readonly Cut[] => contradictedCallCuts(contradicted);
   for (;;) {
     const inbound = build({ dropped, into: new Map([...into].map(([id, edges]) => [id, [...edges.values()]])), settled });
-    const walk = walkImpact(seeds, inbound, budget);
+    const walk = walkImpact(seeds, inbound, budget, syntax);
     if (targets === undefined || signal?.aborted) return { inbound, walk, attributed, cuts: cuts() };
     const fresh = inbound.followed().filter(({ edge }) => !checked.has(edgeKey(edge)));
-    const reached = [...seeds, ...walk.reached.map(({ symbol }) => symbol)].filter((symbol) => !probed.has(symbol.id));
+    const reached = [...seeds, ...walk.reached.flatMap(({ symbol }) => indexedDeclaration(symbol) ?? [])].filter((symbol) => !probed.has(symbol.id));
     if (fresh.length === 0 && reached.length === 0) return { inbound, walk, attributed, cuts: cuts() };
     for (const { edge } of fresh) checked.add(edgeKey(edge));
     for (const symbol of reached) probed.add(symbol.id);

@@ -219,6 +219,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   };
   const unmodelled = staged<UnmodelledConstructsReader>({ extract: async (sources) => createJavaRecordsReader(await javaParser()).extract(sources) }, { extract: "java-records" });
   const impactDeps: ImpactQueriesDeps = {
+    frameworks,
     vcs,
     scratch,
     holds,
@@ -282,6 +283,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     sourceSelection: isWritten,
   };
   const bareOutline = createOutlineQueries({
+    frameworks,
     ...headDeps,
     moduleReader,
     unmodelled,
@@ -317,6 +319,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   };
   const operation = createWorkspaceReadOperation(workspaceDeps);
   const bareTrace = createTraceQueries({
+    frameworks,
     workspace: operation,
     holds,
     ...snapshotCache,

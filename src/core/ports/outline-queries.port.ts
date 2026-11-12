@@ -1,3 +1,4 @@
+import type { ScopeFault } from "./scope-fault.port.ts";
 import type { OutlineValue } from "../domain/outline/outline-fact.ts";
 import type { Fact } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
@@ -39,7 +40,7 @@ export interface TopLevelLineFault {
   }[];
 }
 
-export type OutlineFault = VcsFault | LiveFault | UnknownSymbolFault | TopLevelLineFault;
+export type OutlineFault = ScopeFault | VcsFault | LiveFault | UnknownSymbolFault | TopLevelLineFault;
 
 export interface OutlineQueries {
   /**

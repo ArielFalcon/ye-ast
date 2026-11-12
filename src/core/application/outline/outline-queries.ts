@@ -24,7 +24,7 @@ import { createBaseReadings, withOutputs, type BaseReadingDeps } from "../snapsh
 import { absentFileEntries, heldPaths, snapshotFiles } from "../navigation/snapshot-files.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 
-export interface OutlineQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, "typeBindings" | "checkerInputs" | "declaredOutputs"> {
+export interface OutlineQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, "typeBindings" | "checkerInputs" | "declaredOutputs" | "frameworks"> {
   /** Version of each engine every operation runs on, by package name. */
   engines: Readonly<Record<string, string>>;
   /** The reader of every language's module statements. */
@@ -98,7 +98,9 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
             ...read.unheld.map((file) => unheldCut(file, held)),
             ...unmodelled.map((file) => fileCut("no-extractor", file, "unmodelled")),
           ];
-          return { ok: true, value: withCuts(withOutputs(head.base(content, true), typed?.outputs), read, cuts, asserted) };
+          const base = withOutputs(head.base(content, true), typed?.outputs);
+          const bindingEvidence = (await Promise.all(covered.map((file) => reading.declarations.list(file)))).flatMap((nodes) => nodes.flatMap(({ bindingEvidence }) => bindingEvidence ?? []));
+          return { ok: true, value: withCuts({ ...base, evidence: [...base.evidence, ...bindingEvidence] }, read, cuts, asserted) };
         } finally {
           store.close();
         }

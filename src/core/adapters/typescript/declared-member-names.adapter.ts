@@ -4,7 +4,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredCallable, DeclaredDeclaration, DeclaredMemberNames, DeclaredMemberNamesReader, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import { annotated, isFunctionValueNode, localReceivers } from "./function-value-calls.ts";
 import type { SourcePosition, SourceSpan } from "../../domain/shared/owning-body.ts";
-import { hasModifier, isStatic, lineOf, unwrapped } from "./syntax.ts";
+import { hasModifier, isStatic, lineOf, unwrapped, propertyNameText } from "./syntax.ts";
 import { sourceTree } from "./source-tree.ts";
 import { defaultExportOf } from "./import-bindings.ts";
 
@@ -33,6 +33,7 @@ function derive(file: SourceFile): DeclaredMemberNames {
   const calls: SyntaxCall[] = [];
   const initializedFields: NonNullable<DeclaredMemberNames["initializedFields"]>[number][] = [];
   const owners: SyntaxCall["owners"][number][] = [];
+  const literalHolders = new Map<ts.ObjectLiteralExpression, ts.VariableDeclaration | ts.PropertyDeclaration | ts.PropertyAssignment>();
   const callable = (node: ts.FunctionDeclaration | ts.MethodDeclaration | ts.MethodSignature, overridable: boolean): void => {
     if (node.name === undefined) return;
     const body = !ts.isMethodSignature(node) && node.body !== undefined;
@@ -49,12 +50,24 @@ function derive(file: SourceFile): DeclaredMemberNames {
     const { line, character } = tree.getLineAndCharacterOfPosition(at);
     return { line: line + 1, column: character };
   };
-  const declare = (node: ts.Node, name: string, kind: DeclaredDeclaration["kind"]): void => {
+  const declare = (node: ts.Node, name: string, kind: DeclaredDeclaration["kind"], literal?: ts.ObjectLiteralExpression, bound = true): void => {
     let parent: ts.Node | undefined = node.parent;
-    while (parent !== undefined && !ts.isClassLike(parent) && !ts.isInterfaceDeclaration(parent) && !ts.isFunctionLike(parent)) parent = parent.parent;
-    declarations.push({ name, kind, invoked: true, span: { start: positionOf(node.getStart(tree)), end: positionOf(node.getEnd()) }, ...(parent === undefined ? {} : { container: positionOf(parent.getStart(tree)) }) });
+    while (parent !== undefined && !ts.isClassLike(parent) && !ts.isInterfaceDeclaration(parent) && !ts.isFunctionLike(parent) && !ts.isObjectLiteralExpression(parent)) parent = parent.parent;
+    const holder = literal === undefined || !bound ? undefined : literalHolders.get(literal);
+    const container = literal === undefined ? parent : holder ?? literal;
+    declarations.push({ name, kind, invoked: kind !== "object", span: { start: positionOf(node.getStart(tree)), end: positionOf(node.getEnd()) }, ...(container === undefined ? {} : { container: positionOf(container.getStart(tree)) }), ...(holder === undefined ? {} : { binding: positionOf(holder.getStart(tree)) }) });
   };
   const visit = (node: ts.Node): void => {
+    if (ts.isObjectLiteralExpression(node)) {
+      let value: ts.Node = node;
+      while (ts.isExpression(value.parent) && unwrapped(value.parent) === node) value = value.parent;
+      const holder = value.parent;
+      if ((ts.isVariableDeclaration(holder) || ts.isPropertyDeclaration(holder) || ts.isPropertyAssignment(holder)) && holder.initializer === value && propertyName(holder.name) !== undefined) {
+        literalHolders.set(node, holder);
+        const outer = ts.isPropertyAssignment(holder) && ts.isObjectLiteralExpression(holder.parent) ? holder.parent : undefined;
+        declare(holder, propertyName(holder.name)!, "object", outer);
+      }
+    }
     if (isFunctionValueNode(node)) functionValues.push({ start: positionOf(node.getStart(tree)), end: positionOf(node.getEnd()) });
     if (ts.isDecorator(node)) {
       let scope: ts.Node | undefined = node.parent;
@@ -111,6 +124,12 @@ function derive(file: SourceFile): DeclaredMemberNames {
       declare(node, node.name.getText(tree), "method");
     }
     if ((ts.isGetAccessor(node) || ts.isSetAccessor(node)) && ts.isClassLike(node.parent)) declare(node, node.name.getText(tree), "accessor");
+    const property = ts.isMethodDeclaration(node) || ts.isGetAccessor(node) || ts.isSetAccessor(node) ? node :
+      (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && ts.isPropertyAssignment(node.parent) ? node.parent : undefined;
+    if (property !== undefined && ts.isObjectLiteralExpression(property.parent)) {
+      const name = propertyName(property.name);
+      declare(node, name ?? property.name.getText(tree), ts.isGetAccessor(node) || ts.isSetAccessor(node) ? "accessor" : "method", property.parent, name !== undefined);
+    }
     if (ts.isObjectLiteralExpression(node)) for (const property of node.properties) if (!ts.isSpreadAssignment(property)) add(property.name);
     if (ts.isClassLike(node)) for (const member of node.members) if (!isDeclareOnly(member)) add(member.name);
     if (ts.isConstructorDeclaration(node)) for (const parameter of node.parameters) if (ts.isParameterPropertyDeclaration(parameter, node)) add(parameter.name);
@@ -135,6 +154,10 @@ function derive(file: SourceFile): DeclaredMemberNames {
   };
   visit(tree);
   return { names: [...names].sort(compareText), ...localReceivers(tree), callables, declarations, calls, functionValues, initializedFields };
+}
+
+function propertyName(name: ts.PropertyName | ts.BindingName): string | undefined {
+  return ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name) ? undefined : propertyNameText(name);
 }
 
 /** The names a module re-exports or exports under another name, without the ones marked type-only. */

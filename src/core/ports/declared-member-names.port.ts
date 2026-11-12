@@ -30,7 +30,7 @@ export interface DeclaredMemberNames {
 
 export interface DeclaredDeclaration {
   name: string;
-  kind: "method" | "function" | "accessor" | "initializer" | "anonymous-class";
+  kind: "method" | "function" | "accessor" | "initializer" | "anonymous-class" | "object";
   span: SourceSpan;
   invoked: boolean;
   /** A proven enclosing declaration, by its source position. */
@@ -72,6 +72,8 @@ export interface ReceiverBinding {
  * binds `type` where it is written, so neither an import nor a top-level declaration of the file names it.
  */
 export type ReceiverValue =
+  | { kind: "object"; line: number; column: number }
+  | { kind: "token"; name: string; line: number; column: number }
   | { kind: "literal"; type: "RegExp" | "Array" | "String" }
   /** The value a call returns, `name` the last name of its callee, at the place the call starts. */
   | { kind: "returned"; name: string; line: number; column: number }
@@ -131,7 +133,7 @@ export interface DeclaredMemberNamesReader {
 
 /** A written call and the enclosing declarations that can own its execution, outermost first. */
 export interface SyntaxCall {
-  kind: "calls" | "instantiates";
+  kind: "calls" | "instantiates" | "references";
   line: number;
   column: number;
   name: string;

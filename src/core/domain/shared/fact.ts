@@ -4,7 +4,7 @@ import { compareText } from "./code-node.ts";
 export type SchemaVersion = `${number}.${number}.${number}`;
 
 /** The schema version of every fact this build produces. */
-export const SCHEMA: SchemaVersion = "0.22.0";
+export const SCHEMA: SchemaVersion = "0.23.0";
 
 export type SnapshotRef =
   | { repo: string; kind: "sha"; sha: string }
@@ -216,12 +216,18 @@ export function boundCut(kind: WalkBoundKind, at: string, limit: number): Cut {
   return { kind, at: [at], limit, reason: kind, reach: ANYTHING };
 }
 
+export interface ScopeSelection {
+  unmatchedIncludes: readonly string[];
+  selectedFiles: number;
+}
+
 export interface FactBase {
   schema: SchemaVersion;
   snapshot: SnapshotRef;
   producer: Producer;
   inputs: FactInputs;
   evidence: readonly Evidence[];
+  scopeSelection?: ScopeSelection;
 }
 
 export interface CompleteFact<T> extends FactBase {
@@ -251,8 +257,8 @@ export type Fact<T> = CompleteFact<T> | PartialFact<T> | UnknownFact;
 export type FactProvenance = (FactBase & { status: "complete" }) | (FactBase & { status: "partial"; cuts: readonly [Cut, ...Cut[]] }) | UnknownFact;
 
 export function provenanceOf<T>(fact: Fact<T>): FactProvenance {
-  const { schema, snapshot, producer, inputs, evidence } = fact;
-  const base = { schema, snapshot, producer, inputs, evidence };
+  const { schema, snapshot, producer, inputs, evidence, scopeSelection } = fact;
+  const base = { schema, snapshot, producer, inputs, evidence, ...(scopeSelection === undefined ? {} : { scopeSelection }) };
   if (fact.status === "unknown") return { ...base, status: "unknown", reason: fact.reason };
   if (fact.status === "partial") return { ...base, status: "partial", cuts: fact.cuts };
   return { ...base, status: "complete" };

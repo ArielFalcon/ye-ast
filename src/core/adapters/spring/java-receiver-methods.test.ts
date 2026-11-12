@@ -324,3 +324,23 @@ test("a method whose repository contract is reached through a wildcard import is
   ]);
   assert.deepEqual(answers, [{ kind: "unknown" }]);
 });
+
+test("references select only a unique member or constructor without using invocation arity", async () => {
+  const unique = java("Target.java", ["package app;", "class Target {", "  Target(String x) {}", "  void save(String x) {}", "}"]);
+  const overloaded = java("Target.java", ["package app;", "class Target {", "  Target(String x) {}", "  Target() {}", "  void save(String x) {}", "  void save() {}", "}"]);
+  assert.deepEqual(await methodAt([unique, use("consume(target::save)", [], "Target target")], "save", undefined, "target::save"), method(unique, 4));
+  assert.deepEqual(await methodAt([unique, use("consume(Target::new)", [], "")], "Target", undefined, "Target::new"), method(unique, 3));
+  assert.deepEqual(await methodAt([unique, use("consume(Target::save)", [], "")], "save", undefined, "Target::save"), method(unique, 4));
+  const self = use("consume(this::save)", ["  void save(String x) {}"], "");
+  assert.deepEqual(await methodAt([self], "save", undefined, "this::save"), method(self, 5));
+  assert.deepEqual(await methodAt([overloaded, use("consume(target::save)", [], "Target target")], "save", undefined, "target::save"), { kind: "unproven", candidates: [place(overloaded, 5), place(overloaded, 6)] });
+  assert.deepEqual(await methodAt([overloaded, use("consume(Target::new)", [], "")], "Target", undefined, "Target::new"), { kind: "unproven", candidates: [place(overloaded, 3), place(overloaded, 4)] });
+});
+
+test("constructor references preserve private and package accessibility", async () => {
+  const hidden = java("Target.java", ["package app;", "public class Target {", "  private Target(String x) {}", "}"]);
+  const packageLocal = java("other/Target.java", ["package app.other;", "public class Target {", "  Target(String x) {}", "}"]);
+  const caller = use("consume(Target::new)", [], "");
+  assert.deepEqual(await methodAt([hidden, caller], "Target", undefined, "Target::new"), { kind: "unproven" });
+  assert.deepEqual(await methodAt([packageLocal, use("consume(app.other.Target::new)", [], "")], "Target", undefined, "app.other.Target::new"), { kind: "unproven", candidates: [] });
+});

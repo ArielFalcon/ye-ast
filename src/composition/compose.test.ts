@@ -671,7 +671,7 @@ test("a trace over a real index charges an anonymous callback to its encloser, d
   const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/flow.ts", symbol: "run" }] });
 
   assert.ok(answer.ok);
-  assert.equal(answer.value.status, "complete");
+  assert.equal(answer.value.status, "complete", JSON.stringify(answer));
   assert.deepEqual(answer.value.status === "complete" && answer.value.value.steps, [{
     id: 0, depth: 0, file: "src/flow.ts", symbol: "run", kind: "function", line: 1, endLine: 6,
     leaves: [{ symbol: "helper", file: "src/flow.ts", start: 7, end: 9 }, { symbol: "named", file: "src/flow.ts", start: 3, end: 3, deferred: true }],
@@ -1332,7 +1332,7 @@ test("a trace over a real index roots at a property whose initializer makes call
   assert.ok(stamp.ok && stamp.value.status === "complete");
   assert.deepEqual(stamp.value.value.steps.map(({ symbol, external }) => ({ symbol, external })), [{ symbol: "stamp", external: [{ kind: "global", names: ["Date.now"] }] }]);
   assert.ok(range.ok && range.value.status === "complete");
-  assert.deepEqual(range.value.value.steps.map(({ symbol }) => symbol), ["submitForm"]);
+  assert.deepEqual(range.value.value.steps.map(({ symbol }) => symbol), ["action"]);
   assert.ok(!label.ok && label.fault.kind === "unknown-symbol");
 });
 
@@ -1768,14 +1768,14 @@ test("callers and impact over a real index never count a call through a paramete
   assert.deepEqual(symbols(change), ["callback"]);
 });
 
-test("callers over a range inside a property initializer still seeds the class that holds it", async () => {
+test("callers over a range inside a written callback selects that declaration by place", async () => {
   commitPage();
   const { impact } = composeQueries({ scratchRoot });
 
   const answer = await impact.callers({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/page.ts", start: 9, end: 11 }] });
 
   assert.ok(answer.ok && answer.value.status !== "unknown");
-  assert.deepEqual(answer.value.value.seeds.map(({ symbol, basis }) => ({ symbol, basis })), [{ symbol: "Page", basis: "lines" }]);
+  assert.deepEqual(answer.value.value.seeds.map(({ symbol, basis }) => ({ symbol, basis })), [{ symbol: "action", basis: "lines" }]);
 });
 
 test("a trace over a real index names each candidate of the call's runtime by its file and dotted containment path, a top-level one by its name", async () => {
@@ -2016,7 +2016,7 @@ test("inventory respects deferred values and preserves an index-declared functio
     assert.ok(answer.ok && answer.value.status !== "unknown", `${name}: ${JSON.stringify(answer)}`);
     if (name.includes("iife")) assert.equal(answer.value.status, "partial", `${name}: ${JSON.stringify(answer)}`);
     const names = answer.value.value.steps.flatMap((step) => step.external ?? []).flatMap((leaf) => leaf.names);
-    assert.equal(names.includes("[1].map"), immediate, name);
+    assert.equal(names.includes("[1].map"), immediate, `${name}: ${JSON.stringify(answer)}`);
   }
 });
 

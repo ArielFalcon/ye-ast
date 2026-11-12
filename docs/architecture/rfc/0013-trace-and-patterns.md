@@ -1013,3 +1013,12 @@ The 14-command differential (map, impact, callers, importers and outline) is byt
 exit code. Every source read is pinned; the source implementation adds no stored SCHEMA version.
 
 Final Node 24.22.2 `npm run check`: exit 0; typecheck and architecture pass; 3,741 tests pass, 0 fail. Evidence: `/tmp/ye-ast-trace.jKk16G/all-five-check-complete.log`.
+
+
+### Declaration-model continuations
+
+A receiver proved by its single initializer may reach a model declaration not held by the index. The existing binder
+owns that selection; trace reads its reconciled body and places effects from the same model, without synthesizing an
+index identity. Unproved or replaceable receivers retain cuts. A written Java method or constructor reference reaches
+its unique proven declaration as a deferred `reference`, never as evidence that the method executes; ambiguous
+signatures and unread heritage remain cuts.

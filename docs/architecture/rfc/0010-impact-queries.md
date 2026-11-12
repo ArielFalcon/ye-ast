@@ -690,3 +690,10 @@ Unresolved type occurrences use the existing name-based reverse frontier, so an 
 the answer partial. Unread sources and an incomplete source universe retain uncertainty; the absent-stage cut is
 removed only for the registered Java reader. No dispatch selection changes. B4 remains a whole-snapshot slot: a changed
 source invalidates the stage, while a repeated snapshot reuses its retained output.
+
+
+### Written declaration references
+
+A syntax-only declaration target reads its first reverse callers through the shared binder and `intoDeclarations`.
+Later hops use the existing indexed walk; the first hop obeys the same depth, fan-in and expansion bounds. Written Java
+method/constructor references use `basis: reference` and prove a dependency without proving execution.

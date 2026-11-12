@@ -204,7 +204,9 @@ more than one declaration in one file is an **ambiguity fault** naming every pla
 index-only overload sets keep the query protocol's declaration-set selection; the member binder still selects only
 what its existing signature rule proves.
 
-Kinds: `method`, `function`, `accessor`, `initializer`, `anonymous-class`, plus the index's own kinds unchanged.
+Kinds: `method`, `function`, `accessor`, `initializer`, `anonymous-class`, and `object` for a literal's named holder,
+plus the index's own kinds unchanged. An object holder joins an indexed variable or field when present and supplies
+containment; a syntax-only object holder is not an execution body.
 
 ```ts
 // src/core/ports/declared-member-names.port.ts — added; `callables` keeps its dispatch meaning
@@ -715,3 +717,36 @@ against a finding. Where a finding had two parts, the response names the part ea
   language pack names a library.
 - A Java declaration's written types are references to those types' declarations (B4's Java step), and a Java type target
   stays `partial` until that step reads them.
+
+
+## Implemented declaration continuations
+
+Object-literal holders and callable members enter B1 from the same retained source tree. Literal containment supplies
+nested paths; a returned literal remains unbound until a framework contribution proves its holder. Object holders do
+not become execution bodies. Initializer receiver proof preserves the existing lexical, private-field and non-escape
+guards, rejects later stores, and recognizes Angular injection through its existing import-identity helper. It does
+not infer an arbitrary factory's result or relax provider replacement uncertainty.
+
+The one framework registry includes the signals-store member contribution. It prepares project evidence once per
+reading, requires the nearest manifest dependency and the file's runtime imports, and supplies source-position member
+claims for `signalStore`/`withMethods`. Async/generator factories, conditional or multiple returns and dynamic keys do
+not establish membership. Binding evidence records the framework and feature occurrence. Conflicting holders leave
+no path and retain both claims. The declaration-model retention key includes the contributions.
+
+Trace accepts model declarations without fabricating graph handles, retains its existing indexed dispatch path and
+uses the same budget/seen traversal for both populations. Effects use the model's bodies and reconciled calls too.
+Reverse lookup includes matched unresolved calls as well as written-only/deferred calls; the existing binder decides
+both. Syntax targets obtain their first callers through `intoDeclarations`, then use the unchanged indexed walk with
+normal depth, fan-in, expansion and seed provenance rules. A missing reverse binding stage remains explicit partial.
+
+Java method and constructor references are written `references`. Static selection uses the same held Java hierarchy
+and receiver resolver, with a unique accessible declaration and no invocation-arity guess. Unknown hierarchy,
+overloads and multiple constructors retain cuts. Trace marks selected references deferred with `via: reference`;
+callers uses `basis: reference`. Dispatch and its vetoes are unchanged.
+
+The same plugin recognizes the `rxMethod` runtime export of `@ngrx/signals/rxjs-interop` as a deferred callable value
+inside a selected `withMethods` literal. Its contribution supplies that declaration from the held syntax; generic B1
+does not guess that a call expression returns a function. Trace reads only the deferred callback calls of that value,
+not its factory initialization as if it ran again. The fixed-source store probe reaches `setListPage`, `loadArticles`,
+`ArticlesService.query` and `ApiService.get`; HTTP effects remain explicit cuts where the injected API URL token is
+not proven. This is an acceptance limit, not a complete URL claim.

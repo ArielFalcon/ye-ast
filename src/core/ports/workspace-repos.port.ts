@@ -1,3 +1,4 @@
+import type { ScopeFault } from "./scope-fault.port.ts";
 import type { Entrypoint } from "../domain/entrypoints/entrypoint.ts";
 import type { CallSite, UnresolvedCallSite } from "../domain/topology/call-site.ts";
 import type { WorkspaceRepositoryDeclaration } from "../domain/topology/workspace-manifest.ts";
@@ -54,4 +55,4 @@ export interface WorkspaceRepository {
   declaredTrust?: TrustMode;
 }
 
-export type WorkspaceFault = VcsFault | LiveFault | FixedLayerFault | { kind: "duplicate-repository"; detail: string; repo: string; entries: readonly number[]; fromLaunch: boolean } | { kind: "duplicate-workspace-source"; detail: string } | { kind: "workspace-replay-mismatch"; detail: string } | { kind: "workspace-capture-unavailable"; detail: string; repo: string; cause: LiveFailure };
+export type WorkspaceFault = ScopeFault | VcsFault | LiveFault | FixedLayerFault | { kind: "duplicate-repository"; detail: string; repo: string; entries: readonly number[]; fromLaunch: boolean } | { kind: "duplicate-workspace-source"; detail: string } | { kind: "workspace-replay-mismatch"; detail: string } | { kind: "workspace-capture-unavailable"; detail: string; repo: string; cause: LiveFailure };

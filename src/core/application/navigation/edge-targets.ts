@@ -240,7 +240,13 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
   async function receiversOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<readonly (string | undefined)[]> {
     const read = syntaxOf;
     if (read === undefined) return [];
-    const asked = edges.flatMap((followed, index) => (hasTyping(followed.source.file, "structural") && ((FIELD_KINDS as readonly string[]).includes(followed.target.kind) || navigation.ownersOf(followed.target).some((owner) => TYPE_KINDS.includes(owner.kind))) ? [{ ...followed, index }] : []));
+    const asked: (FollowedEdge & { index: number })[] = [];
+    for (const [index, followed] of edges.entries()) {
+      if (!hasTyping(followed.source.file, "structural")) continue;
+      const member = (FIELD_KINDS as readonly string[]).includes(followed.target.kind) || navigation.ownersOf(followed.target).some((owner) => TYPE_KINDS.includes(owner.kind));
+      const bound = !member && followed.target.kind === "function" && (await syntaxIn(read, followed.source.file)).receiverBindings.has(bindingKey(followed.edge.line!, followed.edge.column! + 1, followed.target.name));
+      if (member || bound) asked.push({ ...followed, index });
+    }
     if (asked.length === 0) return [];
     const bindings = await origins.rootBindings(asked.map(({ edge, source, target }): UseSite => ({ file: source.file, line: edge.line!, column: edge.column! + 1, spelled: target.name, owner: { name: source.name, line: source.startLine, endLine: source.endLine } })), signal);
     /** The body's own binding, or a declaration of the file the index holds as no class, function or other non-value node. */

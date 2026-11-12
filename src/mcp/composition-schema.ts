@@ -40,6 +40,7 @@ const readAnalysis = z.discriminatedUnion("status", [
 ]);
 const readRecord = z.strictObject({
   id: ids.read, source: ids.source, owner: readOwner, schema: schemaVersion, producer, inputs: factInputs,
+  scopeSelection: z.strictObject({ unmatchedIncludes: z.array(z.string()), selectedFiles: count }).exactOptional(),
   snapshot: ids.snapshot, evidence: z.array(ids.evidence), analysis: readAnalysis,
 });
 const fileRecord = z.strictObject({ id: ids.file, repo: z.string(), origin: evidenceOrigin, path: z.string(), supports });

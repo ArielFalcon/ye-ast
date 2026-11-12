@@ -21,6 +21,7 @@ import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { VcsFault } from "../core/ports/vcs.port.ts";
+import type { ScopeFault } from "../core/ports/scope-fault.port.ts";
 import type { LiveFault } from "../core/ports/live-queries.port.ts";
 import type { Install, InstallFault, InstallOutcome, InstallRequest, BatchInstallRequest, BatchInstallReport } from "../core/ports/install.port.ts";
 import { EXIT_CODE, run, type CliDeps, type CliIo } from "./main.ts";
@@ -58,7 +59,7 @@ function recordingIo(): CliIo & { stdout: string[]; stderr: string[] } {
   return { stdout, stderr, out: (line) => stdout.push(line), err: (line) => stderr.push(line) };
 }
 
-function setup(answer: Result<EntrypointMapFact, VcsFault | LiveFault> = { ok: true, value: MAP }) {
+function setup(answer: Result<EntrypointMapFact, VcsFault | LiveFault | ScopeFault> = { ok: true, value: MAP }) {
   const requests: MapRequest[] = [];
   const signal = new AbortController().signal;
   const entrypoints: EntrypointQueries = {
@@ -1299,4 +1300,12 @@ test("init carries a nonnegative answer byte limit into its registration", async
   const invalid = setupInstall();
   assert.equal(await run(["init", "--trust", "untrusted", "--answer-bytes", "-1", "/work/shop"], invalid.io, invalid.deps), EXIT_CODE.usage);
   assert.equal(invalid.installs.length, 0);
+});
+
+
+test("CLI reports an unmatched scope as a query fault", async () => {
+  const fault = { kind: "unknown-scope-path" as const, detail: "scope.include matches no path read from this commit: missing/**", globs: ["missing/**"] };
+  const { io, deps } = setup({ ok: false, fault });
+  assert.equal(await run(["map", "--include", "missing/**", "."], io, deps), EXIT_CODE.queryFailed);
+  assert.match(io.stderr.join("\n"), /unknown-scope-path.*missing\/\*\*/);
 });

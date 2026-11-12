@@ -16,7 +16,6 @@ test("declarations retain callable spans and exact containers without changing d
     "  set value(v: number) {}",
     "}",
     "interface Port { send(): void; }",
-    "const literal = { extra() {} };",
   ]);
   assert.deepEqual(answer.declarations.map(({ name, kind, span, container }) => [name, kind, span.start, container]), [
     ["top", "function", { line: 1, column: 0 }, undefined],
@@ -28,6 +27,44 @@ test("declarations retain callable spans and exact containers without changing d
   ]);
   assert.deepEqual(answer.callables.map(({ name }) => name), ["top", "constructor", "run", "send"]);
   assert.ok(answer.declarations.every(({ invoked, span }) => invoked && span.end.column > span.start.column));
+});
+
+test("object literal callables retain their holder while returned literals have no binding", async () => {
+  const answer = await read([
+    "const D = { m() {}, a: { run: () => 1 }, get value() { return 1; } };",
+    "function factory() { return { detached() {} }; }",
+    "const unknown = { [key]() {}, ['literal']() {} };",
+  ]);
+  const named = (name: string) => answer.declarations.find((one) => one.name === name)!;
+  assert.deepEqual(named("m").binding, { line: 1, column: 6 });
+  assert.deepEqual(named("run").binding, { line: 1, column: 20 });
+  assert.equal(named("value").kind, "accessor");
+  assert.equal(named("detached").binding, undefined);
+  assert.equal(named("[key]").binding, undefined);
+  assert.ok(named("literal").binding);
+  assert.deepEqual(answer.callables.map(({ name }) => name), ["factory"]);
+});
+
+test("single initializer receivers bind literal holders and imported injection tokens, never later writes or foreign factories", async () => {
+  const answer = await read([
+    "import { inject as take } from '@angular/core';",
+    "import { inject as other } from 'elsewhere';",
+    "import { Store } from './store';",
+    "class A {",
+    " private readonly s = take(Store);",
+    " private d = { m() {} };",
+    " private changed = take(Store);",
+    " private foreign = other(Store);",
+    " run() { this.s.m(); this.d.m(); this.changed.m(); this.foreign.m(); }",
+    " reset() { this.changed = take(Store); }",
+    "}",
+    "export function local() { const d = { m() {} }; d.m(); }",
+    "export function computed(key: string) { const d = { m() {}, [key]() {} }; d.m(); }",
+    "export function spread(other: object) { const d = { m() {}, ...other }; d.m(); }",
+  ]);
+  assert.deepEqual(answer.receiverBindings.filter(({ line }) => line === 9).map(({ receiver, holds }) => [receiver, holds.kind]), [["s", "token"], ["d", "object"]]);
+  assert.equal(answer.receiverBindings.find(({ line }) => line === 12)?.holds.kind, "object");
+  assert.ok(answer.receiverBindings.filter(({ line }) => line > 12).every(({ holds }) => holds.kind !== "object"));
 });
 
 test("every object-literal key is a name, at any depth and in any context, and a spread is none", async () => {

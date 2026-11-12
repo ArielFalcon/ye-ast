@@ -63,3 +63,27 @@ test("a Java receiver is settled by the binding, not by a second rule in the wal
   assert.deepEqual(unestablished.roots[0]!.children, []);
   assert.equal(unestablished.cuts.length, 2);
 });
+
+test("a written reference is deferred and an unresolved reference remains a cut", async () => {
+  const store = fakeCodeGraph([fakeNode("run", "method", use, 1, 12), fakeNode("load", "method", port, 4, 4, "load")], []);
+  const run = store.symbolsInFiles([use])[0]!;
+  const target = store.symbolsInFiles([port])[0]!;
+  const written = [{ from: run.id, file: use, name: "load", kind: "references", line: 3, column: 4, candidates: [] }, { from: run.id, file: use, name: "ambiguous", kind: "references", line: 4, column: 4, candidates: [] }];
+  let dispatched = 0;
+  const input = {
+    store, unresolvedIn: () => [],
+    origins: { replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }), dispatchTargets: async () => (dispatched++, [{ kind: "unknown" }]) },
+    targets: { verdictsOf: async () => [] },
+    bindings: { bindCalls: async () => [], boundCalls: async (calls: readonly unknown[]) => calls.length === 0 ? [] : [{ kind: "declaration", target, link: "declared-receiver" }, { kind: "unbound", form: "bare", candidates: [target], attributed: [target] }], namedDeclarations: () => [] },
+    uses: { followed: () => [], referencesFrom: () => [] },
+    reconciled: { callsOf: async (node: typeof run) => ({ edges: [], references: [], contradicted: [], writtenOnly: [], ambiguous: [], deferredOnly: node.id === run.id ? written : [] }) },
+    inScope: () => true, memberDeclarations: async () => new Map(), syntaxOf: async () => ({ callables: [], functionValueCalls: [] }), budget: {},
+  } as unknown as TraceWalkInput;
+  const result = await walkTrace([run], input);
+  assert.notEqual(result, "aborted");
+  if (result === "aborted") return;
+  assert.equal(result.roots[0]!.children[0]!.via, "reference");
+  assert.equal(result.roots[0]!.children[0]!.deferred, true);
+  assert.equal(result.cuts.length, 1);
+  assert.equal(dispatched, 0);
+});

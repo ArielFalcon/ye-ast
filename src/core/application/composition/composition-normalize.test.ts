@@ -77,7 +77,7 @@ class Tables {
     return this.set.reads.find((r) => canonicalJson(r.owner) === key);
   }
   provenance(read: ReadRecord): FactProvenance {
-    const base = { schema: read.schema, snapshot: this.snapshot(read.snapshot), producer: read.producer, inputs: read.inputs, evidence: this.evidence(read.evidence) };
+    const base = { schema: read.schema, snapshot: this.snapshot(read.snapshot), producer: read.producer, inputs: read.inputs, ...(read.scopeSelection === undefined ? {} : { scopeSelection: read.scopeSelection }), evidence: this.evidence(read.evidence) };
     if (read.analysis.status === "unknown") return { ...base, status: "unknown", reason: read.analysis.reason };
     if (read.analysis.status === "partial") return { ...base, status: "partial", cuts: read.analysis.cuts };
     return { ...base, status: "complete" };
@@ -828,4 +828,14 @@ test("consequences: an unknown derivation has no frontiers to place, and an unkn
   const unknownAnswer = { ...value.answers[1]!, status: "unknown" as const, reason: "no-project" as const, detail: "nothing serves it", findings: [] };
   const set = normalizeSource(consequencesSource({ ...value, answers: [unknownAnswer], change: { ...value.change!, derivation } }), digest);
   assert.deepEqual(set.parts, []);
+});
+
+
+test("normalization preserves scope selection in the source read", () => {
+  const original = fixture("impact-local");
+  const selection = { unmatchedIncludes: ["other/**"], selectedFiles: 2 };
+  const source = { ...original, read: { ...original.read, fact: { ...original.read.fact, scopeSelection: selection } } } as ComposedSource;
+  const set = normalizeSource(source, digest);
+  assert.deepEqual(set.reads.find((read) => read.owner.kind === "fact")?.scopeSelection, selection);
+  assert.deepEqual(reconstruct(source, new Tables(set)), source.read.fact);
 });

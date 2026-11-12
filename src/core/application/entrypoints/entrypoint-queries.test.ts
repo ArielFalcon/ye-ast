@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
-import { SCHEMA, type Cut, type Finding } from "../../domain/shared/fact.ts";
+import { SCHEMA, sameIdentity, type Cut, type Finding } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
@@ -209,7 +209,7 @@ test("a narrowed map preserves an export budget cut outside the selection and re
 
 test("a narrowed map preserves a skipped routing source cut outside the selection", async () => {
   const skipped = "src/app/pets/link.ts";
-  const { deps } = setup({ skipped: [{ path: skipped, reason: "symlink" }] });
+  const { deps } = setup({ files: [{ path: "src/app/owners/list.ts", blob: "owner" }], skipped: [{ path: skipped, reason: "symlink" }] });
   const result = await createEntrypointQueries(deps).map({ ...REQUEST, scope: { include: ["src/app/owners/**"] } });
   assert.ok(result.ok);
   const section = result.value.value.entrypoints;
@@ -496,7 +496,7 @@ test("an include leaves every path it does not match outside the scope", async (
 });
 
 test("the requested scope is declared sorted in the fact and its digest covers it", async () => {
-  const { deps } = setup({ files: [ORDERS] });
+  const { deps } = setup({ files: [ORDERS, { path: "src/a/file.ts", blob: "a" }, { path: "src/b/file.ts", blob: "b" }] });
   const queries = createEntrypointQueries(deps);
 
   const open = await queries.map(REQUEST);
@@ -766,4 +766,46 @@ test("a cached snapshot keeps its reading cuts: the next map of the same commit 
   const section = second.ok ? second.value.value.entrypoints : undefined;
   assert.ok(section?.status === "partial");
   assert.deepEqual(section.cuts, [frontier]);
+});
+
+test("scope includes distinguish a missing selection from a partial match", async () => {
+  const { deps } = setup({ files: [{ path: "src/app.ts", blob: "a" }, { path: "tsconfig.json", blob: "b" }] });
+  const queries = createEntrypointQueries(deps);
+  const missing = await queries.map({ ...REQUEST, scope: { include: ["missing/**"] } });
+  assert.equal(missing.ok, false);
+  if (!missing.ok) assert.equal(missing.fault.kind, "unknown-scope-path");
+  const mixed = await queries.map({ ...REQUEST, scope: { include: ["src/**", "missing/**"] } });
+  assert.equal(mixed.ok, true);
+  if (mixed.ok) {
+    assert.deepEqual(mixed.value.scopeSelection, { unmatchedIncludes: ["missing/**"], selectedFiles: 1 });
+    const otherNotice = { ...mixed.value, scopeSelection: { unmatchedIncludes: ["other/**"], selectedFiles: 9 } };
+    assert.ok(sameIdentity(mixed.value, otherNotice));
+  }
+});
+
+test("scope validation counts skipped paths, excludes paths, and cannot decide a stopped listing", async () => {
+  const skipped = setup({ skipped: [{ path: "src/link.ts", reason: "symlink" }] });
+  const held = await createEntrypointQueries(skipped.deps).map({ ...REQUEST, scope: { include: ["src/**"] } });
+  assert.equal(held.ok, true);
+  const excluded = await createEntrypointQueries(skipped.deps).map({ ...REQUEST, scope: { include: ["src/**"], exclude: ["src/**"] } });
+  assert.equal(excluded.ok, false);
+  const stopped = setup({ files: [{ path: "src/a.ts", blob: "a" }], stopped: { at: "src/a.ts", limit: 1 } });
+  const undecided = await createEntrypointQueries(stopped.deps).map({ ...REQUEST, scope: { include: ["missing/**"] } });
+  assert.equal(undecided.ok, true);
+});
+
+test("live scope notice follows each capture including a retained hit", async () => {
+  const live = fakeLive({ "src/a.ts": "a" }, DIGEST);
+  const { deps } = setup({ trust: TRUSTED, live });
+  const queries = createEntrypointQueries(deps);
+  const request = { ...LIVE_REQUEST, scope: { include: ["src/**", "other/**"] } };
+  const first = await queries.map(request);
+  const hit = await queries.map(request);
+  assert.ok(first.ok && hit.ok);
+  assert.deepEqual(first.value.scopeSelection, { unmatchedIncludes: ["other/**"], selectedFiles: 1 });
+  assert.deepEqual(hit.value.scopeSelection, first.value.scopeSelection);
+  live.tree.set("other/b.ts", "b");
+  const changed = await queries.map(request);
+  assert.ok(changed.ok);
+  assert.equal(changed.value.scopeSelection, undefined);
 });

@@ -9,7 +9,7 @@ import type { DeclaredCallable, ReceiverBinding } from "../../ports/declared-mem
 import type { GraphNavigation } from "./graph-navigation.ts";
 import { provenCallsOf, provenKey, spelledKey, type ProvenCalls } from "./proven-calls.ts";
 import { branchesOf } from "../../domain/shared/declaration-tree.ts";
-import type { DeclarationModel, ModelDeclaration } from "./declaration-model.ts";
+import { indexedDeclaration, type DeclarationModel, type ModelDeclaration } from "./declaration-model.ts";
 
 /** What the relations prove a receiver holds: a field's or an `inject()` local's origin, and the member calls they prove. */
 export interface ReceiverProofs {
@@ -52,7 +52,7 @@ export interface ReceiverSyntax {
 
 /** A member call on a named receiver, by the place it starts (1-based column) and the body that writes it. */
 export interface MemberCallSite {
-  body: GraphSymbol;
+  body: GraphSymbol | ModelDeclaration;
   line: number;
   column: number;
   member: string;
@@ -73,7 +73,7 @@ export type ReceiverProof =
   | { link: "member"; proof: { receiver: SymbolRef; member: SymbolRef }; method?: GraphSymbol }
   | { link: "external"; holds: string }
   | { link: "field" | "local"; holds: FieldOrigin["holds"]; type?: GraphSymbol; replaceable?: true }
-  | { link: "syntax"; holds: ReceiverBinding["holds"]; type?: GraphSymbol; replaceable?: true; unspelled?: true }
+  | { link: "syntax"; holds: ReceiverBinding["holds"]; type?: GraphSymbol; declaration?: ModelDeclaration; replaceable?: true; unspelled?: true }
   | { link: "none"; replaceable?: true };
 
 /** A member call's place, which a nominal language reads its arguments from. */
@@ -165,7 +165,8 @@ export function createCallBinder({ store, navigation, syntaxIn, proofs, imported
     const syntax = await syntaxIn(body.file);
     const callees = syntax.callees.get(`${line}:${column}`) ?? [];
     const link = receiver === "" ? undefined : callees.includes(`this.${receiver}.${member}`) ? "field" : callees.includes(`${receiver}.${member}`) ? "local" : undefined;
-    const found = link === undefined ? undefined : link === "field" ? navigation.fieldOriginAt(body, receiver, held.fields) : navigation.localOriginAt(body, receiver, held.locals);
+    const indexed = indexedDeclaration(body);
+    const found = link === undefined || indexed === undefined ? undefined : link === "field" ? navigation.fieldOriginAt(indexed, receiver, held.fields) : navigation.localOriginAt(indexed, receiver, held.locals);
     if (link !== undefined && typeof found === "object") {
       const type = "class" in found.origin.holds ? navigation.declarationAt(found.origin.holds.class, TYPE_KINDS) : undefined;
       return { link, holds: found.origin.holds, ...(type === undefined ? {} : { type }), ...replaceable };
@@ -173,7 +174,14 @@ export function createCallBinder({ store, navigation, syntaxIn, proofs, imported
     const holds = holdsAt(syntax.receiverBindings, line, column, member, receiver);
     if (holds === undefined) return { link: "none", ...replaceable };
     const type = await typeOf(body.file, holds);
-    return { link: "syntax", holds, ...(type === undefined ? {} : { type }), ...replaceable, ...(link === undefined ? { unspelled: true } : {}) };
+    let declaration: ModelDeclaration | undefined;
+    if (holds.kind === "object") declaration = (await declarations.list(body.file)).find((one) => one.startLine === holds.line && one.startColumn === holds.column - 1);
+    if (holds.kind === "token") {
+      const imported = (await importedDeclarations(body.file)).get(holds.name);
+      const candidates = imported === undefined ? (await declarations.select(body.file, holds.name)) : (await declarations.list(imported.file)).filter(({ symbol }) => symbol?.id === imported.id);
+      if (candidates.length === 1) declaration = candidates[0];
+    }
+    return { link: "syntax", holds, ...(type === undefined ? {} : { type }), ...(declaration === undefined ? {} : { declaration }), ...replaceable, ...(link === undefined ? { unspelled: true } : {}) };
   }
 
   const above = (type: GraphSymbol): GraphSymbol[] => [type, ...navigation.typesAround(type, "up").map((around) => around.type)];
@@ -196,7 +204,7 @@ export function createCallBinder({ store, navigation, syntaxIn, proofs, imported
   const binder: CallBinder = {
     receiverOf,
     async memberOfDeclaration(holder, member, place) {
-      if (holder.symbol !== undefined) {
+      if (holder.symbol !== undefined && isClassKind(holder.kind)) {
         const target = await binder.memberOf(holder.symbol, member, place);
         return target === undefined ? undefined : (await declarations.list(target.file)).find(({ symbol }) => symbol?.id === target.id);
       }

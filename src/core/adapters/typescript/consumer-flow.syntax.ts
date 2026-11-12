@@ -1,8 +1,9 @@
+export { propertyNameText } from "./syntax.ts";
 import ts from "typescript";
 import { ELEMENT, type AccessPath } from "../../domain/contracts/access-path.ts";
 import type { JsonValue, Literal, Replacement } from "../../domain/contracts/use-operation.ts";
 import { bindFile } from "./lexical-bindings.ts";
-import { hasModifier, unwrapped } from "./syntax.ts";
+import { hasModifier, unwrapped, propertyNameText } from "./syntax.ts";
 
 export type FunctionNode = ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration;
 
@@ -35,13 +36,6 @@ export function namedFunction(node: FunctionNode): NamedFunction | undefined {
   }
   const name = node.name === undefined ? undefined : propertyNameText(node.name);
   return name === undefined ? undefined : { node, name, declaration: node };
-}
-
-/** The name a property name denotes: an identifier, a literal, or a literal in brackets. Undefined where it is computed from anything else. */
-export function propertyNameText(name: ts.PropertyName): string | undefined {
-  if (!ts.isComputedPropertyName(name)) return name.text;
-  const key = unwrapped(name.expression);
-  return ts.isStringLiteralLike(key) || ts.isNumericLiteral(key) ? key.text : undefined;
 }
 
 /** How a function receives the argument at `index`: `parameter` is the declared parameter that holds it, `hidden` that it is also readable where no binding follows it (a rest parameter, the function's own `arguments`). */

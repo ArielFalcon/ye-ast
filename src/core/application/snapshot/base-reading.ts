@@ -1,4 +1,4 @@
-import { isReadSource } from "../../domain/languages/profiles.ts";
+import { isReadSource, profileOf } from "../../domain/languages/profiles.ts";
 import type { BuildOutputEvidence, DeclaredBuildOutput, UnreadOutputReason } from "../../domain/shared/build-outputs.ts";
 import type { BuildOutputInput, Cut, FactBase, SnapshotRef } from "../../domain/shared/fact.ts";
 import type { ScopeRequest } from "../../domain/shared/scope.ts";
@@ -27,6 +27,7 @@ import { memberProofContextOf, retainedRelations } from "../relations/retained-r
 import { declaredScope } from "../../domain/map/entrypoint-map.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
+import type { FrameworkPlugin } from "../../ports/framework-plugin.port.ts";
 import type { CommitExtraction, PreparedCommit } from "./read-snapshot.ts";
 
 /** What the type checker contributes to one answer: its bindings by call place, the declarations it read, and its cuts. */
@@ -49,6 +50,7 @@ export function withOutputs(base: FactBase, outputs: readonly BuildOutputInput[]
 }
 
 export interface BaseReadingDeps {
+  frameworks?: readonly FrameworkPlugin[];
   relations: RelationExtractor;
   importOrigins?: ImportOriginsReader | undefined;
   memberNames?: DeclaredMemberNamesReader | undefined;
@@ -226,7 +228,12 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
               return read;
             };
       const lineOf = linesOncePerFile(sources);
-      const declarations = createDeclarationModel({ store, declarationsIn: async (file) => (await syntaxOf?.(file))?.declarations ?? [], sources: tree.sources, facts });
+      const memberStages = (deps.frameworks ?? []).flatMap((plugin) => plugin.members === undefined ? [] : [{ languages: plugin.languages, stage: plugin.members(tree.sources) }]);
+      const declarations = createDeclarationModel({ store, declarationsIn: async (file) => (await syntaxOf?.(file))?.declarations ?? [], bindingsIn: async (path) => {
+        const file = sources.get(path);
+        const language = profileOf(path)?.language;
+        return file === undefined || language === undefined ? [] : (await Promise.all(memberStages.filter(({ languages }) => languages.includes(language)).map(({ stage }) => stage.bindings(file)))).flat();
+      }, sources: tree.sources, facts });
       const tokens = new Map<string, Promise<SourceReading>>();
       const tokensOf = (file: SourceFile): Promise<SourceReading> => {
         let read = tokens.get(file.path);

@@ -1,3 +1,4 @@
+import type { FrameworkPlugin } from "../../ports/framework-plugin.port.ts";
 import { sourceUnreadable } from "../../domain/contracts/consumer-flow.ts";
 import type { Hypothesis } from "../../domain/contracts/hypothesis.ts";
 import { provenanceOf, sortedEngines, type BuildOutputInput, type Cut } from "../../domain/shared/fact.ts";
@@ -43,6 +44,7 @@ import { callersOfFunction, occurrencesOfMember } from "./consumer-callers.ts";
 import { createConsumerTemplateReader } from "./consumer-templates.ts";
 
 export interface ConsumerSourcesDeps {
+  frameworks?: readonly FrameworkPlugin[];
   operation: WorkspaceReadOperation;
   heads: HeadReaderDeps;
   digest: Digest;
@@ -304,9 +306,9 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             };
           };
           const base: PreparedWorkspace["base"] = (asked) => {
-            const { schema, snapshot, producer, inputs } = fact;
+            const { schema, snapshot, producer, inputs, scopeSelection } = fact;
             const composite = compositeBase(
-              { schema, snapshot, producer, inputs, evidence: [] },
+              { schema, snapshot, producer, inputs, evidence: [], ...(scopeSelection === undefined ? {} : { scopeSelection }) },
               Object.entries(fact.value.sections).map(([repo, section]) => ({ kind: `discovery:${repo}`, fact: provenanceOf(section) })),
               fact.value.workspace,
               (text) => deps.digest.of(text),

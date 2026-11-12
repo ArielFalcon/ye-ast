@@ -143,3 +143,14 @@ export function objectOf(expression: ts.Expression): ts.ObjectLiteralExpression 
   if (ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression) || ts.isParenthesizedExpression(expression) || ts.isTypeAssertionExpression(expression)) return objectOf(expression.expression);
   return undefined;
 }
+
+/** The name a property name denotes: an identifier, a literal, or a literal in brackets. Undefined where it is computed from anything else. */
+export function propertyNameText(name: ts.PropertyName): string | undefined {
+  if (!ts.isComputedPropertyName(name)) return name.text;
+  const key = unwrapped(name.expression);
+  return ts.isStringLiteralLike(key) || ts.isNumericLiteral(key) ? key.text : undefined;
+}
+
+export function hasKnownPropertyNames(literal: ts.ObjectLiteralExpression): boolean {
+  return literal.properties.every((property) => !ts.isSpreadAssignment(property) && propertyNameText(property.name) !== undefined);
+}

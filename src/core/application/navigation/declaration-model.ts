@@ -6,6 +6,8 @@ import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.t
 import type { DeclaredDeclaration } from "../../ports/declared-member-names.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { FrameworkMemberBinding } from "../../ports/framework-members.port.ts";
+import type { Evidence } from "../../domain/shared/fact.ts";
 
 export interface ModelDeclaration {
   id: string;
@@ -20,6 +22,9 @@ export interface ModelDeclaration {
   path?: string;
   invoked?: boolean;
   binding?: SourcePosition;
+  bindingEvidence?: readonly Evidence[];
+  bindingConflict?: true;
+  deferredFactory?: true;
 }
 
 export interface DeclarationModel {
@@ -27,6 +32,11 @@ export interface DeclarationModel {
   select(file: string, symbol: string): Promise<readonly ModelDeclaration[]>;
   list(file: string): Promise<readonly ModelDeclaration[]>;
   ownersOf(file: string, at: SourcePosition): Promise<readonly ModelDeclaration[]>;
+}
+
+export function indexedDeclaration(declaration: GraphSymbol | ModelDeclaration): GraphSymbol | undefined {
+  if ("symbol" in declaration && declaration.symbol !== undefined) return declaration.symbol;
+  return "qualifiedName" in declaration ? declaration : undefined;
 }
 
 export class AmbiguousDeclaration extends Error {
@@ -40,6 +50,7 @@ export class AmbiguousDeclaration extends Error {
 export interface DeclarationModelDeps {
   store: CodeGraphReader;
   declarationsIn(file: string): Promise<readonly DeclaredDeclaration[]>;
+  bindingsIn?(file: string): Promise<readonly FrameworkMemberBinding[]>;
   sources?: readonly SourceFile[];
   facts?: DerivedFacts | undefined;
 }
@@ -49,11 +60,12 @@ const positionKey = ({ line, column }: SourcePosition): string => `${line}:${col
 
 function compatibleKind(indexed: string, written: DeclaredDeclaration["kind"]): boolean {
   if (indexed === written) return true;
+  if (written === "object") return ["variable", "constant", "property", "field"].includes(indexed);
   if (written === "accessor") return ["method", "property", "field"].includes(indexed);
   return ["method", "function"].includes(written) && ["method", "function"].includes(indexed);
 }
 
-export function createDeclarationModel({ store, declarationsIn, sources = [], facts }: DeclarationModelDeps): DeclarationModel {
+export function createDeclarationModel({ store, declarationsIn, bindingsIn, sources = [], facts }: DeclarationModelDeps): DeclarationModel {
   const contents = new Map(sources.map(({ path, content }) => [path, content]));
   const files = new Map<string, Promise<{ tree: readonly DeclarationBranch<ModelDeclaration>[]; list: readonly ModelDeclaration[] }>>();
   const read = (file: string) => {
@@ -62,9 +74,13 @@ export function createDeclarationModel({ store, declarationsIn, sources = [], fa
       held = (async () => {
         const symbols = store.symbolsInFiles([file]).filter(({ kind }) => !NOT_DECLARED_KINDS.includes(kind));
         const containment = store.outgoingEdges(symbols.map(({ id }) => id), ["contains"]).map(({ source, target }) => ({ source: `index:${source}`, target: `index:${target}` }));
-        const syntax = await declarationsIn(file);
-        const derive = async () => join(file, symbols, containment, syntax);
-        return facts === undefined ? derive() : facts.ofInputs("declaration-model", { file, content: contents.get(file) ?? null, symbols, containment, syntax }, derive);
+        const bindings = await bindingsIn?.(file) ?? [];
+        const written = await declarationsIn(file);
+        const byPlace = new Map(written.map((node) => [positionKey(node.span.start), node]));
+        for (const node of bindings.flatMap(({ declaration }) => declaration ?? [])) if (!byPlace.has(positionKey(node.span.start))) byPlace.set(positionKey(node.span.start), node);
+        const syntax = [...byPlace.values()];
+        const derive = async () => join(file, symbols, containment, syntax, bindings);
+        return facts === undefined ? derive() : facts.ofInputs("declaration-model", { file, content: contents.get(file) ?? null, symbols, containment, syntax, bindings }, derive);
       })();
       files.set(file, held);
     }
@@ -86,7 +102,7 @@ export function createDeclarationModel({ store, declarationsIn, sources = [], fa
   };
 }
 
-function join(file: string, symbols: readonly GraphSymbol[], containment: { source: string; target: string }[], syntax: readonly DeclaredDeclaration[]) {
+function join(file: string, symbols: readonly GraphSymbol[], containment: { source: string; target: string }[], syntax: readonly DeclaredDeclaration[], bindings: readonly FrameworkMemberBinding[]) {
   const pairs = [...containment];
   const indexed = symbols.map((symbol): ModelDeclaration => ({ ...symbol, id: `index:${symbol.id}`, symbol }));
   const named = Map.groupBy(indexed, ({ name }) => name);
@@ -106,12 +122,36 @@ function join(file: string, symbols: readonly GraphSymbol[], containment: { sour
   const at = Map.groupBy(declarations, ({ startLine, startColumn }) => positionKey({ line: startLine, column: startColumn }));
   const onLine = Map.groupBy(declarations, ({ startLine }) => startLine);
   for (const [written, declaration] of joined) {
-    if (declaration.symbol !== undefined || written.container === undefined) continue;
-    const parents = (at.get(positionKey(written.container)) ?? []).filter(({ id }) => id !== declaration.id);
-    const headers = parents.length === 0 ? (onLine.get(written.container.line) ?? []).filter((parent) => parent.id !== declaration.id && parent.startColumn >= written.container!.column && containsPosition(declarationSpan(parent), written.span.start)) : parents;
+    const container = written.binding ?? written.container;
+    if (declaration.symbol !== undefined || container === undefined) continue;
+    const parents = (at.get(positionKey(container)) ?? []).filter(({ id }) => id !== declaration.id);
+    const headers = parents.length === 0 ? (onLine.get(container.line) ?? []).filter((parent) => parent.id !== declaration.id && parent.startColumn >= container.column && containsPosition(declarationSpan(parent), written.span.start)) : parents;
     const parent = headers.length === 1 ? headers[0] : undefined;
     if (parent === undefined) unplaced.add(declaration.id);
     else pairs.push({ source: parent.id, target: declaration.id });
+  }
+  for (const [member, claims] of Map.groupBy(bindings, ({ member }) => positionKey(member))) {
+    const members = at.get(member) ?? [];
+    if (members.length !== 1) continue;
+    const declaration = members[0]!;
+    declaration.bindingEvidence = claims.map(({ evidence }) => ({ path: evidence.file, line: evidence.line, via: evidence.framework }));
+    if (claims.some(({ deferredFactory }) => deferredFactory)) declaration.deferredFactory = true;
+    const holders = claims.map(({ holder }) => holder.path === file ? declarations.filter((node) => node.id !== declaration.id && node.name === holder.symbol && (holder.line === undefined || node.startLine <= holder.line && holder.line <= node.endLine)) : []);
+    const ids = new Set(holders.flatMap((group) => group.map(({ id }) => id)));
+    if (holders.some((group) => group.length !== 1) || ids.size !== 1) {
+      unplaced.add(declaration.id);
+      declaration.bindingConflict = true;
+      continue;
+    }
+    const parent = holders[0]![0]!;
+    if (!containsPosition(declarationSpan(parent), { line: declaration.startLine, column: declaration.startColumn })) {
+      unplaced.add(declaration.id);
+      declaration.bindingConflict = true;
+      continue;
+    }
+    unplaced.delete(declaration.id);
+    for (let index = pairs.length - 1; index >= 0; index--) if (pairs[index]!.target === declaration.id) pairs.splice(index, 1);
+    pairs.push({ source: parent.id, target: declaration.id });
   }
   const sort = (branches: readonly DeclarationBranch<ModelDeclaration>[]): DeclarationBranch<ModelDeclaration>[] => branches.toSorted((a, b) => positioned(a.declaration, b.declaration)).map((branch) => ({ ...branch, children: sort(branch.children) }));
   const tree = sort(declarationTree(declarations, pairs));

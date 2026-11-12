@@ -859,3 +859,13 @@ test("the contractConsequences fault kinds have their own codes and an invalid h
     }
   } finally { session.end(); await session.done; }
 });
+
+test("an unknown scope path returns redacted globs", async () => {
+  const { deps, behave } = fakes();
+  behave("map", async () => ({ ok: false, fault: { kind: "unknown-scope-path", detail: `missing ${SECRET}`, globs: [`src/${SECRET}/**`] } }));
+  const session = await untrusted(deps);
+  session.send(request(1, METHOD.entrypointsMap, OPERATIONS[0].params));
+  const answer = await session.receive();
+  assert.equal(answer.error?.code, ERROR_CODE["unknown-scope-path"]);
+  assert.deepEqual(answer.error?.data.globs, [`src/${REDACTED}/**`]);
+});
