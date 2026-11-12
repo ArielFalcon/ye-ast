@@ -19,6 +19,7 @@ const scopeKey = (scope: SyntaxScope): string => spanKey(scopeSpan(scope));
 function positionedBodies(declarations: readonly ModelDeclaration[], calls: readonly SyntaxCall[]): PositionedBody[] {
   const scopes = [...new Map(calls.flatMap((call) => call.owners).map((scope) => [scopeKey(scope), { ...scopeSpan(scope), scope }])).values()];
   return declarations.flatMap((symbol): PositionedBody[] => {
+    if (symbol.kind === "object") return [];
     if (symbol.symbol !== undefined && !BODY_KINDS.includes(symbol.kind) && !holdsValue(symbol.kind)) return [];
     const indexed = { ...symbol, key: symbol.symbol?.id ?? symbol.id, ...declarationSpan(symbol) };
     const atStart = owningBody(scopes, { line: symbol.startLine, column: symbol.startColumn });

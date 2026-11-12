@@ -30,7 +30,7 @@ export interface DeclaredMemberNames {
 
 export interface DeclaredDeclaration {
   name: string;
-  kind: "method" | "function" | "accessor" | "initializer" | "anonymous-class";
+  kind: "method" | "function" | "accessor" | "initializer" | "anonymous-class" | "object";
   span: SourceSpan;
   invoked: boolean;
   /** A proven enclosing declaration, by its source position. */

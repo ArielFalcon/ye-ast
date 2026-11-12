@@ -49,6 +49,7 @@ const positionKey = ({ line, column }: SourcePosition): string => `${line}:${col
 
 function compatibleKind(indexed: string, written: DeclaredDeclaration["kind"]): boolean {
   if (indexed === written) return true;
+  if (written === "object") return ["variable", "constant", "property", "field"].includes(indexed);
   if (written === "accessor") return ["method", "property", "field"].includes(indexed);
   return ["method", "function"].includes(written) && ["method", "function"].includes(indexed);
 }
@@ -106,9 +107,10 @@ function join(file: string, symbols: readonly GraphSymbol[], containment: { sour
   const at = Map.groupBy(declarations, ({ startLine, startColumn }) => positionKey({ line: startLine, column: startColumn }));
   const onLine = Map.groupBy(declarations, ({ startLine }) => startLine);
   for (const [written, declaration] of joined) {
-    if (declaration.symbol !== undefined || written.container === undefined) continue;
-    const parents = (at.get(positionKey(written.container)) ?? []).filter(({ id }) => id !== declaration.id);
-    const headers = parents.length === 0 ? (onLine.get(written.container.line) ?? []).filter((parent) => parent.id !== declaration.id && parent.startColumn >= written.container!.column && containsPosition(declarationSpan(parent), written.span.start)) : parents;
+    const container = written.binding ?? written.container;
+    if (declaration.symbol !== undefined || container === undefined) continue;
+    const parents = (at.get(positionKey(container)) ?? []).filter(({ id }) => id !== declaration.id);
+    const headers = parents.length === 0 ? (onLine.get(container.line) ?? []).filter((parent) => parent.id !== declaration.id && parent.startColumn >= container.column && containsPosition(declarationSpan(parent), written.span.start)) : parents;
     const parent = headers.length === 1 ? headers[0] : undefined;
     if (parent === undefined) unplaced.add(declaration.id);
     else pairs.push({ source: parent.id, target: declaration.id });

@@ -64,3 +64,16 @@ test("indexed overloads retain the existing declaration-set target semantics", a
   const model = createDeclarationModel({ store, declarationsIn: async () => [declared("m", 3, 1), declared("m", 5, 1)] });
   assert.deepEqual((await model.select(FILE, "A.m")).map(({ symbol }) => symbol?.id), ["first", "second"]);
 });
+
+test("literal bindings compose nested paths while returned and computed literals remain unplaced", async () => {
+  const store = fakeCodeGraph([fakeNode("D", "constant", FILE, 1, 8)], []);
+  const model = createDeclarationModel({ store, declarationsIn: async () => [
+    { ...declared("D", 1), kind: "object", invoked: false, span: { start: { line: 1, column: 0 }, end: { line: 8, column: 1 } } },
+    { ...declared("a", 2), kind: "object", invoked: false, binding: { line: 1, column: 0 } },
+    { ...declared("m", 3), binding: { line: 2, column: 2 } },
+    declared("detached", 12, 11),
+  ] });
+  assert.deepEqual((await model.select(FILE, "D.a.m")).map(({ name }) => name), ["m"]);
+  assert.equal((await model.list(FILE)).find(({ name }) => name === "detached")?.path, undefined);
+  assert.equal((await model.list(FILE)).filter(({ name }) => name === "D").length, 1);
+});

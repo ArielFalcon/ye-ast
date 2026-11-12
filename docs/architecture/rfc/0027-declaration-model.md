@@ -204,7 +204,9 @@ more than one declaration in one file is an **ambiguity fault** naming every pla
 index-only overload sets keep the query protocol's declaration-set selection; the member binder still selects only
 what its existing signature rule proves.
 
-Kinds: `method`, `function`, `accessor`, `initializer`, `anonymous-class`, plus the index's own kinds unchanged.
+Kinds: `method`, `function`, `accessor`, `initializer`, `anonymous-class`, and `object` for a literal's named holder,
+plus the index's own kinds unchanged. An object holder joins an indexed variable or field when present and supplies
+containment; a syntax-only object holder is not an execution body.
 
 ```ts
 // src/core/ports/declared-member-names.port.ts — added; `callables` keeps its dispatch meaning

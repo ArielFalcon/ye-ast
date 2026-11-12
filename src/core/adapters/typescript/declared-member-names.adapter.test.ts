@@ -16,7 +16,6 @@ test("declarations retain callable spans and exact containers without changing d
     "  set value(v: number) {}",
     "}",
     "interface Port { send(): void; }",
-    "const literal = { extra() {} };",
   ]);
   assert.deepEqual(answer.declarations.map(({ name, kind, span, container }) => [name, kind, span.start, container]), [
     ["top", "function", { line: 1, column: 0 }, undefined],
@@ -28,6 +27,22 @@ test("declarations retain callable spans and exact containers without changing d
   ]);
   assert.deepEqual(answer.callables.map(({ name }) => name), ["top", "constructor", "run", "send"]);
   assert.ok(answer.declarations.every(({ invoked, span }) => invoked && span.end.column > span.start.column));
+});
+
+test("object literal callables retain their holder while returned literals have no binding", async () => {
+  const answer = await read([
+    "const D = { m() {}, a: { run: () => 1 }, get value() { return 1; } };",
+    "function factory() { return { detached() {} }; }",
+    "const unknown = { [key]() {}, ['literal']() {} };",
+  ]);
+  const named = (name: string) => answer.declarations.find((one) => one.name === name)!;
+  assert.deepEqual(named("m").binding, { line: 1, column: 6 });
+  assert.deepEqual(named("run").binding, { line: 1, column: 20 });
+  assert.equal(named("value").kind, "accessor");
+  assert.equal(named("detached").binding, undefined);
+  assert.equal(named("[key]").binding, undefined);
+  assert.ok(named("literal").binding);
+  assert.deepEqual(answer.callables.map(({ name }) => name), ["factory"]);
 });
 
 test("every object-literal key is a name, at any depth and in any context, and a spread is none", async () => {

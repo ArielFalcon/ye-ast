@@ -94,6 +94,8 @@ question an agent asks after `impact` names twelve files, and it is the one no q
   `endLine` (`GraphSymbol`, lines 49-58), and `outgoingEdges` (line 99) carries the `imports` edges. The outline is a
   projection over the model supplied by BaseReading (RFC-0027 U2), joining those indexed declarations with B1 syntax
   declarations from the existing parse; no new parser or dependency is added.
+  Object-literal methods, function properties and accessors retain their spans. A literal initializer supplies its
+  proven holder path, including nested literals; a returned or dynamically keyed member has no invented path.
 - **Nesting requires proof, never overlapping spans alone.** Indexed declarations retain their `contains` edges; a
   syntax declaration uses its proven container in the shared model; the file node's own `contains` edges place the top level. A declaration no
   such edge places (a route or a configuration binding a framework reader adds) stays at the top level even when its span
