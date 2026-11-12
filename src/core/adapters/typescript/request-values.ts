@@ -1,6 +1,7 @@
 import type { Evidence } from "../../domain/shared/fact.ts";
 import type { SummaryGap } from "../../domain/topology/request-summary.ts";
 import { prevailingCause } from "../../domain/topology/evaluated.ts";
+import { compactRequestUrl, type RequestUrlPart } from "../../domain/topology/request-url.ts";
 
 type Scalar = string | number | boolean | null | undefined;
 export type RequestValue =
@@ -8,6 +9,7 @@ export type RequestValue =
   | { kind: "parameter"; index: number; propertiesSafe?: boolean; fallback?: RequestValue }
   | { kind: "unknown"; gap: SummaryGap }
   | { kind: "opaque"; value: RequestValue; gap: SummaryGap }
+  | { kind: "provenance"; value: RequestValue; gap: SummaryGap }
   | { kind: "object"; fields: ReadonlyMap<string, RequestValue> }
   | { kind: "property"; owner: RequestValue; name: string; optional: boolean }
   | { kind: "choose"; condition: RequestValue; yes: RequestValue; no: RequestValue }
@@ -23,6 +25,7 @@ type Value = (
 ) & { readonly supplied: readonly number[] };
 
 export interface RequestValueRead {
+  url: readonly RequestUrlPart[];
   text: string;
   holes: readonly (number | undefined)[];
   encodings: readonly boolean[];
@@ -52,7 +55,7 @@ export function valueHasParameter(root: RequestValue): boolean {
     if (seen.has(value)) return false;
     seen.add(value);
     if (value.kind === "parameter") return true;
-    if (value.kind === "opaque") return visit(value.value);
+    if (value.kind === "opaque" || value.kind === "provenance") return visit(value.value);
     if (value.kind === "choose") return visit(value.yes) || visit(value.no);
     if (value.kind === "apply") return visit(value.body) && value.arguments.some(visit);
     if (value.kind === "property") return visit(value.owner);
@@ -69,7 +72,7 @@ export function valueMayBeObject(root: RequestValue): boolean {
     if (seen.has(value)) return false;
     seen.add(value);
     if (value.kind === "object" || value.kind === "parameter" || value.kind === "property") return true;
-    if (value.kind === "opaque") return visit(value.value);
+    if (value.kind === "opaque" || value.kind === "provenance") return visit(value.value);
     if (value.kind === "apply") return visit(value.body);
     if (value.kind === "choose") return visit(value.yes) || visit(value.no);
     return value.kind === "operation" && ["??", "||", "&&"].includes(value.operator) && value.operands.some(visit);
@@ -92,7 +95,7 @@ export function readRequestValue(root: RequestValue, work?: { evaluations: numbe
     const add = (value: RequestValue): void => { for (const index of inputs(value)) found.add(index); };
     switch (term.kind) {
       case "parameter": found.add(term.index); if (term.fallback !== undefined) add(term.fallback); break;
-      case "opaque": add(term.value); break;
+      case "opaque": case "provenance": add(term.value); break;
       case "choose": add(term.condition); add(term.yes); add(term.no); break;
       case "property": add(term.owner); break;
       case "operation": term.operands.forEach(add); break;
@@ -143,6 +146,15 @@ export function readRequestValue(root: RequestValue, work?: { evaluations: numbe
       case "opaque": {
         const value = evaluate(term.value, args);
         result = value.kind === "object" ? { ...value, opaque: term.gap } : value;
+        break;
+      }
+      case "provenance": {
+        const enrich = (value: Value): Value => {
+          if (value.kind === "unknown" && value.gap.cause === "destination-undecidable" && value.gap.evidence.length === 0) return { ...value, gap: term.gap };
+          if (value.kind === "text") return { ...value, parts: value.parts.map(enrich) };
+          return value;
+        };
+        result = enrich(evaluate(term.value, args));
         break;
       }
       case "object": result = { kind: "object", fields: new Map([...term.fields].map(([key, value]) => [key, evaluate(value, args)])), supplied: [] }; break;
@@ -198,6 +210,7 @@ export function readRequestValue(root: RequestValue, work?: { evaluations: numbe
         } else if (term.operator === "startsWith") {
           result = first.kind === "literal" && typeof first.value === "string" && second.kind === "literal" && typeof second.value === "string" ? scalar(first.value.startsWith(second.value)) : uncertainty(first, second);
         } else if (term.operator === "encode" && first.kind === "parameter") result = { ...first, encoded: true };
+        else if (first.kind === "literal" && typeof first.value === "string" && term.operator === "encode" && !first.value.isWellFormed()) result = { ...unknown(), supplied: first.supplied };
         else if (first.kind === "literal" && typeof first.value === "string") {
           const text = term.operator === "encode" ? encodeURIComponent(first.value) : term.operator === "trim-start" ? first.value.replace(/^\/+/, "") : first.value.replace(/\/+$/, "");
           result = { kind: "literal", value: text, supplied: first.supplied };
@@ -219,9 +232,11 @@ export function readRequestValue(root: RequestValue, work?: { evaluations: numbe
   const holes: (number | undefined)[] = [];
   const encodings: boolean[] = [];
   const gaps: SummaryGap[] = [];
+  const url: RequestUrlPart[] = [];
   for (const part of parts) {
     if (part.kind === "literal" && typeof part.value === "string") {
       text += part.value;
+      url.push({ kind: "text", text: part.value });
       if (/[{}]/.test(part.value)) gaps.push(UNKNOWN_VALUE.gap);
     }
     else {
@@ -230,11 +245,12 @@ export function readRequestValue(root: RequestValue, work?: { evaluations: numbe
       encodings.push(part.kind === "parameter" && part.encoded === true);
       if (part.kind === "unknown") gaps.push(part.gap);
       else if (part.kind !== "parameter") gaps.push(UNKNOWN_VALUE.gap);
+      url.push(part.kind === "parameter" ? { kind: "runtime", ...(part.encoded ? { encoded: true as const } : {}) } : { kind: "unknown", ...(part.kind === "unknown" ? part.gap : UNKNOWN_VALUE.gap) });
     }
   }
   const evidence = [...new Map(gaps.flatMap((gap) => gap.evidence).map((item) => [JSON.stringify(item), item])).values()];
   const unresolved = gaps.length === 0 ? undefined : { cause: prevailingCause(gaps.map((gap) => gap.cause)) ?? "destination-undecidable", evidence };
-  return { text, holes, encodings, supplied: value.supplied, ...(unresolved === undefined ? {} : { unresolved }) };
+  return { text, holes, encodings, supplied: value.supplied, url: compactRequestUrl(url), ...(unresolved === undefined ? {} : { unresolved }) };
 }
 
 function sameValue(a: Value, b: Value): boolean {

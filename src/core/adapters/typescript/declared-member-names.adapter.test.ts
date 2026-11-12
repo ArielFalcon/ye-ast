@@ -630,6 +630,23 @@ test("arrows and function expressions are function values, each whole; a method 
   assert.deepEqual(values.map(({ start, end }) => [start.line, start.column, end.line, end.column]), [[2, 20, 2, 30], [2, 37, 2, 63]]);
 });
 
+test("directly invoked function values execute in their enclosing body while other values remain deferred", async () => {
+  const result = await read([
+    "function run() {",
+    "  ((() => immediateArrow()))();",
+    "  (function () { immediateFunction(); })();",
+    "  const stored = () => storedCall();",
+    "  pass(() => passedCall());",
+    "  (() => { const nested = () => nestedCall(); })();",
+    "  (function* () { generatorCall(); })();",
+    "  (async () => asyncCall())();",
+    "}",
+  ]);
+  const owner = (name: string) => result.calls!.find((call) => call.callee === name)!.owners.at(-1)?.runsInEnclosingBody;
+  assert.deepEqual([owner("immediateArrow"), owner("immediateFunction"), owner("storedCall"), owner("passedCall"), owner("nestedCall"), owner("generatorCall"), owner("asyncCall")], [true, true, undefined, undefined, undefined, undefined, undefined]);
+  assert.deepEqual(result.functionValues.map(({ start }) => start.line), [4, 5, 6, 7, 8]);
+});
+
 test("given derived facts, the member names a file declares are derived once by its content across readers, and answer what they answer without facts", async () => {
   const kept = new Map<string, string>();
   const derived: string[] = [];

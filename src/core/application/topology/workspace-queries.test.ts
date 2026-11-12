@@ -1264,3 +1264,11 @@ test("an unavailable workspace member leaves unmatched includes undecidable", as
   assert.equal(unavailable.fact.scopeSelection, undefined);
   assert.equal(unavailable.fact.status, "partial");
 });
+
+test("call-site readers receive source completeness only for an uncut export", async () => {
+  const seen: boolean[] = [];
+  const reader: CallSiteReader = { of: async (_files, _repo, _libraries, options) => { seen.push(options?.completeSource === true); return []; } };
+  await setup({ "/work/app": { files: { "src/a.ts": "" } } }, reader).outwardNames({ repo: { path: "/work/app" } });
+  await setup({ "/work/app": { files: { "src/a.ts": "" }, stopped: { at: "src/b.ts", limit: 1 } } }, reader).outwardNames({ repo: { path: "/work/app" } });
+  assert.deepEqual(seen, [true, false]);
+});

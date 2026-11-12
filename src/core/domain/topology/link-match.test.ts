@@ -448,3 +448,44 @@ test("a call site is excluded only by positive route proof, keeping an unknown p
   assert.equal(excludedFrom("ANY /orders", repositories([route("ANY", "/orders")]), [])({ kind: "call-site", transport: "http", method: "POST" }), false);
   assert.equal(excludes({ kind: "call-site", transport: "http", template: "/invoices" }), false);
 });
+
+test("a possible competing route prevents attribution at every matching rung", () => {
+  const cases = [
+    { path: "/orders/user-{}", routes: [route("GET", "/orders/user-{id}"), route("GET", "/orders/user-admin")] },
+    { path: "/api/orders/user-{}", routes: [route("GET", "/orders/user-{id}", undefined, { contextPath: "/api" }), route("GET", "/orders/user-admin", undefined, { contextPath: "/api" })] },
+    { path: "/api/orders/user-{}", routes: [route("GET", "/orders/user-{id}"), route("GET", "/orders/user-admin")], gateway: [{ prefix: "api", repo: "orders", basis: "gateway-prefix" as const }] },
+    { path: "/api/orders/user-{}", routes: [route("GET", "/orders/user-{id}"), route("GET", "/orders/user-admin")] },
+  ];
+  for (const { path, routes, gateway = [] } of cases) {
+    const call = site(path);
+    assert.deepEqual(matchCallSite(call, targetOf(call), repositories(routes), gateway), { undecided: path });
+    if (gateway.length === 0) {
+      assert.deepEqual(matchCallSite(call, targetOf(call), [...repositories([routes[0]!]), ...repositories([routes[1]!], "billing")], []), { undecided: path });
+    }
+  }
+  const tiedCall = site("/orders/user-{}");
+  assert.deepEqual(matchCallSite(tiedCall, targetOf(tiedCall), repositories([route("GET", "/orders/user-{id}"), route("GET", "/orders/user{id}-")]), []), { undecided: "/orders/user-{}" });
+  const target = { method: "GET" as const, path: "/orders/user-{}" };
+  assert.equal(matchDeclaredOperation(target, [...repositories([route("GET", "/orders/user-{id}")]), ...repositories([route("GET", "/orders/user-admin")], "billing")]), undefined);
+  const call = site(target.path);
+  assert.equal(joined(matchCallSite(call, target, repositories([route("GET", "/orders/user-{id}"), route("POST", "/orders/user-admin")]), [])), "exact 0.6 -> orders GET /orders/user-{id}");
+});
+
+test("a possible gateway competitor prevents inferred routing", () => {
+  const call = site("/api/orders/user-{}");
+  const repos = [...repositories([route("GET", "/orders/user-{id}")]), ...repositories([route("GET", "/orders/user-admin")], "billing")];
+  assert.deepEqual(inferGateways([call], repos, []), []);
+});
+
+test("an uncertain exact contract match prevents attribution at the base-path rung", () => {
+  const target = { method: "GET" as const, path: "/api/user-{}" };
+  const repos = [...repositories([route("GET", "/api/user-admin")]), ...repositories([route("GET", "/user-{id}", undefined, { contextPath: "/api" })], "billing")];
+  assert.equal(matchDeclaredOperation(target, repos), undefined);
+});
+
+
+test("a less specific possible route cannot displace the established route in the same repository", () => {
+  const call = site("/orders/user-{}");
+  const routes = [route("GET", "/orders/user-{id}"), route("GET", "/{section}/user-a")];
+  assert.equal(joined(matchCallSite(call, targetOf(call), repositories(routes), [])), "exact 0.6 -> orders GET /orders/user-{id}");
+});

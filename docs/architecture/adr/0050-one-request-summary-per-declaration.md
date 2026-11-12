@@ -28,4 +28,4 @@ the conclusions they can invalidate.
 
 ## Not decided here
 
-- Reading an injection token's provider value: it closes no measured item, so the base it names is a cut until a measured item needs it.
+- Source-backed injection-token values are defined by [ADR-0053](0053-multi-repository-relations-retain-their-proof-context.md).

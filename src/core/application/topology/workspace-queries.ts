@@ -1,6 +1,6 @@
 import { EVERYTHING, withCuts } from "../../domain/shared/question.ts";
 import { type LibrarySource, libraryPath } from "../../domain/topology/library-source.ts";
-import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
+import { completeSourceRead, contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
 import { ANYTHING, incompleteSectionCuts, provenanceOf, type Cut, type DeclaredScope, type Fact, type Finding, type FactBase, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -51,6 +51,7 @@ interface ReadRepository {
   /** What the sources and the build state; the names of the call sites join them once those are read. */
   stated: readonly OutwardName[];
   sources: readonly SourceFile[];
+  completeSource: boolean;
   identity: RepositoryIdentity;
   cuts: readonly Cut[];
 }
@@ -79,6 +80,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
       const { export: snapshotExport, findings, sources } = extracted.value;
       const selected = pathSelection(scope, matcher.matches);
       const selectedSources = sources.filter(({ path }) => selected(path));
+      const sourcePaths = new Set(sources.map(({ path }) => path));
       const base = factBaseOf(deps, {
         repoId,
         sha,
@@ -97,6 +99,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
           base,
           stated: deps.evidence.names(selectedSources),
           sources,
+          completeSource: completeSourceRead(snapshotExport, sourcePaths, scope),
           cuts: exportCuts(snapshotExport),
           identity: {
             repo: repoId,
@@ -120,11 +123,12 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
     const scope = at.scope;
     const selected = pathSelection(scope, matcher.matches);
     const selectedSources = sources.filter(({ path }) => selected(path));
+    const sourcePaths = new Set(sources.map(({ path }) => path));
     const snapshot = { repo: at.repoId, kind: "live" as const, head: at.head, stateId: at.tree.stateId };
     const base = { ...factBaseOf(deps, { repoId: at.repoId, sha: at.head, trust: at.trust, scope, content: JSON.stringify({ export: contentFingerprint(snapshotExport), declaredTrust: at.trust, remotes: remotes.value.map(({ name, url }) => ({ name, repository: repositoryNameOf(url) })).toSorted((a, b) => compareText(a.name, b.name) || compareText(a.repository ?? "", b.repository ?? "")) }), declaredConfig: deps.budget === undefined ? {} : { exportBudget: deps.budget }, engines: deps.engines }), snapshot };
     return { ok: true, value: {
       repository: { repo: at.repoId, snapshot, entrypoints: selectedFindings(findings, selected), callSites: [], declaredTrust: at.trust },
-      source: declared, selectedPaths: heldPaths(snapshotExport)?.filter(selected), base, stated: deps.evidence.names(selectedSources), sources, cuts: exportCuts(snapshotExport),
+      source: declared, selectedPaths: heldPaths(snapshotExport)?.filter(selected), base, stated: deps.evidence.names(selectedSources), sources, completeSource: completeSourceRead(snapshotExport, sourcePaths, scope), cuts: exportCuts(snapshotExport),
       identity: { repo: at.repoId, id: at.repoId, artifacts: deps.evidence.artifacts(selectedSources), remotes: remotes.value.map((remote) => ({ remote: remote.name, repository: repositoryNameOf(remote.url) })), evidence: remotes.value.map((remote) => ({ path: ".git/config", line: 1, via: remote.name })) },
     } };
   }
@@ -150,7 +154,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
         };
       })];
       const librarySources = libraries.flatMap((library) => library.sources.toSorted((a, b) => compareText(a.path, b.path)).map((source) => ({ ...source, repo: library.identity.id })));
-      const callSites = (await deps.callSites.of(entry.sources, entry.repository.repo, librarySources)).filter((site) => selected(site.file));
+      const callSites = (await deps.callSites.of(entry.sources, entry.repository.repo, librarySources, { completeSource: entry.completeSource && librarySources.length === 0 })).filter((site) => selected(site.file));
       const entrypoints = librarySources.length === 0 ? entry.repository.entrypoints : selectedFindings((await deps.extractor.extract(entry.sources, librarySources)).findings, selected);
       resolved.push({ ...entry, librarySources, cuts, repository: { ...entry.repository, entrypoints }, callSites, names: [...entry.stated, ...callSiteNames(entry.repository.repo, callSites)] });
     }

@@ -1,4 +1,7 @@
+import type { CallSiteDiagnostic } from "./call-site-diagnostic.ts";
+export { CALL_SITE_CAUSES, type CallSiteDiagnostic } from "./call-site-diagnostic.ts";
 import type { LibrarySource } from "./library-source.ts";
+import type { RequestUrlPart } from "./request-url.ts";
 import type { HttpMethod } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
 import { declarationSpan, type CallSiteReach, type Cut, type Evidence, type Finding, type UnknownReason } from "../shared/fact.ts";
@@ -22,21 +25,12 @@ export interface CallSite {
   stated?: StatedRequest;
 }
 
-export const CALL_SITE_CAUSES = ["source-not-read", "request-not-found", "dispatch-disagreement", "recursive", "destination-undecidable"] as const;
-
-export interface CallSiteDiagnostic {
-  cause: (typeof CALL_SITE_CAUSES)[number];
-  source?: "not-read" | "read";
-  /** Library files rejected by the parser; none is asserted to declare the intermediary. */
-  unreadableSources?: readonly Evidence[];
-  /** The values a run-time choice in the destination takes on the branches the snapshot decides; never the destination itself. */
-  alternatives?: readonly string[];
-}
-
 /** The established HTTP method and, when read, its path independently of the destination base. */
 export interface StatedRequest {
   method: HttpMethod;
   path?: string;
+  /** Separate possible URL expressions; none asserts a normalized destination or a route match. */
+  expressions?: readonly (readonly RequestUrlPart[])[];
 }
 
 /**
@@ -64,13 +58,17 @@ export interface EventTarget {
   exchange?: string;
 }
 
+export interface CallSiteReadOptions {
+  completeSource?: boolean;
+}
+
 /** The call sites of a repository's snapshot, read from its sources; reading them resolves the modules they import. */
 export interface CallSiteReader {
   /**
    * `libraries` are the sources of repositories the snapshot depends on: a call through a class they declare is read
    * through their code, and none of their own calls is reported.
    */
-  of(files: readonly { path: string; content: string }[], repo: string, libraries?: readonly LibrarySource[]): Promise<readonly CallSite[]>;
+  of(files: readonly { path: string; content: string }[], repo: string, libraries?: readonly LibrarySource[], options?: CallSiteReadOptions): Promise<readonly CallSite[]>;
 }
 
 /**
@@ -101,7 +99,7 @@ export interface PlacedOrigin {
 
 /** The call sites of a snapshot with their exact places, read as `CallSiteReader.of` reads them. */
 export interface PlacedCallSiteReader {
-  placed(files: readonly { path: string; content: string }[], repo: string, libraries?: readonly LibrarySource[]): Promise<readonly PlacedCallSite[]>;
+  placed(files: readonly { path: string; content: string }[], repo: string, libraries?: readonly LibrarySource[], options?: CallSiteReadOptions): Promise<readonly PlacedCallSite[]>;
 }
 
 /**

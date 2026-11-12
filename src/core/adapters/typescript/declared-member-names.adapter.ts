@@ -82,7 +82,8 @@ function derive(file: SourceFile): DeclaredMemberNames {
         declare(holder, propertyName(holder.name)!, "object", outer);
       }
     }
-    if (isFunctionValueNode(node)) functionValues.push({ start: positionOf(node.getStart(tree)), end: positionOf(node.getEnd()) });
+    const immediate = isFunctionValueNode(node) && runsImmediately(node);
+    if (isFunctionValueNode(node) && !immediate) functionValues.push({ start: positionOf(node.getStart(tree)), end: positionOf(node.getEnd()) });
     if (ts.isDecorator(node)) {
       let scope: ts.Node | undefined = node.parent;
       while (scope !== undefined && !ts.isClassLike(scope)) scope = scope.parent;
@@ -101,7 +102,7 @@ function derive(file: SourceFile): DeclaredMemberNames {
       const start = positionOf(node.getStart(tree));
       const named = positionOf((name ?? node).getStart(tree));
       const end = positionOf(node.getEnd());
-      owners.push({ name: constructor ? "constructor" : (name?.getText(tree) ?? "").replace(/^['"]|['"]$/g, ""), start: start.line, nameLine: named.line, nameColumn: named.column, startColumn: start.column, endLine: end.line, endColumn: end.column });
+      owners.push({ ...(immediate ? { runsInEnclosingBody: true as const } : {}), name: constructor ? "constructor" : (name?.getText(tree) ?? "").replace(/^['"]|['"]$/g, ""), start: start.line, nameLine: named.line, nameColumn: named.column, startColumn: start.column, endLine: end.line, endColumn: end.column });
     }
     if (ts.isClassDeclaration(node) && node.name !== undefined) declare(node, node.name.text, "class", undefined, true, true);
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && (node.initializer === undefined || !ts.isObjectLiteralExpression(unwrapped(node.initializer)))) declare(node, node.name.text, "value", undefined, true, true);
@@ -129,7 +130,7 @@ function derive(file: SourceFile): DeclaredMemberNames {
       }
       const namePosition = positionOf((ts.isPropertyAccessExpression(expression) ? expression.name : written).getStart(tree));
       anchors.push({ line: namePosition.line, column: namePosition.column + 1 });
-      calls.push({ anchors, kind: ts.isNewExpression(node) ? "instantiates" : "calls", line: point.line, column: point.column + 1, name: written.getText(tree), ...(callee === undefined ? {} : { callee }), owners: [...owners] });
+      calls.push({ ...(ts.isCallExpression(node) && isFunctionValueNode(expression) && runsImmediately(expression) ? { inline: true as const } : {}), anchors, kind: ts.isNewExpression(node) ? "instantiates" : "calls", line: point.line, column: point.column + 1, name: written.getText(tree), ...(callee === undefined ? {} : { callee }), owners: [...owners] });
     }
     if (ts.isMethodDeclaration(node) && ts.isClassLike(node.parent)) {
       callable(node, isOverridable(node));
@@ -170,6 +171,13 @@ function derive(file: SourceFile): DeclaredMemberNames {
   };
   visit(tree);
   return { names: [...names].sort(compareText), ...localReceivers(tree), callables, declarations, calls, functionValues, initializedFields };
+}
+
+function runsImmediately(node: ts.ArrowFunction | ts.FunctionExpression): boolean {
+  if (hasModifier(node, ts.SyntaxKind.AsyncKeyword) || (ts.isFunctionExpression(node) && node.asteriskToken !== undefined)) return false;
+  let expression: ts.Expression = node;
+  while (ts.isParenthesizedExpression(expression.parent)) expression = expression.parent;
+  return ts.isCallExpression(expression.parent) && expression.parent.expression === expression && expression.parent.questionDotToken === undefined;
 }
 
 function propertyName(name: ts.PropertyName | ts.BindingName): string | undefined {

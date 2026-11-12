@@ -2,6 +2,7 @@ import type { EntrypointExtractor } from "../../../ports/entrypoint-extractor.po
 import type { FrameworkPlugin } from "../../../ports/framework-plugin.port.ts";
 import type { ImportedName, RouterVocabulary } from "../../../ports/router-vocabulary.port.ts";
 import type { AngularConsumerSyntaxFactory, InputSyntax } from "../../../ports/angular-consumer-syntax.port.ts";
+import type { FrameworkValueFactory } from "../../../ports/framework-values.port.ts";
 
 const ROUTER_PACKAGE = "@angular/router";
 const ROUTER_MODULE = "RouterModule";
@@ -42,11 +43,12 @@ function unreadableInput(inputs: readonly InputSyntax[]): boolean {
 export interface AngularReaders {
   routes(router: RouterVocabulary): EntrypointExtractor;
   consumer?: AngularConsumerSyntaxFactory;
+  values?: FrameworkValueFactory;
 }
 
 /** Angular over the TypeScript pack: its route tables are its entrypoints, read in the projects that depend on its router. */
 export function createAngularPlugin(readers: AngularReaders): FrameworkPlugin {
-  return { languages: ["typescript"], signal: ANGULAR_ROUTER.signal, entrypoints: readers.routes(ANGULAR_ROUTER), ...(readers.consumer === undefined ? {} : { consumer: {
+  return { languages: ["typescript"], signal: ANGULAR_ROUTER.signal, entrypoints: readers.routes(ANGULAR_ROUTER), ...(readers.values === undefined ? {} : { values: readers.values }), ...(readers.consumer === undefined ? {} : { consumer: {
     signals: [{ dependency: "@angular/core", module: "@angular/core" }],
     async prepare(reading, repo) {
       const syntax = await readers.consumer!(reading, repo, ANGULAR_ROUTER);

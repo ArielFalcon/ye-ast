@@ -7,6 +7,7 @@ import { dependencyDiagnostic } from "./dependency-schema.ts";
 import { z } from "zod";
 import { HTTP_METHODS } from "../core/domain/entrypoints/http-route.ts";
 import { CALL_SITE_CAUSES } from "../core/domain/topology/call-site.ts";
+import { SUMMARY_CAUSES } from "../core/domain/topology/request-summary.ts";
 import { CUT_REASONS, CUT_SUB_REASONS, TRUST_MODES, UNKNOWN_REASONS, type DeclaredConfig } from "../core/domain/shared/fact.ts";
 import type { Part } from "../core/ports/evidence-composition.port.ts";
 import { compositionIdSchema as idOf } from "./composition-id-schema.ts";
@@ -140,7 +141,12 @@ export const moduleVia = z.strictObject({
   form: z.enum(["dynamic-import", "type-query"]).exactOptional(),
 });
 export const callLocation = z.strictObject({ file: ids.file, line: int, column: int.exactOptional(), endLine: int.exactOptional() });
-const stated = z.strictObject({ method: httpMethod, path: z.string().exactOptional() });
+const requestUrlPart = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("text"), text: z.string() }),
+  z.strictObject({ kind: z.literal("runtime"), encoded: z.literal(true).exactOptional() }),
+  z.strictObject({ kind: z.literal("unknown"), cause: z.enum(SUMMARY_CAUSES), evidence: z.array(evidenceValue) }),
+]);
+const stated = z.strictObject({ method: httpMethod, path: z.string().exactOptional(), expressions: z.array(z.array(requestUrlPart)).exactOptional() });
 const transport = z.enum(["http", "event"]);
 const httpTarget = z.strictObject({ method: httpMethod, path: z.string(), base: z.string().exactOptional() });
 const eventTarget = z.strictObject({ protocol, destination: z.string(), role: z.literal("publish") });
@@ -319,6 +325,7 @@ export const partSchema = z.discriminatedUnion("kind", [
       z.strictObject({ kind: z.enum(["global", "unnamed"]), names: strings }),
     ])).exactOptional(),
     alternatives: z.array(ids.anchor).exactOptional(),
+    unresolvedEffects: z.array(unresolvedCallSiteSchema).exactOptional(),
     effects: z.array(z.discriminatedUnion("kind", [
       z.strictObject({ kind: z.literal("http"), line: count, column: count.exactOptional(), target: httpTarget, place: ids.evidence.exactOptional() }),
       z.strictObject({ kind: z.literal("message"), line: count, column: count.exactOptional(), target: eventTarget, place: ids.evidence.exactOptional() }),

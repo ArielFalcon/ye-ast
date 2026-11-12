@@ -21,9 +21,9 @@ export interface DeclaredMemberNames {
   /** In source order. */
   receiverBindings: readonly ReceiverBinding[];
   /**
-   * The function values the source writes, each whole, in source order: the same arrows, function expressions, lambdas
+   * The function values whose execution the source does not establish directly, each whole, in source order: arrows, function expressions, lambdas
    * and method references a function-value call is read through, and Java anonymous-class methods. What runs inside one
-   * runs only when something runs the value.
+   * runs only when something runs the value. Direct synchronous non-generator IIFEs execute in their enclosing body.
    */
   functionValues: readonly SourceSpan[];
 }
@@ -136,6 +136,8 @@ export interface DeclaredMemberNamesReader {
 
 /** A written call and the enclosing declarations that can own its execution, outermost first. */
 export interface SyntaxCall {
+  /** A direct synchronous anonymous invocation whose body executes in its enclosing declaration. */
+  inline?: true;
   kind: "calls" | "instantiates" | "references";
   line: number;
   column: number;

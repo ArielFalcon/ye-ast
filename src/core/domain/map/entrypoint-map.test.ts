@@ -1,6 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { contentFingerprint, declaredScope, exportCuts, isInMapScope, type MapExport } from "./entrypoint-map.ts";
+import { completeSourceRead, contentFingerprint, declaredScope, exportCuts, isInMapScope, type MapExport } from "./entrypoint-map.ts";
+
+test("complete source proof ignores non-source listing records but refuses omitted inputs and restricted captures", () => {
+  const listing: MapExport = { files: [{ path: "api.ts", blob: "a", written: true }, { path: "README.md", blob: "b", written: false }], skipped: [] };
+  const scope = declaredScope();
+  assert.equal(completeSourceRead(listing, new Set(["api.ts"]), scope), true);
+  assert.equal(completeSourceRead(listing, new Set(), scope), false);
+  assert.equal(completeSourceRead({ ...listing, stopped: { at: "next.ts", limit: 1 } }, new Set(["api.ts"]), scope), false);
+  assert.equal(completeSourceRead(listing, new Set(["api.ts"]), { ...scope, include: ["api.ts"] }), false);
+});
 
 const exportOf = (blob: string, overrides: Partial<MapExport> = {}): MapExport => ({
   files: [{ path: "src/app/page.component.html", blob, written: true }],

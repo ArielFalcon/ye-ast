@@ -30,7 +30,7 @@ import type { FrameworkPlugin } from "../core/ports/framework-plugin.port.ts";
 
 /** The workspace read of consequences queries over the workspace read, the TypeScript flow and request origin readers and the Angular template reader. */
 export function composeConsumerSources(deps: { operation: WorkspaceReadOperation; heads: HeadReaderDeps; digest: Digest; importOrigins: ImportOriginsReader; memberNames: DeclaredMemberNamesReader; modules: ModuleDependenciesReader; engines: Readonly<Record<string, string>>; callSites: PlacedCallSiteReader; frameworks: readonly FrameworkPlugin[]; typeBindings?: TypeBindings; checkerInputs?: RevisionSources; declaredOutputs?: (repo: string) => readonly DeclaredBuildOutput[] | undefined }): ConsumerSources {
-  return createConsumerSources({ ...deps, consumerReaders: (files, repo) => createConsumerReaders(files, repo, undefined, deps.frameworks), metadata: createAngularMetadataReader(), templateFlow: createTemplateFlowReader(), relations: composeAngularRelations() });
+  return createConsumerSources({ ...deps, consumerReaders: (files, repo, options) => createConsumerReaders(files, repo, undefined, deps.frameworks, options), metadata: createAngularMetadataReader(), templateFlow: createTemplateFlowReader(), relations: composeAngularRelations() });
 }
 
 /** What the shape readers read of a commit before the files its contract documents reference: Java sources, contract documents and the configuration the mapper reads. */

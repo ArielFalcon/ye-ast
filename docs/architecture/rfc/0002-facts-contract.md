@@ -203,6 +203,8 @@ names are settled in the first slice; the union, the cuts and the inputs are the
    `0.24.0` requires original unknown observations on a reached unknown entrypoint and retains their evidence through
    composition. Outline declarations may carry `placement: {kind: "unplaced", reason: "unresolved-container", at}`;
    absence is used only for established placement. Anonymous lexical ancestry and framework binding are separate.
+   Optional `StatedRequest.expressions` carry: separate ordered URL-expression components with unknown
+   provenance, not normalized paths. Trace steps may retain `unresolvedEffects` separately from complete effects.
    Request occurrence knowledge may coexist with unresolved enumeration; no execution or exclusivity is implied
    (ADR-0052, RFC-0030). Derived-fact keys include the schema so older representations cannot supply new proofs.
 7. **Redaction at egress.** Values and evidence pass redaction when they leave ye-ast's process toward a host: the

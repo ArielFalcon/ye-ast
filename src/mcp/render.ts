@@ -1215,7 +1215,7 @@ export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "
   return lines.join("\n");
 }
 
-const TRACE_FULL_GUIDE = "Select value.steps in pre-order: id, parent, depth, file, symbol, kind, line, endLine, at (the call in the parent), via, deferred, seen (the id that expanded it), leaves (folded terminal declarations with file, start, end) and external (calls leaving the repository by module), alternatives (every body a body-less method may run, when proven; one expands below it via dispatch) and effects (each HTTP request, published message or data operation a declared client makes in its body: kind http with target method, path and base, kind message with target protocol and destination, or kind data with operation, access and optional proven target, at its line). value.roots lists the root step ids per target; value.readingPlan.ranges lists file, start, end and the step ids each range covers, with the total lines. When partial, an unresolved-link cut is at[0] \"file:line spelling\" followed by its candidates, each \"file::Owner.member\" by containment path.";
+const TRACE_FULL_GUIDE = "Select value.steps in pre-order: id, parent, depth, file, symbol, kind, line, endLine, at (the call in the parent), via, deferred, seen (the id that expanded it), leaves (folded terminal declarations with file, start, end) and external (calls leaving the repository by module), alternatives (every body a body-less method may run, when proven; one expands below it via dispatch) and effects (each HTTP request, published message or data operation a declared client makes in its body: kind http with target method, path and base, kind message with target protocol and destination, or kind data with operation, access and optional proven target, at its line). With workspace, value.links and value.unlinked retain matches at executed effects and value.repositorySnapshots pins both endpoints; match basis does not prove host ownership. value.roots lists the root step ids per target; value.readingPlan.ranges lists file, start, end and the step ids each range covers, with the total lines. When partial, an unresolved-link cut is at[0] \"file:line spelling\" followed by its candidates, each \"file::Owner.member\" by containment path.";
 
 const TRACE_BRANCHES = "branches are not evaluated: every call in a body is listed, whichever branch makes it";
 
@@ -1267,6 +1267,7 @@ function traceTreeLines(steps: readonly TraceStep[]): string[] {
       ...(leaves.length === 0 ? [] : [`${indent}  leaves: ${leaves.map((leaf) => (leaf.deferred ? `${leaf.symbol} (deferred)` : leaf.symbol)).join(", ")}`]),
       ...(step.external === undefined ? [] : [`${indent}  external: ${step.external.map(externalText).join("; ")}`]),
       ...(step.effects === undefined ? [] : [`${indent}  effects: ${step.effects.map((effect) => `${effectText(effect)} at ${effect.line}`).join("; ")}`]),
+      ...(step.unresolvedEffects === undefined ? [] : [`${indent}  unresolved requests (URL expressions, not proven destinations):`, ...step.unresolvedEffects.map((site) => `${indent}${unresolvedLine(site, "details")}`)]),
       ...(step.alternatives === undefined ? [] : [`${indent}  dispatch alternatives (${step.alternatives.length}): ${step.alternatives.map((body) => placeText(body.file, body.start, body.end)).join(", ")}`]),
     ];
   });
@@ -1332,6 +1333,7 @@ export function renderTrace(fact: Fact<TraceValue>, detail: ResponseMode = "summ
   if (fact.status === "unknown") return lines.join("\n");
   lines.push(...traceRootLines(fact.value), ...traceSettledLine(fact.value), ...effectLines(fact.value.steps), TRACE_BRANCHES, ...readingPlanLines(fact.value, detail));
   if (detail === "details") lines.push("steps:", ...traceTreeLines(fact.value.steps));
+  if (fact.value.repositorySnapshots !== undefined) lines.push(...linkMapLines(fact.value.links ?? [], fact.value.unlinked ?? [], detail, "links from executed trace effects"));
   lines.push(...traceCutLines(cutsOf(fact), detail));
   return lines.join("\n");
 }
@@ -1357,14 +1359,14 @@ function impactedLinkLine({ link, direction, reach, operations }: ImpactedLink, 
  * The links of a workspace map: each one in details; in summary the count per caller, callee and transport when that is
  * no longer than the list (RFC-0017), with the call sites the join reached without a link always listed.
  */
-function linkMapLines(links: readonly Link[], unlinked: readonly UnlinkedCallSite[], detail: ResponseMode): string[] {
+function linkMapLines(links: readonly Link[], unlinked: readonly UnlinkedCallSite[], detail: ResponseMode, label = "links between the repositories read"): string[] {
   const literal = links.map((link, index) => linkLine(link, index + 1));
   const pairs = new Map<string, number>();
   for (const { from, to, transport } of links) pairs.set(`${from.repo} -> ${to.repo} ${transport}`, (pairs.get(`${from.repo} -> ${to.repo} ${transport}`) ?? 0) + 1);
   const counted = [...[...pairs].map(([pair, count]) => `  - ${pair}: ${count}`), `  ${categoryRecovery({ details: "lists each link" })}`];
   const listed = detail === "details" || links.length === 0 || size(literal) < size(counted) ? literal : counted;
   return [
-    `links between the repositories read (${links.length}):`, ...listed,
+    `${label} (${links.length}):`, ...listed,
     ...(unlinked.length === 0 ? [] : [`call sites the join reached without a link (${unlinked.length}):`, ...unlinked.map(({ from, transport, outcome, name, repos, routes }) => `  - ${from.repo}:${placeText(from.file, from.line)} ${from.symbol} ${transport} ${name}: ${outcome}${repos === undefined ? "" : ` (${repos.join(", ")})`}${routes === undefined ? "" : ` routes ${routes.join(", ")}`}`)]),
   ];
 }
@@ -1535,7 +1537,8 @@ function unresolvedListing(sites: readonly UnresolvedCallSite[], detail: Respons
 
 function unresolvedLine(site: UnresolvedCallSite, detail: ResponseMode): string {
   const through = site.via === undefined ? "" : `, through ${site.via}`;
-  const stated = site.stated === undefined ? "" : ` ${site.stated.method}${site.stated.path === undefined ? "" : ` ${site.stated.path}`}`;
+  const expressions = site.stated?.expressions?.map((parts) => parts.map((part) => part.kind === "text" ? JSON.stringify(part.text) : part.kind === "runtime" ? part.encoded ? "encode(runtime)" : "runtime" : `unknown(${part.cause})`).join(" + ")).join(" | ");
+  const stated = site.stated === undefined ? "" : ` ${site.stated.method}${site.stated.path === undefined ? "" : ` ${site.stated.path}`}${expressions === undefined ? "" : `; URL expression: ${expressions} (destination unresolved)`}`;
   const evidence = detail === "details" ? ` <- ${site.evidence.map(evidenceText).join(", ")}${site.diagnostic?.unreadableSources === undefined ? "" : `; unreadable libraries: ${site.diagnostic.unreadableSources.map(evidenceText).join(", ")}`}${site.diagnostic?.alternatives === undefined ? "" : `; chosen at run time, declared alternatives: ${site.diagnostic.alternatives.join(", ")}`}` : ` ${unresolvedLabel(site)}`;
   return `      ${spanText(site.line, site.endLine)} ${site.symbol} (${site.transport}${through})${stated}${evidence}`;
 }

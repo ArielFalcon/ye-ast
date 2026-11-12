@@ -139,12 +139,29 @@ fallback of a field origin.
 
 A wrapper's request site is its call when the request summary places it there.
 
+A placed HTTP request whose destination is undecided may retain `unresolvedEffects` on the step with the
+existing unresolved-link cut. Each entry carries the unresolved call site and its independently stated request
+components. `stated.expressions` preserves separate URL expressions as ordered text, runtime values and unknown
+values with their causes and evidence. Text following an unknown prefix is not necessarily a path: the prefix may
+contain query or fragment delimiters. These observations neither count as complete effects nor relax occurrence,
+body ownership or execution proofs.
+
 Trace accepts optional `workspace` (`repos`, `gateways`) and `offline` inputs on the library port, protocol, MCP
 `ye_ast_trace` and composed trace queries. CLI uses `trace --workspace <manifest.json> [--offline]`. Omission selects only
 root-repository sources; `{}` uses eligible persisted workspace defaults. The existing workspace operation selects snapshots,
 computes artifact-proven dependency closures and supplies `LibrarySource` to placed call-site extraction. The Java reader uses its existing library summaries; other readers retain their existing coverage. Root indexing
-and the walk stay within the root repository. A live root retains its existing `onStale` callback after the shared capture closes. Dependency-library live sidecars are not exposed by the Fact-returning trace port; the acceptance measurements use committed snapshots. Library snapshots participate in the composite input identity; library
+and the walk stay within the root repository. With workspace reading, `repositorySnapshots`, `links` and `unlinked`
+retain the topology matches of exactly placed HTTP or message effects in the trace. Matches preserve their original
+basis, confidence and profile conditions; a suffix match does not become an exact destination. Source columns are
+required to associate a match with an executed effect. Unrelated and deferred occurrences contribute no executed link.
+The target handler and its repository snapshot provide the next trace target; producer bodies are not automatically
+expanded across an HTTP boundary. Incomplete workspace reading adds a section cut to the trace.
+A live root retains its existing `onStale` callback after the shared capture closes. Dependency-library live sidecars are not exposed by the Fact-returning trace port; the acceptance measurements use committed snapshots. Library snapshots participate in the composite input identity; library
 paths keep the existing `(library)/<repository>/...` provenance. Unrelated declared repositories are not library sources.
+
+Direct synchronous, non-generator IIFEs are part of their enclosing body's execution. Their syntax ownership carries
+`runsInEnclosingBody`; stored, passed, asynchronous and generator values retain their deferred boundaries. No library
+callee name, including an Observable factory, establishes execution by itself.
 
 A library summary carries uncertainty when a request occurs inside a function value whose execution is not proven,
 also through another library method. HTTP and message target readers retain a cut naming the library. Exact-position

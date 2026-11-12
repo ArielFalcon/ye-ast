@@ -1,7 +1,7 @@
 import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
-import { compareCallSites, type CallSite, type CallSiteDiagnostic, type CallSiteReader, type HttpTarget, type PlacedCallSite, type PlacedCallSiteReader, type PlacedOrigin, type StatedRequest } from "../../domain/topology/call-site.ts";
+import { compareCallSites, type CallSite, type CallSiteDiagnostic, type CallSiteReadOptions, type CallSiteReader, type HttpTarget, type PlacedCallSite, type PlacedCallSiteReader, type PlacedOrigin, type StatedRequest } from "../../domain/topology/call-site.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import { requestMethodOf } from "../../domain/entrypoints/http-route.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -10,6 +10,8 @@ import { buildDefines, type BuildDefines } from "./url-define.ts";
 import { callUrl, joinedCallUrl, RUN_TIME_HOLE, urlText } from "../../domain/topology/path-template.ts";
 import { known, prevailingCause, undecided, undecidedTarget, type Evaluated, type Undecided } from "../../domain/topology/evaluated.ts";
 import { injectedClass } from "./angular-injection.ts";
+import { RequestValueReading, type ValueUnit } from "./request-value-reading.ts";
+import type { FrameworkValueFactory, FrameworkValues } from "../../ports/framework-values.port.ts";
 import { declarationCounts } from "./syntax-names.ts";
 import { defaultExportOf } from "./import-bindings.ts";
 import { bindingNames, constructorParameters, lineOf, objectOf, ownBindings, propertyOf, sourceBindings, thisClass, typeName, unwrapped } from "./syntax.ts";
@@ -114,18 +116,18 @@ interface Located<E extends ts.Expression = ts.Expression> {
   trail: ReadonlySet<string>;
 }
 
-export function createHttpCallSites(): CallSiteReader & PlacedCallSiteReader {
-  return { of: async (files, repo) => (await readPlaced(files, repo)).map(({ site, column }) => ({ ...site, ...(column === undefined ? {} : { column: column + 1 }) })), placed: (files, repo) => readPlaced(files, repo) };
+export function createHttpCallSites(values: readonly FrameworkValueFactory[] = []): CallSiteReader & PlacedCallSiteReader {
+  return { of: async (files, repo, _libraries, options) => (await readPlaced(files, repo, options, values)).map(({ site, column }) => ({ ...site, ...(column === undefined ? {} : { column: column + 1 }) })), placed: (files, repo, _libraries, options) => readPlaced(files, repo, options, values) };
 }
 
-function readerOf(files: readonly SourceFile[]): { shapes: ReadonlyMap<string, FileShape>; reader: Reader } {
+function readerOf(files: readonly SourceFile[], options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = []): { shapes: ReadonlyMap<string, FileShape>; reader: Reader } {
   const shapes = new Map(files.filter((file) => isTypeScriptSource(file.path)).map((file) => [file.path, describe(file)]));
   const modules = moduleResolverOf(files);
-  return { shapes, reader: new Reader(shapes, modules, buildDefines(files)) };
+  return { shapes, reader: new Reader(shapes, modules, buildDefines(files), files, options, values) };
 }
 
-export function createHttpSummaryResolver(files: readonly SourceFile[]): SummaryResolver {
-  return readerOf(files).reader.summaryResolver;
+export function createHttpSummaryResolver(files: readonly SourceFile[], options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = []): SummaryResolver {
+  return readerOf(files, options, values).reader.summaryResolver;
 }
 
 /** A call to a wrapper method, and the method it enters. */
@@ -158,8 +160,8 @@ interface PlacedShape {
   targets: readonly { call: ts.CallExpression; key: string }[];
 }
 
-async function prepareRequestCalls(files: readonly SourceFile[]) {
-  const { shapes, reader } = readerOf(files);
+async function prepareRequestCalls(files: readonly SourceFile[], options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = []) {
+  const { shapes, reader } = readerOf(files, options, values);
   const summaries = await summariesOf(files, reader.summaryResolver);
   const callSummaries = new Map<ts.CallExpression, RequestSummary>();
   const directResults = new Map<ts.CallExpression, { kind: "direct"; result: ResultShape; bodyAccess?: "json" }>();
@@ -290,12 +292,12 @@ async function prepareRequestCalls(files: readonly SourceFile[]) {
   return { shapes, reader, direct, placed, lookup, groups, destinations };
 }
 
-export async function createRequestCallLookup(files: readonly SourceFile[]): Promise<RequestCallLookup> {
-  return (await prepareRequestCalls(files)).lookup;
+export async function createRequestCallLookup(files: readonly SourceFile[], options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = []): Promise<RequestCallLookup> {
+  return (await prepareRequestCalls(files, options, values)).lookup;
 }
 
-async function readPlaced(files: readonly SourceFile[], repo: string): Promise<readonly PlacedCallSite[]> {
-  const { shapes, reader: read, direct, placed, lookup, groups, destinations } = await prepareRequestCalls(files);
+async function readPlaced(files: readonly SourceFile[], repo: string, options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = []): Promise<readonly PlacedCallSite[]> {
+  const { shapes, reader: read, direct, placed, lookup, groups, destinations } = await prepareRequestCalls(files, options, values);
   const found: PlacedCallSite[] = [];
   const forwardedLeaves = new Set([...placed.entries()].flatMap(([call, items]) => items.filter((item) => item.leaf !== call).map((item) => item.leaf)));
   const gapCoverage = new WeakMap<SummaryGap, boolean>();
@@ -346,6 +348,13 @@ async function readPlaced(files: readonly SourceFile[], repo: string): Promise<r
         else if (direct.has(call)) target = await read.directTarget(shape, call);
         else if (outstanding || groupGap) target = summaryTarget(shape, call, [], summary, destinations, group);
         if (target === undefined) continue;
+        if (target.target.status === "unknown" && occurrence !== undefined) {
+          const method = occurrence[0]?.shape.method;
+          const expressions = [...new Map(occurrence.flatMap(({ shape }) => shape.url === undefined ? [] : [[JSON.stringify(shape.url), shape.url] as const])).values()];
+          if (method !== undefined && occurrence.every((item) => item.shape.method === method) && expressions.some((parts) => parts.some((part) => part.kind === "text")) && occurrence.every((item) => item.shape.url !== undefined)) {
+            target = { ...target, stated: { ...target.stated, method, expressions } };
+          }
+        }
         const site = siteOf(shape, call, repo, target);
         identified ||= site.target.status === "complete";
         const origins = occurrence?.flatMap(({ calls: chain }) => originsOfChain(chain)) ?? [];
@@ -535,6 +544,9 @@ interface ReadTarget {
 
 /** Reads one file's call sites, resolving the module specifiers it meets through the snapshot. */
 class Reader {
+  private readonly providerReading: RequestValueReading | undefined;
+  private readonly providerContributions: Promise<readonly FrameworkValues[]> | undefined;
+  private readonly explicitConstructions = new WeakMap<ts.ClassDeclaration, Promise<boolean>>();
   private valueSyntax: ReturnType<typeof requestValueSyntax> | undefined;
   private readonly stableBindings = new WeakMap<ts.Node, Promise<boolean>>();
   private readonly importedWrites = new WeakMap<ts.SourceFile, Map<string, boolean>>();
@@ -746,6 +758,9 @@ class Reader {
     private readonly shapes: ReadonlyMap<string, FileShape>,
     private readonly modules: ModuleResolver,
     private readonly defines: BuildDefines,
+    files: readonly SourceFile[],
+    options?: CallSiteReadOptions,
+    values: readonly FrameworkValueFactory[] = [],
   ) {
     this.unsafeEncoder = [...shapes.values()].some((shape) => shape.unsafeEncoder);
     this.fileOf = async (from, specifier) => {
@@ -753,6 +768,14 @@ class Reader {
       return "file" in resolved ? resolved.file : undefined;
     };
     this.declarationOf = createDeclarationLookup(async (file) => shapes.get(file)?.module, this.fileOf, { anonymousDefault: true });
+    if (options?.completeSource === true && values.length > 0) {
+      this.providerReading = new RequestValueReading(files, shapes, modules, async (unit, name) => {
+        const shape = shapes.get(unit.source.fileName);
+        const held = shape === undefined ? undefined : await this.constantAt(shape, name, new Set());
+        return held === undefined ? undefined : { unit: held.shape, expression: held.expression };
+      });
+      this.providerContributions = Promise.all(values.map((factory) => factory.prepare(this.providerReading!))).then((read) => read.filter((value) => value !== undefined));
+    }
   }
 
   private async externalFactoryProperty(receiver: HeldClass, name: string): Promise<boolean> {
@@ -1112,7 +1135,14 @@ class Reader {
     if (trail.has(visited)) return undefined;
     const member = memberNamed(declaration, name);
     if (member === undefined) {
-      if (constructorParameters(declaration).some((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name && ts.isParameterPropertyDeclaration(parameter, parameter.parent))) return ASSIGNED_AT_RUN_TIME;
+      const parameter = constructorParameters(declaration).find((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name && ts.isParameterPropertyDeclaration(parameter, parameter.parent));
+      if (parameter !== undefined) {
+        if (ts.isIdentifier(parameter.name) && !(await this.assignedAbove(read, name)) && !(await this.assignedBelow(declaration, name, new Set()))) {
+          const provided = await this.provided(shape, parameter.name, trail);
+          if (provided !== undefined) return provided;
+        }
+        return ASSIGNED_AT_RUN_TIME;
+      }
       const base = baseClassName(declaration);
       const found = base === undefined ? undefined : await this.classOf(shape, base);
       return found === undefined ? undefined : this.fieldOf(found.shape, found.declaration, name, new Set(trail).add(visited), read);
@@ -1165,6 +1195,8 @@ class Reader {
 
   /** A function the call names, evaluated at its one returned expression: its own parameters are the run-time values. */
   private async evaluateCall(shape: FileShape, call: ts.CallExpression, scope: Scope, trail: ReadonlySet<string>): Promise<Read> {
+    const provided = await this.provided(shape, call, trail);
+    if (provided !== undefined) return this.evaluate(provided.shape, provided.expression, NO_SCOPE, provided.trail);
     if (ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === "toString") return this.scalarText(shape, call.arguments.length === 0 ? [call.expression.expression] : [], scope, trail);
     if (ts.isPropertyAccessExpression(call.expression)) return this.evaluateMethod(shape, call.expression, trail, call, scope);
     if (!ts.isIdentifier(call.expression)) return UNDECIDABLE;
@@ -1178,6 +1210,46 @@ class Reader {
     if (trail.has(visited)) return undecided("recursive", [placeOf(shape, call)]);
     const found = await this.callTargetOf(shape, call.expression.text);
     return found === undefined ? UNDECIDABLE : this.evaluateReturned(found.target, found.declaration, new Set(trail).add(visited));
+  }
+
+  private async provided(shape: ValueUnit, token: ts.Expression, trail: ReadonlySet<string>): Promise<Located | undefined> {
+    const marker = `${shape.source.fileName}\0provider ${token.getStart(shape.source)}`;
+    const reading = this.providerReading;
+    if (reading === undefined || this.providerContributions === undefined || trail.has(marker)) return undefined;
+    const contributions = await this.providerContributions;
+    const bindings = await Promise.all(contributions.map((contribution) => contribution.valueOf(reading.at(token))));
+    const targets = [...new Map(bindings.filter((binding) => binding !== undefined).map((binding) => [JSON.stringify([binding.file, binding.start, binding.end]), binding])).values()];
+    if (targets.length !== 1) return undefined;
+    const expression = reading.expression(targets[0]!);
+    const source = this.shapes.get(targets[0]!.file);
+    if (expression === undefined || source === undefined) return undefined;
+    const owner = ownClassDeclaration(token);
+    if (owner !== undefined && await this.constructedWithoutInjector(owner)) return undefined;
+    return { shape: source, expression, trail: new Set(trail).add(marker) };
+  }
+
+  private constructedWithoutInjector(declaration: ts.ClassDeclaration): Promise<boolean> {
+    let read = this.explicitConstructions.get(declaration);
+    if (read === undefined) { read = this.explicitConstructionOf(declaration); this.explicitConstructions.set(declaration, read); }
+    return read;
+  }
+
+  private async explicitConstructionOf(declaration: ts.ClassDeclaration): Promise<boolean> {
+    const affected = new Set([declaration]);
+    for (const parent of affected) for (const child of await this.subclassesOf(parent)) affected.add(child.declaration);
+    for (const shape of this.shapes.values()) {
+      const expressions: ts.NewExpression[] = [];
+      const visit = (node: ts.Node): void => { if (ts.isNewExpression(node)) expressions.push(node); ts.forEachChild(node, visit); };
+      visit(shape.source);
+      for (const expression of expressions) {
+        if (!ts.isIdentifier(expression.expression)) return true;
+        const target = await this.classOf(shape, expression.expression.text);
+        if (target !== undefined) { if (affected.has(target.declaration)) return true; continue; }
+        const imported = shape.imports.get(expression.expression.text);
+        if (imported === undefined || !("external" in await this.modules.resolve(shape.source.fileName, imported.module))) return true;
+      }
+    }
+    return false;
   }
 
   /** `String(x)` and `x.toString()` write what a template writes for `x`. */

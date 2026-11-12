@@ -1,11 +1,8 @@
 import type { Evidence } from "../shared/fact.ts";
 import type { HttpMethod } from "../entrypoints/http-route.ts";
-import type { CallSiteDiagnostic } from "./call-site.ts";
-
-/** Why a summary could not be decided: the call-site causes a summary can carry, so no cause is added and no SCHEMA changes. */
-export type SummaryCause = Extract<CallSiteDiagnostic["cause"], "recursive" | "dispatch-disagreement" | "destination-undecidable" | "source-not-read">;
-
-export const SUMMARY_CAUSES: readonly SummaryCause[] = ["recursive", "dispatch-disagreement", "destination-undecidable", "source-not-read"];
+import type { SummaryCause } from "./call-site-diagnostic.ts";
+export { SUMMARY_CAUSES, type SummaryCause } from "./call-site-diagnostic.ts";
+import type { RequestUrlPart } from "./request-url.ts";
 
 /** Which of the function's own parameters supplies the request body. */
 export type BodySource = { kind: "parameter"; index: number } | { kind: "none" } | { kind: "unknown"; index: number };
@@ -22,6 +19,7 @@ export interface PathCondition {
  * order. A hole is not a cut: it is a value the call supplies.
  */
 export interface RequestShape {
+  url?: readonly RequestUrlPart[];
   /** Limitations that can invalidate this occurrence; absent when no occurrence-level relevance was established. */
   gaps?: readonly SummaryGap[];
   transport: "http" | "event";

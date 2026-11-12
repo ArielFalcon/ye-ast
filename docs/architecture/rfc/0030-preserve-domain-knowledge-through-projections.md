@@ -204,3 +204,12 @@ unreconciled Java caller reductions as noise or close the original study globall
 
 The owner accepted ADR-0052 and this design on 2026-11-12 by requesting implementation. No product decision is pending.
 The five-unit plan records the evidence still required before delivery; unavailable coverage is not marked complete.
+
+## Partial URL-expression knowledge
+
+The same request owner retains ordered literal text, runtime placeholders and unknown components through supported
+wrapper substitution. Public `StatedRequest.expressions` carries alternative expressions independently of a proved
+`path`. Unknown components retain their cause and evidence. An unknown origin or prefix never permits a literal
+suffix to become an exact route match. Workspace retains these expressions on unresolved call sites; trace retains
+them only where existing occurrence and ownership proofs place the request. Complete effect and link admission
+rules remain unchanged. Provider-value reading and build selection are outside this extension.

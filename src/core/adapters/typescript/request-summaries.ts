@@ -12,12 +12,14 @@ import { RUN_TIME_HOLE } from "../../domain/topology/path-template.ts";
 import type { BodySource, ForwardingRow, PathCondition, RequestShape, RequestSummary, ResultShape, SummaryCause, SummaryGap } from "../../domain/topology/request-summary.ts";
 import { sourceTree } from "./source-tree.ts";
 import { requestSummaryGraph } from "./request-summary-graph.ts";
-import { applyRequestValue, readRequestValue, UNKNOWN_VALUE, type RequestValue } from "./request-values.ts";
+import { applyRequestValue, readRequestValue, valueUnknown, UNKNOWN_VALUE, type RequestValue } from "./request-values.ts";
+import type { RequestUrlPart } from "../../domain/topology/request-url.ts";
 
 export type DeclarationKey = string;
 
 /** A path the resolver states: its text, and `holes` with one entry per `{}` of the text, in order. */
 export interface PathRead {
+  url?: readonly RequestUrlPart[];
   status: "known";
   text: string;
   holes: readonly (number | undefined)[];
@@ -719,6 +721,7 @@ function substitute(shape: RequestShape, edge: Edge, conditionalHole = false): S
   if (decided !== undefined && !decided.keeps) return { kind: "dropped" };
   const when = decided?.condition;
   const result: RequestShape = when === undefined ? { transport: shape.transport, method, path, holes, body, hops } : { transport: shape.transport, method, path, holes, body, hops, when };
+  if (reduced?.url !== undefined) result.url = reduced.url;
   const unresolved = reduced === undefined ? shape.unresolved : reduced.unresolved;
   if (unresolved !== undefined) result.unresolved = unresolved;
   if (value !== undefined) SHAPE_VALUES.set(result, value);
@@ -890,6 +893,7 @@ async function shapesOfCall(
     const read = await readBranch(declaration, branch, resolver);
     if (read.status === "undecided") return { kind: "gap", gap: { cause: read.cause, evidence: [placeOf(declaration.file, call), ...read.evidence] } };
     const shape: RequestShape = { transport: "http", method, path: read.text, holes: read.holes, body, hops: [], ...(branch.when === undefined ? {} : { when: branch.when }) };
+    if (read.url !== undefined) shape.url = read.url;
     if (read.unresolved !== undefined) shape.unresolved = read.unresolved;
     if (read.value !== undefined) SHAPE_VALUES.set(shape, read.value);
     SHAPE_ENCODINGS.set(shape, read.encodings);
@@ -983,6 +987,7 @@ async function readBranch(declaration: Declaration, branch: Branch, resolver: Su
   const encodings: boolean[] = [];
   const values: RequestValue[] = [];
   let declarative = false;
+  let undecided = false;
   for (const part of branch.parts) {
     if (part.kind === "text") {
       text += part.text;
@@ -996,7 +1001,16 @@ async function readBranch(declaration: Declaration, branch: Branch, resolver: Su
       continue;
     }
     const read = await resolver.evaluate(declaration.file, part.node);
-    if (read.status === "undecided") return read;
+    if (read.status === "undecided") {
+      undecided = true;
+      const value = resolver.valueFacts === undefined ? valueUnknown(read.evidence, read.cause) : await resolver.valueFacts(declaration.file, part.node);
+      values.push({ kind: "provenance", value, gap: { cause: read.cause, evidence: read.evidence } });
+      declarative = true;
+      text += RUN_TIME_HOLE;
+      holes.push(undefined);
+      encodings.push(false);
+      continue;
+    }
     text += read.text;
     declarative ||= read.value !== undefined;
     if (read.value !== undefined) values.push(read.value);
@@ -1013,7 +1027,9 @@ async function readBranch(declaration: Declaration, branch: Branch, resolver: Su
   }
   if (!declarative) return { status: "known", text, holes, encodings };
   const value = values.reduce<RequestValue>((left, right) => ({ kind: "operation", operator: "+", operands: [left, right] }), { kind: "literal", value: "" });
-  return { status: "known", ...readRequestValue(value), value };
+  const read = readRequestValue(value);
+  if (undecided && read.unresolved !== undefined && read.url.every((part) => part.kind === "unknown")) return { status: "undecided", ...read.unresolved };
+  return { status: "known", ...read, value };
 }
 
 /**

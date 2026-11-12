@@ -129,7 +129,14 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, declar
       const effects = (item.step.effects ??= []);
       const effect = { ...item.read.effect, column: item.column };
       if (!effects.some((existing) => canonicalJson(existing) === canonicalJson(effect))) effects.push(effect);
-    } else markCut(item.step, item.read.cut, cuts);
+    } else {
+      markCut(item.step, item.read.cut, cuts);
+      const request = item.read.request;
+      if (request !== undefined) {
+        const requests = (item.step.unresolvedEffects ??= []);
+        if (!requests.some((existing) => canonicalJson(existing) === canonicalJson(request))) requests.push(request);
+      }
+    }
   }
   for (const placed of placedSites) {
     for (const origin of ("origins" in placed ? placed.origins : undefined) ?? []) {

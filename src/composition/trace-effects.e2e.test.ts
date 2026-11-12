@@ -51,6 +51,29 @@ async function trace(target: string, ...also: string[]): Promise<{ status: strin
 
 const effectsOf = (value: TraceValue) => value.steps.flatMap((step) => (step.effects ?? []).map(({ column: _column, ...effect }) => [step.symbol, effect]));
 
+test("an unresolved request retains URL knowledge without becoming a complete trace effect", async () => {
+  commit({ "src/partial.ts": [
+    "import { HttpClient } from '@angular/common/http';",
+    "declare const BASE: string;",
+    "export class Api { constructor(private http: HttpClient) {} load(id: string) { return this.http.get(`${BASE}/orders/${id}`) } }",
+  ].join("\n") });
+  const found = await trace("src/partial.ts:Api.load");
+  assert.equal(found.status, "partial");
+  assert.equal(effectsOf(found.value).length, 0);
+  const request = found.value.steps.flatMap((step) => step.unresolvedEffects ?? [])[0];
+  assert.equal(request?.stated?.method, "GET");
+  assert.equal(request?.stated?.path, undefined);
+  assert.ok(request?.stated?.expressions?.[0]?.some((part) => part.kind === "text" && part.text === "/orders/"));
+  assert.ok(found.cuts?.some((cut) => cut.reason === "effect-unplaced"));
+});
+
+test("an immediately invoked function contributes its request while a stored callback stays deferred", async () => {
+  commit({ "api.ts": "export function load() {\n  const later = () => fetch('/never');\n  return (() => fetch('/orders'))();\n}" });
+  const found = await trace("api.ts:load");
+  assert.equal(found.status, "complete");
+  assert.deepEqual(found.value.steps.flatMap((step) => step.effects ?? []).filter((effect) => effect.kind === "http").map((effect) => effect.target.path), ["/orders"]);
+});
+
 test("direct Angular HttpClient and a proved injected wrapper retain their HTTP effects", async () => {
   commit({
     "src/api.client.ts": `import { HttpClient } from '@angular/common/http';

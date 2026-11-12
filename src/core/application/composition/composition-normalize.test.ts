@@ -16,7 +16,7 @@ import type { AnchorId, ComposedSource, EvidenceFinding, EvidenceId, EvidenceOri
 import { jsonPointer } from "./composition-identity.ts";
 import { isCompositionId } from "../../domain/composition/composition-ids.ts";
 import {
-  MERGE_BASE, SHA_A, SHA_B, entrypointsValue, factOf, impactValue, inputsOf, shaRef, sourceFixture, unknownFactOf, workspaceImpactValue,
+  MERGE_BASE, SHA_A, SHA_B, entrypointsValue, factOf, impactValue, inputsOf, shaRef, sourceFixture, unknownFactOf, workspaceImpactValue, workspaceValue, traceValue,
   type FixtureKind,
 } from "./composition-fixtures.testing.ts";
 import { normalizeSource } from "./composition-normalize.ts";
@@ -515,6 +515,21 @@ test("a trace anchors each step and each leaf at its declaration, on the anchor 
   assert.deepEqual(steps[1]!.alternatives?.map((alternative) => t.handler(alternative)), [{ path: "src/OrderServiceImpl.java", symbol: "find", line: 12, endLine: 20 }]);
   const outline = new Tables(normalizeSource(sourceFixture("outline"), digest));
   assert.equal(outline.partOf(outline.list("/value/files", "outline-file")[0]!.declarations[1]!, "outline-declaration").anchor, steps[0]!.anchor);
+});
+
+test("workspace trace links retain both endpoint snapshots through composition", () => {
+  const { repositorySnapshots, links, unlinked } = workspaceValue();
+  const source = sourceFixture("trace", { value: { ...traceValue(), repositorySnapshots, links, unlinked } });
+  const t = new Tables(normalizeSource(source, digest));
+  const matched = t.list("/value/links", "workspace-link");
+  assert.deepEqual(matched.map(({ link }) => rebuildLink(t, link)), links);
+  const producer = t.file(t.anchor(matched[0]!.link.to.handler).file).origin;
+  assert.ok(producer.kind === "snapshot");
+  assert.deepEqual(t.snapshot(producer.snapshot), shaRef("shop"));
+  const consumer = t.file(matched[0]!.link.from.file).origin;
+  assert.ok(consumer.kind === "snapshot");
+  assert.equal(t.snapshot(consumer.snapshot).kind, "live");
+  assert.equal(t.list("/value/unlinked", "unlinked-call-site").length, unlinked.length);
 });
 
 test("an outline focus keeps each matched declaration with its subtree, and no outline file a cut of the file would misstate", () => {

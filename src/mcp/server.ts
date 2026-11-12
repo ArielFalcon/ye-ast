@@ -65,7 +65,7 @@ When to call:
 - ye_ast_impact: diff dependents; added/removed/altered entrypoints.
 - ye_ast_importers: who imports or names a file.
 - ye_ast_outline: declaration spans/imports; focus by dotted path or line.
-- ye_ast_trace: forward calls, effects and reading plan; workspace supplies declared library sources.
+- ye_ast_trace: forward calls, effects and reading plan; workspace adds scoped links/library sources.
 - ye_ast_workspace: named repositories (HTTP, messaging, dependencies); choose clones.
 - ye_ast_decisions: evidence-backed options for workspace gaps; read-only.
 - ye_ast_contract_consequences: consumers/producers affected by a contract hypothesis or diff.
@@ -202,6 +202,14 @@ const callSite = z.looseObject({
   diagnostic: callSiteDiagnostic.optional(),
 });
 const unresolvedCallSite = unresolvedCallSiteSchema;
+const workspaceLink = z.looseObject({
+  id: z.string(), from: z.looseObject({ repo: z.string(), file: z.string(), line: z.number(), column: z.number().optional(), symbol: z.string() }),
+  to: z.looseObject({ repo: z.string(), kind: z.string(), name: z.string(), handler }),
+  transport: z.enum(["http", "event"]), basis: z.string(), confidence: z.number(), profiles: strings.optional(),
+});
+const unlinkedCallSite = z.looseObject({
+  from: workspaceLink.shape.from, transport: z.enum(["http", "event"]), outcome: z.enum(["unmatched", "ambiguous", "could-match"]), name: z.string(), repos: strings.optional(), routes: strings.optional(),
+});
 const workspaceImpact = z.looseObject({
   workspace: workspaceIdentity,
   repositorySnapshots: snapshots,
@@ -284,11 +292,13 @@ const shapes = {
     }),
   ]),
   trace: z.looseObject({
+    repositorySnapshots: snapshots.optional(), links: z.array(workspaceLink).optional(), unlinked: z.array(unlinkedCallSite).optional(),
     roots: z.array(z.looseObject({ target: z.string(), steps: z.array(z.number()) })),
-    steps: z.array(z.looseObject({ id: z.number(), depth: z.number(), file: z.string(), symbol: z.string(), kind: z.string(), line: z.number() })),
+    steps: z.array(z.looseObject({ id: z.number(), depth: z.number(), file: z.string(), symbol: z.string(), kind: z.string(), line: z.number(), unresolvedEffects: z.array(unresolvedCallSite).optional() })),
     readingPlan: z.looseObject({ ranges: z.array(z.looseObject({ file: z.string(), start: z.number(), end: z.number(), steps: z.array(z.number()) })), lines: z.number() }),
   }),
   workspace: z.looseObject({
+    links: z.array(workspaceLink), unlinked: z.array(unlinkedCallSite),
     workspace: workspaceIdentity,
     repositorySnapshots: snapshots,
     sections: z.record(z.string(), factOf(z.looseObject({

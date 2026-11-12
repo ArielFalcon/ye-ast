@@ -49,10 +49,10 @@ export function realWorkspaceFixture(scratchRoot: string, roots: readonly string
       return { findings: sortFindings([...spring.findings, ...routes.findings]), readingCuts: routes.readingCuts };
     },
   };
-  const typescriptCallSites = createHttpCallSites();
-  const callSites: CallSiteReader = { of: async (files, repo, libraries) => {
+  const typescriptCallSites = createHttpCallSites(frameworks.filter((plugin) => plugin.languages.includes("typescript")).flatMap((plugin) => plugin.values ?? []));
+  const callSites: CallSiteReader = { of: async (files, repo, libraries, options) => {
     const java = await createJavaCallSites(await createJavaParser()).of(files, repo, libraries);
-    return [...await typescriptCallSites.of(files, repo), ...java].sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
+    return [...await typescriptCallSites.of(files, repo, libraries, options), ...java].sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
   } };
   const vcs = createGitVcs();
   const scratch = createTempScratchDirectory(scratchRoot);

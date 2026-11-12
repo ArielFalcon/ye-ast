@@ -168,17 +168,17 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
       return { findings: sortFindings([...spring.findings, ...routes.findings]), readingCuts: routes.readingCuts };
     },
   }, { extract: "entrypoints" });
-  const typescriptCallSites = createHttpCallSites();
+  const typescriptCallSites = createHttpCallSites(frameworks.filter((plugin) => plugin.languages.includes("typescript")).flatMap((plugin) => plugin.values ?? []));
   const callSites = staged<CallSiteReader>({
-    of: async (files, repo, libraries) => {
+    of: async (files, repo, libraries, options) => {
       const java = await createJavaCallSites(await javaParser()).of(files, repo, libraries);
-      return [...(await typescriptCallSites.of(files, repo)), ...java].sort(compareCallPlaces);
+      return [...(await typescriptCallSites.of(files, repo, libraries, options)), ...java].sort(compareCallPlaces);
     },
   }, { of: "call-sites" });
   const placedCallSites = staged<PlacedCallSiteReader>({
-    placed: async (files, repo, libraries) => {
+    placed: async (files, repo, libraries, options) => {
       const java = await createJavaCallSites(await javaParser()).placed(files, repo, libraries);
-      return [...(await typescriptCallSites.placed(files, repo)), ...java].sort(({ site: a }, { site: b }) => compareCallPlaces(a, b));
+      return [...(await typescriptCallSites.placed(files, repo, libraries, options)), ...java].sort(({ site: a }, { site: b }) => compareCallPlaces(a, b));
     },
   }, { placed: "call-sites" });
   const vcs = staged(createGitVcs(), { exportCommit: "export", listCommit: "export", materializeCommit: "materialize" });

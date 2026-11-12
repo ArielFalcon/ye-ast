@@ -93,12 +93,16 @@ function basePathKeys(route: HttpRoute): { keys: readonly string[]; profile?: st
  * Of the routes a rung took, the one that is most specific: fewer segments that take any text, then more text stated,
  * then a stated verb over none. Routes equal on every count take the call equally, so they are a tie, never a pick.
  */
-function mostSpecific(taken: readonly Taken[], basis: LinkBasis): Landing | undefined {
-  const rank = ({ route }: Taken): readonly number[] => {
+function routeOrder(a: HttpRoute, b: HttpRoute): number {
+  const rank = (route: HttpRoute): readonly number[] => {
     const segments = routeSegments(route.path);
     return [looseness(segments), -statedLength(segments), route.method === ANY_METHOD ? 1 : 0];
   };
-  const order = (a: Taken, b: Taken): number => rank(a).reduce((difference, value, index) => difference || value - rank(b)[index]!, 0);
+  return rank(a).reduce((difference, value, index) => difference || value - rank(b)[index]!, 0);
+}
+
+function mostSpecific(taken: readonly Taken[], basis: LinkBasis): Landing | undefined {
+  const order = (a: Taken, b: Taken): number => routeOrder(a.route, b.route);
   const [first, ...rest] = taken.toSorted(order);
   if (first === undefined) return undefined;
   const tied = rest.filter((candidate) => order(candidate, first) === 0 && candidate.route !== first.route);
@@ -116,18 +120,20 @@ type Rung = (call: CallTemplate, method: HttpTarget["method"], routes: readonly 
 /** The routes a rung's rule takes, and whether the call could match one more depending on its run-time values. */
 interface Found {
   taken: readonly Taken[];
-  could: boolean;
+  could: readonly HttpRoute[];
 }
 
-/** The landing of what a rung found, or `could` when it took no route and the call could match one. */
+/** A possible route keeps the landing undecided until its run-time value is known. */
 function landingOf({ taken, could }: Found, basis: LinkBasis): Landing | "could" | undefined {
-  return mostSpecific(taken, basis) ?? (could ? "could" : undefined);
+  const landing = mostSpecific(taken, basis);
+  const best = landing === undefined ? undefined : "match" in landing ? landing.match.route : landing.tie[0];
+  return could.some((route) => best === undefined || routeOrder(route, best) <= 0) ? "could" : landing;
 }
 
 function foundOf(unified: readonly { route: HttpRoute; unified: Unification }[]): Found {
   return {
     taken: unified.flatMap(({ route, unified: found }) => (found.outcome === "matches" ? [{ route, unified: found }] : [])),
-    could: unified.some(({ unified: found }) => found.outcome === "could-match"),
+    could: unified.flatMap(({ route, unified: found }) => found.outcome === "could-match" ? [route] : []),
   };
 }
 
@@ -136,12 +142,12 @@ function equalPaths(call: CallTemplate, method: HttpTarget["method"], routes: re
 }
 
 function underBasePaths(call: CallTemplate, method: HttpTarget["method"], routes: readonly HttpRoute[]): Found {
-  let could = false;
+  const could: HttpRoute[] = [];
   const taken = routes.flatMap((route): Taken[] => {
     if (!accepts(route, method)) return [];
     const via = basePathKeys(route).flatMap(({ keys, profile }) => {
       const tried = keys.map((key) => unify(call.segments, [...routeSegments(key), ...routeSegments(route.path)]));
-      could ||= tried.some((found) => found.outcome === "could-match");
+      if (tried.some((found) => found.outcome === "could-match")) could.push(route);
       const unified = tried.map(matched).find((found) => found !== undefined);
       return unified === undefined ? [] : [{ unified, profile }];
     });
@@ -179,8 +185,7 @@ const behindGatewayRung: Rung = (call, method, routes) => {
   const stripped = { ...call, segments: call.segments.slice(1) };
   const [exact, basePath] = [equalPaths(stripped, method, routes), underBasePaths(stripped, method, routes)];
   const evidenced = (found: Found): Found => ({ ...found, taken: found.taken.filter(({ unified }) => unified.literals > 0) });
-  const landing = [landingOf(evidenced(exact), "exact"), landingOf(evidenced(basePath), "base-path")].find((found) => found !== undefined && found !== "could");
-  return landing ?? (exact.could || basePath.could ? "could" : undefined);
+  return landingOf(evidenced(exact), "exact") ?? landingOf(evidenced(basePath), "base-path");
 };
 
 function httpRoutes(repository: RepositoryEntrypoints): HttpRoute[] {
@@ -219,13 +224,14 @@ type Landed = { repo: string; match: Match } | { ambiguous: readonly string[]; r
 
 /**
  * The one repository a rung of the ladder lands in, on one route; two repositories, or two routes taken equally, are
- * ambiguous, never a pick. `could` when no repository lands and one could, depending on the call's run-time values.
+ * ambiguous, never a pick. `could` when any repository could land depending on the call's run-time values.
  */
 function atRung(rung: Rung, call: CallTemplate, method: HttpTarget["method"], repositories: readonly RepositoryEntrypoints[]): Landed | "could" | undefined {
   const found = repositories.map((repository) => ({ repo: repository.repo, landing: rung(call, method, httpRoutes(repository)) }));
+  if (found.some(({ landing }) => landing === "could")) return "could";
   const landed = found.flatMap(({ repo, landing }) => (landing === undefined || landing === "could" ? [] : [{ repo, landing }]));
   const [first, ...rest] = landed;
-  if (first === undefined) return found.some(({ landing }) => landing === "could") ? "could" : undefined;
+  if (first === undefined) return undefined;
   if (rest.length === 0 && "match" in first.landing) return { repo: first.repo, match: first.landing.match };
   const routes = landed.flatMap(({ landing }) => ("match" in landing ? [landing.match.route.name] : landing.tie.map((route) => route.name)));
   return { ambiguous: landed.map((candidate) => candidate.repo).sort(compareText), routes: [...new Set(routes)].sort(compareText) };
@@ -241,7 +247,7 @@ export type DeclaredOperationMatch = { repo: string; route: HttpRoute } | { ambi
 export function matchDeclaredOperation(target: HttpTarget, repositories: readonly RepositoryEntrypoints[]): DeclaredOperationMatch | undefined {
   const call = callTemplate(target);
   const exact = atRung(exactRung, call, target.method, repositories);
-  const landed = exact === undefined || exact === "could" ? atRung(basePathRung, call, target.method, repositories) : exact;
+  const landed = exact === undefined ? atRung(basePathRung, call, target.method, repositories) : exact;
   if (landed === undefined || landed === "could") return undefined;
   return "ambiguous" in landed ? { ambiguous: landed.ambiguous } : { repo: landed.repo, route: landed.match.route };
 }
@@ -322,7 +328,8 @@ export function inferGateways(calls: readonly CallSite[], repositories: readonly
     if (declared.some((gateway) => gateway.prefix === prefix)) continue;
     const serving = repositories.filter((repository) => calling.some(({ target, from }) => from !== repository.repo && servedBehindGateway(target, httpRoutes(repository)).length > 0));
     const [only, ...others] = serving;
-    if (only !== undefined && others.length === 0) inferred.push({ prefix, repo: only.repo, basis: "route-overlap" });
+    const uncertain = repositories.some((repository) => calling.some(({ target, from }) => from !== repository.repo && behindGatewayRung(callTemplate(target), target.method, httpRoutes(repository)) === "could"));
+    if (only !== undefined && others.length === 0 && !uncertain) inferred.push({ prefix, repo: only.repo, basis: "route-overlap" });
   }
   return [...declared.map((gateway): Gateway => ({ ...gateway, basis: "gateway-prefix" })), ...inferred].sort((a, b) => compareText(a.prefix, b.prefix));
 }

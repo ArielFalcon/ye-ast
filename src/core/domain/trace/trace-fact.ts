@@ -1,5 +1,7 @@
 import type { SettledRangeChange } from "../impact/impact-fact.ts";
-import type { EventTarget, HttpTarget } from "../topology/call-site.ts";
+import type { EventTarget, HttpTarget, UnresolvedCallSite } from "../topology/call-site.ts";
+import type { Link, UnlinkedCallSite } from "../topology/link.ts";
+import type { SnapshotRef } from "../shared/fact.ts";
 
 /**
  * How a step was reached from its parent: a resolved call or instantiation, `this.<member>`, a function passed as a
@@ -56,6 +58,8 @@ export interface TraceStep {
   external?: readonly ExternalCalls[];
   /** The effects its body makes, by line (R12). */
   effects?: readonly TraceEffect[];
+  /** Requests placed in this body whose destination remains unknown; not complete effects. */
+  unresolvedEffects?: readonly UnresolvedCallSite[];
   /** Every body a call to this body-less method may run, when the declared hierarchy names them all (R7); one is expanded below it `via: "dispatch"`. */
   alternatives?: readonly Omit<TraceLeaf, "deferred">[];
 }
@@ -75,6 +79,10 @@ export interface ReadingPlan {
 }
 
 export interface TraceValue {
+  /** Present with workspace reading; links are restricted to exactly placed effects in this trace. */
+  repositorySnapshots?: readonly { repo: string; snapshot: SnapshotRef }[];
+  links?: readonly Link[];
+  unlinked?: readonly UnlinkedCallSite[];
   /** Per requested target, in the request's fixed order, the root steps it selected: homonyms and ranges select several. */
   roots: readonly { target: string; steps: readonly number[] }[];
   /** The requested ranges whose every line holds no token; present when not empty, sorted by file and position. */

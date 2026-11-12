@@ -11,7 +11,7 @@ import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
 import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 import type { ComponentRef } from "../../domain/change/seeds.ts";
-import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
+import { completeSourceRead, contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { fileCut, placeAt } from "../../domain/impact/impact-cuts.ts";
@@ -21,6 +21,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import { readingPlan } from "../../domain/trace/reading-plan.ts";
 import type { TraceValue } from "../../domain/trace/trace-fact.ts";
 import { traceSteps } from "../../domain/trace/trace-tree.ts";
+import { traceLinks } from "../../domain/trace/trace-links.ts";
 import type { CodeGraphReader, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
@@ -75,7 +76,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
       const { signal } = request;
       if (request.workspace !== undefined) {
         if (deps.workspace === undefined) return { ok: false, fault: { kind: "git-failed", detail: "workspace reader unavailable" } };
-        const result = await deps.workspace.withRead({
+        const result = await deps.workspace.withRead<Fact<TraceValue>, TraceFault>({
           repo: { path: request.repo, id: request.repoId, ...(request.live ? { live: true as const } : { revision: request.revision }) },
           ...request.workspace,
           ...(request.scope === undefined ? {} : { scope: request.scope }),
@@ -94,7 +95,10 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const answer = await trace.walk({ ...local, ...at, [WORKSPACE_SCOPE]: true });
           if (!answer.ok) return answer;
           const base = compositeBase({ ...answer.value, ...(read.fact.scopeSelection === undefined ? {} : { scopeSelection: read.fact.scopeSelection }) }, [{ kind: "trace", fact: answer.value }, { kind: "workspace", fact: read.fact }], request.workspace, (value) => deps.digest.of(value));
-          return { ok: true as const, value: { ...answer.value, ...base } };
+          if (answer.value.status === "unknown") return { ok: true as const, value: { ...answer.value, ...base } };
+          const value = read.fact.status === "unknown" ? answer.value.value : traceLinks(answer.value.value, request.repoId, read.fact.value);
+          const cuts: Cut[] = [...(answer.value.status === "partial" ? answer.value.cuts : []), ...(read.fact.status === "complete" ? [] : [{ kind: "section" as const, at: ["workspace"], reason: read.fact.status === "partial" ? "section-partial" as const : "section-unknown" as const, reach: ANYTHING }])];
+          return { ok: true as const, value: withCuts(base, value, cuts, { kind: "everything" }) };
         });
         if (!result.ok) return result;
         if (request.live) {
@@ -172,7 +176,15 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           if (walk === "aborted") return ABORTED;
           const dataEffects = () => deps.dataEffects?.placed(head.tree.sources) ?? Promise.resolve([]);
           const dataSites = () => head.prepared?.facts === undefined ? dataEffects() : head.prepared.facts.ofInputs("trace-data-effects", { sources: head.tree.sources }, dataEffects);
-          const effectCuts = await placeEffects(walk.roots, { store, declarations: reading.declarations, ownedIn: reconciled.ownedIn, callsOf: (body) => reconciled.callsOf(body), sites: async () => [...(await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources)), ...(await dataSites())].sort(comparePlacement).filter(({ site }) => head.selected(site.file)), lineOf, functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined) });
+          const completeSource = completeSourceRead(head.tree.export, new Set(head.tree.sources.map(({ path }) => path)), {
+            include: request.scope?.include ?? [], exclude: request.scope?.exclude ?? [],
+          }) && (deps.librarySources?.length ?? 0) === 0;
+          const effectCuts = await placeEffects(walk.roots, {
+            store, declarations: reading.declarations, ownedIn: reconciled.ownedIn, callsOf: (body) => reconciled.callsOf(body),
+            sites: async () => [...await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources, { completeSource }), ...await dataSites()]
+              .sort(comparePlacement).filter(({ site }) => head.selected(site.file)),
+            lineOf, functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined),
+          });
 
           const { steps, ids } = traceSteps(walk.roots);
           const rootIds = new Map(roots.map((root, index) => [root.id, ids.get(walk.roots[index]!)!]));

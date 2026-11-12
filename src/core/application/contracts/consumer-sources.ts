@@ -1,3 +1,4 @@
+import { completeSourceRead } from "../../domain/map/entrypoint-map.ts";
 import type { FrameworkPlugin } from "../../ports/framework-plugin.port.ts";
 import { sourceUnreadable } from "../../domain/contracts/consumer-flow.ts";
 import type { Hypothesis } from "../../domain/contracts/hypothesis.ts";
@@ -8,7 +9,7 @@ import { nameTail } from "../../domain/shared/call-place.ts";
 import { contradictedCallCuts } from "../../domain/impact/impact-cuts.ts";
 import { followedEdge } from "../../domain/impact/edge-policy.ts";
 import type { Result } from "../../domain/shared/result.ts";
-import { callPlaceOf, callSiteReach, compareCallPlaces, httpTargetOf, type PlacedCallSite, type PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
+import { callPlaceOf, callSiteReach, compareCallPlaces, httpTargetOf, type CallSiteReadOptions, type PlacedCallSite, type PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import { excludedFrom, matchCallSite, matchDeclaredOperation, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
@@ -49,7 +50,7 @@ export interface ConsumerSourcesDeps {
   heads: HeadReaderDeps;
   digest: Digest;
   /** Readers sharing the preparation of one repository reading. */
-  consumerReaders(files: readonly SourceFile[], repo: string): Promise<{ flow: ConsumerFlowReader; origins: RequestOriginReader }>;
+  consumerReaders(files: readonly SourceFile[], repo: string, options?: CallSiteReadOptions): Promise<{ flow: ConsumerFlowReader; origins: RequestOriginReader }>;
   metadata: AngularMetadataReader;
   templateFlow: TemplateFlowReader;
   /** The injection and template relations, fields and locals that let the callers of a function see calls made through `inject()`. */
@@ -191,14 +192,15 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             const typedCuts = typed === undefined ? [] : [...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs)];
             if (typed !== undefined) for (const output of typed.outputs ?? []) buildOutputs.set(canonicalJson(output), output);
             const owned = new Set(sources.map((file) => file.path));
+            const completeSource = completeSourceRead(loaded.value.export, owned, context.scope) && (context.librarySources?.get(plan.at.repoId)?.length ?? 0) === 0;
             let placed: Promise<ConsumerPlacedSites> | undefined;
             const placedSites = (): Promise<ConsumerPlacedSites> => (placed ??= deps.callSites === undefined
               ? Promise.resolve(NOT_READ)
-              : deps.callSites.placed(sources, plan.at.repoId, context.librarySources?.get(plan.at.repoId) ?? []).then((sites) => ({ kind: "read", sites, owned })));
+              : deps.callSites.placed(sources, plan.at.repoId, context.librarySources?.get(plan.at.repoId) ?? [], { completeSource }).then((sites) => ({ kind: "read", sites, owned })));
             return {
               ok: true,
               value: {
-                ...await deps.consumerReaders(sources, plan.at.repoId),
+                ...await deps.consumerReaders(sources, plan.at.repoId, { completeSource }),
                 templates: await createConsumerTemplateReader({ metadata: deps.metadata, flow: deps.templateFlow }, sources),
                 placedSites,
                 graph: indexed === "unavailable" ? undefined : indexed.store,

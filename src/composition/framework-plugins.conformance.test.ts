@@ -8,6 +8,8 @@ import { composeFrameworkPlugins, frameworkEntrypoints } from "./framework-plugi
 import { createConsumerReaders } from "../core/adapters/typescript/consumer-readers.ts";
 import { buildProgram } from "../core/adapters/typescript/consumer-flow.index.ts";
 import { createRequestCallLookup } from "../core/adapters/typescript/http-call-sites.adapter.ts";
+import { createHttpCallSites } from "../core/adapters/typescript/http-call-sites.adapter.ts";
+import { providerValueFiles } from "../core/adapters/typescript/provider-values.testing.ts";
 
 test("core-only projects read Angular inputs but cannot claim router continuations", async () => {
   const files = [{ path: "package.json", content: '{"dependencies":{"@angular/core":"1"}}' }, { path: "a.ts", content: "import { input } from '@angular/core'; import { provideRouter, withComponentInputBinding } from '@angular/router'; import { bootstrapApplication } from '@angular/platform-browser'; export function load() {} class Page { order = input(); } const routes = [{ path: '', component: Page, resolve: { order: load } }]; bootstrapApplication(Page, { providers: [provideRouter(routes, withComponentInputBinding())] });" }];
@@ -408,6 +410,18 @@ test("a bootstrapped NgModule associates forRoot settings with its route graph",
 
 /** RFC-0007 Conformance: each fixture is a minimal repository and the facts the registered plugins read from it. */
 const ROUTES = fileURLToPath(new URL("../core/adapters/frameworks/angular/fixtures/routes/", import.meta.url));
+
+test("removing the registered Angular value contribution disables provider proof and preserves generic HTTP reading", async () => {
+  const files = providerValueFiles();
+  for (const registered of [true, false]) {
+    const plugins = registered ? composeFrameworkPlugins() : [];
+    const values = plugins.flatMap((plugin) => plugin.values ?? []);
+    const sites = await createHttpCallSites(values).of(files, "repo", [], { completeSource: true });
+    assert.equal(sites.some((site) => site.target.status === "complete" && "path" in site.target.value && site.target.value.path === "https://example.test/api/items"), registered);
+    const ordinary = await createHttpCallSites(values).of([{ path: "generic.ts", content: "fetch('/ordinary')" }], "repo");
+    assert.ok(ordinary.some((site) => site.target.status === "complete"));
+  }
+});
 
 for (const name of readdirSync(ROUTES).filter((file) => file.endsWith(".json")).sort()) {
   test(`the Angular route fixture ${name} yields its expected entrypoints`, async () => {

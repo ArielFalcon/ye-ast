@@ -1,3 +1,5 @@
+import { providerValueFiles } from "./provider-values.testing.ts";
+import { angularProviderContribution } from "./angular-provider-values.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Seed, ReachedEntrypoint } from "../../domain/impact/impact-fact.ts";
@@ -6,6 +8,27 @@ import type { CallSite } from "../../domain/topology/call-site.ts";
 import { createHttpCallSites, createRequestCallLookup } from "./http-call-sites.adapter.ts";
 
 const reader = createHttpCallSites();
+
+test("partial URL expressions survive wrappers without becoming proven route paths", async () => {
+  const capture = (prefix: string, suffix: string) => [source("partial.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    prefix,
+    "class Api { constructor(private http: HttpClient) {} get(path: string) { return this.http.get(`${BASE}${path}`) } }",
+    `class Service { constructor(private api: Api) {} load(id: string) { return this.api.get(\`${suffix}/\${id}\`) } }`,
+  ].join("\n"))];
+  const first = await reader.of(capture("declare const BASE: string", "/articles"), "repo");
+  const partial = first.find((site) => site.line === 4);
+  assert.equal(partial?.target.status, "unknown");
+  assert.equal(partial?.stated?.path, undefined);
+  assert.deepEqual(partial?.stated?.expressions?.[0]?.map((part) => part.kind), ["unknown", "text", "runtime"]);
+  assert.equal(partial?.stated?.expressions?.[0]?.[1]?.kind === "text" && partial.stated.expressions[0][1].text, "/articles/");
+  const changed = await reader.of(capture("declare const BASE: string", "/comments"), "repo");
+  assert.notDeepEqual(changed[0]?.stated?.expressions, partial?.stated?.expressions);
+  const known = await reader.of(capture("const BASE = 'https://example.test/api'", "/articles"), "repo");
+  assert.ok(known.some((site) => site.target.status === "complete" && "path" in site.target.value && site.target.value.path === "https://example.test/api/articles/{}"));
+  const query = await reader.of(capture("const BASE = 'https://example.test/api?redirect='", "/articles"), "repo");
+  assert.ok(query.every((site) => site.target.status === "complete" && "path" in site.target.value && site.target.value.path === "https://example.test/api"));
+});
 
 test("identified requests retain targets alongside later independent enumeration gaps", async () => {
   const files = [source("scoped.ts", [
@@ -1008,7 +1031,7 @@ test("a request without a URL and its caller stay unknown while a recursive URL 
 test("an undecided call carries its cause: a path function that calls itself, overrides that disagree, or a base the snapshot does not decide", async () => {
   const routes = source("src/app/routes.ts", ["export class Route { value(): string { return '/a' } }", "export class OtherRoute extends Route { value(): string { return '/b' } }"].join("\n"));
   const service = source("src/app/devices.service.ts", ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "import { Route } from './routes'", "export class DevicesService { private readonly http = inject(HttpClient)", "  load(route: Route) { this.http.get(`/api${route.value()}`) } }"].join("\n"));
-  const causes = async (files: readonly { path: string; content: string }[]) => (await reader.of(files, "shop-web")).map((site) => [site.target.status, site.diagnostic?.cause, site.stated]);
+  const causes = async (files: readonly { path: string; content: string }[]) => (await reader.of(files, "shop-web")).map((site) => [site.target.status, site.diagnostic?.cause, site.stated === undefined ? undefined : { method: site.stated.method, ...(site.stated.path === undefined ? {} : { path: site.stated.path }) }]);
 
   assert.deepEqual(await causes([pathFunction(" return orderPath(!open)")]), [["unknown", "recursive", { method: "GET" }]]);
   assert.deepEqual(await causes([routes, service]), [["unknown", "dispatch-disagreement", { method: "GET" }]]);
@@ -1533,4 +1556,52 @@ test("callback request boundaries stay local to their own function bodies", asyn
     [5, "https://host/api/function/1"],
   ]);
   assert.ok(!sites.some((site) => site.symbol === "invoke"));
+});
+
+
+const providerReader = createHttpCallSites([angularProviderContribution]);
+
+
+const completeProviderPaths = (sites: readonly CallSite[]) => sites.flatMap((site) => site.target.status === "complete" && "path" in site.target.value ? [site.target.value.path] : []);
+
+test("a registered injection token supplies a wrapper URL only with complete source and follows new captures", async () => {
+  const files = providerValueFiles();
+  assert.ok(completeProviderPaths(await providerReader.of(files, "repo", [], { completeSource: true })).includes("https://example.test/api/items"));
+  assert.deepEqual(completeProviderPaths(await providerReader.of(files, "repo")), []);
+  const changed = files.map((file) => file.path === "src/environment.ts" ? source(file.path, file.content.replace("example.test/api", "other.test/v2")) : file);
+  assert.ok(completeProviderPaths(await providerReader.of(changed, "repo", [], { completeSource: true })).includes("https://other.test/v2/items"));
+});
+
+test("provider value proofs retain uncertainty for overrides, mutations, unsupported roots and build replacements", async () => {
+  const cases = [
+    ["src/main.ts", (text: string) => text + ` @Component({providers: [{provide: BASE, useValue:'other'}]}) class Other {}`],
+    ["src/environment.ts", (text: string) => text + ` environment.url = 'other';`],
+    ["src/config.ts", (text: string) => text + ` unknown(appConfig);`],
+    ["src/config.ts", (text: string) => text.replace("providers: [", "...other, providers: [")],
+    ["src/main.ts", (text: string) => text.replace("bootstrapApplication(App, appConfig)", "bootstrapApplication(App, appConfig); bootstrapApplication(App, appConfig)")],
+    ["angular.json", (text: string) => text.replace("src/main.ts", "src/not-main.ts")],
+    ["angular.json", (text: string) => text.replace('"browser":"src/main.ts"', '"browser":"src/main.ts","fileReplacements":[{"replace":"src/environment.ts","with":"src/environment.prod.ts"}]')],
+  ] as const;
+  for (const [path, change] of cases) {
+    const files = providerValueFiles().map((file) => file.path === path ? source(file.path, change(file.content)) : file);
+    assert.deepEqual(completeProviderPaths(await providerReader.of(files, "repo", [], { completeSource: true })), [], path);
+  }
+});
+
+test("constructor token values require the injector rather than an explicit construction", async () => {
+  const files = providerValueFiles().map((file) => file.path === "src/api.ts" ? source(file.path, file.content.replace("private base = inject(BASE); constructor(private http: HttpClient)", "constructor(@Inject(BASE) private base: string, private http: HttpClient)")) : file);
+  assert.ok(completeProviderPaths(await providerReader.of(files, "repo", [], { completeSource: true })).includes("https://example.test/api/items"));
+  const manual = files.map((file) => file.path === "src/api.ts" ? source(file.path, file.content + ` const api = new Api('different', null as any);`) : file);
+  assert.deepEqual(completeProviderPaths(await providerReader.of(manual, "repo", [], { completeSource: true })), []);
+});
+
+test("aliases of provider-owned objects cannot mutate or escape without invalidating the value proof", async () => {
+  for (const usage of [
+    "const alias = appConfig.providers; alias.pop();",
+    "function change() { const alias = appConfig.providers; alias.pop(); } change();",
+    "const wrapper = { list: appConfig.providers }; unknown(wrapper);",
+  ]) {
+    const files = providerValueFiles().map((file) => file.path === "src/config.ts" ? source(file.path, file.content + usage) : file);
+    assert.deepEqual(completeProviderPaths(await providerReader.of(files, "repo", [], { completeSource: true })), [], usage);
+  }
 });

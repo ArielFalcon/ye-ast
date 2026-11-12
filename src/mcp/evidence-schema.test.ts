@@ -11,12 +11,13 @@ import { recoveryControlShapeFor, validRecoveryControls, recoveryControlConstrai
 test('unresolved request schemas preserve method-only facts and reject unstated methods or undefined keys', () => {
   const site = { path: 'client.ts', line: 3, symbol: 'Client.send', transport: 'http', reason: 'unresolved', evidence: [] };
   const advertised = validator(z.toJSONSchema(unresolvedCallSiteSchema));
-  for (const stated of [{ method: 'GET' }, { method: 'POST', path: '/orders' }]) {
+  for (const stated of [{ method: 'GET' }, { method: 'POST', path: '/orders' }, { method: 'GET', expressions: [[{ kind: 'unknown', cause: 'destination-undecidable', evidence: [{ path: 'config.ts', line: 9 }] }, { kind: 'text', text: '/orders/' }, { kind: 'runtime', encoded: true }]] }]) {
     assert.equal(unresolvedCallSiteSchema.safeParse({ ...site, stated }).success, true);
     assert.equal(advertised({ ...site, stated }).valid, true);
   }
   assert.equal(unresolvedCallSiteSchema.safeParse({ ...site, stated: { path: '/orders' } }).success, false);
   assert.equal(unresolvedCallSiteSchema.safeParse({ ...site, stated: { method: 'GET', path: undefined } }).success, false);
+  assert.equal(unresolvedCallSiteSchema.safeParse({ ...site, stated: { method: 'GET', expressions: [[{ kind: 'unknown', cause: 'destination-undecidable' }]] } }).success, false);
 });
 
 test('control schemas enforce pairing, branches, safe integers and closed subjects', () => {

@@ -56,6 +56,11 @@ export interface MapExport {
   stopped?: { at: string; limit: number };
 }
 
+/** Provider proofs require every eligible source and configuration, including files outside an answer's local targets. */
+export function completeSourceRead(exported: MapExport, paths: ReadonlySet<string>, scope: Pick<DeclaredScope, "include" | "exclude">): boolean {
+  return scope.include.length === 0 && scope.exclude.length === 0 && exported.stopped === undefined && exported.skipped.length === 0 && exported.files.every(({ path, written }) => !isInMapScope(path) || written && paths.has(path));
+}
+
 /**
  * Everything of the export that decides the fact, unambiguously encoded and sorted so the order of the lists does not
  * matter (RFC-0002 rule 5): the blob of every in-scope file (the blob ids stand for the content), the path and blob of

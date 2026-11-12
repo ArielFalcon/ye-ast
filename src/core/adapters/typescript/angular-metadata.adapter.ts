@@ -5,7 +5,8 @@ import { bindFile } from "./lexical-bindings.ts";
 import { unwrapped } from "./syntax.ts";
 import { ANGULAR_CORE } from "./angular-injection.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
-import { isAngularWorkspace, nxConfigurationOf, isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import { replacedFiles } from "./angular-replacements.ts";
 import type { AngularClass, Operand, TemplateSource } from "../../domain/relations/angular-class.ts";
 import type { ExternalMemberUseOrigin, MemberProofContext, MemberSubstitute, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
@@ -87,42 +88,6 @@ interface ProofScope {
   replaced?: ReadonlySet<string>;
 }
 
-/** Source paths replaced by Angular or Nx build configuration; undefined when its scope or content is unreadable. */
-function replacedFiles(files: readonly SourceFile[]): ReadonlySet<string> | undefined {
-  const replaced = new Set<string>();
-  const nxRoots = files.filter(({ path }) => nxConfigurationOf(path) === "workspace").map(({ path }) => posix.dirname(path)).sort((a, b) => b.length - a.length);
-  for (const file of files.filter(({ path }) => isAngularWorkspace(path) || nxConfigurationOf(path) !== undefined)) {
-    const root = nxConfigurationOf(file.path) === "project" ? nxRoots.find((directory) => directory === "." || file.path.startsWith(`${directory}/`)) : posix.dirname(file.path);
-    let workspace: unknown;
-    try {
-      workspace = JSON.parse(file.content);
-    } catch {
-      return undefined;
-    }
-    if (root === undefined) {
-      const schema = (workspace as { $schema?: unknown } | null)?.$schema;
-      if (typeof schema === "string" && schema.endsWith("/nx/schemas/project-schema.json")) return undefined;
-      continue;
-    }
-    const pending = [workspace];
-    for (let value = pending.pop(); value !== undefined; value = pending.pop()) {
-      if (typeof value !== "object" || value === null) continue;
-      for (const [key, nested] of Object.entries(value)) {
-        if (key !== "fileReplacements") {
-          pending.push(nested);
-          continue;
-        }
-        if (!Array.isArray(nested)) return undefined;
-        for (const entry of nested) {
-          const source = (entry as { replace?: unknown } | null)?.replace;
-          if (typeof source !== "string") return undefined;
-          replaced.add(posix.join(root, source));
-        }
-      }
-    }
-  }
-  return replaced;
-}
 
 async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: ManifestPackages, sources: readonly string[], scope: ProofScope | undefined, collectSites: boolean, templateEffects?: AngularMetadataReadOptions["templateEffects"]): Promise<AngularMetadata> {
   const proveMembers = scope !== undefined;

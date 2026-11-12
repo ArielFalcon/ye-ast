@@ -1425,8 +1425,6 @@ test("each shape's call sites are effects of the body that owns their exact plac
       options: { nodes: [PLACED_API, method("run", 6, 1, 6, 71), method("dead", 6, 22, 6, 50, "function")], edges: [member("run"), call("run", "dead", 6, 52)], unresolved: [globalCall("dead", 6, 34)], placedSites: [at(6, 34, "/dead")] } },
     { shape: "a lambda or callback passed and invoked, which the index holds as no declaration", target: "run", effects: [], cuts: ["src/a.ts:6 http effect"],
       options: { nodes: [PLACED_API, method("run", 6, 1, 6, 71)], edges: [member("run")], unresolved: [globalCall("run", 6, 40)], functionValues: { [A]: [valueSpan(6, 30, 60)] }, placedSites: [at(6, 40, "/cb")] } },
-    { shape: "an immediately invoked function, whose run the walk does not prove", target: "run", effects: [], cuts: ["src/a.ts:7 http effect"],
-      options: { nodes: [PLACED_API, method("run", 6, 1, 8, 2)], edges: [member("run")], unresolved: [globalCall("run", 7, 10)], functionValues: { [A]: [valueSpan(6, 12, 1, 8)] }, placedSites: [at(7, 10, "/iife")] } },
     { shape: "a class field initializer", target: "field", effects: [["field", "/field"]], cuts: [],
       options: { nodes: [PLACED_API, method("field", 4, 1, 4, 34, "property"), method("run", 6, 1, 6, 30)], edges: [member("field"), member("run")], unresolved: [globalCall("field", 4, 16), globalCall("run", 6, 10)], placedSites: [at(4, 16, "/field"), at(6, 10, "/run")] } },
     { shape: "a call spread over several lines", target: "run", effects: [["run", "/multi"]], cuts: [],
@@ -1533,6 +1531,25 @@ test("a workspace live trace forwards the root stale notice once and never subst
   const result = await queries.walk({ repo: "/work/shop", repoId: "shop", live: true, workspace: {}, targets: [{ file: A, symbol: "run" }], onStale: notice => notices.push(notice) });
   assert.ok(result.ok);
   assert.deepEqual(notices, [rootNotice]);
+});
+
+test("a workspace trace retains only links at executed effect occurrences and the producer snapshots", async () => {
+  const snapshots = [{ repo: "shop", snapshot: { repo: "shop", kind: "sha" as const, sha: SHA } }, { repo: "orders", snapshot: { repo: "orders", kind: "sha" as const, sha: "b".repeat(40) } }];
+  const link = { id: "checkout", from: { repo: "shop", file: A, line: 8, column: 1, symbol: "Svc.run" }, to: { repo: "orders", kind: "http-route" as const, name: "POST /orders/{}/checkout", handler: { path: "Orders.java", symbol: "checkout", line: 12 } }, transport: "http" as const, basis: "exact" as const, confidence: 1 };
+  const base = await factOf(EFFECTS_BODY);
+  assert.ok(base.status !== "unknown");
+  const workspace = { withRead: async (_request: unknown, use: Parameters<NonNullable<TraceQueriesDeps["workspace"]>["withRead"]>[1]) => {
+    const answer = await use({ fact: { ...base, value: { workspace: { repos: ["orders", "shop"], gateways: [], source: "request" }, repositorySnapshots: snapshots, links: [link, { ...link, id: "sibling", from: { ...link.from, column: 2 } }, { ...link, id: "deferred", from: { ...link.from, line: 10 } }], unlinked: [], sections: {}, candidates: [], unserved: [], repositories: [] } } }, {
+      selectedSnapshots: [snapshots[0]!.snapshot], plans: [{ kind: "read", at: { repoId: "shop", source: "/work/shop" } }], liveCaptures: new Map(),
+    } as never);
+    return answer.ok ? { ok: true, value: { value: answer.value } } : answer;
+  } } as NonNullable<TraceQueriesDeps["workspace"]>;
+  const { queries } = setup({ ...EFFECTS_BODY, workspace, callSites: [site(8)] });
+  const result = await queries.walk({ repo: "/work/shop", repoId: "shop", revision: SHA, workspace: {}, targets: [{ file: A, symbol: "run" }] });
+  assert.ok(result.ok && result.value.status !== "unknown");
+  const value = result.value.value as TraceValue & { links?: unknown; repositorySnapshots?: unknown };
+  assert.deepEqual(value.links, [link]);
+  assert.deepEqual(value.repositorySnapshots, snapshots);
 });
 
 test("a dispatch veto projects its fixed reason onto the existing cut as its sub-reason", async () => {

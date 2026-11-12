@@ -1,3 +1,4 @@
+import type { CallSiteReadOptions } from "../../domain/topology/call-site.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { buildProgram } from "./consumer-flow.index.ts";
 import { consumerFlowReader } from "./consumer-flow.adapter.ts";
@@ -55,12 +56,12 @@ export interface ConsumerReadersDeps {
 const defaultDeps: ConsumerReadersDeps = { buildProgram, createRequestCallLookup };
 
 /** Both readers hold one program for this reading; origin-specific preparation stays lazy. */
-export async function createConsumerReaders(files: readonly SourceFile[], repo: string, deps: ConsumerReadersDeps = defaultDeps, plugins?: readonly FrameworkPlugin[]) {
+export async function createConsumerReaders(files: readonly SourceFile[], repo: string, deps: ConsumerReadersDeps = defaultDeps, plugins?: readonly FrameworkPlugin[], options?: CallSiteReadOptions) {
   let held: ReturnType<typeof buildProgram> | undefined;
   const program = () => (held ??= deps.buildProgram(files));
   const reading = new TypeScriptReading(program(), files);
   let heldLookup: ReturnType<typeof createRequestCallLookup> | undefined;
-  const lookupOf: typeof createRequestCallLookup = () => (heldLookup ??= (deps.createRequestCallLookup ?? createRequestCallLookup)(files));
+  const lookupOf: typeof createRequestCallLookup = () => (heldLookup ??= (deps.createRequestCallLookup ?? createRequestCallLookup)(files, options, plugins?.filter((plugin) => plugin.languages.includes("typescript")).flatMap((plugin) => plugin.values ?? [])));
   const [built, lookup] = await Promise.all([reading.program(), lookupOf(files)]);
   const manifests = manifestsOf(files);
   const projectAllows = (dependency: string, file: string): boolean => {

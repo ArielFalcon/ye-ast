@@ -16,7 +16,7 @@ import type { OutlineDeclaration, OutlineValue } from "../../domain/outline/outl
 import { hasUnprovedUses } from "../../domain/outline/outline-uses.ts";
 import type { TraceValue } from "../../domain/trace/trace-fact.ts";
 import { callPlaceEvidence, type CallSite } from "../../domain/topology/call-site.ts";
-import type { Link } from "../../domain/topology/link.ts";
+import type { Link, UnlinkedCallSite } from "../../domain/topology/link.ts";
 import type { Decision } from "../../domain/decisions/decision.ts";
 import type { ConsequencesValue, HypothesisAnswer, LocatedHop, ProducerConsequence, UseConsequence } from "../../domain/contracts/consequence-fact.ts";
 import type { EntrypointMap } from "../../domain/map/entrypoint-map.ts";
@@ -265,8 +265,14 @@ function adapt(source: ComposedSource, b: Builder, root: ReadContext): readonly 
       return local(b, root, source.read.fact, (value) => importers(b, root, value));
     case "outline":
       return local(b, root, source.read.fact, (value) => outline(b, root, value, source.read.fact.status === "partial" ? source.read.fact.cuts : []));
-    case "trace":
-      return local(b, root, source.read.fact, (value) => trace(b, root, value));
+    case "trace": {
+      const fact = source.read.fact;
+      if (fact.status === "unknown" || fact.value.repositorySnapshots === undefined) return local(b, root, fact, (value) => trace(b, root, value));
+      const { sorted } = vectorOf(b, root, fact.value.repositorySnapshots, "repositorySnapshots");
+      trace(b, root, fact.value);
+      linkParts(b, root, fact.value.links ?? [], fact.value.unlinked ?? []);
+      return sorted;
+    }
     case "workspace":
       return workspace(b, root, source.read.fact);
     case "decisions":
@@ -551,6 +557,7 @@ function trace(b: Builder, root: ReadContext, value: TraceValue): void {
       ...(step.deferred === undefined ? {} : { deferred: step.deferred }),
       ...(leaves === undefined ? {} : { leaves }),
       ...(step.external === undefined ? {} : { external: step.external }),
+      ...(step.unresolvedEffects === undefined ? {} : { unresolvedEffects: step.unresolvedEffects }),
       ...(alternatives === undefined ? {} : { alternatives }),
       ...(step.effects === undefined ? {} : { effects: step.effects.map((effect, k) => {
         const exact = callPlaceEvidence({ ...effect, repo: root.here.repo, file: step.file, symbol: step.symbol });
@@ -638,12 +645,16 @@ function workspace(b: Builder, root: ReadContext, fact: Fact<PublicWorkspaceValu
     const origin: EvidenceOrigin = repos.length === 1 ? b.placeOf(repos[0]!, root.id).origin : { kind: "query-context", read: root.id };
     b.part({ kind: "outward-name", origin, name: name.name, kindName: name.kind, evidence, disposition: "unserved" }, root.id, [at]);
   });
-  value.links.forEach((link, index) => b.part({ kind: "workspace-link", link: linkData(b, root, link, `/value/links/${index}`) }, root.id, [`/value/links/${index}`]));
-  value.unlinked.forEach(({ from, ...site }, index) => {
+  linkParts(b, root, value.links, value.unlinked);
+  return sorted;
+}
+
+function linkParts(b: Builder, root: ReadContext, links: readonly Link[], unlinked: readonly UnlinkedCallSite[]): void {
+  links.forEach((link, index) => b.part({ kind: "workspace-link", link: linkData(b, root, link, `/value/links/${index}`) }, root.id, [`/value/links/${index}`]));
+  unlinked.forEach(({ from, ...site }, index) => {
     const at = `/value/unlinked/${index}`;
     b.part({ kind: "unlinked-call-site", site: { ...site, from: { file: b.file(b.placeOf(from.repo, root.id), from.file, root.id, `${at}/from/file`), line: from.line, repo: from.repo, symbol: from.symbol } } }, root.id, [at]);
   });
-  return sorted;
 }
 
 /**

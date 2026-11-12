@@ -4,10 +4,11 @@ import { createAngularConsumerSyntax } from "../core/adapters/typescript/angular
 import { createSignalsStorePlugin } from "../core/adapters/typescript/signals-store.adapter.ts";
 import type { EntrypointExtraction, SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
 import type { FrameworkPlugin } from "../core/ports/framework-plugin.port.ts";
+import { angularProviderContribution } from "../core/adapters/typescript/angular-provider-values.ts";
 
 /** Every framework plugin, each over the readers of its language it wraps: the one place a plugin is registered. */
 export function composeFrameworkPlugins(): readonly FrameworkPlugin[] {
-  return [createAngularPlugin({ routes: createAngularRoutesExtractor, consumer: createAngularConsumerSyntax }), createSignalsStorePlugin()];
+  return [createAngularPlugin({ routes: createAngularRoutesExtractor, consumer: createAngularConsumerSyntax, values: angularProviderContribution }), createSignalsStorePlugin()];
 }
 
 /** The entrypoints every plugin that reads them contributes, in registration order; the caller sorts the union. */

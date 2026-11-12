@@ -2004,8 +2004,8 @@ test("inventory respects deferred values and preserves an index-declared functio
     ["arrow", "ts", 'export function entry(){ const dead = () => [1].map(x=>x); }', "entry", false],
     ["unknown", "ts", 'export function entry(){ unknown(() => [1].map(x=>x)); }', "entry", false],
     ["expression", "ts", 'function ignore(cb:()=>void){} export function entry(){ ignore(function(){ [1].map(x=>x); }); }', "entry", false],
-    ["iife", "ts", 'export function entry(){ (() => [1].map(x=>x))(); }', "entry", false],
-    ["unary-iife", "ts", 'export function entry(){ void function(){ [1].map(x=>x); }(); }', "entry", false],
+    ["iife", "ts", 'export function entry(){ (() => [1].map(x=>x))(); }', "entry", true],
+    ["unary-iife", "ts", 'export function entry(){ void function(){ [1].map(x=>x); }(); }', "entry", true],
     ["invoked", "ts", 'export function entry(){ const live = () => [1].map(x=>x); live(); }', "entry", true],
   ] as const;
   for (const [name, ext, source] of rows) writeFileSync(join(repo, `src/${name}.${ext}`), source);
@@ -2014,7 +2014,7 @@ test("inventory respects deferred values and preserves an index-declared functio
   for (const [name, ext, , symbol, immediate] of rows) {
     const answer = await trace.walk({ repo, repoId: "deferred", revision: "HEAD", targets: [{ file: `src/${name}.${ext}`, symbol }] });
     assert.ok(answer.ok && answer.value.status !== "unknown", `${name}: ${JSON.stringify(answer)}`);
-    if (name.includes("iife")) assert.equal(answer.value.status, "partial", `${name}: ${JSON.stringify(answer)}`);
+    if (name.includes("iife")) assert.equal(answer.value.status, "complete", `${name}: ${JSON.stringify(answer)}`);
     const names = answer.value.value.steps.flatMap((step) => step.external ?? []).flatMap((leaf) => leaf.names);
     assert.equal(names.includes("[1].map"), immediate, `${name}: ${JSON.stringify(answer)}`);
   }

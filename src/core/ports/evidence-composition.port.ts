@@ -249,6 +249,7 @@ export type PartPayload =
       alternatives?: readonly AnchorId[];
       /** The requests and messages its body makes through a declared client (RFC-0013 R12). */
       effects?: readonly (TraceEffect & { place?: EvidenceId })[];
+      unresolvedEffects?: NonNullable<TraceStep["unresolvedEffects"]>;
     }
   | { kind: "trace-root"; target: string; steps: readonly number[] }
   | { kind: "reading-range"; file: FileId; start: number; end: number; steps: readonly number[] }

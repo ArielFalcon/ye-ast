@@ -1,4 +1,5 @@
 import { compareText } from "../shared/code-node.ts";
+import type { UnresolvedCallSite } from "../topology/call-site.ts";
 import type { ExternalCalls, TraceEffect, TraceLeaf, TraceStep, TraceVia } from "./trace-fact.ts";
 
 /** A declaration a trace reaches; `key` tells two declarations apart and never leaves the walk. */
@@ -28,6 +29,7 @@ export interface WalkedStep {
   external: ExternalCall[];
   /** The effects its body makes, set on the occurrence that expanded it. */
   effects?: TraceEffect[];
+  unresolvedEffects?: UnresolvedCallSite[];
   /** Every body the declared hierarchy proves a call to this body-less method may run. */
   alternatives?: readonly TraceDeclaration[];
 }
@@ -85,6 +87,7 @@ function stepOf(step: WalkedStep, id: number, depth: number, parent: number | un
     ...(leaves.length === 0 ? {} : { leaves }),
     ...(step.external.length === 0 ? {} : { external: groupedByModule(step.external) }),
     ...(step.effects === undefined ? {} : { effects: step.effects }),
+    ...(step.unresolvedEffects === undefined ? {} : { unresolvedEffects: step.unresolvedEffects }),
     ...(step.alternatives === undefined ? {} : { alternatives: step.alternatives.map(({ symbol, file, start, end }) => ({ symbol, file, start, end })) }),
   };
 }

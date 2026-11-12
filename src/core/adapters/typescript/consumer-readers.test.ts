@@ -131,3 +131,13 @@ test("a framework that declares consumer capability absent reports a frontier wi
   const none = await createConsumerReaders([{ path: "a.ts", content: "import { item } from 'first';" }], "repo", undefined, []);
   assert.equal(none.flow.follow({ site: { kind: "input", repo: "repo", file: "a.ts", owner: "Page", name: "value" }, path: [] }).frontiers[0]?.reason, "no-extractor");
 });
+
+test("consumer lookup receives the source completeness of its reading", async () => {
+  let completeSource: boolean | undefined;
+  const files = [{ path: "a.ts", content: "export const value = 1;" }];
+  await createConsumerReaders(files, "repo", {
+    buildProgram,
+    createRequestCallLookup: (sources, options) => { completeSource = options?.completeSource; return createRequestCallLookup(sources, options); },
+  }, [], { completeSource: true });
+  assert.equal(completeSource, true);
+});

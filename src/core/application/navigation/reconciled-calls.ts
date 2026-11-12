@@ -50,6 +50,7 @@ export function callsByOwner(calls: readonly SyntaxCall[], declarations: readonl
   const found = new Map<string, OwnedCall[]>();
   const bodies = positionedBodies(declarations, calls);
   for (const call of calls) {
+    if (call.inline === true) continue;
     const scopeKeys = new Set(call.owners.map(scopeKey));
     const valuesInScope = functionValues.filter((value) => scopeKeys.has(spanKey(value)));
     const eligible = bodies.filter((body) => body.scope?.runsInEnclosingBody !== true && (body.scope === undefined || scopeKeys.has(scopeKey(body.scope))));
@@ -81,7 +82,7 @@ interface CallRecord {
 }
 
 /** What alignment decided for a record: at a written call, in `body`, as the index has it, or contradicted by its source. */
-type Alignment = { kind: "matched"; call: SyntaxCall; deferred: boolean; body: GraphSymbol } | { kind: "kept" } | { kind: "contradicted" };
+type Alignment = { kind: "matched"; call: SyntaxCall; deferred: boolean; body: GraphSymbol } | { kind: "kept" } | { kind: "contradicted" } | { kind: "inlined" };
 
 const callKey = (call: SyntaxCall): string => `${call.kind}:${call.line}:${call.column}:${call.name}`;
 
@@ -208,6 +209,7 @@ export function createReconciledCalls({ store, uses, syntaxOf, lineOf, importedD
     for (const { node, edges, references } of bodies) {
       for (const followed of edges) {
         const alignment = alignments[next++]!;
+        if (alignment.kind === "inlined") continue;
         const { edge, target } = followed;
         if (alignment.kind === "contradicted") placed.get(node.id)!.contradicted.push({ record: { from: node.id, file: node.file, line: edge.line!, column: edge.column!, name: target.name, kind: edge.kind, candidates: [] }, target });
         else if (alignment.kind === "kept") placed.get(node.id)!.edges.push(followed);
@@ -215,6 +217,7 @@ export function createReconciledCalls({ store, uses, syntaxOf, lineOf, importedD
       }
       for (const reference of references) {
         const alignment = alignments[next++]!;
+        if (alignment.kind === "inlined") continue;
         if (alignment.kind === "contradicted") placed.get(node.id)!.contradicted.push({ record: reference });
         else if (alignment.kind === "kept") placed.get(node.id)!.references.push(reference);
         else placed.get(alignment.body.id)!.references.push(alignment.deferred ? reference : { ...reference, from: alignment.body.id, line: alignment.call.line, column: alignment.call.column - 1 });
@@ -261,6 +264,7 @@ function alignRecords(records: readonly CallRecord[], syntax: DeclaredMemberName
     for (const call of agreeing) accounted.add(callKey(call));
     const [call] = agreeing;
     if (call !== undefined && agreeing.length === 1) {
+      if (call.inline === true) return { kind: "inlined" };
       const body = enclosingExecutions.get(callKey(call)) ?? (record.node.kind === "file" ? classOwning.get(callKey(call)) : undefined) ?? record.node;
       const own = owned.get(body.id)?.find((candidate) => callKey(candidate) === callKey(call));
       return { kind: "matched", call, body, deferred: own !== undefined ? own.deferred === true : !executesInBody(declarationSpan(body), syntax.functionValues, { line: call.line, column: call.column - 1 }) };
