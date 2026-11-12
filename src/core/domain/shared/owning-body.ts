@@ -40,7 +40,7 @@ export function declarationSpan(declaration: { startLine: number; startColumn: n
 
 /** A value containing the whole indexed body is that body or its ancestor; a value inside it is not proven to run. */
 export function executesInBody(body: SourceSpan, values: readonly SourceSpan[], at: SourcePosition): boolean {
-  return !values.some((value) => containsPosition(value, at) && !(containsPosition(value, body.start) && comparePositions(body.end, value.end) <= 0));
+  return executionIn(body, values, [], at) === "runs";
 }
 
 /**

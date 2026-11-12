@@ -89,10 +89,7 @@ function basePathKeys(route: HttpRoute): { keys: readonly string[]; profile?: st
   return held.filter((entry) => entry.keys.length > 0);
 }
 
-/**
- * Of the routes a rung took, the one that is most specific: fewer segments that take any text, then more text stated,
- * then a stated verb over none. Routes equal on every count take the call equally, so they are a tie, never a pick.
- */
+/** Orders routes by specificity: fewer segments that take any text, then more text stated, then a stated verb over none. */
 function routeOrder(a: HttpRoute, b: HttpRoute): number {
   const rank = (route: HttpRoute): readonly number[] => {
     const segments = routeSegments(route.path);
@@ -101,6 +98,10 @@ function routeOrder(a: HttpRoute, b: HttpRoute): number {
   return rank(a).reduce((difference, value, index) => difference || value - rank(b)[index]!, 0);
 }
 
+/**
+ * Of the routes a rung took, the one that is most specific: fewer segments that take any text, then more text stated,
+ * then a stated verb over none. Routes equal on every count take the call equally, so they are a tie, never a pick.
+ */
 function mostSpecific(taken: readonly Taken[], basis: LinkBasis): Landing | undefined {
   const order = (a: Taken, b: Taken): number => routeOrder(a.route, b.route);
   const [first, ...rest] = taken.toSorted(order);
