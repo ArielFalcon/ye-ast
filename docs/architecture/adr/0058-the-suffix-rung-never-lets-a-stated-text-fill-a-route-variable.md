@@ -10,8 +10,10 @@
 The `suffix` rung (one path ends with the other, at confidence 0.5) produced two false links, measured on real
 workspaces:
 
-1. A web call `GET <undecided base>/name-restaurants-api/restaurants/daily-menus` linked to `GET /restaurants/{id}`: the
-   text `daily-menus` filled the parameter. The producer serves `GET /daily-menus`; there `daily-menus` would be an id.
+1. A suffix match let a text the call states fill a route parameter, as `daily-menus` filling `{id}` of
+   `GET /restaurants/{id}`. The measured web call `GET <undecided base>/name-restaurants-api/restaurants/daily-menus`
+   turned out to reach that route through its inferred gateway prefix, where the path after the prefix equals the route
+   and the request really dispatches to it (the consumer's path drifted from `GET /daily-menus`); that link stays.
 2. An Angular frontend whose base is the literal `http://localhost:9966/petclinic/api/` (another backend's address)
    linked 10 of 10 calls to microservice routes such as `GET /owners`, by cutting the leading segments of a path the call
    states completely.
@@ -29,5 +31,6 @@ workspaces:
 ## Consequences
 
 - Fewer `suffix` links; no link field and no schema change. Calls that lose their link are reported unmatched.
-- A real producer whose route is `/restaurants/{id}` and that receives `daily-menus` as an id is no longer linked by
-  suffix; it still links on the exact rung when the paths are equal.
+- A call that reaches `/restaurants/{id}` with `daily-menus` as the id only by cutting leading segments is no longer
+  linked; behind a gateway prefix, or with equal paths, it still links, since there the request dispatches to that
+  route.
