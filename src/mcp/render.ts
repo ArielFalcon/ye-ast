@@ -1245,7 +1245,7 @@ function readingPlanLines(value: TraceValue, detail: ResponseMode): string[] {
 
 /** Every effect of the trace, in pre-order; a site whose target is undecided is among the cuts. */
 function effectLines(steps: readonly TraceStep[]): string[] {
-  const effects = steps.flatMap((step) => (step.effects ?? []).map((effect) => `${effectText(effect)}${"deferred" in effect && effect.deferred ? " (deferred)" : ""} at ${placeText(step.file, effect.line)}`));
+  const effects = steps.flatMap((step) => (step.effects ?? []).map((effect) => `${effectText(effect)} at ${placeText(step.file, effect.line)}`));
   return [`effects (${effects.length})${effects.length === 0 ? "" : `: ${effects.join(", ")}`}`];
 }
 
@@ -1266,7 +1266,7 @@ function traceTreeLines(steps: readonly TraceStep[]): string[] {
       `${indent}#${step.id} ${step.at?.line ?? step.line} ${step.symbol}${step.parent === undefined ? ` [${step.kind}]` : ""}${span}${notes.length === 0 ? "" : ` ${notes.join(", ")}`}`,
       ...(leaves.length === 0 ? [] : [`${indent}  leaves: ${leaves.map((leaf) => (leaf.deferred ? `${leaf.symbol} (deferred)` : leaf.symbol)).join(", ")}`]),
       ...(step.external === undefined ? [] : [`${indent}  external: ${step.external.map(externalText).join("; ")}`]),
-      ...(step.effects === undefined ? [] : [`${indent}  effects: ${step.effects.map((effect) => `${effectText(effect)}${"deferred" in effect && effect.deferred ? " (deferred)" : ""} at ${effect.line}`).join("; ")}`]),
+      ...(step.effects === undefined ? [] : [`${indent}  effects: ${step.effects.map((effect) => `${effectText(effect)} at ${effect.line}`).join("; ")}`]),
       ...(step.unresolvedEffects === undefined ? [] : [`${indent}  unresolved requests (URL expressions, not proven destinations):`, ...step.unresolvedEffects.map((site) => `${indent}${unresolvedLine(site, "details")}`)]),
       ...(step.alternatives === undefined ? [] : [`${indent}  dispatch alternatives (${step.alternatives.length}): ${step.alternatives.map((body) => placeText(body.file, body.start, body.end)).join(", ")}`]),
     ];

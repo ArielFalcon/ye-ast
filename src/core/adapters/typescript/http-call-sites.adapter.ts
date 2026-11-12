@@ -12,7 +12,7 @@ import { known, prevailingCause, undecided, undecidedTarget, type Evaluated, typ
 import { injectedClass } from "./angular-injection.ts";
 import { RequestValueReading, type ValueUnit } from "./request-value-reading.ts";
 import type { FrameworkValueFactory, FrameworkValues } from "../../ports/framework-values.port.ts";
-import type { FrameworkValueCells } from "../../ports/framework-cells.port.ts";
+import type { CellFactory, FrameworkValueCells } from "../../ports/framework-cells.port.ts";
 import type { DeferredValueReader, FrameworkDeferrals } from "../../ports/framework-deferrals.port.ts";
 import type { SourcePosition, SourceSpan } from "../../domain/shared/owning-body.ts";
 import { declarationCounts } from "./syntax-names.ts";
@@ -125,13 +125,8 @@ export function createHttpCallSites(values: readonly FrameworkValueFactory[] = [
   return { of: async (files, repo, _libraries, options) => (await readPlaced(files, repo, options, values, cells)).map(({ site, column }) => ({ ...site, ...(column === undefined ? {} : { column: column + 1 }) })), placed: (files, repo, _libraries, options) => readPlaced(files, repo, options, values, cells) };
 }
 
-export interface PackageExport {
-  module: string;
-  path: readonly string[];
-}
-
 /** The export of a package a callee names, when its root is an import of that package nothing in the file rebinds. */
-async function packageExportOf(shape: FileShape, callee: ts.Expression, modules: ModuleResolver, written: (source: ts.SourceFile, name: string) => boolean): Promise<PackageExport | undefined> {
+async function packageExportOf(shape: FileShape, callee: ts.Expression, modules: ModuleResolver, written: (source: ts.SourceFile, name: string) => boolean): Promise<CellFactory | undefined> {
   const path: string[] = [];
   let root = callee;
   while (ts.isPropertyAccessExpression(root)) { path.unshift(root.name.text); root = unwrapped(root.expression); }
@@ -895,7 +890,7 @@ class Reader {
     return found === undefined ? undefined : { ...found, virtual: true };
   }
 
-  private packageExport(shape: FileShape, callee: ts.Expression): Promise<PackageExport | undefined> {
+  private packageExport(shape: FileShape, callee: ts.Expression): Promise<CellFactory | undefined> {
     return packageExportOf(shape, callee, this.modules, (source, name) => this.importedMemberWritten(source, name));
   }
 

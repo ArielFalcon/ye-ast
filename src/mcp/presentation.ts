@@ -23,9 +23,10 @@ export function dependencyDiagnosticText(dependency: NonNullable<Cut["dependency
   return `dependency ${dependency.name}: ${dependency.reason} (${dependency.candidates.join(", ")})`;
 }
 
-/** An effect as one phrase, with its operation and proven target. */
+/** An effect as one phrase, with its operation, proven target and whether it runs later. */
 export function effectText(effect: TraceEffect): string {
   if (effect.kind === "data") return `data ${effect.access} ${effect.operation}${effect.target === undefined ? "" : ` ${effect.target.kind} ${effect.target.name}`}`;
-  if (effect.kind === "http") return `http ${effect.target.method} ${effect.target.path}${effect.target.base === undefined ? "" : ` base ${effect.target.base}`}`;
-  return `message ${effect.target.protocol} ${effect.target.destination}`;
+  const later = effect.deferred ? " (deferred)" : "";
+  if (effect.kind === "http") return `http ${effect.target.method} ${effect.target.path}${effect.target.base === undefined ? "" : ` base ${effect.target.base}`}${later}`;
+  return `message ${effect.target.protocol} ${effect.target.destination}${later}`;
 }
