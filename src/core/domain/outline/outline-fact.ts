@@ -8,6 +8,7 @@ export interface OutlineDeclaration {
   line: number;
   /** 1-based last line of the declaration, so a caller reads exactly it. */
   endLine: number;
+  placement?: { kind: "unplaced"; reason: "unresolved-container"; at: { line: number; column: number } };
   /** The declarations a contains edge of the graph places directly inside this one, in line then name order; absent when none. */
   children?: readonly OutlineDeclaration[];
 }

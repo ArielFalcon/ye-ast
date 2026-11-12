@@ -36,7 +36,7 @@ export function partReferences(part: Part): Reference[] {
     case "symbol-reach":
       return [ref("anchor", "anchor", part.anchor), ...(part.via === undefined ? [] : [ref("file", "via.target.file", part.via.target.file)])];
     case "entrypoint-reach":
-      return [ref("anchor", "handler", part.handler), ...part.seeds.flatMap((seed) => (seed.status === "present" ? [ref("part", "seeds.part", seed.part)] : []))];
+      return [ref("anchor", "handler", part.handler), ...(part.kindName === "unknown" ? part.observations.flatMap((observation, index) => many("evidence", `observations.${index}.evidence`, observation.evidence)) : []), ...part.seeds.flatMap((seed) => (seed.status === "present" ? [ref("part", "seeds.part", seed.part)] : []))];
     case "entrypoint-change":
       return [ref("anchor", "handler", part.handler), ...comparisonReferences(part.comparison)];
     case "contract-change":

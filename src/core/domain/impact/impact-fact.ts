@@ -2,7 +2,7 @@ import type { Entrypoint } from "../entrypoints/entrypoint.ts";
 import type { Handler } from "../entrypoints/http-route.ts";
 import type { SeedBasis } from "../change/seeds.ts";
 import type { SettledReason } from "../change/hunk-settling.ts";
-import type { Evidence, WalkBounds } from "../shared/fact.ts";
+import type { Evidence, Finding, WalkBounds } from "../shared/fact.ts";
 import type { Asserted } from "../shared/question.ts";
 import type { ChangedContract } from "./changed-contracts.ts";
 import type { ChangedEntrypoint } from "./changed-entrypoints.ts";
@@ -62,17 +62,17 @@ export interface ReceiverSubstitute {
   at: { file: string; line: number };
 }
 
-export interface ReachedEntrypoint {
-  /** `unknown` for a reached declaration the extractor reported as an entrypoint it could not read whole; then `name` is absent. */
-  kind: Entrypoint["kind"] | "unknown";
-  name?: string;
+export type ReachedEntrypoint = {
   handler: Handler;
   depth: number;
   confidence: number;
   seeds: readonly number[];
   /** A UI route's declaration: the place its route entry was read at. Absent for every other entrypoint. */
   declaredAt?: Evidence;
-}
+} & (
+  | { kind: Entrypoint["kind"]; name?: string }
+  | { kind: "unknown"; name?: never; observations: readonly [Extract<Finding<Entrypoint>, { status: "unknown" }>, ...Extract<Finding<Entrypoint>, { status: "unknown" }>[]] }
+);
 
 export interface ImpactValue {
   /** Present only when the seeds come from a change; `impact.callers` has no merge base. */

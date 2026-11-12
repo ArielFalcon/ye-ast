@@ -1,5 +1,5 @@
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
-import type { TrustMode } from "../../domain/shared/fact.ts";
+import { SCHEMA, type TrustMode } from "../../domain/shared/fact.ts";
 import type { DerivedFacts, DerivedFactsTally } from "../../ports/derived-facts.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -16,7 +16,7 @@ const NO_COUNTS: Counts = { hits: 0, misses: 0, admitted: 0, admittedBytes: 0, e
 export function createDerivedFacts(cache: SnapshotDataCache, digest: Digest, trust: TrustMode): DerivedFacts {
   const contentDigests = new WeakMap<SourceFile, string>();
   let tally = { ...NO_COUNTS };
-  const keyOf = (slot: string, inputs: object): string => digest.of(canonicalJson({ fact: slot, trust, inputs }));
+  const keyOf = (slot: string, inputs: object): string => digest.of(canonicalJson({ schema: SCHEMA, fact: slot, trust, inputs }));
   const kept = (key: string): unknown => {
     const value = cache.getFact(key);
     if (value === undefined) tally.misses++;

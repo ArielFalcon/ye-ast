@@ -208,7 +208,7 @@ export function createCallBinder({ store, navigation, syntaxIn, proofs, imported
         const target = await binder.memberOf(holder.symbol, member, place);
         return target === undefined ? undefined : (await declarations.list(target.file)).find(({ symbol }) => symbol?.id === target.id);
       }
-      const branch = branchesOf(await declarations.tree(holder.file)).find(({ declaration }) => declaration.id === holder.id);
+      const branch = branchesOf(await declarations.semanticTree(holder.file)).find(({ declaration }) => declaration.id === holder.id);
       const children = branch?.children.filter(({ declaration }) => declaration.name === member) ?? [];
       return children.length === 1 ? children[0]!.declaration : undefined;
     },

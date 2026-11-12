@@ -4,6 +4,11 @@ Delivery: one unit per branch and commit; one corpus gate per integration into `
 
 ## Current delivery status (2026-11-12)
 
+New quality follow-up: [RFC-0030](../../docs/architecture/rfc/0030-preserve-domain-knowledge-through-projections.md)
+and its [five-unit plan](../../docs/architecture/domain-knowledge-preservation-plan.md) distinguish proposed domain
+contract corrections from presentation changes. The owner authorized implementation; the five-unit plan tracks verification. This follow-up does not reopen or relabel the delivered units below;
+ADR-0052's accepted request semantics govern the implementation.
+
 All RFC-0024 through RFC-0029 implementation units are integrated into `main` through `949507ce`.
 The original 106-item study acceptance remains open; passing implementation checks and the 113-answer regression
 corpus do not establish that every study requirement is satisfied. Injected API URL values and external Java

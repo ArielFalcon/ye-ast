@@ -18,7 +18,7 @@ test("a proven syntax-only holder binds through the shared model without inventi
   const store = fakeCodeGraph([], []);
   const navigation = createGraphNavigation(store, () => false);
   const declarations = createDeclarationModel({ store, declarationsIn: async () => [
-    { name: "Holder", kind: "function", invoked: true, span: { start: { line: 1, column: 0 }, end: { line: 8, column: 1 } } },
+    { name: "Holder", kind: "function", invoked: true, placement: { kind: "file" }, span: { start: { line: 1, column: 0 }, end: { line: 8, column: 1 } } },
     { name: "send", kind: "method", invoked: true, span: { start: { line: 3, column: 2 }, end: { line: 3, column: 20 } }, container: { line: 1, column: 0 } },
   ] });
   const importedDeclarations = async () => new Map();
@@ -31,10 +31,10 @@ test("a proven syntax-only holder binds through the shared model without inventi
 });
 
 test("an imported token receiver selects its declaration member without a fabricated graph target", async () => {
-  const store = fakeCodeGraph([fakeNode("use", "function", USE, 20, 30), fakeNode("Holder", "constant", API, 1, 8)], []);
+  const store = fakeCodeGraph([fakeNode("use", "function", USE, 20, 30), fakeNode("Holder", "constant", API, 1, 8), fakeNode("api-file", "file", API, 1, 8)], [{ from: "api-file", to: "Holder", kind: "contains" }]);
   const navigation = createGraphNavigation(store, () => false);
   const declarations = createDeclarationModel({ store, declarationsIn: async (file) => file === API ? [
-    { name: "send", kind: "method", invoked: true, binding: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 4, column: 3 } } },
+    { name: "send", kind: "method", invoked: true, container: { line: 1, column: 0 }, binding: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 4, column: 3 } } },
   ] : [] });
   const importedDeclarations = async () => new Map([["S", store.symbolsInFiles([API])[0]!]]);
   const binder = createCallBinder({ store, navigation, declarations, importedDeclarations, proofs: async () => ({ fields: [], locals: [] }), callablesIn: async () => [], syntaxIn: async () => ({

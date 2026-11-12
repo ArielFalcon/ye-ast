@@ -200,6 +200,11 @@ names are settled in the first slice; the union, the cuts and the inputs are the
    unknown, never empty; an incompatible method can exclude the site from another operation while a compatible method
    with no path keeps it in question. `0.23.0` adds optional `scopeSelection` output: unmatched include globs and the
    count of selected paths when only part of an include matches. It is not an input, a cut, or part of fact identity.
+   `0.24.0` requires original unknown observations on a reached unknown entrypoint and retains their evidence through
+   composition. Outline declarations may carry `placement: {kind: "unplaced", reason: "unresolved-container", at}`;
+   absence is used only for established placement. Anonymous lexical ancestry and framework binding are separate.
+   Request occurrence knowledge may coexist with unresolved enumeration; no execution or exclusivity is implied
+   (ADR-0052, RFC-0030). Derived-fact keys include the schema so older representations cannot supply new proofs.
 7. **Redaction at egress.** Values and evidence pass redaction when they leave ye-ast's process toward a host: the
    patterns always, by-value secrets only in the process that already holds them
    ([ADR-0010](../adr/0010-trust-modes.md)). The success report `ye-ast init` writes for the user who ran it is not

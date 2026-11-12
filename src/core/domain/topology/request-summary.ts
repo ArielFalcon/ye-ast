@@ -22,6 +22,8 @@ export interface PathCondition {
  * order. A hole is not a cut: it is a value the call supplies.
  */
 export interface RequestShape {
+  /** Limitations that can invalidate this occurrence; absent when no occurrence-level relevance was established. */
+  gaps?: readonly SummaryGap[];
   transport: "http" | "event";
   /** Undefined when the verb is a value an argument fills. */
   method: HttpMethod | undefined;
@@ -78,5 +80,6 @@ export interface ForwardingRow {
 export interface RequestSummary {
   shapes: readonly RequestShape[];
   result: ResultShape;
+  /** Limits on enumerating the declaration's requests, including gaps independent of an identified occurrence. */
   gaps: readonly SummaryGap[];
 }

@@ -165,6 +165,7 @@ test("a file the index holds answers its declarations and closes the store", asy
   const { queries, log, store } = setup({
     written: ["src/Order.java"],
     nodes: [fakeNode("Order.java", "file", "src/Order.java", 1, 40), fakeNode("Order.total", "method", "src/Order.java", 20, 24, "total")],
+    edges: [{ from: "Order.java", to: "Order.total", kind: "contains" }],
   });
   assert.ok(store);
 
@@ -181,7 +182,8 @@ for (const live of [false, true]) {
     const mirror = live ? fakeLive({ "src/Order.java": "1" }) : undefined;
     const { queries, log } = setup({
       written: ["src/Order.java"],
-      nodes: [fakeNode("Order.total", "method", "src/Order.java", 20, 24, "total")],
+      nodes: [fakeNode("Order.java", "file", "src/Order.java", 1, 40), fakeNode("Order.total", "method", "src/Order.java", 20, 24, "total")],
+      edges: [{ from: "Order.java", to: "Order.total", kind: "contains" }],
       ...(mirror && { live: mirror }),
     });
 
@@ -228,6 +230,7 @@ const TWO_CLASSES = {
   edges: [
     { from: "api", to: "A", kind: "contains" },
     { from: "api", to: "B", kind: "contains" },
+    { from: "api", to: "Aardvark", kind: "contains" },
     { from: "A", to: "A.m", kind: "contains" },
     { from: "A.m", to: "A.m.inner", kind: "contains" },
     { from: "A", to: "A.n", kind: "contains" },

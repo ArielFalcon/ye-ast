@@ -374,7 +374,13 @@ function impact(b: Builder, read: ReadContext, prefix: string, value: ImpactValu
   });
   value.entrypoints.forEach((reached, index) => {
     const pointer = `${prefix}/entrypoints/${index}`;
-    b.part({ kind: "entrypoint-reach", kindName: reached.kind, ...(reached.name === undefined ? {} : { name: reached.name }), handler: handler(`${pointer}/handler`, reached.handler), depth: reached.depth, confidence: reached.confidence, seeds: references(reached.seeds, seeds) }, read.id, [pointer]);
+    const context = { handler: handler(`${pointer}/handler`, reached.handler), depth: reached.depth, confidence: reached.confidence, seeds: references(reached.seeds, seeds) };
+    if (reached.kind === "unknown") {
+      const observations = reached.observations.map((finding, j) => ({ status: "unknown" as const, reason: finding.reason, evidence: finding.evidence.map((item, k) => b.evidence(head, item, read.id, `${pointer}/observations/${j}/evidence/${k}`)) }));
+      b.part({ kind: "entrypoint-reach", kindName: "unknown", ...context, observations: [observations[0]!, ...observations.slice(1)] }, read.id, [pointer]);
+    } else {
+      b.part({ kind: "entrypoint-reach", kindName: reached.kind, ...(reached.name === undefined ? {} : { name: reached.name }), ...context }, read.id, [pointer]);
+    }
   });
   if (value.modules !== undefined) {
     const modules = value.modules;
@@ -563,7 +569,7 @@ function outline(b: Builder, root: ReadContext, value: OutlineValue, cuts: reado
   const declared = (path: string, fileAt: string, declaration: OutlineDeclaration, at: string, uses?: readonly OutlineUseRecord[], unproved?: boolean): PartId => {
     const anchor = b.anchor(root.here, { path, symbol: declaration.name, line: declaration.line, endLine: declaration.endLine }, root.id, at, fileAt);
     const children = declaration.children?.map((child, k) => declared(path, fileAt, child, `${at}/children/${k}`));
-    return b.part({ kind: "outline-declaration", anchor, kindName: declaration.kind, ...(children !== undefined && { children }), ...(uses !== undefined && { uses }), ...(unproved === true && { unproved }) }, root.id, [at]);
+    return b.part({ kind: "outline-declaration", anchor, kindName: declaration.kind, ...(declaration.placement === undefined ? {} : { placement: declaration.placement }), ...(children !== undefined && { children }), ...(uses !== undefined && { uses }), ...(unproved === true && { unproved }) }, root.id, [at]);
   };
   value.focus?.forEach((match, index) => {
     const pointer = `/value/focus/${index}`;

@@ -165,7 +165,8 @@ class CompactView {
   render(): string[] {
     const { graph, counts } = this.result;
     this.claimSubjectParts();
-    const connections = this.listedConnections.map(({ connection, index }) => this.connection(connection, index));
+    for (const part of graph.parts) if (part.kind === "outline-declaration" && this.selected(part)) this.covered.add(part.id);
+    const connections = this.connectionLines();
     const relations = this.relationLines();
     const findings = this.findingLines();
     const decisions = this.decisionLines();
@@ -291,6 +292,7 @@ class CompactView {
     const extra = [
       config?.changed === undefined ? undefined : `changed ${config.changed.join(", ")} (seed selection, not consequence coverage)`,
       config?.targets === undefined ? undefined : `targets ${config.targets.join(", ")}`,
+      config?.focus === undefined ? undefined : `focus ${config.focus.join(", ")}`,
       ...this.declaredFiles(source, config?.files),
       config?.walk === undefined ? undefined : `walk ${Object.entries(config.walk).map(([key, value]) => `${key} ${value}`).join(", ")}`,
       config?.exportBudget === undefined ? undefined : `export budget ${config.exportBudget.maxEntries} entries/${config.exportBudget.maxBytes} bytes`,
@@ -480,7 +482,7 @@ class CompactView {
       case "module-reach": return short ? `module ${this.file(part.file)} (${part.side})` : `module ${this.file(part.file)} (${part.side}) depth ${part.depth}; origin indexes ${this.origins(part.origins) || "none"}${part.via === undefined ? "" : `; via ${part.via.file}:${part.via.line} ${part.via.kind} ${quoted(part.via.specifier)}${part.via.typeOnly ? " type-only" : ""}${part.via.form === undefined ? "" : ` ${part.via.form}`}`}`;
       case "file-dependency": return `${this.file(part.from)} → ${this.file(part.to)} ${part.category}`;
       case "file-query": return `asked ${this.file(part.file)}: recorded entries ${part.categories.map(({ name, collection }) => `${name}: ${collection.state === "absent" ? "not provided" : collection.count}`).join(", ")}`;
-      case "outline-declaration": return `outline declaration ${this.anchor(part.anchor)} ${part.kindName}${part.uses === undefined ? "" : `; uses ${part.uses.length === 0 ? (part.unproved ? "nothing proven outside its body (see its unresolved-link cuts)" : "nothing outside its body") : part.uses.map((use) => ("declaration" in use ? this.anchor(use.declaration.anchor) : "module" in use ? `${use.module} (package)` : `${use.global} (global)`)).join(", ")}`}`;
+      case "outline-declaration": return `outline declaration ${this.anchor(part.anchor)} ${part.kindName}${this.outlineUses(part)}`;
       case "outline-file": return `outline ${this.file(part.file)}: ${part.declarations.length === 0 ? "no declarations" : this.outlined(part.declarations).map((declaration) => this.describe(declaration, true)).join(", ")}; ${part.imports.length} imports`;
       case "unheld-file": return `unheld ${this.file(part.file)} (not read; not an empty file)`;
       case "trace-step": return short ? `trace step #${part.step} ${this.anchor(part.anchor)}` : [
@@ -561,6 +563,8 @@ class CompactView {
     type Row = { entity: EntityId } | { unbound: PartOf<"outline-declaration"> };
     const blocks = new Map<FileId, { outlines: PartOf<"outline-file">[]; rows: Row[] }>();
     const placed = new Set<EntityId>();
+    const selectedEntities = new Set<EntityId>();
+    const placedUnbound = new Set<PartId>();
     const block = (file: FileId) => blocks.get(file) ?? blocks.set(file, { outlines: [], rows: [] }).get(file)!;
     const place = (file: FileId, entity: EntityId) => {
       if (placed.has(entity)) return;
@@ -576,19 +580,37 @@ class CompactView {
         const binding = this.bindings.get(declaration.anchor);
         const entity = binding?.status === "resolved" ? this.entities.get(binding.entity) : undefined;
         if (entity?.kind === "declaration") place(entity.file, entity.id);
-        else block(part.file).rows.push({ unbound: declaration });
+        else {
+          placedUnbound.add(declaration.id);
+          block(part.file).rows.push({ unbound: declaration });
+        }
       }
+    }
+    for (const part of this.result.graph.parts) {
+      if (part.kind !== "outline-declaration" || !this.selected(part)) continue;
+      const anchor = this.anchors.get(part.anchor);
+      if (anchor === undefined) continue;
+      const binding = this.bindings.get(part.anchor);
+      if (binding?.status === "resolved") {
+        selectedEntities.add(binding.entity);
+        place(anchor.file, binding.entity);
+      }
+      else if (!placedUnbound.has(part.id)) {
+        placedUnbound.add(part.id);
+        block(anchor.file).rows.push({ unbound: part });
+      }
+      this.covered.add(part.id);
     }
     for (const entity of this.result.graph.entities) if (entity.kind === "declaration") place(entity.file, entity.id);
     let unlisted = 0;
     for (const [file, { outlines, rows }] of blocks) {
-      const shown = rows.filter((row) => this.details || outlines.length > 0 || ("entity" in row ? this.entityLabels.has(row.entity) : true));
+      const shown = rows.filter((row) => this.details || outlines.length > 0 || ("entity" in row ? this.entityLabels.has(row.entity) || selectedEntities.has(row.entity) : true));
       unlisted += rows.length - shown.length;
       if (shown.length === 0 && outlines.length === 0) continue;
       const heading = unique(outlines.map((part) => this.supportLabels(part)));
       const outline = outlines.length === 0 ? "" : ` [${outlines.map((part) => `outline ${this.supportLabels(part)}: ${this.outlined(part.declarations).length} declarations, ${part.imports.length} imports`).join("; ")}]`;
       lines.push(`${this.file(file)}${outline}`);
-      for (const row of shown) lines.push(`  ${"entity" in row ? this.declarationRow(row.entity, heading) : `${this.anchor(row.unbound.anchor)} ${row.unbound.kindName}`}`);
+      for (const row of shown) lines.push(`  ${"entity" in row ? this.declarationRow(row.entity, heading) : `${this.selected(row.unbound) ? "outline declaration " : ""}${this.anchor(row.unbound.anchor)} ${row.unbound.kindName} [outline ${this.supportLabels(row.unbound)}]${this.selected(row.unbound) ? this.outlineUses(row.unbound) : ""}`}`);
     }
     if (unlisted > 0) this.omitted.set("uncited declarations", unlisted);
     return lines;
@@ -614,6 +636,13 @@ class CompactView {
     });
   }
 
+  private outlineUses(part: PartOf<"outline-declaration">): string {
+    if (part.uses === undefined) return part.unproved ? "; uses unproven (see its unresolved-link cuts)" : "";
+    if (part.uses.length === 0) return `; uses ${part.unproved ? "nothing proven outside its body (see its unresolved-link cuts)" : "nothing outside its body"}`;
+    const uses = part.uses.map((use) => ("declaration" in use ? this.anchor(use.declaration.anchor) : "module" in use ? `${use.module} (package)` : `${use.global} (global)`)).join(", ");
+    return `; uses ${uses}${part.unproved ? "; additional uses unproven (see its unresolved-link cuts)" : ""}`;
+  }
+
   /** A declaration row: label when cited, every recorded span and alias, outline kinds, and supports unlike its file's. */
   private declarationRow(id: EntityId, heading: readonly string[]): string {
     const entity = this.entities.get(id);
@@ -627,7 +656,9 @@ class CompactView {
     const supports = unique(declarations.map((part) => this.supportLabels(part)));
     const own = supports.length === 0 || (supports.length === heading.length && supports.every((label) => heading.includes(label))) ? "" : ` [outline ${supports.join(", ")}]`;
     const label = this.entityLabels.get(id);
-    return `${label === undefined ? "" : `${label} = `}${groups.join("; ")}${kinds.length === 0 ? "" : ` ${kinds.join(", ")}`}${own}`;
+    const selected = declarations.filter((part) => this.selected(part));
+    const uses = selected.flatMap((part) => { const text = this.outlineUses(part); return text === "" ? [] : [`${text} [${this.supportLabels(part)}]`]; });
+    return `${label === undefined ? "" : `${label} = `}${selected.length === 0 ? "" : "outline declaration "}${groups.join("; ")}${kinds.length === 0 ? "" : ` ${kinds.join(", ")}`}${own}${uses.join("")}`;
   }
 
   private entrypointText(entity: Extract<EntityRecord, { kind: "entrypoint" }>): string {
@@ -710,6 +741,26 @@ class CompactView {
         return `${value.parts.map((part) => this.partRef(part)).join(", ")} shares-evidence ${record === undefined ? "?" : evidenceText(record.value)}`;
       }
     }
+  }
+
+  private connectionLines(): string[] {
+    if (this.details) return this.listedConnections.map(({ connection, index }) => this.connection(connection, index));
+    const groups = Map.groupBy(this.listedConnections.filter(({ connection }) => connection.rule === "shared-support" && connection.relations.length === 1), ({ connection }) => connection.relations[0]!);
+    const emitted = new Set<RelationId>();
+    return this.listedConnections.flatMap(({ connection, index }) => {
+      const id = connection.relations[0];
+      const group = id === undefined ? undefined : groups.get(id);
+      if (connection.rule !== "shared-support" || group === undefined || group.length < 2) return [this.connection(connection, index)];
+      if (emitted.has(id!)) return [];
+      const firstGroup = emitted.size === 0;
+      emitted.add(id!);
+      for (const member of group) for (const part of member.connection.parts) this.covered.add(part);
+      const label = `L${(this.relationIndex.get(id!) ?? -1) + 1}`;
+      return [
+        ...(firstGroup ? ["Shared support: same evidence, not causality; compatibility per connection, not transitive; details defines C labels, one-based graph.connections positions."] : []),
+        `${label} → ${group.map((member) => `C${member.index + 1}`).join(",")}`,
+      ];
+    });
   }
 
   /** Relations by label, entities by label, and a part only when no cited relation or subject already states it. */
@@ -817,6 +868,10 @@ class CompactView {
     return lines;
   }
 
+  private selected(part: Part): boolean {
+    return part.supports.some((support) => this.reads.get(support.read)?.inputs.declaredConfig.focus !== undefined);
+  }
+
   /** Whether a record is listed: always outside the context count, otherwise when a source that asks supports it. */
   private isListed(supports: readonly { source: SourceId }[]): boolean {
     return !this.countsContext || supports.some((support) => this.asking.has(support.source));
@@ -836,7 +891,7 @@ function lacksSubject(part: Part): boolean {
 /** A read asks about a subject when it declares targets, files or a change selection; a read declaring none enumerates. */
 function declaresSubject(read: ReadRecord): boolean {
   const config = read.inputs.declaredConfig;
-  return config.targets !== undefined || config.files !== undefined || config.changed !== undefined;
+  return config.targets !== undefined || config.files !== undefined || config.focus !== undefined || config.changed !== undefined;
 }
 
 function section(title: string, lines: readonly string[]): string[] {

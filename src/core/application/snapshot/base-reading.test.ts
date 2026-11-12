@@ -88,8 +88,8 @@ test("the typed reading answers evidence and builds no cut, whatever kept it fro
 
 test("every reading redirects an edge by the module statements composition hands the line, without a family naming a reader", async () => {
   const store = fakeCodeGraph(
-    [fakeNode("run", "function", "src/a.ts", 2, 4), fakeNode("helper-a", "function", "src/a.ts", 6, 8, "helper"), fakeNode("helper-b", "function", "src/b.ts", 1, 3, "helper")],
-    [{ from: "run", to: "helper-a", kind: "calls", line: 3, column: 2 }],
+    [fakeNode("file-b", "file", "src/b.ts", 1, 3), fakeNode("run", "function", "src/a.ts", 2, 4), fakeNode("helper-a", "function", "src/a.ts", 6, 8, "helper"), fakeNode("helper-b", "function", "src/b.ts", 1, 3, "helper")],
+    [{ from: "run", to: "helper-a", kind: "calls", line: 3, column: 2 }, { from: "file-b", to: "helper-b", kind: "contains" }],
   );
   const origins = () => ({ rootOrigins: async (sites: readonly unknown[]) => sites.map(() => ({ status: "complete", value: { kind: "repository", file: "src/b.ts" }, bare: true, evidence: [] })) }) as unknown as ImportOrigins;
   const modules: ModuleDependenciesReader = {
@@ -207,9 +207,10 @@ test("declarations and bindings share B1, and a changed file or index containmen
   const retained = rememberingFacts();
   const facts: DerivedFacts = { ...retained, ofInputs: (slot, inputs, derive) => retained.ofInputs(slot, inputs, async () => (derivations++, derive())) };
   const graph = (contains: boolean) => fakeCodeGraph([
+    fakeNode("file", "file", file.path, 1, 1),
     { ...fakeNode("A", "class", file.path, 1, 1), endColumn: 21 },
     { ...fakeNode("run", "method", file.path, 1, 1), startColumn: 10, endColumn: 18 },
-  ], contains ? [{ from: "A", to: "run", kind: "contains" }] : []);
+  ], [{ from: "file", to: "A", kind: "contains" }, ...(contains ? [{ from: "A", to: "run", kind: "contains" }] : [])]);
   const readings = createBaseReadings({ relations: {} as RelationExtractor, memberNames, importOrigins: () => ({} as ImportOrigins) });
   const reading = (contains: boolean, content = file.content) => readings.of({ tree: { export: { files: [], skipped: [] }, sources: [{ ...file, content }] }, prepared: { facts } as never, store: graph(contains), snapshot: SHA, request: { repo: "/work/repo" } });
   const first = reading(true);
@@ -219,7 +220,7 @@ test("declarations and bindings share B1, and a changed file or index containmen
   assert.equal(reads, 1);
   await reading(true).declarations.list(file.path);
   assert.equal(derivations, 1);
-  assert.equal((await reading(false).declarations.select(file.path, "run"))[0]?.path, "run");
+  assert.equal((await reading(false).declarations.select(file.path, "run"))[0]?.path, "A.run");
   assert.equal((await reading(true, "class A { run() {} }\n").declarations.select(file.path, "run"))[0]?.path, "A.run");
   assert.equal(derivations, 3);
 });

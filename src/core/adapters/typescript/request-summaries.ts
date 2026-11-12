@@ -276,6 +276,7 @@ async function computeSummaries(files: readonly SourceFile[], resolver: SummaryR
   const scanned = new Map<DeclarationKey, SummaryGap[]>();
   const disagreements = new Map<DeclarationKey, SummaryGap[]>();
   const returns = new Map<DeclarationKey, ts.Expression[]>();
+  const callOwners = new Map<ts.CallExpression, DeclarationKey>();
   for (const [key, declarations] of bodies) {
     if (declarations.length > 1) {
       own.set(key, []);
@@ -287,6 +288,7 @@ async function computeSummaries(files: readonly SourceFile[], resolver: SummaryR
     const [declaration] = declarations;
     if (declaration === undefined) continue;
     const found = await scan(declaration, resolver);
+    for (const call of found.calls) callOwners.set(call, key);
     own.set(key, found.shapes);
     edges.set(key, found.edges);
     scanned.set(key, found.gaps);
@@ -344,9 +346,48 @@ async function computeSummaries(files: readonly SourceFile[], resolver: SummaryR
   const results = await resultsOf(bodies, returns, edges, resolver);
   const summaries = new Map<DeclarationKey, RequestSummary>();
   for (const key of bodies.keys()) {
+    if ((gapsOf.get(key)?.length ?? 0) > 0) {
+      for (const shape of shapes.get(key) ?? []) {
+        const scoped = occurrenceGaps(key, shape, gapsOf, callOwners);
+        if (scoped.length === 0) shape.gaps = scoped;
+      }
+    }
     summaries.set(key, { shapes: shapes.get(key) ?? [], result: results.get(key) ?? { kind: "none" }, gaps: gapsOf.get(key) ?? [] });
   }
   return summaries;
+}
+
+function occurrenceGaps(key: DeclarationKey, shape: RequestShape, gaps: ReadonlyMap<DeclarationKey, readonly SummaryGap[]>, owners: ReadonlyMap<ts.CallExpression, DeclarationKey>): readonly SummaryGap[] {
+  const trace = SHAPE_TRACES.get(shape);
+  if (trace === undefined) return gaps.get(key) ?? [];
+  const blocking: SummaryGap[] = [];
+  for (const [index, occurrence] of trace.allCalls.entries()) {
+    const owner = owners.get(occurrence);
+    if (owner === undefined) return gaps.get(key) ?? [];
+    for (const gap of gaps.get(owner) ?? []) {
+      const calls = GAP_CALLS.get(gap);
+      if (calls === undefined || calls.size === 0) { blocking.push(gap); continue; }
+      if ([...calls].every((call) => (index > 0 && call === occurrence) || evaluatedBefore(occurrence, call))) continue;
+      blocking.push(gap);
+    }
+  }
+  return distinctGaps(blocking);
+}
+
+/** A call's receiver is evaluated before its arguments; an earlier argument before a later one. */
+function evaluatedBefore(before: ts.CallExpression, after: ts.CallExpression): boolean {
+  if (before.getSourceFile() !== after.getSourceFile()) return false;
+  const contains = (outer: ts.Node, inner: ts.Node): boolean => outer.pos <= inner.pos && inner.end <= outer.end;
+  for (let node: ts.Node = before; node.parent !== undefined; node = node.parent) {
+    const parent = node.parent;
+    if (ts.isFunctionLike(parent) || ts.isStatement(parent) || ts.isConditionalExpression(parent) || ts.isBinaryExpression(parent) || ts.isAwaitExpression(parent)) return false;
+    if (!ts.isCallExpression(parent) || !contains(parent, after)) continue;
+    if (contains(parent.expression, before)) return parent.arguments.some((argument) => contains(argument, after));
+    const left = parent.arguments.findIndex((argument) => contains(argument, before));
+    const right = parent.arguments.findIndex((argument) => contains(argument, after));
+    return left >= 0 && right > left;
+  }
+  return false;
 }
 
 /**
@@ -765,16 +806,18 @@ function parameterNames(parameters: readonly ts.ParameterDeclaration[]): readonl
 }
 
 /** The leaves and the edges of one declaration: its request calls, and its calls to other declarations, not entering nested functions. */
-async function scan(declaration: Declaration, resolver: SummaryResolver): Promise<{ shapes: RequestShape[]; edges: Edge[]; gaps: SummaryGap[]; returns: ts.Expression[] }> {
+async function scan(declaration: Declaration, resolver: SummaryResolver): Promise<{ shapes: RequestShape[]; edges: Edge[]; gaps: SummaryGap[]; returns: ts.Expression[]; calls: ts.CallExpression[] }> {
   const shapes: RequestShape[] = [];
   const edges: Edge[] = [];
   const gaps: SummaryGap[] = [];
   const returns: ts.Expression[] = [];
+  const calls: ts.CallExpression[] = [];
   if (!ts.isBlock(declaration.body)) returns.push(declaration.body as ts.Expression);
   const visit = async (node: ts.Node, inCallback: boolean): Promise<void> => {
     if (node !== declaration.body && (ts.isFunctionLike(node) || ts.isClassLike(node))) return;
     if (!inCallback && ts.isReturnStatement(node) && node.expression !== undefined) returns.push(node.expression);
     if (ts.isCallExpression(node)) {
+      calls.push(node);
       const leaf = await leafOf(declaration, node, resolver);
       if (leaf.kind === "shapes") shapes.push(...leaf.shapes);
       else if (leaf.kind === "gap") gaps.push(atCall(leaf.gap, node));
@@ -796,7 +839,7 @@ async function scan(declaration: Declaration, resolver: SummaryResolver): Promis
     for (const child of node.getChildren()) await visit(child, inCallback);
   };
   await visit(declaration.body, false);
-  return { shapes, edges, gaps, returns };
+  return { shapes, edges, gaps, returns, calls };
 }
 
 /** A request of the client vocabulary, with its path folded in the declaration's own scope. */

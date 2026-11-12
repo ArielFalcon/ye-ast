@@ -22,7 +22,7 @@ const redaction: McpDeps["redaction"] = {
 };
 
 /** A server whose entrypoints and outline answer from fixtures; compose runs on the real evidence composition. */
-async function setup(outline: OutlineQueries["outline"] = async () => ({ ok: true, value: factOf(outlineValue()) })): Promise<{ session: Session; maps: MapRequest[] }> {
+async function setup(outline: OutlineQueries["outline"] = async () => ({ ok: true, value: factOf(outlineValue()) }), answerBytes?: number): Promise<{ session: Session; maps: MapRequest[] }> {
   const maps: MapRequest[] = [];
   const entrypoints: EntrypointQueries = { map: async (request) => (maps.push(request), { ok: true, value: factOf(entrypointsValue()) as EntrypointMapFact }) };
   const digest = createSha256Digest();
@@ -30,13 +30,28 @@ async function setup(outline: OutlineQueries["outline"] = async () => ({ ok: tru
     version: "0.0.0", entrypoints, outline: { outline },
     impact: {} as McpDeps["impact"], trace: {} as McpDeps["trace"], workspace: {} as McpDeps["workspace"], workspaceImpact: {} as McpDeps["workspaceImpact"],
     decisions: {} as McpDeps["decisions"], contractConsequences: {} as McpDeps["contractConsequences"],
-    digest, evidenceComposition: createEvidenceComposition(digest), redaction, repository: { path: "/work/shop", repoId: "shop" },
+    digest, evidenceComposition: createEvidenceComposition(digest), redaction, repository: { path: "/work/shop", repoId: "shop" }, ...(answerBytes === undefined ? {} : { answerBytes }),
   });
   return { session: await openSession(server), maps };
 }
 
 const focusFact = (value: OutlineValue, cuts?: [Cut]): Fact<OutlineValue> =>
   factOf(value, { inputs: inputsOf({ declaredConfig: { focus: ["src/Api.ts:get"] } }), ...(cuts === undefined ? {} : { cuts }) });
+
+test("compose honors the host text bound while keeping complete structured fields or explicit refusal", async () => {
+  for (const bound of [0, 100, 100000]) {
+    const { session } = await setup(undefined, bound);
+    try {
+      const result = await session.callTool("ye_ast_compose", { queries: [{ name: "ye_ast_outline", arguments: { files: ["src/Api.ts"] } }], mode: "full" });
+      assert.ok(Buffer.byteLength(textOf(result)) <= bound);
+      if (result.isError) assert.equal(result._meta?.kind, "answer-over-bound");
+      else {
+        assert.ok(result.structuredContent !== undefined);
+        assert.match(textOf(result), /structuredContent/);
+      }
+    } finally { await session.close(); }
+  }
+});
 
 test("compose preserves declared capability absence as distinct from no extractor", async () => {
   for (const reason of [CAPABILITY_ABSENT, "no-extractor"] as const) {

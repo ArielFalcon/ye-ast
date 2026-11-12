@@ -44,6 +44,7 @@ interface Options {
   notIndexed?: readonly string[];
   syntaxCalls?: Readonly<Record<string, readonly SyntaxCall[]>>;
   nodes: readonly FakeNode[];
+  fileRoots?: readonly string[];
   edges?: readonly FakeEdge[];
   unresolved?: readonly FakeUnresolved[];
   /** What the import origins answer for a site, by its full spelling; unknown otherwise. */
@@ -109,7 +110,9 @@ interface Options {
 
 function setup(options: Options) {
   const log = { closed: 0 };
-  const graph = fakeCodeGraph(options.nodes, options.edges ?? [], options.unresolved ?? []);
+  const roots = options.nodes.filter(({ id }) => options.fileRoots?.includes(id));
+  const files = [...new Set(roots.map(({ file }) => file))].map((file) => fakeNode(`placement-file:${file}`, "file", file, 1, 1));
+  const graph = fakeCodeGraph([...options.nodes, ...files], [...options.edges ?? [], ...roots.map(({ id, file }) => ({ from: `placement-file:${file}`, to: id, kind: "contains" }))], options.unresolved ?? []);
   const failing = options.storeFails;
   const unresolvedReferences = (files: readonly string[]) => (options.onUnresolved?.(files), graph.unresolvedReferences(files));
   const store = { ...graph, unresolvedReferences, ...(failing && { outgoingEdges: () => { throw failing; } }), close: () => void (log.closed += 1) };
@@ -289,7 +292,7 @@ test("a call the index resolved into an edge of another kind is settled as the c
 test("a property whose initializer's only call the index resolved into an edge of another kind is a root", async () => {
   const property = fakeNode("toArticle", "property", A, 3);
   const navigates: FakeEdge = { from: "toArticle", to: "route", kind: "navigates", line: 3, column: 14, resolvedFrom: { name: "this.router.navigate", kind: "calls" } };
-  const fact = await factOf({ nodes: [SVC, property, fakeNode("route", "route", B, 1)], edges: [{ from: "Svc", to: "toArticle", kind: "contains" }, navigates] }, [{ file: A, symbol: "Svc.toArticle" }]);
+  const fact = await factOf({ nodes: [SVC, property, fakeNode("route", "route", B, 1)], fileRoots: ["Svc"], edges: [{ from: "Svc", to: "toArticle", kind: "contains" }, navigates] }, [{ file: A, symbol: "Svc.toArticle" }]);
 
   assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["toArticle"]);
 });
@@ -635,12 +638,12 @@ test("a line range selects the declarations it intersects, never the file's othe
 test("a line range wholly past the end of its file is an unknown-symbol fault, and one over trivia settles", async () => {
   const content = ["function f() {", "  return 1;", "}", "", "function g() {", "  return 2;", "}", "", "function h() {}", ""].join("\n");
   const nodes = [fakeNode("f", "function", B, 1, 3), fakeNode("g", "function", B, 5, 7), fakeNode("h", "function", B, 9, 9)];
-  const past = await trace({ nodes, sources: [{ path: B, content }], trivia: { [B]: [4, 8, 10] } }, [{ file: B, start: 20, end: 25 }]);
+  const past = await trace({ nodes, fileRoots: ["f", "g", "h"], sources: [{ path: B, content }], trivia: { [B]: [4, 8, 10] } }, [{ file: B, start: 20, end: 25 }]);
   assert.ok(!past.answer.ok);
   assert.equal(past.answer.fault.kind, "unknown-symbol");
   assert.deepEqual(past.answer.fault.kind === "unknown-symbol" && past.answer.fault.entries, [{ file: B, start: 20, end: 25, absent: false, candidates: ["f", "g", "h"] }]);
 
-  const trivia = await trace({ nodes, sources: [{ path: B, content }], trivia: { [B]: [4, 8, 10] } }, [{ file: B, start: 4, end: 4 }]);
+  const trivia = await trace({ nodes, fileRoots: ["f", "g", "h"], sources: [{ path: B, content }], trivia: { [B]: [4, 8, 10] } }, [{ file: B, start: 4, end: 4 }]);
   assert.ok(trivia.answer.ok);
   if (!trivia.answer.ok || trivia.answer.value.status === "unknown") assert.fail("expected a trace fact");
   assert.deepEqual(trivia.answer.value.value.settled, [{ basis: "range", file: B, start: 4, end: 4, reason: "no-token", candidates: ["f", "g", "h"] }]);
@@ -661,7 +664,7 @@ test("a root an earlier root already expanded is seen at that step", async () =>
 });
 
 test("a symbol that names no declaration is an unknown-symbol fault with what the file declares", async () => {
-  const { answer } = await trace({ nodes: [SVC, RUN] }, [{ file: A, symbol: "missing" }]);
+  const { answer } = await trace({ nodes: [SVC, RUN], fileRoots: ["Svc", "run"] }, [{ file: A, symbol: "missing" }]);
   assert.ok(!answer.ok);
   assert.equal(answer.fault.kind, "unknown-symbol");
   assert.deepEqual(answer.fault.kind === "unknown-symbol" ? answer.fault.entries : [], [{ file: A, symbol: "missing", absent: false, candidates: ["Svc", "run"] }]);
@@ -794,6 +797,7 @@ test("a member call on a call result or on this keeps its cut whatever its root 
 
 /** A call `store.save()` at line 9, column 5 of `run`, whose receiver the source binds as `holds` says. */
 const boundCall = (holds: ReceiverBinding["holds"], member = "save"): Options => ({
+  fileRoots: ["Svc", "Repo", "Child"],
   nodes: [SVC, RUN, REPO, REPO_SAVE, fakeNode("Other.save", "method", A, 30, 32, "save")],
   edges: [...CONTAINS, { from: "Repo", to: "Repo.save", kind: "contains" }],
   unresolved: [{ from: "run", name: "store.save", kind: "calls", file: A, line: 9, column: 4 }, OUTWARD_CALL("Repo.save", B, 4)],
@@ -1086,6 +1090,7 @@ test("a page's template children run in the order the template first uses them, 
  * parameter of `run` the source binds as `holds` says, if at all.
  */
 const resolvedOnParameter = (holds?: ReceiverBinding["holds"]): Options => ({
+  fileRoots: ["Svc", "Repo", "Twin", "Base", "Sub"],
   nodes: [SVC, RUN, REPO, REPO_SAVE, fakeNode("Twin", "class", A, 22, 28), fakeNode("Twin.save", "method", A, 24, 26, "save")],
   edges: [...CONTAINS, { from: "Repo", to: "Repo.save", kind: "contains" }, { from: "Twin", to: "Twin.save", kind: "contains" }, call("run", "Repo.save", 9, 4)],
   unresolved: [OUTWARD_CALL("Repo.save", B, 4), OUTWARD_CALL("Twin.save", A, 25)],
@@ -1566,7 +1571,7 @@ test("effect deduplication preserves distinct call columns", async () => {
 
 test("a syntax-only trace target runs its owned calls without an index handle", async () => {
   const file = A;
-  const fact = await factOf({ nodes: [fakeNode("D", "constant", file, 1, 8)], sources: [{ path: file, content: "const D = {};" }], declarations: { [file]: [{ name: "m", kind: "method", invoked: true, container: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 5, column: 3 } } }] }, syntaxCalls: { [file]: [{ kind: "calls", name: "opaque", callee: "opaque", line: 4, column: 4, owners: [] }] }, placedSites: [at(4, 3, "/literal")] }, [{ file, symbol: "D.m" }]);
+  const fact = await factOf({ nodes: [fakeNode("D", "constant", file, 1, 8)], fileRoots: ["D"], sources: [{ path: file, content: "const D = {};" }], declarations: { [file]: [{ name: "m", kind: "method", invoked: true, container: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 5, column: 3 } } }] }, syntaxCalls: { [file]: [{ kind: "calls", name: "opaque", callee: "opaque", line: 4, column: 4, owners: [] }] }, placedSites: [at(4, 3, "/literal")] }, [{ file, symbol: "D.m" }]);
   assert.equal(fact.status, "partial");
   assert.equal(valueOf(fact).steps[0]?.symbol, "m");
   assert.ok(fact.status === "partial" && fact.cuts.some(({ at }) => at[0] === `${file}:4 opaque`));

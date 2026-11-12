@@ -239,7 +239,15 @@ async function prepareRequestCalls(files: readonly SourceFile[]) {
       const directResult = directResults.get(call);
       if (directResult !== undefined) return directResult;
       const single = callSummaries.get(call);
-      if (single !== undefined) return { ...single, ...(resultBodyAccess(single.result) === "json" ? { bodyAccess: "json" as const } : {}) };
+      if (single !== undefined) {
+        const occurrences = new Map(single.shapes.map((shape) => {
+          const trace = requestShapeTrace(shape);
+          const chain = trace?.allCalls ?? [];
+          return [JSON.stringify(chain.map((node) => [node.getSourceFile().fileName, node.getStart()])), trace?.leaf] as const;
+        }));
+        if (occurrences.size > 1) return { ...single, result: { kind: "unknown", cause: "dispatch-disagreement", evidence: [...occurrences.values()].flatMap((leaf) => leaf === undefined ? [] : [{ path: leaf.getSourceFile().fileName, line: lineOf(leaf.getSourceFile(), leaf) }]) } };
+        return { ...single, ...(resultBodyAccess(single.result) === "json" ? { bodyAccess: "json" as const } : {}) };
+      }
       const group = groups.get(call);
       const selections = placed.get(call);
       if (group === undefined || selections === undefined) return undefined;
@@ -330,15 +338,23 @@ async function readPlaced(files: readonly SourceFile[], repo: string): Promise<r
       const group = groups.get(call);
       const groupGap = group?.some((candidate) => candidate.body === undefined || candidate.summary === undefined || candidate.summary.gaps.length > 0) ?? false;
       const outstanding = summary?.gaps.some((gap) => !gapAtSite(gap)) ?? false;
-      let target: ReadTarget | undefined;
-      if (selections !== undefined) target = selections[0]?.leaf === call ? await read.directTarget(shape, call) : summaryTarget(shape, call, selections, summary, destinations, group);
-      else if (direct.has(call)) target = await read.directTarget(shape, call);
-      else if (outstanding || groupGap) target = summaryTarget(shape, call, [], summary, destinations, group);
-      if (target === undefined) continue;
-      const site = siteOf(shape, call, repo, target);
-      const origins = selections?.flatMap(({ calls: chain }) => originsOfChain(chain)) ?? [];
-      const proven = selections !== undefined && selections.length > 0 && selections.every((selection) => selection.bound && selection.calls.at(-1) === call) && summary !== undefined && summary.gaps.length === 0 && !groupGap && site.target.status === "complete";
-      found.push({ site, column, ...(origins.length === 0 && direct.has(call) ? {} : { origins }), ...(proven ? { issuingBoundary: "site" as const } : {}) });
+      const occurrences = selections === undefined ? [undefined] : group === undefined ? [...Map.groupBy(selections, ({ leaf }) => leaf).values()] : [selections];
+      let identified = false;
+      for (const occurrence of occurrences) {
+        let target: ReadTarget | undefined;
+        if (occurrence !== undefined) target = occurrence[0]?.leaf === call ? await read.directTarget(shape, call) : summaryTarget(shape, call, occurrence, summary, destinations, group);
+        else if (direct.has(call)) target = await read.directTarget(shape, call);
+        else if (outstanding || groupGap) target = summaryTarget(shape, call, [], summary, destinations, group);
+        if (target === undefined) continue;
+        const site = siteOf(shape, call, repo, target);
+        identified ||= site.target.status === "complete";
+        const origins = occurrence?.flatMap(({ calls: chain }) => originsOfChain(chain)) ?? [];
+        const proven = occurrence !== undefined && occurrence.length > 0 && occurrence.every((selection) => selection.bound && selection.calls.at(-1) === call) && summary !== undefined && summary.gaps.length === 0 && !groupGap && site.target.status === "complete";
+        found.push({ site, column, ...(origins.length === 0 && direct.has(call) ? {} : { origins }), ...(proven ? { issuingBoundary: "site" as const } : {}) });
+      }
+      if (identified && summary !== undefined && summary.gaps.length > 0) {
+        found.push({ site: siteOf(shape, call, repo, summaryTarget(shape, call, [], summary, destinations, group)), column, origins: [] });
+      }
     }
   }
   return found.sort(({ site: a }, { site: b }) => compareCallSites(a, b));
@@ -362,7 +378,7 @@ function siteOf(shape: FileShape, call: ts.CallExpression, repo: string, read: R
 }
 
 function summaryTarget(shape: FileShape, call: ts.CallExpression, selections: readonly PlacedShape[], summary: RequestSummary | undefined, destinations: ReadonlyMap<PlacedShape, Evaluated<string>>, group?: readonly { key: string; body: ts.Node | undefined; summary: RequestSummary | undefined }[]): ReadTarget {
-  const gaps = group === undefined ? [...(summary?.gaps ?? [])] : group.flatMap((candidate) => candidate.body === undefined || candidate.summary === undefined ? [{ cause: "source-not-read" as const, evidence: [placeOf(shape, call)] }] : candidate.summary.gaps);
+  const gaps = group === undefined ? selections.length === 0 ? [...(summary?.gaps ?? [])] : selections.flatMap((selection) => [...(selection.shape.gaps ?? summary?.gaps ?? [])]) : group.flatMap((candidate) => candidate.body === undefined || candidate.summary === undefined ? [{ cause: "source-not-read" as const, evidence: [placeOf(shape, call)] }] : candidate.summary.gaps);
   const leafEvidence = selections.map(({ leaf }) => {
     const source = leaf.getSourceFile();
     const at = source.getLineAndCharacterOfPosition(leaf.getStart(source));

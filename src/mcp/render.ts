@@ -483,6 +483,7 @@ function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail
   const declared = reached.declaredAt === undefined ? "" : ` at ${reached.declaredAt.path}:${reached.declaredAt.line}`;
   return [
     compact ? `  - ${name} -> ${handlerText(reached.handler)} (${facts.join(", ")})${declared}` : `  - ${name} (${facts.join(", ")})${declared}; lookup example: ${literalSelection({ kind: "handler-origins", owner, handler: { path, symbol, line } })}`,
+    ...(reached.kind === "unknown" ? reached.observations.map((observation) => `    unknown (${observation.reason})${observation.evidence.length === 0 ? "" : `: ${observation.evidence.map(evidenceText).join(", ")}`}`) : []),
     ...(detail === "summary" || origin === undefined || sharedOrigin ? [] : [`    one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${plural(others, "other origin")}` : ""}`]),
   ];
 }
@@ -1151,7 +1152,7 @@ export function renderImporters(fact: Fact<ImportersValue>, detail: ResponseMode
 
 /** Each declaration on its own line, its children under it one level deeper. */
 function outlineLines(declarations: readonly OutlineDeclaration[], indent: string): string[] {
-  return declarations.flatMap((declaration) => [`${indent}${spanText(declaration.line, declaration.endLine)} ${declaration.name} [${declaration.kind}]`, ...outlineLines(declaration.children ?? [], `${indent}  `)]);
+  return declarations.flatMap((declaration) => [`${indent}${spanText(declaration.line, declaration.endLine)} ${declaration.name} [${declaration.kind}]${declaration.placement === undefined ? "" : ` (unplaced: ${declaration.placement.reason} at ${declaration.placement.at.line}:${declaration.placement.at.column})`}`, ...outlineLines(declaration.children ?? [], `${indent}  `)]);
 }
 
 /**

@@ -50,12 +50,26 @@ function derive(file: SourceFile): DeclaredMemberNames {
     const { line, character } = tree.getLineAndCharacterOfPosition(at);
     return { line: line + 1, column: character };
   };
-  const declare = (node: ts.Node, name: string, kind: DeclaredDeclaration["kind"], literal?: ts.ObjectLiteralExpression, bound = true): void => {
-    let parent: ts.Node | undefined = node.parent;
-    while (parent !== undefined && !ts.isClassLike(parent) && !ts.isInterfaceDeclaration(parent) && !ts.isFunctionLike(parent) && !ts.isObjectLiteralExpression(parent)) parent = parent.parent;
+  const declare = (node: ts.Node, name: string, kind: DeclaredDeclaration["kind"], literal?: ts.ObjectLiteralExpression, bound = true, placementOnly = false): void => {
     const holder = literal === undefined || !bound ? undefined : literalHolders.get(literal);
-    const container = literal === undefined ? parent : holder ?? literal;
-    declarations.push({ name, kind, invoked: kind !== "object", span: { start: positionOf(node.getStart(tree)), end: positionOf(node.getEnd()) }, ...(container === undefined ? {} : { container: positionOf(container.getStart(tree)) }), ...(holder === undefined ? {} : { binding: positionOf(holder.getStart(tree)) }) });
+    let parent: ts.Node | undefined = node.parent;
+    let anonymous: ts.Node | undefined;
+    let container: ts.Node | undefined;
+    while (parent !== undefined && !ts.isSourceFile(parent)) {
+      if (ts.isObjectLiteralExpression(parent)) {
+        const namedHolder = literalHolders.get(parent);
+        if (namedHolder !== undefined && namedHolder !== node) { container = namedHolder; break; }
+        anonymous ??= parent;
+      } else if (ts.isClassLike(parent) || ts.isInterfaceDeclaration(parent) || ts.isFunctionLike(parent)) {
+        if ("name" in parent && parent.name !== undefined) { container = parent; break; }
+        anonymous ??= parent;
+      }
+      parent = parent.parent;
+    }
+    const placement: NonNullable<DeclaredDeclaration["placement"]> = container !== undefined
+      ? { kind: "nested", container: positionOf(container.getStart(tree)) }
+      : anonymous !== undefined ? { kind: "unplaced", at: positionOf(anonymous.getStart(tree)) } : { kind: "file" };
+    declarations.push({ name, kind, invoked: kind !== "object", ...(placementOnly ? { placementOnly: true as const } : {}), span: { start: positionOf(node.getStart(tree)), end: positionOf(node.getEnd()) }, placement, ...(container === undefined ? {} : { container: positionOf(container.getStart(tree)) }), ...(holder === undefined ? {} : { binding: positionOf(holder.getStart(tree)) }) });
   };
   const visit = (node: ts.Node): void => {
     if (ts.isObjectLiteralExpression(node)) {
@@ -89,6 +103,8 @@ function derive(file: SourceFile): DeclaredMemberNames {
       const end = positionOf(node.getEnd());
       owners.push({ name: constructor ? "constructor" : (name?.getText(tree) ?? "").replace(/^['"]|['"]$/g, ""), start: start.line, nameLine: named.line, nameColumn: named.column, startColumn: start.column, endLine: end.line, endColumn: end.column });
     }
+    if (ts.isClassDeclaration(node) && node.name !== undefined) declare(node, node.name.text, "class", undefined, true, true);
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && (node.initializer === undefined || !ts.isObjectLiteralExpression(unwrapped(node.initializer)))) declare(node, node.name.text, "value", undefined, true, true);
     if (ts.isFunctionDeclaration(node)) {
       callable(node, false);
       if (node.name !== undefined) declare(node, node.name.text, "function");

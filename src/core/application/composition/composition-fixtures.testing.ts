@@ -101,7 +101,7 @@ export function impactValue(): ImpactValue {
     ],
     entrypoints: [
       { kind: "http-route", name: "GET /orders", handler: handler("src/OrderController.java", "OrderController.one", 6, 9), depth: 1, confidence: 0.9, seeds: [1, 0, 1] },
-      { kind: "unknown", handler: handler("src/Dyn.java", "Dyn.run", 2), depth: 3, confidence: 0.2, seeds: [7] },
+      { kind: "unknown", observations: [{ status: "unknown", reason: "unresolved", evidence: [{ path: "src/Dyn.java", line: 3 }] }], handler: handler("src/Dyn.java", "Dyn.run", 2), depth: 3, confidence: 0.2, seeds: [7] },
     ],
     modules: {
       origins: [

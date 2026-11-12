@@ -128,7 +128,14 @@ function rebuildImpact(t: Tables, prefix: string): ImpactValue {
       const { path: file, ...at } = t.handler(s.anchor);
       return { file, ...at, kind: s.kindName, depth: s.depth, confidence: s.confidence, fanIn: s.fanIn, ...(s.via === undefined ? {} : { via: { file: t.path(s.via.target.file), symbol: s.via.target.symbol, ...(s.via.lines === undefined ? {} : { lines: s.via.lines }), basis: s.via.basis } }) };
     }),
-    entrypoints: reached.map((r) => ({ kind: r.kindName, ...(r.name === undefined ? {} : { name: r.name }), handler: t.handler(r.handler), depth: r.depth, confidence: r.confidence, seeds: r.seeds.map(indexOf) })),
+    entrypoints: reached.map((r) => {
+      const context = { handler: t.handler(r.handler), depth: r.depth, confidence: r.confidence, seeds: r.seeds.map(indexOf) };
+      if (r.kindName === "unknown") {
+        const observation = (item: typeof r.observations[number]) => ({ ...item, evidence: t.evidence(item.evidence) });
+        return { kind: "unknown", ...context, observations: [observation(r.observations[0]), ...r.observations.slice(1).map(observation)] };
+      }
+      return { kind: r.kindName, ...(r.name === undefined ? {} : { name: r.name }), ...context };
+    }),
     ...(modulesCost === undefined ? {} : {
       modules: {
         origins: t.list(`${prefix}/modules/origins`, "module-origin").map((o) => ({ file: o.file, change: o.change })),
@@ -183,7 +190,7 @@ const CATEGORIES: readonly FileCategory[] = ["importers", "reexporters", "dynami
 function rebuildDeclaration(t: Tables, id: PartId): OutlineDeclaration {
   const d = t.partOf(id, "outline-declaration");
   const a = t.anchor(d.anchor);
-  return { kind: d.kindName, name: a.symbol, line: a.line, endLine: found(a.endLine, "endLine"), ...(d.children !== undefined && { children: d.children.map((child) => rebuildDeclaration(t, child)) }) };
+  return { kind: d.kindName, name: a.symbol, line: a.line, endLine: found(a.endLine, "endLine"), ...(d.placement === undefined ? {} : { placement: d.placement }), ...(d.children !== undefined && { children: d.children.map((child) => rebuildDeclaration(t, child)) }) };
 }
 
 function rebuildTrace(t: Tables): TraceValue {
@@ -360,6 +367,14 @@ test("an unknown root keeps its reason and evidence and yields no part", () => {
   assert.deepEqual(reconstruct(source, new Tables(set)), source.read.fact);
 });
 
+test("outline normalization retains unplaced declaration provenance", () => {
+  const placement = { kind: "unplaced", reason: "unresolved-container", at: { line: 8, column: 5 } } as const;
+  const source = sourceFixture("outline", { value: { unheld: [], files: [{ file: "src/a.ts", imports: [], declarations: [{ kind: "function", name: "nested", line: 8, endLine: 10, placement }] }] } });
+  const t = new Tables(normalizeSource(source, digest));
+  assert.deepEqual(t.list("/value/files/0/declarations", "outline-declaration")[0]?.placement, placement);
+  assert.deepEqual(reconstruct(source, t), source.read.fact);
+});
+
 test("entrypoints keep unknown basePath, unknown component, guards and outlet, and both aliases of one handler", () => {
   const t = new Tables(normalizeSource(sourceFixture("entrypoints"), digest));
   const [get, post, ui] = t.list("/value/entrypoints/value", "entrypoint", "unknown-finding");
@@ -390,6 +405,10 @@ test("impact remaps seed and module-origin indices into their own tables and kee
   assert.deepEqual(unknown?.seeds, [{ status: "missing", index: 7 }]);
   assert.equal(unknown?.kindName, "unknown");
   assert.equal(unknown?.name, undefined);
+  assert.ok(unknown?.kindName === "unknown");
+  assert.deepEqual(unknown.observations.map((observation) => ({ ...observation, evidence: t.evidence(observation.evidence) })), [
+    { status: "unknown", reason: "unresolved", evidence: [{ path: "src/Dyn.java", line: 3 }] },
+  ]);
   const [head, base, lazy] = t.list("/value/modules/modules", "module-reach");
   assert.deepEqual(head?.origins, [{ status: "present", index: 2, part: origins[2] }, { status: "present", index: 1, part: origins[1] }]);
   assert.deepEqual(base?.origins, [{ status: "present", index: 0, part: origins[0] }]);

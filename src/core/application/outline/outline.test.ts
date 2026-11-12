@@ -10,7 +10,7 @@ const NO_MODULES = { files: [], dependencies: [], unread: [] };
 
 test("a syntax-only member is outlined with its own span under its proven holder", async () => {
   const file = "src/store.ts";
-  const store = fakeCodeGraph([fakeNode("D", "constant", file, 1, 8)], []);
+  const store = fakeCodeGraph([fakeNode("file", "file", file, 1, 8), fakeNode("D", "constant", file, 1, 8)], [{ from: "file", to: "D", kind: "contains" }]);
   const model = createDeclarationModel({ store, declarationsIn: async () => [{ name: "m", kind: "method", invoked: true, container: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 5, column: 3 } } }] });
   const answer = await readOutline(store, [file], NO_MODULES, model);
   assert.deepEqual(answer.value.files[0]?.declarations, [{ kind: "constant", name: "D", line: 1, endLine: 8, children: [{ kind: "method", name: "m", line: 3, endLine: 5 }] }]);
@@ -25,7 +25,7 @@ test("a file answers its declarations in line order with their spans, and a file
       fakeNode("Order.id", "field", "src/Order.java", 5, 5, "id"),
       fakeNode("java.util", "import", "src/Order.java", 1, 1, "java.util"),
     ],
-    [],
+    [{ from: "Order.java", to: "Order", kind: "contains" }, { from: "Order.java", to: "Order.id", kind: "contains" }, { from: "Order.java", to: "Order.total", kind: "contains" }],
   );
   const read = (await readOutline(store, ["src/Order.java", "src/Gone.java"], NO_MODULES)).value;
   assert.deepEqual(read.unheld, ["src/Gone.java"]);
@@ -99,4 +99,13 @@ test("a declaration no contains edge places inside a declaration of its file sta
     [{ from: "other", to: "Auth.login", kind: "contains" }],
   );
   assert.deepEqual((await readOutline(store, ["src/auth.ts"], NO_MODULES)).value.files[0]?.declarations.map((declaration) => declaration.name), ["AuthService", "GET /login", "login"]);
+});
+
+test("an unresolved syntax container stays visible with its evidence rather than appearing file-level", async () => {
+  const file = "src/a.ts";
+  const store = fakeCodeGraph([], []);
+  const model = createDeclarationModel({ store, declarationsIn: async () => [{ name: "run", kind: "method", invoked: true, span: { start: { line: 1, column: 7 }, end: { line: 1, column: 15 } }, placement: { kind: "unplaced", at: { line: 1, column: 5 } } }] });
+  const answer = await readOutline(store, [file], NO_MODULES, model);
+  assert.deepEqual(answer.value.files[0]?.declarations, [{ name: "run", kind: "method", line: 1, endLine: 1, placement: { kind: "unplaced", reason: "unresolved-container", at: { line: 1, column: 5 } } }]);
+  assert.equal((await model.select(file, "run"))[0]?.path, undefined);
 });

@@ -17,7 +17,7 @@ test("declarations retain callable spans and exact containers without changing d
     "}",
     "interface Port { send(): void; }",
   ]);
-  assert.deepEqual(answer.declarations.map(({ name, kind, span, container }) => [name, kind, span.start, container]), [
+  assert.deepEqual(answer.declarations.filter(({ placementOnly }) => !placementOnly).map(({ name, kind, span, container }) => [name, kind, span.start, container]), [
     ["top", "function", { line: 1, column: 0 }, undefined],
     ["constructor", "method", { line: 3, column: 2 }, { line: 2, column: 0 }],
     ["run", "method", { line: 4, column: 2 }, { line: 2, column: 0 }],
@@ -656,4 +656,19 @@ test("given derived facts, the member names a file declares are derived once by 
   assert.deepEqual(derived, ["ts-member-names src/a.ts"]);
   assert.equal(JSON.stringify(first), JSON.stringify(alone));
   assert.equal(JSON.stringify(again), JSON.stringify(alone));
+});
+
+test("nested literals retain the nearest named syntax ancestor across anonymous arguments", async () => {
+  const answer = await read(["function outer() {", "  take({ child: { run() {} } });", "}", "function top() {}"]);
+  const child = answer.declarations.find(({ name }) => name === "child")!;
+  assert.deepEqual(child.container, { line: 1, column: 0 });
+});
+
+test("syntax distinguishes file declarations, class fields, and anonymous ancestry without a named parent", async () => {
+  const answer = await read(["function top() {}", "class Box { field = { run() {} }; }", "take({ lost() {} });"]);
+  const placement = (name: string) => answer.declarations.find((node) => node.name === name)?.placement;
+  assert.deepEqual(placement("top"), { kind: "file" });
+  assert.deepEqual(placement("field"), { kind: "nested", container: { line: 2, column: 0 } });
+  assert.deepEqual(placement("run"), { kind: "nested", container: { line: 2, column: 12 } });
+  assert.deepEqual(placement("lost"), { kind: "unplaced", at: { line: 3, column: 5 } });
 });

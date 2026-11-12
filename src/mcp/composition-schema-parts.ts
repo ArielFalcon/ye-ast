@@ -295,17 +295,17 @@ export const partSchema = z.discriminatedUnion("kind", [
     anchor: ids.anchor, kindName: z.string(), depth: count, confidence: z.number(), fanIn: count,
     via: z.strictObject({ target: symbolNameRef, lines: z.array(int).exactOptional(), basis: dependenceBasis }).exactOptional(),
   }),
-  part("entrypoint-reach", {
-    kindName: z.enum([...entrypointKind.options, "unknown"]), name: z.string().exactOptional(), handler: ids.anchor,
-    depth: count, confidence: z.number(), seeds: z.array(originReference),
-  }),
+  z.discriminatedUnion("kindName", [
+    part("entrypoint-reach", { kindName: entrypointKind, name: z.string().exactOptional(), handler: ids.anchor, depth: count, confidence: z.number(), seeds: z.array(originReference) }),
+    part("entrypoint-reach", { kindName: z.literal("unknown"), handler: ids.anchor, depth: count, confidence: z.number(), seeds: z.array(originReference), observations: z.tuple([z.strictObject({ status: z.literal("unknown"), reason: unknownReason, evidence: evidenceList })]).rest(z.strictObject({ status: z.literal("unknown"), reason: unknownReason, evidence: evidenceList })) }),
+  ]),
   part("entrypoint-change", { change: z.enum(["added", "removed", "altered"]), kindName: entrypointKind, name: z.string(), handler: ids.anchor, comparison: comparisonRef }),
   part("contract-change", { contract: z.strictObject({ ...changedOperation, handlers: z.array(ids.anchor).exactOptional() }), comparison: comparisonRef }),
   part("module-origin", { comparison: comparisonRef, file: z.string(), change: z.enum(["added", "modified", "deleted"]) }),
   part("module-reach", { file: ids.file, side: z.enum(["base", "head"]), depth: count, origins: z.array(originReference), via: moduleVia.exactOptional() }),
   part("file-dependency", { from: ids.file, to: ids.file, category: fileDependencyCategory }),
   part("file-query", { file: ids.file, categories: z.array(z.strictObject({ name: fileCategory, collection: recordedCollectionState })) }),
-  part("outline-declaration", { anchor: ids.anchor, kindName: z.string(), children: z.array(ids.part).exactOptional(), uses: z.array(outlineUse).exactOptional(), unproved: z.literal(true).exactOptional() }),
+  part("outline-declaration", { anchor: ids.anchor, kindName: z.string(), placement: z.strictObject({ kind: z.literal("unplaced"), reason: z.literal("unresolved-container"), at: z.strictObject({ line: int, column: int }) }).exactOptional(), children: z.array(ids.part).exactOptional(), uses: z.array(outlineUse).exactOptional(), unproved: z.literal(true).exactOptional() }),
   part("outline-file", { file: ids.file, declarations: z.array(ids.part), imports: z.array(outlineImport) }),
   part("unheld-file", { file: ids.file }),
   part("trace-step", {

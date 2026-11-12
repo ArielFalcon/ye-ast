@@ -1,5 +1,6 @@
 import type { Entrypoint } from "../entrypoints/entrypoint.ts";
 import { compareText, joinsFact, type CodeNode } from "../shared/code-node.ts";
+import { canonicalJson } from "../shared/canonical-json.ts";
 import { declarationSpan } from "../shared/fact.ts";
 import type { Finding } from "../shared/fact.ts";
 import { handlerOf } from "./changed-entrypoints.ts";
@@ -39,7 +40,7 @@ export function reachedEntrypoints(findings: readonly Finding<Entrypoint>[], rea
       for (const place of finding.evidence) {
         const holding = reached.filter((candidate) => joinsFact(candidate, { path: place.path, line: place.line }));
         const innermost = holding.toSorted((a, b) => span(a) - span(b))[0];
-        if (innermost !== undefined) add({ kind: "unknown", handler: { path: innermost.file, symbol: innermost.name, line: innermost.startLine, ...declarationSpan(innermost.startLine, innermost.endLine) }, depth: innermost.depth, confidence: innermost.confidence, seeds: innermost.seeds });
+        if (innermost !== undefined) add({ kind: "unknown", handler: { path: innermost.file, symbol: innermost.name, line: innermost.startLine, ...declarationSpan(innermost.startLine, innermost.endLine) }, depth: innermost.depth, confidence: innermost.confidence, seeds: innermost.seeds, observations: [finding] });
       }
     }
   }
@@ -51,7 +52,13 @@ function span(node: CodeNode): number {
 }
 
 function merge(a: ReachedEntrypoint, b: ReachedEntrypoint): ReachedEntrypoint {
-  return { ...a, depth: Math.min(a.depth, b.depth), confidence: Math.max(a.confidence, b.confidence), seeds: [...new Set([...a.seeds, ...b.seeds])].sort((x, y) => x - y) };
+  const context = { depth: Math.min(a.depth, b.depth), confidence: Math.max(a.confidence, b.confidence), seeds: [...new Set([...a.seeds, ...b.seeds])].sort((x, y) => x - y) };
+  if (a.kind === "unknown" && b.kind === "unknown") {
+    const observations = new Map([...a.observations, ...b.observations].map((observation) => [canonicalJson(observation), observation]));
+    const sorted = [...observations.entries()].sort(([left], [right]) => compareText(left, right)).map(([, observation]) => observation);
+    return { ...a, ...context, observations: [sorted[0]!, ...sorted.slice(1)] };
+  }
+  return { ...a, ...context };
 }
 
 function compareEntries(a: ReachedEntrypoint, b: ReachedEntrypoint): number {

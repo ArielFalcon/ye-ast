@@ -750,3 +750,11 @@ does not guess that a call expression returns a function. Trace reads only the d
 not its factory initialization as if it ran again. The fixed-source store probe reaches `setListPage`, `loadArticles`,
 `ArticlesService.query` and `ApiService.get`; HTTP effects remain explicit cuts where the injected API URL token is
 not proven. This is an acceptance limit, not a complete URL claim.
+
+## Placement refinement (RFC-0030)
+
+[RFC-0030 D3](0030-preserve-domain-knowledge-through-projections.md#d3--declaration-placement-is-explicit-p3) refines
+root placement: a missing parent relation is not proof of file-level ownership. Syntax ancestry traverses anonymous
+containers; index-only roots require the file containment edge. Unplaced declarations remain visible with explicit
+placement evidence and are selectable by a bare name, but cannot acquire a fabricated dotted path. The lexical tree
+is separate from framework binding paths; binding selection does not rewrite lexical containment or prove execution.

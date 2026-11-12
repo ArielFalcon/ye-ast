@@ -50,8 +50,17 @@ test("an entrypoint the extractor could not read whole is reported by the innerm
   const unknown: Finding<Entrypoint> = { status: "unknown", reason: "unresolved", evidence: [{ path: "src/Orders.java", line: 12 }] };
   const reached = [node("Orders", 3, 30, { depth: 0 }), node("list", 10, 14)];
   assert.deepEqual(reachedEntrypoints([unknown], reached), [
-    { kind: "unknown", handler: { path: "src/Orders.java", symbol: "list", line: 10, endLine: 14 }, depth: 1, confidence: 0.9, seeds: [0] },
+    { kind: "unknown", handler: { path: "src/Orders.java", symbol: "list", line: 10, endLine: 14 }, depth: 1, confidence: 0.9, seeds: [0], observations: [unknown] },
   ]);
+});
+
+test("unknown observations reaching one handler retain their original reasons and evidence deterministically", () => {
+  const first: Finding<Entrypoint> = { status: "unknown", reason: "unresolved", evidence: [{ path: "src/Orders.java", line: 12 }] };
+  const second: Finding<Entrypoint> = { status: "unknown", reason: "no-extractor", evidence: [{ path: "src/Orders.java", line: 13, column: 4 }] };
+  const reached = [node("list", 10, 14, { seeds: [2, 0] })];
+  const result = reachedEntrypoints([second, first, first], reached);
+  assert.deepEqual(result, reachedEntrypoints([first, second], reached));
+  assert.deepEqual(result[0], { kind: "unknown", handler: { path: "src/Orders.java", symbol: "list", line: 10, endLine: 14 }, depth: 1, confidence: 0.9, seeds: [0, 2], observations: [second, first] });
 });
 
 test("a route is reached through a reached guard of its own, joined by the guard's file and name; an inline or installed guard joins nothing", () => {

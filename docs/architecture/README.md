@@ -68,6 +68,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0049](adr/0049-every-written-callable-is-a-declaration.md) | Object-literal and factory members, anonymous-class bodies and method references are declarations or references; a Java type target is `partial` until its type references are read; designed in RFC-0027 | Accepted |
 | [0050](adr/0050-one-request-summary-per-declaration.md) | One request summary per declaration, applied at every call, is the only reader of a request's parameters and a response's container; one owner answers "is this call a request"; designed in RFC-0028 | Accepted |
 | [0051](adr/0051-an-answer-never-hides-what-the-engine-knows.md) | Where the engine holds a fact the answer states it: one owner of fault text, a missing file is a fault everywhere, a declared answer bound refuses instead of truncating, an empty `include` is a fault, entrypoints carry their declaration place, `importers` relationships carry their lines; designed in RFC-0029 | Accepted |
+| [0052](adr/0052-request-knowledge-is-independent-of-enumeration-completeness.md) | Preserve identified request occurrences separately from enumeration completeness; scoped gaps retain fail-closed target and execution limits; partially supersedes of ADR-0050 decision 3 | Accepted |
 
 ## Designs (RFC)
 
@@ -99,6 +100,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0027](rfc/0027-declaration-model.md) | Every callable the source writes is a declaration: one declaration model, object-literal and factory members, method references, anonymous classes, Java type references | Accepted |
 | [0028](rfc/0028-value-flow-through-wrappers.md) | Values flow through the project's own wrappers: per-declaration request summaries, the request owner, holder carriers | Accepted |
 | [0029](rfc/0029-presentation-residuals.md) | An answer never hides or misstates what the engine knows: fault text owner, absent files, answer bound, empty scope, entrypoint places, `importers` lines | Accepted |
+| [0030](rfc/0030-preserve-domain-knowledge-through-projections.md) | Preserve request knowledge, unknown provenance and declaration placement; reuse grouped composition evidence and explicit selection in summaries | Accepted |
 
 ## Pending decisions
 
@@ -108,6 +110,14 @@ marked **Proposed** awaits the owner's acceptance.
 | Publication | RFC-0008, Q1-Q2 | Public or private; clearance of extracted qayaba code; npm name and GitHub organization (license decided: Apache-2.0) |
 | Recording the constraints in qayaba's migration | RFC-0009, Q1 | Accepted on 2026-10-30; where to record them, since qayaba's migration branch is active |
 | Daemon good practices | RFC-0005 | Complete and agree before the daemon slice |
+
+## Domain knowledge preservation follow-up
+
+[RFC-0030](rfc/0030-preserve-domain-knowledge-through-projections.md) specifies five corrections derived from the
+response-quality evaluation: request knowledge, reached uncertainty provenance, declaration placement, grouped
+composition support and focused summaries. Its [implementation plan](domain-knowledge-preservation-plan.md)
+tracks five implementation units and their verification. The owner accepted ADR-0052 and RFC-0030 on 2026-11-12;
+that acceptance does not claim the original study is closed.
 
 ## Templates
 

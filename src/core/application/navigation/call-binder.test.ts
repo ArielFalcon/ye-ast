@@ -11,7 +11,7 @@ import { createDeclarationModel } from "./declaration-model.ts";
 test("a syntax holder selects only its unique direct child independently of the caller position", async () => {
   const store = fakeCodeGraph([], []);
   const declarations = createDeclarationModel({ store, declarationsIn: async () => [
-    { name: "Store", kind: "function", invoked: true, span: { start: { line: 1, column: 0 }, end: { line: 10, column: 1 } } },
+    { name: "Store", kind: "function", invoked: true, placement: { kind: "file" }, span: { start: { line: 1, column: 0 }, end: { line: 10, column: 1 } } },
     { name: "run", kind: "method", invoked: true, span: { start: { line: 3, column: 2 }, end: { line: 3, column: 20 } }, container: { line: 1, column: 0 } },
     { name: "outside", kind: "function", invoked: true, span: { start: { line: 12, column: 0 }, end: { line: 12, column: 20 } } },
   ] });
@@ -20,7 +20,7 @@ test("a syntax holder selects only its unique direct child independently of the 
   assert.equal((await binder.memberOfDeclaration(holder!, "run", { file: "src/consumer.ts", line: 40, column: 7 }))?.path, "Store.run");
   assert.equal(await binder.memberOfDeclaration(holder!, "outside", { file: "src/store.ts", line: 12, column: 1 }), undefined);
   const ambiguous = createDeclarationModel({ store, declarationsIn: async () => [
-    { name: "Store", kind: "function", invoked: true, span: { start: { line: 1, column: 0 }, end: { line: 10, column: 1 } } },
+    { name: "Store", kind: "function", invoked: true, placement: { kind: "file" }, span: { start: { line: 1, column: 0 }, end: { line: 10, column: 1 } } },
     ...[3, 5].map((line) => ({ name: "run", kind: "method" as const, invoked: true, span: { start: { line, column: 2 }, end: { line, column: 20 } }, container: { line: 1, column: 0 } })),
   ] });
   const other = createCallBinder({ store, declarations: ambiguous, navigation: createGraphNavigation(store, () => false), syntaxIn: async () => ({ receiverBindings: new Map(), callees: new Map() }), proofs: async () => ({ fields: [], locals: [] }), importedDeclarations: async () => new Map(), callablesIn: async () => [] });

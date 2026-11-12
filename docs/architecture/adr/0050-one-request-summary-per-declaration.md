@@ -18,6 +18,10 @@ Value-flow items failed because a wrapper's request is read where it is written,
 4. One module answers "is this call a request of the project" for the TypeScript pack: `createRequestCallLookup`; the flow walker, the request-origin reader and ADR-0044 V5.2 call it, and name-based predicates are deleted.
 5. A value crossing a binding construct (derived signal, resource, form control) is a carrier; a construct outside the pack's table is a named frontier.
 
+Decision 3 is partially superseded by [ADR-0052](0052-request-knowledge-is-independent-of-enumeration-completeness.md):
+identified request occurrences are retained independently of enumeration completeness, with relevant gaps still blocking
+the conclusions they can invalidate.
+
 ## Consequences
 
 - The delivery units, their order and their tests are in RFC-0028, and each unit names the units of other RFCs it waits for.

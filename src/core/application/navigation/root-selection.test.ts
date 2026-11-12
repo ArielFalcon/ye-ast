@@ -10,7 +10,7 @@ import { createDeclarationModel } from "./declaration-model.ts";
 
 test("target candidates include a proven syntax-only member", async () => {
   const file = "src/store.ts";
-  const store = fakeCodeGraph([fakeNode("D", "constant", file, 1, 8)], []);
+  const store = fakeCodeGraph([fakeNode("file", "file", file, 1, 8), fakeNode("D", "constant", file, 1, 8)], [{ from: "file", to: "D", kind: "contains" }]);
   const model = createDeclarationModel({ store, declarationsIn: async () => [{ name: "m", kind: "method", invoked: true, container: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 5, column: 3 } } }] });
   assert.deepEqual(await missingTargets(model, [{ file, symbol: "absent" }], isSeedable), [{ file, symbol: "absent", candidates: ["D", "D.m"] }]);
   const selected = await selectModelRoots(model, [], [{ file, symbol: "D.m" }], new Map());
@@ -50,7 +50,7 @@ function tokens(quiet: Readonly<Record<string, readonly number[]>>): SourceToken
 const snapshot: SnapshotFiles = { holds: (path) => path === FILE || path === TS_FILE, describe: (entries: readonly RawUnknownEntry[]) => entries.map((entry) => ({ ...entry, absent: false })) };
 
 async function ranges(start: number, end: number, file = FILE, content = SOURCE, quiet: Readonly<Record<string, readonly number[]>> = { [FILE]: [6] }, nodes = NODES) {
-  const store = fakeCodeGraph(nodes, []);
+  const store = fakeCodeGraph([fakeNode("file", "file", file, 1, 1), ...nodes], nodes.map(({ id }) => ({ from: "file", to: id, kind: "contains" })));
   return { store, read: await requestedRanges(rangeChanges([{ file, start, end }]), [{ path: file, content }], tokens(quiet), snapshot, createDeclarationModel({ store, declarationsIn: async () => [] })) };
 }
 

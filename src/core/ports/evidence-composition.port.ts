@@ -225,7 +225,10 @@ export type PartPayload =
   | { kind: "unknown-finding"; reason: UnknownReason; evidence: readonly EvidenceId[] }
   | { kind: "seed"; anchor: AnchorId; basis: SeedBasis; comparison?: ComparisonRef }
   | { kind: "symbol-reach"; anchor: AnchorId; kindName: ImpactedSymbol["kind"]; depth: number; confidence: number; fanIn: number; via?: ViaData }
-  | { kind: "entrypoint-reach"; kindName: ReachedEntrypoint["kind"]; name?: string; handler: AnchorId; depth: number; confidence: number; seeds: readonly OriginReference[] }
+  | ({ kind: "entrypoint-reach"; handler: AnchorId; depth: number; confidence: number; seeds: readonly OriginReference[] } & (
+      | { kindName: Exclude<ReachedEntrypoint["kind"], "unknown">; name?: string }
+      | { kindName: "unknown"; name?: never; observations: readonly [Extract<EvidenceFinding<Entrypoint>, { status: "unknown" }>, ...Extract<EvidenceFinding<Entrypoint>, { status: "unknown" }>[]] }
+    ))
   | { kind: "entrypoint-change"; change: ChangedEntrypoint["change"]; kindName: ChangedEntrypoint["kind"]; name: string; handler: AnchorId; comparison: ComparisonRef }
   | { kind: "contract-change"; contract: ContractChangeData; comparison: ComparisonRef }
   | { kind: "module-origin"; comparison: ComparisonRef; file: string; change: ModuleOrigin["change"] }
@@ -233,7 +236,7 @@ export type PartPayload =
   | { kind: "file-dependency"; from: FileId; to: FileId; category: FileDependencyCategory }
   | { kind: "file-query"; file: FileId; categories: readonly { name: FileCategory; collection: RecordedCollectionState }[] }
   /** `unproved`: the declaration uses a name no binding proves, so an empty `uses` is not "nothing". */
-  | { kind: "outline-declaration"; anchor: AnchorId; kindName: OutlineDeclaration["kind"]; children?: readonly PartId[]; uses?: readonly OutlineUseRecord[]; unproved?: true }
+  | { kind: "outline-declaration"; anchor: AnchorId; kindName: OutlineDeclaration["kind"]; placement?: OutlineDeclaration["placement"]; children?: readonly PartId[]; uses?: readonly OutlineUseRecord[]; unproved?: true }
   | { kind: "outline-file"; file: FileId; declarations: readonly PartId[]; imports: readonly OutlineImportRecord[] }
   | { kind: "unheld-file"; file: FileId }
   | {

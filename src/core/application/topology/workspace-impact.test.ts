@@ -67,7 +67,7 @@ function impactOf(entrypoints: ImpactValue["entrypoints"], rest: Partial<ImpactV
   return { cost: { expansionsUsed: 0 }, seeds: [], symbols: [], entrypoints, ...rest };
 }
 
-const REACHED: ImpactValue["entrypoints"] = [{ kind: "http-route", name: "POST /orders", handler: HANDLER, depth: 0, confidence: 1, seeds: [] }];
+const REACHED = [{ kind: "http-route", name: "POST /orders", handler: HANDLER, depth: 0, confidence: 1, seeds: [] }] satisfies ImpactValue["entrypoints"];
 
 interface Setup {
   /** Per repository: its own routes and call sites. */

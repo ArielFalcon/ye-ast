@@ -7,6 +7,84 @@ import { createHttpCallSites, createRequestCallLookup } from "./http-call-sites.
 
 const reader = createHttpCallSites();
 
+test("identified requests retain targets alongside later independent enumeration gaps", async () => {
+  const files = [source("scoped.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Api { handler: any; constructor(private http: HttpClient) { this.handler = opaqueFactory() }",
+    "remove(id: string) { return this.http.delete('/items/' + id).pipe(this.handler('remove', 0)) }",
+    "} class Page { constructor(private api: Api) {} remove() { return this.api.remove('42') } }",
+  ].join("\n"))];
+  const sites = await reader.of(files, "repo");
+  assert.ok(sites.some((site) => site.target.status === "complete" && "path" in site.target.value && site.target.value.path === "/items/42"));
+  assert.ok(sites.some((site) => site.target.status === "unknown" && site.diagnostic?.cause === "dispatch-disagreement"));
+});
+
+test("separate request occurrences do not become alternatives for one target", async () => {
+  const files = [source("multiple.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Api { constructor(private http: HttpClient) {} send(id: string) { this.http.post('/items/' + id, {}); return this.http.get('/audit/' + id) } }",
+    "class Page { constructor(private api: Api) {} send() { return this.api.send('42') } }",
+  ].join("\n"))];
+  const sites = await reader.of(files, "repo");
+  assert.deepEqual(sites.flatMap((site) => site.target.status === "complete" && "path" in site.target.value ? [site.target.value.path] : []).sort(), ["/audit/42", "/items/42"]);
+  const lookup = await createRequestCallLookup(files);
+  const call = lookup.at({ file: "multiple.ts", line: 3, symbol: "Page.send" });
+  assert.ok(call !== undefined);
+  assert.equal(lookup.of(call)?.result.kind, "unknown");
+});
+
+test("uncertainty in a request argument still blocks its target", async () => {
+  const sites = await reader.of([source("blocked.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Api { handler: any; constructor(private http: HttpClient) { this.handler = opaqueFactory() }",
+    "remove(id: string) { return this.http.delete(this.handler(id)) }",
+    "} class Page { constructor(private api: Api) {} remove() { return this.api.remove('42') } }",
+  ].join("\n"))], "repo");
+  assert.ok(sites.length > 0);
+  assert.ok(sites.every((site) => site.target.status === "unknown"));
+});
+
+test("an unresolved earlier argument cannot be proved independent of the request", async () => {
+  const sites = await reader.of([source("ordered.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Api { handler: any; constructor(private http: HttpClient) { this.handler = opaqueFactory() }",
+    "remove(id: string) { return combine(this.handler(), this.http.delete('/items/' + id)) }",
+    "} class Page { constructor(private api: Api) {} remove() { return this.api.remove('42') } }",
+  ].join("\n"))], "repo");
+  assert.ok(sites.some((site) => site.line === 4));
+  assert.ok(sites.filter((site) => site.line === 4).every((site) => site.target.status === "unknown"));
+});
+
+test("request relevance is rebuilt for each captured source generation", async () => {
+  const capture = (expression: string) => [source("live.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Api { handler: any; constructor(private http: HttpClient) { this.handler = opaqueFactory() }",
+    `remove(id: string) { return ${expression} }`,
+    "} class Page { constructor(private api: Api) {} remove() { return this.api.remove('42') } }",
+  ].join("\n"))];
+  const first = reader.of(capture("this.http.delete('/items/' + id).pipe(this.handler())"), "repo");
+  const second = reader.of(capture("combine(this.handler(), this.http.delete('/items/' + id))"), "repo");
+  assert.ok((await first).some((site) => site.line === 4 && site.target.status === "complete"));
+  assert.ok((await second).filter((site) => site.line === 4).every((site) => site.target.status === "unknown"));
+});
+
+test("response ambiguity survives outer wrappers and distinct calls of the same leaf", async () => {
+  for (const body of ["this.http.post('/a/' + id, {}); return this.http.get('/b/' + id)", "this.load(id); return this.load(id)"]) {
+    const files = [source("response-occurrences.ts", [
+      "import { HttpClient } from '@angular/common/http'",
+      `class Api { constructor(private http: HttpClient) {} load(id: string) { return this.http.get('/b/' + id) } run(id: string) { ${body} } }`,
+      "class Page { constructor(private api: Api) {} run(id: string) { return this.api.run(id) } }",
+      "class App { constructor(private page: Page) {} run() { return this.page.run('1') } }",
+    ].join("\n"))];
+    const lookup = await createRequestCallLookup(files);
+    for (const [line, symbol] of [[3, "Page.run"], [4, "App.run"]] as const) {
+      const call = lookup.at({ file: "response-occurrences.ts", line, symbol });
+      assert.ok(call !== undefined);
+      assert.equal(lookup.of(call)?.result.kind, "unknown");
+    }
+  }
+});
+
 test("the lookup carries each direct request's result and fetch body access", async () => {
   const files = [source("results.ts", [
     "import { HttpClient, httpResource } from '@angular/common/http'",

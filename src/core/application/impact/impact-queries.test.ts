@@ -78,6 +78,7 @@ interface Options {
   index?: Result<IndexSummary, CodeGraphFault>;
   open?: Result<CodeGraphReader, CodeGraphFault>;
   nodes?: FakeNode[];
+  fileRoots?: readonly string[];
   edges?: FakeEdge[];
   unresolved?: FakeUnresolved[];
   declarations?: AngularDeclaration[];
@@ -127,7 +128,9 @@ interface Options {
 function setup(options: Options = {}) {
   const log = { exported: [] as string[], plans: [] as { sha: string; destination: string; wanted: string[] }[], compared: [] as [string, string][], created: [] as string[], removed: [] as string[], indexed: 0, closed: 0, reads: 0, extractions: 0, obtained: [] as string[], listed: [] as string[], materialized: [] as string[] };
   const nodes = options.nodes ?? [];
-  const reader: CodeGraphReader = { ...fakeCodeGraph(nodes, options.edges ?? [], options.unresolved ?? []), close: () => void log.closed++ };
+  const roots = nodes.filter(({ id }) => options.fileRoots?.includes(id));
+  const files = [...new Set(roots.map(({ file }) => file))].map((file) => fakeNode(`placement-file:${file}`, "file", file, 1, 1));
+  const reader: CodeGraphReader = { ...fakeCodeGraph([...nodes, ...files], [...options.edges ?? [], ...roots.map(({ id, file }) => ({ from: `placement-file:${file}`, to: id, kind: "contains" }))], options.unresolved ?? []), close: () => void log.closed++ };
   const vcs: Vcs & VcsChanges = {
     resolveCommit: async (_repo, revision) => ({ ok: true, value: revision.toLowerCase() === "head" ? HEAD : BASE }),
     mergeBase: async () => ({ ok: true, value: options.mergeBase ?? FORK }),
@@ -858,6 +861,7 @@ test("a dependence the walk never places names its reason instead of leaving the
 });
 
 const TWO_CLASSES = {
+  fileRoots: ["A", "B"],
   nodes: [fakeNode("A", "class", "src/A.ts", 1, 9), fakeNode("A.m", "method", "src/A.ts", 2, 4, "m"), fakeNode("B", "class", "src/A.ts", 11, 19), fakeNode("B.m", "method", "src/A.ts", 12, 14, "m")],
   edges: [{ from: "A", to: "A.m", kind: "contains" }, { from: "B", to: "B.m", kind: "contains" }],
 };
@@ -926,7 +930,7 @@ function rangeFile(between: readonly string[]): SourceFile {
 const RANGE_NODES = [fakeNode("f", "function", "src/A.ts", 1, 3), fakeNode("h", "function", "src/A.ts", 10, 14), fakeNode("g", "function", "src/A.ts", 20, 20)];
 
 test("a requested range selects the declarations it intersects, and a range of trivia inside one selects nothing", async () => {
-  const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "// note", "/* block", "   still */", "", ""])], trivia: { "src/A.ts": [4, 5, 6, 7, 8, 9, 12, 13, 15, 16, 17, 18, 19, 21] } });
+  const { callers } = setup({ nodes: RANGE_NODES, fileRoots: ["f", "g", "h"], sources: [rangeFile(["", "// note", "/* block", "   still */", "", ""])], trivia: { "src/A.ts": [4, 5, 6, 7, 8, 9, 12, 13, 15, 16, 17, 18, 19, 21] } });
   const seeds = async (start: number, end: number) => {
     const answer = callersFact(await callers({ targets: [{ file: "src/A.ts", start, end }] }));
     return answer.status === "unknown" ? [] : answer.value.seeds.map((seed) => [seed.symbol, seed.basis]);
@@ -940,7 +944,7 @@ test("a requested range selects the declarations it intersects, and a range of t
 });
 
 test("a range wholly past the end stays the unknown-symbol fault, and a trivia range answers ok with settled", async () => {
-  const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "// note", "/* block", "   still */", "", ""])], trivia: { "src/A.ts": [4, 5, 6, 7, 8, 9, 12, 13, 15, 16, 17, 18, 19, 21] }, exports: listingOf(["src/A.ts"]) });
+  const { callers } = setup({ nodes: RANGE_NODES, fileRoots: ["f", "g", "h"], sources: [rangeFile(["", "// note", "/* block", "   still */", "", ""])], trivia: { "src/A.ts": [4, 5, 6, 7, 8, 9, 12, 13, 15, 16, 17, 18, 19, 21] }, exports: listingOf(["src/A.ts"]) });
   const past = await callers({ targets: [{ file: "src/A.ts", start: 30, end: 35 }, { file: "src/A.ts", start: 2, end: 2 }] });
   assert.ok(!past.ok);
   assert.equal(past.fault.kind, "unknown-symbol");
@@ -964,7 +968,7 @@ test("a symbol that is both requested and inside a requested range seeds once, a
 });
 
 test("a requested symbol that names no node at the revision is a typed failure naming the entries, even beside one that exists", async () => {
-  const { callers } = setup({ nodes: SOURCE_NODES, exports: listingOf(["src/A.java", "src/B.java"]) });
+  const { callers } = setup({ nodes: SOURCE_NODES, fileRoots: ["f", "g"], exports: listingOf(["src/A.java", "src/B.java"]) });
   const answer = await callers({ targets: [{ file: "src/A.java", symbol: "f" }, { file: "src/A.java", symbol: "gone" }, { file: "src/B.java", symbol: "f" }] });
   assert.ok(!answer.ok);
   assert.equal(answer.fault.kind, "unknown-symbol");
@@ -976,7 +980,7 @@ test("a requested symbol that names no node at the revision is a typed failure n
 
 test("a missing entry names the seedable declarations of its file, sorted and once each, and none for a file the index does not hold", async () => {
   const nodes = [fakeNode("z", "function", "src/A.java", 1), fakeNode("a1", "method", "src/A.java", 5, 5, "a"), fakeNode("a2", "method", "src/A.java", 9, 9, "a"), fakeNode("d", "field", "src/A.java", 12)];
-  const { callers } = setup({ nodes });
+  const { callers } = setup({ nodes, fileRoots: ["z", "a1", "a2", "d"] });
   const answer = await callers({ targets: [{ file: "src/A.java", symbol: "gone" }, { file: "src/Elsewhere.java", symbol: "x" }] });
   assert.ok(!answer.ok);
   assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [
@@ -2295,7 +2299,7 @@ test("a graph edge whose bare root Java places in another file leaves the graph'
     rootBindings: NO_BINDINGS,
     declaredTypes: NO_DECLARED_TYPES, dispatchTargets: NO_DISPATCH_TARGETS, receiverMethods: NO_RECEIVER_METHODS, implementedDeclarations: NO_IMPLEMENTED,
   });
-  const { callers } = setup({ nodes, edges, importOrigins });
+  const { callers } = setup({ nodes, edges, fileRoots: ["dto", "gateway"], importOrigins });
 
   const answer = callersFact(await callers({ targets: [{ file: "src/dto/Visits.java", symbol: "Visits" }, { file: "src/gateway/Visits.java", symbol: "Visits" }] }));
 
@@ -2777,7 +2781,7 @@ test("shared preparation gives each impact reading the hold that owns its head s
 
 test("a syntax-only callers target remains partial without reverse binding support", async () => {
   const file = "src/store.ts";
-  const { callers } = setup({ nodes: [fakeNode("D", "constant", file, 1, 8)], sources: [{ path: file, content: "const D = {};" }], exports: { [HEAD]: { files: [{ path: file, blob: "1", written: true }], skipped: [] } }, syntaxDeclarations: { [file]: [{ name: "m", kind: "method", invoked: true, container: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 5, column: 3 } } }] } });
+  const { callers } = setup({ nodes: [fakeNode("D", "constant", file, 1, 8)], fileRoots: ["D"], sources: [{ path: file, content: "const D = {};" }], exports: { [HEAD]: { files: [{ path: file, blob: "1", written: true }], skipped: [] } }, syntaxDeclarations: { [file]: [{ name: "m", kind: "method", invoked: true, container: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 5, column: 3 } } }] } });
   const fact = callersFact(await callers({ targets: [{ file, symbol: "D.m" }] }));
   assert.equal(fact.status, "partial");
   assert.ok(fact.status === "partial" && fact.cuts.some(({ reason }) => reason === "no-symbols"));

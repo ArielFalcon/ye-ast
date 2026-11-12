@@ -85,7 +85,7 @@ const COMPUTED_SPECIFIER = "a computed expression names the module";
 
 function outlined({ declaration, children }: DeclarationBranch<ModelDeclaration>): OutlineDeclaration {
   const nested = children.map(outlined);
-  return { kind: declaration.kind, name: declaration.name, line: declaration.startLine, endLine: declaration.endLine, ...(nested.length > 0 && { children: nested }) };
+  return { kind: declaration.kind, name: declaration.name, line: declaration.startLine, endLine: declaration.endLine, ...(declaration.placement === undefined ? {} : { placement: declaration.placement }), ...(nested.length > 0 && { children: nested }) };
 }
 
 export interface FocusRead {

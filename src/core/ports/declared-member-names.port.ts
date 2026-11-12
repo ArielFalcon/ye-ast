@@ -30,11 +30,14 @@ export interface DeclaredMemberNames {
 
 export interface DeclaredDeclaration {
   name: string;
-  kind: "method" | "function" | "accessor" | "initializer" | "anonymous-class" | "object";
+  kind: "method" | "function" | "accessor" | "initializer" | "anonymous-class" | "object" | "class" | "value";
+  placementOnly?: true;
   span: SourceSpan;
   invoked: boolean;
   /** A proven enclosing declaration, by its source position. */
   container?: SourcePosition;
+  /** Placement established from syntax, including an anonymous ancestry with no representable parent. */
+  placement?: { kind: "file" } | { kind: "nested"; container: SourcePosition } | { kind: "unplaced"; at: SourcePosition };
   /** The variable or field proven to hold this value. */
   binding?: SourcePosition;
 }

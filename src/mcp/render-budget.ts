@@ -15,10 +15,14 @@ const narrowing: Record<RenderContext["tool"], readonly string[]> = {
 };
 
 export function boundedText<V>(render: ResponseRenderer<V>, fact: Fact<V>, mode: ResponseMode, context: RenderContext, bound: AnswerBound | undefined): BoundedText {
-  const requested = render(fact, mode, context);
+  return boundedProjection((candidate) => render(fact, candidate, context), mode, fact.status, narrowing[context.tool], bound);
+}
+
+export function boundedProjection(render: (mode: ResponseMode) => string, mode: ResponseMode, status: string, narrow: readonly string[], bound: AnswerBound | undefined): BoundedText {
+  const requested = render(mode);
   if (bound === undefined || Buffer.byteLength(requested) <= bound.bytes) return { kind: "text", text: requested };
-  const note = `\nPresentation shortened from ${mode} to summary to fit ${bound.bytes} bytes; status ${fact.status} is unchanged.`;
-  const summary = render(fact, "summary", context) + note;
+  const note = `\nPresentation shortened from ${mode} to summary to fit ${bound.bytes} bytes; status ${status} is unchanged.`;
+  const summary = render("summary") + note;
   if (Buffer.byteLength(summary) <= bound.bytes) return { kind: "text", text: summary };
-  return { kind: "refused", bound: bound.bytes, mode, status: fact.status, narrow: narrowing[context.tool] };
+  return { kind: "refused", bound: bound.bytes, mode, status, narrow };
 }

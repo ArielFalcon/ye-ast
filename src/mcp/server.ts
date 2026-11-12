@@ -1,4 +1,4 @@
-import { boundedText } from "./render-budget.ts";
+import { boundedProjection, boundedText, type BoundedText } from "./render-budget.ts";
 import { dependencyDiagnostic } from "./dependency-schema.ts";
 import { callSiteDiagnostic, unresolvedCallSiteSchema } from "./composition-schema-parts.ts";
 import { compactInput } from "./compact-schema.ts";
@@ -12,7 +12,7 @@ import { z } from "zod";
 import { repositoryCatalog, type RepositoryBinding } from "./repository-targeting.ts";
 import type { ResponseMode, ResponseRenderer } from "./presentation.ts";
 import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
-import { TRUST_MODES } from "../core/domain/shared/fact.ts";
+import { TRUST_MODES, UNKNOWN_REASONS } from "../core/domain/shared/fact.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import type { Fact } from "../core/domain/shared/fact.ts";
 import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type ComposeQuery, type SemanticQuery, type ToolArguments } from "./query-schema.ts";
@@ -33,6 +33,11 @@ export const FAULT_META = "ye-ast/fault";
 export const RESULT_JSON_LABEL = "result JSON: ";
 /** Opens the line of a fault's text that carries its fields beyond kind, detail and entries. */
 const FAULT_FIELDS_LABEL = "fault fields: ";
+
+function boundRefusal({ bound, mode, status, narrow }: Extract<BoundedText, { kind: "refused" }>, meta: Record<string, unknown> = {}): CallToolResult {
+  const explanation = `answer-over-bound: ${bound} bytes; requested ${mode}; status ${status}; narrow: ${narrow.join(", ")}`;
+  return { isError: true, content: Buffer.byteLength(explanation) <= bound ? [{ type: "text", text: explanation }] : [], _meta: { ...meta, kind: "answer-over-bound", bound, mode, status, narrow } };
+}
 
 /** Presentation and result fields are delivered once in the text content. */
 function delivered(text: string, fields: Record<string, unknown>, meta: Record<string, unknown>): CallToolResult {
@@ -152,10 +157,14 @@ const provenance = z.discriminatedUnion("status", [
 const strings = z.array(z.string());
 const position = z.looseObject({ file: z.string(), symbol: z.string(), line: z.number() });
 const handler = z.looseObject({ path: z.string(), symbol: z.string(), line: z.number() });
+const unknownObservation = z.looseObject({ status: z.literal("unknown"), reason: z.enum(UNKNOWN_REASONS), evidence: z.array(evidence) });
 const impact = z.looseObject({
   seeds: z.array(position),
   symbols: z.array(position),
-  entrypoints: z.array(z.looseObject({ handler, seeds: z.array(z.number()) })),
+  entrypoints: z.array(z.discriminatedUnion("kind", [
+    z.looseObject({ kind: z.enum(["http-route", "ui-route", "listener", "job", "callback"]), handler, seeds: z.array(z.number()) }),
+    z.looseObject({ kind: z.literal("unknown"), handler, seeds: z.array(z.number()), observations: z.tuple([unknownObservation]).rest(unknownObservation) }),
+  ])),
   cost: z.looseObject({ expansionsUsed: z.number() }),
   modules: z.looseObject({
     origins: z.array(z.looseObject({ file: z.string(), change: z.string() })),
@@ -239,7 +248,7 @@ const finding = z.discriminatedUnion("status", [
     .refine((item) => !("value" in item))
     .meta({ not: { required: ["value"] } }),
 ]);
-const outlineDeclaration = z.looseObject({ kind: z.string(), name: z.string(), line: z.number(), endLine: z.number() });
+const outlineDeclaration = z.looseObject({ kind: z.string(), name: z.string(), line: z.number(), endLine: z.number(), placement: z.strictObject({ kind: z.literal("unplaced"), reason: z.literal("unresolved-container"), at: z.strictObject({ line: z.number(), column: z.number() }) }).optional() });
 const moduleTarget = z.union([
   z.looseObject({ kind: z.literal("repository"), file: z.string() }),
   z.looseObject({ kind: z.literal("external"), module: z.string() }),
@@ -446,11 +455,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       OUTPUTS[tool].parse({ text, ...fields });
       if (answerBytes === undefined) return delivered(text, fields, meta);
       const bounded = boundedText((_fact, candidate) => `${candidate === mode ? text : summary()}\nResult JSON fields are in structuredContent.`, fact, mode, renderContext, { bytes: answerBytes });
-      if (bounded.kind === "refused") {
-        const { bound, status, narrow } = bounded;
-        const explanation = `answer-over-bound: ${bound} bytes; requested ${mode}; status ${status}; narrow: ${narrow.join(", ")}`;
-        return { isError: true, content: Buffer.byteLength(explanation) <= bound ? [{ type: "text", text: explanation }] : [], _meta: { ...meta, kind: "answer-over-bound", bound, mode, status, narrow } };
-      }
+      if (bounded.kind === "refused") return boundRefusal(bounded, meta);
       return { content: [{ type: "text", text: bounded.text }], structuredContent: fields, ...(Object.keys(meta).length ? { _meta: meta } : {}) };
     };
     if (controls?.select !== undefined && controls.page !== undefined && recovery !== undefined && sourceFor !== undefined) {
@@ -596,7 +601,9 @@ export function createMcpServer(deps: McpDeps): McpServer {
       if (!result.ok) return failure(result.fault, sourceContext(input.queries, result.fault));
       const fields = input.mode === "full" ? composeFull(result.value) : composeReceipt(result.value, input.mode);
       output.parse(fields);
-      return delivered(renderComposition(result.value, input.mode), fields, {});
+      if (deps.answerBytes === undefined) return delivered(renderComposition(result.value, input.mode), fields, {});
+      const bounded = boundedProjection((mode) => `${renderComposition(result.value, mode)}\nResult JSON fields are in structuredContent.`, input.mode, "per-source", ["queries", "scope", "focus", "mode: summary"], { bytes: deps.answerBytes });
+      return bounded.kind === "refused" ? boundRefusal(bounded) : { content: [{ type: "text", text: bounded.text }], structuredContent: fields };
     } catch (error) {
       return failure({ kind: "internal-fault", detail: redaction.redactError(error) });
     }

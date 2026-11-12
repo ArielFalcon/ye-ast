@@ -5,6 +5,11 @@ import { fakeCodeGraph, fakeNode } from "./fake-code-graph.testing.ts";
 import type { DeclaredDeclaration } from "../../ports/declared-member-names.port.ts";
 
 const FILE = "src/a.ts";
+const rootedGraph = (nodes: Parameters<typeof fakeCodeGraph>[0], edges: Parameters<typeof fakeCodeGraph>[1]) => {
+  const file = fakeNode("fixture-file", "file", FILE, 1, 100);
+  const roots = nodes.filter(({ kind, id }) => kind !== "file" && !edges.some(({ to, kind }) => to === id && kind === "contains"));
+  return fakeCodeGraph([...nodes, file], [...edges, ...roots.map(({ id }) => ({ from: file.id, to: id, kind: "contains" }))]);
+};
 const declared = (name: string, line: number, container?: number): DeclaredDeclaration => ({
   name, kind: "method", invoked: true,
   span: { start: { line, column: 2 }, end: { line, column: 18 } },
@@ -12,7 +17,7 @@ const declared = (name: string, line: number, container?: number): DeclaredDecla
 });
 
 test("syntax joins the index identity and proven containment without a file node or duplicate member", async () => {
-  const store = fakeCodeGraph([fakeNode("file", "file", FILE, 1, 20), fakeNode("A", "class", FILE, 1, 9), fakeNode("m", "method", FILE, 3, 3)], [
+  const store = rootedGraph([fakeNode("file", "file", FILE, 1, 20), fakeNode("A", "class", FILE, 1, 9), fakeNode("m", "method", FILE, 3, 3)], [
     { from: "file", to: "A", kind: "contains" }, { from: "A", to: "m", kind: "contains" },
   ]);
   let reads = 0;
@@ -29,27 +34,28 @@ test("syntax joins the index identity and proven containment without a file node
 });
 
 test("duplicate paths report both declarations while unproven containers receive no invented path", async () => {
-  const store = fakeCodeGraph([fakeNode("A", "class", FILE, 1, 10)], []);
+  const store = rootedGraph([fakeNode("A", "class", FILE, 1, 10)], []);
   const model = createDeclarationModel({ store, declarationsIn: async () => [declared("n", 3, 1), declared("n", 5, 1), declared("hidden", 7, 6)] });
   await assert.rejects(model.select(FILE, "A.n"), (error: unknown) => error instanceof AmbiguousDeclaration && error.declarations.map(({ startLine }) => startLine).join(",") === "3,5");
   assert.equal((await model.list(FILE)).find(({ name }) => name === "hidden")?.path, undefined);
-  assert.deepEqual(await model.select(FILE, "hidden"), []);
+  assert.equal((await model.select(FILE, "hidden"))[0]?.path, undefined);
 });
 
 test("a constructor missing from the index never merges into its same-named class", async () => {
-  const store = fakeCodeGraph([fakeNode("A", "class", FILE, 1, 8)], []);
+  const store = rootedGraph([fakeNode("A", "class", FILE, 1, 8)], []);
   const model = createDeclarationModel({ store, declarationsIn: async () => [declared("A", 3, 1)] });
   assert.deepEqual((await model.list(FILE)).map(({ path, symbol }) => [path, symbol?.kind]), [["A", "class"], ["A.A", undefined]]);
 });
 
 test("parser headers preceding indexed starts still join the same callable and its container", async () => {
-  const store = fakeCodeGraph([
+  const store = rootedGraph([
     { ...fakeNode("run", "function", FILE, 1, 5), startColumn: 7, endColumn: 1 },
     { ...fakeNode("nested", "function", FILE, 3, 4, "run"), startColumn: 2, endColumn: 3 },
     { ...fakeNode("Box", "class", FILE, 7, 12), startColumn: 7, endColumn: 1 },
   ], [{ from: "run", to: "nested", kind: "contains" }]);
   const model = createDeclarationModel({ store, declarationsIn: async () => [
     { name: "run", kind: "function", invoked: true, span: { start: { line: 1, column: 0 }, end: { line: 5, column: 1 } } },
+    { name: "Box", kind: "class", placementOnly: true, invoked: false, placement: { kind: "file" }, span: { start: { line: 7, column: 0 }, end: { line: 12, column: 1 } } },
     { name: "n", kind: "method", invoked: true, container: { line: 7, column: 0 }, span: { start: { line: 9, column: 2 }, end: { line: 10, column: 3 } } },
   ] });
   assert.equal((await model.select(FILE, "run"))[0]?.id, "index:run");
@@ -58,7 +64,7 @@ test("parser headers preceding indexed starts still join the same callable and i
 });
 
 test("indexed overloads retain the existing declaration-set target semantics", async () => {
-  const store = fakeCodeGraph([fakeNode("A", "class", FILE, 1, 8), fakeNode("first", "method", FILE, 3, 3, "m"), fakeNode("second", "method", FILE, 5, 5, "m")], [
+  const store = rootedGraph([fakeNode("A", "class", FILE, 1, 8), fakeNode("first", "method", FILE, 3, 3, "m"), fakeNode("second", "method", FILE, 5, 5, "m")], [
     { from: "A", to: "first", kind: "contains" }, { from: "A", to: "second", kind: "contains" },
   ]);
   const model = createDeclarationModel({ store, declarationsIn: async () => [declared("m", 3, 1), declared("m", 5, 1)] });
@@ -66,14 +72,44 @@ test("indexed overloads retain the existing declaration-set target semantics", a
 });
 
 test("literal bindings compose nested paths while returned and computed literals remain unplaced", async () => {
-  const store = fakeCodeGraph([fakeNode("D", "constant", FILE, 1, 8)], []);
+  const store = rootedGraph([fakeNode("D", "constant", FILE, 1, 8)], []);
   const model = createDeclarationModel({ store, declarationsIn: async () => [
     { ...declared("D", 1), kind: "object", invoked: false, span: { start: { line: 1, column: 0 }, end: { line: 8, column: 1 } } },
-    { ...declared("a", 2), kind: "object", invoked: false, binding: { line: 1, column: 0 } },
-    { ...declared("m", 3), binding: { line: 2, column: 2 } },
+    { ...declared("a", 2, 1), kind: "object", invoked: false, binding: { line: 1, column: 0 } },
+    { ...declared("m", 3), container: { line: 2, column: 2 }, binding: { line: 2, column: 2 } },
     declared("detached", 12, 11),
   ] });
   assert.deepEqual((await model.select(FILE, "D.a.m")).map(({ name }) => name), ["m"]);
   assert.equal((await model.list(FILE)).find(({ name }) => name === "detached")?.path, undefined);
   assert.equal((await model.list(FILE)).filter(({ name }) => name === "D").length, 1);
+});
+
+test("indexed nested literal applies the syntax parent when the graph has no contains edge", async () => {
+  const store = rootedGraph([fakeNode("outer", "function", FILE, 1, 5), fakeNode("child", "property", FILE, 2, 2)], []);
+  const model = createDeclarationModel({ store, declarationsIn: async () => [
+    { ...declared("outer", 1), kind: "function" },
+    { ...declared("child", 2, 1), kind: "object", invoked: false },
+  ] });
+  assert.equal((await model.select(FILE, "outer.child"))[0]?.symbol?.id, "child");
+  assert.equal((await model.list(FILE)).filter(({ name }) => name === "child").length, 1);
+});
+
+test("index-only declarations require a file edge or a represented parent to establish placement", async () => {
+  const store = fakeCodeGraph([fakeNode("file", "file", FILE, 1, 10), fakeNode("root", "class", FILE, 2, 4), fakeNode("unknown", "class", FILE, 6, 8)], [
+    { from: "file", to: "root", kind: "contains" },
+  ]);
+  const model = createDeclarationModel({ store, declarationsIn: async () => [] });
+  assert.equal((await model.select(FILE, "root"))[0]?.name, "root");
+  assert.equal((await model.select(FILE, "unknown"))[0]?.path, undefined);
+  assert.equal((await model.list(FILE)).find(({ name }) => name === "unknown")?.placement?.kind, "unplaced");
+});
+
+test("framework binding cannot overwrite proven lexical containment", async () => {
+  const store = fakeCodeGraph([fakeNode("file", "file", FILE, 1, 10), fakeNode("A", "class", FILE, 1, 9), fakeNode("B", "class", FILE, 2, 9)], [
+    { from: "file", to: "A", kind: "contains" }, { from: "file", to: "B", kind: "contains" },
+  ]);
+  const model = createDeclarationModel({ store, declarationsIn: async () => [declared("m", 3, 1)], bindingsIn: async () => [{ member: { line: 3, column: 2 }, holder: { path: FILE, symbol: "B", line: 2 }, evidence: { framework: "example", file: FILE, line: 1 } }] });
+  const m = (await model.list(FILE)).find(({ name }) => name === "m")!;
+  assert.equal(m.bindingEvidence?.length, 1);
+  assert.notEqual(m.path, "B.m");
 });

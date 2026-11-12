@@ -2,6 +2,7 @@ import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import type { ModuleBinding, ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import { bindingDeclaration, type PlacedImport } from "../../domain/relations/import-binding.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
+import { branchesOf, declarationPath } from "../../domain/shared/declaration-tree.ts";
 import type { DeclarationModel } from "./declaration-model.ts";
 
 const IMPORT = "imports";
@@ -33,8 +34,8 @@ async function namedDeclaration(declarations: DeclarationModel, dependency: Modu
   return binding.exportedAs === undefined || dependency.target.kind !== "repository" ? undefined : declarationAt(declarations, dependency.target.file, binding.exportedAs);
 }
 
-/** The one declaration of `file` at the exact proven `path`; a syntax-only declaration has no index handle. */
+/** Joins an independently proven path with the exact lexical chain; it does not establish that chain's file placement. */
 export async function declarationAt(declarations: DeclarationModel, file: string, path: string): Promise<GraphSymbol | undefined> {
-  const named = (await declarations.select(file, path)).filter((declaration) => declaration.path === path);
-  return named.length === 1 ? named[0]!.symbol : undefined;
+  const named = branchesOf(await declarations.tree(file)).filter((branch) => declarationPath(branch) === path);
+  return named.length === 1 ? named[0]!.declaration.symbol : undefined;
 }

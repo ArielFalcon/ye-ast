@@ -342,10 +342,14 @@ declaration with a summary:
   alternative, never a disagreement.
 - two or more shapes that differ with no `when` → `target: {status: "unknown"}`,
   `diagnostic: {cause: "dispatch-disagreement", alternatives: <canonical shapes>}`, evidence = the call and every leaf.
-- `gaps` non-empty → `target: {status: "unknown", reason: "unresolved"}` with the prevailing retained gap cause and
-  evidence = the call and the gap places. One known shape does not establish the only possible request when another
-  callee remains unread or ambiguous, so it supplies no exclusion proof in `stated`. **Fail closed**: a call that may also
-  reach a request the summary could not state is not attributed confidently; the answer names the gap at that call.
+- `gaps` non-empty limits enumeration; it blocks a particular identified occurrence unless occurrence-level relevance
+  proves independence, as specified by [ADR-0052](../adr/0052-request-knowledge-is-independent-of-enumeration-completeness.md)
+  and [RFC-0030 D1](0030-preserve-domain-knowledge-through-projections.md#d1--request-occurrence-knowledge-and-scoped-gaps-p1).
+  Preserve independently identified targets alongside an explicit unresolved enumeration site. Unread or unclassified
+  gaps still fail closed; a known occurrence proves neither the only possible request nor guaranteed execution.
+  Distinct leaves are separate operations; competing targets of one occurrence remain alternatives. No incomplete
+  enumeration supplies an issuing-boundary or exclusion proof. Response lookup retains an explicit frontier where
+  the occurrence cannot be associated uniquely, including across outer wrappers.
 - `shapes` empty and `gaps` empty → no call site (the body was read and issues no request).
 - no summary (not a snapshot declaration) → no call site; the operation's `no-call-site` finding remains the answer.
 

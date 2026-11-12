@@ -28,6 +28,7 @@ import type { OutwardName } from "../core/domain/topology/outward-name.ts";
 import type { EvidenceComposition } from "../core/ports/evidence-composition.port.ts";
 import type { FactRead, WorkspaceRefresh } from "../core/ports/workspace-queries.port.ts";
 import { createMcpServer, FAULT_META, RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, TRACE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT, CONTRACT_CONSEQUENCES_OUTPUT } from "./server.ts";
+import { partSchema } from "./composition-schema-parts.ts";
 
 function resultFields(result: any): any {
   const text = result.content?.[0]?.text;
@@ -67,6 +68,57 @@ test("an outline focus without a proven path is delivered by span through MCP", 
     assert.equal(OUTLINE_OUTPUT.safeParse(full).success, true);
   } finally {
     await session.close();
+  }
+});
+
+test("impact and callers expose reached unknown causes and source evidence in text and full schemas", async () => {
+  const value: ImpactValue = { seeds: [], symbols: [], cost: { expansionsUsed: 0 }, entrypoints: [{ kind: "unknown", handler: { path: "src/handler.ts", symbol: "run", line: 2 }, depth: 1, confidence: 1, seeds: [], observations: [{ status: "unknown", reason: "unresolved", evidence: [{ path: "src/handler.ts", line: 5 }] }, { status: "unknown", reason: "no-extractor", evidence: [{ path: "src/handler.ts", line: 7, column: 3 }] }] }] };
+  const answer = async () => ({ ok: true as const, value: { ...base(), status: "complete" as const, value } });
+  const reached = value.entrypoints[0]!;
+  assert.equal(reached.kind, "unknown");
+  const { session } = await setup({ callers: answer, ofChange: answer });
+  try {
+    for (const [tool, args, schema] of [["ye_ast_callers", { targets: [{ file: "src/handler.ts", symbol: "run" }] }, CALLERS_OUTPUT], ["ye_ast_impact", { base: "main" }, IMPACT_OUTPUT]] as const) {
+      const summary = textOf(await session.callTool(tool, args));
+      assert.match(summary, /unresolved.*src\/handler\.ts:5/);
+      assert.match(summary, /no-extractor.*src\/handler\.ts:7/);
+      const full = resultFields(await session.callTool(tool, { ...args, mode: "full" }));
+      assert.deepEqual(full.value.entrypoints[0].observations, reached.observations);
+      const validate = validatorOf(schema["~standard"].jsonSchema.output({ target: "draft-07" }));
+      for (const invalid of [undefined, []]) {
+        const changed = structuredClone(full);
+        if (invalid === undefined) delete changed.value.entrypoints[0].observations;
+        else changed.value.entrypoints[0].observations = invalid;
+        assert.equal(schema.safeParse(changed).success, false);
+        assert.equal(validate(changed).valid, false);
+      }
+      assert.equal(schema.safeParse(full).success, true);
+      assert.equal(validate(full).valid, true);
+    }
+  } finally { await session.close(); }
+});
+
+test("outline identifies unplaced declarations in text and preserves placement in full output", async () => {
+  const placement = { kind: "unplaced", reason: "unresolved-container", at: { line: 4, column: 9 } } as const;
+  const value: OutlineValue = { unheld: [], files: [{ file: "src/store.ts", imports: [], declarations: [{ kind: "function", name: "nested", line: 4, endLine: 6, placement }] }] };
+  const { session } = await setup({ outline: async () => ({ ok: true, value: { ...base(), status: "complete", value } }) });
+  try {
+    assert.match(textOf(await session.callTool("ye_ast_outline", { files: ["src/store.ts"] })), /unplaced: unresolved-container at 4:9/);
+    const full = resultFields(await session.callTool("ye_ast_outline", { files: ["src/store.ts"], mode: "full" }));
+    assert.deepEqual(full.value.files[0].declarations[0].placement, placement);
+    assert.equal(OUTLINE_OUTPUT.safeParse(full).success, true);
+  } finally { await session.close(); }
+});
+
+test("composition part schemas require unknown provenance and preserve unplaced coordinates", () => {
+  const id = (prefix: string) => `${prefix}:${"a".repeat(64)}`;
+  const common = { id: id("p1"), supports: [{ source: id("s1"), read: id("r1"), pointer: "/value" }] };
+  const reach = { ...common, kind: "entrypoint-reach", kindName: "unknown", handler: id("a1"), depth: 1, confidence: 1, seeds: [], observations: [{ status: "unknown", reason: "unresolved", evidence: [id("e1")] }] };
+  const declaration = { ...common, kind: "outline-declaration", kindName: "function", anchor: id("a1"), placement: { kind: "unplaced", reason: "unresolved-container", at: { line: 8, column: 5 } } };
+  const validate = validatorOf(partSchema["~standard"].jsonSchema.output({ target: "draft-07" }));
+  for (const [value, expected] of [[reach, true], [{ ...reach, observations: [] }, false], [declaration, true], [{ ...declaration, placement: { ...declaration.placement, at: { line: 8 } } }, false]] as const) {
+    assert.equal(partSchema.safeParse(value).success, expected);
+    assert.equal(validate(value).valid, expected);
   }
 });
 const REPOSITORY = { path: "/work/shop", repoId: "shop" };
