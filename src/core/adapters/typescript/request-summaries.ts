@@ -35,7 +35,7 @@ export interface SummaryResolver {
    * per `{}` in order, the declaration parameter index that value is (undefined when it is not a parameter), or why not.
    */
   evaluate(file: string, expression: ts.Expression): Promise<PathRead | { status: "undecided"; cause: SummaryCause; evidence: readonly Evidence[] }>;
-  /** The declaration a call resolves to, an explicit gap when dispatch is ambiguous, or undefined outside the snapshot. */
+  /** The declaration a call resolves to, an explicit gap when dispatch is ambiguous, or undefined outside the snapshot or when the call runs no repository code. */
   calleeOf(file: string, call: ts.CallExpression): Promise<{ key: DeclarationKey; file: string; body: ts.Node | undefined } | { candidates: readonly { key: DeclarationKey; file: string; body: ts.Node | undefined }[] } | { gap: SummaryGap } | undefined>;
   /** Whether the call's receiver is an Angular `HttpClient`, typed by the B11 reader (fields, parameters, inherited fields). It answers receiver typing only; it does not decide what a request is. */
   clientReceiver(file: string, call: ts.CallExpression): Promise<boolean>;
@@ -342,8 +342,9 @@ async function computeSummaries(files: readonly SourceFile[], resolver: SummaryR
   }
   const causes = graph.causeIndex(new Map([...ownGaps].map(([key, gaps]) => [key, gaps.map((gap) => gap.cause)])));
   const gapsOf = new Map<DeclarationKey, SummaryGap[]>();
+  const leaves = leafPlaces(edges, ownGaps);
   for (const key of bodies.keys()) {
-    gapsOf.set(key, distinctGaps([...(ownGaps.get(key) ?? []), ...calledGaps(edges.get(key) ?? [], causes.forCaller(key))]));
+    gapsOf.set(key, distinctGaps([...(ownGaps.get(key) ?? []), ...calledGaps(edges.get(key) ?? [], causes.forCaller(key), (edge, cause) => cause === "recursive" || graph.isRecursive(key, edge.callee) ? undefined : leaves(edge.callee, cause))]));
   }
   const results = await resultsOf(bodies, returns, edges, resolver);
   const summaries = new Map<DeclarationKey, RequestSummary>();
@@ -605,13 +606,36 @@ function unreadGaps(edges: readonly Edge[]): SummaryGap[] {
   return edges.filter((edge) => edge.unread).map((edge) => atCall({ cause: "source-not-read", evidence: [edge.call] }, edge.node));
 }
 
-/** The gaps a declaration inherits from the declarations it reaches, each at the call that reaches it. */
-function calledGaps(edges: readonly Edge[], causes: (callee: DeclarationKey) => ReadonlySet<SummaryCause>): SummaryGap[] {
+/** The place of the nearest declaration, from a callee through the calls it makes, that holds the cause as its own gap. */
+type LeafPlaces = (callee: DeclarationKey, cause: SummaryCause) => Evidence | undefined;
+
+function leafPlaces(edges: ReadonlyMap<DeclarationKey, readonly Edge[]>, own: ReadonlyMap<DeclarationKey, readonly SummaryGap[]>): LeafPlaces {
+  const found = new Map<string, Evidence | undefined>();
+  return (callee, cause) => {
+    const memo = `${cause}\0${callee}`;
+    if (found.has(memo)) return found.get(memo);
+    const seen = new Set([callee]);
+    const queue = [callee];
+    let place: Evidence | undefined;
+    for (let i = 0; i < queue.length && place === undefined; i++) {
+      place = own.get(queue[i]!)?.find((gap) => gap.cause === cause)?.evidence[0];
+      for (const edge of edges.get(queue[i]!) ?? []) {
+        if (!seen.has(edge.callee)) { seen.add(edge.callee); queue.push(edge.callee); }
+      }
+    }
+    found.set(memo, place);
+    return place;
+  };
+}
+
+/** The gaps a declaration inherits from the declarations it reaches, each at the call that reaches it and naming the place that holds the cause. */
+function calledGaps(edges: readonly Edge[], causes: (callee: DeclarationKey) => ReadonlySet<SummaryCause>, leaves: (edge: Edge, cause: SummaryCause) => Evidence | undefined): SummaryGap[] {
   const inherited = new Map<string, SummaryGap>();
   for (const edge of edges) {
     for (const cause of causes(edge.callee)) {
       const key = `${cause}\0${edge.call.path}\0${edge.call.line}`;
-      const at = inherited.get(key) ?? { cause, evidence: [edge.call] };
+      const leaf = leaves(edge, cause);
+      const at = inherited.get(key) ?? { cause, evidence: leaf === undefined || (leaf.path === edge.call.path && leaf.line === edge.call.line) ? [edge.call] : [edge.call, leaf] };
       inherited.set(key, atCall(at, edge.node));
     }
   }

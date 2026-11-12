@@ -3,6 +3,7 @@ import type { FrameworkPlugin } from "../../../ports/framework-plugin.port.ts";
 import type { ImportedName, RouterVocabulary } from "../../../ports/router-vocabulary.port.ts";
 import type { AngularConsumerSyntaxFactory, InputSyntax } from "../../../ports/angular-consumer-syntax.port.ts";
 import type { FrameworkValueFactory } from "../../../ports/framework-values.port.ts";
+import type { FrameworkValueCells, ValueCellRun } from "../../../ports/framework-cells.port.ts";
 
 const ROUTER_PACKAGE = "@angular/router";
 const ROUTER_MODULE = "RouterModule";
@@ -12,6 +13,23 @@ const CONFIGURATIONS: ReadonlyMap<string, "root" | "child"> = new Map([
   ["RouterModule.forRoot", "root"],
   ["RouterModule.forChild", "child"],
 ]);
+
+const CORE_PACKAGE = "@angular/core";
+const INTEROP_PACKAGE = "@angular/core/rxjs-interop";
+const NOTHING: ValueCellRun = { kind: "nothing" };
+const CALLBACK: ValueCellRun = { kind: "callback", argument: 0 };
+const VALUE_CELLS: ReadonlyMap<string, ValueCellRun> = new Map([
+  ...["signal", "input", "input.required", "model", "model.required", "viewChild", "viewChild.required", "viewChildren", "contentChild", "contentChild.required", "contentChildren"].map((name): [string, ValueCellRun] => [`${CORE_PACKAGE}\0${name}`, NOTHING]),
+  [`${INTEROP_PACKAGE}\0toSignal`, NOTHING],
+  [`${CORE_PACKAGE}\0computed`, CALLBACK],
+  [`${CORE_PACKAGE}\0linkedSignal`, CALLBACK],
+]);
+
+/** The signal family of `@angular/core`: reading one of these fields runs nothing, or the callback it was built from. */
+export const ANGULAR_CELLS: FrameworkValueCells = {
+  runOf: ({ module, path }) => VALUE_CELLS.get(`${module}\0${path.join(".")}`),
+  projections: new Set(["asReadonly"]),
+};
 
 /** The export of the router a name reaches, then the members written after it; none for a name the router does not bind. */
 function routerPathOf({ binding, members }: ImportedName): readonly string[] | undefined {
@@ -48,7 +66,7 @@ export interface AngularReaders {
 
 /** Angular over the TypeScript pack: its route tables are its entrypoints, read in the projects that depend on its router. */
 export function createAngularPlugin(readers: AngularReaders): FrameworkPlugin {
-  return { languages: ["typescript"], signal: ANGULAR_ROUTER.signal, entrypoints: readers.routes(ANGULAR_ROUTER), ...(readers.values === undefined ? {} : { values: readers.values }), ...(readers.consumer === undefined ? {} : { consumer: {
+  return { languages: ["typescript"], signal: ANGULAR_ROUTER.signal, entrypoints: readers.routes(ANGULAR_ROUTER), cells: ANGULAR_CELLS, ...(readers.values === undefined ? {} : { values: readers.values }), ...(readers.consumer === undefined ? {} : { consumer: {
     signals: [{ dependency: "@angular/core", module: "@angular/core" }],
     async prepare(reading, repo) {
       const syntax = await readers.consumer!(reading, repo, ANGULAR_ROUTER);

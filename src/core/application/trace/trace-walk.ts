@@ -11,7 +11,7 @@ import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import type { DispatchTargets, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { DeclaredType, DispatchTargets, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, placedBetween, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
@@ -372,9 +372,10 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     const typed: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; declared?: DeclaredBinding }[] = [];
     /**
      * The method `member` names on what a call returns, when the call is a resolved edge of this body whose own receiver
-     * needs no proof and whose declaration states a nominal class as its return type (RFC-0013 R5).
+     * needs no proof and whose declaration states a nominal class as its return type, or the library or package type it
+     * states, whose instance the repository does not hold (RFC-0013 R5).
      */
-    const returnedMethod = async (head: Extract<ReceiverBinding["holds"], { kind: "returned" }>, member: string, reference: GraphUnresolvedReference): Promise<GraphSymbol | undefined> => {
+    const returnedMethod = async (head: Extract<ReceiverBinding["holds"], { kind: "returned" }>, member: string, reference: GraphUnresolvedReference): Promise<GraphSymbol | Extract<DeclaredType, { kind: "global" | "package" }> | undefined> => {
       const placed = called.flatMap(({ edge, target }, index) => {
         const verdict = verdicts[index]!;
         const at = edge.line === head.line && edge.column !== null && edge.column + 1 === head.column && target.name === head.name;
@@ -384,6 +385,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
       const returns = callee === undefined ? undefined : (await syntaxIndexOf(callee.file)).callables.get(callee.name)?.find(({ start, nameLine }) => start <= callee.startLine && callee.startLine <= nameLine)?.returns;
       if (callee === undefined || returns === undefined) return undefined;
       const [type] = await origins.declaredTypes([{ file: callee.file, line: returns.line, column: returns.column, spelled: returns.type, owner: { name: callee.name, line: callee.startLine, endLine: callee.endLine } }], signal);
+      if (type?.kind === "global" || type?.kind === "package") return type;
       if (type?.kind !== "nominal") return undefined;
       const candidates = store.symbolsInFiles([type.file]).filter((symbol) => isClassKind(symbol.kind) && joinsFact(symbol, { path: type.file, line: type.line, symbol: type.name }));
       return candidates.length === 1 && executionProven(candidates[0]!, member) ? (await bindings.memberOfReceiver(candidates[0]!, member, placeOf(reference))).target : undefined;
@@ -411,7 +413,11 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
       if (proof.link !== "syntax") return;
       const { holds, type } = proof;
       if ((holds.kind === "token" || holds.kind === "object") && proof.unspelled !== true && proof.replaceable !== true) return step(target);
-      if (holds.kind === "returned" && returned) return step(await returnedMethod(holds, name, reference));
+      if (holds.kind === "returned" && returned) {
+        const result = await returnedMethod(holds, name, reference);
+        if (result === undefined || "file" in result) return step(result);
+        return result.kind === "global" ? leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(result.name, name), () => settleByName(reference, name, named, true)) : leafUnlessReplaced({ kind: "import", module: result.module, name: reference.name }, { module: result.module }, () => settleByName(reference, name, named, true));
+      }
       if (holds.kind === "literal") return leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(holds.type, name), () => settleByName(reference, name, named, true));
       if (holds.kind === "annotated") return void annotated.push({ reference, name, named, holds, type, target, unspelled: returned && proof.unspelled === true });
       if (holds.kind === "constructed" && type === undefined) return void constructed.push({ reference, name, named, holds });
@@ -486,6 +492,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
         const root = roots[index];
         const origin = root?.status === "complete" ? root.value : undefined;
         if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(origin.name, name), () => settleByName(reference, name, named, true));
+        else if (origin?.kind === "external") await leafUnlessReplaced({ kind: "import", module: origin.module, name: reference.name }, { module: origin.module }, () => settleByName(reference, name, named, true));
         else await settleByName(reference, name, named);
       }
     }

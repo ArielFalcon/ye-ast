@@ -71,6 +71,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0052](adr/0052-request-knowledge-is-independent-of-enumeration-completeness.md) | Preserve identified request occurrences separately from enumeration completeness; scoped gaps retain fail-closed target and execution limits; partially supersedes of ADR-0050 decision 3 | Accepted |
 | [0053](adr/0053-multi-repository-relations-retain-their-proof-context.md) | Source-complete provider values and scoped execution-to-producer matches retain build, route competition and snapshot proof | Accepted |
 | [0054](adr/0054-a-stated-route-links-when-only-its-base-is-undecided.md) | A request whose path is stated after an undecided base links by route, basis `suffix`, marked `authority: undecided`, only to one serving repository | Accepted |
+| [0055](adr/0055-uncertainty-reaches-a-call-site-only-where-it-can-reach-a-request.md) | A framework plugin lists the value cells whose read runs nothing or a callback; `calleeOf` answers from that list, a gap names its leaf place, and trace treats package-constructed and package-typed receivers as leaves | Accepted |
 
 ## Designs (RFC)
 

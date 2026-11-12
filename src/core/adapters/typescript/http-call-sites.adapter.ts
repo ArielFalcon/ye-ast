@@ -12,6 +12,7 @@ import { known, prevailingCause, undecided, undecidedTarget, type Evaluated, typ
 import { injectedClass } from "./angular-injection.ts";
 import { RequestValueReading, type ValueUnit } from "./request-value-reading.ts";
 import type { FrameworkValueFactory, FrameworkValues } from "../../ports/framework-values.port.ts";
+import type { FrameworkValueCells } from "../../ports/framework-cells.port.ts";
 import { declarationCounts } from "./syntax-names.ts";
 import { defaultExportOf } from "./import-bindings.ts";
 import { bindingNames, constructorParameters, lineOf, objectOf, ownBindings, propertyOf, sourceBindings, thisClass, typeName, unwrapped } from "./syntax.ts";
@@ -72,6 +73,8 @@ type Evaluation = { readonly kind: "text"; readonly text: string; readonly cut?:
 /** What a path part reads as: an evaluation, or why the snapshot does not decide it. */
 type Read = Evaluated<Evaluation>;
 
+type Callee = Awaited<ReturnType<SummaryResolver["calleeOf"]>>;
+
 interface HeldClass {
   shape: FileShape;
   declaration: ts.ClassDeclaration;
@@ -116,18 +119,18 @@ interface Located<E extends ts.Expression = ts.Expression> {
   trail: ReadonlySet<string>;
 }
 
-export function createHttpCallSites(values: readonly FrameworkValueFactory[] = []): CallSiteReader & PlacedCallSiteReader {
-  return { of: async (files, repo, _libraries, options) => (await readPlaced(files, repo, options, values)).map(({ site, column }) => ({ ...site, ...(column === undefined ? {} : { column: column + 1 }) })), placed: (files, repo, _libraries, options) => readPlaced(files, repo, options, values) };
+export function createHttpCallSites(values: readonly FrameworkValueFactory[] = [], cells: readonly FrameworkValueCells[] = []): CallSiteReader & PlacedCallSiteReader {
+  return { of: async (files, repo, _libraries, options) => (await readPlaced(files, repo, options, values, cells)).map(({ site, column }) => ({ ...site, ...(column === undefined ? {} : { column: column + 1 }) })), placed: (files, repo, _libraries, options) => readPlaced(files, repo, options, values, cells) };
 }
 
-function readerOf(files: readonly SourceFile[], options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = []): { shapes: ReadonlyMap<string, FileShape>; reader: Reader } {
+function readerOf(files: readonly SourceFile[], options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = [], cells: readonly FrameworkValueCells[] = []): { shapes: ReadonlyMap<string, FileShape>; reader: Reader } {
   const shapes = new Map(files.filter((file) => isTypeScriptSource(file.path)).map((file) => [file.path, describe(file)]));
   const modules = moduleResolverOf(files);
-  return { shapes, reader: new Reader(shapes, modules, buildDefines(files), files, options, values) };
+  return { shapes, reader: new Reader(shapes, modules, buildDefines(files), files, options, values, cells) };
 }
 
-export function createHttpSummaryResolver(files: readonly SourceFile[], options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = []): SummaryResolver {
-  return readerOf(files, options, values).reader.summaryResolver;
+export function createHttpSummaryResolver(files: readonly SourceFile[], options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = [], cells: readonly FrameworkValueCells[] = []): SummaryResolver {
+  return readerOf(files, options, values, cells).reader.summaryResolver;
 }
 
 /** A call to a wrapper method, and the method it enters. */
@@ -160,8 +163,8 @@ interface PlacedShape {
   targets: readonly { call: ts.CallExpression; key: string }[];
 }
 
-async function prepareRequestCalls(files: readonly SourceFile[], options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = []) {
-  const { shapes, reader } = readerOf(files, options, values);
+async function prepareRequestCalls(files: readonly SourceFile[], options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = [], cells: readonly FrameworkValueCells[] = []) {
+  const { shapes, reader } = readerOf(files, options, values, cells);
   const summaries = await summariesOf(files, reader.summaryResolver);
   const callSummaries = new Map<ts.CallExpression, RequestSummary>();
   const directResults = new Map<ts.CallExpression, { kind: "direct"; result: ResultShape; bodyAccess?: "json" }>();
@@ -292,12 +295,12 @@ async function prepareRequestCalls(files: readonly SourceFile[], options?: CallS
   return { shapes, reader, direct, placed, lookup, groups, destinations };
 }
 
-export async function createRequestCallLookup(files: readonly SourceFile[], options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = []): Promise<RequestCallLookup> {
-  return (await prepareRequestCalls(files, options, values)).lookup;
+export async function createRequestCallLookup(files: readonly SourceFile[], options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = [], cells: readonly FrameworkValueCells[] = []): Promise<RequestCallLookup> {
+  return (await prepareRequestCalls(files, options, values, cells)).lookup;
 }
 
-async function readPlaced(files: readonly SourceFile[], repo: string, options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = []): Promise<readonly PlacedCallSite[]> {
-  const { shapes, reader: read, direct, placed, lookup, groups, destinations } = await prepareRequestCalls(files, options, values);
+async function readPlaced(files: readonly SourceFile[], repo: string, options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = [], cells: readonly FrameworkValueCells[] = []): Promise<readonly PlacedCallSite[]> {
+  const { shapes, reader: read, direct, placed, lookup, groups, destinations } = await prepareRequestCalls(files, options, values, cells);
   const found: PlacedCallSite[] = [];
   const forwardedLeaves = new Set([...placed.entries()].flatMap(([call, items]) => items.filter((item) => item.leaf !== call).map((item) => item.leaf)));
   const gapCoverage = new WeakMap<SummaryGap, boolean>();
@@ -596,21 +599,7 @@ class Reader {
       }
       if (!ts.isPropertyAccessExpression(call.expression)) return undefined;
       const receiver = await this.receiverClass(shape, call.expression.expression);
-      if (receiver === undefined) return undefined;
-      if (await this.assignedAbove(receiver, call.expression.name.text)) return { gap: { cause: "dispatch-disagreement", evidence: [placeOf(shape, call)] } };
-      const method = await this.inheritedMethod(receiver.shape, receiver.declaration, call.expression.name.text, new Set());
-      const overrides = receiver.virtual ? await this.overrides(receiver.declaration, call.expression.name.text, new Set()) : [];
-      if (method === "ambiguous" && overrides !== undefined && overrides.length === 0 && await this.externalFactoryProperty(receiver, call.expression.name.text)) return undefined;
-      if (method === "ambiguous" || overrides === undefined) return { gap: { cause: "dispatch-disagreement", evidence: [placeOf(shape, call)] } };
-      if (method === undefined) return undefined;
-      const name = call.expression.name.text;
-      const candidates = [method, ...overrides].map((item) => {
-        const owner = ownClassDeclaration(item.method);
-        return owner?.name === undefined ? undefined : { key: `${item.shape.source.fileName}\0${owner.name.text}.${name}`, file: item.shape.source.fileName, body: item.method.body };
-      });
-      if (candidates.some((candidate) => candidate === undefined)) return { gap: { cause: "dispatch-disagreement", evidence: [placeOf(shape, call)] } };
-      const held = candidates.filter((candidate) => candidate !== undefined);
-      return held.length === 1 ? held[0] : { candidates: held };
+      return receiver === undefined ? undefined : this.memberCallee(shape, call, receiver, call.expression.name.text, new Set());
     },
     clientReceiver: async (file, call) => {
       const shape = this.shapes.get(file);
@@ -761,6 +750,7 @@ class Reader {
     files: readonly SourceFile[],
     options?: CallSiteReadOptions,
     values: readonly FrameworkValueFactory[] = [],
+    private readonly cells: readonly FrameworkValueCells[] = [],
   ) {
     this.unsafeEncoder = [...shapes.values()].some((shape) => shape.unsafeEncoder);
     this.fileOf = async (from, specifier) => {
@@ -776,6 +766,91 @@ class Reader {
       });
       this.providerContributions = Promise.all(values.map((factory) => factory.prepare(this.providerReading!))).then((read) => read.filter((value) => value !== undefined));
     }
+  }
+
+  /** The declaration a member read through a receiver runs: a gap when the dispatch is undecided, undefined when it runs no repository code. */
+  private async memberCallee(shape: FileShape, call: ts.CallExpression, receiver: HeldClass & { virtual: boolean }, name: string, reading: ReadonlySet<ts.PropertyDeclaration>): Promise<Callee> {
+    const gap: Callee = { gap: { cause: "dispatch-disagreement", evidence: [placeOf(shape, call)] } };
+    if (await this.assignedAbove(receiver, name)) return gap;
+    const method = await this.inheritedMethod(receiver.shape, receiver.declaration, name, new Set());
+    const overrides = receiver.virtual ? await this.overrides(receiver.declaration, name, new Set()) : [];
+    if (method === "ambiguous" && overrides !== undefined && overrides.length === 0) {
+      if (await this.externalFactoryProperty(receiver, name)) return undefined;
+      const cell = await this.valueCell(shape, call, receiver, name, reading);
+      if (cell !== undefined) return cell.callee;
+    }
+    if (method === "ambiguous" || overrides === undefined) return gap;
+    if (method === undefined) return undefined;
+    const candidates = [method, ...overrides].map((item) => {
+      const owner = ownClassDeclaration(item.method);
+      return owner?.name === undefined ? undefined : { key: `${item.shape.source.fileName}\0${owner.name.text}.${name}`, file: item.shape.source.fileName, body: item.method.body };
+    });
+    if (candidates.some((candidate) => candidate === undefined)) return gap;
+    const held = candidates.filter((candidate) => candidate !== undefined);
+    return held.length === 1 ? held[0] : { candidates: held };
+  }
+
+  /**
+   * What reading a field runs when a framework's vocabulary says what its initializer holds: nothing, the callback it
+   * was given, or what the field it aliases runs. Undefined when the vocabulary does not decide it.
+   */
+  private async valueCell(shape: FileShape, call: ts.CallExpression, receiver: HeldClass, name: string, reading: ReadonlySet<ts.PropertyDeclaration>): Promise<{ callee: Callee } | undefined> {
+    if (this.cells.length === 0 || await this.assignedBelow(receiver.declaration, name, new Set())) return undefined;
+    const seen = new Set<ts.ClassDeclaration>();
+    for (let current: HeldClass | undefined = receiver; current !== undefined && !seen.has(current.declaration);) {
+      seen.add(current.declaration);
+      const members = current.declaration.members.filter((member) => member.name !== undefined && ts.isIdentifier(member.name) && member.name.text === name);
+      if (members.length > 0) {
+        const property = members[0];
+        if (members.length !== 1 || property === undefined || !ts.isPropertyDeclaration(property) || property.initializer === undefined || reading.has(property)) return undefined;
+        return this.cellValue(shape, call, current, unwrapped(property.initializer), new Set(reading).add(property));
+      }
+      const base = baseClassName(current.declaration);
+      current = base === undefined ? undefined : await this.classOf(current.shape, base);
+    }
+    return undefined;
+  }
+
+  private async cellValue(shape: FileShape, call: ts.CallExpression, holder: HeldClass, value: ts.Expression, reading: ReadonlySet<ts.PropertyDeclaration>): Promise<{ callee: Callee } | undefined> {
+    if (ts.isPropertyAccessExpression(value)) {
+      const target = await this.aliasedClass(holder.shape, value.expression);
+      return target === undefined ? undefined : { callee: await this.memberCallee(shape, call, target, value.name.text, reading) };
+    }
+    if (!ts.isCallExpression(value)) return undefined;
+    const factory = unwrapped(value.expression);
+    if (ts.isPropertyAccessExpression(factory) && this.cells.some(({ projections }) => projections.has(factory.name.text))) {
+      const cell = unwrapped(factory.expression);
+      const projected = ts.isCallExpression(cell) || ts.isPropertyAccessExpression(cell) ? await this.cellValue(shape, call, holder, cell, reading) : undefined;
+      if (projected !== undefined) return projected;
+    }
+    const exported = await this.packageExport(holder.shape, factory);
+    const run = exported === undefined ? undefined : this.cells.map((cells) => cells.runOf(exported)).find((one) => one !== undefined);
+    if (run === undefined) return undefined;
+    if (run.kind === "nothing") return { callee: undefined };
+    const callback = value.arguments[run.argument] === undefined ? undefined : unwrapped(value.arguments[run.argument]!);
+    if (callback === undefined || !(ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))) return undefined;
+    return { callee: { key: `${holder.shape.source.fileName}\0@${callback.getStart()}`, file: holder.shape.source.fileName, body: callback.body } };
+  }
+
+  /** The class an aliased field's receiver is an instance of: an injected class, or the one the receiver expression names. */
+  private async aliasedClass(shape: FileShape, receiver: ts.Expression): Promise<(HeldClass & { virtual: boolean }) | undefined> {
+    const target = unwrapped(receiver);
+    const injected = ts.isCallExpression(target) ? injectedClass(target, shape) : undefined;
+    if (injected === undefined) return this.receiverClass(shape, target);
+    const found = await this.classOf(shape, injected);
+    return found === undefined ? undefined : { ...found, virtual: true };
+  }
+
+  /** The export of a package a callee names, when its root is an import of that package nothing in the file rebinds. */
+  private async packageExport(shape: FileShape, callee: ts.Expression): Promise<{ module: string; path: readonly string[] } | undefined> {
+    const path: string[] = [];
+    let root = callee;
+    while (ts.isPropertyAccessExpression(root)) { path.unshift(root.name.text); root = unwrapped(root.expression); }
+    if (!ts.isIdentifier(root)) return undefined;
+    const imported = shape.imports.get(root.text);
+    if (imported === undefined || imported.typeOnly || shape.module.reimported.has(root.text) || shape.declared.has(root.text) || lexicalScope(root).names.has(root.text) || reboundIn(shape.source).has(root.text) || this.importedMemberWritten(shape.source, root.text)) return undefined;
+    if (!("external" in await this.modules.resolve(shape.source.fileName, imported.module))) return undefined;
+    return { module: imported.module, path: imported.imported === "*" ? path : [imported.imported, ...path] };
   }
 
   private async externalFactoryProperty(receiver: HeldClass, name: string): Promise<boolean> {
@@ -1170,7 +1245,7 @@ class Reader {
     if (visited.has(declaration)) return false;
     visited.add(declaration);
     for (const { declaration: subclass } of await this.subclassesOf(declaration)) {
-      if (memberNamed(subclass, name) !== undefined || writes(subclass, name) || (await this.assignedBelow(subclass, name, visited))) return true;
+      if (memberNamed(subclass, name) !== undefined || constructorParameters(subclass).some((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name && ts.isParameterPropertyDeclaration(parameter, parameter.parent)) || writes(subclass, name) || (await this.assignedBelow(subclass, name, visited))) return true;
     }
     return false;
   }

@@ -60,8 +60,9 @@ export async function createConsumerReaders(files: readonly SourceFile[], repo: 
   let held: ReturnType<typeof buildProgram> | undefined;
   const program = () => (held ??= deps.buildProgram(files));
   const reading = new TypeScriptReading(program(), files);
+  const typescriptPlugins = plugins?.filter((plugin) => plugin.languages.includes("typescript"));
   let heldLookup: ReturnType<typeof createRequestCallLookup> | undefined;
-  const lookupOf: typeof createRequestCallLookup = () => (heldLookup ??= (deps.createRequestCallLookup ?? createRequestCallLookup)(files, options, plugins?.filter((plugin) => plugin.languages.includes("typescript")).flatMap((plugin) => plugin.values ?? [])));
+  const lookupOf: typeof createRequestCallLookup = () => (heldLookup ??= (deps.createRequestCallLookup ?? createRequestCallLookup)(files, options, typescriptPlugins?.flatMap((plugin) => plugin.values ?? []), typescriptPlugins?.flatMap((plugin) => plugin.cells ?? [])));
   const [built, lookup] = await Promise.all([reading.program(), lookupOf(files)]);
   const manifests = manifestsOf(files);
   const projectAllows = (dependency: string, file: string): boolean => {

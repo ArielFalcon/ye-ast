@@ -1283,6 +1283,22 @@ test("a call the index resolved on a call result is a step only when the call's 
   for (const fact of [unstated, other, computed]) assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["run", "make"]);
 });
 
+test("a call on a value constructed from a package export, or on a call result whose declared type a library or package states, is a leaf, never a cut against a homonym", async () => {
+  const cut = [["unresolved-link", ["src/a.ts:9 store.save", "src/a.ts::save", "src/b.ts::Repo.save"]]];
+  const imported = await factOf({ ...boundCall({ kind: "constructed", name: "Context", line: 8, column: 17 }), roots: { Context: { kind: "external", module: "@acme/http", bare: true } } });
+  const replaced = await factOf({ ...boundCall({ kind: "constructed", name: "Context", line: 8, column: 17 }), roots: { Context: { kind: "external", module: "@acme/http", bare: true } }, replaced: { ...written(), packages: new Set(["@acme/http"]) } });
+  const global = await factOf({ ...resultCall(MADE, "string"), declared: { string: { kind: "global", name: "String" } } });
+  const packaged = await factOf({ ...resultCall(MADE, "Context"), declared: { Context: { kind: "package", module: "@acme/http", name: "Context" } } });
+  const unknown = await factOf(resultCall(MADE, "string"));
+
+  assert.deepEqual(valueOf(imported).steps.flatMap((step) => step.external ?? []), [{ kind: "import", module: "@acme/http", names: ["store.save"] }]);
+  const leaves = (fact: Fact<TraceValue>) => valueOf(fact).steps.flatMap((step) => step.external ?? []).filter(({ kind }) => kind !== "unnamed");
+  assert.deepEqual(leaves(global), [{ kind: "global", names: ["save"] }]);
+  assert.deepEqual(leaves(packaged), [{ kind: "import", module: "@acme/http", names: ["save"] }]);
+  assert.deepEqual(cutsOf(replaced), cut);
+  assert.deepEqual(valueOf(unknown).steps.map((step) => step.symbol), ["run", "make"]);
+});
+
 test("a call result proves nothing when its call is itself unproven, or when two calls under the member's name start at its place", async () => {
   const unprovenHead = await factOf({ ...resultCall(MADE, "Repo"), receiverRoots: { save: { kind: "this", member: "make" }, make: { kind: "local", root: "factory", lines: [5] } } });
   const twice = await factOf({ ...resultCall(MADE, "Repo"), receiverBindings: { [A]: [{ line: 9, column: 5, receiver: "", member: "save", holds: MADE }, { line: 9, column: 5, receiver: "", member: "save", holds: MADE }] } });

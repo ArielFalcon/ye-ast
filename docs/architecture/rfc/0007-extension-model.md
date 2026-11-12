@@ -530,6 +530,11 @@ binds members returned by `withMethods` to the declaration receiving `signalStor
 and framework evidence; the shared model owns containment, path uniqueness and conflicts. Removing the registry entry
 removes this contribution while preserving the language's literal declarations.
 
+The Angular plugin also contributes `cells` (ADR-0055): the closed list of `@angular/core` exports whose field, read or
+called, runs no repository code (`signal`, `input`, `model`, the query signals, `toSignal`) or the callback it was given
+(`computed`, `linkedSignal`), and `asReadonly` as a projection. The TypeScript call reader answers from that list and
+holds no Angular name; removing the plugin restores the undecided dispatch.
+
 Angular build replacement evidence reads workspace `angular.json`, Nx `nx.json` defaults and Nx `project.json`
 configurations. Nx project replacement paths are resolved from their enclosing workspace root, not from the project
 file's directory. Missing workspace scope for an explicitly Nx-scoped project or unreadable configuration withholds

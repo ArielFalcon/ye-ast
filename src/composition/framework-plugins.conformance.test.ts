@@ -408,6 +408,80 @@ test("a bootstrapped NgModule associates forRoot settings with its route graph",
   assert.equal(result.next.filter((item) => item.carrier.site.kind === "input").length, 1);
 });
 
+const CELL_PACKAGE = { path: "package.json", content: '{"dependencies":{"@angular/core":"1","@angular/common":"1"}}' };
+const CELL_ENTRIES: readonly (readonly [module: string, initializer: string, run: "nothing" | "callback"])[] = [
+  ["@angular/core", "signal({})", "nothing"],
+  ["@angular/core", "input({})", "nothing"],
+  ["@angular/core", "input.required<string>({})", "nothing"],
+  ["@angular/core", "model({})", "nothing"],
+  ["@angular/core", "model.required<number>({})", "nothing"],
+  ["@angular/core", "viewChild(ref)", "nothing"],
+  ["@angular/core", "viewChild.required(ref)", "nothing"],
+  ["@angular/core", "viewChildren(ref)", "nothing"],
+  ["@angular/core", "contentChild(ref)", "nothing"],
+  ["@angular/core", "contentChild.required(ref)", "nothing"],
+  ["@angular/core", "contentChildren(ref)", "nothing"],
+  ["@angular/core/rxjs-interop", "toSignal(source$)", "nothing"],
+  ["@angular/core", "signal({}).asReadonly()", "nothing"],
+  ["@angular/core", "computed(() => this.http.get('/cell'))", "callback"],
+  ["@angular/core", "linkedSignal(() => this.http.get('/cell'))", "callback"],
+];
+const cellFixture = (module: string, initializer: string) => {
+  const names = [...new Set(initializer.match(/[a-zA-Z]+(?=[(.<])/g)?.filter((name) => ["signal", "input", "model", "viewChild", "viewChildren", "contentChild", "contentChildren", "toSignal", "computed", "linkedSignal"].includes(name)))];
+  return [CELL_PACKAGE, { path: "cell.ts", content: [
+    `import { ${names.join(", ")} } from '${module}';`,
+    "declare const ref: any, source$: any;",
+    "import { HttpClient } from '@angular/common/http';",
+    `class Store { constructor(private http: HttpClient) {} value = ${initializer}; read() { return this.value() } }`,
+    "class Page { constructor(private store: Store) {} click() { return this.store.read() } }",
+  ].join("\n") }];
+};
+
+for (const [module, initializer, run] of CELL_ENTRIES) {
+  test(`the Angular value cell ${initializer} from ${module} runs ${run} when read`, async () => {
+    const files = cellFixture(module, initializer);
+    const cells = composeFrameworkPlugins().flatMap((plugin) => plugin.cells ?? []);
+    const click = async (registered: boolean) => {
+      const lookup = await createRequestCallLookup(files, undefined, [], registered ? cells : []);
+      const call = lookup.at({ file: "cell.ts", line: 5, symbol: "Page.click" });
+      const summary = call === undefined ? undefined : lookup.of(call);
+      return summary === undefined || "kind" in summary ? { shapes: [], gaps: [] } : summary;
+    };
+    const registered = await click(true);
+    assert.deepEqual(registered.gaps, []);
+    assert.deepEqual(registered.shapes.map((shape) => shape.method), run === "callback" ? ["GET"] : []);
+    assert.ok((await click(false)).gaps.length > 0);
+  });
+}
+
+test("a field a vocabulary does not list and one the code reassigns remain undecided dispatches", async () => {
+  const cells = composeFrameworkPlugins().flatMap((plugin) => plugin.cells ?? []);
+  const files = [CELL_PACKAGE, { path: "gap.ts", content: [
+    "import { signal, type WritableSignal } from '@angular/core';",
+    "import { httpResource } from '@angular/common/http';",
+    "class Listed { constructor(private http: HttpClient) {} value = httpResource(() => '/x'); read() { return this.value() } }",
+    "class Reassigned { value = signal(0); swap(next: any) { this.value = next } read() { return this.value() } }",
+    "abstract class Declared { abstract value: WritableSignal<number>; read() { return this.value() } }",
+    "class Page { constructor(private listed: Listed, private reassigned: Reassigned, private declared: Declared) {}",
+    "  a() { return this.listed.read() } b() { return this.reassigned.read() } c() { return this.declared.read() } }",
+  ].join("\n") }];
+  const lookup = await createRequestCallLookup(files, undefined, [], cells);
+  for (const symbol of ["Page.a", "Page.b", "Page.c"]) {
+    const call = lookup.at({ file: "gap.ts", line: 7, symbol });
+    const summary = call === undefined ? undefined : lookup.of(call);
+    assert.ok(summary !== undefined && !("kind" in summary) && summary.gaps.some((gap) => gap.cause === "dispatch-disagreement"), symbol);
+  }
+});
+
+test("removing the registered Angular value cells restores the undecided dispatch of a signal read", async () => {
+  const files = cellFixture("@angular/core", "signal({})");
+  for (const registered of [true, false]) {
+    const cells = registered ? composeFrameworkPlugins().flatMap((plugin) => plugin.cells ?? []) : [];
+    const sites = await createHttpCallSites([], cells).of(files, "repo");
+    assert.equal(sites.some((site) => site.target.status === "unknown"), !registered);
+  }
+});
+
 /** RFC-0007 Conformance: each fixture is a minimal repository and the facts the registered plugins read from it. */
 const ROUTES = fileURLToPath(new URL("../core/adapters/frameworks/angular/fixtures/routes/", import.meta.url));
 

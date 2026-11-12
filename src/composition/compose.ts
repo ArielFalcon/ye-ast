@@ -168,7 +168,8 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
       return { findings: sortFindings([...spring.findings, ...routes.findings]), readingCuts: routes.readingCuts };
     },
   }, { extract: "entrypoints" });
-  const typescriptCallSites = createHttpCallSites(frameworks.filter((plugin) => plugin.languages.includes("typescript")).flatMap((plugin) => plugin.values ?? []));
+  const typescriptFrameworks = frameworks.filter((plugin) => plugin.languages.includes("typescript"));
+  const typescriptCallSites = createHttpCallSites(typescriptFrameworks.flatMap((plugin) => plugin.values ?? []), typescriptFrameworks.flatMap((plugin) => plugin.cells ?? []));
   const callSites = staged<CallSiteReader>({
     of: async (files, repo, libraries, options) => {
       const java = await createJavaCallSites(await javaParser()).of(files, repo, libraries);

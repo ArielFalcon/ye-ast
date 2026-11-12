@@ -100,9 +100,9 @@ test("cycle projection excludes the caller's own unread gap and retains known re
     { cause: "destination-undecidable", evidence: [{ path: "b.ts", line: 3 }] },
   ]);
   assert.deepEqual(summaries.get("up.ts\0Up.up")?.gaps, [
-    { cause: "destination-undecidable", evidence: [{ path: "up.ts", line: 3 }] },
+    { cause: "destination-undecidable", evidence: [{ path: "up.ts", line: 3 }, { path: "b.ts", line: 3 }] },
     { cause: "recursive", evidence: [{ path: "up.ts", line: 3 }] },
-    { cause: "source-not-read", evidence: [{ path: "up.ts", line: 3 }] },
+    { cause: "source-not-read", evidence: [{ path: "up.ts", line: 3 }, { path: "a.ts", line: 3 }] },
   ]);
   assert.deepEqual(summaries.get("self.ts\0Self.self")?.gaps, [
     { cause: "recursive", evidence: [{ path: "self.ts", line: 2 }] },
@@ -118,7 +118,7 @@ test("duplicate call places deduplicate projected causes while own multi-place e
   assert.deepEqual(summaries.get("dup.ts\0Dup.go")?.gaps, [{ cause: "dispatch-disagreement", evidence: [{ path: "dup.ts", line: 2 }, { path: "dup.ts", line: 2 }] }]);
   assert.deepEqual(summaries.get("caller.ts\0Caller.run")?.gaps, [
     { cause: "destination-undecidable", evidence: [{ path: "caller.ts", line: 2 }] },
-    { cause: "dispatch-disagreement", evidence: [{ path: "caller.ts", line: 2 }] },
+    { cause: "dispatch-disagreement", evidence: [{ path: "caller.ts", line: 2 }, { path: "dup.ts", line: 2 }] },
   ]);
 });
 
@@ -136,10 +136,10 @@ test("opaque and represented targets retain resolver evidence without creating a
   assert.deepEqual(summaries.get("caller.ts\0Caller.provided"), { shapes: [], result: { kind: "none" }, gaps: [] });
   assert.deepEqual(summaries.get("caller.ts\0Caller.external"), { shapes: [], result: { kind: "none" }, gaps: [] });
   assert.deepEqual(summaries.get("caller.ts\0Caller.represented")?.gaps, [
-    { cause: "destination-undecidable", evidence: [{ path: "caller.ts", line: 5 }] },
+    { cause: "destination-undecidable", evidence: [{ path: "caller.ts", line: 5 }, { path: "deep.ts", line: 2 }] },
     { cause: "source-not-read", evidence: [{ path: "caller.ts", line: 5 }] },
   ]);
-  assert.deepEqual(summaries.get("up.ts\0Up.up")?.gaps, [{ cause: "source-not-read", evidence: [{ path: "up.ts", line: 3 }] }]);
+  assert.deepEqual(summaries.get("up.ts\0Up.up")?.gaps, [{ cause: "source-not-read", evidence: [{ path: "up.ts", line: 3 }, { path: "caller.ts", line: 2 }] }]);
   assert.equal(summaries.has("absent.ts\0Missing.missing"), false);
   assert.equal(summaries.has("absent.ts\0Provided.body"), false);
   assert.equal(summaries.size, 7);

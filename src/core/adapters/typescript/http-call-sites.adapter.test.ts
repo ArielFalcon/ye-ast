@@ -6,6 +6,7 @@ import type { Seed, ReachedEntrypoint } from "../../domain/impact/impact-fact.ts
 import { handlerKey, reachedBy } from "../../domain/topology/link-graph.ts";
 import type { CallSite } from "../../domain/topology/call-site.ts";
 import { createHttpCallSites, createRequestCallLookup } from "./http-call-sites.adapter.ts";
+import type { FrameworkValueCells } from "../../ports/framework-cells.port.ts";
 
 const reader = createHttpCallSites();
 
@@ -1604,4 +1605,108 @@ test("aliases of provider-owned objects cannot mutate or escape without invalida
     const files = providerValueFiles().map((file) => file.path === "src/config.ts" ? source(file.path, file.content + usage) : file);
     assert.deepEqual(completeProviderPaths(await providerReader.of(files, "repo", [], { completeSource: true })), [], usage);
   }
+});
+
+const CELLS: FrameworkValueCells = {
+  runOf: ({ module, path }) => {
+    if (module !== "cell-lib") return undefined;
+    const name = path.join(".");
+    if (name === "cell" || name === "cell.required") return { kind: "nothing" };
+    return name === "derived" ? { kind: "callback", argument: 0 } : undefined;
+  },
+  projections: new Set(["frozen"]),
+};
+const cellReader = createHttpCallSites([], [CELLS]);
+const CELL_PACKAGE = source("package.json", '{"dependencies":{"cell-lib":"1"}}');
+const CELL_IMPORTS = "import { cell, derived } from 'cell-lib'\nimport { HttpClient } from '@angular/common/http'\n";
+const unresolved = (sites: readonly CallSite[]) => sites.filter((site) => site.target.status === "unknown");
+
+test("reading a value cell where no request can run leaves no unresolved call site at any caller", async () => {
+  const file = source("cells-pure.ts", [
+    CELL_IMPORTS,
+    "class Store { items = cell([]); total = derived(() => this.items().length); pure() { return this.total() } top() { this.pure() } }",
+    "class Page { constructor(private store: Store) {} click() { this.store.top() } }",
+  ].join("\n"));
+  assert.deepEqual(unresolved(await cellReader.of([CELL_PACKAGE, file], "repo")), []);
+  assert.ok(unresolved(await reader.of([CELL_PACKAGE, file], "repo")).length > 0);
+});
+
+test("a derived cell whose callback issues a request still yields that request at its callers", async () => {
+  const file = source("cells-request.ts", [
+    CELL_IMPORTS,
+    "class Store { constructor(private http: HttpClient) {} remote = derived(() => this.http.get('/remote')); read() { return this.remote() } }",
+    "class Page { constructor(private store: Store) {} click() { return this.store.read() } }",
+  ].join("\n"));
+  const lookup = await createRequestCallLookup([CELL_PACKAGE, file], undefined, [], [CELLS]);
+  for (const [line, symbol] of [[4, "Store.read"], [5, "Page.click"]] as const) {
+    const call = lookup.at({ file: "cells-request.ts", line, symbol });
+    const summary = call === undefined ? undefined : lookup.of(call);
+    assert.ok(summary !== undefined && !("kind" in summary) && summary.gaps.length === 0, symbol);
+    assert.deepEqual(summary.shapes.map((shape) => shape.method), ["GET"], symbol);
+  }
+});
+
+test("a function field that code reassigns stays an undecided dispatch", async () => {
+  const file = source("cells-reassigned.ts", [
+    CELL_IMPORTS,
+    "class Store { items = cell([]); constructor(private http: HttpClient) {} swap(next: any) { this.items = next } read() { return this.items() } }",
+    "class Page { constructor(private store: Store) {} click() { return this.store.read() } }",
+  ].join("\n"));
+  const sites = unresolved(await cellReader.of([CELL_PACKAGE, file], "repo"));
+  assert.deepEqual(sites.map((site) => [site.symbol, site.diagnostic?.cause]), [["Page.click", "dispatch-disagreement"]]);
+});
+
+test("a cell field that a subclass redeclares, a duplicate declaration, or an alias cycle stays an undecided dispatch", async () => {
+  const page = "class Page { constructor(private store: Store) {} click() { return this.store.read() } }";
+  const variants: Record<string, string> = {
+    redeclared: "class Store { items = cell([]); read() { return this.items() } }\nclass Other extends Store { override items: any = opaque() }",
+    "parameter property": "class Store { items = cell([]); read() { return this.items() } }\nclass Other extends Store { constructor(public items: any) { super() } }",
+    duplicate: "class Store { items = cell([]); items = cell([]); read() { return this.items() } }",
+    cycle: "class Store { first = this.second; second = this.first; read() { return this.first() } }",
+  };
+  for (const [name, classes] of Object.entries(variants)) {
+    const file = source("cells-undecided.ts", [CELL_IMPORTS, classes, page].join("\n"));
+    assert.deepEqual(unresolved(await cellReader.of([CELL_PACKAGE, file], "repo")).map((site) => site.symbol), ["Page.click"], name);
+  }
+});
+
+test("a cell factory no manifest declares as a dependency is not a package export, so its field stays an undecided dispatch", async () => {
+  const file = source("cells-undeclared.ts", [
+    CELL_IMPORTS,
+    "class Store { items = cell([]); read() { return this.items() } }",
+    "class Page { constructor(private store: Store) {} click() { return this.store.read() } }",
+  ].join("\n"));
+  assert.deepEqual(unresolved(await cellReader.of([file], "repo")).map((site) => site.symbol), ["Page.click"]);
+});
+
+test("an alias field answers what its target field answers", async () => {
+  const files = [source("cells-alias.ts", [
+    CELL_IMPORTS,
+    "class Platform { wide = cell(false); frozenWide = this.wide.frozen(); fetch(): any { return null } }",
+    "class Store { constructor(private platform: Platform, private http: HttpClient) {} view = this.platform.frozenWide; open = this.platform.wide; remote = this.http.get; read() { return this.view() && this.open() } }",
+    "class Reassigned { wide = cell(false); swap(next: any) { this.wide = next } }",
+    "class Holder { constructor(private other: Reassigned) {} alias = this.other.wide; read() { return this.alias() } }",
+    "class Page { constructor(private store: Store, private holder: Holder) {} click() { this.store.read() } later() { this.holder.read() } }",
+  ].join("\n"))];
+  const sites = unresolved(await cellReader.of([CELL_PACKAGE, ...files], "repo"));
+  assert.deepEqual(sites.map((site) => site.symbol), ["Page.later"]);
+});
+
+test("a gap names the field read where dispatch is undecided at every caller", async () => {
+  const file = source("cells-leaf.ts", [
+    CELL_IMPORTS,
+    "class Store {",
+    "  hook: any = opaque()",
+    "  read() {",
+    "    return this.hook()",
+    "  }",
+    "  top() { return this.read() }",
+    "}",
+    "class Page { constructor(private store: Store) {} click() {",
+    "  return this.store.top()",
+    "} }",
+  ].join("\n"));
+  const page = (await cellReader.of([CELL_PACKAGE, file], "repo")).find((site) => site.symbol === "Page.click");
+  assert.ok(page?.target.status === "unknown");
+  assert.ok(page.target.evidence.some((place) => place.path === "cells-leaf.ts" && place.line === 7), JSON.stringify(page.target.evidence));
 });
