@@ -59,9 +59,12 @@ test("single initializer receivers bind literal holders and imported injection t
     " reset() { this.changed = take(Store); }",
     "}",
     "export function local() { const d = { m() {} }; d.m(); }",
+    "export function computed(key: string) { const d = { m() {}, [key]() {} }; d.m(); }",
+    "export function spread(other: object) { const d = { m() {}, ...other }; d.m(); }",
   ]);
   assert.deepEqual(answer.receiverBindings.filter(({ line }) => line === 9).map(({ receiver, holds }) => [receiver, holds.kind]), [["s", "token"], ["d", "object"]]);
   assert.equal(answer.receiverBindings.find(({ line }) => line === 12)?.holds.kind, "object");
+  assert.ok(answer.receiverBindings.filter(({ line }) => line > 12).every(({ holds }) => holds.kind !== "object"));
 });
 
 test("every object-literal key is a name, at any depth and in any context, and a spread is none", async () => {

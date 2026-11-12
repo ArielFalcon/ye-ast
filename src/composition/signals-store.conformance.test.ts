@@ -23,6 +23,8 @@ test("the registered store plugin supplies member bindings only with project and
   assert.deepEqual((await Promise.all(plugins.map((plugin) => plugin.members?.([manifest, foreign]).bindings(foreign) ?? []))).flat(), []);
   const spread = { ...file, content: file.content.replace("m() { work(); }", "m() { work(); }, ...replacement") };
   assert.deepEqual((await Promise.all(plugins.map((plugin) => plugin.members?.([manifest, spread]).bindings(spread) ?? []))).flat(), []);
+  const computed = { ...file, content: file.content.replace("m() { work(); }", "m() { work(); }, [key]() { replacement(); }") };
+  assert.deepEqual((await Promise.all(plugins.map((plugin) => plugin.members?.([manifest, computed]).bindings(computed) ?? []))).flat(), []);
   const duplicate = createDeclarationModel({ store, declarationsIn: async () => [...syntax.declarations, { ...syntax.declarations.find(({ name }) => name === "m")!, span: { start: { line: 5, column: 1 }, end: { line: 5, column: 15 } } }], bindingsIn: async () => [...bindings, { ...bindings[0]!, member: { line: 5, column: 1 } }] });
   await assert.rejects(duplicate.select(file.path, "S.m"), AmbiguousDeclaration);
   const conflicting = createDeclarationModel({ store: fakeCodeGraph([fakeNode("S", "constant", file.path, 2, 8), fakeNode("Other", "constant", file.path, 1, 9)], []), declarationsIn: async () => syntax.declarations, bindingsIn: async () => [...bindings, { ...bindings[0]!, holder: { path: file.path, symbol: "Other", line: 1 }, evidence: { framework: "other", file: file.path, line: 1 } }] });

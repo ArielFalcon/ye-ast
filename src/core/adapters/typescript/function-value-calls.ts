@@ -1,7 +1,7 @@
 import ts from "typescript";
 import type { FunctionValueCall, ReceiverBinding, ReceiverValue } from "../../ports/declared-member-names.port.ts";
 import { bindFile, type BoundFile, isDirectEval, type LexicalBinding } from "./lexical-bindings.ts";
-import { hasModifier, isStatic, lineOf, thisClass, unwrapped } from "./syntax.ts";
+import { hasKnownPropertyNames, hasModifier, isStatic, lineOf, thisClass, unwrapped } from "./syntax.ts";
 import { declarationCounts, typeScopeOf } from "./syntax-names.ts";
 import { moduleShape } from "./module-shape.ts";
 import { injectedToken, type FileNames } from "./angular-injection.ts";
@@ -34,6 +34,7 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
   const initializerValue = (value: ts.Expression): ReceiverValue | undefined => {
     const inner = unwrapped(value);
     if (ts.isObjectLiteralExpression(inner)) {
+      if (!hasKnownPropertyNames(inner)) return undefined;
       const holder = value.parent;
       if (!ts.isVariableDeclaration(holder) && !ts.isPropertyDeclaration(holder)) return undefined;
       const at = tree.getLineAndCharacterOfPosition(holder.getStart(tree));

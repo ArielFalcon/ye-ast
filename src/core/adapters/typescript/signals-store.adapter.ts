@@ -6,7 +6,7 @@ import { moduleShape } from "./module-shape.ts";
 import { declarationCounts } from "./syntax-names.ts";
 import { importedNameOf } from "./imported-name.ts";
 import { sourceTree } from "./source-tree.ts";
-import { hasModifier, propertyNameText, unwrapped } from "./syntax.ts";
+import { hasKnownPropertyNames, hasModifier, propertyNameText, unwrapped } from "./syntax.ts";
 
 const PACKAGE = "@ngrx/signals";
 
@@ -54,7 +54,7 @@ export function createSignalsStorePlugin(): FrameworkPlugin {
                     if (last === undefined || !ts.isReturnStatement(last) || last.expression !== returns[0]) continue;
                   }
                   const literal = unwrapped(returns[0]!);
-                  if (!ts.isObjectLiteralExpression(literal) || literal.properties.some(ts.isSpreadAssignment)) continue;
+                  if (!ts.isObjectLiteralExpression(literal) || !hasKnownPropertyNames(literal)) continue;
                   for (const property of literal.properties) {
                     if (ts.isSpreadAssignment(property)) continue;
                     const name = propertyNameText(property.name);

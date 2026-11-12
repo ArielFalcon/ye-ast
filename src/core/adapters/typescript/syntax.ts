@@ -150,3 +150,7 @@ export function propertyNameText(name: ts.PropertyName): string | undefined {
   const key = unwrapped(name.expression);
   return ts.isStringLiteralLike(key) || ts.isNumericLiteral(key) ? key.text : undefined;
 }
+
+export function hasKnownPropertyNames(literal: ts.ObjectLiteralExpression): boolean {
+  return literal.properties.every((property) => !ts.isSpreadAssignment(property) && propertyNameText(property.name) !== undefined);
+}
