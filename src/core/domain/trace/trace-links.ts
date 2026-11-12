@@ -3,18 +3,33 @@ import type { TraceValue } from "./trace-fact.ts";
 
 /**
  * Workspace matches retain their original basis; execution is established only by an exactly placed trace effect, or by
- * an exactly placed request whose destination the snapshot leaves undecided.
+ * an exactly placed request whose destination the snapshot leaves undecided. A match reached only by effects that run
+ * later, if at all, is marked `deferred`; one an executed effect also reaches is not.
  */
 export function traceLinks(value: TraceValue, repo: string, workspace: Required<Pick<TraceValue, "repositorySnapshots" | "links" | "unlinked">>): TraceValue {
-  const places = new Set(value.steps.filter((step) => step.deferred !== true).flatMap((step) => [
-    ...(step.effects ?? []).flatMap((effect) => {
-      if (effect.kind === "data" || effect.column === undefined) return [];
-      return [key({ repo, file: step.file, line: effect.line, column: effect.column }, effect.kind === "http" ? "http" : "event")];
-    }),
-    ...(step.unresolvedEffects ?? []).flatMap((request) => (request.column === undefined ? [] : [key({ repo, file: request.path, line: request.line, column: request.column }, request.transport)])),
-  ]));
-  const reached = (site: { from: CallPlace; transport: "http" | "event" }): boolean => site.from.column !== undefined && places.has(key(site.from, site.transport));
-  return { ...value, repositorySnapshots: workspace.repositorySnapshots, links: workspace.links.filter(reached), unlinked: workspace.unlinked.filter(reached) };
+  const executed = new Set<string>();
+  const deferred = new Set<string>();
+  for (const step of value.steps) {
+    if (step.deferred === true) continue;
+    for (const effect of step.effects ?? []) {
+      if (effect.kind === "data" || effect.column === undefined) continue;
+      (effect.deferred === true ? deferred : executed).add(key({ repo, file: step.file, line: effect.line, column: effect.column }, effect.kind === "http" ? "http" : "event"));
+    }
+    for (const request of step.unresolvedEffects ?? []) {
+      if (request.column === undefined) continue;
+      (request.deferred === true ? deferred : executed).add(key({ repo, file: request.path, line: request.line, column: request.column }, request.transport));
+    }
+  }
+  const keyOf = (site: { from: CallPlace; transport: "http" | "event" }): string | undefined => (site.from.column === undefined ? undefined : key(site.from, site.transport));
+  const reached = (site: { from: CallPlace; transport: "http" | "event" }): boolean => {
+    const at = keyOf(site);
+    return at !== undefined && (executed.has(at) || deferred.has(at));
+  };
+  const marked = <T extends { from: CallPlace; transport: "http" | "event" }>(site: T): T & { deferred?: true } => {
+    const at = keyOf(site);
+    return at !== undefined && deferred.has(at) && !executed.has(at) ? { ...site, deferred: true } : site;
+  };
+  return { ...value, repositorySnapshots: workspace.repositorySnapshots, links: workspace.links.filter(reached).map(marked), unlinked: workspace.unlinked.filter(reached).map(marked) };
 }
 
 function key(place: Pick<CallPlace, "repo" | "file" | "line" | "column">, transport: "http" | "event"): string {

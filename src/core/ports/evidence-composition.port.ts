@@ -188,12 +188,13 @@ export type CallSiteData = Omit<CallSite, "file" | "line" | "column" | "endLine"
   target: EvidenceFinding<HttpTarget | EventTarget>;
 };
 export type LinkData = Omit<Link, "from" | "to"> & {
+  deferred?: true;
   from: CallLocation & { repo: string; symbol: string };
   to: { repo: string; kind: Entrypoint["kind"]; name: string; handler: AnchorId };
 };
 
 /** A call site the join reached without a link; its file is the caller's. */
-export type UnlinkedCallSiteData = Omit<UnlinkedCallSite, "from"> & { from: CallLocation & { repo: string; symbol: string } };
+export type UnlinkedCallSiteData = Omit<UnlinkedCallSite, "from"> & { deferred?: true; from: CallLocation & { repo: string; symbol: string } };
 
 /** A changed contract operation; its known handlers become anchors on the side that declares the operation. */
 export type ContractChangeData = Omit<ChangedContract, "handlers"> & { handlers?: readonly AnchorId[] };

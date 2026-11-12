@@ -45,7 +45,7 @@ import { createRemoteRefresh, defaultRemoteRefreshDeps } from "../core/adapters/
 import { createGitWorkingTree } from "../core/adapters/git/git-working-tree.adapter.ts";
 import { createContractRoutes } from "../core/adapters/openapi/contract-document.adapter.ts";
 import { createWorkspaceEvidence } from "../core/adapters/workspace/outward-names.adapter.ts";
-import { createHttpCallSites } from "../core/adapters/typescript/http-call-sites.adapter.ts";
+import { createDeferredValueReader, createHttpCallSites } from "../core/adapters/typescript/http-call-sites.adapter.ts";
 import { createPatternRedaction } from "../core/adapters/redaction/pattern-redaction.adapter.ts";
 import { createJavaDataEffects } from "../core/adapters/spring/data-effects.adapter.ts";
 import { createJavaCallSites } from "../core/adapters/spring/java-call-sites.adapter.ts";
@@ -321,6 +321,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const operation = createWorkspaceReadOperation(workspaceDeps);
   const bareTrace = createTraceQueries({
     frameworks,
+    deferredValues: createDeferredValueReader(typescriptFrameworks.flatMap((plugin) => plugin.deferrals ?? [])),
     workspace: operation,
     holds,
     ...snapshotCache,

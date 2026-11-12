@@ -68,6 +68,8 @@ interface Options {
   onTrivia?: (path: string) => void;
   /** The function values each source's syntax states (arrows, function expressions, lambdas, method references, anonymous class bodies), by path. */
   functionValues?: Readonly<Record<string, readonly SourceSpan[]>>;
+  /** The function values a registered combinator takes, by source; none by default. */
+  deferredValues?: Readonly<Record<string, readonly SourceSpan[]>>;
   /** The member names each source declares in value positions, by path. */
   memberNames?: Readonly<Record<string, readonly string[]>>;
   /** Runs each time the walk reads a source's member names. */
@@ -154,6 +156,7 @@ function setup(options: Options) {
     }),
     relations: { language: TYPESCRIPT_PROFILE, extract: async () => ({ relations: [], fields: [], locals: [], ...options.proofs, ...options.relations }) },
     ...(options.imports === undefined ? {} : { moduleReader: { extract: async () => ({ dependencies: Object.entries(options.imports!).flatMap(([file, bound]) => bound.map(({ local, from }, index) => ({ file, line: index + 1, endLine: index + 1, specifier: from, kind: "import", typeOnly: false, target: { kind: "repository", file: from }, bindings: [{ local, imported: local, line: index + 1, column: 10, typeOnly: false, exportedAs: local }] }))) }) } }),
+    ...(options.deferredValues === undefined ? {} : { deferredValues: () => ({ of: async (file: string) => options.deferredValues![file] ?? [] }) }),
     callSites: { placed: async () => (options.onCallSites?.(), options.placedSites ?? (options.callSites ?? []).map((site) => ({ site, column: 0 }))) },
     engines: {},
     ...(options.typed && { typeBindings: { of: async () => options.typed }, checkerInputs: { filesAt: async () => ({ ok: true, value: { files: [], cuts: [] } }) }, declaredOutputs: () => DECLARED }),
@@ -1464,6 +1467,20 @@ test("each shape's call sites are effects of the body that owns their exact plac
 });
 
 
+test("a call site inside function values that a registered combinator takes is a deferred effect, and one inside an unlisted value around it stays a cut", async () => {
+  const run = placedNode("run", "method", 6, 1, 6, 71);
+  const base: Options = { nodes: [PLACED_API, run], edges: [{ from: "Api", to: "run", kind: "contains" }], unresolved: [globalCall("run", 6, 40)], roots: MATH, sources: HELD_A, placedSites: [at(6, 40, "/cb")] };
+  const listed = await factOf({ ...base, functionValues: { [A]: [valueSpan(6, 30, 60)] }, deferredValues: { [A]: [valueSpan(6, 30, 60)] } }, [{ file: A, symbol: "run" }]);
+  const nested = await factOf({ ...base, functionValues: { [A]: [valueSpan(6, 20, 65), valueSpan(6, 30, 60)] }, deferredValues: { [A]: [valueSpan(6, 30, 60)] } }, [{ file: A, symbol: "run" }]);
+  const unlisted = await factOf({ ...base, functionValues: { [A]: [valueSpan(6, 30, 60)] }, deferredValues: { [A]: [valueSpan(6, 31, 60)] } }, [{ file: A, symbol: "run" }]);
+  assert.deepEqual(valueOf(listed).steps.flatMap((step) => step.effects ?? []).map((effect) => ("deferred" in effect ? effect.deferred : undefined)), [true]);
+  assert.deepEqual(effectCuts(listed), []);
+  for (const fact of [nested, unlisted]) {
+    assert.deepEqual(effectPaths(fact), []);
+    assert.deepEqual(effectCuts(fact).map(([, place]) => (place as readonly string[])[0]), ["src/a.ts:6 http effect"]);
+  }
+});
+
 test("each function-value shape keeps its call sites from the body around it unless the index declares the value and the walk expands it", async () => {
   const run = placedNode("run", "method", 6, 1, 9, 2);
   const member = { from: "Api", to: "run", kind: "contains" };
@@ -1566,6 +1583,29 @@ test("a workspace trace retains only links at executed effect occurrences and th
   const value = result.value.value as TraceValue & { links?: unknown; repositorySnapshots?: unknown };
   assert.deepEqual(value.links, [link]);
   assert.deepEqual(value.repositorySnapshots, snapshots);
+});
+
+test("a workspace trace marks a link reached only by a deferred effect, never one at a deferred step", async () => {
+  const snapshots = [{ repo: "shop", snapshot: { repo: "shop", kind: "sha" as const, sha: SHA } }, { repo: "orders", snapshot: { repo: "orders", kind: "sha" as const, sha: "b".repeat(40) } }];
+  const link = { id: "later", from: { repo: "shop", file: A, line: 6, column: 41, symbol: "Api.run" }, to: { repo: "orders", kind: "http-route" as const, name: "GET /cb", handler: { path: "Orders.java", symbol: "cb", line: 12 } }, transport: "http" as const, basis: "exact" as const, confidence: 1 };
+  const nodes = [PLACED_API, placedNode("run", "method", 6, 1, 6, 71)];
+  const body: Options = { nodes, edges: [{ from: "Api", to: "run", kind: "contains" }], unresolved: [globalCall("run", 6, 40)], roots: MATH, sources: HELD_A, placedSites: [at(6, 40, "/cb")], functionValues: { [A]: [valueSpan(6, 30, 60)] } };
+  const base = await factOf(body);
+  assert.ok(base.status !== "unknown");
+  const workspace = { withRead: async (_request: unknown, use: Parameters<NonNullable<TraceQueriesDeps["workspace"]>["withRead"]>[1]) => {
+    const answer = await use({ fact: { ...base, value: { workspace: { repos: ["orders", "shop"], gateways: [], source: "request" }, repositorySnapshots: snapshots, links: [link], unlinked: [], sections: {}, candidates: [], unserved: [], repositories: [] } } }, {
+      selectedSnapshots: [snapshots[0]!.snapshot], plans: [{ kind: "read", at: { repoId: "shop", source: "/work/shop" } }], liveCaptures: new Map(),
+    } as never);
+    return answer.ok ? { ok: true, value: { value: answer.value } } : answer;
+  } } as NonNullable<TraceQueriesDeps["workspace"]>;
+  const linked = async (deferredValues?: Options["deferredValues"]) => {
+    const { queries } = setup({ ...body, workspace, ...(deferredValues === undefined ? {} : { deferredValues }) });
+    const result = await queries.walk({ repo: "/work/shop", repoId: "shop", revision: SHA, workspace: {}, targets: [{ file: A, symbol: "run" }] });
+    assert.ok(result.ok && result.value.status !== "unknown");
+    return (result.value.value as TraceValue).links;
+  };
+  assert.deepEqual(await linked({ [A]: [valueSpan(6, 30, 60)] }), [{ ...link, deferred: true }]);
+  assert.deepEqual(await linked(), []);
 });
 
 test("a dispatch veto projects its fixed reason onto the existing cut as its sub-reason", async () => {

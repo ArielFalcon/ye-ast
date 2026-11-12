@@ -39,6 +39,7 @@ import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
 import { isTraceRoot, walkTrace } from "./trace-walk.ts";
 import { placeEffects } from "./trace-effects.ts";
 import { comparePlacement, type DataEffectReader } from "../../domain/trace/data-effect-site.ts";
+import type { DeferredValueReader } from "../../ports/framework-deferrals.port.ts";
 import type { PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
 import { pagePlans } from "./page-plans.ts";
 import { createBaseReadings, withOutputs, type BaseReadingDeps } from "../snapshot/base-reading.ts";
@@ -58,6 +59,8 @@ export interface TraceQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, 
   /** Reads the snapshot's call sites (RFC-0011), the declared rows a trace's effects come from (RFC-0013 R12). */
   callSites: PlacedCallSiteReader;
   dataEffects?: DataEffectReader;
+  /** Reads the function values a registered vocabulary lists as run later, so the requests inside them are owned by the declaration around them. */
+  deferredValues?: DeferredValueReader;
   /** Tells the trivia lines of a requested range apart, so they select nothing. */
   tokens?: SourceTokens;
   /** Version of each engine every operation runs on, by package name. */
@@ -174,6 +177,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const pages = pageRoots.size === 0 ? {} : { pages: { roots: pageRoots, of: pagePlans(store, reading.relations) } };
           const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, bindings: edgeTargets.bindings, uses: reading.declarationUses(), reconciled, inScope: head.selected, memberDeclarations, syntaxOf, budget, ...pages, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
+          const deferredValues = deps.deferredValues?.(head.tree.sources);
           const dataEffects = () => deps.dataEffects?.placed(head.tree.sources) ?? Promise.resolve([]);
           const dataSites = () => head.prepared?.facts === undefined ? dataEffects() : head.prepared.facts.ofInputs("trace-data-effects", { sources: head.tree.sources }, dataEffects);
           const completeSource = completeSourceRead(head.tree.export, new Set(head.tree.sources.map(({ path }) => path)), {
@@ -184,6 +188,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             sites: async () => [...await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources, { completeSource }), ...await dataSites()]
               .sort(comparePlacement).filter(({ site }) => head.selected(site.file)),
             lineOf, functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined),
+            ...(deferredValues === undefined ? {} : { deferredValuesOf: (file: string) => deferredValues.of(file) }),
           });
 
           const { steps, ids } = traceSteps(walk.roots);

@@ -8,7 +8,7 @@ import { composeFrameworkPlugins, frameworkEntrypoints } from "./framework-plugi
 import { createConsumerReaders } from "../core/adapters/typescript/consumer-readers.ts";
 import { buildProgram } from "../core/adapters/typescript/consumer-flow.index.ts";
 import { createRequestCallLookup } from "../core/adapters/typescript/http-call-sites.adapter.ts";
-import { createHttpCallSites } from "../core/adapters/typescript/http-call-sites.adapter.ts";
+import { createDeferredValueReader, createHttpCallSites } from "../core/adapters/typescript/http-call-sites.adapter.ts";
 import { providerValueFiles } from "../core/adapters/typescript/provider-values.testing.ts";
 
 test("core-only projects read Angular inputs but cannot claim router continuations", async () => {
@@ -480,6 +480,24 @@ test("removing the registered Angular value cells restores the undecided dispatc
     const sites = await createHttpCallSites([], cells).of(files, "repo");
     assert.equal(sites.some((site) => site.target.status === "unknown"), !registered);
   }
+});
+
+const RXJS_PACKAGE_FILE = { path: "package.json", content: '{"dependencies":{"rxjs":"7"}}' };
+const DEFERRAL_ENTRIES: readonly (readonly [module: string, name: string])[] = ["rxjs", "rxjs/operators"].flatMap((module) => ["defer", "switchMap", "mergeMap", "concatMap", "exhaustMap"].map((name): [string, string] => [module, name]));
+
+for (const [module, name] of DEFERRAL_ENTRIES) {
+  test(`the RxJS combinator ${name} from ${module} owns the function value it is given`, async () => {
+    const files = [RXJS_PACKAGE_FILE, { path: "rx.ts", content: `import { ${name} } from '${module}';\n${name}(() => 1);` }];
+    const registered = composeFrameworkPlugins().flatMap((plugin) => plugin.deferrals ?? []);
+    assert.deepEqual((await createDeferredValueReader(registered)(files).of("rx.ts")).map(({ start }) => start.line), [2]);
+    assert.deepEqual(await createDeferredValueReader([])(files).of("rx.ts"), []);
+  });
+}
+
+test("an RxJS export outside the closed list, or one from another module, owns no function value", async () => {
+  const registered = composeFrameworkPlugins().flatMap((plugin) => plugin.deferrals ?? []);
+  const content = "import { of, map, from } from 'rxjs';\nimport { ajax } from 'rxjs/ajax';\nimport { switchMap } from 'rxjs/webSocket';\nof(() => 1); map(() => 1); from(() => 1); ajax(() => 1); switchMap(() => 1);";
+  assert.deepEqual(await createDeferredValueReader(registered)([RXJS_PACKAGE_FILE, { path: "rx.ts", content }]).of("rx.ts"), []);
 });
 
 /** RFC-0007 Conformance: each fixture is a minimal repository and the facts the registered plugins read from it. */

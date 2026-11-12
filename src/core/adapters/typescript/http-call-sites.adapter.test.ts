@@ -5,8 +5,9 @@ import assert from "node:assert/strict";
 import type { Seed, ReachedEntrypoint } from "../../domain/impact/impact-fact.ts";
 import { handlerKey, reachedBy } from "../../domain/topology/link-graph.ts";
 import type { CallSite } from "../../domain/topology/call-site.ts";
-import { createHttpCallSites, createRequestCallLookup } from "./http-call-sites.adapter.ts";
+import { createDeferredValueReader, createHttpCallSites, createRequestCallLookup } from "./http-call-sites.adapter.ts";
 import type { FrameworkValueCells } from "../../ports/framework-cells.port.ts";
+import type { FrameworkDeferrals } from "../../ports/framework-deferrals.port.ts";
 
 const reader = createHttpCallSites();
 
@@ -1762,4 +1763,41 @@ test("a gap inside the request call itself or the receiver that enters the calle
   const page = sites.filter((site) => site.symbol === "Page.run");
   assert.ok(page.length > 0 && page.every((site) => site.target.status === "unknown"));
   assert.ok(page.every((site) => site.stated?.method === "GET"));
+});
+
+const DEFERRALS: FrameworkDeferrals = { runOf: ({ module, path }) => (module === "later-lib" && path.length === 1 && path[0] === "later" ? { argument: 1 } : undefined) };
+const LATER_PACKAGE = source("package.json", '{"dependencies":{"later-lib":"1"}}');
+
+async function deferredSpans(content: string, packaged = true): Promise<readonly number[]> {
+  const files = [...(packaged ? [LATER_PACKAGE] : []), source("later.ts", content)];
+  const spans = await createDeferredValueReader([DEFERRALS])(files).of("later.ts");
+  return spans.map(({ start }) => start.line);
+}
+
+test("a function value in the listed argument of a combinator the file imports from a package is a deferred value", async () => {
+  assert.deepEqual(await deferredSpans("import { later } from 'later-lib'\nlater(1, () => 1)\nlater(2, function () { return 2 })\nlater(3, (() => 3))"), [2, 3, 4]);
+  assert.deepEqual(await deferredSpans("import * as lib from 'later-lib'\nlib.later(1, () => 1)"), [2]);
+  assert.deepEqual(await deferredSpans("import { later as run } from 'later-lib'\nrun(1, () => 1)"), [2]);
+  assert.deepEqual(await deferredSpans("import { later } from 'later-lib'\n(later as any)(1, () => 1)"), [2]);
+});
+
+test("a function value is not deferred in an argument the vocabulary does not list, for an unlisted export, or when it is not written inline", async () => {
+  assert.deepEqual(await deferredSpans("import { later, other } from 'later-lib'\nlater(() => 1, 2)\nother(1, () => 1)\nconst f = () => 1\nlater(1, f)\nlater(1)"), []);
+});
+
+test("an import the file does not make from a package, shadows, rebinds or only types is not the vocabulary's export", async () => {
+  const cases: Record<string, string> = {
+    "type only": "import type { later } from 'later-lib'\nlater(1, () => 1)",
+    "shadowed by a parameter": "import { later } from 'later-lib'\nfunction run(later: any) { later(1, () => 1) }",
+    "redeclared locally": "import { later } from 'later-lib'\nfunction run() { const later = (a: number, f: () => number) => f; later(1, () => 1) }",
+    "local function": "function later(a: number, f: () => number) { return f }\nlater(1, () => 1)",
+    "project module": "import { later } from './later-lib'\nlater(1, () => 1)",
+    "rebound": "import { later } from 'later-lib'\nlater = null as any\nlater(1, () => 1)",
+  };
+  for (const [name, content] of Object.entries(cases)) assert.deepEqual(await deferredSpans(content), [], name);
+  assert.deepEqual(await deferredSpans("import { later } from 'later-lib'\nlater(1, () => 1)", false), [], "package not declared");
+});
+
+test("without a vocabulary no function value is deferred", async () => {
+  assert.deepEqual(await createDeferredValueReader([])([LATER_PACKAGE, source("later.ts", "import { later } from 'later-lib'\nlater(1, () => 1)")]).of("later.ts"), []);
 });

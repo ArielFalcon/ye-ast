@@ -42,3 +42,15 @@ export function declarationSpan(declaration: { startLine: number; startColumn: n
 export function executesInBody(body: SourceSpan, values: readonly SourceSpan[], at: SourcePosition): boolean {
   return !values.some((value) => containsPosition(value, at) && !(containsPosition(value, body.start) && comparePositions(body.end, value.end) <= 0));
 }
+
+/**
+ * How a place inside a body executes: `runs` when no function value around it stands between it and the body,
+ * `deferred` when every such value is one a registered vocabulary lists as run later by the library that takes it, and
+ * `unproven` as soon as one is not.
+ */
+export function executionIn(body: SourceSpan, values: readonly SourceSpan[], deferred: readonly SourceSpan[], at: SourcePosition): "runs" | "deferred" | "unproven" {
+  const around = values.filter((value) => containsPosition(value, at) && !(containsPosition(value, body.start) && comparePositions(body.end, value.end) <= 0));
+  if (around.length === 0) return "runs";
+  const sameSpan = (a: SourceSpan, b: SourceSpan): boolean => comparePositions(a.start, b.start) === 0 && comparePositions(a.end, b.end) === 0;
+  return around.every((value) => deferred.some((listed) => sameSpan(value, listed))) ? "deferred" : "unproven";
+}

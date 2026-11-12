@@ -7,6 +7,7 @@ import type { SourceFile } from "./entrypoint-extractor.port.ts";
 import type { FrameworkMemberBindings } from "./framework-members.port.ts";
 import type { FrameworkValueFactory } from "./framework-values.port.ts";
 import type { FrameworkValueCells } from "./framework-cells.port.ts";
+import type { FrameworkDeferrals } from "./framework-deferrals.port.ts";
 export type { FrameworkSignal } from "./framework-signal.port.ts";
 
 /**
@@ -23,4 +24,5 @@ export interface FrameworkPlugin {
   members?: (sources: readonly SourceFile[]) => FrameworkMemberBindings;
   values?: FrameworkValueFactory;
   cells?: FrameworkValueCells;
+  deferrals?: FrameworkDeferrals;
 }

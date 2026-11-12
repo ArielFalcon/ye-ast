@@ -133,6 +133,8 @@ export interface UnresolvedCallSite {
   via?: string;
   /** The request components established independently of the undecided destination. */
   stated?: StatedRequest;
+  /** A trace placed it in a function value a registered combinator takes: it runs later, if at all. */
+  deferred?: true;
 }
 
 /** Where a call site is written in the workspace: the place a link starts from. */

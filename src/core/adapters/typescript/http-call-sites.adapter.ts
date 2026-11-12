@@ -13,6 +13,8 @@ import { injectedClass } from "./angular-injection.ts";
 import { RequestValueReading, type ValueUnit } from "./request-value-reading.ts";
 import type { FrameworkValueFactory, FrameworkValues } from "../../ports/framework-values.port.ts";
 import type { FrameworkValueCells } from "../../ports/framework-cells.port.ts";
+import type { DeferredValueReader, FrameworkDeferrals } from "../../ports/framework-deferrals.port.ts";
+import type { SourcePosition, SourceSpan } from "../../domain/shared/owning-body.ts";
 import { declarationCounts } from "./syntax-names.ts";
 import { defaultExportOf } from "./import-bindings.ts";
 import { bindingNames, constructorParameters, lineOf, objectOf, ownBindings, propertyOf, sourceBindings, thisClass, typeName, unwrapped } from "./syntax.ts";
@@ -121,6 +123,55 @@ interface Located<E extends ts.Expression = ts.Expression> {
 
 export function createHttpCallSites(values: readonly FrameworkValueFactory[] = [], cells: readonly FrameworkValueCells[] = []): CallSiteReader & PlacedCallSiteReader {
   return { of: async (files, repo, _libraries, options) => (await readPlaced(files, repo, options, values, cells)).map(({ site, column }) => ({ ...site, ...(column === undefined ? {} : { column: column + 1 }) })), placed: (files, repo, _libraries, options) => readPlaced(files, repo, options, values, cells) };
+}
+
+export interface PackageExport {
+  module: string;
+  path: readonly string[];
+}
+
+/** The export of a package a callee names, when its root is an import of that package nothing in the file rebinds. */
+async function packageExportOf(shape: FileShape, callee: ts.Expression, modules: ModuleResolver, written: (source: ts.SourceFile, name: string) => boolean): Promise<PackageExport | undefined> {
+  const path: string[] = [];
+  let root = callee;
+  while (ts.isPropertyAccessExpression(root)) { path.unshift(root.name.text); root = unwrapped(root.expression); }
+  if (!ts.isIdentifier(root)) return undefined;
+  const imported = shape.imports.get(root.text);
+  if (imported === undefined || imported.typeOnly || shape.module.reimported.has(root.text) || shape.declared.has(root.text) || lexicalScope(root).names.has(root.text) || reboundIn(shape.source).has(root.text) || written(shape.source, root.text)) return undefined;
+  if (!("external" in await modules.resolve(shape.source.fileName, imported.module))) return undefined;
+  return { module: imported.module, path: imported.imported === "*" ? path : [imported.imported, ...path] };
+}
+
+/** The function values a listed combinator of a registered vocabulary takes, found where the file imports the combinator from its package. */
+export function createDeferredValueReader(deferrals: readonly FrameworkDeferrals[]): DeferredValueReader {
+  return (files) => {
+    const held = new Map(files.filter((file) => isTypeScriptSource(file.path)).map((file) => [file.path, file]));
+    const modules = moduleResolverOf(files);
+    const read = new Map<string, Promise<readonly SourceSpan[]>>();
+    const spansOf = async (file: SourceFile): Promise<readonly SourceSpan[]> => {
+      const shape = describe(file);
+      const position = (at: number): SourcePosition => {
+        const { line, character } = shape.source.getLineAndCharacterOfPosition(at);
+        return { line: line + 1, column: character };
+      };
+      const spans: SourceSpan[] = [];
+      for (const call of calls(shape.source)) {
+        const exported = await packageExportOf(shape, unwrapped(call.expression), modules, writesImportedMember);
+        const run = exported === undefined ? undefined : deferrals.map((one) => one.runOf(exported)).find((one) => one !== undefined);
+        const argument = run === undefined || call.arguments[run.argument] === undefined ? undefined : unwrapped(call.arguments[run.argument]!);
+        if (argument !== undefined && (ts.isArrowFunction(argument) || ts.isFunctionExpression(argument))) spans.push({ start: position(argument.getStart(shape.source)), end: position(argument.getEnd()) });
+      }
+      return spans;
+    };
+    return {
+      of: (file) => {
+        const source = held.get(file);
+        if (source === undefined || deferrals.length === 0) return Promise.resolve([]);
+        if (!read.has(file)) read.set(file, spansOf(source));
+        return read.get(file)!;
+      },
+    };
+  };
 }
 
 function readerOf(files: readonly SourceFile[], options?: CallSiteReadOptions, values: readonly FrameworkValueFactory[] = [], cells: readonly FrameworkValueCells[] = []): { shapes: ReadonlyMap<string, FileShape>; reader: Reader } {
@@ -841,16 +892,8 @@ class Reader {
     return found === undefined ? undefined : { ...found, virtual: true };
   }
 
-  /** The export of a package a callee names, when its root is an import of that package nothing in the file rebinds. */
-  private async packageExport(shape: FileShape, callee: ts.Expression): Promise<{ module: string; path: readonly string[] } | undefined> {
-    const path: string[] = [];
-    let root = callee;
-    while (ts.isPropertyAccessExpression(root)) { path.unshift(root.name.text); root = unwrapped(root.expression); }
-    if (!ts.isIdentifier(root)) return undefined;
-    const imported = shape.imports.get(root.text);
-    if (imported === undefined || imported.typeOnly || shape.module.reimported.has(root.text) || shape.declared.has(root.text) || lexicalScope(root).names.has(root.text) || reboundIn(shape.source).has(root.text) || this.importedMemberWritten(shape.source, root.text)) return undefined;
-    if (!("external" in await this.modules.resolve(shape.source.fileName, imported.module))) return undefined;
-    return { module: imported.module, path: imported.imported === "*" ? path : [imported.imported, ...path] };
+  private packageExport(shape: FileShape, callee: ts.Expression): Promise<PackageExport | undefined> {
+    return packageExportOf(shape, callee, this.modules, (source, name) => this.importedMemberWritten(source, name));
   }
 
   private async externalFactoryProperty(receiver: HeldClass, name: string): Promise<boolean> {

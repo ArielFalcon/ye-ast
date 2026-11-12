@@ -72,6 +72,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0053](adr/0053-multi-repository-relations-retain-their-proof-context.md) | Source-complete provider values and scoped execution-to-producer matches retain build, route competition and snapshot proof | Accepted |
 | [0054](adr/0054-a-stated-route-links-when-only-its-base-is-undecided.md) | A request whose path is stated after an undecided base links by route, basis `suffix`, marked `authority: undecided`, only to one serving repository | Accepted |
 | [0055](adr/0055-uncertainty-reaches-a-call-site-only-where-it-can-reach-a-request.md) | A framework plugin lists the value cells whose read runs nothing or a callback; `calleeOf` answers from that list, a gap names its leaf place, and trace treats package-constructed and package-typed receivers as leaves | Accepted |
+| [0056](adr/0056-requests-in-listed-deferring-combinators-are-owned-deferred-effects.md) | A function value passed to an argument a registered framework deferral vocabulary lists (RxJS `defer`, `switchMap`, ...) is owned by its declaration; requests in it are effects marked `deferred`, and workspace trace matches them with the same mark | Accepted |
 
 ## Designs (RFC)
 

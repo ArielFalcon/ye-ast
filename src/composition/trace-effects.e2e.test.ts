@@ -639,3 +639,97 @@ class Flow {
   assert.equal(result.value.steps.find((step) => step.symbol === "save")?.line, 2);
   assert.ok(result.cuts?.some((cut) => cut.at[0]?.includes("src/Flow.java:2 save")));
 });
+
+const RXJS_PACKAGE = '{"dependencies":{"rxjs":"7","@angular/core":"19","@angular/common":"19"}}';
+const REST_CLIENT = `import { HttpClient } from '@angular/common/http';
+import { Injectable, inject } from '@angular/core';
+
+@Injectable({ providedIn: 'root' })
+export class RestClient {
+  private readonly http = inject(HttpClient);
+  post(path: string, body: unknown) { return this.http.post('/api' + path, body); }
+  get(path: string) { return this.http.get('/api' + path); }
+}
+`;
+const orderApi = (imports: string, body: string) => `${imports}
+import { Injectable, inject } from '@angular/core';
+import { RestClient } from './rest';
+
+@Injectable({ providedIn: 'root' })
+export class OrderApi {
+  private readonly rest = inject(RestClient);
+${body}
+}
+`;
+const requestsOf = (value: TraceValue) => value.steps.flatMap((step) => (step.effects ?? []).filter((effect) => effect.kind === "http").map((effect) => [step.symbol, effect.target.method, effect.target.path, "deferred" in effect ? effect.deferred ?? false : false]));
+const effectCuts = (found: { cuts?: Cut[] }) => (found.cuts ?? []).filter((cut) => cut.at[0]?.includes(" effect")).map((cut) => cut.at[0]);
+
+test("a request inside a function value passed to a listed RxJS factory is a deferred effect of the declaration around it", async () => {
+  commit({
+    "package.json": RXJS_PACKAGE,
+    "src/rest.ts": REST_CLIENT,
+    "src/order.api.ts": orderApi("import { defer, of } from 'rxjs';\nimport { switchMap } from 'rxjs/operators';", [
+      "  checkout() { return defer(() => this.rest.post('/orders/checkout', {})); }",
+      "  nested(x: number) { return of(x).pipe(switchMap(() => defer(() => this.rest.get('/y')))); }",
+    ].join("\n")),
+  });
+  const checkout = await trace("src/order.api.ts:OrderApi.checkout");
+  const nested = await trace("src/order.api.ts:OrderApi.nested");
+  assert.deepEqual(requestsOf(checkout.value), [["checkout", "POST", "/api/orders/checkout", true]]);
+  assert.deepEqual(requestsOf(nested.value), [["nested", "GET", "/api/y", true]]);
+  assert.deepEqual([effectCuts(checkout), effectCuts(nested)], [[], []]);
+});
+
+test("a direct request and a deferred one of the same call are two effects and only the deferred one is marked", async () => {
+  commit({
+    "package.json": RXJS_PACKAGE,
+    "src/rest.ts": REST_CLIENT,
+    "src/order.api.ts": orderApi("import { defer } from 'rxjs';", "  both() { this.rest.get('/z'); return defer(() => this.rest.get('/z')); }"),
+  });
+  const found = await trace("src/order.api.ts:OrderApi.both");
+  assert.deepEqual(requestsOf(found.value), [["both", "GET", "/api/z", false], ["both", "GET", "/api/z", true]]);
+});
+
+test("a callback no listed factory takes, or a factory the file does not import from its package, keeps its cut", async () => {
+  const cases: Record<string, string> = {
+    mapped: orderApi("import { defer } from 'rxjs';", "  load(items: number[]) { return items.map(() => defer(() => this.rest.get('/each'))); }"),
+    local: orderApi("", "  load() { function defer(f: () => unknown) { return f; } return defer(() => this.rest.get('/mine')); }"),
+    foreign: orderApi("import { defer } from './mine';", "  load() { return defer(() => this.rest.get('/mine')); }"),
+    stored: orderApi("import { defer } from 'rxjs';", "  load() { const later = () => defer(() => this.rest.get('/never')); return 1; }"),
+  };
+  for (const [name, source] of Object.entries(cases)) {
+    rmSync(repo, { recursive: true, force: true });
+    mkdirSync(repo);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo, env: GIT_ENV });
+    commit({ "package.json": RXJS_PACKAGE, "src/rest.ts": REST_CLIENT, "src/mine.ts": "export function defer(f: () => unknown) { return f; }", "src/order.api.ts": source });
+    const found = await trace("src/order.api.ts:OrderApi.load");
+    assert.deepEqual(requestsOf(found.value), [], name);
+    assert.equal(effectCuts(found).length > 0, name !== "stored", name);
+  }
+});
+
+test("an unresolved request inside a listed combinator is owned by the declaration and marked deferred", async () => {
+  commit({
+    "package.json": RXJS_PACKAGE,
+    "src/partial.ts": [
+      "import { HttpClient } from '@angular/common/http';",
+      "import { defer } from 'rxjs';",
+      "declare const BASE: string;",
+      "export class Api { constructor(private http: HttpClient) {} load(id: string) { return defer(() => this.http.get(`${BASE}/orders/${id}`)) } }",
+    ].join("\n"),
+  });
+  const found = await trace("src/partial.ts:Api.load");
+  const requests = found.value.steps.flatMap((step) => step.unresolvedEffects ?? []);
+  assert.deepEqual(requests.map((request) => [request.stated?.method, request.deferred ?? false]), [["GET", true]]);
+  assert.deepEqual(effectsOf(found.value), []);
+});
+
+test("a request a wrapper defers is a deferred effect of the caller that runs the wrapper", async () => {
+  commit({
+    "package.json": RXJS_PACKAGE,
+    "src/rest.ts": REST_CLIENT.replace("post(path: string, body: unknown) { return this.http.post('/api' + path, body); }", "post(path: string, body: unknown) { return defer(() => this.http.post('/api' + path, body)); }").replace("import { Injectable, inject } from '@angular/core';", "import { Injectable, inject } from '@angular/core';\nimport { defer } from 'rxjs';"),
+    "src/order.api.ts": orderApi("", "  checkout() { return this.rest.post('/orders/checkout', {}); }"),
+  });
+  const found = await trace("src/order.api.ts:OrderApi.checkout");
+  assert.deepEqual(requestsOf(found.value), [["checkout", "POST", "/api/orders/checkout", true]]);
+});

@@ -28,9 +28,10 @@ export type DataEffect = { kind: "data"; line: number; column?: number; operatio
 /**
  * A call the RFC-0011 call-site extraction proves leaves the process through a declared client (an HTTP request, a
  * published message) with the target it resolves, or a declared framework data operation, at its 1-based line and
- * optional start column in the step's file.
+ * optional start column in the step's file. `deferred` marks one a function value makes that a registered combinator takes:
+ * it runs later, if at all.
  */
-export type TraceEffect = DataEffect | { kind: "http"; line: number; column?: number; target: HttpTarget } | { kind: "message"; line: number; column?: number; target: EventTarget };
+export type TraceEffect = DataEffect | { kind: "http"; line: number; column?: number; target: HttpTarget; deferred?: true } | { kind: "message"; line: number; column?: number; target: EventTarget; deferred?: true };
 
 /**
  * Calls that leave the repository, once per name. `import` names the package a file imports the callee from, `global` a
@@ -78,11 +79,14 @@ export interface ReadingPlan {
   lines: number;
 }
 
+/** A workspace match as a trace reports it; `deferred` when only effects that run later, if at all, reach it. */
+export type TraceLinked<T> = T & { deferred?: true };
+
 export interface TraceValue {
   /** Present with workspace reading; links are restricted to exactly placed effects in this trace. */
   repositorySnapshots?: readonly { repo: string; snapshot: SnapshotRef }[];
-  links?: readonly Link[];
-  unlinked?: readonly UnlinkedCallSite[];
+  links?: readonly TraceLinked<Link>[];
+  unlinked?: readonly TraceLinked<UnlinkedCallSite>[];
   /** Per requested target, in the request's fixed order, the root steps it selected: homonyms and ranges select several. */
   roots: readonly { target: string; steps: readonly number[] }[];
   /** The requested ranges whose every line holds no token; present when not empty, sorted by file and position. */
