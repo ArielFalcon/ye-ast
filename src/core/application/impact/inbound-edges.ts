@@ -186,10 +186,10 @@ export function createInboundEdges(
     return (relationsByTargetFile.get(node.file) ?? [])
       .filter((candidate) => (kinds === undefined || kinds.includes(candidate.kind)) && joinsFact(node, { path: candidate.to.path, line: candidate.to.line, symbol: candidate.to.symbol }))
       .flatMap((candidate) => {
-        const from = declarationAt(candidate.from);
+        const from = declarationAt(candidate.from, candidate.kind === "references" ? EDGE_POLICY.typeReferences.from : undefined);
         return from === undefined || isTestFile(from.file) || !followsRelation({ kind: candidate.kind, sourceKind: from.kind, targetKind: node.kind })
           ? []
-          : [{ from, confidence: EDGE_POLICY.relations.confidence, basis: "relation" as const, derivation: "proven" as const, lines: [] }];
+          : [{ from, confidence: EDGE_POLICY.relations.confidence, basis: candidate.kind === "references" ? "reference" as const : "relation" as const, derivation: "proven" as const, lines: candidate.at === undefined ? [] : [candidate.at.line] }];
       });
   }
 

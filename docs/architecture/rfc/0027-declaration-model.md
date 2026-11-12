@@ -606,7 +606,9 @@ Prerequisites: U0, ADR-0045 L2; **not L4** — see retention below.
 
 - **Files**: create `src/core/adapters/tree-sitter/java-relations.adapter.ts` (+ conformance test), its port wiring in
   `src/core/application/snapshot/base-reading.ts` (the B4 stage for the Java pack), `src/composition/compose.ts`.
-  It removes U0's cut where it read the relation (the Java pack stops declaring `relations` absent).
+  The syntax helper reads written type occurrences; `adapters/spring/java-relations.adapter.ts` resolves them with
+  the existing Java project owner. It removes U0's cut where it read the relation (the Java pack stops declaring
+  `relations` absent).
   **Must not touch** the TypeScript relation extractor or any Java dispatch reader.
 - **Retention (ADR-0045 decision 8, answered)**: B4 is a whole-snapshot slot today (`retained-relations.ts:13-22`), so
   the Java reader joins **that** stage and inherits its existing whole-snapshot key; no new stage and no new key. The
@@ -622,6 +624,13 @@ Prerequisites: U0, ADR-0045 L2; **not L4** — see retention below.
   unresolved type name is `partial` with an `unresolved-link` cut, never U0's absent-stage cut.
 - **Gate**: `callers:+`, `impact:+`; the report lists every added class caller and every new `unresolved-link` cut.
 - **Docs**: ADR-0045 decision 12's B4 row (Java becomes "yes") and decision 2's B4 retention, RFC-0010.
+- **Measured delivery** (2026-11-12): the fixed mapper probe reaches `ReadableShoppingCartMapper` at line 74 as a
+  proven reference and is complete. An isolated B4 run over 1,173 production Java sources used 2,145 ms process CPU
+  on its first derivation and 21 ms on a retained repeat (no derivation); one edited source required one derivation
+  at 1,839 ms. The admitted B4 output was 11,232,578 bytes under a 32 MiB snapshot cache. These are individual stage
+  measurements, including parsing/serialization, not end-to-end latency distributions. The existing whole-snapshot
+  invalidation remains; L4 is still the per-file optimization. Unresolved type occurrences are retained as data and
+  attributed through the existing name frontier, not emitted as repository-wide cuts.
 - **Risk**: item 3 and item 6 — a new public dependence for every Java class and a new stage with no existing test; the
   conformance fixture and the gate report are the guard.
 

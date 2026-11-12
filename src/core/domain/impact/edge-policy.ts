@@ -24,6 +24,7 @@ export const EDGE_POLICY = {
     { edges: ["references"], from: REFERRER_KINDS, to: REFERENCED_KINDS },
     { edges: ["extends", "implements"], from: TYPE_KINDS, to: TYPE_KINDS },
   ],
+  typeReferences: { from: [...TYPE_KINDS, "enum"], to: [...TYPE_KINDS, "enum"] },
   /**
    * Relations ye-ast reads from Angular sources (RFC-0007 rows A2 and A4): a class injects another, or uses it in its
    * template or as a host directive. The source depends on the target, as with a reference. They are read, not guessed,
@@ -77,6 +78,7 @@ export function followsEdge({ kind, sourceKind, targetKind }: PolicyEdge): boole
 }
 
 export function followsRelation({ kind, sourceKind, targetKind }: PolicyEdge): boolean {
+  if (kind === "references") return (EDGE_POLICY.typeReferences.from as readonly string[]).includes(sourceKind) && (EDGE_POLICY.typeReferences.to as readonly string[]).includes(targetKind);
   const { kinds, from, to } = EDGE_POLICY.relations;
   return (kinds as readonly string[]).includes(kind) && (from as readonly string[]).includes(sourceKind) && (to as readonly string[]).includes(targetKind);
 }

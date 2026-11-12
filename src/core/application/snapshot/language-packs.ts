@@ -5,7 +5,7 @@ import { CAPABILITY_ABSENT, type Finding } from "../../domain/shared/fact.ts";
 import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
-import type { AbsentCapability, LanguagePack } from "../../ports/language-pack.port.ts";
+import type { AbsentCapability, LanguagePack, LanguageRelationsReader } from "../../ports/language-pack.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { SourceReading } from "../../domain/change/source-tokens.ts";
 import type { SourceTokens } from "../../ports/source-tokens.port.ts";
@@ -15,6 +15,7 @@ export interface RoutedReaders {
   memberNames: DeclaredMemberNamesReader;
   importOrigins: ImportOriginsReader;
   modules: ModuleDependenciesReader;
+  relations: LanguageRelationsReader;
   sourceTokens: SourceTokens;
 }
 
@@ -77,6 +78,12 @@ export function routedReaders(packs: readonly LanguagePack[]): RoutedReaders {
         if (owner === undefined) return Promise.resolve({ status: "unread", reason: "no-language" });
         if (owner.tokens === undefined || owner.absent?.includes("tokens") === true) return Promise.resolve({ status: "unread", reason: "capability-absent" });
         return owner.tokens.tokensOf(file);
+      },
+    },
+    relations: {
+      async extract(sources, options) {
+        const reads = await Promise.all(packs.filter((pack) => pack.relations !== undefined && !pack.absent?.includes("relations")).map((pack) => pack.relations!.extract(sourcesOf(pack, sources), options)));
+        return { relations: reads.flatMap((read) => read.relations), cuts: reads.flatMap((read) => read.cuts), unresolved: reads.flatMap((read) => read.unresolved) };
       },
     },
     modules: {

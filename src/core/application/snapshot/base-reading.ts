@@ -238,7 +238,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       const origins = once(() => deps.importOrigins?.(tree.sources, narrowing.originPaths, facts, source.hold));
       const implementedContracts = once(() => implementedContractsOf(store, tree.sources.map(({ path }) => path), navigation(), origins()));
       const unresolved = once(() => unresolvedOf(store, tree));
-      const relations = once(() => retainedRelations(deps.relations, prepared, tree, request));
+      const relations = once(() => retainedRelations(deps.relations, prepared, tree, request, source.hold));
       const declarationUses = once(() => createDeclarationUses(store, navigation(), unresolvedIn));
       const retained = facts === undefined || source.digest === undefined ? undefined : { facts, index: source.digest };
       /** Kept between requests under the index it read and the relations its origins come from. */

@@ -1,3 +1,8 @@
+import type { UnresolvedUse } from "../domain/impact/impact-cuts.ts";
+import type { Relation } from "../domain/relations/relation.ts";
+import type { Cut, Finding } from "../domain/shared/fact.ts";
+import type { SourceFile } from "./entrypoint-extractor.port.ts";
+import type { ParseHold } from "./parse-holds.port.ts";
 import type { LanguageProfile } from "../domain/languages/profiles.ts";
 import type { DeclaredMemberNamesReader } from "./declared-member-names.port.ts";
 import type { ImportOriginsReader } from "./import-origins.port.ts";
@@ -22,6 +27,18 @@ export interface LanguagePack {
   /** Over the pack's sources, with every path of the snapshot, which its proofs may read. */
   origins: ImportOriginsReader;
   modules: ModuleDependenciesReader;
+  /** B4 relations over the same held sources and complete path universe as the other language stages. */
+  relations?: LanguageRelationsReader;
   /** The B11 tokens of its sources; absent where the pack cannot tokenize them (ADR-0043 decision 9). */
   tokens?: SourceTokens;
+}
+
+export interface LanguageRelations {
+  relations: readonly Finding<Relation>[];
+  cuts: readonly Cut[];
+  unresolved: readonly UnresolvedUse[];
+}
+
+export interface LanguageRelationsReader {
+  extract(sources: readonly SourceFile[], options?: { paths?: readonly string[]; completeSource?: boolean; hold?: ParseHold; signal?: AbortSignal }): Promise<LanguageRelations>;
 }

@@ -2057,3 +2057,45 @@ test("a Java anonymous initializer runs at construction while its methods stay d
   assert.ok(reached.includes("fieldExecuted"), JSON.stringify(answer.value));
   assert.equal(reached.includes("deferred"), false);
 });
+
+test("Java type references reach their declaring owner and unread types remain explicit", async () => {
+  const files = {
+    "Target.java": "class Target {}",
+    "Holder.java": "class Holder {\n  private Target field;\n  Target copy(Target input) { return new Target(); }\n}",
+    "Port.java": "interface Port { Target copy(Target input); }",
+    "Kind.java": "enum Kind { ONLY; Target field; }",
+  };
+  const query = async (name: string, sources: Readonly<Record<string, string>>, scope?: { include: readonly string[] }) => composeQueries({ scratchRoot }).impact.callers({ ...(scope === undefined ? {} : { scope }), repo: committedRepository(name, sources), repoId: name, revision: "HEAD", targets: [{ file: "Target.java", symbol: "Target" }] });
+  const answer = await query("type-references", files);
+  assert.ok(answer.ok && answer.value.status !== "unknown");
+  assert.equal(answer.value.status, "complete", JSON.stringify(answer.value));
+  assert.ok(answer.value.value.symbols.some((symbol) => symbol.symbol === "Holder" && symbol.depth > 0 && symbol.via?.lines?.includes(2)), JSON.stringify(answer.value));
+  for (const name of ["Port", "Kind"]) assert.ok(answer.value.value.symbols.some((symbol) => symbol.symbol === name && symbol.depth > 0 && symbol.via?.basis === "reference"), JSON.stringify(answer.value));
+  const bounded = await query("bounded-type-reference", files, { include: ["Holder.java", "Target.java"] });
+  assert.ok(bounded.ok && bounded.value.status === "partial");
+  assert.ok(bounded.value.cuts.some((cut) => cut.reason === "name-only" || cut.reason === "hidden-caller"));
+  const stopped = await composeQueries({ scratchRoot, exportBudget: { maxEntries: 4, maxBytes: Number.MAX_SAFE_INTEGER } }).impact.callers({ repo: committedRepository("stopped-type-reference", { ...files, "ZZ.java": "class Unread {}" }), repoId: "stopped-type-reference", revision: "HEAD", targets: [{ file: "Target.java", symbol: "Target" }] });
+  assert.ok(stopped.ok && stopped.value.status === "partial", JSON.stringify(stopped));
+  assert.ok(stopped.value.cuts.some((cut) => cut.kind === "caller-budget"));
+  assert.equal(stopped.value.value.symbols.some((symbol) => symbol.symbol === "Holder" && symbol.via?.derivation === "proven"), false);
+  const irrelevant = await query("unrelated-type-reference", { ...files, "Other.java": "class Other { Missing field; }" });
+  assert.ok(irrelevant.ok && irrelevant.value.status === "complete", JSON.stringify(irrelevant));
+  const unread = await query("unread-type-reference", { ...files, "Other.java": "class Other extends Unknown { Target field; }" });
+  assert.ok(unread.ok && unread.value.status === "partial", JSON.stringify(unread));
+  assert.ok(unread.value.cuts.some((cut) => cut.kind === "unresolved-link" && cut.at.some((at) => at.includes("Target"))));
+  assert.equal(unread.value.cuts.some((cut) => cut.subReason === "capability-absent" && cut.reason === "relation-unread"), false);
+});
+
+test("unresolved type references do not become callers of a reached member", async () => {
+  const repo = committedRepository("member-type-reference", {
+    "Target.java": "class Target { void run() {} }",
+    "Other.java": "class Other extends Unknown { Target field; }",
+  });
+  const queries = composeQueries({ scratchRoot });
+  const request = { repo, repoId: "member-type-reference", revision: "HEAD" };
+  const member = await queries.impact.callers({ ...request, targets: [{ file: "Target.java", symbol: "Target.run" }] });
+  assert.ok(member.ok && member.value.status === "complete", JSON.stringify(member));
+  const type = await queries.impact.callers({ ...request, targets: [{ file: "Target.java", symbol: "Target" }] });
+  assert.ok(type.ok && type.value.status === "partial", JSON.stringify(type));
+  assert.ok(type.value.cuts.some((cut) => cut.kind === "unresolved-link" && cut.at.some((at) => at.startsWith("Other.java:1"))));
+});
