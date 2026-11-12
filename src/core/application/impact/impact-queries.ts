@@ -13,8 +13,9 @@ import { triviaLinesOf } from "../../domain/change/token-lines.ts";
 import type { SettledHunkChange } from "../../domain/impact/impact-fact.ts";
 import type { ComponentRef, SelectedSeed } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
+import { EDGE_POLICY } from "../../domain/impact/edge-policy.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
-import { attributedCallCuts, contradictedCallCuts, fileCut, isJavaTypeKind, removedDeclarationCuts, unheldCut, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
+import { attributedCallCuts, contradictedCallCuts, fileCut, isJavaTypeKind, removedDeclarationCuts, unheldCut, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation, type UnresolvedUse } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
 import { impactFact, impactWalk, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
@@ -206,7 +207,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
             return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}${unmodelledNote(unknown, unmodelled)}`, entries: missing } };
           }
           const reading = readingOf(head, index, head.base(content).snapshot, request);
-          const { relations: found, fields, locals, memberUses, externalUses } = await reading.relations();
+          const { relations: found, fields, locals, memberUses, externalUses, cuts: relationCuts = [], unresolved: unresolvedRelations = [] } = await reading.relations();
           if (signal?.aborted) return ABORTED;
           const loads = await deps.dynamicLoads.extract(headTree.sources);
           if (signal?.aborted) return ABORTED;
@@ -217,7 +218,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const typed = await reading.typed();
           if (typed === "aborted") return ABORTED;
-          const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
+          const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
           if (signal?.aborted) return ABORTED;
           const settled = settledRangeChanges(ranges.settled);
           const value = settled.length === 0 ? read.value : { ...read.value, settled };
@@ -451,7 +452,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const { store, summary } = index;
     try {
       const reading = readingOf(head, index, head.base(content).snapshot, request);
-      const { relations: found, fields, locals, memberUses, externalUses } = await reading.relations();
+      const { relations: found, fields, locals, memberUses, externalUses, cuts: relationCuts = [], unresolved: unresolvedRelations = [] } = await reading.relations();
       if (signal?.aborted) return ABORTED;
       const loads = await deps.dynamicLoads.extract(headTree.sources);
       if (signal?.aborted) return ABORTED;
@@ -475,7 +476,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (signal?.aborted) return ABORTED;
       const typed = await reading.typed();
       if (typed === "aborted") return ABORTED;
-      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
+      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
       if (signal?.aborted) return ABORTED;
       const reached = { ...value, ...read.value };
       return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), reached, [...unaccounted([...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts]), ...moduleCuts], impactWalk(changes.map(({ path }) => path), reached)) };
@@ -609,6 +610,8 @@ interface WalkInput {
   requested: readonly { file: string; symbol: string }[];
   componentsByResource: ReadonlyMap<string, readonly ComponentRef[]>;
   found: readonly Finding<Relation>[];
+  relationCuts?: readonly Cut[];
+  unresolvedRelations?: readonly UnresolvedUse[];
   /** The class fields whose declaration fixes what they hold. */
   fields: readonly FieldOrigin[];
   /** The locals a function or constant takes from `inject()`, and what they hold. */
@@ -672,10 +675,12 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
 
   const cuts: Cut[] = [
     ...walk.cuts,
+    ...input.relationCuts ?? [],
     ...unreadTypeReferenceCuts(seeds, selection.removalHolders, input.reading),
     ...contradictedCuts,
     ...attributedCallCuts(attributed.map(({ node, call: { reference } }) => ({ declaration: node, place: { ...reference, name: compactSpelling(reference.name) } }))),
     ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(walk.expanded, reachedIds), knownPlaces, input.proofs?.bound, inbound.memberProofs(walk.expanded)),
+    ...unresolvedLinkCuts(input.unresolvedRelations ?? [], walked.filter((symbol) => walk.wholeDeclarations.has(symbol.id) && (EDGE_POLICY.typeReferences.to as readonly string[]).includes(symbol.kind)), []),
     ...removedDeclarationCuts(unresolved, selection.removed, knownPlaces, input.proofs?.bound, input.proofs?.localParameters),
     ...unreadRelationCuts(unread, new Set(walked.map((symbol) => symbol.file)), templateOwners(componentsByResource)),
     ...summary.filesNotIndexed.map((file) => fileCut("no-extractor", file, "not-indexed")),

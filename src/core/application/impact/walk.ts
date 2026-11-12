@@ -36,6 +36,8 @@ export interface ReachedSymbol {
 
 export interface Walk {
   reached: readonly ReachedSymbol[];
+  /** Declarations reached directly, rather than only as owners of reached members. */
+  wholeDeclarations: ReadonlySet<GraphNodeId>;
   /** IDs whose expansion was admitted by all walk bounds. */
   expanded: ReadonlySet<GraphNodeId>;
   cuts: readonly Cut[];
@@ -149,6 +151,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
   };
   return {
     reached,
+    wholeDeclarations: new Set([...recs.values()].filter((rec) => !rec.throughMember).map((rec) => rec.symbol.id)),
     expanded,
     cuts: [...cutAt("depth", stopped.depth, budget.depth), ...cutAt("hub", stopped.hub, budget.hubFanIn), ...cutAt("caller-budget", stopped.expansions, budget.expansions)],
     cost: { expansionsUsed: expansions },

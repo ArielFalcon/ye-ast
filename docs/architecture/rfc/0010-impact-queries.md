@@ -152,7 +152,7 @@ of traversal facts records the policy in its own validity key.
 | a Java `calls` edge whose place the receiver reading settles to another method than the edge's target | to that method instead, `proven` | codegraph matches a Java call by name; the declared receiver's type names the one method the language binds (ADR-0044 decision 1), and the same base binding settles the edge, so a nominal receiver's dependence is that type's declaration (RFC-0024 U2) |
 | containment | no | structure, not dependence |
 
-Edges ye-ast derives (interface bridges, and the Angular injection and template relations of rows A2 and A4) enter through one port of
+Edges ye-ast derives (interface bridges, Java declaration-to-type references, and the Angular injection and template relations of rows A2 and A4) enter through one port of
 inbound edges that codegraph's edges also feed, so a new row never changes the walk.
 
 Exact member evidence uses the same `MemberUseOrigin` value for a direct fixed field, a supported constant local,
@@ -675,3 +675,13 @@ review's eight.
 
 Slice 3's design ([Live head](#live-head-slice-3)) was crossed from three independent plans on 2026-11-01 and
 corrected by two independent reviews the same day; the owner asked for it ("hazlo como recomiendas").
+
+### Java declaration-to-type references (RFC-0027 U8)
+
+The Java language pack contributes written type references to the same retained B4 extraction as framework relations.
+Fields, parameter and return types, constructions and annotations resolve through the existing Java type resolver and
+the read's held project. A proven reference reaches the declaring class, interface or enum with its occurrence line.
+Unresolved type occurrences use the existing name-based reverse frontier, so an unrelated unknown name does not make
+the answer partial. Unread sources and an incomplete source universe retain uncertainty; the absent-stage cut is
+removed only for the registered Java reader. No dispatch selection changes. B4 remains a whole-snapshot slot: a changed
+source invalidates the stage, while a repeated snapshot reuses its retained output.

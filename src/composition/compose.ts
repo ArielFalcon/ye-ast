@@ -1,3 +1,4 @@
+import { createRelationExtractor } from "../core/application/relations/relation-extractor.ts";
 import { createDeclarationEvidenceReader } from "../core/adapters/typescript/declaration-evidence.adapter.ts";
 import { createTypeBindings } from "../core/adapters/typescript/type-bindings.adapter.ts";
 import { createDeclaredTrees } from "../core/adapters/fs/declared-tree.adapter.ts";
@@ -226,7 +227,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     ...snapshotCache,
     angular: staged(createAngularDeclarationReader(), { read: "angular-declarations" }),
     contracts,
-    relations: staged(composeAngularRelations(), { extract: "relations" }),
+    relations: staged(createRelationExtractor(composeAngularRelations(), merged.relations), { extract: "relations" }),
     dynamicLoads: staged(createDynamicLoadReader(), { extract: "dynamic-loads" }),
     graph,
     ...(indexes && { indexes }),

@@ -62,7 +62,7 @@ test("an edge counts its score, a certain one counts 1 and a heuristic one witho
   assert.equal(edgeConfidence({ confidence: null, provenance: "heuristic", synthesizedBy: null }), 0.3);
 });
 
-test("an injection or template use between two classes or components is followed, from and into anything else it is not", () => {
+test("source relations follow only the declaration kinds each rule permits", () => {
   const relation = (kind: string, sourceKind: string, targetKind: string): boolean => followsRelation({ kind, sourceKind, targetKind });
   for (const kind of ["injects", "uses-component", "uses-directive", "uses-pipe"]) {
     assert.equal(relation(kind, "component", "class"), true, kind);
@@ -71,7 +71,10 @@ test("an injection or template use between two classes or components is followed
     assert.equal(relation(kind, "class", "interface"), false, kind);
     assert.equal(relation(kind, "class", "function"), false, kind);
   }
-  assert.equal(relation("references", "class", "class"), false);
+  assert.equal(relation("references", "class", "interface"), true);
+  assert.equal(relation("references", "interface", "enum"), true);
+  assert.equal(relation("references", "method", "class"), false);
+  assert.equal(relation("references", "class", "function"), false);
 });
 
 test("only a root a package or the language's libraries bind is outside the repository", () => {

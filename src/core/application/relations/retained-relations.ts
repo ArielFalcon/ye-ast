@@ -1,3 +1,5 @@
+import type { ParseHold } from "../../ports/parse-holds.port.ts";
+import { heldPaths } from "../navigation/snapshot-files.ts";
 import { declaredScope } from "../../domain/map/entrypoint-map.ts";
 import type { MemberProofContext } from "../../domain/relations/member-use.ts";
 import type { DeclaredScope } from "../../domain/shared/fact.ts";
@@ -15,9 +17,16 @@ export function retainedRelations(
   prepared: PreparedCommit | undefined,
   tree: Pick<CommitExtraction, "export" | "sources">,
   request: { scope?: ScopeRequest; signal?: AbortSignal },
+  hold?: ParseHold,
 ): Promise<RelationExtraction> {
   const memberProofs = memberProofContextOf(extractor, tree, declaredScope(request.scope));
-  const produce = () => extractor.extract(tree.sources, { memberProofs });
+  const completeSource = tree.export.stopped === undefined && (request.scope?.include?.length ?? 0) === 0 && (request.scope?.exclude?.length ?? 0) === 0;
+  const produce = () => extractor.extract(tree.sources, {
+    memberProofs, completeSource,
+    paths: heldPaths(tree.export) ?? tree.export.files.map(({ path }) => path),
+    ...(hold === undefined ? {} : { hold }),
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
+  });
   return prepared?.retained === undefined ? produce() : prepared.retained(canonicalJson({ output: "relations", memberProofs }), produce, request.signal);
 }
 

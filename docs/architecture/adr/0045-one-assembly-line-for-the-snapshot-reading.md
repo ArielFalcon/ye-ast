@@ -218,7 +218,7 @@ retention silently becomes a per-call cost.
    | B2a per-file projections of origins (E4, TypeScript): a file's module shape, its bindings and annotations | B0 | Derived fact per file (`import-origins.adapter.ts:56`) | That file |
    | B2b cross-file origin answers (E4, TypeScript): repository globals from every `.d.ts`, `declare global` and script (`import-origins.adapter.ts:130-140`); the heritage of every class for `declaredTypes` (`:243`, `subtypedTypes` `:299`); namespace members through other files' exports (`importBinding`, `:379`); module resolution by layout (`module-resolver.ts:218-221`) | B2a, B0 | A whole-snapshot key over every TypeScript path and content (plus the layout for resolution) until a narrower key is proven (decision 10) | Every B2b answer |
    | B3 module dependencies, every language (E5) | B0 | Snapshot slot today; per-file fact plus a join after migration L4 | Today the whole stage; after L4 that file and the join |
-   | B4 relations (E6) | B0 | Snapshot slot today; per-file extraction plus a cross-file join after L4 | Today the whole stage; after L4 that file and the join |
+   | B4 relations (E6), including Java type references | B0 | Snapshot slot today; per-file extraction plus a cross-file join after L4 | Today the whole stage; after L4 that file and the join |
    | B5 Java project and its readings (E4 Java, E14, E15, E18) | B0, the read's hold | Trees and one `JavaProject` per read hold; plain outputs (call sites, data effects, receiver methods by sites) as facts keyed by every Java source's path and content and the snapshot's whole path universe, as the branch keys receiver methods (`java: [path, content]` and `paths`, `java-receiver-methods.ts:99` on `t3/reverse-call-reconciliation`), since a new non-Java file (a `.kt`) can withdraw a proof; member names per file (B1) | Every cross-file Java fact; a file added or removed anywhere; one parse of that file inside the next read |
    | B6 reference proofs (E7) | B0, B2a, B2b | Per read | Recomputed per read |
    | B7 typed bindings (E8) | B0, a declared build output | ADR-0037 decision 8 (snapshot content and install records) | The whole pass of its key: 3.0-4.5 s CPU today; the per-program key is open question 3 |
@@ -436,7 +436,7 @@ retention silently becomes a per-call cost.
     | B2b receiver methods, dispatch targets | absent: `unknown` per site (`:240`, `:242`); structural typing keeps trace's R7 cut | yes (`java-receiver-methods.ts`, `java-dispatch-targets.ts`; ADR-0044) |
     | B2b replaced roots | yes | absent: none replaced (`java-name-bindings.adapter.ts:43`) |
     | B3 module statements | yes, JSON module resources included | yes (`java-imports.adapter.ts`) |
-    | B4 relations (fields, locals, member proofs) | through the Angular framework plugin | absent: no Java relations reader; Java receivers settle through B2 |
+    | B4 relations (fields, locals, member proofs, type references) | through the Angular framework plugin | yes: declared type references through the Java pack; Java receivers still settle through B2 |
     | B5 cross-file project in the read's hold | absent (B7 is TypeScript's cross-file reading) | yes (`JavaProject`, ADR-0040) |
     | B7 typed bindings over declared build outputs | yes (ADR-0037) | absent until a class-file reader (generated sources enter B5, ADR-0044 decision 13) |
     | B9 alignment | yes (base rule over B1 and B0) | yes |

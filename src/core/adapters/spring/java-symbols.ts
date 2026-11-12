@@ -122,6 +122,8 @@ export interface JavaProject {
    * import is the only one that can offer it.
    */
   bindName(name: string, scope: Scope, reading: "strict" | "lenient"): TypeLookup | "unsettled" | LocalType;
+  /** A written type name, including qualifiers, resolved with the strict lexical and import rules. */
+  resolveTypeName(name: string, scope: Scope): TypeLookup | "unsettled" | LocalType;
   /**
    * Whether a name no source declares belongs to the platform: it sits under a platform package, and no package the
    * sources declare claims the segment after that prefix.
@@ -236,6 +238,13 @@ export function qualifiedTypeName(name: string, scope: Scope, project: JavaProje
   const head = name.split(".")[0] ?? "";
   const named = scope.file.singleImports.has(head) || (name.includes(".") && PACKAGE_SEGMENT.test(head)) || candidate === `java.lang.${name}`;
   return named ? candidate : undefined;
+}
+
+/** A platform-owned type identity, excluding unresolved signature contexts and names a repository scope binds. */
+export function platformTypeName(name: string, scope: Scope, project: JavaProject): string | undefined {
+  if (project.resolveTypeName(name, scope) !== undefined) return undefined;
+  const identity = project.typeIdentity(name, scope) ?? qualifiedTypeName(name, scope, project);
+  return identity !== undefined && project.isPlatformName(identity) ? identity : undefined;
 }
 
 /** The platform prefix and its next segment, when a package the sources declare sits under a platform prefix. */
@@ -668,6 +677,7 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     lookupType,
     typeIdentity,
     bindName,
+    resolveTypeName: (name, scope) => resolveName(name.replace(/\s+/g, ""), scope, true),
     isPlatformName,
     hierarchy,
     classChain,
