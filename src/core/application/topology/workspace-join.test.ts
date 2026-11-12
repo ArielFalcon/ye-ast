@@ -74,6 +74,14 @@ test("a request whose route is stated and whose base is undecided links to the o
   assert.deepEqual(described(joined([web, api])), ["link api POST /api/profiles/{username}/follow suffix 0.5 undecided"]);
 });
 
+test("a request with an undecided base reads its route without the query or the fragment it writes", () => {
+  const queried = requesting("GET", UNDECIDED_BASE, text("/restaurants-api/restaurants/daily-menus?restaurantId="), RUNTIME);
+  const anchored = requesting("GET", UNDECIDED_BASE, text("/restaurants-api/restaurants/daily-menus#today"));
+  const api = repository("api", [], [serving("GET", "/restaurants/daily-menus", "Restaurants.dailyMenus")]);
+
+  assert.deepEqual([queried, anchored].map((site) => described(joined([repository("web", [site], []), api]))), [["link api GET /restaurants/daily-menus suffix 0.5 undecided"], ["link api GET /restaurants/daily-menus suffix 0.5 undecided"]]);
+});
+
 test("a request with an undecided base that two repositories serve is ambiguous, never a link", () => {
   const web = repository("web", [requesting("GET", UNDECIDED_BASE, text("/orders/"), RUNTIME)], []);
   const orders = repository("orders", [], [serving("GET", "/orders/{id}", "Orders.get")]);
