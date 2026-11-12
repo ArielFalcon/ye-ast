@@ -96,18 +96,22 @@ test("homonym calls on one line pair each record with the call at its own column
   assert.deepEqual(found, { edges: ["save@4:14"], references: ["a.save@4:4"], contradicted: [], writtenOnly: [], ambiguous: [] });
 });
 
-test("the construction of an anonymous class belongs to the body that runs it, the calls inside to the class", async () => {
+test("an anonymous construction and its initializer belong to the constructing body", async () => {
   // Map<String, Object> build() {     (2)
   //   return new HashMap<>() {        (3)
   //     { put("k", v); }              (4)
   //   };                              (5)
   // }                                 (6)
   const method = scope("build", 2, 2, 6, 3);
-  const anonymous = scope("", 3, 27, 5, 5);
+  const anonymous = { ...scope("", 3, 27, 5, 5), runsInEnclosingBody: true as const };
   const nodes: FakeNode[] = [{ ...fakeNode("build", "method", FILE, 2, 6), startColumn: 2, endColumn: 3 }, { ...fakeNode("anonymous", "class", FILE, 3, 5), startColumn: 11, endColumn: 5 }];
   const calls = [ownedBy([method], { ...written(3, 12, "HashMap", "HashMap"), kind: "instantiates" }), ownedBy([method, anonymous], written(4, 7, "put", "put"))];
-  assert.deepEqual(placed(await callsOf("build", nodes, [], calls)).writtenOnly, ["HashMap"]);
-  assert.deepEqual(placed(await callsOf("anonymous", nodes, [], calls)).writtenOnly, ["put"]);
+  assert.deepEqual(placed(await callsOf("build", nodes, [], calls)).writtenOnly, ["HashMap", "put"]);
+  assert.deepEqual(placed(await callsOf("anonymous", nodes, [], calls)).writtenOnly, []);
+  const indexed = [...nodes, fakeNode("put", "method", "src/map.ts", 1)];
+  const edges: FakeEdge[] = [{ from: "anonymous", to: "put", kind: "calls", line: 4, column: 6 }];
+  assert.deepEqual(placed(await callsOf("build", indexed, edges, calls)).edges, ["put@4:6"]);
+  assert.deepEqual(placed(await callsOf("anonymous", indexed, edges, calls)).edges, []);
 });
 
 test("a call no body encloses belongs to its file's top level, deferred inside a function value the top level does not run", async () => {

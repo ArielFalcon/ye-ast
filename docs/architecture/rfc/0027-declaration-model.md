@@ -588,7 +588,8 @@ Prerequisites: ADR-0045 L1b (the Java pack's B1). Independent of U1 and U2.
 
 - **Files**: `src/core/adapters/tree-sitter/java-member-names.adapter.ts` (`isAnonymousClassBody` no longer a function
   value; instead the anonymous class's method bodies are the function values), its test; a trace fixture.
-  **Must not touch** the dispatch readers.
+  The syntax scopes identify initialization that executes in the enclosing body; `reconciled-calls.ts` applies that
+  ownership to both written-only calls and aligned index records. **Must not touch** the dispatch readers.
 - **RED**: `java-member-names.adapter.test.ts`, "an anonymous class initializer is not a function value": a fixture
   `new HashMap<>() {{ put("a", service.get()); }}` yields a function value only for a method the class declares, not for
   its `class_body`. Fails today: the whole body is a function value. Variant: a method declared inside the anonymous
