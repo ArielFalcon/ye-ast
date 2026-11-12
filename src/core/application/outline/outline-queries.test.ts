@@ -11,12 +11,15 @@ import type { OutlineUse } from "../../domain/outline/outline-fact.ts";
 import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
 import { createOutlineQueries, type OutlineQueriesDeps } from "./outline-queries.ts";
 import type { TypeBindingsAnswer } from "../../ports/type-bindings.port.ts";
+import type { DeclaredMemberNames } from "../../ports/declared-member-names.port.ts";
+import { NOTHING_DECLARED } from "../navigation/edge-targets.ts";
 
 const SHA = "a".repeat(40);
 const SUMMARY = { filesIndexed: 1, filesSkipped: 0, filesErrored: 0, filesNotIndexed: [], versions: { codegraph: "fake", schema: 0, extraction: 0 } };
 const STORE = "/scratch/store";
 
 interface Options {
+  syntax?: Readonly<Record<string, DeclaredMemberNames>>;
   live?: FakeLive;
   /** The paths the commit export wrote, so the index's own list of what it could not hold is meaningful. */
   written?: readonly string[];
@@ -66,6 +69,7 @@ function setup(options: Options = {}) {
     matcher: { matches: options.matches ?? (() => true) },
     graph: { index: async () => ({ ok: true, value: { ...SUMMARY, filesNotIndexed: options.notIndexed ?? [] } }), open: () => ({ ok: true, value: store }) },
     engines: {},
+    memberNames: options.syntax === undefined ? undefined : { memberNames: async ({ path }: { path: string }) => options.syntax?.[path] ?? NOTHING_DECLARED },
     moduleReader: { extract: async (_sources: unknown, read?: { files?: readonly string[] }) => { log.moduleReads.push(read?.files); return { files: written.map((file) => ({ file, statements: [], moduleOnly: true })), dependencies: options.dependencies ?? [], unread: [] }; } },
     importOrigins: () => ({
       origins: async () => [],
@@ -79,6 +83,22 @@ function setup(options: Options = {}) {
   } as unknown as OutlineQueriesDeps;
   return { queries: createOutlineQueries(deps), log, store };
 }
+
+test("the query lists and focuses syntax-only bodies and reads their uses without inventing an unproven path", async () => {
+  const file = "src/store.ts";
+  const syntax: DeclaredMemberNames = { ...NOTHING_DECLARED, declarations: [
+    { name: "m", kind: "method", invoked: true, container: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 5, column: 3 } } },
+    { name: "unbound", kind: "method", invoked: true, container: { line: 9, column: 0 }, span: { start: { line: 10, column: 2 }, end: { line: 12, column: 3 } } },
+  ], calls: [{ kind: "calls", line: 11, column: 5, name: "work", owners: [] }] };
+  const { queries } = setup({ written: [file], nodes: [fakeNode("file", "file", file, 1, 20), fakeNode("D", "constant", file, 1, 8)], syntax: { [file]: syntax }, bindings: { "11:5 work": { kind: "ambient", root: "work" } } });
+  const listed = await queries.outline({ repo: "/work/repo", repoId: "repo", revision: "HEAD", files: [file] });
+  assert.ok(listed.ok && listed.value.status !== "unknown");
+  assert.deepEqual(listed.value.value.files?.[0]?.declarations.map(({ name, children }) => [name, children?.map(({ name }) => name)]), [["D", ["m"]], ["unbound", undefined]]);
+  const focused = await queries.outline({ repo: "/work/repo", repoId: "repo", revision: "HEAD", focus: [{ file, line: 11 }] });
+  assert.ok(focused.ok && focused.value.status === "complete", JSON.stringify(focused));
+  assert.equal(focused.value.value.focus?.[0]?.path, undefined);
+  assert.deepEqual(focused.value.value.focus?.[0]?.uses, [{ global: "work", relations: ["calls"], at: [{ line: 11, column: 5 }] }]);
+});
 
 test("a requested file the scope leaves out is unknown with its evidence, not an empty outline", async () => {
   const { queries } = setup({ matches: (path, glob) => (glob === "docs/**" ? path.startsWith("docs/") : true) });

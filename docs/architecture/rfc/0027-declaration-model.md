@@ -174,7 +174,9 @@ populations join into one tree:
 | Syntax declaration | B1's `declarations` (new) | `syntax:<file>:<startLine>:<startColumn>` (a source place; never an index name) |
 
 **One declaration, two sources.** A syntax declaration is an index declaration when a compatible index declaration **of
-the same name** in the same file contains its start place. A method or function joins a callable, never its same-named
+the same name** in the same file contains its start place. A parser header before the indexed start joins the same
+declaration when the indexed start lies in the written span and both end at exactly the same source position; this
+handles export/modifier prefixes without merging a nested same-name callable. A method or function joins a callable, never its same-named
 type; an accessor may join an indexed method, property or field. When several do, it is the **innermost**: the one that starts last,
 and of two that start together the one that ends first — the existing `owningBody` rule (`owning-body.ts:27-34`). The
 index identity wins and the syntax data (its path root, `invoked`, its binding) attaches to it. A syntax declaration no
@@ -197,8 +199,10 @@ then the declaration's own name, joined by `.`. A syntax declaration gets a path
    that starts on a line another declaration also starts on is **not** range-targetable on its own: the range form is
    lines only, so its path is the address, and a duplicate path is the fault below.
 
-Determinism: per-file lists sorted by `(startLine, startColumn, name)`; repository-relative paths; a path that selects
-more than one declaration in one file is an **ambiguity fault** naming every place, never a pick (fail closed).
+Determinism: per-file lists sorted by `(startLine, startColumn, name)`; repository-relative paths; a path introduced by syntax that selects
+more than one declaration in one file is an **ambiguity fault** naming every place, never a pick (fail closed). Existing
+index-only overload sets keep the query protocol's declaration-set selection; the member binder still selects only
+what its existing signature rule proves.
 
 Kinds: `method`, `function`, `accessor`, `initializer`, `anonymous-class`, plus the index's own kinds unchanged.
 
@@ -252,7 +256,7 @@ export interface ModelDeclaration {
 export interface DeclarationModel {
   /** The file's tree, `declarationTree`'s rule unchanged, index and syntax declarations in one node list. */
   tree(file: string): Promise<readonly DeclarationBranch<ModelDeclaration>[]>;
-  /** Selected declarations in position order; duplicate full paths throw an ambiguity fault naming every place. */
+  /** Selected declarations in position order; duplicate syntax paths fault; indexed overload target sets remain intact. */
   select(file: string, symbol: string): Promise<readonly ModelDeclaration[]>;
   /** The file's declarations, in position order. */
   list(file: string): Promise<readonly ModelDeclaration[]>;
@@ -492,7 +496,9 @@ Prerequisites: U1.
   U5); `callers`/`trace` still answer every index target byte-identically.
 - **Gate**: `none` expected — U1's declarations coincide with index symbols, so the merge adds none; any addition the
   report shows is attributed to the merge rule, not accepted silently.
-- **Docs**: RFC-0017 (outline), RFC-0010 (target resolution), the MCP outline guide.
+- **Docs**: RFC-0017 (outline), RFC-0010 (target resolution), the MCP outline guide. Syntax-only roots remain in the
+  selection and produce explicit `no-symbols` cuts while execution/reverse traversal awaits U4/U5; no graph handle is
+  fabricated and no unsupported root is reported complete and empty. A focused unbound declaration omits `path`.
 - **Risk**: item 3 — every surface that lists declarations changes for every repository; the report must show the
   additions only.
 

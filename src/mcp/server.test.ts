@@ -55,6 +55,20 @@ function validatorOf(schema: Parameters<AjvJsonSchemaValidator["getValidator"]>[
 }
 
 const SECRET = "hunter2-secret";
+
+test("an outline focus without a proven path is delivered by span through MCP", async () => {
+  const value: OutlineValue = { unheld: [], focus: [{ file: "src/store.ts", selector: "4", ancestors: [], declaration: { kind: "method", name: "m", line: 3, endLine: 5 }, omitted: 0, uses: [] }] };
+  const { session } = await setup({ outline: async () => ({ ok: true, value: { ...base(), status: "complete", value } }) });
+  try {
+    const result = await session.callTool("ye_ast_outline", { focus: [{ file: "src/store.ts", line: 4 }], mode: "full" });
+    assert.notEqual(result.isError, true);
+    const full = resultFields(result);
+    assert.equal(full.value.focus[0].path, undefined);
+    assert.equal(OUTLINE_OUTPUT.safeParse(full).success, true);
+  } finally {
+    await session.close();
+  }
+});
 const REPOSITORY = { path: "/work/shop", repoId: "shop" };
 
 function base(overrides: Partial<FactBase> = {}): FactBase {

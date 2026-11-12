@@ -5,8 +5,18 @@ import type { DeclaredMemberNames, SyntaxCall } from "../../ports/declared-membe
 import { createDeclarationUses } from "./declaration-uses.ts";
 import { NOTHING_DECLARED } from "./edge-targets.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "./fake-code-graph.testing.ts";
+import { createDeclarationModel } from "./declaration-model.ts";
+
+test("a call within a syntax-only member belongs to that member instead of its holder or file", async () => {
+  const file = "src/store.ts";
+  const store = fakeCodeGraph([fakeNode("file", "file", file, 1, 10), fakeNode("D", "constant", file, 1, 8)], []);
+  const model = createDeclarationModel({ store, declarationsIn: async () => [{ name: "m", kind: "method", invoked: true, container: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 5, column: 3 } } }] });
+  const calls: SyntaxCall[] = [{ kind: "calls", name: "work", line: 4, column: 5, owners: [] }, { kind: "calls", name: "initialize", line: 7, column: 1, owners: [] }, { kind: "calls", name: "top", line: 10, column: 1, owners: [] }];
+  const owned = callsByOwner(calls, await model.list(file), [], store.symbolsInFiles([file]).find(({ kind }) => kind === "file"));
+  assert.deepEqual([...owned].map(([key, values]) => [key, values.map(({ name }) => name)]), [[`syntax:${file}:3:2`, ["work"]], ["D", ["initialize"]], ["file", ["top"]]]);
+});
 import { createGraphNavigation } from "./graph-navigation.ts";
-import { createReconciledCalls, type BodyCalls } from "./reconciled-calls.ts";
+import { callsByOwner, createReconciledCalls, type BodyCalls } from "./reconciled-calls.ts";
 
 const FILE = "src/c.ts";
 /** The files whose import bindings the last `callsOf` read. */
@@ -31,7 +41,7 @@ async function callsOf(body: string, nodes: readonly FakeNode[], edges: readonly
   const uses = createDeclarationUses(store, createGraphNavigation(store, () => false));
   const syntax: DeclaredMemberNames = { ...NOTHING_DECLARED, calls, functionValues };
   const imported = new Map(Object.entries(imports).map(([local, id]) => [local, store.symbolsByIds([id as GraphNodeId])[0]!]));
-  const reconciled = createReconciledCalls({ store, uses, syntaxOf: async (file) => (file === FILE ? syntax : NOTHING_DECLARED), lineOf: (file, line) => (file === FILE ? text[line] : undefined), importedDeclarations: async (file) => (importsRead.push(file), file === FILE ? imported : new Map()) });
+  const reconciled = createReconciledCalls({ store, uses, declarations: createDeclarationModel({ store, declarationsIn: async () => [] }), syntaxOf: async (file) => (file === FILE ? syntax : NOTHING_DECLARED), lineOf: (file, line) => (file === FILE ? text[line] : undefined), importedDeclarations: async (file) => (importsRead.push(file), file === FILE ? imported : new Map()) });
   importsRead = [];
   const [node] = store.symbolsByIds([body as GraphNodeId]);
   return reconciled.callsOf(node!);

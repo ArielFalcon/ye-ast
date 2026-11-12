@@ -5,18 +5,20 @@ import { triviaLinesOf } from "../../domain/change/token-lines.ts";
 import { comparePosition, compareText } from "../../domain/shared/code-node.ts";
 import type { SettledRangeChange } from "../../domain/impact/impact-fact.ts";
 import { sortedUnique } from "../../domain/impact/importers-fact.ts";
-import { branchesOf, declarationPath, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
-import type { Evidence } from "../../domain/shared/fact.ts";
-import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
+import { branchesOf, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
+import type { Cut, Evidence } from "../../domain/shared/fact.ts";
+import type { GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 import type { CallersTarget } from "../../ports/impact-queries.port.ts";
-import { containmentTree } from "./containment-tree.ts";
+import type { DeclarationModel, ModelDeclaration } from "./declaration-model.ts";
+import { fileCut } from "../../domain/impact/impact-cuts.ts";
 import type { RawUnknownEntry, SnapshotFiles } from "./snapshot-files.ts";
 
 export interface RootSelection extends SeedSelection<GraphSymbol> {
   /** In position order. */
   seeds: SelectedSeed<GraphSymbol>[];
+  syntaxSeeds: SelectedSeed<ModelDeclaration>[];
   /** The requested symbols that name no node, with what their file declares; nothing is selected when there is one. */
   missing: RawUnknownEntry[];
   /** The ranges whose every line holds no token: they select nothing and answer successfully (ADR-0043 decision 3). */
@@ -67,9 +69,9 @@ export interface RequestedRanges {
  * `uncovered`, and so is every range of a file the snapshot does not hold. A file the snapshot holds but the sources do
  * not, one that declares nothing, and one no pack tokenizes keep today's line rules.
  */
-export async function requestedRanges(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], tokens: SourceTokens, snapshot: SnapshotFiles): Promise<RequestedRanges> {
+export async function requestedRanges(changes: readonly FileChange[], sources: readonly SourceFile[], tokens: SourceTokens, snapshot: SnapshotFiles, declarations: DeclarationModel): Promise<RequestedRanges> {
   const files = new Map(sources.map((file) => [file.path, file]));
-  const symbolsByFile = Map.groupBy(store.symbolsInFiles(changes.map(({ path }) => path)).filter(isSeedable), (symbol) => symbol.file);
+  const symbolsByFile = new Map(await Promise.all(changes.map(async ({ path }) => [path, (await declarations.list(path)).filter(isSeedable)] as const)));
   const narrowed = await Promise.all(changes.map(async (change) => {
     const file = files.get(change.path);
     const symbols = symbolsByFile.get(change.path) ?? [];
@@ -84,7 +86,7 @@ export async function requestedRanges(store: CodeGraphReader, changes: readonly 
     const lastLine = file.content.split("\n").length;
     const selects = (line: number): boolean => !quiet.has(line) || (reading.status !== "read" && top.some((symbol) => symbol.startLine <= line && line <= symbol.endLine));
     const ranges = change.added.map(({ start, end }) => ({ start, end, runs: runsOf(start, Math.min(end, lastLine), selects) }));
-    const candidates = candidatesOf(containmentTree(store, store.symbolsInFiles([change.path])));
+    const candidates = candidatesOf(await declarations.tree(change.path));
     const entries = (left: readonly { start: number; end: number }[]): RawUnknownEntry[] => left.map(({ start, end }) => ({ file: change.path, start, end, candidates }));
     return {
       change: { ...change, added: ranges.flatMap(({ runs }) => runs) },
@@ -118,43 +120,54 @@ function runsOf(start: number, end: number, selects: (line: number) => boolean):
  * names in its file, and the changes select what their lines, resources or top-level code touch. A requested symbol
  * that names nothing, or an `uncovered` range, makes it `missing`, and nothing is selected.
  */
-export function selectRoots(
-  store: CodeGraphReader,
+export async function selectRoots(
+  declarations: DeclarationModel,
   changes: readonly FileChange[],
   requested: readonly { file: string; symbol: string }[],
   componentsByResource: ReadonlyMap<string, readonly ComponentRef[]>,
   uncovered: readonly RawUnknownEntry[] = [],
   isRoot: (symbol: GraphSymbol) => boolean = isSeedable,
   settled: RawUnknownEntry[] = [],
-): RootSelection {
+): Promise<RootSelection> {
   const sourceChanges = changes.filter((file) => kindOfChangedFile(file.path) === "source" && !file.deleted).map((file) => file.path);
   const componentFiles = changes.flatMap((file) => (componentsByResource.get(file.path) ?? []).map((component) => component.file));
-  const symbols = store.symbolsInFiles([...new Set([...sourceChanges, ...componentFiles, ...requested.map(({ file }) => file)])]);
-  const symbolsByFile = Map.groupBy(symbols, (symbol) => symbol.file);
-  const missing = [...missingTargets(store, requested, isRoot), ...uncovered];
-  if (missing.length > 0) return { seeds: [], withoutSymbols: [], removed: [], removalHolders: [], missing, settled };
+  const files = [...new Set([...sourceChanges, ...componentFiles, ...requested.map(({ file }) => file)])];
+  const symbolsByFile = new Map(await Promise.all(files.map(async (file) => [file, await declarations.list(file)] as const)));
+  const missing = [...await missingTargets(declarations, requested, isRoot), ...uncovered];
+  if (missing.length > 0) return { seeds: [], syntaxSeeds: [], withoutSymbols: [], removed: [], removalHolders: [], missing, settled };
 
-  const trees = new Map([...new Set(requested.map(({ file }) => file))].map((file) => [file, containmentTree(store, symbolsByFile.get(file) ?? [])]));
-  const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource, isRoot);
-  const requestedSymbols = new Set(requested.flatMap((target) => selectedBySymbol(trees.get(target.file) ?? [], target.symbol).map(({ declaration }) => declaration).filter(isRoot)));
-  const chosen = [...[...requestedSymbols].map((symbol): SelectedSeed<GraphSymbol> => ({ symbol, basis: "requested" })), ...selection.seeds.filter(({ symbol }) => !requestedSymbols.has(symbol))];
-  return { ...selection, seeds: chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol)), missing: [], settled };
+  const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource, (declaration) => isModelRoot(declaration, isRoot));
+  const matched = await Promise.all(requested.map(async (target) => (await declarations.select(target.file, target.symbol)).filter((declaration) => isModelRoot(declaration, isRoot))));
+  const requestedSymbols = new Map(matched.flat().map((declaration) => [declaration.id, declaration]));
+  const chosen = [...[...requestedSymbols.values()].map((symbol): SelectedSeed<ModelDeclaration> => ({ symbol, basis: "requested" })), ...selection.seeds.filter(({ symbol }) => !requestedSymbols.has(symbol.id))];
+  const ordered = chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol));
+  return { ...selection,
+    seeds: ordered.flatMap(({ symbol, basis }) => symbol.symbol === undefined ? [] : [{ symbol: symbol.symbol, basis }]),
+    syntaxSeeds: ordered.filter(({ symbol }) => symbol.symbol === undefined),
+    removalHolders: selection.removalHolders.flatMap(({ symbol }) => symbol ?? []),
+    missing: [], settled,
+  };
 }
 
 /**
- * The requested symbols that name no root of their file, each with the file's dotted paths as candidates; read from
- * the store alone, so a wrong name fails before any reader runs over the snapshot.
+ * The requested symbols that name no declaration root, with proven paths from the shared population as candidates.
  */
-export function missingTargets(store: CodeGraphReader, requested: readonly { file: string; symbol: string }[], isRoot: (symbol: GraphSymbol) => boolean = isSeedable): RawUnknownEntry[] {
+export async function missingTargets(declarations: DeclarationModel, requested: readonly { file: string; symbol: string }[], isRoot: (symbol: GraphSymbol) => boolean = isSeedable): Promise<RawUnknownEntry[]> {
   const files = [...new Set(requested.map(({ file }) => file))];
-  const byFile = Map.groupBy(store.symbolsInFiles(files), (symbol) => symbol.file);
-  const trees = new Map(files.map((file) => [file, containmentTree(store, byFile.get(file) ?? [])]));
-  return requested
-    .filter((target) => selectedBySymbol(trees.get(target.file) ?? [], target.symbol).every(({ declaration }) => !isRoot(declaration)))
-    .map((target) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? [], isRoot) }));
+  const trees = new Map(await Promise.all(files.map(async (file) => [file, await declarations.tree(file)] as const)));
+  const matched = await Promise.all(requested.map(async (target) => (await declarations.select(target.file, target.symbol)).some((declaration) => isModelRoot(declaration, isRoot))));
+  return requested.filter((_, index) => !matched[index]).map((target) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? [], isRoot) }));
 }
 
 /** The dotted paths of what a file declares that a request can seed, so a symbol that names no node tells the caller what does. */
-function candidatesOf(tree: readonly DeclarationBranch<GraphSymbol>[], isRoot: (symbol: GraphSymbol) => boolean = isSeedable): string[] {
-  return sortedUnique(branchesOf(tree).filter(({ declaration }) => isRoot(declaration)).map(declarationPath));
+function candidatesOf(tree: readonly DeclarationBranch<ModelDeclaration>[], isRoot: (symbol: GraphSymbol) => boolean = isSeedable): string[] {
+  return sortedUnique(branchesOf(tree).filter(({ declaration }) => declaration.path !== undefined && isModelRoot(declaration, isRoot)).map(({ declaration }) => declaration.path!));
+}
+
+function isModelRoot(declaration: ModelDeclaration, isRoot: (symbol: GraphSymbol) => boolean): boolean {
+  return declaration.symbol === undefined ? declaration.invoked === true || isSeedable(declaration) : isRoot(declaration.symbol);
+}
+
+export function syntaxRootCuts(seeds: readonly SelectedSeed<ModelDeclaration>[]): Cut[] {
+  return seeds.map(({ symbol }) => ({ ...fileCut("no-extractor", symbol.file, "no-symbols"), at: [`${symbol.file}:${symbol.startLine} ${symbol.path ?? symbol.name}`] }));
 }

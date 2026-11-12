@@ -77,16 +77,16 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
         try {
           const held = new Set(listing ?? headTree.export.files.map((file) => file.path));
           const snapshot = snapshotFiles(store, [...held]);
-          const focused = focus === undefined ? undefined : readFocus(store, focus.filter(({ file }) => isReadableFile(file)), snapshot);
+          const reading = readings.of({ tree: headTree, prepared: head.prepared, hold: head.hold, store, digest: index.digest, snapshot: head.base(content).snapshot, request });
+          const focused = focus === undefined ? undefined : await readFocus(store, focus.filter(({ file }) => isReadableFile(file)), snapshot, reading.declarations);
           const unknown = focused === undefined ? [] : snapshot.describe(focused.unknown);
           if (unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${unknown.map(unknownTargetKey).join(", ")}${unmodelledNote(unknown, unmodelled)}`, entries: unknown } };
           if (focused !== undefined && focused.topLevel.length > 0) return { ok: false, fault: { kind: "top-level-line", detail: `no declaration holds ${focused.topLevel.map(({ file, line }) => `${file}:${line}`).join(", ")}; the line is at the top level of its file`, entries: focused.topLevel } };
-          const listed = focused === undefined ? readOutline(store, covered, await deps.moduleReader.extract(sources, { files: covered })) : undefined;
+          const listed = focused === undefined ? await readOutline(store, covered, await deps.moduleReader.extract(sources, { files: covered }), reading.declarations) : undefined;
           if (request.signal?.aborted) return ABORTED;
-          const reading = focused === undefined ? undefined : readings.of({ tree: headTree, prepared: head.prepared, hold: head.hold, store, digest: index.digest, snapshot: head.base(content).snapshot, request });
-          const typed = reading === undefined ? undefined : await reading.typed();
+          const typed = focused === undefined ? undefined : await reading.typed();
           if (typed === "aborted") return ABORTED;
-          const used = focused === undefined || reading === undefined ? undefined : await focusWithUses(store, focused, reading, typed?.typed, request.signal);
+          const used = focused === undefined ? undefined : await focusWithUses(store, focused, reading, typed?.typed, request.signal);
           if (used === "aborted" || request.signal?.aborted) return ABORTED;
           const read = focused === undefined ? listed!.value : { ...focused.value, focus: used!.focus };
           const cuts = [

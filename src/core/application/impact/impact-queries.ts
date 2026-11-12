@@ -11,7 +11,7 @@ import { settledOf } from "../../domain/change/hunk-settling.ts";
 import type { TokenReading } from "../../domain/change/source-tokens.ts";
 import { triviaLinesOf } from "../../domain/change/token-lines.ts";
 import type { SettledHunkChange } from "../../domain/impact/impact-fact.ts";
-import type { ComponentRef, SelectedSeed } from "../../domain/change/seeds.ts";
+import { isSeedable, type ComponentRef, type SelectedSeed } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { EDGE_POLICY } from "../../domain/impact/edge-policy.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
@@ -63,7 +63,7 @@ import { edgeKey, type EdgeTargets, type FollowedEdge } from "../navigation/edge
 import type { AttributedCall, ReverseCalls } from "../navigation/reverse-calls.ts";
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
-import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey } from "../navigation/root-selection.ts";
+import { syntaxRootCuts, distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey } from "../navigation/root-selection.ts";
 import { absentFileEntries, heldPaths, snapshotFiles } from "../navigation/snapshot-files.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
@@ -197,8 +197,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const { store, summary } = index;
         try {
           const snapshot = snapshotFiles(store, listing);
-          const unknown = missingTargets(store, requested);
-          const ranges = await requestedRanges(store, changes, headTree.sources, { tokensOf: (file) => readings.tokensOf(file, head.prepared) }, snapshot);
+          const reading = readingOf(head, index, head.base(content).snapshot, request);
+          const unknown = await missingTargets(reading.declarations, requested, isSeedable);
+          const ranges = await requestedRanges(changes, headTree.sources, { tokensOf: (file) => readings.tokensOf(file, head.prepared) }, snapshot, reading.declarations);
           if (signal?.aborted) return ABORTED;
           const missing = snapshot.describe([...unknown, ...ranges.uncovered]);
           if (missing.length > 0) {
@@ -206,7 +207,6 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
             const unmodelled = await unmodelledIn(deps, headTree, unknown.map(({ file }) => file));
             return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}${unmodelledNote(unknown, unmodelled)}`, entries: missing } };
           }
-          const reading = readingOf(head, index, head.base(content).snapshot, request);
           const { relations: found, fields, locals, memberUses, externalUses, cuts: relationCuts = [], unresolved: unresolvedRelations = [] } = await reading.relations();
           if (signal?.aborted) return ABORTED;
           const loads = await deps.dynamicLoads.extract(headTree.sources);
@@ -656,7 +656,7 @@ function unreadTypeReferenceCuts(seeds: readonly SelectedSeed<GraphSymbol>[], re
 
 async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const { store, changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved } = input;
-  const selection = selectRoots(store, changes, requested, componentsByResource);
+  const selection = await selectRoots(input.reading.declarations, changes, requested, componentsByResource);
 
   const { seeds } = selection;
   const implemented = await input.reading.implementedContracts();
@@ -674,6 +674,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const unread = found.flatMap((finding): UnreadRelation[] => (finding.status === "unknown" ? finding.evidence.slice(0, 1).map(({ path, line }) => ({ path, line, reason: finding.reason })) : []));
 
   const cuts: Cut[] = [
+    ...syntaxRootCuts(selection.syntaxSeeds),
     ...walk.cuts,
     ...input.relationCuts ?? [],
     ...unreadTypeReferenceCuts(seeds, selection.removalHolders, input.reading),
@@ -689,7 +690,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   ];
   const value = {
     cost: walk.cost,
-    seeds: seeds.map(({ symbol, basis }): Seed => ({ file: symbol.file, symbol: symbol.name, line: symbol.startLine, ...declarationSpan(symbol.startLine, symbol.endLine), basis })),
+    seeds: [...seeds, ...selection.syntaxSeeds].map(({ symbol, basis }): Seed => ({ file: symbol.file, symbol: symbol.name, line: symbol.startLine, ...declarationSpan(symbol.startLine, symbol.endLine), basis })),
     symbols: walk.reached.map(({ symbol, depth, confidence, fanIn, via }): ImpactedSymbol => ({
       file: symbol.file,
       symbol: symbol.name,

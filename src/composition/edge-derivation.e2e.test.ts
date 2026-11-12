@@ -162,7 +162,7 @@ test("a use the index matched by name alone is no declared use of a focused body
   assert.ok(answer.ok && answer.value.status !== "unknown", JSON.stringify(answer));
   const cuts = answer.value.status === "partial" ? answer.value.cuts : [];
   assert.deepEqual(
-    answer.value.value.focus?.map((entry) => ({ file: entry.file, uses: (entry.uses ?? []).map((use) => ("declaration" in use ? `${use.declaration.file}:${use.declaration.name}` : "outside")), unproved: hasUnprovedUses(cuts, entry.file, entry.path) })),
+    answer.value.value.focus?.map((entry) => ({ file: entry.file, uses: (entry.uses ?? []).map((use) => ("declaration" in use ? `${use.declaration.file}:${use.declaration.name}` : "outside")), unproved: hasUnprovedUses(cuts, entry.file, entry.path!) })),
     [
       { file: "src/deep.ts", uses: [], unproved: true },
       { file: "src/route-reader.ts", uses: [], unproved: true },
@@ -238,5 +238,5 @@ test("a focused body's call on an injected field the relations bind is a use of 
 
   assert.ok(answer.ok && answer.value.status !== "unknown", JSON.stringify(answer));
   const cuts = answer.value.status === "partial" ? answer.value.cuts : [];
-  assert.deepEqual(answer.value.value.focus?.map((entry) => ({ uses: (entry.uses ?? []).flatMap((use) => ("declaration" in use ? [`${use.declaration.file}:${use.declaration.name}`] : [])), unproved: hasUnprovedUses(cuts, entry.file, entry.path) })), [{ uses: ["src/store.ts:save"], unproved: false }]);
+  assert.deepEqual(answer.value.value.focus?.map((entry) => ({ uses: (entry.uses ?? []).flatMap((use) => ("declaration" in use ? [`${use.declaration.file}:${use.declaration.name}`] : [])), unproved: hasUnprovedUses(cuts, entry.file, entry.path!) })), [{ uses: ["src/store.ts:save"], unproved: false }]);
 });

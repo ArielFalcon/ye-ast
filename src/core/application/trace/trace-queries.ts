@@ -1,3 +1,4 @@
+import type { DeclarationModel } from "../navigation/declaration-model.ts";
 import { withCuts, type Asserted } from "../../domain/shared/question.ts";
 import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { WorkspaceReadOperation } from "../topology/workspace-operation.ts";
@@ -26,7 +27,7 @@ import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { EntrypointTarget, TraceFault, TraceQueries, TraceTarget, UnknownEntrypointFault } from "../../ports/trace-queries.port.ts";
-import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey, type RootSelection } from "../navigation/root-selection.ts";
+import { syntaxRootCuts, distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey, type RootSelection } from "../navigation/root-selection.ts";
 import { heldPaths, snapshotFiles, type SnapshotFiles } from "../navigation/snapshot-files.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
 import { NOTHING_DECLARED } from "../navigation/edge-targets.ts";
@@ -141,17 +142,18 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             const symbols = store.symbolsInFiles([file]);
             if (symbols.some((symbol) => symbol.kind === "property" || symbol.kind === "field")) {
               const syntax = await syntaxOf(file);
-              for (const [id, calls] of callsByOwner(syntax.calls ?? [], symbols, syntax.functionValues)) if (calls.some((call) => !call.deferred)) syntaxCalls.add(id);
+              const owned = callsByOwner(syntax.calls ?? [], await reading.declarations.list(file), syntax.functionValues, symbols.find(({ kind }) => kind === "file"));
+              for (const symbol of symbols) if ((owned.get(symbol.id) ?? []).some((call) => !call.deferred)) syntaxCalls.add(symbol.id);
             }
           }
           const isRoot = isTraceRoot(store, unresolvedIn, syntaxCalls);
-          const selections = await Promise.all(targets.map(async (target): Promise<{ target: TraceTarget; selection: Pick<RootSelection, "seeds" | "missing" | "withoutSymbols" | "settled"> }> => ({
+          const selections = await Promise.all(targets.map(async (target): Promise<{ target: TraceTarget; selection: Pick<RootSelection, "seeds" | "syntaxSeeds" | "missing" | "withoutSymbols" | "settled"> }> => ({
             target,
             selection: isEntrypointTarget(target)
               ? handlerRoots(store, handlers.byTarget.get(traceTargetKey(target)) ?? [], isRoot)
               : "start" in target
-                ? await rangeRoots(store, rangeChanges([target]), head.tree.sources, tokens, snapshot, isRoot)
-                : selectRoots(store, [], [target], NO_COMPONENTS, [], isRoot),
+                ? await rangeRoots(rangeChanges([target]), head.tree.sources, tokens, snapshot, isRoot, reading.declarations)
+                : await selectRoots(reading.declarations, [], [target], NO_COMPONENTS, [], isRoot),
           })));
           const missing = snapshot.describe(selections.flatMap(({ selection }) => selection.missing));
           if (missing.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${missing.map(unknownTargetKey).join(", ")}`, entries: missing } };
@@ -187,6 +189,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             ...buildOutputCuts(typed.buildOutputs),
             ...summary.filesNotIndexed.map((file) => fileCut("no-extractor", file, "not-indexed")),
             ...selections.flatMap(({ selection }) => selection.withoutSymbols.map((file) => fileCut("no-extractor", file, "no-symbols"))),
+            ...selections.flatMap(({ selection }) => syntaxRootCuts(selection.syntaxSeeds)),
             ...handlers.unplaced,
             ...selections.flatMap(({ target, selection }) => (isEntrypointTarget(target) ? unplacedHandlers(handlers.byTarget.get(traceTargetKey(target)) ?? [], selection) : [])),
             ...walk.cuts,
@@ -251,10 +254,10 @@ function entrypointHandlers(findings: readonly Finding<Entrypoint>[], targets: r
 }
 
 /** The declarations of the index the handlers name: the one join of a map fact and a node (file, line in span, name). */
-function handlerRoots(store: CodeGraphReader, handlers: readonly HandlerPlace[], isRoot: (symbol: GraphSymbol) => boolean): Pick<RootSelection, "seeds" | "missing" | "withoutSymbols" | "settled"> {
+function handlerRoots(store: CodeGraphReader, handlers: readonly HandlerPlace[], isRoot: (symbol: GraphSymbol) => boolean): Pick<RootSelection, "seeds" | "syntaxSeeds" | "missing" | "withoutSymbols" | "settled"> {
   const symbols = store.symbolsInFiles(sortedUnique(handlers.map(({ path }) => path)));
   const joined = symbols.filter((symbol) => isRoot(symbol) && handlers.some((handler) => joinsFact(symbol, handler)));
-  return { seeds: joined.sort(comparePosition).map((symbol) => ({ symbol, basis: "requested" })), missing: [], withoutSymbols: [], settled: [] };
+  return { syntaxSeeds: [], seeds: joined.sort(comparePosition).map((symbol) => ({ symbol, basis: "requested" })), missing: [], withoutSymbols: [], settled: [] };
 }
 
 /** A handler no declaration of the index joins is a cut at the handler, never a root silently missing. */
@@ -278,7 +281,7 @@ async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file:
   return new Map([...byName].map(([name, files]) => [name, files.sort(compareText)]));
 }
 
-async function rangeRoots(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], tokens: SourceTokens, snapshot: SnapshotFiles, isRoot: (symbol: GraphSymbol) => boolean): Promise<RootSelection> {
-  const ranges = await requestedRanges(store, changes, sources, tokens, snapshot);
-  return selectRoots(store, ranges.changes, [], NO_COMPONENTS, ranges.uncovered, isRoot, ranges.settled);
+async function rangeRoots(changes: readonly FileChange[], sources: readonly SourceFile[], tokens: SourceTokens, snapshot: SnapshotFiles, isRoot: (symbol: GraphSymbol) => boolean, declarations: DeclarationModel): Promise<RootSelection> {
+  const ranges = await requestedRanges(changes, sources, tokens, snapshot, declarations);
+  return selectRoots(declarations, ranges.changes, [], NO_COMPONENTS, ranges.uncovered, isRoot, ranges.settled);
 }

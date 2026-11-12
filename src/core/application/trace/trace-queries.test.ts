@@ -11,7 +11,7 @@ import type { CallSite, PlacedCallSite } from "../../domain/topology/call-site.t
 import type { SourceSpan } from "../../domain/shared/owning-body.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
-import type { DeclaredCallable, ReceiverBinding, SyntaxCall } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredDeclaration, DeclaredCallable, ReceiverBinding, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import type { RelationExtraction } from "../relations/relation-extractor.ts";
 import type { TypeBindingsAnswer, TypeTarget } from "../../ports/type-bindings.port.ts";
 import { createTraceQueries, type TraceQueriesDeps } from "./trace-queries.ts";
@@ -38,6 +38,7 @@ function tokenReading(file: { path: string; content: string }, trivia: Readonly<
 }
 
 interface Options {
+  declarations?: Readonly<Record<string, readonly DeclaredDeclaration[]>>;
   workspace?: TraceQueriesDeps["workspace"];
   /** Files the export holds and the index did not; none by default. */
   notIndexed?: readonly string[];
@@ -133,7 +134,7 @@ function setup(options: Options) {
       open: () => ({ ok: true, value: store }),
     },
     tokens: { tokensOf: async (file: { path: string; content: string }) => (options.onTrivia?.(file.path), tokenReading(file, options.trivia ?? {})) },
-    memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: options.callables?.[file.path] ?? [], receiverBindings: options.receiverBindings?.[file.path] ?? [], ...(options.syntaxCalls?.[file.path] === undefined ? {} : { calls: options.syntaxCalls[file.path] }), functionValues: options.functionValues?.[file.path] ?? [] }) },
+    memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { declarations: options.declarations?.[file.path] ?? [], names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: options.callables?.[file.path] ?? [], receiverBindings: options.receiverBindings?.[file.path] ?? [], ...(options.syntaxCalls?.[file.path] === undefined ? {} : { calls: options.syntaxCalls[file.path] }), functionValues: options.functionValues?.[file.path] ?? [] }) },
     importOrigins: () => ({
       replacedRoots: async () => options.replaced ?? written(),
       rootBindings: async (sites: readonly UseSite[]) => sites.map((site) => options.receiverRoots?.[site.spelled] ?? { kind: "unknown" }),
@@ -1560,4 +1561,12 @@ test("effect deduplication preserves distinct call columns", async () => {
     placedSites: [at(8, 4), at(8, 4), at(8, 20)],
   });
   assert.deepEqual(valueOf(fact).steps[0]!.effects?.map((effect) => effect.column), [5, 21]);
+});
+
+
+test("a syntax-only trace target remains explicit and partial until its execution stage is supported", async () => {
+  const file = "src/store.ts";
+  const fact = await factOf({ nodes: [fakeNode("D", "constant", file, 1, 8)], sources: [{ path: file, content: "const D = {};" }], declarations: { [file]: [{ name: "m", kind: "method", invoked: true, container: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 5, column: 3 } } }] } }, [{ file, symbol: "D.m" }]);
+  assert.equal(fact.status, "partial");
+  assert.ok(fact.status === "partial" && fact.cuts.some(({ reason, at }) => reason === "no-symbols" && at[0]?.includes("D.m")));
 });

@@ -1,7 +1,7 @@
 import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { branchesOf, declarationPath, declarationTree, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
-import { containsPosition, declarationSpan, owningBody, type SourcePosition } from "../../domain/shared/owning-body.ts";
+import { comparePositions, containsPosition, declarationSpan, owningBody, type SourcePosition } from "../../domain/shared/owning-body.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { DeclaredDeclaration } from "../../ports/declared-member-names.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
@@ -76,7 +76,7 @@ export function createDeclarationModel({ store, declarationsIn, sources = [], fa
     async select(file, symbol) {
       const found = selectedBySymbol((await read(file)).tree, symbol).map(({ declaration }) => declaration).filter(({ path }) => path !== undefined).sort(positioned);
       const paths = Map.groupBy(found, ({ path }) => path!);
-      for (const [path, declarations] of paths) if (declarations.length > 1) throw new AmbiguousDeclaration(file, path, declarations);
+      for (const [path, declarations] of paths) if (declarations.length > 1 && declarations.some(({ symbol }) => symbol === undefined)) throw new AmbiguousDeclaration(file, path, declarations);
       return found;
     },
     async ownersOf(file, at) {
@@ -94,7 +94,8 @@ function join(file: string, symbols: readonly GraphSymbol[], containment: { sour
   const joined = new Map<DeclaredDeclaration, ModelDeclaration>();
   for (const written of syntax) {
     const candidates = (named.get(written.name) ?? []).filter(({ kind }) => compatibleKind(kind, written.kind)).map((declaration) => ({ ...declarationSpan(declaration), declaration }));
-    const existing = owningBody(candidates, written.span.start)?.declaration;
+    const aligned = candidates.filter(({ start, end }) => containsPosition(written.span, start) && comparePositions(end, written.span.end) === 0);
+    const existing = owningBody(candidates, written.span.start)?.declaration ?? (aligned.length === 1 ? aligned[0]!.declaration : undefined);
     const declaration: ModelDeclaration = existing ?? { id: `syntax:${file}:${written.span.start.line}:${written.span.start.column}`, file, name: written.name, kind: written.kind, startLine: written.span.start.line, startColumn: written.span.start.column, endLine: written.span.end.line, endColumn: written.span.end.column };
     declaration.invoked = written.invoked;
     if (written.binding !== undefined) declaration.binding = written.binding;
@@ -103,10 +104,12 @@ function join(file: string, symbols: readonly GraphSymbol[], containment: { sour
   }
   const unplaced = new Set<string>();
   const at = Map.groupBy(declarations, ({ startLine, startColumn }) => positionKey({ line: startLine, column: startColumn }));
+  const onLine = Map.groupBy(declarations, ({ startLine }) => startLine);
   for (const [written, declaration] of joined) {
     if (declaration.symbol !== undefined || written.container === undefined) continue;
     const parents = (at.get(positionKey(written.container)) ?? []).filter(({ id }) => id !== declaration.id);
-    const parent = parents.length === 1 ? parents[0] : undefined;
+    const headers = parents.length === 0 ? (onLine.get(written.container.line) ?? []).filter((parent) => parent.id !== declaration.id && parent.startColumn >= written.container!.column && containsPosition(declarationSpan(parent), written.span.start)) : parents;
+    const parent = headers.length === 1 ? headers[0] : undefined;
     if (parent === undefined) unplaced.add(declaration.id);
     else pairs.push({ source: parent.id, target: declaration.id });
   }

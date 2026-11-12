@@ -1,3 +1,4 @@
+import type { DeclaredDeclaration } from "../../ports/declared-member-names.port.ts";
 import { JAVA_PROFILE, TYPESCRIPT_PROFILE } from "../../domain/languages/profiles.ts";
 import { absentCapabilitiesOf } from "../snapshot/language-packs.ts";
 import { test } from "node:test";
@@ -71,6 +72,7 @@ function listingOf(paths: readonly string[]): NonNullable<Options["exports"]> {
 }
 
 interface Options {
+  syntaxDeclarations?: Readonly<Record<string, readonly DeclaredDeclaration[]>>;
   declarationEvidence?: ImpactQueriesDeps["declarationEvidence"];
   changes?: Result<readonly FileChange[], VcsFault>;
   index?: Result<IndexSummary, CodeGraphFault>;
@@ -217,6 +219,7 @@ function setup(options: Options = {}) {
     ...(options.typeBindings && { typeBindings: options.typeBindings.bindings, declaredOutputs: () => options.typeBindings!.outputs }),
     ...(options.syntax && { memberNames: { memberNames: async (file: SourceFile) => ({ ...NOTHING_DECLARED, calls: (options.unresolved ?? []).filter((use) => use.file === file.path).map(({ line, column, name }) => ({ kind: "calls" as const, line, column: (column ?? 0) + 1, name, owners: [] })) }) } }),
     ...(options.written && { memberNames: { memberNames: async (file: SourceFile) => ({ ...NOTHING_DECLARED, calls: options.written![file.path] ?? [] }) } }),
+    ...(options.syntaxDeclarations && { memberNames: { memberNames: async (file: SourceFile) => ({ ...NOTHING_DECLARED, declarations: options.syntaxDeclarations?.[file.path] ?? [] }) } }),
     ...(options.unmodelled && { unmodelled: { extract: async (sources) => sources.map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };
@@ -2769,4 +2772,14 @@ test("shared preparation gives each impact reading the hold that owns its head s
       assert.equal(owner === outer, !liveMode);
     }
   }
+});
+
+
+test("a syntax-only callers target is retained as a seed and remains partial instead of claiming no impact", async () => {
+  const file = "src/store.ts";
+  const { callers } = setup({ nodes: [fakeNode("D", "constant", file, 1, 8)], sources: [{ path: file, content: "const D = {};" }], exports: { [HEAD]: { files: [{ path: file, blob: "1", written: true }], skipped: [] } }, syntaxDeclarations: { [file]: [{ name: "m", kind: "method", invoked: true, container: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 5, column: 3 } } }] } });
+  const fact = callersFact(await callers({ targets: [{ file, symbol: "D.m" }] }));
+  assert.equal(fact.status, "partial");
+  assert.ok(fact.status === "partial" && fact.cuts.some(({ reason, at }) => reason === "no-symbols" && at[0]?.includes("D.m")));
+  assert.ok(fact.value.seeds.some(({ symbol }) => symbol === "m"));
 });

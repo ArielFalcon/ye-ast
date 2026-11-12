@@ -353,6 +353,11 @@ for an unresolvable revision. A range whose lines hold no token does not fault: 
 (`no-token`), as [Seeds](#seeds) states. A requested line range in a file that is not a covered source (a test, an uncovered
 language, a template no component names) is a `no-extractor` cut at that file, never an empty answer.
 
+RFC-0027 U2 resolves declaration paths and range candidates from BaseReading's shared declaration model, including
+B1 declarations missing from the index. A syntax-only selected root is retained and yields a `no-symbols` cut until
+its traversal stage is supported (U4/U5); it never becomes a complete empty result. Indexed roots keep their existing
+identities and binding chain.
+
 `impact.importers` is `complete` unless a cut applies: a requested file outside the declared scope or that the index
 holds no node of (`no-extractor`, with no entry for it), a file that loads modules by a computed name outside the tests
 (`unresolved-link`, and a load the reader read with a string-literal specifier is no cut, as for impact), a staged file

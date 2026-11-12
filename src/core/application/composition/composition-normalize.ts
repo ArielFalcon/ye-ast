@@ -574,7 +574,7 @@ function outline(b: Builder, root: ReadContext, value: OutlineValue, cuts: reado
       const anchor = b.anchor(root.here, { path: declaration.file, symbol: declaration.name, line: declaration.line, endLine: declaration.endLine }, root.id, place, `${place}/file`);
       return { ...rest, declaration: { anchor, kindName: declaration.kind } };
     });
-    declared(match.file, `${pointer}/file`, match.declaration, `${pointer}/declaration`, uses, hasUnprovedUses(cuts, match.file, match.path));
+    declared(match.file, `${pointer}/file`, match.declaration, `${pointer}/declaration`, uses, hasUnprovedUses(cuts, match.file, match.path ?? match.selector));
   });
   value.files?.forEach((held, index) => {
     const pointer = `/value/files/${index}`;
