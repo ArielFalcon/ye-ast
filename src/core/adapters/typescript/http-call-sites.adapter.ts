@@ -18,7 +18,7 @@ import type { SourcePosition, SourceSpan } from "../../domain/shared/owning-body
 import { declarationCounts } from "./syntax-names.ts";
 import { defaultExportOf } from "./import-bindings.ts";
 import { bindingNames, constructorParameters, lineOf, objectOf, ownBindings, propertyOf, sourceBindings, thisClass, typeName, unwrapped } from "./syntax.ts";
-import { leafResultOf, memberOf, requestCallOf, requestGapCalls, requestShapeTrace, resultBodyAccess, summariesOf, type RequestCall, type RequestMethod, type SummaryResolver } from "./request-summaries.ts";
+import { leafResultOf, memberOf, requestCallOf, requestGapCalls, requestShapeTrace, requestShapeUrls, resultBodyAccess, summariesOf, type RequestCall, type RequestMethod, type SummaryResolver } from "./request-summaries.ts";
 import { requestValueSyntax } from "./request-value-syntax.ts";
 import { readRequestValue, valueHasParameter, valueUnknown, type RequestValue } from "./request-values.ts";
 import { addWrittenRoots, type WrittenRoots } from "./written-roots.ts";
@@ -404,7 +404,7 @@ async function readPlaced(files: readonly SourceFile[], repo: string, options?: 
         if (target === undefined) continue;
         if (target.target.status === "unknown" && occurrence !== undefined) {
           const method = occurrence[0]?.shape.method;
-          const expressions = [...new Map(occurrence.flatMap(({ shape }) => shape.url === undefined ? [] : [[JSON.stringify(shape.url), shape.url] as const])).values()];
+          const expressions = [...new Map(occurrence.flatMap(({ shape }) => requestShapeUrls(shape).map((url) => [JSON.stringify(url), url] as const))).values()];
           if (method !== undefined && occurrence.every((item) => item.shape.method === method) && expressions.some((parts) => parts.some((part) => part.kind === "text")) && occurrence.every((item) => item.shape.url !== undefined)) {
             target = { ...target, stated: { ...target.stated, method, expressions } };
           }

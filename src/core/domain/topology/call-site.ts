@@ -50,14 +50,15 @@ export function httpTargetOf(site: CallSite): HttpTarget | undefined {
 }
 
 /**
- * The request a call site states when only its base is undecided: its one URL expression starts with the undecided base
- * and states the path after it (ADR-0054). The path is relative to an authority the snapshot does not decide.
+ * The requests a call site states when only its base is undecided: each of its URL expressions that starts with the
+ * undecided base and states the path after it (ADR-0054, ADR-0057), one per distinct path. The path is relative to an
+ * authority the snapshot does not decide.
  */
-export function undecidedAuthorityTargetOf(site: CallSite): HttpTarget | undefined {
-  if (site.transport !== "http" || site.target.status === "complete" || site.stated === undefined) return undefined;
-  const [expression, ...others] = site.stated.expressions ?? [];
-  const path = expression === undefined || others.length > 0 ? undefined : routeAfterUndecidedBase(expression);
-  return path === undefined ? undefined : { method: site.stated.method, path };
+export function undecidedAuthorityTargetsOf(site: CallSite): readonly HttpTarget[] {
+  if (site.transport !== "http" || site.target.status === "complete" || site.stated === undefined) return [];
+  const { method, expressions = [] } = site.stated;
+  const paths = new Set(expressions.flatMap((expression) => routeAfterUndecidedBase(expression) ?? []));
+  return [...paths].sort(compareText).map((path) => ({ method, path }));
 }
 
 /** A message the code publishes. */

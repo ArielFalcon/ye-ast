@@ -3,7 +3,7 @@ import type { HttpMethod, HttpRoute } from "../entrypoints/http-route.ts";
 import { requestMethodOf } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
 import type { CallSiteReach } from "../shared/fact.ts";
-import { callPlaceOf, httpTargetOf, undecidedAuthorityTargetOf, type CallSite, type EventTarget, type HttpTarget } from "./call-site.ts";
+import { callPlaceOf, httpTargetOf, undecidedAuthorityTargetsOf, type CallSite, type EventTarget, type HttpTarget } from "./call-site.ts";
 import { consumption, delivers } from "./event-destination.ts";
 import { linkIdentity, type Link, type LinkBasis } from "./link.ts";
 import { callTemplate, CANNOT_MATCH, literalText, looseness, namesHost, prefixText, routeSegments, statedLength, unify, type CallTemplate, type TemplateSegment, type Unification } from "./path-template.ts";
@@ -293,15 +293,30 @@ export function matchUndecidedAuthority(site: CallSite, target: HttpTarget, repo
 }
 
 /**
- * What the join makes of an HTTP call site: its decided target by the ladder, or the path it states after an undecided
- * base by ADR-0054; nothing for a call site with neither, or one that settles nothing.
+ * What the join makes of an HTTP call site: its decided target by the ladder, or each path it states after an undecided
+ * base by ADR-0054, one answer per alternative (ADR-0057): the links of all alternatives, once per link, the ambiguity
+ * of those that tie, and the first path some route could take; nothing for a call site with neither, or one that
+ * settles nothing.
  */
 export function matchHttpCallSite(site: CallSite, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): JoinResult | undefined {
   const target = httpTargetOf(site);
   if (target !== undefined) return matchCallSite(site, target, repositories, gateways);
-  const route = undecidedAuthorityTargetOf(site);
-  const joined = route === undefined ? undefined : matchUndecidedAuthority(site, route, repositories, gateways);
-  return joined === undefined || Object.keys(joined).length === 0 ? undefined : joined;
+  const answers = undecidedAuthorityTargetsOf(site).map((route) => matchUndecidedAuthority(site, route, repositories, gateways));
+  const links = [...new Map(answers.flatMap((answer) => answer.links ?? []).map((link) => [link.id, link])).values()];
+  const ties = answers.flatMap((answer) => answer.ambiguous ?? []);
+  const undecided = answers.find((answer) => answer.undecided !== undefined)?.undecided;
+  const joined: JoinResult = {
+    ...(links.length === 0 ? {} : { links }),
+    ...(ties.length === 0 ? {} : { ambiguous: mergedAmbiguity(ties) }),
+    ...(undecided === undefined ? {} : { undecided }),
+  };
+  return Object.keys(joined).length === 0 ? undefined : joined;
+}
+
+function mergedAmbiguity(ties: readonly AmbiguousMatch[]): AmbiguousMatch {
+  const sorted = (values: readonly string[]): string[] => [...new Set(values)].sort(compareText);
+  const routes = ties.flatMap((tie) => tie.routes ?? []);
+  return { key: sorted(ties.map((tie) => tie.key)).join(", "), repos: sorted(ties.flatMap((tie) => tie.repos)), ...(routes.length === 0 ? {} : { routes: sorted(routes) }) };
 }
 
 /** Whether the ladder could link a call with this target to one of the routes: a link, a tie or a `could` on any rung. */
@@ -361,9 +376,11 @@ function ladder(target: HttpTarget, repositories: readonly RepositoryEntrypoints
 export function inferGateways(calls: readonly CallSite[], repositories: readonly RepositoryEntrypoints[], declared: readonly GatewayDeclaration[]): Gateway[] {
   const byPrefix = new Map<string, { target: HttpTarget; from: string }[]>();
   for (const call of calls) {
-    const target = httpTargetOf(call) ?? undecidedAuthorityTargetOf(call);
-    const prefix = target === undefined ? undefined : prefixOf(target);
-    if (target !== undefined && prefix !== undefined) byPrefix.set(prefix, [...(byPrefix.get(prefix) ?? []), { target, from: call.repo }]);
+    const decided = httpTargetOf(call);
+    for (const target of decided === undefined ? undecidedAuthorityTargetsOf(call) : [decided]) {
+      const prefix = prefixOf(target);
+      if (prefix !== undefined) byPrefix.set(prefix, [...(byPrefix.get(prefix) ?? []), { target, from: call.repo }]);
+    }
   }
   const inferred: Gateway[] = [];
   for (const [prefix, calling] of byPrefix) {

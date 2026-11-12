@@ -1801,3 +1801,58 @@ test("an import the file does not make from a package, shadows, rebinds or only 
 test("without a vocabulary no function value is deferred", async () => {
   assert.deepEqual(await createDeferredValueReader([])([LATER_PACKAGE, source("later.ts", "import { later } from 'later-lib'\nlater(1, () => 1)")]).of("later.ts"), []);
 });
+
+const PARTIAL_REST_CLIENT = [
+  "import { HttpClient } from '@angular/common/http'",
+  "declare const BASE: string",
+  "function sub(path: string, params?: any) { if (!params) return path; let r = path; for (const [k, v] of Object.entries(params)) { r = r.replaceAll(':' + k, v) } return r }",
+  "function resolve(p: string, options: any = {}) { const rp = sub(p, options.params); if (rp.startsWith('http://') || rp.startsWith('https://')) return rp; const base = (options.baseUrl ?? BASE).replace(/\\/+$/, ''); return `${base}/${rp.replace(/^\\/+/, '')}` }",
+  "class Rest { constructor(private http: HttpClient) {}",
+  "  get(path: string, options?: any) { const url = this.resolveUrl(path, options); return this.http.get(url) }",
+  "  resolveUrl(path: string, options?: any) { return resolve(path, { params: options?.pathParams, baseUrl: options?.baseUrl }) } }",
+];
+
+async function restExpressions(file: string, member: string, symbol: string): Promise<readonly (readonly string[])[]> {
+  const sites = await reader.of([source(file, [...PARTIAL_REST_CLIENT, member].join("\n"))], "repo");
+  return sites.filter((site) => site.symbol === symbol).flatMap((site) => site.stated?.expressions ?? []).map((parts) => parts.map((part) => part.kind === "text" ? part.text : part.kind));
+}
+
+test("a path built behind an absolute-URL guard and a leading-slash trim keeps the text it states", async () => {
+  const member = "class Orders { constructor(private rest: Rest) {} one(id: string) { return this.rest.get(`/orders/${id}`, { cache: true }) } }";
+  assert.deepEqual(await restExpressions("guard.ts", member, "Orders.one"), [["unknown", "/orders/", "runtime"]]);
+});
+
+test("request options written with shorthand or a conditional spread leave the request present with its route", async () => {
+  const options = (written: string) => restExpressions("options.ts", `class Orders { constructor(private rest: Rest) {} list(q: string, params: any) { return this.rest.get('/orders', ${written}) } }`, "Orders.list");
+  assert.deepEqual(await options("{ params, cache: true }"), [["unknown", "/orders"]]);
+  assert.deepEqual(await options("{ ...(q ? { params: { q } } : {}) }"), [["unknown", "/orders"]]);
+});
+
+test("a single undecided branch of a path becomes two alternatives and two independent branches become none", async () => {
+  const query = (written: string) => restExpressions("branch.ts", `class Articles { constructor(private rest: Rest) {} query(cfg: any, other: any) { return this.rest.get(${written}) } }`, "Articles.query");
+  assert.deepEqual(await query("'/articles' + (cfg.type === 'FEED' ? '/feed' : '')"), [["unknown", "/articles/feed"], ["unknown", "/articles"]]);
+  assert.deepEqual(await query("'/articles' + (cfg.type === 'FEED' ? '/feed' : '') + (other.x ? '/a' : '')"), [["unknown", "/articles", "unknown", "unknown"]]);
+});
+
+test("a spread member overrides the earlier member of the same name only when its condition holds", async () => {
+  const target = async (condition: string) => {
+    const member = `class Orders { constructor(private rest: Rest) {} list() { return this.rest.get('/orders', { baseUrl: 'http://a', ...(${condition} ? { baseUrl: 'http://b' } : {}) }) } }`;
+    const sites = await reader.of([source("spread.ts", [...PARTIAL_REST_CLIENT, member].join("\n"))], "repo");
+    return sites.filter((site) => site.symbol === "Orders.list").map((site) => (site.target.status === "complete" && "path" in site.target.value ? site.target.value.path : site.target.status));
+  };
+  assert.deepEqual([await target("true"), await target("false")], [["http://b/orders"], ["http://a/orders"]]);
+});
+
+test("a spread of anything but an object literal, a shorthand member and a prototype member keep their meaning", async () => {
+  const target = async (options: string) => {
+    const member = `class Orders { constructor(private rest: Rest) {} list(q: string, extra: any) { const baseUrl = 'http://s'; return this.rest.get('/orders', ${options}) } }`;
+    const sites = await reader.of([source("members.ts", [...PARTIAL_REST_CLIENT, member].join("\n"))], "repo");
+    return sites.filter((site) => site.symbol === "Orders.list").map((site) => (site.target.status === "complete" && "path" in site.target.value ? site.target.value.path : site.target.status));
+  };
+  assert.deepEqual(await target("{ baseUrl }"), ["http://s/orders"]);
+  const unsubstituted = await restExpressions("proto.ts", "class Orders { constructor(private rest: Rest) {} list() { return this.rest.get('/orders', { __proto__: { pathParams: { id: '1' } } }) } }", "Orders.list");
+  assert.notDeepEqual(unsubstituted, [["unknown", "/orders"]]);
+  for (const [options, claimed] of [["{ baseUrl: 'http://a', ...extra }", "http://a/orders"], ["{ baseUrl: 'http://a', ...(q ? extra : {}) }", "http://a/orders"], ["{ __proto__: { baseUrl: 'http://x' } }", "http://x/orders"]] as const) {
+    assert.ok(!(await target(options)).includes(claimed), options);
+  }
+});

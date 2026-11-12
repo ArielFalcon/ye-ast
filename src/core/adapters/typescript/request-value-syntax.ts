@@ -55,6 +55,36 @@ export function requestValueSyntax(deps: ValueSyntaxDeps): (node: ts.Expression)
     for (let index = nodes.length - 1; index >= 0; index--) value = await statement(nodes[index]!, value, trail);
     return value;
   };
+  /** The members an object literal states in order; a spread is read only from an object literal or a conditional of two. */
+  const objectFields = async (literal: ts.ObjectLiteralExpression, trail: ReadonlySet<ts.Node>): Promise<Map<string, RequestValue> | undefined> => {
+    const fields = new Map<string, RequestValue>();
+    for (const property of literal.properties) {
+      if (ts.isShorthandPropertyAssignment(property)) fields.set(property.name.text, await expression(property.name, trail));
+      else if (ts.isPropertyAssignment(property) && !ts.isComputedPropertyName(property.name) && property.name.text !== "__proto__") fields.set(property.name.text, await expression(property.initializer, trail));
+      else if (ts.isSpreadAssignment(property)) {
+        if (!(await spread(fields, unwrapped(property.expression), trail))) return undefined;
+      } else return undefined;
+    }
+    return fields;
+  };
+  const spread = async (into: Map<string, RequestValue>, source: ts.Expression, trail: ReadonlySet<ts.Node>): Promise<boolean> => {
+    if (ts.isObjectLiteralExpression(source)) {
+      const members = await objectFields(source, trail);
+      members?.forEach((value, key) => into.set(key, value));
+      return members !== undefined;
+    }
+    if (!ts.isConditionalExpression(source)) return false;
+    const yes = unwrapped(source.whenTrue), no = unwrapped(source.whenFalse);
+    if (!ts.isObjectLiteralExpression(yes) || !ts.isObjectLiteralExpression(no)) return false;
+    const [whenYes, whenNo] = [await objectFields(yes, trail), await objectFields(no, trail)];
+    if (whenYes === undefined || whenNo === undefined) return false;
+    const condition = await expression(source.condition, trail);
+    for (const key of new Set([...whenYes.keys(), ...whenNo.keys()])) {
+      const previous = into.get(key) ?? ABSENT_VALUE;
+      into.set(key, { kind: "choose", condition, yes: whenYes.get(key) ?? previous, no: whenNo.get(key) ?? previous });
+    }
+    return true;
+  };
   const compile = async (written: ts.Expression, trail: ReadonlySet<ts.Node>): Promise<RequestValue> => {
     const node = unwrapped(written);
     if (node !== written) return expression(node, trail);
@@ -76,12 +106,8 @@ export function requestValueSyntax(deps: ValueSyntaxDeps): (node: ts.Expression)
     }
     if (ts.isObjectLiteralExpression(node)) {
       if (!deps.propertiesSafe) return unknownAt(node);
-      const fields = new Map<string, RequestValue>();
-      for (const property of node.properties) {
-        if (ts.isSpreadAssignment(property) || !ts.isPropertyAssignment(property) || ts.isComputedPropertyName(property.name) || property.name.text === "__proto__") return unknownAt(node);
-        fields.set(property.name.text, await expression(property.initializer, trail));
-      }
-      return { kind: "object", fields };
+      const fields = await objectFields(node, trail);
+      return fields === undefined ? unknownAt(node) : { kind: "object", fields };
     }
     if (ts.isPropertyAccessExpression(node)) {
       if (node.expression.kind === ts.SyntaxKind.ThisKeyword) return deps.constant(node);

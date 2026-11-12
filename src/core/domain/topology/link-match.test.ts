@@ -4,7 +4,7 @@ import type { Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { CallSite, EventTarget, HttpTarget } from "../../domain/topology/call-site.ts";
 import type { RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
-import { excludedFrom, inferGateways, matchCallSite, matchDeclaredOperation, matchEventCallSite, prefixOf } from "../../domain/topology/link-match.ts";
+import { excludedFrom, inferGateways, matchCallSite, matchDeclaredOperation, matchEventCallSite, matchHttpCallSite, prefixOf } from "../../domain/topology/link-match.ts";
 
 function route(method: HttpRoute["method"], path: string, handler = { path: "src/main/java/app/Orders.java", symbol: "Orders.orders", line: 10 }, basePath = {}): HttpRoute {
   return { kind: "http-route", name: `${method} ${path}`, method, path, handler, basePath: { status: "complete", value: { default: basePath, profiles: {} }, evidence: [] } };
@@ -488,4 +488,19 @@ test("a less specific possible route cannot displace the established route in th
   const call = site("/orders/user-{}");
   const routes = [route("GET", "/orders/user-{id}"), route("GET", "/{section}/user-a")];
   assert.equal(joined(matchCallSite(call, targetOf(call), repositories(routes), [])), "exact 0.6 -> orders GET /orders/user-{id}");
+});
+
+function stating(...paths: readonly (readonly ["text" | "runtime", string])[][]): CallSite {
+  const base = { kind: "unknown", cause: "destination-undecidable", evidence: [] } as const;
+  return { ...site("/unused"), target: { status: "unknown", reason: "unresolved", evidence: [] }, stated: { method: "GET", expressions: paths.map((parts) => [base, ...parts.map(([kind, text]) => (kind === "text" ? { kind, text } as const : { kind } as const))]) } };
+}
+
+test("a request with several URL expressions makes one link for alternatives landing on one route and reports the first path some route could take", () => {
+  const orders = repositories([route("GET", "/v1/orders/{id}")]);
+  const same = matchHttpCallSite(stating([["text", "/orders/"], ["runtime", ""]], [["text", "/v1/orders/"], ["runtime", ""]]), orders, []);
+  assert.equal(same?.links?.length, 1);
+
+  const users = repositories([route("GET", "/aa/user-admin"), route("GET", "/zz/user-admin")]);
+  const could = matchHttpCallSite(stating([["text", "/zz/user-"], ["runtime", ""]], [["text", "/aa/user-"], ["runtime", ""]]), users, []);
+  assert.deepEqual(could, { undecided: "/aa/user-{}" });
 });

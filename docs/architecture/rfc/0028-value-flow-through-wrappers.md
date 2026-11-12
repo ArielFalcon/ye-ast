@@ -321,6 +321,14 @@ represented prototype replacement withdraw that proof. Supported string operatio
 their builtins. A slash-trimming regex must be a local literal that neither escapes nor is modified. Unsupported
 statements, including loops, stay unknown; an earlier proven return can avoid that branch.
 
+As built ([ADR-0057](../adr/0057-partial-request-strings-keep-what-they-state.md)): a partial string is the `text` value.
+`startsWith` and slash-trimming read its stated literal prefix and stay undecided where a hole could change the answer,
+so a guard such as `isAbsolute(path) ? path : base + '/' + trim(path)` keeps the text the path states. An object literal
+reads shorthand members and the spread of an object literal or of a conditional of two object literals (each key a
+choice between the arm's value and the earlier member); any other spread keeps it unknown. When exactly one undecided
+choice with differing outcomes reaches the URL, the reduction also reads the URL once per outcome (`alternatives`);
+two such choices read none.
+
 `RequestShape.unresolved` retains an undecidable destination part independently of parameter holes. A known suffix may
 establish the first supplied request boundary while its base remains unknown, with the base's evidence preserved.
 Replacement branches and opaque transformations never gain a parameter hole from merely mentioning an argument.

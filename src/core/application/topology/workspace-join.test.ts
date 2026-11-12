@@ -100,3 +100,28 @@ test("a request with an undecided base under a gateway prefix links only to the 
 
   assert.deepEqual([described(joined(repositories, [{ prefix: "orders-api", repo: "orders" }])), inferred], [["link orders POST /orders/checkout suffix 0.5 undecided"], [{ prefix: "orders-api", repo: "orders", basis: "route-overlap" }]]);
 });
+
+function alternatives(method: HttpRoute["method"], ...expressions: readonly (readonly RequestUrlPart[])[]): CallSite {
+  const site = requesting(method);
+  return { ...site, stated: { method, expressions } };
+}
+
+test("a request that states several URL expressions links each one that states its route, once per route", () => {
+  const api = repository("api", [], [serving("GET", "/api/articles/feed", "Articles.feed"), serving("GET", "/api/articles", "Articles.list")]);
+  const both = repository("web", [alternatives("GET", [UNDECIDED_BASE, text("/articles/feed")], [UNDECIDED_BASE, text("/articles")])], []);
+  const same = repository("web", [alternatives("GET", [UNDECIDED_BASE, text("/articles"), RUNTIME], [UNDECIDED_BASE, text("/articles")])], []);
+  const onlyFeed = repository("web", [alternatives("GET", [UNDECIDED_BASE, text("/articles/feed")], [UNDECIDED_BASE, text("/articles/feed")])], []);
+
+  assert.deepEqual(described(joined([both, api])), ["link api GET /api/articles suffix 0.5 undecided", "link api GET /api/articles/feed suffix 0.5 undecided"]);
+  assert.equal(described(joined([onlyFeed, api])).length, 1);
+  assert.equal(described(joined([same, repository("api", [], [serving("GET", "/api/articles", "Articles.list")])])).length, 1);
+});
+
+test("an alternative that is ambiguous across repositories does not block the alternative that links", () => {
+  const web = repository("web", [alternatives("GET", [UNDECIDED_BASE, text("/orders/"), RUNTIME], [UNDECIDED_BASE, text("/profiles/me")])], []);
+  const orders = repository("orders", [], [serving("GET", "/orders/{id}", "Orders.get")]);
+  const archive = repository("archive", [], [serving("GET", "/v1/orders/{id}", "Archive.get")]);
+  const profiles = repository("profiles", [], [serving("GET", "/api/profiles/me", "Profiles.me")]);
+
+  assert.deepEqual(described(joined([web, orders, archive, profiles])), ["link profiles GET /api/profiles/me suffix 0.5 undecided", "ambiguous archive,orders"]);
+});

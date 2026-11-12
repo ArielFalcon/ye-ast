@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readRequestValue, valueUnknown, UNKNOWN_VALUE, type RequestValue } from "./request-values.ts";
+import { readRequestValue, valueUnknown, UNKNOWN_VALUE, type RequestValue, type RequestValueRead } from "./request-values.ts";
 
 test("URL components keep unknown provenance and encoded parameters through substitution", () => {
   const evidence = [{ path: "config.ts", line: 7 }];
@@ -71,4 +71,36 @@ test("source provenance fills generic uncertainty without replacing specific cau
   assert.deepEqual(known.url, [{ kind: "text", text: "/api/other" }]);
   const specific = readRequestValue({ kind: "provenance", gap: { cause: "dispatch-disagreement", evidence }, value: valueUnknown([{ path: "cycle.ts", line: 3 }], "recursive") });
   assert.equal(specific.unresolved?.cause, "recursive");
+});
+
+const lit = (value: string): RequestValue => ({ kind: "literal", value });
+const plus = (...operands: RequestValue[]): RequestValue => operands.reduce((left, right) => ({ kind: "operation", operator: "+", operands: [left, right] }));
+
+test("a partial string decides startsWith and trim-start by its stated prefix and stays undecided where a hole could change the answer", () => {
+  const base = valueUnknown([{ path: "base.ts", line: 1 }]);
+  const resolved = (path: RequestValue): RequestValue => ({
+    kind: "choose",
+    condition: { kind: "operation", operator: "||", operands: [{ kind: "operation", operator: "startsWith", operands: [path, lit("http://")] }, { kind: "operation", operator: "startsWith", operands: [path, lit("https://")] }] },
+    yes: path,
+    no: plus(base, lit("/"), { kind: "operation", operator: "trim-start", operands: [path] }),
+  });
+  const hole: RequestValue = { kind: "parameter", index: 0 };
+  assert.deepEqual(readRequestValue(resolved(plus(lit("/orders/"), hole))).url, [
+    { kind: "unknown", cause: "destination-undecidable", evidence: [{ path: "base.ts", line: 1 }] }, { kind: "text", text: "/orders/" }, { kind: "runtime" },
+  ]);
+  for (const path of [plus(hole, lit("/orders")), plus(lit("h"), hole)]) {
+    assert.ok(readRequestValue(resolved(path)).url.every((part) => part.kind === "unknown"));
+  }
+  assert.equal(readRequestValue(resolved(plus(lit("//"), hole))).url.at(-1)?.kind, "unknown");
+  assert.deepEqual(readRequestValue(resolved(lit("http"))).url, [{ kind: "unknown", cause: "destination-undecidable", evidence: [{ path: "base.ts", line: 1 }] }, { kind: "text", text: "/http" }]);
+  assert.deepEqual(readRequestValue(resolved(plus(lit("http://"), hole))).url, [{ kind: "text", text: "http://" }, { kind: "runtime" }]);
+});
+
+test("one undecided condition yields an alternative per outcome only when the outcomes state different URLs", () => {
+  const condition = valueUnknown([{ path: "c.ts", line: 2 }]);
+  const split = (yes: RequestValue, no: RequestValue): RequestValueRead => readRequestValue(plus(lit("/articles"), { kind: "choose", condition, yes, no }));
+  assert.deepEqual(split(lit("/feed"), lit("")).alternatives?.map((url) => url.map((part) => (part.kind === "text" ? part.text : part.kind))), [["/articles/feed"], ["/articles"]]);
+  assert.equal(split({ kind: "literal", value: 1 }, { kind: "literal", value: 2 }).alternatives, undefined);
+  const twice = readRequestValue(plus(lit("/a"), { kind: "choose", condition, yes: lit("/b"), no: lit("") }, { kind: "choose", condition, yes: lit("/c"), no: lit("") }));
+  assert.equal(twice.alternatives, undefined);
 });

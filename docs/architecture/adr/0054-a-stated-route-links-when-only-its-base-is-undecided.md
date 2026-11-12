@@ -5,6 +5,7 @@
   deployment configuration may link by its route: "Link con basis suffix (Recomendado)".
 - Supersedes: the RFC-0011 "Completeness" row "a call site that cannot be told from a candidate, because the evaluator
   cannot resolve the base URL", which kept such a call site a cut unless a gateway prefix was declared.
+- Superseded in part by: ADR-0057, decision 1 only (each URL expression that states its route).
 - Related: ADR-0042, ADR-0051, ADR-0052, ADR-0053, RFC-0011
 
 ## Context

@@ -237,6 +237,7 @@ interface ShapeTrace {
 const SHAPE_TRACES = new WeakMap<RequestShape, ShapeTrace>();
 const SHAPE_ENCODINGS = new WeakMap<RequestShape, readonly boolean[]>();
 const SHAPE_VALUES = new WeakMap<RequestShape, RequestValue>();
+const SHAPE_ALTERNATIVES = new WeakMap<RequestShape, readonly (readonly RequestUrlPart[])[]>();
 const GAP_CALLS = new WeakMap<SummaryGap, Set<ts.CallExpression>>();
 function atCall(gap: SummaryGap, call: ts.CallExpression): SummaryGap {
   const calls = GAP_CALLS.get(gap) ?? new Set<ts.CallExpression>();
@@ -246,6 +247,10 @@ function atCall(gap: SummaryGap, call: ts.CallExpression): SummaryGap {
 }
 export function requestGapCalls(gap: SummaryGap): ReadonlySet<ts.CallExpression> | undefined {
   return GAP_CALLS.get(gap);
+}
+/** The URL expressions a shape states: one per outcome of its single undecided condition, otherwise its one URL. */
+export function requestShapeUrls(shape: RequestShape): readonly (readonly RequestUrlPart[])[] {
+  return SHAPE_ALTERNATIVES.get(shape) ?? (shape.url === undefined ? [] : [shape.url]);
 }
 export function requestShapeTrace(shape: RequestShape): ShapeTrace | undefined {
   return SHAPE_TRACES.get(shape);
@@ -741,6 +746,7 @@ function substitute(shape: RequestShape, edge: Edge, conditionalHole = false): S
   const when = decided?.condition;
   const result: RequestShape = when === undefined ? { transport: shape.transport, method, path, holes, body, hops } : { transport: shape.transport, method, path, holes, body, hops, when };
   if (reduced?.url !== undefined) result.url = reduced.url;
+  if (reduced?.alternatives !== undefined) SHAPE_ALTERNATIVES.set(result, reduced.alternatives);
   const unresolved = reduced === undefined ? shape.unresolved : reduced.unresolved;
   if (unresolved !== undefined) result.unresolved = unresolved;
   if (value !== undefined) SHAPE_VALUES.set(result, value);

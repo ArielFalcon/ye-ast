@@ -4,7 +4,7 @@ import { compareText } from "../shared/code-node.ts";
 import { TRUST_MODES, type TrustMode } from "../shared/fact.ts";
 import type { RepositoryEvidence } from "../shared/repository-evidence.ts";
 import type { CallSite } from "../topology/call-site.ts";
-import { callSiteEvidence, httpTargetOf, undecidedAuthorityTargetOf, unresolvedCallSite } from "../topology/call-site.ts";
+import { callSiteEvidence, httpTargetOf, undecidedAuthorityTargetsOf, unresolvedCallSite } from "../topology/call-site.ts";
 import { inferGateways, prefixOf, servedBehindGateway, type GatewayDeclaration, type RepositoryEntrypoints } from "../topology/link-match.ts";
 import { sortEvidence, type NameCandidate, type OutwardKind, type OutwardName, type RepositoryOutwardName } from "../topology/outward-name.ts";
 import type { RepositoryResolution } from "../topology/remote-snapshot.ts";
@@ -183,11 +183,11 @@ function gatewayDecisions(input: DecisionInput): Decision[] {
   const named = new Set(input.repositories.map((repository) => repository.repo));
   const calls = input.repositories.flatMap((repository) =>
     repository.callSites.flatMap((site) => {
-      const target = httpTargetOf(site) ?? undecidedAuthorityTargetOf(site);
-      if (target === undefined) return [];
-      const prefix = prefixOf(target);
-      if (prefix === undefined || named.has(prefix) || served.has(prefix)) return [];
-      return [{ prefix, site, target }];
+      const decided = httpTargetOf(site);
+      return (decided === undefined ? undecidedAuthorityTargetsOf(site) : [decided]).flatMap((target) => {
+        const prefix = prefixOf(target);
+        return prefix === undefined || named.has(prefix) || served.has(prefix) ? [] : [{ prefix, site, target }];
+      });
     }),
   );
   return groupsOf(calls, (call) => call.prefix).map(([prefix, under]) => {
@@ -198,7 +198,7 @@ function gatewayDecisions(input: DecisionInput): Decision[] {
       });
       return matched.length === 0 ? [] : [{ value: repo, evidence: sortEvidence(matched), recommended: false }];
     });
-    return decisionOf({ kind: "gateway", subject: prefix, evidence: under.map(({ site }) => ({ ...callSiteEvidence(site), repo: site.repo })), options, allowsFreeText: false, required: false });
+    return decisionOf({ kind: "gateway", subject: prefix, evidence: [...new Set(under.map(({ site }) => site))].map((site) => ({ ...callSiteEvidence(site), repo: site.repo })), options, allowsFreeText: false, required: false });
   });
 }
 

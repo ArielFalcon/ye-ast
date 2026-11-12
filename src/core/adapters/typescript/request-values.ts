@@ -31,6 +31,8 @@ export interface RequestValueRead {
   encodings: readonly boolean[];
   supplied: readonly number[];
   unresolved?: SummaryGap;
+  /** The URL each outcome of the one undecided condition states; present only when exactly one condition splits the value. */
+  alternatives?: readonly (readonly RequestUrlPart[])[];
 }
 
 export const UNKNOWN_VALUE: Extract<RequestValue, { kind: "unknown" }> = { kind: "unknown", gap: { cause: "destination-undecidable", evidence: [] } };
@@ -81,6 +83,15 @@ export function valueMayBeObject(root: RequestValue): boolean {
 }
 
 export function readRequestValue(root: RequestValue, work?: { evaluations: number; inspections?: number }): RequestValueRead {
+  const first = reduceRequestValue(root, work);
+  if (first.splits !== 1) return first.read;
+  const urls = [true, false].map((outcome) => reduceRequestValue(root, work, outcome).read.url);
+  return new Set(urls.map((url) => JSON.stringify(url))).size === 2 ? { ...first.read, alternatives: urls } : first.read;
+}
+
+/** `outcome` forces the one undecided condition that tells two values apart; `splits` counts those conditions. */
+function reduceRequestValue(root: RequestValue, work: { evaluations: number; inspections?: number } | undefined, outcome?: boolean): { read: RequestValueRead; splits: number } {
+  let splits = 0;
   const empty: readonly Value[] = [];
   const environments = new Map<string, readonly Value[]>();
   const ids = new WeakMap<Value, number>();
@@ -104,6 +115,24 @@ export function readRequestValue(root: RequestValue, work?: { evaluations: numbe
     }
     dependencies.set(term, found);
     return found;
+  };
+  const startsWithOf = (prefix: StatedPrefix, needle: string): Value | undefined => {
+    const shared = Math.min(prefix.text.length, needle.length);
+    if (prefix.text.slice(0, shared) !== needle.slice(0, shared)) return scalar(false);
+    if (prefix.text.length >= needle.length) return scalar(true);
+    return prefix.closed ? scalar(false) : undefined;
+  };
+  const trimmedStart = (value: Extract<Value, { kind: "text" }>): Value | undefined => {
+    const parts = flattened(value);
+    let index = 0;
+    while (index < parts.length) {
+      const part = parts[index]!;
+      if (part.kind !== "literal" || typeof part.value !== "string") return undefined;
+      const kept = part.value.replace(/^\/+/, "");
+      if (kept !== "") return { kind: "text", parts: [{ ...part, value: kept }, ...parts.slice(index + 1)], supplied: value.supplied };
+      index++;
+    }
+    return { kind: "literal", value: "", supplied: value.supplied };
   };
   const unknown = (gap = UNKNOWN_VALUE.gap): Value => ({ kind: "unknown", gap, supplied: [] });
   const uncertainty = (...values: Value[]): Value => {
@@ -174,7 +203,11 @@ export function readRequestValue(root: RequestValue, work?: { evaluations: numbe
         if (condition !== undefined) result = evaluate(condition ? term.yes : term.no, args);
         else {
           const yes = evaluate(term.yes, args), no = evaluate(term.no, args);
-          result = sameValue(yes, no) ? { ...yes, supplied: supplied([yes, no]) } : { ...uncertainty(conditionValue, yes, no), supplied: yes.supplied.length > 0 && no.supplied.length > 0 ? supplied([yes, no]) : [] };
+          if (sameValue(yes, no)) result = { ...yes, supplied: supplied([yes, no]) };
+          else {
+            splits++;
+            result = outcome === undefined ? { ...uncertainty(conditionValue, yes, no), supplied: yes.supplied.length > 0 && no.supplied.length > 0 ? supplied([yes, no]) : [] } : outcome ? yes : no;
+          }
         }
         break;
       }
@@ -208,9 +241,11 @@ export function readRequestValue(root: RequestValue, work?: { evaluations: numbe
           if (first.kind === "literal" && second.kind === "literal" && typeof first.value === "string" && typeof second.value === "string") result = { kind: "literal", value: first.value + second.value, supplied: supplied([first, second]) };
           else result = { kind: "text", parts: [first, second], supplied: supplied([first, second]) };
         } else if (term.operator === "startsWith") {
-          result = first.kind === "literal" && typeof first.value === "string" && second.kind === "literal" && typeof second.value === "string" ? scalar(first.value.startsWith(second.value)) : uncertainty(first, second);
+          const prefix = statedPrefix(first);
+          result = prefix === undefined || second.kind !== "literal" || typeof second.value !== "string" ? uncertainty(first, second) : startsWithOf(prefix, second.value) ?? uncertainty(first, second);
         } else if (term.operator === "encode" && first.kind === "parameter") result = { ...first, encoded: true };
         else if (first.kind === "literal" && typeof first.value === "string" && term.operator === "encode" && !first.value.isWellFormed()) result = { ...unknown(), supplied: first.supplied };
+        else if (first.kind === "text" && term.operator === "trim-start") result = trimmedStart(first) ?? uncertainty(first);
         else if (first.kind === "literal" && typeof first.value === "string") {
           const text = term.operator === "encode" ? encodeURIComponent(first.value) : term.operator === "trim-start" ? first.value.replace(/^\/+/, "") : first.value.replace(/\/+$/, "");
           result = { kind: "literal", value: text, supplied: first.supplied };
@@ -250,7 +285,23 @@ export function readRequestValue(root: RequestValue, work?: { evaluations: numbe
   }
   const evidence = [...new Map(gaps.flatMap((gap) => gap.evidence).map((item) => [JSON.stringify(item), item])).values()];
   const unresolved = gaps.length === 0 ? undefined : { cause: prevailingCause(gaps.map((gap) => gap.cause)) ?? "destination-undecidable", evidence };
-  return { text, holes, encodings, supplied: value.supplied, url: compactRequestUrl(url), ...(unresolved === undefined ? {} : { unresolved }) };
+  return { splits, read: { text, holes, encodings, supplied: value.supplied, url: compactRequestUrl(url), ...(unresolved === undefined ? {} : { unresolved }) } };
+}
+
+interface StatedPrefix { text: string; closed: boolean }
+
+function flattened(value: Value): Value[] {
+  return value.kind === "text" ? value.parts.flatMap(flattened) : [value];
+}
+
+/** The leading literal characters a value states, and whether they are all of it. */
+function statedPrefix(value: Value): StatedPrefix | undefined {
+  if (value.kind === "literal") return typeof value.value === "string" ? { text: value.value, closed: true } : undefined;
+  if (value.kind !== "text") return undefined;
+  const parts = flattened(value);
+  const literals = parts.findIndex((part) => part.kind !== "literal" || typeof part.value !== "string");
+  const leading = (literals < 0 ? parts : parts.slice(0, literals)).map((part) => (part.kind === "literal" ? part.value : ""));
+  return { text: leading.join(""), closed: literals < 0 };
 }
 
 function sameValue(a: Value, b: Value): boolean {
