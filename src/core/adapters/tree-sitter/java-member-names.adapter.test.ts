@@ -6,6 +6,11 @@ import { createJavaMemberNames } from "./java-member-names.adapter.ts";
 
 const read = (lines: readonly string[], path = "src/A.java", reader = createJavaMemberNames(createJavaParser)) => reader.memberNames({ path, content: lines.join("\n") });
 
+test("Java method and constructor references name their referenced declarations", async () => {
+  const result = await read(["class A { void run() { list.map(this::fmt); list.map(A::new); } String fmt(String s) { return s; } }"]);
+  assert.deepEqual(result.calls?.filter((call) => call.kind === "references").map(({ name, callee }) => [name, callee]), [["fmt", "fmt"], ["A", "A"]]);
+});
+
 test("declarations retain method and constructor spans and their exact type containers", async () => {
   const answer = await read(["class Box {", "  Box() {}", "  void run() {}", "  interface Port { void send(); }", "}"]);
   assert.deepEqual(answer.declarations.map(({ name, kind, span, container }) => [name, kind, span.start, container]), [

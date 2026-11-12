@@ -449,18 +449,27 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       await settleReceiver(reference, target.name, named, proof, binding.target, true, () => void cuts.push(unresolvedAt(reference, named)));
     }
     for (const reference of ambiguous) cuts.push(unresolvedAt(reference, [], "unowned"));
-    const unsettled = unsettledBy([...indexed, ...missing], called);
+    const references = [...missing, ...deferredOnly].filter((reference) => reference.kind === "references");
+    const unsettled = unsettledBy([...indexed, ...missing.filter((reference) => reference.kind !== "references")], called);
     const bound = await bindings.bindCalls(unsettled.map((reference) => ({ body: node, reference })), signal);
     for (const [index, reference] of unsettled.entries()) await settleBinding(reference, bound[index]!);
     /**
      * A call inside a function value the body does not run that no record matches runs later, if at all (R8): a deferred
      * step where the base binds it to a declaration, and otherwise left out, as an unrecorded call is today.
      */
-    const later = await bindings.boundCalls(deferredOnly.map((reference) => ({ body: node, reference })), signal);
-    for (const [index, reference] of deferredOnly.entries()) {
+    const deferredCalls = deferredOnly.filter((reference) => reference.kind !== "references");
+    const later = await bindings.boundCalls(deferredCalls.map((reference) => ({ body: node, reference })), signal);
+    for (const [index, reference] of deferredCalls.entries()) {
       const binding = later[index]!;
       const target = (binding.kind === "declaration" && binding.link !== "bound-receiver") || binding.kind === "receiver" ? binding.target : undefined;
       if (target !== undefined && !(reference.kind === "instantiates" && isClassKind(target.kind))) children.push(childAt(target, reference.line, reference.column, reference.name, binding.kind === "declaration" && binding.link === "own-member" ? "own-member" : "call", true));
+    }
+    const referenced = await bindings.boundCalls(references.map((reference) => ({ body: node, reference })), signal);
+    for (const [index, reference] of references.entries()) {
+      const binding = referenced[index]!;
+      const target = binding.kind === "declaration" || binding.kind === "receiver" ? binding.target : undefined;
+      if (target !== undefined) children.push(childAt(target, reference.line, reference.column, reference.name, "reference", true));
+      else cuts.push(callCut(placeAt(node.file, reference.line, reference.name), binding.kind === "unbound" || binding.kind === "receiver" ? binding.candidates.map(candidateOf) : []));
     }
     if (constructed.length > 0) {
       const sites = constructed.map(({ reference, holds }): ResolvedNameSite => ({ file: reference.file, line: holds.line, column: holds.column, kind: "instantiates", name: holds.name }));

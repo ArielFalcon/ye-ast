@@ -717,3 +717,7 @@ against a finding. Where a finding had two parts, the response names the part ea
   language pack names a library.
 - A Java declaration's written types are references to those types' declarations (B4's Java step), and a Java type target
   stays `partial` until that step reads them.
+
+Java method and constructor references are written references | U2, RFC-0024 U2/U4 (ADR-0044 V0a/V0b) | 260 | `trace:+`, `callers:+` |
+| U7 | A Java anonymous class's initializer is execution, not a function value | L1b | 80 | `trace:+` |
+| U8 | Java type references from declarations (B4's Java step); removes U0's cut | U0, L2, the existing B4 key | 340 | `callers:+`, `impact:+` |

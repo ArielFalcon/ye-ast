@@ -247,7 +247,7 @@ function alignRecords(records: readonly CallRecord[], syntax: DeclaredMemberName
   const { calls } = syntax;
   const alignments = records.map((record): Alignment => {
     if (calls === undefined || record.synthesized) return { kind: "kept" };
-    const at = callsAtPlace(calls, record, record.line === null ? undefined : lineOf(record.line));
+    const at = callsAtPlace(calls.filter((call) => call.kind !== "references"), record, record.line === null ? undefined : lineOf(record.line));
     const agreeing = agreeingCalls(at, record);
     for (const call of agreeing) accounted.add(callKey(call));
     const [call] = agreeing;

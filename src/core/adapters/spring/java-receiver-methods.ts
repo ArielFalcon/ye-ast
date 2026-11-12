@@ -91,6 +91,11 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         const invocations = source?.invocations.get(callKey(site.line, site.column, site.member)) ?? [];
         if (source === undefined || invocations.length !== 1) continue;
         const invocation = invocations[0]!;
+        if (invocation.type === "method_reference") {
+          const named = proves ? resolver.referenceOf(invocation, source.file) : undefined;
+          results[index] = named === undefined ? UNPROVEN : "method" in named ? placedAt(named.method) : { kind: "unproven", candidates: named.candidates.map(placeOf).sort(byPlace) };
+          continue;
+        }
         if (invocation.type === "explicit_constructor_invocation") {
           const chained = resolver.constructorOf(invocation, source.file);
           results[index] = chained === undefined ? UNKNOWN : chained === "unproven" || !proves ? UNPROVEN : placedAt(chained);
@@ -281,6 +286,31 @@ export function createResolver(project: JavaProject) {
     return held.typeName && !offered.method.modifiers.includes("static") ? undefined : { method: offered.method, bound: held.bound };
   };
 
+  const referenceOf = (reference: Node, file: JavaFile): { method: MethodDecl } | { candidates: readonly MethodDecl[] } | undefined => {
+    const object = reference.namedChildren[0];
+    if (object === undefined || object === null) return undefined;
+    const constructor = reference.children.some((child) => child?.type === "new");
+    const name = constructor ? undefined : reference.namedChildren.at(-1)?.text;
+    let type: TypeDecl | undefined;
+    if (object.type === "this") type = thisType(reference, file, project);
+    else {
+      const local = object.type === "identifier" ? localBinding(object) : undefined;
+      const fieldName = object.type === "field_access" && object.childForFieldName("object")?.type === "this" ? object.childForFieldName("field")?.text : object.type === "identifier" ? object.text : undefined;
+      const field = local === undefined && fieldName !== undefined ? fieldsOf(enclosingBody(object) ?? file.root).filter((candidate) => candidate.childForFieldName("name")?.text === fieldName) : [];
+      const declaration = local ?? (field.length === 1 ? field[0] : undefined);
+      const annotation = declaration?.type === "variable_declarator" ? declaration.parent?.childForFieldName("type") : declaration?.childForFieldName("type");
+      type = annotation == null ? (declaration === undefined ? repositoryType(object, file, object) : undefined) : repositoryType(annotation, file, annotation);
+    }
+    if (type === undefined) return undefined;
+    if (!constructor && (name === undefined || OBJECT_METHODS.has(name))) return undefined;
+    const above = declaredHierarchy(type);
+    if (!constructor && above.gaps.some((gap) => !memberless.has(clauseKey(gap.file, gap.node)))) return undefined;
+    const candidates = constructor ? type.constructors : above.types.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
+    if (candidates.some((method) => reachability(method, file) === "unknown" || (method.modifiers.includes("private") && method.owner !== enclosingType(reference, file, project)))) return undefined;
+    const reachable = candidates.filter((method) => reachability(method, file) === "reachable");
+    return reachable.length === 1 ? { method: reachable[0]! } : { candidates: reachable };
+  };
+
   /** The repository type a method declares it returns: none for a type variable, an array, a primitive or a type outside the repository. */
   const returnTypeOf = (method: MethodDecl): TypeDecl | undefined => {
     const type = method.node.childForFieldName("type");
@@ -375,6 +405,7 @@ export function createResolver(project: JavaProject) {
 
   return {
     constructorOf,
+    referenceOf,
     hasDeclaredReceiver: (invocation: Node, source: ReceiverSource): boolean => receiverOf(invocation, source) !== undefined,
     /** The method the call names through its declared receiver and one settled signature; dispatch decides its body separately. */
     methodOf: methodNamed,
@@ -431,8 +462,9 @@ function invocationsOf(root: Node): ReadonlyMap<string, readonly Node[]> {
   const found = new Map<string, Node[]>();
   const pending: Node[] = [root];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node.type === "method_invocation" || node.type === "explicit_constructor_invocation") {
-      const member = node.type === "method_invocation" ? node.childForFieldName("name")?.text : node.childForFieldName("constructor")?.text;
+    if (node.type === "method_invocation" || node.type === "explicit_constructor_invocation" || node.type === "method_reference") {
+      const constructor = node.type === "method_reference" && node.children.some((child) => child?.type === "new");
+      const member = node.type === "method_reference" ? (constructor ? node.namedChildren[0]?.text.split(".").at(-1) : node.namedChildren.at(-1)?.text) : node.type === "method_invocation" ? node.childForFieldName("name")?.text : node.childForFieldName("constructor")?.text;
       const key = callKey(node.startPosition.row + 1, node.startPosition.column + 1, member ?? "");
       found.set(key, [...(found.get(key) ?? []), node]);
     }

@@ -67,6 +67,13 @@ function derive(parser: JavaParser, file: SourceFile): DeclaredMemberNames {
       if (named !== null) anchors.push({ line: named.startPosition.row + 1, column: named.startPosition.column + 1 });
       calls.push({ anchors, kind: node.type === "object_creation_expression" ? "instantiates" : "calls", ...(callee === undefined ? {} : { callee }), line: node.startPosition.row + 1, column: node.startPosition.column + 1, name: node.type === "object_creation_expression" ? (type?.type === "generic_type" ? type.namedChildren[0]?.text : type?.text) ?? "new" : file.content.slice(node.startIndex, argumentsNode?.startIndex ?? node.endIndex).trim(), owners: [...owners] });
     }
+    if (node.type === "method_reference") {
+      const receiver = node.namedChildren[0];
+      const member = node.namedChildren.at(-1);
+      const constructor = node.children.some((child) => child?.type === "new");
+      const name = constructor ? receiver?.text.split(".").at(-1) : member?.text;
+      if (name !== undefined) calls.push({ kind: "references", name, callee: name, line: node.startPosition.row + 1, column: node.startPosition.column + 1, anchors: [{ line: (constructor ? receiver : member)!.startPosition.row + 1, column: (constructor ? receiver : member)!.startPosition.column + 1 }], owners: [...owners] });
+    }
     if (node.type === "variable_declarator" && MEMBER_FIELDS.includes(node.parent?.type ?? "") && node.childForFieldName("value") !== null && ownerName !== null) initializedFields.push({ name: ownerName.text, start: node.parent!.startPosition.row + 1, nameLine: ownerName.startPosition.row + 1 });
     if (node.type === "variable_declarator" ? MEMBER_FIELDS.includes(node.parent?.type ?? "") : NAMED.includes(node.type)) nameOf(node);
     if (node.type === "method_declaration" || node.type === "constructor_declaration" || node.type === "compact_constructor_declaration") {

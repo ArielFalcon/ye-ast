@@ -189,6 +189,10 @@ export function createCallBindings({ store, navigation, origins, binder, declara
     const rooted: { index: number; member: string }[] = [];
     for (const [index, call] of calls.entries()) {
       const { body, reference } = call;
+      if (reference.kind === "references" && hasTyping(reference.file, "nominal")) {
+        typed.push({ index, member: reference.name, site: call });
+        continue;
+      }
       const own = ownMemberOf(compactSpelling(reference.name));
       const members = own === undefined || hasTyping(reference.file, "nominal") ? [] : ownMembersOf(navigation, body, own, ["method"]);
       if (members.length === 1) bindings[index] = { kind: "declaration", target: members[0]!, link: "own-member" };
@@ -267,8 +271,9 @@ export function createCallBindings({ store, navigation, origins, binder, declara
       const constructors = chainedConstructors(call.body, member);
       return method?.kind === "unproven" ? { kind: "unbound", form, candidates: constructors, attributed: constructors } : implicitConstructor(call.body, member) ?? { kind: "unbound", form, candidates: [], attributed: [] };
     }
-    const candidates = namedDeclarations(member, call.reference.file, form === "member");
-    return { kind: "unbound", form, candidates, attributed: form === "bare" ? candidates.filter((candidate) => candidate.file === call.reference.file) : [] };
+    const offered = call.reference.kind === "references" && method?.kind === "unproven" && method.candidates !== undefined ? method.candidates.flatMap(({ file, start, nameLine }) => placed(file, start, nameLine) ?? []) : undefined;
+    const candidates = offered ?? namedDeclarations(member, call.reference.file, form === "member");
+    return { kind: "unbound", form, candidates, attributed: offered ?? (form === "bare" ? candidates.filter((candidate) => candidate.file === call.reference.file) : []) };
   }
 
   /** A chaining call to a repository class that declares no constructor runs its implicit one: the class itself. */

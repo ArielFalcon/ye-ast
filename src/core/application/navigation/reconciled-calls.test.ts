@@ -272,3 +272,10 @@ test("a file reads its import bindings only when a record agrees with no call at
   assert.deepEqual(placed(await callsOf("run", [RUN, ...LIB], record, [written(3, 3, "alpha", "alpha")], [], [], {}, { alpha: "beta" })).edges, ["beta@3:2"]);
   assert.deepEqual(importsRead, [FILE]);
 });
+
+test("a Java method reference survives reconciliation as a written reference", async () => {
+  const nodes = [fakeNode("run", "method", FILE, 1, 3)];
+  const reference: SyntaxCall = { kind: "references", name: "fmt", callee: "fmt", line: 2, column: 5, owners: [] };
+  const result = await callsOf("run", nodes, [], [reference], [], [{ start: { line: 2, column: 4 }, end: { line: 2, column: 14 } }]);
+  assert.deepEqual([...result.writtenOnly, ...result.deferredOnly].filter(({ kind }) => kind === "references").map(({ name }) => name), ["fmt"]);
+});
