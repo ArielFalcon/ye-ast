@@ -30,3 +30,10 @@ test("a fact that read a declared build output says so in its header, and whethe
   assert.ok(renderFactHeader(read(true)).includes("build output: web/node_modules, verified by the snapshot's lockfile"));
   assert.equal(renderFactHeader({ ...base, status: "complete", value: null } as Fact<null>).some((line) => line.startsWith("build output")), false);
 });
+
+test("a partial scope selection is presented without changing the fact status", () => {
+  const fact = { ...base, status: "complete", value: null, scopeSelection: { unmatchedIncludes: ["missing/**"], selectedFiles: 2 } } as Fact<null>;
+  const lines = renderFactHeader(fact);
+  assert.equal(lines[0], "status: complete");
+  assert.ok(lines.includes("scope: include missing/** selected no path (the rest selected 2 files)"));
+});

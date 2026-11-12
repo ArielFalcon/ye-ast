@@ -160,7 +160,7 @@ class Builder {
       const at = `${pointer}/evidence/${index}`;
       return located === undefined ? this.evidence(here, value, id, at) : this.repositoryEvidence(value as RepositoryEvidence, id, at, false);
     });
-    this.reads.set(id, { id, source: this.source, owner, schema: fact.schema, producer: fact.producer, inputs: fact.inputs, snapshot, evidence, analysis: readAnalysisOf(fact) });
+    this.reads.set(id, { id, source: this.source, owner, schema: fact.schema, producer: fact.producer, inputs: fact.inputs, ...(fact.scopeSelection === undefined ? {} : { scopeSelection: fact.scopeSelection }), snapshot, evidence, analysis: readAnalysisOf(fact) });
     this.readPointers.push({ id, pointer });
     return context;
   }

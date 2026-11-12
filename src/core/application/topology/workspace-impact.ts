@@ -1,3 +1,4 @@
+import { WORKSPACE_SCOPE } from "../../domain/shared/scope.ts";
 import { EVERYTHING, withCuts } from "../../domain/shared/question.ts";
 import type { ChangedEntrypoint } from "../../domain/impact/changed-entrypoints.ts";
 import type { ImpactValue, Seed } from "../../domain/impact/impact-fact.ts";
@@ -167,7 +168,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
     const config = walked.value.inputs.declaredConfig;
     const inputs = { repos: workspace.workspace.repos, gateways: declared.toSorted((a, b) => compareText(a.prefix, b.prefix) || compareText(a.repo, b.repo)), source: workspace.workspace.source, budget: request.budget, ...("targets" in request ? { targets: request.targets } : {}), ...("changed" in request ? { changed: request.changed } : {}) };
     const reads = Object.entries(sections).flatMap(([repo, section]) => section.status === "unknown" ? [{ kind: `discovery:${repo}`, fact: provenanceOf(section) }] : section.value.reads.map(({ kind, fact }) => ({ kind: `${kind}:${repo}`, fact })));
-    const base = compositeBase(baseOf(triggerBase), reads, inputs, (text) => deps.digest.of(text), config);
+    const base = compositeBase({ ...baseOf(triggerBase), ...(fact.scopeSelection === undefined ? {} : { scopeSelection: fact.scopeSelection }) }, reads, inputs, (text) => deps.digest.of(text), config);
     return { ok: true, value: { fact: composite(base, value), ...(read.value.workspaceReplay === undefined ? {} : { workspaceReplay: read.value.workspaceReplay }), ...(read.value.refresh === undefined ? {} : { refresh: read.value.refresh }), ...(read.value.repositoryRoots === undefined ? {} : { repositoryRoots: read.value.repositoryRoots }) } };
   }
 
@@ -252,6 +253,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
     if (source === undefined) return { fault: { kind: "git-failed", detail: `no read location for ${repository.repo}` } };
     if (repository.snapshot.kind !== "sha") return { fault: { kind: "git-failed", detail: `unsupported snapshot for ${repository.repo}` } };
     const answered = await deps.impact.callers({
+      [WORKSPACE_SCOPE]: true,
       repo: source.root,
       ...(source.source === source.root ? {} : { source: source.source }),
       repoId: repository.repo,
@@ -272,6 +274,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
         request.repo.revision ?? "HEAD",
         (revision) =>
           deps.impact.callers({
+            [WORKSPACE_SCOPE]: true,
             repo: request.repo.path,
             repoId: request.repo.id ?? directoryNameOf(request.repo.path),
             revision,
@@ -288,6 +291,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
         request.repo.revision ?? "HEAD",
         (revision) =>
           deps.impact.ofChange({
+            [WORKSPACE_SCOPE]: true,
             repo: request.repo.path,
             repoId: request.repo.id ?? directoryNameOf(request.repo.path),
             base: request.base,
@@ -330,7 +334,7 @@ export function createCapturedWorkspaceImpactQueries(deps: { operation: Workspac
         }
         return { ok: false, fault: { kind: "git-failed", detail: `unsupported snapshot for ${repo}` } };
       };
-      const common = (repoId: string) => ({ repoId, ...(request.scope === undefined ? {} : { scope: request.scope }), ...(request.budget === undefined ? {} : { budget: request.budget }), ...(context.signal === undefined ? {} : { signal: context.signal }) });
+      const common = (repoId: string) => ({ [WORKSPACE_SCOPE]: true as const, repoId, ...(request.scope === undefined ? {} : { scope: request.scope }), ...(request.budget === undefined ? {} : { budget: request.budget }), ...(context.signal === undefined ? {} : { signal: context.signal }) });
       const captured: CapturedWalks = {
         callers: async (repo, observed, targets) => {
           const at = location(repo, observed);

@@ -1,3 +1,4 @@
+import type { ScopeFault } from "./scope-fault.port.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { MapRequest } from "./entrypoint-queries.port.ts";
 import type { FixedLayerFault } from "./fixed-layer-store.port.ts";
@@ -15,7 +16,7 @@ export type FixedLayerRefresh =
   /** The fact cannot be stored (RFC-0002 rule 3): a deadline cut it, or its index was unavailable. */
   | { outcome: "not-written"; reason: "deadline" | "index-unavailable" };
 
-export type FixedLayerRefreshFault = VcsFault | LiveFault | FixedLayerFault;
+export type FixedLayerRefreshFault = VcsFault | LiveFault | FixedLayerFault | ScopeFault;
 
 /**
  * Writes the fixed layer of a repository: the only write ye-ast makes to a repository's folder, and only to

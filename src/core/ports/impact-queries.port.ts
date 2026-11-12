@@ -1,8 +1,9 @@
+import type { ScopeFault } from "./scope-fault.port.ts";
 import type { ImpactBudget, ImpactValue } from "../domain/impact/impact-fact.ts";
 import type { UnknownSymbolEntry } from "../domain/shared/unknown-target.ts";
 import type { ImportersValue } from "../domain/impact/importers-fact.ts";
 import type { DeclaredBuildOutput } from "../domain/shared/build-outputs.ts";
-import type { ScopeRequest } from "../domain/shared/scope.ts";
+import { WORKSPACE_SCOPE, type ScopeRequest } from "../domain/shared/scope.ts";
 import type { Fact } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { LiveFault, LiveSelector } from "./live-queries.port.ts";
@@ -15,6 +16,7 @@ type AtRevision = { revision: string; live?: undefined } | ({ revision?: undefin
 export type ImpactOfChangeRequest = ImpactOfChangeBase & AtHead;
 
 interface ImpactOfChangeBase {
+  [WORKSPACE_SCOPE]?: true;
   /** Path of the root of the git repository to read. */
   repo: string;
   /** Stable name of the repository in the snapshot of every fact; never a path. */
@@ -45,6 +47,7 @@ export type CallersTarget = { file: string; symbol: string } | { file: string; s
 export type ImpactCallersRequest = ImpactCallersBase & AtRevision;
 
 interface ImpactCallersBase {
+  [WORKSPACE_SCOPE]?: true;
   repo: string;
   /** Snapshot read location when it differs from the declared clone whose trust applies. */
   source?: string;
@@ -93,7 +96,7 @@ export interface UnknownChangePathFault {
   globs: readonly string[];
 }
 
-export type OfChangeFault = VcsFault | LiveFault | UnknownChangePathFault;
+export type OfChangeFault = VcsFault | LiveFault | UnknownChangePathFault | ScopeFault;
 export type ImpactFault = OfChangeFault | UnknownSymbolFault;
 
 export interface ImpactQueries {

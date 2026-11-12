@@ -49,6 +49,7 @@ export const ERROR_CODE = {
   "unknown-entrypoint": -32023,
   "invalid-hypothesis": -32024,
   "contradictory-revisions": -32025,
+  "unknown-scope-path": -32026,
 } as const;
 
 export type ErrorKind = keyof typeof ERROR_CODE;

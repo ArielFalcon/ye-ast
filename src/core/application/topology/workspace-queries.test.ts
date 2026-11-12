@@ -1227,3 +1227,40 @@ test("a blocked transitive hop cuts the consumer at the declaring library", asyn
     dependency: { name: "com.acme:x", reason: "ambiguous", candidates: ["x1", "x2"] },
   }]);
 });
+
+test("workspace validates includes across all complete repository listings", async () => {
+  const repositories: Repositories = {
+    "/work/app": { files: { "src/a.ts": "a" } },
+    "/work/lib": { files: { "src/a.ts": "b" } },
+  };
+  const queries = setup(repositories, undefined, undefined, undefined, undefined, true);
+  const request = { repo: { path: "/work/app" }, repos: [{ path: "/work/lib" }], scope: { include: ["src/**", "missing/**"] } };
+  const mixed = await queries.outwardNames(request);
+  assert.ok(mixed.ok);
+  assert.deepEqual(mixed.value.fact.scopeSelection, { unmatchedIncludes: ["missing/**"], selectedFiles: 2 });
+  const decisions = createDecisionQueries({ workspace: queries, digest: { of: (value) => value }, vcs: { remotes: async () => ({ ok: true, value: [] }) } });
+  const decision = await decisions.decisions(request);
+  assert.ok(decision.ok);
+  assert.deepEqual(decision.value.fact.scopeSelection, mixed.value.fact.scopeSelection);
+  const missing = await queries.outwardNames({ ...request, scope: { include: ["missing/**"] } });
+  assert.equal(!missing.ok && missing.fault.kind, "unknown-scope-path");
+  repositories["/work/lib"]!.stopped = { at: "src/a.ts", limit: 1 };
+  const stopped = await queries.outwardNames({ ...request, scope: { include: ["missing/**"] } });
+  assert.ok(stopped.ok);
+  assert.equal(stopped.value.fact.scopeSelection, undefined);
+});
+
+test("an unavailable workspace member leaves unmatched includes undecidable", async () => {
+  const oldSha = "b".repeat(40), newSha = "c".repeat(40);
+  const repositories: Repositories = { [TRIGGER]: { files: { "src/a.ts": "a" } }, [SIBLING]: { files: {} }, [MIRROR]: { files: { "src/b.ts": "b" }, holds: [oldSha] } };
+  const answers: RefreshedRemote[] = [refreshed(REMOTE, { branches: [{ name: "main", sha: oldSha }], defaultBranch: "main" }, { status: "verified" }, MIRROR)];
+  const queries = setup(repositories, undefined, trusted([TRIGGER, SIBLING]), persisted({ repos: [{ path: SIBLING, remote: REMOTE }] }), { answers }, true, undefined, deterministicDigest);
+  const request = { repo: { path: TRIGGER }, scope: { include: ["src/**", "missing/**"] } };
+  const first = readOf(await queries.outwardNames(request));
+  assert.deepEqual(first.fact.scopeSelection, { unmatchedIncludes: ["missing/**"], selectedFiles: 2 });
+  assert.ok(first.workspaceReplay);
+  repositories[MIRROR]!.holds = [newSha];
+  const unavailable = readOf(await queries.outwardNames({ ...request, replay: first.workspaceReplay }));
+  assert.equal(unavailable.fact.scopeSelection, undefined);
+  assert.equal(unavailable.fact.status, "partial");
+});

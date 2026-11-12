@@ -3,7 +3,7 @@ import type { WorkspaceFault } from "./workspace-repos.port.ts";
 import type { Entrypoint } from "../domain/entrypoints/entrypoint.ts";
 import type { Fact, WalkBounds } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
-import type { ScopeRequest } from "../domain/shared/scope.ts";
+import { WORKSPACE_SCOPE, type ScopeRequest } from "../domain/shared/scope.ts";
 import type { TraceValue } from "../domain/trace/trace-fact.ts";
 import type { CallersTarget, UnknownSymbolFault } from "./impact-queries.port.ts";
 import type { LiveSelector } from "./live-queries.port.ts";
@@ -39,6 +39,7 @@ export interface UnknownEntrypointFault {
 }
 
 interface TraceBase {
+  [WORKSPACE_SCOPE]?: true;
   /** Omitted reads only this repository; {} uses eligible workspace defaults. */
   workspace?: Pick<WorkspaceRequest, "repos" | "gateways">;
   offline?: boolean;

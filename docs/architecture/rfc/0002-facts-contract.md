@@ -198,7 +198,8 @@ names are settled in the first slice; the union, the cuts and the inputs are the
    the count of the file's declarations left out; `inputs.declaredConfig.focus` records the selectors.
    `0.22.0` lets an unresolved HTTP site's `stated` retain its established method without a path. An omitted path is
    unknown, never empty; an incompatible method can exclude the site from another operation while a compatible method
-   with no path keeps it in question.
+   with no path keeps it in question. `0.23.0` adds optional `scopeSelection` output: unmatched include globs and the
+   count of selected paths when only part of an include matches. It is not an input, a cut, or part of fact identity.
 7. **Redaction at egress.** Values and evidence pass redaction when they leave ye-ast's process toward a host: the
    patterns always, by-value secrets only in the process that already holds them
    ([ADR-0010](../adr/0010-trust-modes.md)). The success report `ye-ast init` writes for the user who ran it is not

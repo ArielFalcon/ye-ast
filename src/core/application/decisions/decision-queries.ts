@@ -145,8 +145,8 @@ function entrypointsOf(repository: WorkspaceRepository): readonly Entrypoint[] {
 }
 
 /** The workspace read's base without its evidence: the set rests on the read, not on a place. */
-function baseOf({ schema, snapshot, producer, inputs }: FactBase): FactBase {
-  return { schema, snapshot, producer, inputs, evidence: [] };
+function baseOf({ schema, snapshot, producer, inputs, scopeSelection }: FactBase): FactBase {
+  return { schema, snapshot, producer, inputs, evidence: [], ...(scopeSelection === undefined ? {} : { scopeSelection }) };
 }
 
 /** The decision set as a fact of the read: a partial read keeps its cuts, a complete one stays complete. */

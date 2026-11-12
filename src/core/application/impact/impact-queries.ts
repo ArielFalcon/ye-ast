@@ -31,7 +31,7 @@ import { cutsCompleteness } from "../../domain/languages/uncovered.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { declarationSpan, sortedEngines, type Cut, type DeclaredConfig, type Evidence, type Fact, type FactBase, type Finding, type IndexOrigin, type SnapshotRef, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
-import { exportSelection, pathSelection, sortedGlobs, type PathSelection } from "../../domain/shared/scope.ts";
+import { WORKSPACE_SCOPE, exportSelection, pathSelection, sortedGlobs, type PathSelection } from "../../domain/shared/scope.ts";
 import { changedPaths, isWritten } from "../../domain/snapshot/live-export.ts";
 import { contentFingerprint, declaredScope, exportCuts, holdsDeclaredSource, isInMapScope } from "../../domain/map/entrypoint-map.ts";
 import type { Result } from "../../domain/shared/result.ts";
@@ -65,6 +65,7 @@ import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { syntaxRootCuts, distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey } from "../navigation/root-selection.ts";
 import { absentFileEntries, heldPaths, snapshotFiles } from "../navigation/snapshot-files.ts";
+import { scopeNotice } from "../snapshot/scope-selection.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
@@ -315,6 +316,8 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     return withScratch(deps, async (readScope): Promise<Answer> => {
       const preparedHead = await prepareCommit(changeDeps, repo, head.value, readScope, exported, { scope, trust }, signal);
       if (!preparedHead.ok) return preparedHead;
+      const notice = scopeNotice(scope, deps.matcher.matches, request[WORKSPACE_SCOPE] ? undefined : heldPaths(preparedHead.value.tree.export)?.filter(selected));
+      if (!notice.ok) return notice;
       const headTree = await preparedHead.value.extract(signal);
       if (!headTree.ok) return headTree;
       const preparedBase = mergeBase === head.value ? preparedHead : await prepareCommit(changeDeps, repo, mergeBase, readScope, exported, { scope, trust }, signal);
@@ -326,7 +329,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         prepared: preparedHead.value,
         hold: preparedHead.value.hold,
         selected,
-        base: (content, store = false) => (store ? changeReader.factBase(trust, snapshot, content, spec, scope, { kind: "full" }) : baseOfHead(content)),
+        base: (content, store = false) => ({ ...(store ? changeReader.factBase(trust, snapshot, content, spec, scope, { kind: "full" }) : baseOfHead(content)), ...(notice.value === undefined ? {} : { scopeSelection: notice.value }) }),
         open: () => changeReader.indexHead(preparedHead.value, readScope.directory, signal),
       };
       return readChange({ request, radius, head: reading, baseTree: baseTree.value, basePrepared: preparedBase.value, sameTree: baseTree === headTree, unreadable: JSON.stringify([mergeBase, head.value]) });
@@ -343,13 +346,16 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       const selected = pathSelection(scope, deps.matcher.matches);
       const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
       return withScratch(deps, async (readScope): Promise<Answer> => {
+        const notice = scopeNotice(scope, deps.matcher.matches, request[WORKSPACE_SCOPE] ? undefined : heldPaths(tree.export)?.filter(selected));
+        if (!notice.ok) return notice;
         const liveTree = await held.extract(signal);
         if (!liveTree.ok) return liveTree;
         const preparedBase = await prepareCommit(changeDeps, repo, mergeBase, readScope, exported, { scope: declaredScope(request.scope), trust: "trusted" }, signal);
         if (!preparedBase.ok) return preparedBase;
         const baseTree = await preparedBase.value.extract(signal);
         if (!baseTree.ok) return baseTree;
-        const reading = { ...headReader.liveReading(tree, liveTree.value, "trusted", scope, selected, head, repoId, spec), prepared: preparedLive(held), hold: held.hold };
+        const liveReading = headReader.liveReading(tree, liveTree.value, "trusted", scope, selected, head, repoId, spec);
+        const reading = { ...liveReading, base: (content: string, store?: boolean) => ({ ...liveReading.base(content, store), ...(notice.value === undefined ? {} : { scopeSelection: notice.value }) }), prepared: preparedLive(held), hold: held.hold };
 
         const changed = changedPaths(baseTree.value.export.files, tree.export.files).filter((path) => !isEngineConfiguration(path));
         const [before, after] = [await readScope.directory(), await readScope.directory()];

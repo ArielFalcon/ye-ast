@@ -1570,3 +1570,8 @@ test("a syntax-only trace target remains explicit and partial until its executio
   assert.equal(fact.status, "partial");
   assert.ok(fact.status === "partial" && fact.cuts.some(({ reason, at }) => reason === "no-symbols" && at[0]?.includes("D.m")));
 });
+
+test("trace refuses an include with no held path", async () => {
+  const { answer } = await trace({ nodes: [SVC], matches: (path, glob) => path.startsWith(glob.replace(/\*\*$/, "")) }, undefined, { scope: { include: ["missing/**"] } });
+  assert.equal(!answer.ok && answer.fault.kind, "unknown-scope-path");
+});

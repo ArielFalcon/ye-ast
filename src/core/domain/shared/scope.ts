@@ -7,6 +7,9 @@ export interface ScopeRequest {
   exclude?: readonly string[];
 }
 
+/** Marks one internal workspace walk whose aggregate selection has already been evaluated; never serialized or retained. */
+export const WORKSPACE_SCOPE: unique symbol = Symbol("workspace scope already evaluated");
+
 export type PathSelection = (path: string) => boolean;
 
 export function sortedGlobs(globs: readonly string[] | undefined): string[] {
@@ -35,4 +38,8 @@ export function exportSelection(
 /** A glob no repository path can fail to match because of its spelling: relative, normalized, with `/` separators. */
 export function isValidGlob(glob: string): boolean {
   return !glob.includes("\\") && glob.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+export function unmatchedIncludes(scope: Pick<DeclaredScope, "include">, matches: (path: string, glob: string) => boolean, listing: readonly string[]): string[] {
+  return sortedGlobs(scope.include.filter((glob) => !listing.some((path) => matches(path, glob))));
 }

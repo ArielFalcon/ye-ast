@@ -163,7 +163,7 @@ export type SelectedOutputDeps = { recovery: z.ZodType; baseFact: {schema: z.Zod
 export function selectedOutputFor(tool: Tool, deps: SelectedOutputDeps) {
   const {schema, snapshot, producer, inputs, evidence} = deps.baseFact;
   const analysis = z.discriminatedUnion('status', [z.strictObject({status:z.literal('complete')}), z.strictObject({status:z.literal('partial')}), z.strictObject({status:z.literal('unknown'), reason})]);
-  const sourceFields = {schema, snapshot, producer, inputs, analysis};
+  const sourceFields = {schema, snapshot, producer, inputs, scopeSelection: z.strictObject({ unmatchedIncludes: z.array(z.string()), selectedFiles: z.int().min(0) }).optional(), analysis};
   const source = z.strictObject({...sourceFields, reads:z.array(z.strictObject({owner:cutOwner,...sourceFields})), limits:z.array(z.strictObject({owner:cutOwner,kind:cutKind,cuts:index,places:index,limit:z.number().optional()}))});
   const handler = z.strictObject({path:z.string(),symbol:z.string(),line:z.number(),endLine:z.number().optional()});
   const identity = z.discriminatedUnion('kind', [

@@ -4539,3 +4539,18 @@ test("answerBytes limits the MCP text and preserves full facts or refusal metada
     } finally { await limitedHost.session.close(); }
   } finally { await session.close(); }
 });
+
+test("scope faults and partial scope notices reach MCP", async () => {
+  const fault: ImpactFault = { kind: "unknown-scope-path", detail: "scope include matches no path", globs: ["missing/**"] };
+  const scoped = mapFact({ scopeSelection: { unmatchedIncludes: ["missing/**"], selectedFiles: 1 } });
+  const { session } = await setup({ map: async () => ({ ok: true, value: scoped }), callers: async () => ({ ok: false, fault }) });
+  try {
+    const result = await session.callTool("ye_ast_entrypoints", { mode: "summary" });
+    assert.match(textOf(result), /scope: include missing\/\*\* selected no path/);
+    const full = await session.callTool("ye_ast_entrypoints", { mode: "full" });
+    assert.deepEqual((resultFields(full) as { scopeSelection: unknown }).scopeSelection, scoped.scopeSelection);
+    const failed = await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "f" }] });
+    assert.equal(failed.isError, true);
+    assert.deepEqual(failed._meta?.["ye-ast/fault"], fault);
+  } finally { await session.close(); }
+});

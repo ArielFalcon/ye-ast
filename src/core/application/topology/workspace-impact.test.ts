@@ -1,3 +1,4 @@
+import { WORKSPACE_SCOPE } from "../../domain/shared/scope.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
@@ -485,7 +486,7 @@ test("the repository holding an impacted call site is walked from that call site
   const value = valueOf(await queries.callers(ASK));
 
   const consumer = walks.find((walk) => walk.repoId === "shop-web");
-  assert.deepEqual(consumer, { repo: "/work/shop-web", repoId: "shop-web", revision: OTHER_SHA, targets: [{ file: "src/app/shop-web.api.ts", start: 7, end: 7 }] });
+  assert.deepEqual(consumer, { [WORKSPACE_SCOPE]: true, repo: "/work/shop-web", repoId: "shop-web", revision: OTHER_SHA, targets: [{ file: "src/app/shop-web.api.ts", start: 7, end: 7 }] });
   assert.ok(repoImpact(value, "shop-web").impact !== undefined);
   assert.deepEqual(value.repositorySnapshots.map(({ repo, snapshot }) => `${repo} ${snapshot.kind === "sha" ? snapshot.sha.slice(0, 1) : "live"}`), ["orders a", "shop-web b"]);
 });
@@ -723,7 +724,7 @@ test("captured change pins a moving committed trigger and preserves its request"
   }) });
   const result = await queries.ofChange({ repo: { path: "/work/webapp", revision: "moving-branch" }, repos: [{ path: "/work/orders", live: true }, { path: "/work/payments", live: true }], base: "base-revision", changed: ["src/**"], scope, budget, signal });
   assert.ok(result.ok);
-  assert.deepEqual(received, { repo: "/work/webapp", repoId: "webapp", head: SHA, base: "base-revision", changed: ["src/**"], scope, budget, signal });
+  assert.deepEqual(received, { [WORKSPACE_SCOPE]: true, repo: "/work/webapp", repoId: "webapp", head: SHA, base: "base-revision", changed: ["src/**"], scope, budget, signal });
   assert.equal(valueOf(result).trigger.mergeBase, OTHER_SHA);
   assert.equal(s.fake.held.locks, s.fake.held.released);
 });

@@ -304,9 +304,9 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             };
           };
           const base: PreparedWorkspace["base"] = (asked) => {
-            const { schema, snapshot, producer, inputs } = fact;
+            const { schema, snapshot, producer, inputs, scopeSelection } = fact;
             const composite = compositeBase(
-              { schema, snapshot, producer, inputs, evidence: [] },
+              { schema, snapshot, producer, inputs, evidence: [], ...(scopeSelection === undefined ? {} : { scopeSelection }) },
               Object.entries(fact.value.sections).map(([repo, section]) => ({ kind: `discovery:${repo}`, fact: provenanceOf(section) })),
               fact.value.workspace,
               (text) => deps.digest.of(text),

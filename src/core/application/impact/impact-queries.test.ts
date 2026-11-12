@@ -1338,7 +1338,7 @@ test("a callers request naming a target outside the scope is unknown out-of-scop
 });
 
 test("an include leaves a callers target it does not match out of scope, and a file with no extractor inside the scope stays a no-extractor cut", async () => {
-  const { callers } = setup({ nodes: SOURCE_NODES, exports: listingOf(["src/A.java", "README.md"]) });
+  const { callers } = setup({ nodes: SOURCE_NODES, exports: listingOf(["src/A.java", "README.md", "lib/held.ts"]) });
 
   const outside = callersFact(await callers({ targets: [{ file: "src/A.java", symbol: "f" }], scope: { include: ["lib/"] } }));
   const noExtractor = callersFact(await callers({ targets: [{ file: "README.md", start: 1, end: 2 }], scope: { exclude: ["gen/"] } }));
@@ -2782,4 +2782,11 @@ test("a syntax-only callers target is retained as a seed and remains partial ins
   assert.equal(fact.status, "partial");
   assert.ok(fact.status === "partial" && fact.cuts.some(({ reason, at }) => reason === "no-symbols" && at[0]?.includes("D.m")));
   assert.ok(fact.value.seeds.some(({ symbol }) => symbol === "m"));
+});
+
+test("scope validation uses the head listing across impact, callers and importers", async () => {
+  const reader = setup({ exports: { [HEAD]: { files: [{ path: "src/A.java", blob: "head", written: true }], skipped: [] }, [FORK]: { files: [{ path: "missing/base.java", blob: "base", written: true }], skipped: [] } } });
+  const scope = { include: ["missing/**"] };
+  const answers = await Promise.all([reader.ask({ scope }), reader.callers({ targets: [], scope }), reader.importers({ files: [], scope })]);
+  for (const answer of answers) assert.equal(!answer.ok && answer.fault.kind, "unknown-scope-path");
 });

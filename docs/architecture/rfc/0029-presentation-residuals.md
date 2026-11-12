@@ -642,3 +642,17 @@ Findings from `designs/review-entrypoints.md` against this draft, at `96bf4389`/
 `repro/answers.md` and the raw responses in `repro/` were produced on `6d21e7bc`. The two blockers they prove
 (`importers`/`outline files` absent cut, unbounded `entrypoints` details) are unchanged at `ebd12a4f` by inspection of the
 same lines cited above; `outline focus` on an extensionless path is taken from `reprobe-6d21e7bc/summary.md:83`.
+
+
+## Scope selection transport
+
+The output-only optional `scopeSelection` on `FactBase` carries `{ unmatchedIncludes, selectedFiles }` for a mixed
+selection. It is preserved by provenance, composition and presentation, changes neither status nor cuts, and is not
+an input to semantic identity. The additive fact contract uses schema 0.23.0. An entirely empty known selection faults
+with `unknown-scope-path` and protocol code -32026; a stopped listing cannot establish a miss.
+
+Workspace matching is over contributing repository/path occurrences, counting an identical relative path separately
+in each repository. An unavailable or stopped contributing listing leaves unmatchedness undecidable. Internal nested
+walk requests carry a non-serializable marker for the already evaluated workspace scope; public JSON requests cannot
+supply that marker. Live selection is derived from each capture's held paths, including skipped entries, using the
+original predicate even when configuration reading is wider.

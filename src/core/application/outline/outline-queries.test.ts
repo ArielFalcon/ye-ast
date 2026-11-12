@@ -529,3 +529,10 @@ test("a focus reads the head's sources without extracting entrypoints", async ()
   assert.ok(answer.ok);
   assert.equal(log.extractions, 0);
 });
+
+test("outline refuses an include that selects no held path", async () => {
+  const { queries, log } = setup({ written: ["src/a.ts"], matches: (path, glob) => path.startsWith(glob.replace(/\*\*$/, "")) });
+  const answer = await queries.outline({ repo: "/work/repo", repoId: "repo", revision: "HEAD", files: ["src/a.ts"], scope: { include: ["missing/**"] } });
+  assert.equal(!answer.ok && answer.fault.kind, "unknown-scope-path");
+  assert.equal(log.reads, 0);
+});

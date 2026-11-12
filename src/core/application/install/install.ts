@@ -84,7 +84,9 @@ async function persist(store: FixedLayerStore, repo: string, manifest: Workspace
   return written.ok ? { ok: true, value: { outcome: "written" } } : written;
 }
 
-function stopped(fault: Omit<InstallFault, "trustRecorded" | "stage">, trustRecorded: boolean, stage: InstallFault["stage"]): { ok: false; fault: InstallFault } {
+type InstallCause<T = InstallFault> = T extends InstallFault ? Omit<T, "trustRecorded" | "stage"> : never;
+
+function stopped(fault: InstallCause, trustRecorded: boolean, stage: InstallFault["stage"]): { ok: false; fault: InstallFault } {
   return { ok: false, fault: { ...fault, trustRecorded, stage } };
 }
 

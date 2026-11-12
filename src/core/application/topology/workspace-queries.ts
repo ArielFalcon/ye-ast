@@ -26,6 +26,8 @@ import { ABORTED, declaredTrustOf, factBaseOf, withScratch, type SnapshotReaderD
 import type { ReadSource, WorkspacePlanningRequest } from "./workspace-plan.ts";
 import { withWorkspaceSnapshots, type WorkspaceSnapshotContext } from "./workspace-snapshots.ts";
 import type { SnapshotPreparation } from "../snapshot/read-snapshot.ts";
+import { heldPaths } from "../navigation/snapshot-files.ts";
+import { scopeNotice } from "../snapshot/scope-selection.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 
 export interface WorkspaceQueriesDeps extends SnapshotReaderDeps {
@@ -43,6 +45,7 @@ export interface WorkspaceQueriesDeps extends SnapshotReaderDeps {
 
 interface ReadRepository {
   repository: WorkspaceRepository;
+  selectedPaths: readonly string[] | undefined;
   source: string;
   base: FactBase;
   /** What the sources and the build state; the names of the call sites join them once those are read. */
@@ -90,6 +93,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
         value: {
           repository: { repo: repoId, snapshot: base.snapshot, entrypoints: selectedFindings(findings, selected), callSites: [], ...(declaredTrust === undefined ? {} : { declaredTrust }) },
           source,
+          selectedPaths: heldPaths(snapshotExport)?.filter(selected),
           base,
           stated: deps.evidence.names(selectedSources),
           sources,
@@ -120,7 +124,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
     const base = { ...factBaseOf(deps, { repoId: at.repoId, sha: at.head, trust: at.trust, scope, content: JSON.stringify({ export: contentFingerprint(snapshotExport), declaredTrust: at.trust, remotes: remotes.value.map(({ name, url }) => ({ name, repository: repositoryNameOf(url) })).toSorted((a, b) => compareText(a.name, b.name) || compareText(a.repository ?? "", b.repository ?? "")) }), declaredConfig: deps.budget === undefined ? {} : { exportBudget: deps.budget }, engines: deps.engines }), snapshot };
     return { ok: true, value: {
       repository: { repo: at.repoId, snapshot, entrypoints: selectedFindings(findings, selected), callSites: [], declaredTrust: at.trust },
-      source: declared, base, stated: deps.evidence.names(selectedSources), sources, cuts: exportCuts(snapshotExport),
+      source: declared, selectedPaths: heldPaths(snapshotExport)?.filter(selected), base, stated: deps.evidence.names(selectedSources), sources, cuts: exportCuts(snapshotExport),
       identity: { repo: at.repoId, id: at.repoId, artifacts: deps.evidence.artifacts(selectedSources), remotes: remotes.value.map((remote) => ({ remote: remote.name, repository: repositoryNameOf(remote.url) })), evidence: remotes.value.map((remote) => ({ path: ".git/config", line: 1, via: remote.name })) },
     } };
   }
@@ -183,6 +187,9 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
           if (!result.ok) return result;
           read.push(result.value);
         }
+        const listing = unavailable.length > 0 || read.some((entry) => entry.selectedPaths === undefined) ? undefined : read.flatMap((entry) => entry.selectedPaths!);
+        const notice = scopeNotice(scope, matcher.matches, listing);
+        if (!notice.ok) return notice;
         const trigger = read.find((entry) => entry.repository.repo === (request.repo.id ?? directoryNameOf(request.repo.path)));
         if (trigger === undefined) return { ok: false, fault: { kind: "git-failed", detail: "a workspace request names no repository" } };
 
@@ -225,7 +232,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
           repositories,
         };
         const declared = { repos: value.workspace.repos, gateways: [...membership.gateways].sort((a, b) => compareText(a.prefix, b.prefix)), source: value.workspace.source };
-        const base = compositeBase({ ...trigger.base, evidence: [] }, Object.entries(value.sections).map(([repo, section]) => ({ kind: `discovery:${repo}`, fact: provenanceOf(section) })), declared, (text) => deps.digest.of(text));
+        const base = compositeBase({ ...trigger.base, evidence: [], ...(notice.value === undefined ? {} : { scopeSelection: notice.value }) }, Object.entries(value.sections).map(([repo, section]) => ({ kind: `discovery:${repo}`, fact: provenanceOf(section) })), declared, (text) => deps.digest.of(text));
         const fact = composite(base, value);
         const repositoryRoots = asked.map((repository, index) => ({ repo: ids[index]!, path: repository.path })).toSorted((a, b) => compareText(a.repo, b.repo));
         const repositorySources = resolved.map(({ repository, source }) => ({ repo: repository.repo, path: source })).toSorted((a, b) => compareText(a.repo, b.repo));

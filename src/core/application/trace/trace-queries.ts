@@ -1,3 +1,4 @@
+import { WORKSPACE_SCOPE } from "../../domain/shared/scope.ts";
 import type { DeclarationModel } from "../navigation/declaration-model.ts";
 import { withCuts, type Asserted } from "../../domain/shared/question.ts";
 import type { LibrarySource } from "../../domain/topology/library-source.ts";
@@ -90,9 +91,9 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             : selected?.kind === "sha" && plan?.kind === "read" ? { repo: request.repo, source: plan.at.source, revision: selected.sha, live: undefined } : undefined;
           if (at === undefined) return { ok: false as const, fault: { kind: "git-failed" as const, detail: "trace snapshot unavailable" } };
           const trace = createTraceQueries({ ...deps, preparation: context.preparation, heldLive: () => held, librarySources: context.librarySources?.get(request.repoId) ?? [] });
-          const answer = await trace.walk({ ...local, ...at });
+          const answer = await trace.walk({ ...local, ...at, [WORKSPACE_SCOPE]: true });
           if (!answer.ok) return answer;
-          const base = compositeBase(answer.value, [{ kind: "trace", fact: answer.value }, { kind: "workspace", fact: read.fact }], request.workspace, (value) => deps.digest.of(value));
+          const base = compositeBase({ ...answer.value, ...(read.fact.scopeSelection === undefined ? {} : { scopeSelection: read.fact.scopeSelection }) }, [{ kind: "trace", fact: answer.value }, { kind: "workspace", fact: read.fact }], request.workspace, (value) => deps.digest.of(value));
           return { ok: true as const, value: { ...answer.value, ...base } };
         });
         if (!result.ok) return result;

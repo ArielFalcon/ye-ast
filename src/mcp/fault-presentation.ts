@@ -176,6 +176,8 @@ function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-faul
       return "Use a listed name of that kind as targets[].name, spelled as ye_ast_entrypoints lists it at the same revision; an empty list means the map holds no entrypoint of that kind. Candidates are alternatives, not substitutions.";
     case "top-level-line":
       return "The line lies outside every declaration: focus on a line inside one, or on a listed dotted path as focus[].symbol; files lists the file whole.";
+    case "unknown-scope-path":
+      return "Correct the include globs against the paths held by the snapshot.";
     case "unknown-change-path":
       return "Correct the changed globs against the paths base..head touches. Remove changed to walk every change within the declared scope; mode or budget cannot fix a path-selection mismatch.";
     case "duplicate-repository":

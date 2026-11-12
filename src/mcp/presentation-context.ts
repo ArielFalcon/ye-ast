@@ -81,7 +81,9 @@ function scopeLines(fact: Fact<unknown>): string[] {
   const { declaredScope } = contextOf(fact);
   const parts = [["include", declaredScope.include], ["exclude", declaredScope.exclude]] as const;
   const named = parts.filter(([, globs]) => globs.length > 0).map(([label, globs]) => `${label} ${globs.join(", ")}`);
-  return named.length === 0 ? [] : [`scope: ${named.join("; ")} (the content it selects; the configuration that interprets it is read too)`];
+  const lines = named.length === 0 ? [] : [`scope: ${named.join("; ")} (the content it selects; the configuration that interprets it is read too)`];
+  if (fact.scopeSelection !== undefined) lines.push(`scope: include ${fact.scopeSelection.unmatchedIncludes.join(", ")} selected no path (the rest selected ${fact.scopeSelection.selectedFiles} files)`);
+  return lines;
 }
 
 /** The languages and frameworks a status is relative to. */

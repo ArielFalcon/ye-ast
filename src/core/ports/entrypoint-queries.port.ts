@@ -2,6 +2,7 @@ import type { EntrypointMapFact } from "../domain/map/entrypoint-map.ts";
 import type { ScopeRequest } from "../domain/shared/scope.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { LiveFault, LiveSelector } from "./live-queries.port.ts";
+import type { ScopeFault } from "./scope-fault.port.ts";
 import type { VcsFault } from "./vcs.port.ts";
 
 export type MapRequest = MapRequestBase & ({ revision: string; live?: undefined } | ({ revision?: undefined } & LiveSelector));
@@ -22,5 +23,5 @@ export interface EntrypointQueries {
    * The map fact of the repository at `revision`, read under `untrusted` from an export of that commit, or of its working
    * tree with `live`, read from ye-ast's mirror of it under `trusted` only and with no index.
    */
-  map(request: MapRequest): Promise<Result<EntrypointMapFact, VcsFault | LiveFault>>;
+  map(request: MapRequest): Promise<Result<EntrypointMapFact, VcsFault | LiveFault | ScopeFault>>;
 }
