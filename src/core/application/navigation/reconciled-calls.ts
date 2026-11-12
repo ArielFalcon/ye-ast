@@ -51,7 +51,7 @@ export function callsByOwner(calls: readonly SyntaxCall[], declarations: readonl
   for (const call of calls) {
     const scopeKeys = new Set(call.owners.map(scopeKey));
     const valuesInScope = functionValues.filter((value) => scopeKeys.has(spanKey(value)));
-    const eligible = bodies.filter((body) => body.scope === undefined || scopeKeys.has(scopeKey(body.scope)));
+    const eligible = bodies.filter((body) => body.scope?.runsInEnclosingBody !== true && (body.scope === undefined || scopeKeys.has(scopeKey(body.scope))));
     const owner = owningBody(eligible, { line: call.line, column: call.column - 1 });
     const enclosing = owner === undefined ? declarations.filter((symbol) => BODY_KINDS.includes(symbol.kind) &&
       ((symbol.startLine <= call.line && call.line <= symbol.endLine) || call.owners.some((scope) => scope.start <= symbol.startLine && symbol.startLine <= scope.endLine))) : [];
@@ -228,14 +228,16 @@ export function createReconciledCalls({ store, uses, syntaxOf, lineOf, importedD
 
 /**
  * Aligns a file's records with its written calls, in the records' order. A record stays in the body the index gives it
- * whichever body owns its call, except a record of the file's top level whose call a class owns: a decorator and its
- * arguments, which the class's declaration runs. A written call is accounted when a record matches it or is undecided
- * between it and others.
+ * whichever body owns its call, except a source-proven enclosing execution or a record of the file's top level whose
+ * call a class owns: a decorator and its arguments, which the class's declaration runs. A written call is accounted
+ * when a record matches it or is undecided between it and others.
  */
 function alignRecords(records: readonly CallRecord[], syntax: DeclaredMemberNames, owned: ReadonlyMap<GraphNodeId, readonly OwnedCall[]>, declarations: readonly GraphSymbol[], lineOf: (line: number) => string | undefined): { alignments: readonly Alignment[]; accounted: ReadonlySet<string> } {
   const accounted = new Set<string>();
   const classes = new Map(declarations.filter((symbol) => isClassKind(symbol.kind)).map((symbol) => [symbol.id, symbol]));
   const classOwning = new Map([...owned].flatMap(([id, calls]) => (classes.has(id) ? calls.filter((call) => !call.ambiguous).map((call) => [callKey(call), classes.get(id)!] as const) : [])));
+  const byId = new Map(declarations.map((node) => [node.id, node]));
+  const enclosingExecutions = new Map([...owned].flatMap(([id, calls]) => calls.filter((call) => !call.ambiguous && call.owners.some((scope) => scope.runsInEnclosingBody)).map((call) => [callKey(call), byId.get(id)!] as const)));
   const { calls } = syntax;
   const alignments = records.map((record): Alignment => {
     if (calls === undefined || record.synthesized) return { kind: "kept" };
@@ -244,7 +246,7 @@ function alignRecords(records: readonly CallRecord[], syntax: DeclaredMemberName
     for (const call of agreeing) accounted.add(callKey(call));
     const [call] = agreeing;
     if (call !== undefined && agreeing.length === 1) {
-      const body = (record.node.kind === "file" ? classOwning.get(callKey(call)) : undefined) ?? record.node;
+      const body = enclosingExecutions.get(callKey(call)) ?? (record.node.kind === "file" ? classOwning.get(callKey(call)) : undefined) ?? record.node;
       const own = owned.get(body.id)?.find((candidate) => callKey(candidate) === callKey(call));
       return { kind: "matched", call, body, deferred: own !== undefined ? own.deferred === true : !executesInBody(declarationSpan(body), syntax.functionValues, { line: call.line, column: call.column - 1 }) };
     }

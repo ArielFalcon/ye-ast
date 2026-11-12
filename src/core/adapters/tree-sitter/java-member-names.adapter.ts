@@ -46,11 +46,12 @@ function derive(parser: JavaParser, file: SourceFile): DeclaredMemberNames {
   };
   const functionValues: SourceSpan[] = [];
   const visit = (node: Node): void => {
-    const functionValue = isFunctionValueNode(node) || isAnonymousClassBody(node);
+    const functionValue = isFunctionValueNode(node) || isAnonymousMethod(node);
     if (functionValue) functionValues.push({ start: { line: node.startPosition.row + 1, column: node.startPosition.column }, end: { line: node.endPosition.row + 1, column: node.endPosition.column } });
     const ownerName = ["class_declaration", "interface_declaration", "enum_declaration", "record_declaration", "method_declaration", "constructor_declaration", "compact_constructor_declaration"].includes(node.type) || (node.type === "variable_declarator" && MEMBER_FIELDS.includes(node.parent?.type ?? "")) ? node.childForFieldName("name") : null;
-    const owns = ownerName !== null || functionValue;
-    if (owns) owners.push({ name: ownerName?.text ?? "", start: node.startPosition.row + 1, nameLine: (ownerName ?? node).startPosition.row + 1, nameColumn: (ownerName ?? node).startPosition.column, startColumn: node.startPosition.column, endLine: node.endPosition.row + 1, endColumn: node.endPosition.column });
+    const runsInEnclosingBody = isAnonymousBody(node) || (node.type === "variable_declarator" && MEMBER_FIELDS.includes(node.parent?.type ?? "") && isAnonymousBody(node.parent?.parent));
+    const owns = ownerName !== null || functionValue || runsInEnclosingBody;
+    if (owns) owners.push({ ...(runsInEnclosingBody ? { runsInEnclosingBody: true as const } : {}), name: ownerName?.text ?? "", start: node.startPosition.row + 1, nameLine: (ownerName ?? node).startPosition.row + 1, nameColumn: (ownerName ?? node).startPosition.column, startColumn: node.startPosition.column, endLine: node.endPosition.row + 1, endColumn: node.endPosition.column });
     if (node.type === "method_invocation" || node.type === "object_creation_expression" || node.type === "explicit_constructor_invocation") {
       const argumentsNode = node.childForFieldName("arguments");
       const type = node.childForFieldName("type");
@@ -88,7 +89,10 @@ function derive(parser: JavaParser, file: SourceFile): DeclaredMemberNames {
   return { names: [...names].sort(compareText), functionValueCalls, callables, receiverBindings, calls, functionValues, initializedFields };
 }
 
-/** The body of a class a `new` expression declares in place: its methods run only when something calls them. */
-function isAnonymousClassBody(node: Node): boolean {
-  return node.type === "class_body" && node.parent?.type === "object_creation_expression";
+function isAnonymousMethod(node: Node): boolean {
+  return node.type === "method_declaration" && isAnonymousBody(node.parent);
+}
+
+function isAnonymousBody(node: Node | null | undefined): boolean {
+  return node?.type === "class_body" && node.parent?.type === "object_creation_expression";
 }

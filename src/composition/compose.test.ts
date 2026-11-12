@@ -2034,3 +2034,26 @@ test("indexed callback obligations survive inventory exclusion", async () => {
     for (const obligation of obligations) assert.ok(answer.value.cuts.some((cut) => cut.at[0]?.endsWith(` ${obligation}`)), JSON.stringify(answer));
   }
 });
+
+test("a Java anonymous initializer runs at construction while its methods stay deferred", async () => {
+  const source = [
+    "public class Use {",
+    "  public void entry() {",
+    "    Object value = new Object() {",
+    "      { executed(); }",
+    "      Object field = fieldExecuted();",
+    "      void later() { deferred(); }",
+    "    };",
+    "  }",
+    "  private static void executed() {}",
+    "  private static Object fieldExecuted() { return null; }",
+    "  private static void deferred() {}",
+    "}",
+  ].join("\n");
+  const answer = await composeQueries({ scratchRoot }).trace.walk({ repo: committedRepository("anonymous-initializer", { "Use.java": source }), repoId: "anonymous-initializer", revision: "HEAD", targets: [{ file: "Use.java", symbol: "Use.entry" }] });
+  assert.ok(answer.ok && answer.value.status !== "unknown");
+  const reached = answer.value.value.steps.flatMap((step) => [step.symbol, ...(step.leaves ?? []).map((leaf) => leaf.symbol)]);
+  assert.ok(reached.includes("executed"), JSON.stringify(answer.value));
+  assert.ok(reached.includes("fieldExecuted"), JSON.stringify(answer.value));
+  assert.equal(reached.includes("deferred"), false);
+});

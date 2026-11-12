@@ -20,7 +20,7 @@ export interface DeclaredMemberNames {
   receiverBindings: readonly ReceiverBinding[];
   /**
    * The function values the source writes, each whole, in source order: the same arrows, function expressions, lambdas
-   * and method references a function-value call is read through, and a Java anonymous class body. What runs inside one
+   * and method references a function-value call is read through, and Java anonymous-class methods. What runs inside one
    * runs only when something runs the value.
    */
   functionValues: readonly SourceSpan[];
@@ -125,5 +125,9 @@ export interface SyntaxCall {
   callee?: string;
   /** Exact source anchors used by indexers for the same invocation expression or statement. */
   anchors?: readonly { line: number; column: number }[];
-  owners: readonly { name: string; start: number; nameLine: number; nameColumn: number; startColumn: number; endLine: number; endColumn: number }[];
+  owners: readonly {
+    /** This declaration's initialization executes in its enclosing body rather than owning a separate execution. */
+    runsInEnclosingBody?: true;
+    name: string; start: number; nameLine: number; nameColumn: number; startColumn: number; endLine: number; endColumn: number;
+  }[];
 }
