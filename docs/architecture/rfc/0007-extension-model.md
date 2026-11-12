@@ -522,3 +522,12 @@ row under ADR-0013. Mongo/Redis templates and TypeScript ORMs were not found; no
 Project wrappers remain code the trace walks, never vocabulary entries. Each admitted site is subject to slice 4's
 exact-position and function-value rules. Reads remain visible with their access class; no entity getter is a data row.
 The data effect union and compose schema are extended in place under the owner's no-bump rule (MCP has no consumers).
+
+
+### Framework member contributions
+
+The registered signals-store plugin extends TypeScript declarations through `FrameworkMemberBindings`. Its per-reading
+factory reuses B1 source trees, selects by nearest `@ngrx/signals` manifest dependency and runtime file imports, and
+binds members returned by `withMethods` to the declaration receiving `signalStore`. It contributes source positions
+and framework evidence; the shared model owns containment, path uniqueness and conflicts. Removing the registry entry
+removes this contribution while preserving the language's literal declarations.

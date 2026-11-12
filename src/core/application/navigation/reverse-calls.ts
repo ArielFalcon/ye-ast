@@ -10,6 +10,17 @@ import type { CallBindings, SettledBinding, UnboundCall } from "./call-binding.t
 import type { FollowedEdge } from "./edge-targets.ts";
 import type { GraphNavigation } from "./graph-navigation.ts";
 import type { BodyCalls, ReconciledCalls } from "./reconciled-calls.ts";
+import type { ModelDeclaration } from "./declaration-model.ts";
+import { ANYTHING, type Cut } from "../../domain/shared/fact.ts";
+import { placeAt } from "../../domain/impact/impact-cuts.ts";
+
+export interface DeclarationCaller {
+  from: GraphSymbol;
+  declaration: ModelDeclaration;
+  line: number;
+  column: number;
+  kind: string;
+}
 
 /** A recovered call nothing binds that is attributed to a reached declaration (ADR-0041 decision 8): a cut at the call. */
 export interface AttributedCall {
@@ -24,6 +35,7 @@ export interface AttributedCall {
  */
 export interface ReverseCalls {
   into(nodes: readonly GraphSymbol[], signal?: AbortSignal): Promise<{ edges: readonly FollowedEdge[]; attributed: readonly AttributedCall[] }>;
+  intoDeclarations(nodes: readonly ModelDeclaration[], signal?: AbortSignal): Promise<{ callers: readonly DeclarationCaller[]; cuts: readonly Cut[] }>;
 }
 
 export interface ReverseCallsDeps {
@@ -65,7 +77,18 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, im
   const contents = new Map<string, string>();
   const byName = new Map<string, UnboundCall[]>();
   const aligned = new Set<string>();
-  const bound = new Map<UnboundCall, Promise<SettledBinding>>();
+  const bound = new Map<UnboundCall, { batch: Promise<readonly SettledBinding[]>; index: number }>();
+  const bindingOf = async (call: UnboundCall): Promise<SettledBinding> => {
+    const { batch, index } = bound.get(call)!;
+    return (await batch)[index]!;
+  };
+  async function bindFresh(calls: readonly UnboundCall[], signal?: AbortSignal): Promise<void> {
+    const fresh = [...new Set(calls)].filter((call) => !bound.has(call));
+    if (fresh.length === 0) return;
+    const settled = bindings.boundCalls(fresh, signal);
+    for (const [index, call] of fresh.entries()) bound.set(call, { batch: settled, index });
+    await settled;
+  }
   const words = new Map<string, ReadonlySet<string>>();
   const wordsOf = (file: SourceFile): ReadonlySet<string> => {
     let found = words.get(file.path);
@@ -113,7 +136,7 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, im
   /** A source's written calls alignment leaves unmatched, `deferred` ones included, by body in the index's order. */
   async function unboundIn(file: SourceFile): Promise<readonly GraphUnresolvedReference[]> {
     const calls = await Promise.all(store.symbolsInFiles([file.path]).map((body) => reconciled.callsOf(body)));
-    return calls.flatMap(unmatchedCalls);
+    return calls.flatMap((body) => [...body.references, ...unmatchedCalls(body)]);
   }
 
   function bodiesOf(references: readonly GraphUnresolvedReference[]): ReadonlyMap<GraphNodeId, GraphSymbol> {
@@ -178,6 +201,24 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, im
   }
 
   return {
+    async intoDeclarations(nodes, signal) {
+      await align(nodes.map(({ name }) => ({ name })));
+      const calls = [...new Set(nodes.flatMap(({ name }) => byName.get(name) ?? []))];
+      await bindFresh(calls, signal);
+      const found: DeclarationCaller[] = [];
+      const cuts: Cut[] = [];
+      for (const call of calls) {
+        const binding = await bindingOf(call);
+        const declaration = binding.kind === "receiver" ? binding.declaration : undefined;
+        if (declaration === undefined) {
+          if (binding.kind === "unbound" || (binding.kind === "receiver" && !binding.outside)) cuts.push({ kind: "unresolved-link", reason: "receiver-unproven", at: [placeAt(call.reference.file, call.reference.line, call.reference.name), ...nodes.filter(({ name }) => name === lookupName(call.reference.file, call.reference.name)).map((node) => placeAt(node.file, node.startLine, node.path ?? node.name))], reach: ANYTHING });
+          continue;
+        }
+        const target = nodes.find(({ id }) => id === declaration.id);
+        if (target !== undefined) found.push({ from: call.body, declaration: target, line: call.reference.line, column: call.reference.column, kind: call.reference.kind });
+      }
+      return { callers: found, cuts };
+    },
     async into(nodes, signal) {
       const asked = await Promise.all(nodes.map(async (node) => ({ node, keys: await keysOf(node) })));
       await align(asked.flatMap(({ keys }) => keys));
@@ -185,16 +226,12 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, im
         node,
         calls: [...new Set(keys.flatMap(({ name, files }) => (byName.get(name) ?? []).filter((call) => (files === undefined || files.has(call.reference.file)) && sharesRuntime(call.reference.file, node.file))))],
       }));
-      const fresh = [...new Set(candidates.flatMap(({ calls }) => calls))].filter((call) => !bound.has(call));
-      if (fresh.length > 0) {
-        const settled = bindings.boundCalls(fresh, signal);
-        for (const [index, call] of fresh.entries()) bound.set(call, settled.then((all) => all[index]!));
-      }
+      await bindFresh(candidates.flatMap(({ calls }) => calls), signal);
       const edges: FollowedEdge[] = [];
       const attributed: AttributedCall[] = [];
       for (const { node, calls } of candidates) {
         for (const call of calls) {
-          const binding = await bound.get(call)!;
+          const binding = await bindingOf(call);
           if (reaches(binding, call, node)) {
             const edge: GraphEdge = { source: call.body.id, target: node.id, kind: call.reference.kind, line: call.reference.line, column: call.reference.column, confidence: null, provenance: null, synthesizedBy: null, resolvedFrom: null };
             edges.push({ edge, source: call.body, target: node });

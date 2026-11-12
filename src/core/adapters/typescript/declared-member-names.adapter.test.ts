@@ -45,6 +45,25 @@ test("object literal callables retain their holder while returned literals have 
   assert.deepEqual(answer.callables.map(({ name }) => name), ["factory"]);
 });
 
+test("single initializer receivers bind literal holders and imported injection tokens, never later writes or foreign factories", async () => {
+  const answer = await read([
+    "import { inject as take } from '@angular/core';",
+    "import { inject as other } from 'elsewhere';",
+    "import { Store } from './store';",
+    "class A {",
+    " private readonly s = take(Store);",
+    " private d = { m() {} };",
+    " private changed = take(Store);",
+    " private foreign = other(Store);",
+    " run() { this.s.m(); this.d.m(); this.changed.m(); this.foreign.m(); }",
+    " reset() { this.changed = take(Store); }",
+    "}",
+    "export function local() { const d = { m() {} }; d.m(); }",
+  ]);
+  assert.deepEqual(answer.receiverBindings.filter(({ line }) => line === 9).map(({ receiver, holds }) => [receiver, holds.kind]), [["s", "token"], ["d", "object"]]);
+  assert.equal(answer.receiverBindings.find(({ line }) => line === 12)?.holds.kind, "object");
+});
+
 test("every object-literal key is a name, at any depth and in any context, and a spread is none", async () => {
   assert.deepEqual(await names([
     "make({ argMethod() {}, argKey: 1 });",

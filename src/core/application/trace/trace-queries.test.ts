@@ -1564,11 +1564,14 @@ test("effect deduplication preserves distinct call columns", async () => {
 });
 
 
-test("a syntax-only trace target remains explicit and partial until its execution stage is supported", async () => {
-  const file = "src/store.ts";
-  const fact = await factOf({ nodes: [fakeNode("D", "constant", file, 1, 8)], sources: [{ path: file, content: "const D = {};" }], declarations: { [file]: [{ name: "m", kind: "method", invoked: true, container: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 5, column: 3 } } }] } }, [{ file, symbol: "D.m" }]);
+test("a syntax-only trace target runs its owned calls without an index handle", async () => {
+  const file = A;
+  const fact = await factOf({ nodes: [fakeNode("D", "constant", file, 1, 8)], sources: [{ path: file, content: "const D = {};" }], declarations: { [file]: [{ name: "m", kind: "method", invoked: true, container: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 5, column: 3 } } }] }, syntaxCalls: { [file]: [{ kind: "calls", name: "opaque", callee: "opaque", line: 4, column: 4, owners: [] }] }, placedSites: [at(4, 3, "/literal")] }, [{ file, symbol: "D.m" }]);
   assert.equal(fact.status, "partial");
-  assert.ok(fact.status === "partial" && fact.cuts.some(({ reason, at }) => reason === "no-symbols" && at[0]?.includes("D.m")));
+  assert.equal(valueOf(fact).steps[0]?.symbol, "m");
+  assert.ok(fact.status === "partial" && fact.cuts.some(({ at }) => at[0] === `${file}:4 opaque`));
+  assert.ok(fact.status === "partial" && fact.cuts.every(({ reason }) => reason !== "no-symbols"));
+  assert.deepEqual(effectPaths(fact), [["m", "/literal"]]);
 });
 
 test("trace refuses an include with no held path", async () => {

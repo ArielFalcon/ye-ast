@@ -2,7 +2,9 @@ import ts from "typescript";
 import type { FunctionValueCall, ReceiverBinding, ReceiverValue } from "../../ports/declared-member-names.port.ts";
 import { bindFile, type BoundFile, isDirectEval, type LexicalBinding } from "./lexical-bindings.ts";
 import { hasModifier, isStatic, lineOf, thisClass, unwrapped } from "./syntax.ts";
-import { typeScopeOf } from "./syntax-names.ts";
+import { declarationCounts, typeScopeOf } from "./syntax-names.ts";
+import { moduleShape } from "./module-shape.ts";
+import { injectedToken, type FileNames } from "./angular-injection.ts";
 
 const LOGICAL_OPERATORS: readonly ts.SyntaxKind[] = [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken];
 /** Operators that store their right operand, or may: `a ??= f` leaves `a` holding `f` when it held nothing. */
@@ -28,6 +30,21 @@ export interface LocalReceivers {
  * - the calls whose bare receiver holds one kind of value (see `ReceiverBinding`), keyed by where the call starts.
  */
 export function localReceivers(tree: ts.SourceFile): LocalReceivers {
+  let fileNames: FileNames | undefined;
+  const initializerValue = (value: ts.Expression): ReceiverValue | undefined => {
+    const inner = unwrapped(value);
+    if (ts.isObjectLiteralExpression(inner)) {
+      const holder = value.parent;
+      if (!ts.isVariableDeclaration(holder) && !ts.isPropertyDeclaration(holder)) return undefined;
+      const at = tree.getLineAndCharacterOfPosition(holder.getStart(tree));
+      return { kind: "object", line: at.line + 1, column: at.character + 1 };
+    }
+    fileNames ??= { imports: moduleShape(tree)?.imports ?? new Map(), declared: declarationCounts(tree) };
+    const token = injectedToken(value, fileNames);
+    if (token === undefined || !ts.isIdentifier(token)) return undefined;
+    const at = tree.getLineAndCharacterOfPosition(token.getStart(tree));
+    return { kind: "token", name: token.text, line: at.line + 1, column: at.character + 1 };
+  };
   const accesses: ts.PropertyAccessExpression[] = [];
   const holders = new Set<string>();
   const stores: Store[] = [];
@@ -120,6 +137,10 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
     if (values.length === 0 || values.some((value) => value === undefined)) return undefined;
     const reads = values.map((value) => unwrapped(value!));
     const [read] = reads;
+    if (binding.declarations.length === 1 && assignments.length === 0 && values.length === 1) {
+      const initialized = initializerValue(values[0]!);
+      if (initialized !== undefined) return initialized;
+    }
     if (read !== undefined && isThisMember(read)) {
       const same = reads.every((other) => isThisMember(other) && other.name.text === read.name.text && thisClass(other) === thisClass(read));
       return same ? fieldAnnotationOf(read, new Set(reads)) : undefined;
@@ -172,7 +193,21 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
     const [field, ...others] = declared;
     if (field === undefined || others.length > 0 || !isClassPrivate(field) || !fieldStaysLocal(owner, name, copies)) return undefined;
     if (ts.isParameter(field)) return annotated(field.type, tree);
-    return ts.isPropertyDeclaration(field) && !isStatic(field) ? annotated(field.type, tree) : undefined;
+    if (!ts.isPropertyDeclaration(field) || isStatic(field)) return undefined;
+    if (field.type !== undefined) return annotated(field.type, tree);
+    if (field.initializer !== undefined) {
+      let written = false;
+      const visit = (node: ts.Node): void => {
+        if (isThisMember(node) && node.name.text === name && thisClass(node) === owner && isWritten(node)) written = true;
+        ts.forEachChild(node, visit);
+      };
+      visit(owner);
+      if (!written) {
+        const initialized = initializerValue(field.initializer) ?? storedValue(field.initializer, bindingOf, tree);
+        if (initialized !== undefined) return initialized;
+      }
+    }
+    return annotated(field.type, tree);
   };
   const receiverBindings = accesses.flatMap((access): ReceiverBinding[] => {
     const receiver = seenThrough(access.expression);

@@ -51,7 +51,7 @@ async function trace(target: string, ...also: string[]): Promise<{ status: strin
 
 const effectsOf = (value: TraceValue) => value.steps.flatMap((step) => (step.effects ?? []).map(({ column: _column, ...effect }) => [step.symbol, effect]));
 
-test("a direct Angular HttpClient request has its effect and an unexpanded wrapper remains an effect cut", async () => {
+test("direct Angular HttpClient and a proved injected wrapper retain their HTTP effects", async () => {
   commit({
     "src/api.client.ts": `import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
@@ -88,8 +88,8 @@ export class OrdersApi {
   const checkout = await trace("src/orders.api.ts:OrdersApi.checkout");
   const cancel = await trace("src/orders.api.ts:OrdersApi.cancel");
 
-  assert.deepEqual(effectsOf(checkout.value), []);
-  assert.ok(checkout.cuts?.some((cut) => cut.at[0]?.includes("http effect")));
+  assert.deepEqual(effectsOf(checkout.value), [["checkout", { kind: "http", line: 11, target: { method: "POST", path: "/api/orders/checkout" } }]]);
+  assert.ok(!checkout.cuts?.some((cut) => cut.at[0]?.includes("http effect")));
   assert.deepEqual(effectsOf(cancel.value), [["cancel", { kind: "http", line: 15, target: { method: "DELETE", path: "/api/orders/{}" } }]]);
 });
 

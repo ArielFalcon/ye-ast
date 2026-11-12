@@ -4,11 +4,12 @@ import { boundCut, type Cut, type WalkBoundKind } from "../../domain/shared/fact
 import { comparePosition } from "../../domain/shared/code-node.ts";
 import type { MemberSubstitute } from "../../domain/relations/member-use.ts";
 import type { GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
+import { indexedDeclaration, type ModelDeclaration } from "../navigation/declaration-model.ts";
 import type { InboundEdge, InboundEdges } from "./inbound-edges.ts";
 
 /** The dependence that reached a symbol: the symbol it came through, and where this one depends on it. */
 export interface Via {
-  symbol: GraphSymbol;
+  symbol: GraphSymbol | ModelDeclaration;
   /** The places in the reached symbol's own file, or in `resource`, where it depends on `symbol`, in line order; empty when the store places none. */
   lines: readonly number[];
   /** The file `lines` are in when it is not the reached symbol's own: the template of a component. */
@@ -22,7 +23,7 @@ export interface Via {
 }
 
 export interface ReachedSymbol {
-  symbol: GraphSymbol;
+  symbol: GraphSymbol | ModelDeclaration;
   depth: number;
   /** The strongest weakest edge over every path from a seed, 1 for a seed. */
   confidence: number;
@@ -46,7 +47,7 @@ export interface Walk {
 }
 
 interface Rec {
-  symbol: GraphSymbol;
+  symbol: GraphSymbol | ModelDeclaration;
   depth: number;
   /** Whether a changed contract can still flow down to the implementations. */
   contractChanged: boolean;
@@ -63,7 +64,7 @@ interface Link {
   via: Via;
 }
 
-function placeOn(symbol: GraphSymbol, dependence: InboundEdge): Via {
+function placeOn(symbol: GraphSymbol | ModelDeclaration, dependence: InboundEdge): Via {
   return { symbol, lines: dependence.lines, ...(dependence.resource === undefined ? {} : { resource: dependence.resource }), basis: dependence.basis, derivation: dependence.derivation, ...(dependence.substitutes === undefined ? {} : { substitutes: dependence.substitutes }) };
 }
 
@@ -71,12 +72,12 @@ function placeOn(symbol: GraphSymbol, dependence: InboundEdge): Via {
  * Inbound from the seeds, level by level in position order, each symbol expanded once, so the walk ends on any graph.
  * A reached method also reaches its type at its own level. The seeds are distinct symbols.
  */
-export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges, budget: ImpactBudget = {}): Walk {
-  const recs = new Map<GraphNodeId, Rec>();
+export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges, budget: ImpactBudget = {}, syntax?: { seeds: readonly ModelDeclaration[]; callers: ReadonlyMap<string, readonly InboundEdge[]> }): Walk {
+  const recs = new Map<string, Rec>();
   const links: Link[] = [];
   let level: Rec[] = [];
 
-  function enter(symbol: GraphSymbol, depth: number, contractChanged: boolean, into: Rec[], throughMember = false): Rec {
+  function enter(symbol: GraphSymbol | ModelDeclaration, depth: number, contractChanged: boolean, into: Rec[], throughMember = false): Rec {
     const rec: Rec = { symbol, depth, contractChanged, throughMember, fanIn: 0, callers: [] };
     recs.set(symbol.id, rec);
     into.push(rec);
@@ -84,13 +85,14 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
   }
 
   function enterOwners(rec: Rec, into: Rec[]): void {
-    for (const owner of inbound.ownersOf(rec.symbol)) {
+    const indexed = indexedDeclaration(rec.symbol);
+    for (const owner of indexed === undefined ? [] : inbound.ownersOf(indexed)) {
       const ownerRec = recs.get(owner.id) ?? enter(owner, rec.depth, false, into, true);
       links.push({ from: rec, to: ownerRec, confidence: 1, via: { symbol: rec.symbol, lines: [], basis: "contains", derivation: "resolved" } });
     }
   }
 
-  const seedRecs = seeds.map((seed) => enter(seed, 0, true, level));
+  const seedRecs = [...seeds, ...syntax?.seeds ?? []].map((seed) => enter(seed, 0, true, level));
   for (const rec of seedRecs) enterOwners(rec, level);
 
   const stopped = { depth: [] as Rec[], hub: [] as Rec[], expansions: [] as Rec[] };
@@ -105,14 +107,15 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
       const rec = queue[index]!;
       if (handled.has(rec)) continue;
       handled.add(rec);
-      rec.callers = inbound.callersOf(rec.symbol, rec.contractChanged, rec.throughMember);
+      const indexed = indexedDeclaration(rec.symbol);
+      rec.callers = indexed === undefined ? syntax?.callers.get(rec.symbol.id) ?? [] : inbound.callersOf(indexed, rec.contractChanged, rec.throughMember);
       rec.fanIn = rec.callers.filter((caller) => caller.hasCall ?? caller.basis === "call").length;
       if (budget.depth !== undefined && depth >= budget.depth) stopped.depth.push(rec);
       else if (budget.hubFanIn !== undefined && rec.fanIn > budget.hubFanIn) stopped.hub.push(rec);
       else if (budget.expansions !== undefined && expansions >= budget.expansions) stopped.expansions.push(rec);
       else {
         expansions += 1;
-        expanded.add(rec.symbol.id);
+        if (indexed !== undefined) expanded.add(indexed.id);
         for (const caller of rec.callers) {
           const free = caller.bridge !== undefined;
           const into = free ? queue : next;
@@ -151,7 +154,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
   };
   return {
     reached,
-    wholeDeclarations: new Set([...recs.values()].filter((rec) => !rec.throughMember).map((rec) => rec.symbol.id)),
+    wholeDeclarations: new Set([...recs.values()].filter((rec) => !rec.throughMember).flatMap((rec) => indexedDeclaration(rec.symbol)?.id ?? [])),
     expanded,
     cuts: [...cutAt("depth", stopped.depth, budget.depth), ...cutAt("hub", stopped.hub, budget.hubFanIn), ...cutAt("caller-budget", stopped.expansions, budget.expansions)],
     cost: { expansionsUsed: expansions },

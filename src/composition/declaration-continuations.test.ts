@@ -22,6 +22,29 @@ async function inRepository(files: Readonly<Record<string, string>>, verify: (qu
   } finally { await rm(root, { recursive: true, force: true }); }
 }
 
+test("store declarations join trace effects and reverse callers through the same registered plugin", async () => {
+  await inRepository({
+  "package.json": JSON.stringify({ dependencies: { "@angular/core": "1.0.0", "@ngrx/signals": "1.0.0" } }),
+  "src/store.ts": "import { signalStore, withMethods } from '@ngrx/signals';\nexport const S = signalStore(withMethods(() => ({\n m() {\n  fetch('/items');\n }\n})));\n",
+  "src/page.ts": "import { inject } from '@angular/core';\nimport { S } from './store';\nexport class Page {\n private readonly s = inject(S);\n run() { this.s.m(); this.s.m(); }\n}\n",
+}, async (queries, request) => {
+    const trace = await queries.trace.walk({ ...request, targets: [{ file: "src/page.ts", symbol: "Page.run" }] });
+    assert.ok(trace.ok, JSON.stringify(trace));
+    assert.notEqual(trace.value.status, "unknown");
+    if (trace.value.status === "unknown") return;
+    assert.ok(trace.value.value.steps.some(({ file, symbol }) => file === "src/store.ts" && symbol === "m"), JSON.stringify(trace.value));
+    assert.ok(trace.value.value.steps.some(({ effects }) => effects?.some((effect) => effect.kind === "http")), JSON.stringify(trace.value));
+    const callers = await queries.impact.callers({ ...request, targets: [{ file: "src/store.ts", symbol: "S.m" }] });
+    assert.ok(callers.ok, JSON.stringify(callers));
+    assert.notEqual(callers.value.status, "unknown");
+    if (callers.value.status === "unknown") return;
+    const run = callers.value.value.symbols.find(({ file, symbol }) => file === "src/page.ts" && symbol === "run");
+    assert.equal(run?.depth, 1, JSON.stringify(callers.value));
+    assert.deepEqual(run?.via?.lines, [5]);
+    assert.equal(run?.via?.derivation, "proven");
+  });
+});
+
 test("a Java method reference reaches its caller while remaining deferred in trace", async () => {
   await inRepository({ "src/Refs.java": "package fixture;\nimport java.util.function.Function;\nclass Refs {\n String fmt(String value) { return value.trim(); }\n void run() { Function<String, String> fn = this::fmt; }\n}\n" }, async (queries, request) => {
     const trace = await queries.trace.walk({ ...request, targets: [{ file: "src/Refs.java", symbol: "Refs.run" }] });

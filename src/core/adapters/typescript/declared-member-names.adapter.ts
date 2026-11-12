@@ -4,7 +4,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredCallable, DeclaredDeclaration, DeclaredMemberNames, DeclaredMemberNamesReader, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import { annotated, isFunctionValueNode, localReceivers } from "./function-value-calls.ts";
 import type { SourcePosition, SourceSpan } from "../../domain/shared/owning-body.ts";
-import { hasModifier, isStatic, lineOf, unwrapped } from "./syntax.ts";
+import { hasModifier, isStatic, lineOf, unwrapped, propertyNameText } from "./syntax.ts";
 import { sourceTree } from "./source-tree.ts";
 import { defaultExportOf } from "./import-bindings.ts";
 
@@ -157,9 +157,7 @@ function derive(file: SourceFile): DeclaredMemberNames {
 }
 
 function propertyName(name: ts.PropertyName | ts.BindingName): string | undefined {
-  if (ts.isIdentifier(name) || ts.isPrivateIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) return name.text;
-  if (ts.isComputedPropertyName(name) && (ts.isStringLiteralLike(name.expression) || ts.isNumericLiteral(name.expression))) return name.expression.text;
-  return undefined;
+  return ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name) ? undefined : propertyNameText(name);
 }
 
 /** The names a module re-exports or exports under another name, without the ones marked type-only. */

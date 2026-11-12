@@ -32,7 +32,8 @@ export function injectedToken(expression: ts.Expression, names: FileNames): ts.E
 }
 
 function importOf(name: ts.Identifier, names: FileNames): RawImport | undefined {
-  return names.declared.has(name.text) ? undefined : names.imports.get(name.text);
+  const imported = names.declared.has(name.text) ? undefined : names.imports.get(name.text);
+  return imported?.typeOnly === true ? undefined : imported;
 }
 
 /** The class an Angular `inject(X)` call asks for, by the name `X` is written with. */

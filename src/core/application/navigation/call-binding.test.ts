@@ -30,6 +30,24 @@ test("a proven syntax-only holder binds through the shared model without inventi
   assert.equal((await bindings.ofReceiver({ link: "none" }, "send", [], { file: USE, line: 24, column: 3 })).declaration, undefined);
 });
 
+test("an imported token receiver selects its declaration member without a fabricated graph target", async () => {
+  const store = fakeCodeGraph([fakeNode("use", "function", USE, 20, 30), fakeNode("Holder", "constant", API, 1, 8)], []);
+  const navigation = createGraphNavigation(store, () => false);
+  const declarations = createDeclarationModel({ store, declarationsIn: async (file) => file === API ? [
+    { name: "send", kind: "method", invoked: true, binding: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 4, column: 3 } } },
+  ] : [] });
+  const importedDeclarations = async () => new Map([["S", store.symbolsInFiles([API])[0]!]]);
+  const binder = createCallBinder({ store, navigation, declarations, importedDeclarations, proofs: async () => ({ fields: [], locals: [] }), callablesIn: async () => [], syntaxIn: async () => ({
+    receiverBindings: new Map([["24:3:send", { line: 24, column: 3, receiver: "s", member: "send", holds: { kind: "token", name: "S", line: 2, column: 20 } }]]),
+    callees: new Map([["24:3", ["this.s.send"]]]),
+  }) });
+  const proof = await binder.receiverOf({ body: store.symbolsInFiles([USE])[0]!, line: 24, column: 3, receiver: "s", member: "send" });
+  const bindings = createCallBindings({ store, navigation, declarations, binder, importedDeclarations, origins: {} as ImportOrigins });
+  const answer = await bindings.ofReceiver(proof, "send", [], { file: USE, line: 24, column: 3 });
+  assert.equal(answer.declaration?.path, "Holder.send");
+  assert.equal(answer.target, undefined);
+});
+
 interface World {
   nodes: readonly FakeNode[];
   edges?: readonly FakeEdge[];
@@ -211,4 +229,17 @@ test("an unsettled receiver's candidates are the members of its type, not the ho
   assert.deepEqual(binding.attributed.map(({ id }) => id), ["A.save@3", "A.save@4"]);
   const [unproven] = await bound(world, "run", [{ name: "factory().save", line: 8, kind: "calls" }]);
   assert.deepEqual(summary(unproven!), ["unbound", "member", ["A.save@3", "A.save@4", "B.save"], []]);
+});
+
+test("a Java written reference uses declared receiver selection and attributes every ambiguous candidate", async () => {
+  const file = "src/main/java/p/Use.java";
+  const port = "src/main/java/p/Port.java";
+  const world: World = {
+    nodes: [fakeNode("run", "method", file, 1, 8), fakeNode("load1", "method", port, 3, 3, "load"), fakeNode("load2", "method", port, 4, 4, "load")],
+    receivers: { load: { kind: "unproven", candidates: [{ file: port, start: 3, nameLine: 3 }, { file: port, start: 4, nameLine: 4 }] } },
+  };
+  const [ambiguous] = await bound(world, "run", [{ kind: "references", name: "load", line: 3 }]);
+  assert.deepEqual(summary(ambiguous!), ["unbound", "bare", ["load1", "load2"], ["load1", "load2"]]);
+  const [resolved] = await bound({ ...world, receivers: { load: { kind: "method", file: port, start: 3, nameLine: 3 } } }, "run", [{ kind: "references", name: "load", line: 3 }]);
+  assert.deepEqual(summary(resolved!), ["declaration", "declared-receiver", "load1"]);
 });

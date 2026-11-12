@@ -72,6 +72,8 @@ export interface ReceiverBinding {
  * binds `type` where it is written, so neither an import nor a top-level declaration of the file names it.
  */
 export type ReceiverValue =
+  | { kind: "object"; line: number; column: number }
+  | { kind: "token"; name: string; line: number; column: number }
   | { kind: "literal"; type: "RegExp" | "Array" | "String" }
   /** The value a call returns, `name` the last name of its callee, at the place the call starts. */
   | { kind: "returned"; name: string; line: number; column: number }

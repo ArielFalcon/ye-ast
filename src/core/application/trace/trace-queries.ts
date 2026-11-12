@@ -28,7 +28,7 @@ import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { EntrypointTarget, TraceFault, TraceQueries, TraceTarget, UnknownEntrypointFault } from "../../ports/trace-queries.port.ts";
-import { syntaxRootCuts, distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey, type RootSelection } from "../navigation/root-selection.ts";
+import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey, type RootSelection } from "../navigation/root-selection.ts";
 import { heldPaths, snapshotFiles, type SnapshotFiles } from "../navigation/snapshot-files.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
 import { NOTHING_DECLARED } from "../navigation/edge-targets.ts";
@@ -43,7 +43,7 @@ import { pagePlans } from "./page-plans.ts";
 import { createBaseReadings, withOutputs, type BaseReadingDeps } from "../snapshot/base-reading.ts";
 import { buildOutputCuts } from "../../domain/shared/build-outputs.ts";
 
-export interface TraceQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, "typeBindings" | "checkerInputs" | "declaredOutputs"> {
+export interface TraceQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, "typeBindings" | "checkerInputs" | "declaredOutputs" | "frameworks"> {
   workspace?: WorkspaceReadOperation;
   librarySources?: readonly LibrarySource[];
   /** Reads where the bare names a file calls come from, so a call to a package or a language global is external. */
@@ -159,7 +159,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const missing = snapshot.describe(selections.flatMap(({ selection }) => selection.missing));
           if (missing.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${missing.map(unknownTargetKey).join(", ")}`, entries: missing } };
 
-          const roots = [...new Map(selections.flatMap(({ selection }) => selection.seeds.map(({ symbol }): [GraphNodeId, GraphSymbol] => [symbol.id, symbol]))).values()].sort(comparePosition);
+          const roots = [...new Map(selections.flatMap(({ selection }) => [...selection.seeds, ...selection.syntaxSeeds].map(({ symbol }) => [symbol.id, symbol] as const))).values()].sort(comparePosition);
           const origins = reading.origins();
           const typed = await reading.typed();
           if (typed === "aborted") return ABORTED;
@@ -172,13 +172,13 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           if (walk === "aborted") return ABORTED;
           const dataEffects = () => deps.dataEffects?.placed(head.tree.sources) ?? Promise.resolve([]);
           const dataSites = () => head.prepared?.facts === undefined ? dataEffects() : head.prepared.facts.ofInputs("trace-data-effects", { sources: head.tree.sources }, dataEffects);
-          const effectCuts = await placeEffects(walk.roots, { store, callsOf: (body) => reconciled.callsOf(body), sites: async () => [...(await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources)), ...(await dataSites())].sort(comparePlacement).filter(({ site }) => head.selected(site.file)), lineOf, functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined) });
+          const effectCuts = await placeEffects(walk.roots, { store, declarations: reading.declarations, ownedIn: reconciled.ownedIn, callsOf: (body) => reconciled.callsOf(body), sites: async () => [...(await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources)), ...(await dataSites())].sort(comparePlacement).filter(({ site }) => head.selected(site.file)), lineOf, functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined) });
 
           const { steps, ids } = traceSteps(walk.roots);
           const rootIds = new Map(roots.map((root, index) => [root.id, ids.get(walk.roots[index]!)!]));
           const settled = settledRangeChanges(selections.flatMap(({ selection }) => selection.settled));
           const value: TraceValue = {
-            roots: selections.map(({ target, selection }) => ({ target: traceTargetKey(target), steps: selection.seeds.map(({ symbol }) => rootIds.get(symbol.id)!).sort((a, b) => a - b) })),
+            roots: selections.map(({ target, selection }) => ({ target: traceTargetKey(target), steps: [...selection.seeds, ...selection.syntaxSeeds].map(({ symbol }) => rootIds.get(symbol.id)!).sort((a, b) => a - b) })),
             ...(settled.length === 0 ? {} : { settled }),
             steps,
             readingPlan: readingPlan(steps),
@@ -190,14 +190,14 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             ...buildOutputCuts(typed.buildOutputs),
             ...summary.filesNotIndexed.map((file) => fileCut("no-extractor", file, "not-indexed")),
             ...selections.flatMap(({ selection }) => selection.withoutSymbols.map((file) => fileCut("no-extractor", file, "no-symbols"))),
-            ...selections.flatMap(({ selection }) => syntaxRootCuts(selection.syntaxSeeds)),
             ...handlers.unplaced,
             ...selections.flatMap(({ target, selection }) => (isEntrypointTarget(target) ? unplacedHandlers(handlers.byTarget.get(traceTargetKey(target)) ?? [], selection) : [])),
             ...walk.cuts,
             ...effectCuts,
           ];
           const walked: Asserted = { kind: "walk", files: [...new Set([...selections.flatMap(({ target }) => (isEntrypointTarget(target) ? [] : [target.file])), ...steps.map(({ file }) => file)])] };
-          return { ok: true, value: withCuts(withOutputs(head.base(content, true), typed.outputs), value, cuts, walked) };
+          const base = withOutputs(head.base(content, true), typed.outputs);
+          return { ok: true, value: withCuts({ ...base, evidence: [...base.evidence, ...walk.evidence] }, value, cuts, walked) };
         } finally {
           store.close();
         }

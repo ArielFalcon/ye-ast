@@ -8,7 +8,7 @@ import type { CodeGraphReader, GraphSymbol, GraphUnresolvedReference } from "../
 import type { ImportOrigins, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
 import type { CallBinder, CallPlace, ReceiverProof } from "./call-binder.ts";
 import { ownMembersOf, placedBetween, type GraphNavigation } from "./graph-navigation.ts";
-import type { DeclarationModel, ModelDeclaration } from "./declaration-model.ts";
+import { indexedDeclaration, type DeclarationModel, type ModelDeclaration } from "./declaration-model.ts";
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 
 /** A call the index left without a target: its body, and the reference the index or the syntax states for it. */
@@ -16,6 +16,8 @@ export interface UnboundCall {
   body: GraphSymbol;
   reference: GraphUnresolvedReference;
 }
+
+export type BindingCall = UnboundCall | { body: ModelDeclaration; reference: Omit<GraphUnresolvedReference, "from"> };
 
 type Outside = Extract<ImportOrigin, { kind: "external" | "ambient" }>;
 
@@ -51,7 +53,7 @@ export interface DeclaredBinding {
   kind: "declared";
   member: string;
   form: "bare" | "member" | "chain";
-  call: UnboundCall;
+  call: BindingCall;
 }
 
 /** A binding no read is pending on. */
@@ -73,11 +75,11 @@ export interface ReceiverMemberAnswer {
 /** The one owner of what a call the index left without a target binds to, for every family (ADR-0041 decisions 1 and 4). */
 export interface CallBindings {
   /** One binding per call, in the order given; the reads each link needs are made once for all of them, save the receiver methods a `declared` binding waits on. */
-  bindCalls(calls: readonly UnboundCall[], signal?: AbortSignal): Promise<readonly CallBinding[]>;
+  bindCalls(calls: readonly BindingCall[], signal?: AbortSignal): Promise<readonly CallBinding[]>;
   /** What the method a `declared` binding's receiver reading names settles it to. */
   settleDeclared(binding: DeclaredBinding, method: ReceiverMethod | undefined): SettledBinding;
   /** `bindCalls` with every `declared` binding settled through one read of the receiver methods. */
-  boundCalls(calls: readonly UnboundCall[], signal?: AbortSignal): Promise<readonly SettledBinding[]>;
+  boundCalls(calls: readonly BindingCall[], signal?: AbortSignal): Promise<readonly SettledBinding[]>;
   /** The declarations of `name` a call written in `from` may run, in scope; `values` leaves out the kinds only types have. */
   namedDeclarations(name: string, from: string, values?: boolean): readonly GraphSymbol[];
   /** What a member call of `member` binds to by what its receiver's proof decides, attributed among `candidates`. */
@@ -121,9 +123,12 @@ export function createCallBindings({ store, navigation, origins, binder, declara
    * for `super`. The index holds a record's constructors as functions of no container, so `this` in one of them runs
    * another function of its file with its name.
    */
-  const classesOf = (body: GraphSymbol): readonly GraphSymbol[] => navigation.ownersOf(body).filter((owner) => isClassKind(owner.kind));
+  const classesOf = (body: GraphSymbol | ModelDeclaration): readonly GraphSymbol[] => {
+    const symbol = indexedDeclaration(body);
+    return symbol === undefined ? [] : navigation.ownersOf(symbol).filter((owner) => isClassKind(owner.kind));
+  };
   const superclassesOf = (types: readonly GraphSymbol[]): readonly GraphSymbol[] => store.symbolsByIds(store.outgoingEdges(types.map((type) => type.id), ["extends"]).map((edge) => edge.target)).filter((type) => isClassKind(type.kind));
-  const chainedConstructors = (body: GraphSymbol, keyword: string): readonly GraphSymbol[] => {
+  const chainedConstructors = (body: GraphSymbol | ModelDeclaration, keyword: string): readonly GraphSymbol[] => {
     const own = classesOf(body);
     if (own.length === 0) return keyword === "this" && body.kind === "function" ? navigation.symbolsInFile(body.file).filter((symbol) => symbol.kind === "function" && symbol.name === body.name && symbol.id !== body.id && navigation.ownersOf(symbol).length === 0) : [];
     const types = keyword === "this" ? own : superclassesOf(own);
@@ -134,7 +139,7 @@ export function createCallBindings({ store, navigation, origins, binder, declara
    * The declaration a bare name binds in its own file: an import's where the occurrence reads that import, or the file's
    * own declaration of it. A local binding, an own member or an unread occurrence never takes the import of its name.
    */
-  async function bareDeclaration({ body, reference }: UnboundCall, name: string, bound: Awaited<ReturnType<ImportOrigins["rootBindings"]>>[number] | undefined): Promise<CallBinding | undefined> {
+  async function bareDeclaration({ body, reference }: BindingCall, name: string, bound: Awaited<ReturnType<ImportOrigins["rootBindings"]>>[number] | undefined): Promise<CallBinding | undefined> {
     const imported = bound?.kind === "import" || bound?.kind === "located" ? (await importedDeclarations(reference.file)).get(name) : undefined;
     if (imported !== undefined) return { kind: "declaration", target: imported, link: "import" };
     if (bound?.kind !== "declared" || bound.captured) return undefined;
@@ -159,6 +164,10 @@ export function createCallBindings({ store, navigation, origins, binder, declara
     if (proof.link === "external") return { kind: "receiver", proof, candidates, attributed: [], outside: true };
     if (proof.link === "field" || proof.link === "local") return "external" in proof.holds ? { kind: "receiver", proof, candidates, attributed: [], outside: true } : { kind: "receiver", proof, candidates, ...(await typed(proof.type, proof.holds.class)) };
     if (proof.link === "syntax" && proof.holds.kind === "literal") return { kind: "receiver", proof, candidates, attributed: [], outside: true };
+    if (proof.link === "syntax" && proof.unspelled !== true && proof.declaration !== undefined) {
+      const declaration = await binder.memberOfDeclaration(proof.declaration, name, place);
+      return { kind: "receiver", proof, candidates, attributed: [], ...(declaration === undefined ? {} : { declaration, ...(declaration.symbol === undefined ? {} : { target: declaration.symbol }) }) };
+    }
     if (proof.link === "syntax" && proof.unspelled !== true && ["declared", "annotated", "constructed"].includes(proof.holds.kind)) return { kind: "receiver", proof, candidates, ...(await typed(proof.type)) };
     return { kind: "receiver", proof, candidates, attributed: [] };
   }
@@ -182,10 +191,10 @@ export function createCallBindings({ store, navigation, origins, binder, declara
     return { candidates: offered ?? binder.membersAbove(type, member) };
   }
 
-  async function bindCalls(calls: readonly UnboundCall[], signal?: AbortSignal): Promise<readonly CallBinding[]> {
+  async function bindCalls(calls: readonly BindingCall[], signal?: AbortSignal): Promise<readonly CallBinding[]> {
     const bindings: (CallBinding | undefined)[] = calls.map(() => undefined);
     const bare: { index: number; name: string }[] = [];
-    const typed: { index: number; member: string; site: UnboundCall }[] = [];
+    const typed: { index: number; member: string; site: BindingCall }[] = [];
     const rooted: { index: number; member: string }[] = [];
     for (const [index, call] of calls.entries()) {
       const { body, reference } = call;
@@ -194,7 +203,15 @@ export function createCallBindings({ store, navigation, origins, binder, declara
         continue;
       }
       const own = ownMemberOf(compactSpelling(reference.name));
-      const members = own === undefined || hasTyping(reference.file, "nominal") ? [] : ownMembersOf(navigation, body, own, ["method"]);
+      const indexed = indexedDeclaration(body);
+      if (own !== undefined && indexed === undefined) {
+        const declaration = await binder.memberOfDeclaration(body as ModelDeclaration, own, { file: reference.file, line: reference.line, column: reference.column + 1 });
+        if (declaration !== undefined) {
+          bindings[index] = { kind: "receiver", proof: { link: "none" }, candidates: [], attributed: [], ...(declaration.symbol === undefined ? { declaration } : { target: declaration.symbol }) };
+          continue;
+        }
+      }
+      const members = own === undefined || indexed === undefined || hasTyping(reference.file, "nominal") ? [] : ownMembersOf(navigation, indexed, own, ["method"]);
       if (members.length === 1) bindings[index] = { kind: "declaration", target: members[0]!, link: "own-member" };
       else if (members.length > 1) {
         const [owner] = classesOf(body);
@@ -277,7 +294,7 @@ export function createCallBindings({ store, navigation, origins, binder, declara
   }
 
   /** A chaining call to a repository class that declares no constructor runs its implicit one: the class itself. */
-  function implicitConstructor(body: GraphSymbol, keyword: string): SettledBinding | undefined {
+  function implicitConstructor(body: GraphSymbol | ModelDeclaration, keyword: string): SettledBinding | undefined {
     if (keyword !== "super") return undefined;
     const above = superclassesOf(classesOf(body));
     const [type] = above;

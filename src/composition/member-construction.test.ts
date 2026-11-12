@@ -1,3 +1,4 @@
+import { indexedDeclaration } from "../core/application/navigation/declaration-model.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
@@ -68,8 +69,8 @@ test("an alternate constructor result cannot exclude the replacement method from
     const target = symbols.find((symbol) => symbol.file === "src/replacement.ts" && symbol.name === "hit");
     assert.ok(target);
     const walk = walkImpact([target], inbound, {});
-    const reached = new Set(walk.reached.map(({ symbol }) => symbol.id));
-    const cuts = unresolvedLinkCuts(references, walk.reached.map(({ symbol }) => symbol), [], inbound.settledUses(walk.expanded, reached), new Set(), new Map(), inbound.memberProofs(walk.expanded));
+    const reached = new Set(walk.reached.flatMap(({ symbol }) => indexedDeclaration(symbol)?.id ?? []));
+    const cuts = unresolvedLinkCuts(references, walk.reached.flatMap(({ symbol }) => indexedDeclaration(symbol) ?? []), [], inbound.settledUses(walk.expanded, reached), new Set(), new Map(), inbound.memberProofs(walk.expanded));
     assert.ok(cuts.some((cut) => cut.at.some((place) => place.includes("this.svc.hit"))), JSON.stringify(cuts));
   } finally {
     reader?.close();

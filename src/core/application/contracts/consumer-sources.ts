@@ -1,3 +1,4 @@
+import type { FrameworkPlugin } from "../../ports/framework-plugin.port.ts";
 import { sourceUnreadable } from "../../domain/contracts/consumer-flow.ts";
 import type { Hypothesis } from "../../domain/contracts/hypothesis.ts";
 import { provenanceOf, sortedEngines, type BuildOutputInput, type Cut } from "../../domain/shared/fact.ts";
@@ -43,6 +44,7 @@ import { callersOfFunction, occurrencesOfMember } from "./consumer-callers.ts";
 import { createConsumerTemplateReader } from "./consumer-templates.ts";
 
 export interface ConsumerSourcesDeps {
+  frameworks?: readonly FrameworkPlugin[];
   operation: WorkspaceReadOperation;
   heads: HeadReaderDeps;
   digest: Digest;

@@ -2775,12 +2775,12 @@ test("shared preparation gives each impact reading the hold that owns its head s
 });
 
 
-test("a syntax-only callers target is retained as a seed and remains partial instead of claiming no impact", async () => {
+test("a syntax-only callers target remains partial without reverse binding support", async () => {
   const file = "src/store.ts";
   const { callers } = setup({ nodes: [fakeNode("D", "constant", file, 1, 8)], sources: [{ path: file, content: "const D = {};" }], exports: { [HEAD]: { files: [{ path: file, blob: "1", written: true }], skipped: [] } }, syntaxDeclarations: { [file]: [{ name: "m", kind: "method", invoked: true, container: { line: 1, column: 0 }, span: { start: { line: 3, column: 2 }, end: { line: 5, column: 3 } } }] } });
   const fact = callersFact(await callers({ targets: [{ file, symbol: "D.m" }] }));
   assert.equal(fact.status, "partial");
-  assert.ok(fact.status === "partial" && fact.cuts.some(({ reason, at }) => reason === "no-symbols" && at[0]?.includes("D.m")));
+  assert.ok(fact.status === "partial" && fact.cuts.some(({ reason }) => reason === "no-symbols"));
   assert.ok(fact.value.seeds.some(({ symbol }) => symbol === "m"));
 });
 

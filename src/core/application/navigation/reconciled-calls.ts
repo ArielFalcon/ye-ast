@@ -176,6 +176,15 @@ export function createReconciledCalls({ store, uses, syntaxOf, lineOf, importedD
   const alignedIn = oncePerFile(async (file): Promise<ReadonlyMap<GraphNodeId, BodyCalls>> => {
     const syntax = await syntaxOf(file);
     const owned = await ownedIn(file);
+    const indexedBodies = positionedBodies((await declarations.list(file)).filter(({ symbol }) => symbol !== undefined), syntax.calls ?? []);
+    const deferredByOwner = new Map<string, OwnedCall[]>();
+    for (const [key, calls] of owned) {
+      if (!key.startsWith("syntax:")) continue;
+      for (const call of calls) {
+        const body = owningBody(indexedBodies, { line: call.line, column: call.column - 1 });
+        if (body !== undefined) deferredByOwner.set(body.key, [...deferredByOwner.get(body.key) ?? [], { ...call, deferred: true }]);
+      }
+    }
     const bodies = store.symbolsInFiles([file]).map((node) => ({ node, edges: uses.followed(node, callEdgesOf(store, node)), references: uses.referencesFrom(node, CALL_EDGE_KINDS) }));
     let imported: ReadonlyMap<string, GraphSymbol> | undefined;
     let consulted = false;
@@ -215,7 +224,7 @@ export function createReconciledCalls({ store, uses, syntaxOf, lineOf, importedD
       const writtenOnly: GraphUnresolvedReference[] = [];
       const ambiguous: GraphUnresolvedReference[] = [];
       const deferredOnly: GraphUnresolvedReference[] = [];
-      for (const call of owned.get(node.id) ?? []) {
+      for (const call of [...owned.get(node.id) ?? [], ...deferredByOwner.get(node.id) ?? []]) {
         if (accounted.has(callKey(call))) continue;
         const reference = { from: node.id, file: node.file, line: call.line, column: call.column - 1, name: call.name, kind: call.kind, candidates: [] };
         (call.deferred ? deferredOnly : call.ambiguous ? ambiguous : writtenOnly).push(reference);
