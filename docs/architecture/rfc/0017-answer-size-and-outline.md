@@ -75,6 +75,15 @@ for counting to pay — the count line is about 200 characters, so it only wins 
 are enlarged until it does, with the assertions they carry unchanged. A new test holds the invariant on the collapsing
 fixture.
 
+**As built: the workspace unresolved call sites.** A workspace summary groups the unresolved call sites by cause
+(destination-undecidable, recursive, dispatch-disagreement, source-not-read, request-not-found, then any other cause or
+reason sorted) in one header line. Under each cause it lists a site when its code states the request or when its file is
+the `from` file of a link or of a call site the join reached without a link; it counts the others with their files and
+repositories and names the recovery (`details` lists them, `full` retains all recorded sites). The request-site guide
+prints once at the end. The grouped form is used only when it is shorter than the literal per-repository listing,
+which `details` and `full` keep unchanged. Measured on a six-repository workspace with 412 undecided sites, the
+unresolved block drops from 39206 to 11694 bytes and the summary from 45191 to 17125.
+
 ## 2. The outline: the shape of a file, with coordinates
 
 **The question it answers.** "I have decided I must open this file. What is inside, and which ranges matter?" It is the

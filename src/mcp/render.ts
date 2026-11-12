@@ -1525,15 +1525,58 @@ function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: Respo
 const REQUEST_SITE_GUIDE = "A wrapper request is sited at the call supplying its parameters; the stated request names the path written in code. For a suffix-only match, inspect the gateway prefix or server configuration that would declare the full path.";
 
 /** The unresolved call sites under the file that holds them, sorted, each with the request it writes when the code states it. */
-function unresolvedListing(sites: readonly UnresolvedCallSite[], detail: ResponseMode): string[] {
+function unresolvedFiles(sites: readonly UnresolvedCallSite[], detail: ResponseMode): string[] {
   const sorted = [...sites].toSorted(compareUnresolvedCallSites);
-  return [...[...Map.groupBy(sorted, (site) => site.path)].flatMap(([path, inFile]) => [
+  return [...Map.groupBy(sorted, (site) => site.path)].flatMap(([path, inFile]) => [
     `    ${path}`,
     ...[...Map.groupBy(inFile, (site) => `${site.reason}${site.diagnostic === undefined ? "" : `/${site.diagnostic.cause}`}${site.diagnostic?.source === undefined ? "" : ` source=${site.diagnostic.source}`}`)].flatMap(([reason, group]) => [
       ...(detail === "details" ? [`      ${reason}:`] : []),
       ...group.map((site) => unresolvedLine(site, detail)),
     ]),
-  ]), ...(sites.length === 0 ? [] : [`    ${REQUEST_SITE_GUIDE}`])];
+  ]);
+}
+
+function unresolvedListing(sites: readonly UnresolvedCallSite[], detail: ResponseMode): string[] {
+  return [...unresolvedFiles(sites, detail), ...(sites.length === 0 ? [] : [`    ${REQUEST_SITE_GUIDE}`])];
+}
+
+/** The causes a summary lists first, the ones closest to a request; any other cause follows, sorted. */
+const UNRESOLVED_CAUSE_ORDER: readonly string[] = ["destination-undecidable", "recursive", "dispatch-disagreement", "source-not-read", "request-not-found"];
+
+function unresolvedCause(site: UnresolvedCallSite): string {
+  return site.diagnostic?.cause ?? site.reason;
+}
+
+function compareUnresolvedCauses(a: string, b: string): number {
+  const rank = (cause: string): number => { const index = UNRESOLVED_CAUSE_ORDER.indexOf(cause); return index < 0 ? UNRESOLVED_CAUSE_ORDER.length : index; };
+  return rank(a) - rank(b) || compareText(a, b);
+}
+
+/**
+ * The summary of the unresolved sites by cause: a site is listed when its code states the request or it sits in a file
+ * a link or an unlinked call site starts from; the others are counted with their files and repositories.
+ */
+function unresolvedByCause(sections: readonly (readonly [string, readonly UnresolvedCallSite[]])[], total: number, anchors: ReadonlySet<string>): string[] {
+  const entries = sections.flatMap(([repo, sites]) => sites.map((site) => ({ repo, site })));
+  const causes = [...Map.groupBy(entries, ({ site }) => unresolvedCause(site))].toSorted(([a], [b]) => compareUnresolvedCauses(a, b));
+  return [
+    `unresolved call sites (${total}): ${causes.map(([cause, inCause]) => `${cause} ${inCause.length}`).join(", ")}`,
+    ...causes.flatMap(([cause, inCause]) => {
+      const shown = ({ repo, site }: (typeof entries)[number]): boolean => site.stated !== undefined || anchors.has(JSON.stringify([repo, site.path]));
+      const omitted = inCause.filter((entry) => !shown(entry));
+      const perRepo = sections.flatMap(([repo]) => [[repo, omitted.filter((entry) => entry.repo === repo).length] as const]).filter(([, count]) => count > 0);
+      const files = new Set(omitted.map(({ repo, site }) => JSON.stringify([repo, site.path])));
+      return [
+        `  ${cause} (${inCause.length}):`,
+        ...sections.flatMap(([repo]) => {
+          const listed = inCause.filter((entry) => entry.repo === repo && shown(entry));
+          return listed.length === 0 ? [] : [`    ${repo}:`, ...unresolvedFiles(listed.map(({ site }) => site), "summary").map((line) => `  ${line}`)];
+        }),
+        ...(omitted.length === 0 ? [] : [`    not listed: ${omitted.length} in ${files.size} ${files.size === 1 ? "file" : "files"} (${perRepo.map(([repo, count]) => `${repo} ${count}`).join(", ")}); ${categoryRecovery({ details: "lists them", full: "retains all recorded sites" })}`]),
+      ];
+    }),
+    `  ${REQUEST_SITE_GUIDE}`,
+  ];
 }
 
 function unresolvedLine(site: UnresolvedCallSite, detail: ResponseMode): string {
@@ -1551,10 +1594,15 @@ function unresolvedBlock(value: Omit<WorkspaceValue, "repositories">, detail: Re
     return section === undefined || section.status === "unknown" || section.value.unresolved.length === 0 ? [] : [[repo, section.value.unresolved] as const];
   });
   if (sections.length === 0) return [];
-  return [
-    `unresolved call sites (${sections.reduce((total, [, sites]) => total + sites.length, 0)}):`,
+  const total = sections.reduce((count, [, sites]) => count + sites.length, 0);
+  const literal = [
+    `unresolved call sites (${total}):`,
     ...sections.flatMap(([repo, sites]) => [`  ${repo}:`, ...unresolvedListing(sites, detail)]),
   ];
+  if (detail !== "summary") return literal;
+  const anchors = new Set([...value.links.map((link) => link.from), ...value.unlinked.map(({ from }) => from)].map(({ repo, file }) => JSON.stringify([repo, file])));
+  const grouped = unresolvedByCause(sections, total, anchors);
+  return size(grouped) < size(literal) ? grouped : literal;
 }
 
 export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>, detail: ResponseMode = "summary"): string {

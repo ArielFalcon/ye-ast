@@ -142,3 +142,73 @@ test("dependency ambiguity remains visible with its candidates in both workspace
     if (mode === "details") assert.match(text, /pom.xml.*4/);
   }
 });
+
+type Site = { path: string; line: number; symbol: string; transport: string; reason: string; evidence: unknown[]; diagnostic?: { cause: string }; stated?: { method: string; path?: string } };
+
+function unresolvedWorkspace(perRepo: Record<string, Site[]>, anchors: { links?: { repo: string; file: string }[]; unlinked?: { repo: string; file: string }[] } = {}): never {
+  const repos = Object.keys(perRepo);
+  const snapshot = (repo: string) => ({ ...base.snapshot, repo });
+  const from = ({ repo, file }: { repo: string; file: string }) => ({ repo, file, line: 1, symbol: "caller" });
+  const sections = Object.fromEntries(repos.map((repo) => [repo, { ...base, snapshot: snapshot(repo), status: "complete", value: { names: [], unresolved: perRepo[repo] } }]));
+  const links = (anchors.links ?? []).map((place) => ({ id: `link-${place.file}`, from: from(place), to: { repo: "z", kind: "http", name: "GET /x", handler: { path: "h.ts", line: 1, symbol: "h" } }, transport: "http", basis: "exact", confidence: 1 }));
+  const unlinked = (anchors.unlinked ?? []).map((place) => ({ from: from(place), transport: "http", outcome: "unmatched", name: "/x" }));
+  const value = { workspace: { repos, source: "request" }, repositorySnapshots: repos.map((repo) => ({ repo, snapshot: snapshot(repo) })), sections, candidates: [], links, unlinked, unserved: [] };
+  return { ...base, status: "complete", value } as never;
+}
+
+const site = (path: string, line: number, cause: string | undefined, extra: Partial<Site> = {}): Site => ({ path, line, symbol: `Symbol.method${line}`, transport: "http", reason: "unresolved", evidence: [{ path, line }], ...(cause === undefined ? {} : { diagnostic: { cause } }), ...extra });
+
+function unresolvedSection(text: string): string {
+  return text.slice(text.indexOf("unresolved call sites ("));
+}
+
+test("a summary lists the unresolved sites that show a request and counts the rest by cause, file and repository", () => {
+  const fact = unresolvedWorkspace({
+    alpha: [
+      ...Array.from({ length: 12 }, (_, i) => site("src/very/long/path/to/an/unstated/file.ts", i + 1, "source-not-read")),
+      ...Array.from({ length: 12 }, (_, i) => site(`src/very/long/path/to/an/other/file${i % 2}.ts`, i + 1, "dispatch-disagreement")),
+      site("src/stated.ts", 7, "destination-undecidable", { stated: { method: "GET", path: "/orders" } }),
+      site("src/linked.ts", 8, "destination-undecidable"),
+      site("src/unlinked.ts", 9, "destination-undecidable"),
+      site("src/plain.ts", 10, "destination-undecidable"),
+    ],
+    beta: [site("src/very/long/path/to/an/unstated/file.ts", 3, "source-not-read"), site("src/other.ts", 4, "unknown-extra"), site("src/r.ts", 5, "recursive", { stated: { method: "GET" } })],
+  }, { links: [{ repo: "alpha", file: "src/linked.ts" }], unlinked: [{ repo: "alpha", file: "src/unlinked.ts" }] });
+  const text = renderWorkspace(fact, "summary");
+  const block = unresolvedSection(text);
+  assert.match(block, /^unresolved call sites \(31\): destination-undecidable 4, recursive 1, dispatch-disagreement 12, source-not-read 13, unknown-extra 1$/m);
+  const listed = block.split("\n").filter((line) => /^ {8}\d+ Symbol/.test(line));
+  assert.deepEqual(listed.map((line) => line.trim().split(" ")[0]), ["8", "7", "9", "5"]);
+  assert.match(block, /destination-undecidable \(4\):\n {4}alpha:\n {6}src\/linked\.ts/);
+  assert.match(block, /not listed: 1 in 1 file \(alpha 1\); mode "details" lists them; mode: "full" retains all recorded sites/);
+  assert.match(block, /not listed: 12 in 2 files \(alpha 12\)/);
+  assert.match(block, /not listed: 13 in 2 files \(alpha 12, beta 1\)/);
+  assert.match(block, /unknown-extra \(1\):\n {2} {2}not listed: 1 in 1 file \(beta 1\)/);
+  assert.equal(block.split("A wrapper request is sited").length - 1, 1);
+  assert.ok(block.length < unresolvedSection(renderWorkspace(fact, "details")).length);
+});
+
+test("details keeps every unresolved site under its repository", () => {
+  const fact = unresolvedWorkspace({ alpha: Array.from({ length: 12 }, (_, i) => site("src/a-long-file-name-here.ts", i + 1, "source-not-read")), beta: [site("src/b.ts", 1, "recursive")] });
+  const text = renderWorkspace(fact, "details");
+  assert.match(text, /^unresolved call sites \(13\):$/m);
+  assert.doesNotMatch(text, /not listed/);
+  assert.equal([...text.matchAll(/^ {6}\d+ Symbol/gm)].length, 13);
+});
+
+test("a summary keeps the literal listing when counting is not shorter", () => {
+  const fact = unresolvedWorkspace({ alpha: [site("src/a.ts", 1, "source-not-read")] });
+  const block = unresolvedSection(renderWorkspace(fact, "summary"));
+  assert.match(block, /^unresolved call sites \(1\):$/m);
+  assert.doesNotMatch(block, /not listed/);
+  assert.match(block, /alpha:\n {4}src\/a\.ts\n {6}1 Symbol/);
+  assert.equal(block.split("A wrapper request is sited").length - 1, 1);
+});
+
+test("the grouped summary does not depend on the order the sites arrive in", () => {
+  const sites = [...Array.from({ length: 10 }, (_, i) => site(`src/long/directory/name/file${i % 3}.ts`, i + 1, i % 2 === 0 ? "source-not-read" : "recursive")), site("src/s.ts", 99, "recursive", { stated: { method: "POST" } })];
+  const render = (alpha: Site[]) => renderWorkspace(unresolvedWorkspace({ alpha, beta: [site("src/long/directory/name/file0.ts", 1, "source-not-read")] }), "summary");
+  const forward = render(sites);
+  assert.match(forward, /not listed/);
+  assert.equal(render([...sites].reverse()), forward);
+});
