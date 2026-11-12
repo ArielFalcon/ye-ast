@@ -4,7 +4,7 @@ import type { Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { CallSite, EventTarget, HttpTarget } from "../../domain/topology/call-site.ts";
 import type { RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
-import { excludedFrom, inferGateways, matchCallSite, matchDeclaredOperation, matchEventCallSite, matchHttpCallSite, prefixOf } from "../../domain/topology/link-match.ts";
+import { excludedFrom, inferGateways, inferHosts, matchCallSite, matchDeclaredOperation, matchEventCallSite, matchHttpCallSite, prefixOf } from "../../domain/topology/link-match.ts";
 
 function route(method: HttpRoute["method"], path: string, handler = { path: "src/main/java/app/Orders.java", symbol: "Orders.orders", line: 10 }, basePath = {}): HttpRoute {
   return { kind: "http-route", name: `${method} ${path}`, method, path, handler, basePath: { status: "complete", value: { default: basePath, profiles: {} }, evidence: [] } };
@@ -423,6 +423,36 @@ test("a literal of the call that fills a route parameter keeps full confidence; 
 
   assert.equal(joined(matchCallSite(site("/orders/7"), targetOf(site("/orders/7")), orders, [])), "exact 1 -> orders GET /orders/{id}");
   assert.equal(joined(matchCallSite(site("/orders/{}"), targetOf(site("/orders/{}")), orders, [])), "exact 0.6 -> orders GET /orders/{id}");
+});
+
+test("a hosted call no route takes is unmatched when its origin is evidenced as one repository's, and external otherwise", () => {
+  const api = repositories([route("GET", "/orders")], "shop-api");
+  const linking = site("http://localhost:8080/orders");
+  const missing = site("http://localhost:8080/refunds");
+  const elsewhere = site("http://localhost:9090/refunds");
+  const hostsOf = (calls: CallSite[], served = api) => inferHosts(calls, served, []);
+
+  assert.deepEqual(hostsOf([linking]), [{ origin: "http://localhost:8080", repo: "shop-api" }]);
+  assert.deepEqual(matchCallSite(missing, targetOf(missing), api, [], hostsOf([linking, missing])), { unmatched: "http://localhost:8080/refunds" });
+  assert.deepEqual(matchCallSite(elsewhere, targetOf(elsewhere), api, [], hostsOf([linking, missing, elsewhere])), { external: true });
+  assert.deepEqual(hostsOf([missing]), []);
+});
+
+test("an origin whose calls link to two repositories is attributed to neither", () => {
+  const two = [...repositories([route("GET", "/orders")], "shop-api"), ...repositories([route("GET", "/invoices")], "billing")];
+  const calls = [site("http://localhost:8080/orders"), site("http://localhost:8080/invoices")];
+  const missing = site("http://localhost:8080/refunds");
+
+  assert.deepEqual(inferHosts(calls, two, []), []);
+  assert.deepEqual(matchCallSite(missing, targetOf(missing), two, [], inferHosts(calls, two, [])), { external: true });
+});
+
+test("an origin attributed to a repository answers undecided when a route could take the call", () => {
+  const api = repositories([route("GET", "/orders"), route("GET", "/user-{id}")], "shop-api");
+  const linking = site("http://localhost:8080/orders");
+  const could = site("http://localhost:8080/user-{}");
+
+  assert.deepEqual(matchCallSite(could, targetOf(could), repositories([route("GET", "/orders"), route("GET", "/user-{id}x")], "shop-api"), [], inferHosts([linking], api, [])), { undecided: "http://localhost:8080/user-{}" });
 });
 
 test("a call that matches no route is unmatched when it states no host, and external when it names one", () => {

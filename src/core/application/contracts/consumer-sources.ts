@@ -12,7 +12,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import { callPlaceOf, callSiteReach, compareCallPlaces, httpTargetOf, type CallSiteReadOptions, type PlacedCallSite, type PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { Link } from "../../domain/topology/link.ts";
-import { excludedFrom, matchDeclaredOperation, matchHttpCallSite, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
+import { excludedFrom, inferHosts, matchDeclaredOperation, matchHttpCallSite, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import type { AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
 import { buildOutputCuts, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
@@ -351,12 +351,14 @@ function joinHttpCalls(repositories: readonly WorkspaceRepository[], entrypoints
   const links = new Map<string, Link>();
   const ambiguousCalls: WorkspaceHttpJoin["ambiguousCalls"][number][] = [];
   const unresolvedCalls: ConsumerSession["unresolvedCalls"][number][] = [];
-  for (const site of repositories.flatMap((repository) => repository.callSites)) {
+  const sites = repositories.flatMap((repository) => repository.callSites);
+  const hosts = inferHosts(sites, entrypoints, gateways);
+  for (const site of sites) {
     if (site.transport !== "http") continue;
     const target = httpTargetOf(site);
     const from = callPlaceOf(site);
     if (target === undefined && site.target.status === "unknown") unresolvedCalls.push({ ...from, reach: callSiteReach(site), evidence: site.target.evidence });
-    const joined = matchHttpCallSite(site, entrypoints, gateways);
+    const joined = matchHttpCallSite(site, entrypoints, gateways, hosts);
     if (joined === undefined) continue;
     for (const link of joined.links ?? []) links.set(link.id, link);
     if (joined.ambiguous === undefined) continue;

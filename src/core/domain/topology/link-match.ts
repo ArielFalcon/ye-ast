@@ -25,6 +25,12 @@ export interface Gateway extends GatewayDeclaration {
   basis: "gateway-prefix" | "route-overlap";
 }
 
+/** An origin (scheme and authority) inferred to belong to one repository: the calls under it link to that repository alone. */
+export interface HostAttribution {
+  origin: string;
+  repo: string;
+}
+
 /** What two repositories, or two consumers of one destination, matched: a cut, never a pick. */
 export interface AmbiguousMatch {
   /** The prefix or destination that matched. */
@@ -278,8 +284,8 @@ export function matchDeclaredOperation(target: HttpTarget, repositories: readonl
  * ends with the route's. A prefix a gateway routes never falls to a lower rung: a call under it that matches nothing is
  * the service's drift.
  */
-export function matchCallSite(site: CallSite, target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): JoinResult {
-  return ladder(target, repositories, gateways, (repo, match) => ({ links: [linkTo(site, repo, match)] }));
+export function matchCallSite(site: CallSite, target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[], hosts: readonly HostAttribution[] = []): JoinResult {
+  return ladder(target, repositories, gateways, hosts, (repo, match) => ({ links: [linkTo(site, repo, match)] }));
 }
 
 /**
@@ -306,9 +312,9 @@ export function matchUndecidedAuthority(site: CallSite, target: HttpTarget, repo
  * of those that tie, and the first path some route could take; nothing for a call site with neither, or one that
  * settles nothing.
  */
-export function matchHttpCallSite(site: CallSite, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): JoinResult | undefined {
+export function matchHttpCallSite(site: CallSite, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[], hosts: readonly HostAttribution[] = []): JoinResult | undefined {
   const target = httpTargetOf(site);
-  if (target !== undefined) return matchCallSite(site, target, repositories, gateways);
+  if (target !== undefined) return matchCallSite(site, target, repositories, gateways, hosts);
   const answers = undecidedAuthorityTargetsOf(site).map((route) => matchUndecidedAuthority(site, route, repositories, gateways));
   const links = [...new Map(answers.flatMap((answer) => answer.links ?? []).map((link) => [link.id, link])).values()];
   const ties = answers.flatMap((answer) => answer.ambiguous ?? []);
@@ -329,7 +335,7 @@ function mergedAmbiguity(ties: readonly AmbiguousMatch[]): AmbiguousMatch {
 
 /** Whether the ladder could link a call with this target to one of the routes: a link, a tie or a `could` on any rung. */
 function mayLink(target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): boolean {
-  const joined = ladder(target, repositories, gateways, () => ({ links: [] }));
+  const joined = ladder(target, repositories, gateways, [], () => ({ links: [] }));
   return joined.unmatched === undefined && joined.external !== true;
 }
 
@@ -349,7 +355,7 @@ export function excludedFrom(operation: string, repositories: readonly Repositor
   };
 }
 
-function ladder(target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[], linked: (repo: string, match: Match) => JoinResult): JoinResult {
+function ladder(target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[], hosts: readonly HostAttribution[], linked: (repo: string, match: Match) => JoinResult): JoinResult {
   const call = callTemplate(target);
   const prefix = prefixOf(target);
   let could = false;
@@ -372,7 +378,32 @@ function ladder(target: HttpTarget, repositories: readonly RepositoryEntrypoints
   const found = settled(atRung(basePathRung, call, target.method, repositories)) ?? settled(atRung(suffixRung, call, target.method, repositories));
   if (found !== undefined) return found;
   const named = prefix !== undefined && repositories.some((repository) => repository.repo === prefix);
-  return could || named || !namesHost(call) ? missed() : { external: true };
+  const attributed = call.origin !== undefined && hosts.some((host) => host.origin === originKey(call.origin));
+  return could || named || attributed || !namesHost(call) ? missed() : { external: true };
+}
+
+function originKey(origin: string | undefined): string {
+  return (origin ?? "").toLowerCase();
+}
+
+/**
+ * The origins evidenced as one repository's: an origin a call states belongs to repository R when at least one call under
+ * it links to R and none links to another repository. An origin with no link, or one that links to two repositories, is
+ * attributed to none, so a request to it that matches no route still leaves the workspace.
+ */
+export function inferHosts(calls: readonly CallSite[], repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): HostAttribution[] {
+  const linkedRepos = new Map<string, Set<string>>();
+  for (const call of calls) {
+    const target = httpTargetOf(call);
+    if (target === undefined) continue;
+    const template = callTemplate(target);
+    if (template.origin === undefined || !namesHost(template)) continue;
+    const key = originKey(template.origin);
+    for (const link of matchCallSite(call, target, repositories, gateways).links ?? []) linkedRepos.set(key, (linkedRepos.get(key) ?? new Set<string>()).add(link.to.repo));
+  }
+  return [...linkedRepos]
+    .flatMap(([origin, repos]) => (repos.size === 1 ? [{ origin, repo: [...repos][0]! }] : []))
+    .sort((a, b) => compareText(a.origin, b.origin));
 }
 
 /**

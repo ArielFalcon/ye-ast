@@ -2,7 +2,7 @@ import { callPlaceOf, compareCallPlaces, type CallSite, type EventTarget } from 
 import type { JoinedSite } from "../../domain/topology/link-graph.ts";
 import type { Link, UnlinkedCallSite } from "../../domain/topology/link.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import { inferGateways, matchEventCallSite, matchHttpCallSite, type Gateway, type GatewayDeclaration, type JoinResult, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
+import { inferGateways, inferHosts, matchEventCallSite, matchHttpCallSite, type Gateway, type GatewayDeclaration, type JoinResult, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import type { WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 
 /** Every call site of a workspace joined once against the entrypoints of the other repositories read. */
@@ -27,6 +27,7 @@ export function entrypointsOf(repository: WorkspaceRepository): RepositoryEntryp
  */
 export function joinWorkspace(repositories: readonly WorkspaceRepository[], entrypoints: readonly RepositoryEntrypoints[], declared: readonly GatewayDeclaration[]): WorkspaceJoin {
   const gateways = inferGateways(repositories.flatMap((repository) => repository.callSites), entrypoints, declared);
+  const hosts = inferHosts(repositories.flatMap((repository) => repository.callSites), entrypoints, gateways);
   const joined: JoinedSite[] = [];
   for (const repository of repositories) {
     for (const site of repository.callSites) {
@@ -35,7 +36,7 @@ export function joinWorkspace(repositories: readonly WorkspaceRepository[], entr
         joined.push({ site, joined: matchEventCallSite(site, event, entrypoints) });
         continue;
       }
-      const answer = site.transport === "http" ? matchHttpCallSite(site, entrypoints, gateways) : undefined;
+      const answer = site.transport === "http" ? matchHttpCallSite(site, entrypoints, gateways, hosts) : undefined;
       if (answer !== undefined) joined.push({ site, joined: acrossRepositories(site, answer) });
     }
   }

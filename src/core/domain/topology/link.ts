@@ -23,8 +23,9 @@ export interface Link {
 }
 
 /**
- * A call site the join reached and did not link: no route takes it and it names no host, several entrypoints take it
- * equally, or a route could take it depending on the value the code fills at run time.
+ * A call site the join reached and did not link: no route takes it and it names no host or a host evidenced as one
+ * repository's of the workspace (ADR-0060), several entrypoints take it equally, or a route could take it depending on
+ * the value the code fills at run time.
  */
 export interface UnlinkedCallSite {
   from: Link["from"];

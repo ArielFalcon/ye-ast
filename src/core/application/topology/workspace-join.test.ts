@@ -133,3 +133,21 @@ test("an alternative that is ambiguous across repositories does not block the al
 
   assert.deepEqual(described(joined([web, orders, archive, profiles])), ["link profiles GET /api/profiles/me suffix 0.5 undecided", "ambiguous archive,orders"]);
 });
+
+function hosted(repo: string, url: string): CallSite {
+  return { repo, file: "src/app/shop.api.ts", line: 4, symbol: "ShopApi.call", transport: "http", target: { status: "complete", value: { method: "GET", path: url }, evidence: [] } };
+}
+
+test("a request to an origin the workspace links into, matching no route, is listed unmatched with its URL; a never-linked origin stays out of the list", () => {
+  const shop = repository("shop", [], [serving("GET", "/orders", "Orders.list")]);
+  const web = repository("web", [
+    hosted("web", "http://localhost:8080/orders"),
+    hosted("web", "http://localhost:8080/refunds"),
+    hosted("web", "http://localhost:9090/refunds"),
+  ], []);
+
+  const { links, unlinked } = joined([shop, web]);
+
+  assert.deepEqual(links.map(({ to }) => to.name), ["GET /orders"]);
+  assert.deepEqual(unlinked.map(({ outcome, name }) => `${outcome} ${name}`), ["unmatched http://localhost:8080/refunds"]);
+});
