@@ -1,18 +1,40 @@
-import { lineOf } from "./syntax.ts";
+import ts from "typescript";
+import { lineOf, unwrapped } from "./syntax.ts";
+import { isModified } from "./consumer-flow.syntax.ts";
 import { siteFile, sourceUnreadable, type Carrier, type CarrierSite, type FlowFrontier, type FlowNext, type FlowResult, type FlowUse } from "../../domain/contracts/consumer-flow.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { ConsumerFlowReader } from "../../ports/consumer-flow.port.ts";
 import type { Program, Unit } from "./consumer-flow.index.ts";
-import { lineage, memberDeclaration, methodDeclared } from "./consumer-flow.classes.ts";
+import { lineage, memberDeclaration, memberReceiver, methodDeclared } from "./consumer-flow.classes.ts";
 import { Walker, type Held } from "./consumer-flow.walker.ts";
 import type { RequestCallLookup } from "./http-call-sites.adapter.ts";
 
 /** Builds a flow reader over a program held by the repository reading. */
 export function consumerFlowReader(program: Program, repo: string, requests: RequestCallLookup): ConsumerFlowReader {
-  return { follow: (carrier) => follow(program, repo, requests, carrier) };
+  let memberReads: ReadonlyMap<string, readonly MemberRead[]> | undefined;
+  return { follow: (carrier) => follow(program, repo, requests, carrier, () => (memberReads ??= plainMemberReads(program))) };
 }
 
-function follow(program: Program, repo: string, requests: RequestCallLookup, { site, path }: Carrier): FlowResult {
+interface MemberRead { unit: Unit; access: ts.PropertyAccessExpression }
+
+function plainMemberReads(program: Program): ReadonlyMap<string, readonly MemberRead[]> {
+  const members = new Map<string, MemberRead[]>();
+  for (const unit of program.index.units.values()) {
+    const visit = (node: ts.Node): void => {
+      if (ts.isTypeNode(node)) return;
+      if (ts.isPropertyAccessExpression(node) && !(ts.isCallExpression(node.parent) && node.parent.expression === node) && !isModified(node)) {
+        const reads = members.get(node.name.text) ?? [];
+        reads.push({ unit, access: node });
+        members.set(node.name.text, reads);
+      }
+      node.forEachChild(visit);
+    };
+    visit(unit.tree);
+  }
+  return members;
+}
+
+function follow(program: Program, repo: string, requests: RequestCallLookup, { site, path }: Carrier, memberReads: () => ReadonlyMap<string, readonly MemberRead[]>): FlowResult {
   const unit = program.index.units.get(siteFile(site));
   if (unit === undefined) return sourceUnreadable(site);
   const walker = new Walker(repo, program, unit, requests);
@@ -24,10 +46,22 @@ function follow(program: Program, repo: string, requests: RequestCallLookup, { s
   else if (site.kind === "method-parameter") return followMethodParameter(repo, program, unit, site, path);
   else if (site.kind === "input" || site.kind === "return") return { uses: [], next: [], frontiers: [] };
   else return sourceUnreadable(site);
+  const readers = new Map<Unit, Walker>();
+  if (site.kind === "member") {
+    for (const { unit: reader, access } of memberReads().get(site.member) ?? []) {
+      const receiver = memberReceiver(program, reader, access);
+      if (receiver === undefined || !lineage(program, receiver).some((held) => held.unit.file === site.file && held.cls.name?.text === site.owner)) continue;
+      if (unwrapped(access.expression).kind === ts.SyntaxKind.ThisKeyword && receiver.unit.file === site.file && receiver.cls.name?.text === site.owner) continue;
+      let one = readers.get(reader);
+      if (one === undefined) { one = new Walker(repo, program, reader, requests); readers.set(reader, one); }
+      one.startMemberAccess(access, site.owner, site.member, path);
+    }
+  }
+  const held = [walker, ...readers.values()];
   return {
-    uses: ordered(walker.uses),
-    next: ordered(walker.next),
-    frontiers: ordered(walker.frontiers),
+    uses: ordered(held.flatMap((reader) => reader.uses)),
+    next: ordered(held.flatMap((reader) => reader.next)),
+    frontiers: ordered(held.flatMap((reader) => reader.frontiers)),
   };
 }
 

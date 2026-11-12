@@ -262,6 +262,7 @@ holder is a use even when its result is later tested; a bare guard remains a tes
 not treated as an executed computed callback. Known project methods and foreign namespace factories keep their own
 semantics. Unsupported holders retain an explicit frontier. This covers the measured form and signal idioms, not
 arbitrary stores, validators or conversions.
+Plain member reads omitted by the graph are discovered lazily from the same held TypeScript program, indexed once per repository reading. They use the existing receiver proof and require the owning declaration's file as well as its name; a fresh reading builds its own discovery index.
 
 **What a carried value is.** Every step that could replace the followed value with another object ends the chain (a
 construction, a conversion, a call the reader cannot resolve, a write to the path). So the value a carrier holds is the

@@ -42,7 +42,7 @@ import { importedNameOf } from "./imported-name.ts";
 import type { RequestCallLookup } from "./http-call-sites.adapter.ts";
 import { FUNCTIONS, isModule, METHODS, type MethodResult, type MethodRow } from "./consumer-flow.callees.ts";
 import { resolveFunction, type Resolved } from "./consumer-flow.resolution.ts";
-import { baseOf, injectedInstance, lineage, memberDeclaration, type ClassRef } from "./consumer-flow.classes.ts";
+import { baseOf, memberReceiver, lineage, memberDeclaration, type ClassRef } from "./consumer-flow.classes.ts";
 import { lineOf, thisClass, unwrapped } from "./syntax.ts";
 
 /** A value being followed: where the changed property sits in it, the steps taken, and the guards that hold on it. */
@@ -182,19 +182,18 @@ export class Walker {
   startMemberRead(site: { line: number; owner: string; member: string }, path: AccessPath): void {
     const reads = this.accessesOnLine(site.line, site.member);
     if (reads.length === 0) return this.lostAt(site.line, "no read of the member at the reported place");
-    for (const access of reads) {
-      if (isModified(access)) continue;
-      if (this.denotesOwner(access, site.owner, site.member) === "read") this.read(access, { origin: path, hops: [], guards: [] });
-    }
+    for (const access of reads) this.startMemberAccess(access, site.owner, site.member, path);
+  }
+
+  startMemberAccess(access: ts.PropertyAccessExpression, owner: string, member: string, path: AccessPath): void {
+    if (!isModified(access) && this.denotesOwner(access, owner, member) === "read") this.read(access, { origin: path, hops: [], guards: [] });
   }
 
   /** `skip`: the read is the member carrier's own, or the member of a class that is provably not the owner; `lost`: the receiver cannot be told, and a frontier says so. */
   private denotesOwner(access: ts.PropertyAccessExpression, owner: string, member: string): "read" | "skip" | "lost" {
     const receiver = unwrapped(access.expression);
     const self = receiver.kind === ts.SyntaxKind.ThisKeyword;
-    const cls = self ? thisClass(access) : undefined;
-    const declared = cls?.name === undefined ? undefined : this.unit.classes.get(cls.name.text);
-    const ref = self ? (declared !== undefined && declared === cls ? { unit: this.unit, cls: declared } : undefined) : injectedInstance(this.program, this.unit, receiver);
+    const ref = memberReceiver(this.program, this.unit, access);
     const chain = ref === undefined ? [] : lineage(this.program, ref);
     const at = chain.findIndex((held) => held.cls.name?.text === owner);
     if (ref !== undefined && at < 0 && !chain.some((held) => baseUnresolved(this.program, held))) return "skip";
@@ -272,9 +271,7 @@ export class Walker {
 
   private isControlMember(reference: ts.Expression): boolean {
     if (!ts.isPropertyAccessExpression(reference)) return false;
-    const receiver = unwrapped(reference.expression);
-    const cls = receiver.kind === ts.SyntaxKind.ThisKeyword ? thisClass(reference) : undefined;
-    const owner = cls === undefined ? injectedInstance(this.program, this.unit, receiver) : { unit: this.unit, cls };
+    const owner = memberReceiver(this.program, this.unit, reference);
     if (owner === undefined) return false;
     let members = this.controlMembers.get(owner.cls);
     if (members === undefined) {

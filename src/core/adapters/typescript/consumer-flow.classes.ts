@@ -65,6 +65,15 @@ export function methodDeclared(cls: ts.ClassLikeDeclaration, name: string): Name
   return fn === undefined ? undefined : namedFunction(fn);
 }
 
+/** The declared instance a member access reads, using the same receiver proof for local and cross-file flow. */
+export function memberReceiver(program: Program, unit: Unit, access: ts.PropertyAccessExpression): ClassRef | undefined {
+  const receiver = unwrapped(access.expression);
+  if (receiver.kind !== ts.SyntaxKind.ThisKeyword) return injectedInstance(program, unit, receiver);
+  const cls = thisClass(access);
+  const declared = cls?.name === undefined ? undefined : unit.classes.get(cls.name.text);
+  return declared !== undefined && declared === cls ? { unit, cls: declared } : undefined;
+}
+
 /**
  * The class of the instance `receiver` denotes when the framework injects it: a field initialized by `inject(X)`, a
  * parameter property of a decorated class, or a local `const x = inject(X)`. A declared type alone is no provenance.

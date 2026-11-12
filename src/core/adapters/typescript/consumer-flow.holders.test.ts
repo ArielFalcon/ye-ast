@@ -15,7 +15,8 @@ test("a response held in a signal reaches its readonly alias and an injected rea
       "  own() { return this.state()?.authorities.length }",
       "}",
     ].join("\n") },
-    { path: "page.ts", content: header + "import { Api } from './api';\nclass Page { api = inject(Api); read() { const current = this.api.account; return computed(() => current()?.authorities.length) } }" },
+    { path: "page.ts", content: header + "import { Api } from './api'; import { Api as OtherApi } from './other';\nclass Page { constructor() { const api = inject(Api); const current = api.account; computed(() => current()?.authorities.length) } }\nclass Other { other = inject(OtherApi); read() { const wrong = this.other.account; computed(() => wrong()?.authorities.length) } }" },
+    { path: "other.ts", content: header + "export class Api { account = signal(null) }" },
   ];
   const { flow } = await createConsumerReaders(files, "repo", undefined, []);
   const response = flow.follow({ site: { kind: "call-site", repo: "repo", file: "api.ts", line: 6, symbol: "Api.load" }, path: ["authorities"] });
@@ -27,8 +28,9 @@ test("a response held in a signal reaches its readonly alias and an injected rea
   assert.ok(alias !== undefined);
   assert.ok(state.next.some(({ carrier }) => carrier.site.kind === "member" && carrier.site.member === "derived"));
   assert.equal(state.next.some(({ carrier }) => carrier.site.kind === "member" && carrier.site.member === "ignored"), false);
-  const read = flow.follow({ site: { kind: "member-read", repo: "repo", file: "page.ts", line: 3, column: 1, owner: "Api", member: "account" }, path: alias.carrier.path });
+  const read = flow.follow(alias.carrier);
   assert.ok(read.uses.some(({ site, path }) => site.path === "page.ts" && path.join(".") === "authorities.length"));
+  assert.deepEqual(read.uses.map(({ site }) => site.line), [3]);
 });
 
 test("a form holder maps whole values and controls and records the value consumed by its controls", async () => {
@@ -108,4 +110,18 @@ test("a setter name on the carried response is not a write into a holder", async
   assert.equal(result.next.length, 0);
   assert.equal(result.frontiers.length, 1);
   assert.equal(result.frontiers[0]?.cause, "unmodelled-flow");
+});
+
+
+test("member read discovery belongs to one prepared reading across source generations", async () => {
+  const load = async (property: string) => createConsumerReaders([
+    { path: "owner.ts", content: "export class Api { account: unknown }" },
+    { path: "page.ts", content: `import { inject } from '@angular/core'; import { Api } from './owner';\nclass Page { api = inject(Api); show() { const account = this.api.account; use(account.authorities.${property}) } }` },
+  ], "repo", undefined, []);
+  const first = await load("first");
+  const second = await load("second");
+  const carrier = { site: { kind: "member" as const, repo: "repo", file: "owner.ts", owner: "Api", member: "account" }, path: ["authorities"] };
+  assert.deepEqual(first.flow.follow(carrier).uses.map(({ path }) => path.join(".")), ["authorities.first"]);
+  assert.deepEqual(second.flow.follow(carrier).uses.map(({ path }) => path.join(".")), ["authorities.second"]);
+  assert.deepEqual(first.flow.follow(carrier).uses.map(({ path }) => path.join(".")), ["authorities.first"]);
 });
