@@ -26,8 +26,9 @@ export function entrypointsOf(repository: WorkspaceRepository): RepositoryEntryp
  * out of the join.
  */
 export function joinWorkspace(repositories: readonly WorkspaceRepository[], entrypoints: readonly RepositoryEntrypoints[], declared: readonly GatewayDeclaration[]): WorkspaceJoin {
-  const gateways = inferGateways(repositories.flatMap((repository) => repository.callSites), entrypoints, declared);
-  const hosts = inferHosts(repositories.flatMap((repository) => repository.callSites), entrypoints, gateways);
+  const calls = repositories.flatMap((repository) => repository.callSites);
+  const gateways = inferGateways(calls, entrypoints, declared);
+  const hosts = inferHosts(calls, entrypoints, gateways);
   const joined: JoinedSite[] = [];
   for (const repository of repositories) {
     for (const site of repository.callSites) {

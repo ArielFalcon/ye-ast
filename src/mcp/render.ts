@@ -1564,7 +1564,7 @@ function unresolvedByCause(sections: readonly (readonly [string, readonly Unreso
     ...causes.flatMap(([cause, inCause]) => {
       const shown = ({ repo, site }: (typeof entries)[number]): boolean => site.stated !== undefined || anchors.has(JSON.stringify([repo, site.path]));
       const omitted = inCause.filter((entry) => !shown(entry));
-      const perRepo = sections.flatMap(([repo]) => [[repo, omitted.filter((entry) => entry.repo === repo).length] as const]).filter(([, count]) => count > 0);
+      const perRepo = sections.map(([repo]) => [repo, omitted.filter((entry) => entry.repo === repo).length] as const).filter(([, count]) => count > 0);
       const files = new Set(omitted.map(({ repo, site }) => JSON.stringify([repo, site.path])));
       return [
         `  ${cause} (${inCause.length}):`,

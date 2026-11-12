@@ -926,7 +926,7 @@ class Reader {
     if (run.kind === "nothing") return { callee: undefined };
     const callback = value.arguments[run.argument] === undefined ? undefined : unwrapped(value.arguments[run.argument]!);
     if (callback === undefined || !(ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))) return undefined;
-    return { callee: { key: `${holder.shape.source.fileName}\0@${callback.getStart()}`, file: holder.shape.source.fileName, body: callback.body } };
+    return { callee: calleeOfFunction(holder.shape.source.fileName, callback) };
   }
 
   /** The class an aliased field's receiver is an instance of: an injected class, or the one the receiver expression names. */

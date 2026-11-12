@@ -378,12 +378,13 @@ function ladder(target: HttpTarget, repositories: readonly RepositoryEntrypoints
   const found = settled(atRung(basePathRung, call, target.method, repositories)) ?? settled(atRung(suffixRung, call, target.method, repositories));
   if (found !== undefined) return found;
   const named = prefix !== undefined && repositories.some((repository) => repository.repo === prefix);
-  const attributed = call.origin !== undefined && hosts.some((host) => host.origin === originKey(call.origin));
+  const origin = call.origin;
+  const attributed = origin !== undefined && hosts.some((host) => host.origin === originKey(origin));
   return could || named || attributed || !namesHost(call) ? missed() : { external: true };
 }
 
-function originKey(origin: string | undefined): string {
-  return (origin ?? "").toLowerCase();
+function originKey(origin: string): string {
+  return origin.toLowerCase();
 }
 
 /**
