@@ -173,8 +173,9 @@ populations join into one tree:
 | Index declaration | `GraphSymbol` + the store's `contains` edges (today) | its `GraphNodeId`, wrapped as `index:<id>` |
 | Syntax declaration | B1's `declarations` (new) | `syntax:<file>:<startLine>:<startColumn>` (a source place; never an index name) |
 
-**One declaration, two sources.** A syntax declaration is an index declaration when an index declaration **of the same
-name** in the same file contains its start place. When several do, it is the **innermost**: the one that starts last,
+**One declaration, two sources.** A syntax declaration is an index declaration when a compatible index declaration **of
+the same name** in the same file contains its start place. A method or function joins a callable, never its same-named
+type; an accessor may join an indexed method, property or field. When several do, it is the **innermost**: the one that starts last,
 and of two that start together the one that ends first — the existing `owningBody` rule (`owning-body.ts:27-34`). The
 index identity wins and the syntax data (its path root, `invoked`, its binding) attaches to it. A syntax declaration no
 index declaration of its name contains adds a node. Without this rule every method would appear twice in `outline`.
@@ -232,6 +233,7 @@ import type { GraphSymbol } from "../../ports/code-graph.port.ts";
 
 /** A declaration a family can name, depend on and step into. It satisfies `TreeDeclaration` (`declaration-tree.ts:4-9`). */
 export interface ModelDeclaration {
+  file: string;
   /** `index:<GraphNodeId>` or `syntax:<file>:<startLine>:<startColumn>`; deterministic and never an index name for syntax. */
   id: string;
   name: string;
@@ -250,7 +252,7 @@ export interface ModelDeclaration {
 export interface DeclarationModel {
   /** The file's tree, `declarationTree`'s rule unchanged, index and syntax declarations in one node list. */
   tree(file: string): Promise<readonly DeclarationBranch<ModelDeclaration>[]>;
-  /** Every declaration the request selects, in position order; empty when none; two or more is an ambiguity fault upstream. */
+  /** Selected declarations in position order; duplicate full paths throw an ambiguity fault naming every place. */
   select(file: string, symbol: string): Promise<readonly ModelDeclaration[]>;
   /** The file's declarations, in position order. */
   list(file: string): Promise<readonly ModelDeclaration[]>;
@@ -320,7 +322,7 @@ same strict reading. `callers`/`impact` of a class then list the declarations th
 | `src/core/ports/declared-member-names.port.ts` | `DeclaredDeclaration` added (U1); `DeclaredMemberNames.declarations` added (U1); `SyntaxCall.kind` gains `"references"` (U6); `ReceiverValue` gains `{ kind: "token"; name: string; line: number; column: number }` (U4). `callables` unchanged |
 | `src/core/application/navigation/declaration-model.ts` (new) | `ModelDeclaration` and `DeclarationModel` as above; `ModelDeclaration.id` satisfies `TreeDeclaration.id` |
 | `src/core/application/navigation/call-binder.ts` | **Exactly one addition** to RFC-0024's `CallBinder`, after its U1–U4 land: `memberOfDeclaration(holder: ModelDeclaration, member: string, place: CallPlace): Promise<ModelDeclaration \| undefined>`. `memberOf`, `memberOfReceiver` and `declares` keep RFC-0024's signatures |
-| `src/core/application/navigation/call-binding.ts` | `CallBindingsDeps` gains `declarations: DeclarationModel`; `proven()`'s `typed()` gains a last branch — holder has no `symbol` → `memberOfDeclaration`; holder has one → RFC-0024's chain unchanged |
+| `src/core/application/navigation/call-binding.ts` | `CallBindingsDeps` gains `declarations: DeclarationModel`; `proven()`'s `typed()` gains a last branch — a proven holder without a `symbol` uses `memberOfDeclaration` and carries `declaration` on the receiver answer; indexed holders retain RFC-0024's chain and `target`. U2 consumes syntax declaration answers |
 | `src/core/application/navigation/reconciled-calls.ts` | `callsByOwner(calls, declarations: readonly ModelDeclaration[], functionValues)`; `positionedBodies` uses a declaration's span whether or not it has a `symbol` |
 | `src/core/application/navigation/reverse-calls.ts` (U5) | `intoDeclarations(declarations: readonly ModelDeclaration[]): Promise<readonly SyntaxCaller[]>`, `SyntaxCaller = { from: GraphSymbol; line: number; column: number; kind: string }`. `into` keeps RFC-0024's shape; no new retention |
 | `src/core/ports/framework-members.port.ts` (new) | `FrameworkMemberBindings` (below), consumed by the line and built by composition from every framework plugin |
@@ -439,6 +441,8 @@ Prerequisites: ADR-0045 L2 on `main` (the families read the line); ADR-0042's re
 ### U1 — The declaration model (extends RFC-0024's binder)
 
 Prerequisites: RFC-0024 U1–U4 landed; ADR-0045 L1b.
+Member-selection clarification accepted by the owner, 2026-11-12: "Continua como recomiendas" — the caller position
+does not constrain the target's span; membership comes from the proven holder and its unique direct child.
 
 - **Files**: create `src/core/application/navigation/declaration-model.ts` (+ test); edit
   `src/core/ports/declared-member-names.port.ts` (`DeclaredDeclaration`, `declarations`), both member-name adapters
@@ -450,9 +454,9 @@ Prerequisites: RFC-0024 U1–U4 landed; ADR-0045 L1b.
   `dispatchTargets`/`receiverMethods`.
 - **Contract**: the binder addition is `memberOfDeclaration(holder, member, place)` (async, `ModelDeclaration` in and
   out). A syntax-only holder's children come from the model's tree; the answer is the unique child whose name equals
-  `member` and whose span contains `place` (`startLine`/`startColumn` ≤ place < `endLine`/`endColumn`); several →
-  `undefined`. An index holder passes through RFC-0024's `memberOf`/`memberOfReceiver` and is wrapped with
-  `id = "index:<id>"`.
+  `member`; no match or several matches → `undefined`. Proven containment establishes membership; `place` remains the
+  caller occurrence and need not lie inside the selected declaration. An index holder keeps RFC-0024's `memberOf`
+  selection and is wrapped with `id = "index:<id>"`; nominal receiver selection stays in `CallBindings.memberOfReceiver`.
 - **RED**: `src/core/application/navigation/declaration-model.test.ts`, "a declaration the index does not hold joins the
   tree, and one it holds is that declaration": the index holds `A` (class) and `A.m` (method); the pack declares `m`
   (coinciding) and a syntax-only `n` under `A`. Expected exact tree: **one root, `A`, with two children `m` and `n`** —

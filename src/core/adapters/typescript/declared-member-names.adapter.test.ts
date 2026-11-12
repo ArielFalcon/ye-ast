@@ -6,6 +6,30 @@ import { createTypeScriptMemberNames } from "./declared-member-names.adapter.ts"
 const read = (lines: readonly string[], path = "src/a.ts") => createTypeScriptMemberNames().memberNames({ path, content: lines.join("\n") });
 const names = async (lines: readonly string[]) => (await read(lines)).names;
 
+test("declarations retain callable spans and exact containers without changing dispatch callables", async () => {
+  const answer = await read([
+    "function top() {}",
+    "class Box {",
+    "  constructor() {}",
+    "  run() {}",
+    "  get value() { return 1; }",
+    "  set value(v: number) {}",
+    "}",
+    "interface Port { send(): void; }",
+    "const literal = { extra() {} };",
+  ]);
+  assert.deepEqual(answer.declarations.map(({ name, kind, span, container }) => [name, kind, span.start, container]), [
+    ["top", "function", { line: 1, column: 0 }, undefined],
+    ["constructor", "method", { line: 3, column: 2 }, { line: 2, column: 0 }],
+    ["run", "method", { line: 4, column: 2 }, { line: 2, column: 0 }],
+    ["value", "accessor", { line: 5, column: 2 }, { line: 2, column: 0 }],
+    ["value", "accessor", { line: 6, column: 2 }, { line: 2, column: 0 }],
+    ["send", "method", { line: 8, column: 17 }, { line: 8, column: 0 }],
+  ]);
+  assert.deepEqual(answer.callables.map(({ name }) => name), ["top", "constructor", "run", "send"]);
+  assert.ok(answer.declarations.every(({ invoked, span }) => invoked && span.end.column > span.start.column));
+});
+
 test("every object-literal key is a name, at any depth and in any context, and a spread is none", async () => {
   assert.deepEqual(await names([
     "make({ argMethod() {}, argKey: 1 });",

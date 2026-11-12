@@ -32,7 +32,7 @@ function recordingPack(profile: LanguageProfile, received: string[], readsProjec
   return {
     profile,
     ...(readsProjectFiles === undefined ? {} : { readsProjectFiles }),
-    memberNames: { memberNames: async (file) => (received.push(file.path), { names: [tag], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] }) },
+    memberNames: { memberNames: async (file) => (received.push(file.path), { names: [tag], functionValueCalls: [], callables: [], declarations: [], receiverBindings: [], functionValues: [] }) },
     origins: (sources, paths) => (received.push(...sources.map(({ path }) => path)), universe.push(...(paths ?? [])), origins),
     modules: { extract: async (sources) => (received.push(...sources.map(({ path }) => path)), { files: [], dependencies: [], unread: sources.map(({ path }) => ({ file: path, reason: "unresolved" as const })), untraversed: [] }) },
     tokens: { tokensOf: async (file) => (received.push(file.path), { status: "read", language: tag, tokens: [], imports: [], importOrder: profile.importOrder }) },

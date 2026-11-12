@@ -1,7 +1,7 @@
 import ts from "typescript";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, SyntaxCall } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredCallable, DeclaredDeclaration, DeclaredMemberNames, DeclaredMemberNamesReader, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import { annotated, isFunctionValueNode, localReceivers } from "./function-value-calls.ts";
 import type { SourcePosition, SourceSpan } from "../../domain/shared/owning-body.ts";
 import { hasModifier, isStatic, lineOf, unwrapped } from "./syntax.ts";
@@ -29,6 +29,7 @@ function derive(file: SourceFile): DeclaredMemberNames {
   const tree = sourceTree(file, ts.ScriptTarget.Latest);
   const names = new Set<string>();
   const callables: DeclaredCallable[] = [];
+  const declarations: DeclaredDeclaration[] = [];
   const calls: SyntaxCall[] = [];
   const initializedFields: NonNullable<DeclaredMemberNames["initializedFields"]>[number][] = [];
   const owners: SyntaxCall["owners"][number][] = [];
@@ -47,6 +48,11 @@ function derive(file: SourceFile): DeclaredMemberNames {
   const positionOf = (at: number): SourcePosition => {
     const { line, character } = tree.getLineAndCharacterOfPosition(at);
     return { line: line + 1, column: character };
+  };
+  const declare = (node: ts.Node, name: string, kind: DeclaredDeclaration["kind"]): void => {
+    let parent: ts.Node | undefined = node.parent;
+    while (parent !== undefined && !ts.isClassLike(parent) && !ts.isInterfaceDeclaration(parent) && !ts.isFunctionLike(parent)) parent = parent.parent;
+    declarations.push({ name, kind, invoked: true, span: { start: positionOf(node.getStart(tree)), end: positionOf(node.getEnd()) }, ...(parent === undefined ? {} : { container: positionOf(parent.getStart(tree)) }) });
   };
   const visit = (node: ts.Node): void => {
     if (isFunctionValueNode(node)) functionValues.push({ start: positionOf(node.getStart(tree)), end: positionOf(node.getEnd()) });
@@ -70,8 +76,14 @@ function derive(file: SourceFile): DeclaredMemberNames {
       const end = positionOf(node.getEnd());
       owners.push({ name: constructor ? "constructor" : (name?.getText(tree) ?? "").replace(/^['"]|['"]$/g, ""), start: start.line, nameLine: named.line, nameColumn: named.column, startColumn: start.column, endLine: end.line, endColumn: end.column });
     }
-    if (ts.isFunctionDeclaration(node)) callable(node, false);
-    if (ts.isConstructorDeclaration(node)) callables.push({ construction: true, name: "constructor", start: lineOf(tree, node), nameLine: lineOf(tree, node), body: node.body !== undefined, overridable: false });
+    if (ts.isFunctionDeclaration(node)) {
+      callable(node, false);
+      if (node.name !== undefined) declare(node, node.name.text, "function");
+    }
+    if (ts.isConstructorDeclaration(node)) {
+      callables.push({ construction: true, name: "constructor", start: lineOf(tree, node), nameLine: lineOf(tree, node), body: node.body !== undefined, overridable: false });
+      declare(node, "constructor", "method");
+    }
     if (ts.isPropertyDeclaration(node) && node.initializer !== undefined && !isDeclareOnly(node)) initializedFields.push({ name: node.name.getText(tree), start: lineOf(tree, node), nameLine: lineOf(tree, node.name) });
     if (isDeclareOnly(node)) { if (owns) owners.pop(); return; }
     if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node)) {
@@ -90,8 +102,15 @@ function derive(file: SourceFile): DeclaredMemberNames {
       anchors.push({ line: namePosition.line, column: namePosition.column + 1 });
       calls.push({ anchors, kind: ts.isNewExpression(node) ? "instantiates" : "calls", line: point.line, column: point.column + 1, name: written.getText(tree), ...(callee === undefined ? {} : { callee }), owners: [...owners] });
     }
-    if (ts.isMethodDeclaration(node) && ts.isClassLike(node.parent)) callable(node, isOverridable(node));
-    if (ts.isMethodSignature(node) && ts.isInterfaceDeclaration(node.parent)) callable(node, true);
+    if (ts.isMethodDeclaration(node) && ts.isClassLike(node.parent)) {
+      callable(node, isOverridable(node));
+      declare(node, node.name.getText(tree), "method");
+    }
+    if (ts.isMethodSignature(node) && ts.isInterfaceDeclaration(node.parent)) {
+      callable(node, true);
+      declare(node, node.name.getText(tree), "method");
+    }
+    if ((ts.isGetAccessor(node) || ts.isSetAccessor(node)) && ts.isClassLike(node.parent)) declare(node, node.name.getText(tree), "accessor");
     if (ts.isObjectLiteralExpression(node)) for (const property of node.properties) if (!ts.isSpreadAssignment(property)) add(property.name);
     if (ts.isClassLike(node)) for (const member of node.members) if (!isDeclareOnly(member)) add(member.name);
     if (ts.isConstructorDeclaration(node)) for (const parameter of node.parameters) if (ts.isParameterPropertyDeclaration(parameter, node)) add(parameter.name);
@@ -115,7 +134,7 @@ function derive(file: SourceFile): DeclaredMemberNames {
     if (owns) owners.pop();
   };
   visit(tree);
-  return { names: [...names].sort(compareText), ...localReceivers(tree), callables, calls, functionValues, initializedFields };
+  return { names: [...names].sort(compareText), ...localReceivers(tree), callables, declarations, calls, functionValues, initializedFields };
 }
 
 /** The names a module re-exports or exports under another name, without the ones marked type-only. */

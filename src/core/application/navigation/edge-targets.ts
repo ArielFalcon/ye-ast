@@ -15,6 +15,7 @@ import { declarationAt, importBindings } from "./import-bindings.ts";
 import { provenKey, typedDeclaration } from "./proven-calls.ts";
 import { createCallBindings, type CallBindings } from "./call-binding.ts";
 import { bindingKey, createCallBinder, receiverBindingsByPlace, type CallBinder, type ReceiverProofs, type ReceiverSyntax } from "./call-binder.ts";
+import type { DeclarationModel } from "./declaration-model.ts";
 
 export { SYNTAX_ONLY, type ReceiverProofs } from "./call-binder.ts";
 
@@ -47,6 +48,7 @@ export interface EdgeTargets {
 }
 
 export interface EdgeTargetsDeps {
+  declarations: DeclarationModel;
   origins: ImportOrigins;
   store: CodeGraphReader;
   /**
@@ -71,7 +73,7 @@ export interface EdgeTargetsDeps {
 }
 
 /** The syntax of a source no reader parses: it states nothing. */
-export const NOTHING_DECLARED: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
+export const NOTHING_DECLARED: DeclaredMemberNames = { names: [], declarations: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
 
 /** A graph edge with both of its ends. */
 export interface FollowedEdge {
@@ -111,7 +113,7 @@ const IMPORT = "imports";
 /** The types whose members a value receiver may stand for. */
 const TYPE_KINDS: readonly string[] = EDGE_POLICY.ownerKinds;
 
-export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, typed, inScope }: EdgeTargetsDeps): EdgeTargets {
+export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, typed, inScope, declarations }: EdgeTargetsDeps): EdgeTargets {
   const verdicts = new Map<string, EdgeTarget>();
   const navigation = createGraphNavigation(store, () => false);
   const syntaxIndexes = new Map<string, Promise<ReceiverSyntax>>();
@@ -126,8 +128,8 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
     }
     return held;
   };
-  const binder = syntaxOf === undefined || proofs === undefined ? undefined : createCallBinder({ store, navigation, syntaxIn: (file) => syntaxIn(syntaxOf, file), proofs, importedDeclarations: (file) => bindingsOf(file), callablesIn: async (file) => (await syntaxOf(file)).callables });
-  const bindings = binder === undefined ? undefined : createCallBindings({ store, navigation, origins, binder, importedDeclarations: (file) => bindingsOf(file), ...(inScope === undefined ? {} : { inScope }) });
+  const binder = syntaxOf === undefined || proofs === undefined ? undefined : createCallBinder({ store, navigation, declarations, syntaxIn: (file) => syntaxIn(syntaxOf, file), proofs, importedDeclarations: (file) => bindingsOf(file), callablesIn: async (file) => (await syntaxOf(file)).callables });
+  const bindings = binder === undefined ? undefined : createCallBindings({ store, navigation, origins, binder, declarations, importedDeclarations: (file) => bindingsOf(file), ...(inScope === undefined ? {} : { inScope }) });
   /** Per file, the declaration each local name its imports bind reaches, when the join proves exactly one. */
   const bound = new Map<string, ReadonlyMap<string, GraphSymbol>>();
   let extracted: ReadonlyMap<string, readonly ModuleDependency[]> | undefined;

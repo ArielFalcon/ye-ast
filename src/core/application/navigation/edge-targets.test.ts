@@ -4,6 +4,7 @@ import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { GraphNodeId } from "../../ports/code-graph.port.ts";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { ImportOrigins, ReceiverMethod } from "../../ports/import-origins.port.ts";
+import { createDeclarationModel } from "./declaration-model.ts";
 import { createEdgeTargets, NOTHING_DECLARED, type FollowedEdge } from "./edge-targets.ts";
 import { fakeCodeGraph, type FakeEdge, type FakeNode } from "./fake-code-graph.testing.ts";
 
@@ -27,6 +28,7 @@ async function verdictOf(world: World, from: string) {
   const targets = createEdgeTargets({
     origins,
     store,
+    declarations: createDeclarationModel({ store, declarationsIn: async () => [] }),
     syntaxOf: async () => ({ ...NOTHING_DECLARED, receiverBindings: world.receiverBindings ?? [], calls: (world.receiverBindings ?? []).map(({ line, column, receiver, member }) => ({ kind: "calls" as const, line, column, name: `${receiver}.${member}`, owners: [] })) }),
     proofs: async () => ({ fields: [], locals: [], memberUses: world.memberUses ?? [] }),
   });

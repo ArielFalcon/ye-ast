@@ -198,6 +198,32 @@ function rememberingFacts(): DerivedFacts {
   };
 }
 
+test("declarations and bindings share B1, and a changed file or index containment rebuilds only its model", async () => {
+  const file = { path: "src/a.ts", content: "class A { run() {} }" };
+  let reads = 0;
+  const written = { name: "run", kind: "method" as const, invoked: true, span: { start: { line: 1, column: 10 }, end: { line: 1, column: 18 } }, container: { line: 1, column: 0 } };
+  const memberNames = { memberNames: async () => (reads++, { ...NOTHING_DECLARED, declarations: [written], calls: [] }) };
+  let derivations = 0;
+  const retained = rememberingFacts();
+  const facts: DerivedFacts = { ...retained, ofInputs: (slot, inputs, derive) => retained.ofInputs(slot, inputs, async () => (derivations++, derive())) };
+  const graph = (contains: boolean) => fakeCodeGraph([
+    { ...fakeNode("A", "class", file.path, 1, 1), endColumn: 21 },
+    { ...fakeNode("run", "method", file.path, 1, 1), startColumn: 10, endColumn: 18 },
+  ], contains ? [{ from: "A", to: "run", kind: "contains" }] : []);
+  const readings = createBaseReadings({ relations: {} as RelationExtractor, memberNames, importOrigins: () => ({} as ImportOrigins) });
+  const reading = (contains: boolean, content = file.content) => readings.of({ tree: { export: { files: [], skipped: [] }, sources: [{ ...file, content }] }, prepared: { facts } as never, store: graph(contains), snapshot: SHA, request: { repo: "/work/repo" } });
+  const first = reading(true);
+  const [[holder]] = await Promise.all([first.declarations.select(file.path, "A"), first.syntaxOf!(file.path)]);
+  const target = await first.edgeTargets()!.binder!.memberOfDeclaration(holder!, "run", { file: "src/use.ts", line: 20, column: 1 });
+  assert.equal(target?.path, "A.run");
+  assert.equal(reads, 1);
+  await reading(true).declarations.list(file.path);
+  assert.equal(derivations, 1);
+  assert.equal((await reading(false).declarations.select(file.path, "run"))[0]?.path, "run");
+  assert.equal((await reading(true, "class A { run() {} }\n").declarations.select(file.path, "run"))[0]?.path, "A.run");
+  assert.equal(derivations, 3);
+});
+
 test("a file's contradiction alignment is kept between readings by its content and index, and another index aligns again", async () => {
   const file = "src/b.ts";
   const graph = fakeCodeGraph([fakeNode("f", "function", "src/a.ts", 1, 3), fakeNode("g", "function", file, 1, 3)], [{ from: "g", to: "f", kind: "calls", line: 2, column: 4 }]);

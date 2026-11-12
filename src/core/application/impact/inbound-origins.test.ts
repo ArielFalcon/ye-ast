@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { GraphNodeId } from "../../ports/code-graph.port.ts";
 import type { ImportOrigins } from "../../ports/import-origins.port.ts";
+import { createDeclarationModel } from "../navigation/declaration-model.ts";
 import { createEdgeTargets, edgeKey, NOTHING_DECLARED, type FollowedEdge } from "../navigation/edge-targets.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
 import type { CallBindings } from "../navigation/call-binding.ts";
@@ -32,7 +33,7 @@ function world(nodes: readonly FakeNode[], uses: readonly FakeUnresolved[], orig
   const fields = origins.fields ?? [];
   const locals = origins.locals ?? [];
   const calls = uses.map(({ line, column, name }) => ({ kind: "calls" as const, line, column: (column ?? 0) + 1, name, owners: [] }));
-  const { bindings } = createEdgeTargets({ origins: importOrigins, store, syntaxOf: async () => ({ ...NOTHING_DECLARED, calls }), proofs: async () => ({ fields, locals, memberUses: [] }) });
+  const { bindings } = createEdgeTargets({ declarations: createDeclarationModel({ store, declarationsIn: async () => [] }), origins: importOrigins, store, syntaxOf: async () => ({ ...NOTHING_DECLARED, calls }), proofs: async () => ({ fields, locals, memberUses: [] }) });
   const counted: CallBindings = { ...bindings!, boundCalls: (asked, signal) => (boundBatches.push(asked.map(({ reference }) => reference.name)), bindings!.boundCalls(asked, signal)) };
   return { store, bindings: counted, origins: { fields, locals } };
 }
@@ -100,7 +101,7 @@ test("a typed redirect reaches the declaration the checker binds whether or not 
   const owners = [{ name: "run", start: 1, nameLine: 1, nameColumn: 0, startColumn: 0, endLine: 3, endColumn: 1 }];
   const unknown = async (sites: readonly unknown[]) => sites.map(() => ({ status: "unknown" as const, reason: "unresolved" as const, evidence: [] }));
   const origins = { origins: unknown, rootOrigins: unknown, rootBindings: async (sites: readonly unknown[]) => sites.map(() => ({ kind: "unknown" as const })), receiverMethods: async (sites: readonly unknown[]) => sites.map(() => ({ kind: "unknown" as const })) } as unknown as ImportOrigins;
-  const targets = createEdgeTargets({ origins, store, syntaxOf: async () => ({ ...NOTHING_DECLARED, calls: [{ kind: "calls", line: 2, column: 5, name: "helper", callee: "helper", owners }] }), proofs: async () => ({ fields: [], locals: [], memberUses: [] }), typed: typedCallsOf([{ file: A, line: 2, column: 5, name: "helper", target: { kind: "repository", file: B, name: "helper", line: 1 } }]) });
+  const targets = createEdgeTargets({ declarations: createDeclarationModel({ store, declarationsIn: async () => [] }), origins, store, syntaxOf: async () => ({ ...NOTHING_DECLARED, calls: [{ kind: "calls", line: 2, column: 5, name: "helper", callee: "helper", owners }] }), proofs: async () => ({ fields: [], locals: [], memberUses: [] }), typed: typedCallsOf([{ file: A, line: 2, column: 5, name: "helper", target: { kind: "repository", file: B, name: "helper", line: 1 } }]) });
 
   const corrections = await receiverCorrectionsOf(store, targets, { fields: [], locals: [] }, [A]);
   const [raw] = store.outgoingEdges(["run" as GraphNodeId], ["calls"]);

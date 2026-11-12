@@ -6,6 +6,26 @@ import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import { createCallBinder } from "./call-binder.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "./fake-code-graph.testing.ts";
 import { createGraphNavigation } from "./graph-navigation.ts";
+import { createDeclarationModel } from "./declaration-model.ts";
+
+test("a syntax holder selects only its unique direct child independently of the caller position", async () => {
+  const store = fakeCodeGraph([], []);
+  const declarations = createDeclarationModel({ store, declarationsIn: async () => [
+    { name: "Store", kind: "function", invoked: true, span: { start: { line: 1, column: 0 }, end: { line: 10, column: 1 } } },
+    { name: "run", kind: "method", invoked: true, span: { start: { line: 3, column: 2 }, end: { line: 3, column: 20 } }, container: { line: 1, column: 0 } },
+    { name: "outside", kind: "function", invoked: true, span: { start: { line: 12, column: 0 }, end: { line: 12, column: 20 } } },
+  ] });
+  const binder = createCallBinder({ store, declarations, navigation: createGraphNavigation(store, () => false), syntaxIn: async () => ({ receiverBindings: new Map(), callees: new Map() }), proofs: async () => ({ fields: [], locals: [] }), importedDeclarations: async () => new Map(), callablesIn: async () => [] });
+  const [holder] = await declarations.select("src/store.ts", "Store");
+  assert.equal((await binder.memberOfDeclaration(holder!, "run", { file: "src/consumer.ts", line: 40, column: 7 }))?.path, "Store.run");
+  assert.equal(await binder.memberOfDeclaration(holder!, "outside", { file: "src/store.ts", line: 12, column: 1 }), undefined);
+  const ambiguous = createDeclarationModel({ store, declarationsIn: async () => [
+    { name: "Store", kind: "function", invoked: true, span: { start: { line: 1, column: 0 }, end: { line: 10, column: 1 } } },
+    ...[3, 5].map((line) => ({ name: "run", kind: "method" as const, invoked: true, span: { start: { line, column: 2 }, end: { line, column: 20 } }, container: { line: 1, column: 0 } })),
+  ] });
+  const other = createCallBinder({ store, declarations: ambiguous, navigation: createGraphNavigation(store, () => false), syntaxIn: async () => ({ receiverBindings: new Map(), callees: new Map() }), proofs: async () => ({ fields: [], locals: [] }), importedDeclarations: async () => new Map(), callablesIn: async () => [] });
+  assert.equal(await other.memberOfDeclaration(holder!, "run", { file: "src/store.ts", line: 3, column: 4 }), undefined);
+});
 
 const STORE = "src/store.ts";
 const API = "src/api.ts";
@@ -22,6 +42,7 @@ function settling(nodes: readonly FakeNode[], edges: readonly FakeEdge[], callab
   const store = fakeCodeGraph(nodes, edges);
   const settle = createCallBinder({
     store,
+    declarations: createDeclarationModel({ store, declarationsIn: async () => [] }),
     navigation: createGraphNavigation(store, () => false),
     syntaxIn: async () => ({ receiverBindings: new Map(), callees: new Map() }),
     proofs: async () => ({ fields: [], locals: [] }),
@@ -42,6 +63,7 @@ function binder() {
   ];
   const settle = createCallBinder({
     store,
+    declarations: createDeclarationModel({ store, declarationsIn: async () => [] }),
     navigation: createGraphNavigation(store, () => false),
     syntaxIn: async () => ({ receiverBindings: new Map(), callees: new Map() }),
     proofs: async () => ({ fields: [], locals: [], memberUses }),
@@ -146,7 +168,7 @@ test("a member proof binds a call to the one member it names, a method or a prop
   for (const kind of ["method", "property"]) {
     const store = fakeCodeGraph([fakeNode("drop", "function", STORE, 2, 5), fakeNode("Api", "class", API, 1, 6), fakeNode("remove", kind, API, 2, 4)], [{ from: "Api", to: "remove", kind: "contains" }]);
     const memberUses: MemberUseOrigin[] = [{ owner: { path: STORE, symbol: "drop", line: 2 }, receiver: { path: API, symbol: "Api", line: 1 }, member: { path: API, symbol: "Api.remove", line: 2 }, reference: { file: STORE, line: 3, column: 5, name: "api.remove", kind: "calls" } }];
-    const settle = createCallBinder({ store, navigation: createGraphNavigation(store, () => false), syntaxIn: async () => ({ receiverBindings: new Map(), callees: new Map() }), proofs: async () => ({ fields: [], locals: [], memberUses }), importedDeclarations: async () => new Map(), callablesIn: async () => [] });
+    const settle = createCallBinder({ store, declarations: createDeclarationModel({ store, declarationsIn: async () => [] }), navigation: createGraphNavigation(store, () => false), syntaxIn: async () => ({ receiverBindings: new Map(), callees: new Map() }), proofs: async () => ({ fields: [], locals: [], memberUses }), importedDeclarations: async () => new Map(), callablesIn: async () => [] });
     const [drop] = store.symbolsByIds(["drop" as GraphNodeId]);
     const proof = await settle.receiverOf({ body: drop!, line: 3, column: 5, member: "remove", receiver: "api" });
 

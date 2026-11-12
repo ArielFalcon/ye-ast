@@ -1,13 +1,13 @@
 import type { Node } from "web-tree-sitter";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, FunctionValueCall, ReceiverBinding, SyntaxCall } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredCallable, DeclaredDeclaration, DeclaredMemberNames, DeclaredMemberNamesReader, FunctionValueCall, ReceiverBinding, SyntaxCall } from "../../ports/declared-member-names.port.ts";
 import { isFunctionValueNode, javaFunctionValueCalls } from "./java-function-value-calls.ts";
 import type { SourceSpan } from "../../domain/shared/owning-body.ts";
 import { javaReceiverBindings } from "./java-receiver-bindings.ts";
 import type { JavaParser } from "./java-parser.adapter.ts";
 
-const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
+const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], declarations: [], receiverBindings: [], functionValues: [] };
 /** Modifiers that keep a subtype from overriding a method. */
 const FIXED: readonly string[] = ["static", "private", "final"];
 
@@ -37,6 +37,7 @@ function derive(parser: JavaParser, file: SourceFile): DeclaredMemberNames {
   if (!parsed.ok) return NONE;
   const names = new Set<string>();
   const callables: DeclaredCallable[] = [];
+  const declarations: DeclaredDeclaration[] = [];
   const calls: SyntaxCall[] = [];
   const initializedFields: NonNullable<DeclaredMemberNames["initializedFields"]>[number][] = [];
   const owners: SyntaxCall["owners"][number][] = [];
@@ -72,6 +73,10 @@ function derive(parser: JavaParser, file: SourceFile): DeclaredMemberNames {
       const name = node.childForFieldName("name");
       const modifiers = node.namedChildren.find((child) => child?.type === "modifiers")?.children ?? [];
       if (name !== null) callables.push({ ...(node.type === "method_declaration" ? {} : { construction: true as const }), name: name.text, start: node.startPosition.row + 1, nameLine: name.startPosition.row + 1, body: node.childForFieldName("body") !== null, overridable: node.type === "method_declaration" && !modifiers.some((modifier) => FIXED.includes(modifier?.type ?? "")) });
+      if (name !== null) {
+        const parent = owners.at(-2);
+        declarations.push({ name: name.text, kind: "method", invoked: true, span: { start: { line: node.startPosition.row + 1, column: node.startPosition.column }, end: { line: node.endPosition.row + 1, column: node.endPosition.column } }, ...(parent === undefined ? {} : { container: { line: parent.start, column: parent.startColumn } }) });
+      }
     }
     if (node.type === "record_declaration") for (const component of node.childForFieldName("parameters")?.namedChildren ?? []) if (component?.type === "formal_parameter") nameOf(component);
     for (const child of node.namedChildren) if (child !== null) visit(child);
@@ -86,7 +91,7 @@ function derive(parser: JavaParser, file: SourceFile): DeclaredMemberNames {
   } finally {
     parsed.value.dispose();
   }
-  return { names: [...names].sort(compareText), functionValueCalls, callables, receiverBindings, calls, functionValues, initializedFields };
+  return { names: [...names].sort(compareText), functionValueCalls, callables, declarations, receiverBindings, calls, functionValues, initializedFields };
 }
 
 function isAnonymousMethod(node: Node): boolean {

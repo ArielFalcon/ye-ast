@@ -20,7 +20,7 @@ export interface RoutedReaders {
 }
 
 /** What a source no pack reads states: nothing. */
-const NOTHING_DECLARED: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
+const NOTHING_DECLARED: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], declarations: [], receiverBindings: [], functionValues: [] };
 const UNKNOWN = { kind: "unknown" } as const;
 /** What a site answers where its pack declares the stage absent: unknown, naming the absence, never "nothing there". */
 const ABSENT = { kind: "unknown", reason: CAPABILITY_ABSENT } as const;
