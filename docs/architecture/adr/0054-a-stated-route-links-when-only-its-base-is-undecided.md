@@ -34,6 +34,9 @@ handler serves it. An undecided authority leaves the first unknown, not the seco
 5. Gateway inference reads the first segment such a route states, as it reads a complete target's.
 6. A route found nowhere settles nothing: the call site stays an unresolved cut, never `unmatched` drift, since it may
    leave the workspace.
+7. A trace with a workspace returns such a link where the trace placed the request exactly in an executed body
+   (ADR-0053 decision 5): the unresolved request keeps the column it was placed at, so an undecided destination does not
+   hide the link the workspace admits.
 
 ## Consequences
 

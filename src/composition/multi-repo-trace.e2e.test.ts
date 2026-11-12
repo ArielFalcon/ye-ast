@@ -8,7 +8,10 @@ import { composeCli } from "./compose.ts";
 import { EXIT_CODE } from "../cli/main.ts";
 import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 
-test("a workspace trace connects an executed client request to its producer handler without unrelated calls", async () => {
+type Query = (args: string[]) => Promise<TraceValue>;
+
+/** A client whose base URL its configuration either provides or leaves undecided, a server, and a workspace manifest. */
+async function withWorkspace(options: { providers: string; gateways: readonly { prefix: string; repo: string }[] }, use: (paths: { client: string; server: string; manifest: string }, query: Query) => Promise<void>): Promise<void> {
   const root = mkdtempSync(join(tmpdir(), "ye-ast-"));
   mkdirSync(join(root, "scratch"));
   const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "test@example.com", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "test@example.com" };
@@ -30,7 +33,7 @@ test("a workspace trace connects an executed client request to its producer hand
       "angular.json": JSON.stringify({ projects: { app: { root: "", architect: { build: { builder: "@angular/build:application", options: { browser: "src/main.ts" } } } } } }),
       "README.md": "A non-source listing record does not make the captured source incomplete.",
       "src/token.ts": "import { InjectionToken } from '@angular/core'; export const BASE = new InjectionToken<string>('base');",
-      "src/config.ts": "import { BASE } from './token'; export const config = { providers: [{ provide: BASE, useValue: 'https://example.test/api' }] };",
+      "src/config.ts": `import { BASE } from './token'; export const config = { providers: [${options.providers}] };`,
       "src/main.ts": "import { Component } from '@angular/core'; import { bootstrapApplication } from '@angular/platform-browser'; import { config } from './config'; @Component({ standalone: true, template: '' }) class App {} bootstrapApplication(App, config);",
       "src/api.ts": "import { Injectable, inject } from '@angular/core'; import { HttpClient } from '@angular/common/http'; import { BASE } from './token';\n@Injectable({providedIn: 'root'}) export class Api {\n private base = inject(BASE);\n constructor(private http: HttpClient) {}\n load(id: string) { return this.http.get(this.base + '/orders/' + id); }\n}\nexport function other() { return fetch('/health'); }",
     });
@@ -44,7 +47,7 @@ class Orders {
   String health() { return "ok"; }
 }` });
     const manifest = join(root, "workspace.json");
-    writeFileSync(manifest, JSON.stringify({ repos: [{ path: server, id: "server", revision: "HEAD" }], gateways: [{ prefix: "api", repo: "server" }] }));
+    writeFileSync(manifest, JSON.stringify({ repos: [{ path: server, id: "server", revision: "HEAD" }], gateways: options.gateways }));
     const run = composeCli({ scratchRoot: join(root, "scratch"), indexCache: join(root, "cache") });
     const query = async (args: string[]): Promise<TraceValue> => {
       const out: string[] = [], err: string[] = [];
@@ -54,6 +57,14 @@ class Orders {
       assert.notEqual(result.status, "unknown");
       return result.value;
     };
+    await use({ client, server, manifest }, query);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("a workspace trace connects an executed client request to its producer handler without unrelated calls", async () => {
+  await withWorkspace({ providers: "{ provide: BASE, useValue: 'https://example.test/api' }", gateways: [{ prefix: "api", repo: "server" }] }, async ({ client, server, manifest }, query) => {
     const traced = await query(["trace", client, "src/api.ts:Api.load", "--workspace", manifest, "--offline"]);
     assert.equal(traced.links?.length, 1, JSON.stringify(traced));
     const link = traced.links![0]!;
@@ -66,7 +77,12 @@ class Orders {
     const producer = await query(["trace", server, `${link.to.handler.path}:${link.to.handler.symbol}`, "--revision", producerSnapshot.sha]);
     assert.ok(producer.steps.some(({ symbol }) => symbol === "normalize"));
     assert.equal(producer.links, undefined);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  });
+});
+
+test("a workspace trace links an executed request whose base URL is undecided, marked as such", async () => {
+  await withWorkspace({ providers: "", gateways: [] }, async ({ client, manifest }, query) => {
+    const traced = await query(["trace", client, "src/api.ts:Api.load", "--workspace", manifest, "--offline"]);
+    assert.deepEqual(traced.links?.map(({ to, basis, authority }) => `${to.repo} ${to.name} ${basis} ${authority}`), ["server GET /orders/{id} suffix undecided"]);
+  });
 });

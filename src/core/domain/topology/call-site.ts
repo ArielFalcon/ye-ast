@@ -121,6 +121,8 @@ export interface PlacedCallSiteReader {
 export interface UnresolvedCallSite {
   path: string;
   line: number;
+  /** 1-based, where a trace placed the call in the executed body that issues it. */
+  column?: number;
   endLine?: number;
   symbol: string;
   transport: CallSite["transport"];

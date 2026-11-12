@@ -134,7 +134,8 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, declar
       const request = item.read.request;
       if (request !== undefined) {
         const requests = (item.step.unresolvedEffects ??= []);
-        if (!requests.some((existing) => canonicalJson(existing) === canonicalJson(request))) requests.push(request);
+        const placed = { ...request, column: item.column };
+        if (!requests.some((existing) => canonicalJson(existing) === canonicalJson(placed))) requests.push(placed);
       }
     }
   }

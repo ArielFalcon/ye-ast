@@ -157,7 +157,7 @@ export const callSiteDiagnostic = z.strictObject({
   alternatives: z.array(z.string()).exactOptional(),
 });
 export const unresolvedCallSiteSchema = z.strictObject({
-  path: z.string(), line: int, endLine: int.exactOptional(), symbol: z.string(), transport,
+  path: z.string(), line: int, column: int.exactOptional(), endLine: int.exactOptional(), symbol: z.string(), transport,
   reason: unknownReason, evidence: z.array(evidenceValue), diagnostic: callSiteDiagnostic.exactOptional(),
   via: z.string().exactOptional(), stated: stated.exactOptional(),
 });
