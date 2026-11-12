@@ -503,7 +503,6 @@ Angular and of Java with Spring must be added solidly".
 | 1 | v1 scope: TypeScript/JavaScript and Java (qayaba's declared scope), with Java marked partial? | Decided: v1 covers Angular on TypeScript and Spring on Java, both completely. The DGS annotation row is admitted on one measured application with a conformance fixture; a second measured application is the trigger to retain it ([RFC-0026](0026-framework-invoked-entrypoints.md), resolved question 1). The approach and the definition of done are [ADR-0014](../adr/0014-angular-and-spring-from-own-extractors.md); the design per gap is above. Java starts with no statement syntax, no decision syntax and no module syntax in qayaba (`decisions: null`, `statements: null` and no entry among the module syntaxes: qayaba@4105c582 `qa-engine/src/shared-kernel/language-id.ts:27,37-40`), which row S1 adds |
 | 2 | Are plugins in-repo packages or separately published? | In-repo until a third party needs to publish one |
 
-
 ### Trace data-access rows (RFC-0013 R12)
 
 The Spring adapter owns the syntax vocabulary for data effects, separate from cross-service call-site transports.
@@ -523,7 +522,6 @@ Project wrappers remain code the trace walks, never vocabulary entries. Each adm
 exact-position and function-value rules. Reads remain visible with their access class; no entity getter is a data row.
 The data effect union and compose schema are extended in place under the owner's no-bump rule (MCP has no consumers).
 
-
 ### Framework member contributions
 
 The registered signals-store plugin extends TypeScript declarations through `FrameworkMemberBindings`. Its per-reading
@@ -531,3 +529,9 @@ factory reuses B1 source trees, selects by nearest `@ngrx/signals` manifest depe
 binds members returned by `withMethods` to the declaration receiving `signalStore`. It contributes source positions
 and framework evidence; the shared model owns containment, path uniqueness and conflicts. Removing the registry entry
 removes this contribution while preserving the language's literal declarations.
+
+Angular build replacement evidence reads workspace `angular.json`, Nx `nx.json` defaults and Nx `project.json`
+configurations. Nx project replacement paths are resolved from their enclosing workspace root, not from the project
+file's directory. Missing workspace scope for an explicitly Nx-scoped project or unreadable configuration withholds
+member proof. These files remain interpretation inputs under a narrowed include; explicit excludes still win.
+This safety rule neither selects a build configuration nor establishes an injected provider's scalar value.

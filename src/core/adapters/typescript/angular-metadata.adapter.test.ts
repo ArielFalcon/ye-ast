@@ -484,7 +484,6 @@ test("an escaped reflective mutator prevents member proofs", async () => {
   assert.deepEqual(meta.memberUses, []);
 });
 
-
 test("a derived field replacement cannot certify the inherited receiver target", async () => {
   const owner = "export class Owner { store = new Store(); run() { this.store.write(); } }";
   assert.equal((await memberProofs(owner)).memberUses?.length, 1);
@@ -643,7 +642,6 @@ test("inline proofs are withheld for unknown providers and derived member replac
   ]) assert.deepEqual((await memberProofs(owner, undefined, extra)).memberUses, []);
 });
 
-
 test("an existing const injection local uses the exact member proof channel", async () => {
   const meta = await memberProofs("export function boot() { const svc = inject(Store); return svc.write(); }");
   assert.equal(meta.memberUses?.length, 1);
@@ -691,7 +689,6 @@ test("unrelated unknown providers do not suppress potential local sites; known s
   const replaced = await memberProofs(owner, undefined, { "src/providers.ts": "import { Store } from './store'; const providers = [{ provide: Store, useValue: {} }];" });
   assert.deepEqual(replaced.locals, []);
 });
-
 
 test("a write to a local literal, a platform global or a platform class prototype reaches no source class", async () => {
   for (const change of ["const a: unknown[] = []; a[0] = 1;", "const o: Record<string, unknown> = {}; o.write = 1;", "document.title = 'x'; window['write'] = 1;", "Element.prototype.write = fn;"])
@@ -801,6 +798,16 @@ test("a class a build-time file replacement may swap proves none of its members,
   const proven = async (extra: Record<string, string>) => ((await memberProofs(owner, undefined, extra)).memberUses ?? []).map((use) => use.receiver.symbol).sort();
   assert.deepEqual(await proven(slot), ["Other", "Store"]);
   assert.deepEqual(await proven(replacing("src/slot.ts")), ["Other"]);
+  const nx = { ...slot, "nx.json": "{}", "apps/app/project.json": JSON.stringify({ targets: { build: { configurations: { production: { fileReplacements: [{ replace: "src/slot.ts", with: "src/native.ts" }] } } } } }) };
+  assert.deepEqual(await proven(nx), ["Other"]);
+  assert.deepEqual(await proven({ ...nx, "apps/app/project.json": JSON.stringify({ fileReplacements: [{ replace: "apps/app/src/slot.ts", with: "src/native.ts" }] }) }), ["Other", "Store"]);
+  assert.deepEqual(await proven({ ...slot, "nx.json": JSON.stringify({ targetDefaults: { build: { configurations: { native: { fileReplacements: [{ replace: "src/slot.ts", with: "src/native.ts" }] } } } } }) }), ["Other"]);
+  assert.deepEqual(await proven({ ...slot, "nx.json": "{}", "nested/nx.json": "{}", "nested/app/project.json": JSON.stringify({ fileReplacements: [{ replace: "../src/slot.ts", with: "src/native.ts" }] }) }), ["Other"]);
+
+  assert.deepEqual(await proven({ ...nx, "apps/app/project.json": "{" }), []);
+  assert.deepEqual(await proven({ ...slot, "apps/app/project.json": JSON.stringify({ $schema: "../../node_modules/nx/schemas/project-schema.json", fileReplacements: [{ replace: "src/slot.ts", with: "src/native.ts" }] }) }), []);
+  assert.deepEqual(await proven({ ...slot, "apps/app/project.json": "{}" }), ["Other", "Store"]);
+
   assert.deepEqual(await proven(replacing("./src/../src/store.ts")), ["Other"]);
   assert.deepEqual(await proven(replacing("src/absent.ts")), ["Other", "Store"]);
   assert.deepEqual(await proven({ ...replacing("src/slot.ts"), "src/slot.ts": "export * from './store';" }), ["Other"]);

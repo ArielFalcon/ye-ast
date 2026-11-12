@@ -5,7 +5,7 @@ import { bindFile } from "./lexical-bindings.ts";
 import { unwrapped } from "./syntax.ts";
 import { ANGULAR_CORE } from "./angular-injection.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
-import { isAngularWorkspace, isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import { isAngularWorkspace, nxConfigurationOf, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { AngularClass, Operand, TemplateSource } from "../../domain/relations/angular-class.ts";
 import type { ExternalMemberUseOrigin, MemberProofContext, MemberSubstitute, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
@@ -79,7 +79,7 @@ async function readMetadata(files: readonly SourceFile[], proof?: MemberProofCon
 
 /**
  * Where proofs may sit (the sources of the project's own manifest), every source whose writes and providers can reach
- * them, and the files an Angular workspace replaces at build time; `replaced` is absent when a workspace file is unreadable.
+ * them, and the files a build configuration replaces; `replaced` is absent when its configuration cannot be read.
  */
 interface ProofScope {
   sites: ReadonlySet<string>;
@@ -87,15 +87,22 @@ interface ProofScope {
   replaced?: ReadonlySet<string>;
 }
 
-/** Every `fileReplacements` source the Angular workspaces name, relative to the repository; undefined when one cannot be read. */
+/** Source paths replaced by Angular or Nx build configuration; undefined when its scope or content is unreadable. */
 function replacedFiles(files: readonly SourceFile[]): ReadonlySet<string> | undefined {
   const replaced = new Set<string>();
-  for (const file of files.filter(({ path }) => isAngularWorkspace(path))) {
+  const nxRoots = files.filter(({ path }) => nxConfigurationOf(path) === "workspace").map(({ path }) => posix.dirname(path)).sort((a, b) => b.length - a.length);
+  for (const file of files.filter(({ path }) => isAngularWorkspace(path) || nxConfigurationOf(path) !== undefined)) {
+    const root = nxConfigurationOf(file.path) === "project" ? nxRoots.find((directory) => directory === "." || file.path.startsWith(`${directory}/`)) : posix.dirname(file.path);
     let workspace: unknown;
     try {
       workspace = JSON.parse(file.content);
     } catch {
       return undefined;
+    }
+    if (root === undefined) {
+      const schema = (workspace as { $schema?: unknown } | null)?.$schema;
+      if (typeof schema === "string" && schema.endsWith("/nx/schemas/project-schema.json")) return undefined;
+      continue;
     }
     const pending = [workspace];
     for (let value = pending.pop(); value !== undefined; value = pending.pop()) {
@@ -109,7 +116,7 @@ function replacedFiles(files: readonly SourceFile[]): ReadonlySet<string> | unde
         for (const entry of nested) {
           const source = (entry as { replace?: unknown } | null)?.replace;
           if (typeof source !== "string") return undefined;
-          replaced.add(posix.join(posix.dirname(file.path), source));
+          replaced.add(posix.join(root, source));
         }
       }
     }
