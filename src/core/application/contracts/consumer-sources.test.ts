@@ -189,6 +189,21 @@ test("a call site two routes of one repository take equally is ambiguous for the
   assert.deepEqual(answer, { ambiguous: ["3 api"], links: 0 });
 });
 
+test("a call site whose base is undecided consumes the operation its stated path reaches, and stays unresolved", async () => {
+  const undecidedBase: CallSite = {
+    ...call("web", "/orders", 3),
+    target: { status: "unknown", reason: "unresolved", evidence: [] },
+    stated: { method: "GET", expressions: [[{ kind: "unknown", cause: "destination-undecidable", evidence: [] }, { kind: "text", text: "/orders" }]] },
+  };
+  const orders: Entrypoint = { ...route("GET /orders", "/orders"), basePath: { status: "complete", value: { default: {}, profiles: {} }, evidence: [] } } as Entrypoint;
+  const bench = workbench({ routes: { api: [orders] }, calls: { web: [undecidedBase] } });
+  const answer = await bench.withWorkspace(async (workspace) => {
+    const session = await settled(workspace.session(hypothesis("/orders")));
+    return { links: session.links.filter((link) => isCallOf(link, "GET /orders")).map(({ basis, authority }) => `${basis} ${authority}`), unresolved: session.unresolvedCalls.map(({ line }) => line) };
+  });
+  assert.deepEqual(answer, { links: ["suffix undecided"], unresolved: [3] });
+});
+
 test("an operation a contract declares is served by the route the join links calls to: by path or by the context path, and no route or two repositories are answers of their own", async () => {
   const configured = (path: string): HttpRoute => ({ ...(route(`GET ${path}`, path) as HttpRoute), basePath: { status: "complete", value: { default: { contextPath: "/api" }, profiles: {} }, evidence: [] } });
   const bench = workbench({ routes: { api: [configured("/orders/{id}")], legacy: [configured("/legacy")], mirror: [configured("/legacy")] }, calls: {} });

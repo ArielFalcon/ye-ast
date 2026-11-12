@@ -425,3 +425,13 @@ test("one unserved name retains identical locations from both repositories", () 
   const set = decisionsOf(input({ unserved: [{ name: "external", kind: "http-host", evidence }] }));
   assert.deepEqual(byId(set).get("repository:external")?.evidence, evidence);
 });
+
+test("a prefix a call states after an undecided base is a gateway decision", () => {
+  const undecided: CallSite = {
+    ...cut("webapp"),
+    stated: { method: "POST", expressions: [[{ kind: "unknown", cause: "destination-undecidable", evidence: [] }, { kind: "text", text: "/legacy/thing" }]] },
+  };
+  const set = decisionsOf(input({ repositories: [repository("webapp", { callSites: [undecided] }), repository("orders", { entrypoints: [route("/orders")] })] }));
+
+  assert.deepEqual(byId(set).get("gateway:legacy")?.evidence, [{ path: "webapp/src/app.ts", line: 7, repo: "webapp" }]);
+});

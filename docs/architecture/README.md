@@ -70,6 +70,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0051](adr/0051-an-answer-never-hides-what-the-engine-knows.md) | Where the engine holds a fact the answer states it: one owner of fault text, a missing file is a fault everywhere, a declared answer bound refuses instead of truncating, an empty `include` is a fault, entrypoints carry their declaration place, `importers` relationships carry their lines; designed in RFC-0029 | Accepted |
 | [0052](adr/0052-request-knowledge-is-independent-of-enumeration-completeness.md) | Preserve identified request occurrences separately from enumeration completeness; scoped gaps retain fail-closed target and execution limits; partially supersedes of ADR-0050 decision 3 | Accepted |
 | [0053](adr/0053-multi-repository-relations-retain-their-proof-context.md) | Source-complete provider values and scoped execution-to-producer matches retain build, route competition and snapshot proof | Accepted |
+| [0054](adr/0054-a-stated-route-links-when-only-its-base-is-undecided.md) | A request whose path is stated after an undecided base links by route, basis `suffix`, marked `authority: undecided`, only to one serving repository | Accepted |
 
 ## Designs (RFC)
 

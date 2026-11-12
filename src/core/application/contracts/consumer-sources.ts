@@ -12,7 +12,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import { callPlaceOf, callSiteReach, compareCallPlaces, httpTargetOf, type CallSiteReadOptions, type PlacedCallSite, type PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { Link } from "../../domain/topology/link.ts";
-import { excludedFrom, matchCallSite, matchDeclaredOperation, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
+import { excludedFrom, matchDeclaredOperation, matchHttpCallSite, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import type { AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
 import { buildOutputCuts, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
@@ -355,11 +355,9 @@ function joinHttpCalls(repositories: readonly WorkspaceRepository[], entrypoints
     if (site.transport !== "http") continue;
     const target = httpTargetOf(site);
     const from = callPlaceOf(site);
-    if (target === undefined) {
-      if (site.target.status === "unknown") unresolvedCalls.push({ ...from, reach: callSiteReach(site), evidence: site.target.evidence });
-      continue;
-    }
-    const joined = matchCallSite(site, target, entrypoints, gateways);
+    if (target === undefined && site.target.status === "unknown") unresolvedCalls.push({ ...from, reach: callSiteReach(site), evidence: site.target.evidence });
+    const joined = matchHttpCallSite(site, entrypoints, gateways);
+    if (joined === undefined) continue;
     for (const link of joined.links ?? []) links.set(link.id, link);
     if (joined.ambiguous === undefined) continue;
     ambiguousCalls.push({ from, repos: joined.ambiguous.repos.toSorted(compareText), reaching: new Set(joined.ambiguous.routes) });

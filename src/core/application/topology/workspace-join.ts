@@ -1,8 +1,8 @@
-import { callPlaceOf, compareCallPlaces, httpTargetOf, type CallSite, type EventTarget } from "../../domain/topology/call-site.ts";
+import { callPlaceOf, compareCallPlaces, type CallSite, type EventTarget } from "../../domain/topology/call-site.ts";
 import type { JoinedSite } from "../../domain/topology/link-graph.ts";
 import type { Link, UnlinkedCallSite } from "../../domain/topology/link.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import { inferGateways, matchCallSite, matchEventCallSite, type Gateway, type GatewayDeclaration, type JoinResult, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
+import { inferGateways, matchEventCallSite, matchHttpCallSite, type Gateway, type GatewayDeclaration, type JoinResult, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import type { WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 
 /** Every call site of a workspace joined once against the entrypoints of the other repositories read. */
@@ -21,7 +21,9 @@ export function entrypointsOf(repository: WorkspaceRepository): RepositoryEntryp
 /**
  * The one join of a workspace: a published message against the listeners its protocol delivers to, an HTTP call by the
  * ladder of RFC-0011 under the gateways in force, against every repository's routes: one its own repository serves is
- * internal, never a link across repositories nor drift. A call site whose target its snapshot does not decide joins nothing.
+ * internal, never a link across repositories nor drift. A call site whose target its snapshot does not decide joins
+ * nothing, unless the snapshot states its path and only its base is undecided (ADR-0054); one that settles nothing stays
+ * out of the join.
  */
 export function joinWorkspace(repositories: readonly WorkspaceRepository[], entrypoints: readonly RepositoryEntrypoints[], declared: readonly GatewayDeclaration[]): WorkspaceJoin {
   const gateways = inferGateways(repositories.flatMap((repository) => repository.callSites), entrypoints, declared);
@@ -33,8 +35,8 @@ export function joinWorkspace(repositories: readonly WorkspaceRepository[], entr
         joined.push({ site, joined: matchEventCallSite(site, event, entrypoints) });
         continue;
       }
-      const target = httpTargetOf(site);
-      if (target !== undefined) joined.push({ site, joined: acrossRepositories(site, matchCallSite(site, target, entrypoints, gateways)) });
+      const answer = site.transport === "http" ? matchHttpCallSite(site, entrypoints, gateways) : undefined;
+      if (answer !== undefined) joined.push({ site, joined: acrossRepositories(site, answer) });
     }
   }
   return { gateways, joined };

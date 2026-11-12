@@ -544,7 +544,7 @@ class Materializer {
       const { place: _place, ...from } = link.from;
       const value: RelationValue = {
         kind: "workspace-match", from, to: { repo: link.to.repo, kind: link.to.kind, name: link.to.name, handler },
-        transport: link.transport, basis: link.basis, ...(link.profiles === undefined ? {} : { profiles: link.profiles }),
+        transport: link.transport, basis: link.basis, ...(link.profiles === undefined ? {} : { profiles: link.profiles }), ...(link.authority === undefined ? {} : { authority: link.authority }),
       };
       for (const read of this.cleanReads(part)) this.relate(value, { parts: [part.id], reads: [read], confidence: link.confidence, extraSnapshots: [fromFile.origin.snapshot, toSnapshot] });
     }

@@ -353,7 +353,7 @@ A cold repository costs one index build; the content key removes the repeats.
 | Cause | Where | Result |
 |---|---|---|
 | call site in a declared repository whose `target` is `unknown`, and whose known parts (verb, literal segments) are compatible with a seed entrypoint | the call site, as `repo:file:line` | cut `unresolved-link` at those call sites; the composite is `partial` |
-| a call site that cannot be told from a candidate, because the evaluator cannot resolve the base URL (environment file absent; RFC-0007 row A3) | the call site | same cut, unless `boundaries[]` declares the prefix, which gives the `suffix` basis |
+| a call site that cannot be told from a candidate, because the evaluator cannot resolve the base URL (environment file absent; RFC-0007 row A3) | the call site | same cut; when the code states the path after the base, a link by that route with the `suffix` basis and `authority: undecided` where one repository serves it ([ADR-0054](../adr/0054-a-stated-route-links-when-only-its-base-is-undecided.md)) |
 | a route whose `basePath` differs by profile, or is `unknown` | the link | link with `profiles`, or `suffix` basis; never a silent pick |
 | a declared repository that cannot be read or indexed | its section | section `unknown` with its reason; composite cut `section` at the repository |
 | no copy of the chosen revision, or no branch the rule can choose | its section | section `unknown(revision-unavailable)`, never stored; composite cut `section` |
@@ -589,7 +589,9 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   `Link.id`. A repository holding an impacted call site is walked with `impact.callers` over that call site's line, at the
   snapshot read, so the answer also names what depends on the call site there (a frontend's UI routes, for instance). A
   call site whose target the code does not decide joins nothing and stays an `unresolved-link` cut of its repository's
-  section; so does a call two repositories serve equally. Each unresolved call site carries the declaration it is
+  section; so does a call two repositories serve equally. When the code states the path after an undecided base, that
+  route links by ADR-0054: under a gateway prefix in force to the repository it routes to, otherwise to the one route
+  of the workspace it equals or ends with, basis `suffix`, `authority: undecided`; the call site stays unresolved. Each unresolved call site carries the declaration it is
   written in, its transport, the library it goes through and, when only the base is undecided, the request the code
   writes (`GET /route`), so the text settles it without opening the file. Sections are sorted by repository and carry
   that repository's own snapshot and trust; the answer's own trust is the bound repository's. `ye_ast_workspace` no

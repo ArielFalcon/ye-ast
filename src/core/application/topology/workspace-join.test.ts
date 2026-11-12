@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Listener } from "../../domain/entrypoints/entrypoint.ts";
+import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { CallSite, EventTarget } from "../../domain/topology/call-site.ts";
+import type { RequestUrlPart } from "../../domain/topology/request-url.ts";
 import type { WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 import { entrypointsOf, joinWorkspace, linkMapOf } from "./workspace-join.ts";
 
@@ -13,12 +15,41 @@ function listening(protocol: Listener["protocol"], destination: string, symbol: 
   return { kind: "listener", name: `${protocol} ${destination}`, protocol, destination, handler: { path: "src/main/java/app/Listeners.java", symbol, line: 3 } };
 }
 
-function repository(repo: string, callSites: readonly CallSite[], listeners: readonly Listener[]): WorkspaceRepository {
-  return { repo, snapshot: { repo, kind: "sha", sha: "a".repeat(40) }, callSites, entrypoints: listeners.map((value) => ({ status: "complete", value, evidence: [] })) };
+function repository(repo: string, callSites: readonly CallSite[], entrypoints: readonly (Listener | HttpRoute)[]): WorkspaceRepository {
+  return { repo, snapshot: { repo, kind: "sha", sha: "a".repeat(40) }, callSites, entrypoints: entrypoints.map((value) => ({ status: "complete", value, evidence: [] })) };
 }
 
-function joined(repositories: readonly WorkspaceRepository[]): ReturnType<typeof linkMapOf> {
-  return linkMapOf(joinWorkspace(repositories, repositories.map(entrypointsOf), []).joined);
+function joined(repositories: readonly WorkspaceRepository[], gateways: readonly { prefix: string; repo: string }[] = []): ReturnType<typeof linkMapOf> {
+  return linkMapOf(joinWorkspace(repositories, repositories.map(entrypointsOf), gateways).joined);
+}
+
+const UNDECIDED_BASE: RequestUrlPart = { kind: "unknown", cause: "destination-undecidable", evidence: [{ path: "src/app/api.service.ts", line: 9 }] };
+
+/** A request whose base URL the snapshot does not decide, with the URL parts the code states after it. */
+function requesting(method: HttpRoute["method"], ...parts: readonly RequestUrlPart[]): CallSite {
+  return {
+    repo: "web",
+    file: "src/app/profiles.api.ts",
+    line: 11,
+    symbol: "ProfilesApi.follow",
+    transport: "http",
+    target: { status: "unknown", reason: "unresolved", evidence: [] },
+    stated: { method, expressions: [parts] },
+  };
+}
+
+function serving(method: HttpRoute["method"], path: string, symbol: string): HttpRoute {
+  return { kind: "http-route", name: `${method} ${path}`, method, path, handler: { path: "src/main/java/app/Api.java", symbol, line: 5 }, basePath: { status: "complete", value: { default: {}, profiles: {} }, evidence: [] } };
+}
+
+const text = (value: string): RequestUrlPart => ({ kind: "text", text: value });
+const RUNTIME: RequestUrlPart = { kind: "runtime" };
+
+function described({ links, unlinked }: ReturnType<typeof linkMapOf>): string[] {
+  return [
+    ...links.map(({ to, basis, confidence, authority }) => `link ${to.repo} ${to.name} ${basis} ${confidence} ${authority ?? "decided"}`),
+    ...unlinked.map(({ outcome, repos }) => `${outcome} ${(repos ?? []).join(",")}`.trim()),
+  ];
 }
 
 test("the join links an in-process application event to the listener of its own repository", () => {
@@ -34,4 +65,38 @@ test("a published message some listeners consume and another could keeps its lin
   const { links, unlinked } = joined([shop, orders]);
 
   assert.deepEqual([links.map(({ to }) => to.handler.symbol), unlinked.map(({ outcome, name }) => `${outcome} ${name}`)], [["Orders.on"], ["could-match orders.created"]]);
+});
+
+test("a request whose route is stated and whose base is undecided links to the one route that ends with it, at suffix confidence", () => {
+  const web = repository("web", [requesting("POST", UNDECIDED_BASE, text("/profiles/"), RUNTIME, text("/follow"))], []);
+  const api = repository("api", [], [serving("POST", "/api/profiles/{username}/follow", "Profiles.follow"), serving("DELETE", "/api/profiles/{username}/follow", "Profiles.unfollow")]);
+
+  assert.deepEqual(described(joined([web, api])), ["link api POST /api/profiles/{username}/follow suffix 0.5 undecided"]);
+});
+
+test("a request with an undecided base that two repositories serve is ambiguous, never a link", () => {
+  const web = repository("web", [requesting("GET", UNDECIDED_BASE, text("/orders/"), RUNTIME)], []);
+  const orders = repository("orders", [], [serving("GET", "/orders/{id}", "Orders.get")]);
+  const archive = repository("archive", [], [serving("GET", "/v1/orders/{id}", "Archive.get")]);
+
+  assert.deepEqual(described(joined([web, orders, archive])), ["ambiguous archive,orders"]);
+});
+
+test("a request with an undecided base joins nothing when no stated segment agrees as text or another value is undecided", () => {
+  const holesOnly = requesting("GET", UNDECIDED_BASE, text("/"), RUNTIME);
+  const undecidedMiddle = requesting("GET", UNDECIDED_BASE, text("/orders/"), UNDECIDED_BASE);
+  const api = repository("api", [], [serving("GET", "/{section}", "Api.section"), serving("GET", "/orders/{id}", "Orders.get")]);
+
+  assert.deepEqual([holesOnly, undecidedMiddle].map((site) => described(joined([repository("web", [site], []), api]))), [[], []]);
+});
+
+test("a request with an undecided base under a gateway prefix links only to the repository the prefix routes to, at suffix confidence", () => {
+  const web = repository("web", [requesting("POST", UNDECIDED_BASE, text("/orders-api/orders/checkout"))], []);
+  const orders = repository("orders", [], [serving("POST", "/orders/checkout", "Orders.checkout")]);
+  const legacy = repository("legacy", [], [serving("POST", "/orders/checkout", "Legacy.checkout")]);
+  const repositories = [web, orders, legacy];
+
+  const inferred = joinWorkspace([web, orders], [web, orders].map(entrypointsOf), []).gateways;
+
+  assert.deepEqual([described(joined(repositories, [{ prefix: "orders-api", repo: "orders" }])), inferred], [["link orders POST /orders/checkout suffix 0.5 undecided"], [{ prefix: "orders-api", repo: "orders", basis: "route-overlap" }]]);
 });

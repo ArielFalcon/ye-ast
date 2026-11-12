@@ -17,6 +17,8 @@ export interface Link {
   basis: LinkBasis;
   /** For `base-path`: the profile expressions under which the match holds; absent means the default document. */
   profiles?: readonly string[];
+  /** `undecided` when the snapshot states the call's path but not the base URL it is sent to (ADR-0054). */
+  authority?: "undecided";
   confidence: number;
 }
 
@@ -53,8 +55,9 @@ export interface ImpactedLink {
 
 /** What makes two links one, and what a reach names: every end, the transport and the basis, never the confidence. */
 export function linkIdentity(link: Omit<Link, "id">): string {
-  const { from, to, transport, basis, profiles } = link;
-  return JSON.stringify([from.repo, from.file, from.line, from.symbol, to.repo, to.kind, to.name, to.handler.path, to.handler.symbol, to.handler.line, transport, basis, profiles ?? null]);
+  const { from, to, transport, basis, profiles, authority } = link;
+  const identity = [from.repo, from.file, from.line, from.symbol, to.repo, to.kind, to.name, to.handler.path, to.handler.symbol, to.handler.line, transport, basis, profiles ?? null];
+  return JSON.stringify(authority === undefined ? identity : [...identity, authority]);
 }
 
 /** The order the answer lists its links in: the place of the call site, then the identity that tells equal places apart. */

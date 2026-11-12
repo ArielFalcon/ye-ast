@@ -1347,7 +1347,8 @@ function traceSettledLine(value: TraceValue): string[] {
 function linkLine(link: Link, number: number | undefined, reached = ""): string {
   const confidence = link.confidence < 1 ? `, confidence ${link.confidence}` : "";
   const profiles = link.profiles === undefined ? "" : `, under ${link.profiles.join(", ")}`;
-  return `  - ${number}. ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} -> ${handlerText(link.to.handler)} (${link.basis}${confidence}${profiles}${reached})`;
+  const authority = link.authority === undefined ? "" : ", base URL undecided";
+  return `  - ${number}. ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} -> ${handlerText(link.to.handler)} (${link.basis}${confidence}${profiles}${authority}${reached})`;
 }
 
 function impactedLinkLine({ link, direction, reach, operations }: ImpactedLink, indexes: ReadonlyMap<string, number>): string {

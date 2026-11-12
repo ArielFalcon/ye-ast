@@ -510,7 +510,7 @@ class CompactView {
       case "workspace-link": {
         const link = part.link;
         const reach = part.reach?.map((reference) => (reference.status === "present" ? (reference.part === part.id ? "self" : "present") : `missing ${reference.linkId}`));
-        return `link ${link.id}${part.direction === undefined ? "" : ` ${part.direction}`}: ${link.from.repo} ${this.file(link.from.file)}:${link.from.line} ${link.from.symbol} → ${link.to.repo} ${link.to.kind} ${link.to.name} handler ${this.anchor(link.to.handler)} basis ${link.basis} ${link.transport} confidence ${link.confidence}${link.profiles === undefined ? "" : ` profiles ${link.profiles.join(", ")}`}${short || reach === undefined ? "" : `; reach ${reach.join(", ") || "none"}`}${short ? "" : `${part.operations === undefined ? "" : `; ${changedOperationsText(part.operations)}`}`}`;
+        return `link ${link.id}${part.direction === undefined ? "" : ` ${part.direction}`}: ${link.from.repo} ${this.file(link.from.file)}:${link.from.line} ${link.from.symbol} → ${link.to.repo} ${link.to.kind} ${link.to.name} handler ${this.anchor(link.to.handler)} basis ${link.basis} ${link.transport} confidence ${link.confidence}${link.profiles === undefined ? "" : ` profiles ${link.profiles.join(", ")}`}${link.authority === undefined ? "" : " base-url undecided"}${short || reach === undefined ? "" : `; reach ${reach.join(", ") || "none"}`}${short ? "" : `${part.operations === undefined ? "" : `; ${changedOperationsText(part.operations)}`}`}`;
       }
       case "unlinked-call-site": return `${part.site.outcome} call site ${part.site.from.repo} ${this.file(part.site.from.file)}:${part.site.from.line} ${part.site.from.symbol} ${part.site.transport} ${quoted(part.site.name)}${part.site.repos === undefined ? "" : ` (${part.site.repos.join(", ")})`}`;
       case "workspace-context": return `workspace context ${this.workspaceContext(part)}`;
@@ -734,7 +734,7 @@ class CompactView {
       case "module-dependence": return `${this.file(value.from)} → ${this.file(value.to)} module-dependence ${value.qualifier.kind} ${quoted(value.qualifier.specifier)}${value.qualifier.typeOnly ? " type-only" : ""}${value.qualifier.form === undefined ? "" : ` ${value.qualifier.form}`}`;
       case "entrypoint-origin": return `${this.partRef(value.entrypoint)} entrypoint-origin ${this.partRef(value.seed)}`;
       case "module-origin": return `${this.partRef(value.module)} module-origin ${this.partRef(value.origin)}`;
-      case "workspace-match": return `${value.from.repo} ${this.file(value.from.file)}:${span(value.from.line, value.from.endLine)} ${value.from.symbol} → ${value.to.repo} ${value.to.kind} ${value.to.name} handler ${this.entity(value.to.handler)} workspace-match basis ${value.basis} ${value.transport}${value.profiles === undefined ? "" : ` profiles ${value.profiles.join(", ")}`}`;
+      case "workspace-match": return `${value.from.repo} ${this.file(value.from.file)}:${span(value.from.line, value.from.endLine)} ${value.from.symbol} → ${value.to.repo} ${value.to.kind} ${value.to.name} handler ${this.entity(value.to.handler)} workspace-match basis ${value.basis} ${value.transport}${value.profiles === undefined ? "" : ` profiles ${value.profiles.join(", ")}`}${value.authority === undefined ? "" : " base-url undecided"}`;
       case "candidate-for-name": return `${this.partRef(value.name)} candidate-for-name ${value.repo} basis ${value.basis}`;
       case "shares-evidence": {
         const record = this.evidence.get(value.evidence);

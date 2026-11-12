@@ -355,7 +355,7 @@ export const partSchema = z.discriminatedUnion("kind", [
   part("workspace-link", {
     link: z.strictObject({
       id: z.string(), from: linkEndpoints.from, to: linkEndpoints.to(ids.anchor), transport, basis: linkBasis,
-      profiles: strings.exactOptional(), confidence: z.number(),
+      profiles: strings.exactOptional(), authority: z.literal("undecided").exactOptional(), confidence: z.number(),
     }),
     direction: z.enum(["upstream", "downstream"]).exactOptional(),
     reach: z.array(z.discriminatedUnion("status", [

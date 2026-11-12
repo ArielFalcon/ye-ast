@@ -3,7 +3,7 @@ import type { HttpMethod, HttpRoute } from "../entrypoints/http-route.ts";
 import { requestMethodOf } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
 import type { CallSiteReach } from "../shared/fact.ts";
-import { callPlaceOf, type CallSite, type EventTarget, type HttpTarget } from "./call-site.ts";
+import { callPlaceOf, httpTargetOf, undecidedAuthorityTargetOf, type CallSite, type EventTarget, type HttpTarget } from "./call-site.ts";
 import { consumption, delivers } from "./event-destination.ts";
 import { linkIdentity, type Link, type LinkBasis } from "./link.ts";
 import { callTemplate, CANNOT_MATCH, literalText, looseness, namesHost, prefixText, routeSegments, statedLength, unify, type CallTemplate, type TemplateSegment, type Unification } from "./path-template.ts";
@@ -188,6 +188,17 @@ const behindGatewayRung: Rung = (call, method, routes) => {
   return landingOf(evidenced(exact), "exact") ?? landingOf(evidenced(basePath), "base-path");
 };
 
+/**
+ * What a call whose base URL is undecided takes: an equal path, a configured base path, or a path one ends with, all at
+ * one rung, since the base may hold any leading segments; only with a segment both state as text.
+ */
+const undecidedAuthorityRung: Rung = (call, method, routes) => {
+  const accepted = routes.filter((route) => accepts(route, method));
+  const suffix = foundOf(accepted.map((route) => ({ route, unified: suffixUnify(call, routeSegments(route.path)) })));
+  const found = [equalPaths(call, method, routes), underBasePaths(call, method, routes), suffix];
+  return landingOf({ taken: found.flatMap(({ taken }) => taken).filter(({ unified }) => unified.literals > 0), could: found.flatMap(({ could }) => could) }, "suffix");
+};
+
 function httpRoutes(repository: RepositoryEntrypoints): HttpRoute[] {
   return repository.entrypoints.flatMap((entrypoint) => (entrypoint.kind === "http-route" ? [entrypoint] : []));
 }
@@ -208,7 +219,7 @@ export function servedBehindGateway(target: HttpTarget, routes: readonly HttpRou
   return landing === undefined || landing === "could" ? [] : "tie" in landing ? landing.tie : [landing.match.route];
 }
 
-function linkTo(site: CallSite, repo: string, match: Match): Link {
+function linkTo(site: CallSite, repo: string, match: Match, authority?: Link["authority"]): Link {
   const link: Omit<Link, "id"> = {
     from: callPlaceOf(site),
     to: { repo, kind: match.route.kind, name: match.route.name, handler: match.route.handler },
@@ -216,6 +227,7 @@ function linkTo(site: CallSite, repo: string, match: Match): Link {
     basis: match.basis,
     confidence: match.confidence,
     ...(match.profiles === undefined ? {} : { profiles: match.profiles }),
+    ...(authority === undefined ? {} : { authority }),
   };
   return { ...link, id: linkIdentity(link) };
 }
@@ -260,6 +272,36 @@ export function matchDeclaredOperation(target: HttpTarget, repositories: readonl
  */
 export function matchCallSite(site: CallSite, target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): JoinResult {
   return ladder(target, repositories, gateways, (repo, match) => ({ links: [linkTo(site, repo, match)] }));
+}
+
+/**
+ * The link a call site makes when the snapshot states its path but not the base URL it is sent to (ADR-0054): under a
+ * gateway prefix in force, a route of the repository the prefix routes to once the prefix is removed; otherwise the one
+ * route of the workspace the path equals or ends with. Either way the link has the `suffix` basis and its confidence,
+ * since the base may name a host outside the workspace. Two repositories are ambiguous; nothing found settles nothing,
+ * and the call site stays unresolved.
+ */
+export function matchUndecidedAuthority(site: CallSite, target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): JoinResult {
+  const prefix = prefixOf(target);
+  const gateway = gateways.find((candidate) => candidate.prefix === prefix);
+  const served = gateway === undefined ? repositories : repositories.filter((repository) => repository.repo === gateway.repo);
+  const landed = atRung(gateway === undefined ? undecidedAuthorityRung : behindGatewayRung, callTemplate(target), target.method, served);
+  if (landed === undefined) return {};
+  if (landed === "could") return { undecided: target.path };
+  if ("ambiguous" in landed) return { ambiguous: { key: prefix ?? target.path, repos: landed.ambiguous, routes: landed.routes } };
+  return { links: [linkTo(site, landed.repo, { ...landed.match, basis: "suffix", confidence: SUFFIX_CONFIDENCE }, "undecided")] };
+}
+
+/**
+ * What the join makes of an HTTP call site: its decided target by the ladder, or the path it states after an undecided
+ * base by ADR-0054; nothing for a call site with neither, or one that settles nothing.
+ */
+export function matchHttpCallSite(site: CallSite, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): JoinResult | undefined {
+  const target = httpTargetOf(site);
+  if (target !== undefined) return matchCallSite(site, target, repositories, gateways);
+  const route = undecidedAuthorityTargetOf(site);
+  const joined = route === undefined ? undefined : matchUndecidedAuthority(site, route, repositories, gateways);
+  return joined === undefined || Object.keys(joined).length === 0 ? undefined : joined;
 }
 
 /** Whether the ladder could link a call with this target to one of the routes: a link, a tie or a `could` on any rung. */
@@ -314,14 +356,14 @@ function ladder(target: HttpTarget, repositories: readonly RepositoryEntrypoints
  * The gateways in force: those the caller declared, and a prefix inferred to route to a repository when at least one call
  * under it, made from another repository, matches a route of that repository once the prefix is removed and no call under
  * it matches a route of another. A prefix two repositories serve is inferred for neither, and a declared prefix is kept
- * as declared. Only the first path segment is a prefix.
+ * as declared. Only the first path segment is a prefix; a call whose base is undecided offers the first segment it states.
  */
 export function inferGateways(calls: readonly CallSite[], repositories: readonly RepositoryEntrypoints[], declared: readonly GatewayDeclaration[]): Gateway[] {
   const byPrefix = new Map<string, { target: HttpTarget; from: string }[]>();
   for (const call of calls) {
-    if (call.target.status !== "complete" || !("path" in call.target.value)) continue;
-    const prefix = prefixOf(call.target.value);
-    if (prefix !== undefined) byPrefix.set(prefix, [...(byPrefix.get(prefix) ?? []), { target: call.target.value, from: call.repo }]);
+    const target = httpTargetOf(call) ?? undecidedAuthorityTargetOf(call);
+    const prefix = target === undefined ? undefined : prefixOf(target);
+    if (target !== undefined && prefix !== undefined) byPrefix.set(prefix, [...(byPrefix.get(prefix) ?? []), { target, from: call.repo }]);
   }
   const inferred: Gateway[] = [];
   for (const [prefix, calling] of byPrefix) {
