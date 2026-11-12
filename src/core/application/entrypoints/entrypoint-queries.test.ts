@@ -599,9 +599,13 @@ test("a live map reports the paths that changed while it was answered", async ()
 });
 
 test("an include reads the configuration that interprets the sources it selects, at a revision and on the live tree", async () => {
-  const atRevision = await createEntrypointQueries(setup({ files: [COMPONENT, MANIFEST], extract: angularRoutes }).deps).map({ ...REQUEST, scope: { include: ["src/**"] } });
-  const live = fakeLive({ [COMPONENT.path]: COMPONENT.blob, [MANIFEST.path]: MANIFEST.blob }, DIGEST);
-  const onLive = await createEntrypointQueries(setup({ trust: TRUSTED, live, files: [COMPONENT, MANIFEST], extract: angularRoutes }).deps).map({ ...LIVE_REQUEST, scope: { include: ["src/**"] } });
+  const configs = [MANIFEST, { path: "nx.json", blob: "b12" }, { path: "apps/site/project.json", blob: "b13" }];
+  const files = [COMPONENT, ...configs];
+  const revision = setup({ files, extract: angularRoutes });
+  const atRevision = await createEntrypointQueries(revision.deps).map({ ...REQUEST, scope: { include: ["src/**"] } });
+  const live = fakeLive(Object.fromEntries(files.map(({ path, blob }) => [path, blob])), DIGEST);
+  const current = setup({ trust: TRUSTED, live, files, extract: angularRoutes });
+  const onLive = await createEntrypointQueries(current.deps).map({ ...LIVE_REQUEST, scope: { include: ["src/**"] } });
 
   for (const answer of [atRevision, onLive]) {
     assert.ok(answer.ok);
@@ -609,6 +613,7 @@ test("an include reads the configuration that interprets the sources it selects,
     assert.ok(section.status === "complete");
     assert.deepEqual(section.value.map((item) => item.status), ["complete"]);
   }
+  for (const paths of [revision.readPaths, current.readPaths]) for (const config of configs) assert.ok(paths.includes(config.path), config.path);
 });
 
 test("a narrowed map reads routing context but reports only selected findings and reading cuts", async () => {

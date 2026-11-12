@@ -45,6 +45,12 @@ export function isAngularWorkspace(path: string): boolean {
   return ANGULAR_WORKSPACE.test(path) && !INSTALLED_PACKAGES.test(path);
 }
 
+export function nxConfigurationOf(path: string): "workspace" | "project" | undefined {
+  if (INSTALLED_PACKAGES.test(path)) return undefined;
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  return name === "nx.json" ? "workspace" : name === "project.json" ? "project" : undefined;
+}
+
 /** A template file a `templateUrl` can name, which the relation reader parses for the components a template uses. */
 export function isAngularTemplate(path: string): boolean {
   return TEMPLATE.test(path) && !INSTALLED_PACKAGES.test(path);

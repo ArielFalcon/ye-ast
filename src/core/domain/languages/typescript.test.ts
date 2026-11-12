@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isAngularTemplate, isAngularWorkspace, isJsonModuleResource, isModuleConfigFile, isPackageManifest, isTypeScriptSource } from "./typescript.ts";
+import { isAngularTemplate, isAngularWorkspace, nxConfigurationOf, isJsonModuleResource, isModuleConfigFile, isPackageManifest, isTypeScriptSource } from "./typescript.ts";
 
 test("a TypeScript source is a .ts, .mts or .cts file that is neither a declaration file nor a test nor generated output", () => {
   assert.equal(isTypeScriptSource("src/app/app.routes.ts"), true);
@@ -70,4 +70,10 @@ test("an angular.json at any depth, outside node_modules, is an Angular workspac
   assert.equal(isAngularWorkspace("my-angular.json"), false);
   assert.equal(isAngularWorkspace("node_modules/pkg/angular.json"), false);
   assert.equal(isJsonModuleResource("angular.json"), true);
+});
+
+test("Nx configuration kinds are exact filenames outside installed packages", () => {
+  assert.equal(nxConfigurationOf("nested/nx.json"), "workspace");
+  assert.equal(nxConfigurationOf("apps/site/project.json"), "project");
+  for (const path of ["node_modules/pkg/project.json", "node_modules/nx.json", "project.json.bak", "other-project.json"]) assert.equal(nxConfigurationOf(path), undefined);
 });
