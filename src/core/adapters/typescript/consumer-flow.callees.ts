@@ -13,14 +13,13 @@ export interface CallbackParameter {
   holds: "element" | "array";
 }
 
-/** What a method does with the value it is called on, by receiver kind; `callback` names the argument that receives the value, and what each of its parameters holds. */
+/** What an intrinsic array method does with the value it is called on; `callback` names the argument that receives the value, and what each of its parameters holds. */
 export interface MethodRow {
-  receiver: "array" | "container";
   callback?: { argument: number; parameters: readonly CallbackParameter[] };
   result: MethodResult;
 }
 
-const array = (result: MethodResult, callback?: MethodRow["callback"]): MethodRow => ({ receiver: "array", result, ...(callback === undefined ? {} : { callback }) });
+const array = (result: MethodResult, callback?: MethodRow["callback"]): MethodRow => ({ result, ...(callback === undefined ? {} : { callback }) });
 const iteratee = { argument: 0, parameters: [{ index: 0, holds: "element" }, { index: 2, holds: "array" }] } as const satisfies MethodRow["callback"];
 const comparator = { argument: 0, parameters: [{ index: 0, holds: "element" }, { index: 1, holds: "element" }] } as const satisfies MethodRow["callback"];
 const predicate = array("none", iteratee);
@@ -58,7 +57,6 @@ export const METHODS: ReadonlyMap<string, MethodRow> = new Map<string, MethodRow
   ["join", array("none")],
   ["push", array("none")],
   ["unshift", array("none")],
-  ["asReadonly", { receiver: "container", result: "same" }],
 ]);
 
 /** An imported function that hands the value it receives as its first argument on as its own result, or as the value of its container. */
