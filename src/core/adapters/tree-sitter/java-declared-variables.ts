@@ -71,3 +71,48 @@ export function typeVariableAround(name: Node, spelling = name.text): Node | und
   }
   return undefined;
 }
+
+/**
+ * Whether a local variable or a parameter of the name is in scope at `at` (JLS 6.3): a parameter of a method, a
+ * constructor or a lambda whose body holds it, a local an enclosing block declares before it, or the variable of a `for`,
+ * an enhanced `for`, a `catch` or a resource around it. A pattern variable, whose scope follows flow, is not read.
+ */
+export function declaresInScope(name: string, at: Node): boolean {
+  for (let inner: Node = at, around = at.parent; around !== null; inner = around, around = around.parent) {
+    if (declaredAround(around, inner).some((declared) => declared?.text === name)) return true;
+  }
+  return false;
+}
+
+function declaredAround(around: Node, inner: Node): (Node | null)[] {
+  const holdsInBody = around.childForFieldName("body")?.id === inner.id;
+  switch (around.type) {
+    case "method_declaration":
+    case "constructor_declaration":
+    case "lambda_expression": {
+      if (!holdsInBody) return [];
+      const parameters = around.childForFieldName("parameters");
+      if (parameters?.type === "identifier") return [parameters];
+      return (parameters?.namedChildren ?? []).map((parameter) => (parameter?.type === "identifier" ? parameter : parameter?.type === "spread_parameter" ? parameter.namedChildren.find((child) => child?.type === "variable_declarator")?.childForFieldName("name") ?? null : parameter?.childForFieldName("name") ?? null));
+    }
+    case "block":
+    case "constructor_body":
+    case "switch_block_statement_group":
+      return around.namedChildren.filter((child) => child !== null && child.type === "local_variable_declaration" && child.endIndex <= inner.startIndex).flatMap((declaration) => declaratorNames(declaration!));
+    case "for_statement": {
+      const init = around.childForFieldName("init");
+      return init?.type === "local_variable_declaration" && init.id !== inner.id ? declaratorNames(init) : [];
+    }
+    case "enhanced_for_statement":
+    case "catch_clause":
+      return holdsInBody ? [around.type === "catch_clause" ? around.namedChildren.find((child) => child?.type === "catch_formal_parameter")?.childForFieldName("name") ?? null : around.childForFieldName("name")] : [];
+    case "try_with_resources_statement":
+      return holdsInBody ? (around.childForFieldName("resources")?.namedChildren ?? []).map((resource) => resource?.childForFieldName("name") ?? null) : [];
+    default:
+      return [];
+  }
+}
+
+function declaratorNames(declaration: Node): (Node | null)[] {
+  return declaration.childrenForFieldName("declarator").map((declarator) => declarator?.childForFieldName("name") ?? null);
+}

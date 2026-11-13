@@ -139,3 +139,60 @@ test("with a declared generator, the relation reader reuses the project the name
     hold.release();
   }
 });
+
+const STORE = { path: "fx/store/Store.java", content: "package fx.store;\npublic class Store {\n  public static final String CACHE = \"c\";\n  public static String helper() { return CACHE; }\n  public static class Inner { public static final String X = \"x\"; }\n  public static String Same = \"s\";\n  public static class Same {}\n}" };
+const KIND = { path: "fx/store/Kind.java", content: "package fx.store;\npublic enum Kind { A, B }" };
+const MARK = { path: "fx/store/Mark.java", content: "package fx.store;\npublic @interface Mark { String value() default \"\"; Kind kind() default Kind.A; }" };
+const BASE = { path: "fx/base/Base.java", content: "package fx.base;\npublic class Base {\n  String fx;\n}" };
+const qualified = (path: string, body: string) => ({ path, content: `package fx.use;\n${body}` });
+const referencesIn = (answer: Awaited<ReturnType<ReturnType<typeof createJavaRelations>["extract"]>>) =>
+  answer.relations.map((finding) => finding.status === "complete" && `${finding.value.from.symbol}->${finding.value.to.symbol}:${finding.evidence[0]?.line}`).toSorted();
+
+test("a type an expression names by its package-qualified name is a reference at the line that writes it", async () => {
+  const answer = await createJavaRelations(createJavaParser).extract([STORE, KIND, MARK, qualified("fx/use/Uses.java", [
+    "import fx.store.Mark;",
+    "import fx.store.Store;",
+    "class Uses {",
+    "  String read() { return fx.store.Store.CACHE; }",
+    "  String call() { return fx.store.Store.helper().trim(); }",
+    "  java.util.function.Supplier<String> ref() { return fx.store.Store::helper; }",
+    "  @Mark(fx.store.Store.CACHE) void marked() {}",
+    "  @Mark(kind = fx.store.Kind.B) void kinded() {}",
+    "  int pick(Object kind) { return switch (kind) { case fx.store.Kind.A -> 1; default -> 2; }; }",
+    "  String nested() { return fx.store.Store.Inner.X; }",
+    "  String member() { return Store.Inner.X; }",
+    "  String simple() { return Store.CACHE + java.util.Collections.emptyList(); }",
+    "  String same() { return fx.store.Store.Same; }",
+    "}",
+  ].join("\n"))]);
+  assert.deepEqual(answer.cuts, []);
+  assert.deepEqual(answer.unresolved, []);
+  assert.deepEqual(referencesIn(answer), ["Mark->Kind:2", "Uses->Inner:11", "Uses->Inner:12", "Uses->Kind:10", "Uses->Kind:9", "Uses->Mark:8", "Uses->Mark:9", "Uses->Store:14", "Uses->Store:5", "Uses->Store:6", "Uses->Store:7", "Uses->Store:8"]);
+});
+
+test("a variable in scope named like a package's first segment makes the qualified expression its own, whether a parameter, a local, a field or an inherited one", async () => {
+  const answer = await createJavaRelations(createJavaParser).extract([STORE, KIND, BASE, { path: "fx/use/Holder.java", content: "package fx.use;\npublic class Holder { public Holder store; public Holder Store; public Holder Kind; public String CACHE; public String A; }" }, qualified("fx/use/Shadows.java", [
+    "class Shadows extends fx.base.Base {",
+    "  Holder fx;",
+    "  Object parameter(Holder fx) { return fx.store.Store.CACHE; }",
+    "  Object local() { Holder fx = null; return fx.store.Store.CACHE; }",
+    "  Object field() { return fx.store.Store.CACHE; }",
+    "  Object lambda() { java.util.function.Function<Holder, Object> f = fx -> fx.store.Store.CACHE; return f; }",
+    "}",
+  ].join("\n")), qualified("fx/use/Inherits.java", "class Inherits extends Sub { Object kind() { return fx.store.Kind.A; } }"), qualified("fx/use/Sub.java", "class Sub { protected Holder fx; }")]);
+  assert.deepEqual(answer.unresolved, []);
+  assert.deepEqual(referencesIn(answer), ["Inherits->Sub:2", "Shadows->Base:2", "Shadows->Holder:3", "Shadows->Holder:4", "Shadows->Holder:5", "Shadows->Holder:7", "Sub->Holder:2"]);
+});
+
+test("a field a superclass keeps private or to its package does not obscure the package, and one the sources cannot show leaves the type unplaced", async () => {
+  const outside = qualified("fx/use/Outside.java", "class Outside extends Thread { Object read() { return fx.store.Store.CACHE; } }");
+  const imported = qualified("fx/use/Imported.java", "import static org.vendor.Constants.*;\nclass Imported { Object read() { return fx.store.Store.CACHE; } }");
+  const local = qualified("fx/use/Local.java", "class Local { Object read() { class Worker extends Thread { Object run(Object o) { return fx.store.Store.CACHE; } } return new Worker(); } }");
+  const blocks = qualified("fx/use/Blocks.java", "class Blocks { Object read(Object o) { if (o instanceof String fx) return fx; return fx.store.Store.CACHE; } }");
+  const hidden = qualified("fx/use/Hidden.java", "class Hidden extends fx.base.Base { Object read() { return fx.store.Store.CACHE; } }");
+  const privateBase = qualified("fx/use/PrivateBase.java", "class PrivateBase { private PrivateBase fx; }");
+  const kept = qualified("fx/use/Kept.java", "class Kept extends PrivateBase { Object read() { return fx.store.Store.CACHE; } }");
+  const answer = await createJavaRelations(createJavaParser).extract([STORE, BASE, outside, imported, local, blocks, hidden, privateBase, kept]);
+  assert.deepEqual(referencesIn(answer), ["Hidden->Base:2", "Hidden->Store:2", "Kept->PrivateBase:2", "Kept->Store:2"]);
+  assert.deepEqual(answer.unresolved.filter((use) => use.name.includes(".")).map((use) => [use.file, use.line, use.name, use.candidates]).toSorted(), [blocks, imported, local, outside].map(({ path }) => [path, path === imported.path ? 3 : 2, "fx.store.Store", ["fx.store.Store"]]));
+});
