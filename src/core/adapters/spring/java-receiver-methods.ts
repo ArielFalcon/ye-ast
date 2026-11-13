@@ -236,10 +236,25 @@ export function createResolver(project: JavaProject, generated = false) {
    * interface that declares none and a generated interface of operations, which is open to nothing a class of the
    * hierarchy declares (ADR-0062).
    */
+  const unsettledGaps = (above: ReturnType<JavaProject["hierarchy"]>) => above.gaps.filter((gap) => !memberless.has(clauseKey(gap.file, gap.node)));
   const hierarchyOpen = (above: ReturnType<JavaProject["hierarchy"]>, declared: readonly MethodDecl[]): boolean => {
-    const unsettled = above.gaps.filter((gap) => !memberless.has(clauseKey(gap.file, gap.node)));
+    const unsettled = unsettledGaps(above);
     return unsettled.some((gap) => !(gap.kind === "missing" && gap.isInterface && project.isGeneratedInterface(gap.name, gap.file))) || (unsettled.length > 0 && declared.some((method) => method.owner.kind !== "class"));
   };
+  /** Whether a supertype gap is a superclass the sources do not declare whose name resolves to one known outside type, by import or qualified name. */
+  const isOutsideSuperclass = (gap: ReturnType<JavaProject["hierarchy"]>["gaps"][number]): boolean => {
+    if (gap.isInterface || gap.kind !== "missing") return false;
+    const owner = enclosingType(gap.node, gap.file, project);
+    const found = resolve(gap.node, gap.file, project, owner === undefined ? undefined : enclosingType(owner.node.parent ?? owner.node, gap.file, project), gap.node, true);
+    return found?.kind === "library" || found?.kind === "platform";
+  };
+  /**
+   * Whether the hierarchy is open only through superclasses outside the sources that resolve to a known type. A member a
+   * class of the sources generates for its own field is declared in that class, so such a supertype can add only an
+   * overload whose body is outside the repository.
+   */
+  const hierarchyOpenOnlyOutsideSuperclasses = (above: ReturnType<JavaProject["hierarchy"]>): boolean =>
+    unsettledGaps(above).every((gap) => (gap.kind === "missing" && gap.isInterface && project.isGeneratedInterface(gap.name, gap.file)) || isOutsideSuperclass(gap));
   const declaredHierarchy = (type: TypeDecl) => {
     let known = hierarchies.get(type);
     if (known === undefined) {
@@ -310,7 +325,7 @@ export function createResolver(project: JavaProject, generated = false) {
   /** A member that a record or a Lombok annotation adds, when no type of the closed hierarchy declares the name and a static call names a static member. */
   const generatedOf = (held: { type: TypeDecl; typeName: boolean }, name: string, arity: number): GeneratedMember | undefined => {
     const above = declaredHierarchy(held.type);
-    if (OBJECT_METHODS.has(name) || hierarchyOpen(above, []) || above.types.some((owner) => owner.methods.some((method) => method.name.toLowerCase() === name.toLowerCase()))) return undefined;
+    if (OBJECT_METHODS.has(name) || (hierarchyOpen(above, []) && !hierarchyOpenOnlyOutsideSuperclasses(above)) || above.types.some((owner) => owner.methods.some((method) => method.name.toLowerCase() === name.toLowerCase()))) return undefined;
     const made = generatedMember(held.type, project, name, arity);
     return made === undefined || (held.typeName && made.kind !== "builder") ? undefined : made;
   };
