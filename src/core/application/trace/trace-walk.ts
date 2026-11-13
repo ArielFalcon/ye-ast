@@ -12,7 +12,7 @@ import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import type { DeclaredType, DispatchTargets, ImplicitChain, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { DeclaredType, DispatchTargets, ImplementedDeclarations, ImplicitChain, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, placedBetween, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
@@ -72,6 +72,8 @@ export interface TraceWalkInput {
    */
   syntaxOf: (file: string) => Promise<DeclaredMemberNames>;
   budget: TraceBudget;
+  /** The supertype methods each method implements or overrides, as the reading's language packs prove them, read when dispatch first needs it. */
+  implemented?: () => Promise<ReadonlyMap<GraphNodeId, ImplementedDeclarations>>;
   /** The roots an entrypoint starts at, of which a class (a UI route's component) runs as a page (R9), and what a component runs as one; absent without such a root. */
   pages?: { roots: ReadonlySet<GraphNodeId>; of: (component: GraphSymbol) => Promise<PagePlan | undefined> };
   signal?: AbortSignal;
@@ -239,12 +241,22 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     const above = ancestorsOf(type);
     return [...owners].some((owner) => above.has(owner));
   };
-  /** The methods of the same name that any type below `owners` declares: a re-declaration in an interface counts, since a body or a type below it may still replace the call. */
-  const implementationsBelow = (symbol: GraphSymbol, owners: readonly GraphSymbol[]): GraphSymbol[] => {
+  /**
+   * The methods of the same name that any type below `owners` declares: a re-declaration in an interface counts, since a
+   * body or a type below it may still replace the call. One whose language pack proves the supertype methods it implements
+   * or overrides, without `symbol` among them, is an overload and replaces nothing.
+   */
+  const implementationsBelow = async (symbol: GraphSymbol, owners: readonly GraphSymbol[]): Promise<GraphSymbol[]> => {
     const ownerIds = new Set(owners.map((owner) => owner.id));
-    return store
+    const below = store
       .declarationsNamed([symbol.name])
       .filter((method) => method.kind === "method" && navigation.ownersOf(method).some((type) => !ownerIds.has(type.id) && isBelow(type, ownerIds)));
+    if (below.length === 0 || input.implemented === undefined) return below;
+    const implemented = await input.implemented();
+    return below.filter((method) => {
+      const answer = implemented.get(method.id);
+      return answer === undefined || answer.kind === "unknown" || answer.declarations.some((place) => place.file === symbol.file && symbol.startLine <= place.nameLine && place.nameLine <= symbol.endLine);
+    });
   };
   const dispatchCut = (symbol: GraphSymbol, implementations: readonly GraphSymbol[], subReason: CutSubReason): Cut =>
     callCut(placeAt(symbol.file, symbol.startLine, symbol.name), sortedUnique(implementations.map(candidateOf)), "dispatch", subReason);
@@ -284,16 +296,16 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     const owners = navigation.ownersOf(symbol);
     if (declared === undefined) {
       const interfaces = owners.filter((owner) => owner.kind === "interface");
-      return interfaces.length === 0 ? undefined : { cut: dispatchCut(symbol, implementationsBelow(symbol, interfaces), "unproven") };
+      return interfaces.length === 0 ? undefined : { cut: dispatchCut(symbol, await implementationsBelow(symbol, interfaces), "unproven") };
     }
     if (!declared.body) {
       const [targets] = await origins.dispatchTargets([{ file: symbol.file, line: symbol.startLine, name: symbol.name }], signal);
       const bodies = targets === undefined ? undefined : placedBodies(targets);
-      if (bodies === undefined || bodies.length === 0) return { cut: dispatchCut(symbol, implementationsBelow(symbol, owners), (targets?.kind === "unknown" ? targets.reason : undefined) ?? "unproven") };
+      if (bodies === undefined || bodies.length === 0) return { cut: dispatchCut(symbol, await implementationsBelow(symbol, owners), (targets?.kind === "unknown" ? targets.reason : undefined) ?? "unproven") };
       return bodies.length === 1 ? { to: bodies[0]!, alternatives: bodies } : { cut: dispatchCut(symbol, bodies, "several-bodies"), alternatives: bodies };
     }
     if (!declared.overridable) return undefined;
-    const overriders = implementationsBelow(symbol, owners);
+    const overriders = await implementationsBelow(symbol, owners);
     return overriders.length === 0 ? undefined : { cut: dispatchCut(symbol, overriders, "overridable") };
   };
   /** Whether the call's own source binds its receiver to a function value, which a library member such as `call` runs. */

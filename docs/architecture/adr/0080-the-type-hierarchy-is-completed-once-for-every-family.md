@@ -65,6 +65,19 @@ already follow: the language pack binds exactly (names, imports, packages), the 
   measured number of `relation-unread` cuts on the corpus, and a pack proof is improved before a cut is hidden. U2 also
   covers the direction below: an answer that reached a type whose name an unplaced reference writes carries a cut, and
   `importers` reads that name without its type arguments.
+  Landed: the completion asks the pack for every unresolved reference of kind `extends` or `implements`. The Java pack
+  proves `outside` a simple name that `java.lang`, the on-demand imports or an outside supertype of a type around the
+  clause offer where no declaration of the repository can bind it: by the one listed platform package that offers it,
+  else the one package the sources do not declare, and without a qualified name (now optional on `outside`) where
+  several such packages, or a member type of that outside supertype, may be it. An on-demand import of a type, or a type
+  around the clause whose supertype the repository declares more than once, leaves it `unknown`. A written name binds at
+  compile time, so the pack's answer needs only every source read: a dynamic proxy or a call-rewriting annotation no
+  longer leaves every supertype of the repository `unknown`, and a source the reader cannot parse still does. The
+  unresolved-name matching of `callers`, `impact` (`name-only`, `removed-declaration`) and `importers` reads a supertype
+  reference by its name without type arguments, in every language. Trace no longer reads a method of the same name in a
+  type below as a possible override when the pack proves the supertype methods it implements or overrides
+  (`implementedDeclarations`) without the called one: an overload of another parameter type is no `dispatch` cut, and
+  an `unknown` answer keeps it one.
 - **U3:** the TypeScript pack answers `declaredSupertypes`. Observed on main: `class NameRepo implements Repo<string>`
   lost its caller through a `Repo<string>` receiver with `complete`. Landed: every heritage entry of a class or
   interface is bound by the pack's own heritage proof (the binder's lexical bindings, the file's type scopes, imports

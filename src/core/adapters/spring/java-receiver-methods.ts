@@ -13,7 +13,8 @@ import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve } from "./java-declared-types.ts";
 import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
 import { REPOSITORY_FRAGMENTS, REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
-import { createJavaProject, MEMBERLESS_PLATFORM_INTERFACES, readArgumentSignature, readSignature, sameSignature, supertypeClauses, typeNodeName, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Signature, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, MEMBERLESS_PLATFORM_INTERFACES, readArgumentSignature, readSignature, sameSignature, scopeOf, supertypeClauses, typeNodeName, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Scope, type Signature, type TypeDecl } from "./java-symbols.ts";
+import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
 
 const SLOT = "java-receiver-methods";
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
@@ -222,17 +223,19 @@ export function createJavaImplicitChains(parser: () => Promise<JavaParser>, sour
  * `ImportOrigins.declaredSupertypes` for Java sources: each entry of a type's clauses bound by the project's one resolver
  * in its strict reading, from the scope around the type, since a clause is outside the type's body (JLS 6.3, 8.1.4). A
  * name the strict reading leaves unsettled, ambiguous or bound to a local type is `unknown`; a platform type, or a name an
- * import or a package qualifier proves outside the repository, is `outside`.
+ * import or a package qualifier proves outside the repository, is `outside`. A written name binds at compile time, so
+ * only a source the reader does not read leaves it unproven: a dynamic implementation or a call-rewriting annotation
+ * changes what runs, never which type a name denotes.
  */
 export function createJavaDeclaredSupertypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): NonNullable<ImportOrigins["declaredSupertypes"]> {
-  return perPlacedType(parser, sources, paths, hold, build, UNKNOWN_SUPERTYPES, declaredSupertypesOf);
+  return perPlacedType(parser, sources, paths, hold, build, UNKNOWN_SUPERTYPES, declaredSupertypesOf, readsEverySource);
 }
 
-/** One answer per site from the one type the site places, `unknown` where none or several are placed or no binding is proven. */
-function perPlacedType<A>(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold: ParseHold | undefined, build: ProjectBuild, unknown: A, answer: (type: TypeDecl, project: JavaProject) => A): (sites: readonly ConstructedClassSite[]) => Promise<readonly A[]> {
+/** One answer per site from the one type the site places, `unknown` where none or several are placed or `proves` proves no binding. */
+function perPlacedType<A>(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold: ParseHold | undefined, build: ProjectBuild, unknown: A, answer: (type: TypeDecl, project: JavaProject) => A, proves: typeof provesBinding = provesBinding): (sites: readonly ConstructedClassSite[]) => Promise<readonly A[]> {
   const unreadJvm = paths.some(isUncoveredJvmSource);
   const analyze = (sites: readonly ConstructedClassSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly A[] => {
-    if (!provesBinding(files, project, unparsed, unreadJvm)) return sites.map(() => unknown);
+    if (!proves(files, project, unparsed, unreadJvm)) return sites.map(() => unknown);
     return sites.map((site) => {
       const placed = project.types.filter((type) => type.file.path === site.file && type.name === site.name && typePlace(type).start <= site.line && site.line <= typePlace(type).nameLine);
       return placed.length === 1 ? answer(placed[0]!, project) : unknown;
@@ -256,9 +259,46 @@ function declaredSupertypesOf(type: TypeDecl, project: JavaProject): DeclaredSup
     const clause = { relation: isInterface && type.kind !== "interface" ? "implements" : "extends", written: typeNodeName(node).replace(/\s+/g, "") } as const;
     const found = resolve(node, type.file, project, scope, node, true);
     if (found?.kind === "repository") return found.type === undefined ? { ...clause, kind: "unknown" } : { ...clause, kind: "placed", name: found.type.name, ...typePlace(found.type) };
-    return found === undefined ? { ...clause, kind: "unknown" } : { ...clause, kind: "outside", qualifiedName: found.fqn };
+    if (found !== undefined) return { ...clause, kind: "outside", qualifiedName: found.fqn };
+    const outside = onDemandOutside(clause.written, { file: type.file, type: scope, at: node }, project);
+    return outside === undefined ? { ...clause, kind: "unknown" } : { ...clause, kind: "outside", ...outside };
   });
   return { kind: "supertypes", supertypes };
+}
+
+/**
+ * Where a simple name that no declaration of the repository binds is proven to bind a type outside it, through
+ * `java.lang`, the on-demand imports and the member types of the types around the scope (JLS 6.4.1, 7.5.2, 8.5); by its
+ * qualified name where the sources settle it. A package whose names are listed offers the name by its listing, and a
+ * package the sources do not declare may offer any name; under the repository-compiles assumption the name is the one
+ * listed package's that offers it, else the one unlisted package's, and several such packages leave it outside without
+ * a name; so does a name none of them offers, which a package of the repository gains from sources the snapshot does
+ * not hold. A type around the scope with a supertype the sources do not declare may declare a member type of the name
+ * outside the repository, which leaves it outside without a name; one the repository declares more than once may declare
+ * it inside, and an on-demand import of a type offers its members, so either proves nothing.
+ */
+function onDemandOutside(name: string, scope: Scope, project: JavaProject): { qualifiedName?: string } | undefined {
+  if (name.includes(".")) return undefined;
+  let outsideAround = false;
+  for (let around = scope.type; around !== undefined; around = around.outer) {
+    const { gaps } = project.hierarchy(around, (node, owner) => project.lookupType(typeNodeName(node), scopeOf(owner)));
+    if (gaps.some((gap) => gap.kind !== "missing")) return undefined;
+    outsideAround ||= gaps.length > 0;
+  }
+  const sources = project.importedTypeSources(name, scope);
+  if (sources === undefined || !("containers" in sources)) return undefined;
+  const listed: string[] = [];
+  const unlisted: string[] = [];
+  for (const container of new Set(sources.containers)) {
+    const offered = `${container}.${name}`;
+    const names = PLATFORM_TYPE_NAMES.get(container);
+    if (names !== undefined && project.isPlatformName(offered)) {
+      if (names.has(name)) listed.push(offered);
+    } else if (project.lookupType(container, { file: scope.file, type: undefined }) !== undefined) return undefined;
+    else if (!project.types.some((type) => type.file.packageName === container)) unlisted.push(offered);
+  }
+  const offered = listed.length > 0 ? listed : unlisted;
+  return offered.length === 1 && !outsideAround ? { qualifiedName: offered[0]! } : {};
 }
 
 function implicitChainOf(type: TypeDecl, project: JavaProject): ImplicitChain {
@@ -305,7 +345,12 @@ class DeadlineCut extends Error {
  * call-rewriting annotation anywhere leaves every binding unproven.
  */
 export function provesBinding(files: readonly JavaFile[], project: JavaProject, unparsed: readonly UnparsedSource[], unreadJvm: boolean): boolean {
-  return unparsed.length === 0 && !unreadJvm && project.unreadable.length === 0 && !files.some((file) => namesAnyDynamicImplementation(file, project)) && !files.some(({ root }) => rewritesCalls(root));
+  return readsEverySource(files, project, unparsed, unreadJvm) && !files.some((file) => namesAnyDynamicImplementation(file, project)) && !files.some(({ root }) => rewritesCalls(root));
+}
+
+/** Whether the reader read every source: none left unparsed, no JVM source no extractor reads, no declaration the project could not read. */
+function readsEverySource(_files: readonly JavaFile[], project: JavaProject, unparsed: readonly UnparsedSource[], unreadJvm: boolean): boolean {
+  return unparsed.length === 0 && !unreadJvm && project.unreadable.length === 0;
 }
 
 /** `generated`: whether the members that a record or a Lombok annotation adds are settled (no `lombok.config` may rename them). */

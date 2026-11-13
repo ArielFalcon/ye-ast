@@ -2,7 +2,7 @@ import type { RemovedDeclaration } from "../change/seeds.ts";
 import { CALL_EDGE_KINDS } from "./call-kinds.ts";
 import { fileReach, mayRunDeclarationOf, sharesRuntime } from "../languages/call-targets.ts";
 import { JAVA_PROFILE, profileOf } from "../languages/profiles.ts";
-import { nameTail } from "../shared/call-place.ts";
+import { nameTail, withoutTypeArguments } from "../shared/call-place.ts";
 import { compareText } from "../shared/code-node.ts";
 import { CAPABILITY_ABSENT, type Cut, type CutReach, type CutReason } from "../shared/fact.ts";
 
@@ -39,6 +39,8 @@ export interface MemberReferenceProofs {
   targets: ReadonlyMap<string, string>;
   expanded: ReadonlySet<string>;
 }
+
+const SUPERTYPE_KINDS: readonly string[] = ["extends", "implements"];
 
 const REFERENCED_BY: Readonly<Record<string, readonly string[]>> = {
   calls: ["function", "method", "property"],
@@ -153,6 +155,11 @@ export function unresolvedPlaceCuts(places: readonly { file: string; line: numbe
   return placeCuts(places, reason, fileReach);
 }
 
+/** The name by which a reference names a declaration: a supertype clause names its type without type arguments (`Repo` of `Repo<String>`). */
+export function referencedName(reference: Pick<UnresolvedUse, "name" | "kind">): string {
+  return SUPERTYPE_KINDS.includes(reference.kind) ? withoutTypeArguments(reference.name) : reference.name;
+}
+
 /** Whether the reference names a declaration without qualifying it, so its tail is the whole name. */
 export function isBareName(name: string): boolean {
   return !/[.:#]/.test(name);
@@ -204,7 +211,8 @@ export function unresolvedLinkCuts(
   for (const reference of references) {
     const occurrence = referenceKey(reference);
     const proofKey = occurrence !== undefined && unique.has(occurrence) ? occurrence : undefined;
-    const tail = nameTail(reference.name);
+    const name = referencedName(reference);
+    const tail = nameTail(name);
     const place = placeAt(reference.file, reference.line);
     /**
      * A reference whose own root the file imports from outside is no cut. The proof is keyed by the complete graph occurrence, before line-based output aggregation.
@@ -220,8 +228,8 @@ export function unresolvedLinkCuts(
       pointingCache.set(pointingKey, pointing);
     }
     pointing = pointing.filter((declaration) => mayReach(reference, declaration.file));
-    const unnamed = !isBareName(reference.name) && (reference.candidates?.length ?? 0) === 0;
-    const attributing = unnamed ? [] : pointing.filter((declaration) => namesDeclaration(reference, declaration, bound, proofKey));
+    const unnamed = !isBareName(name) && (reference.candidates?.length ?? 0) === 0;
+    const attributing = unnamed ? [] : pointing.filter((declaration) => namesDeclaration({ ...reference, name }, declaration, bound, proofKey));
     const actual = proofKey === undefined ? undefined : members?.targets.get(proofKey);
     const settledAt = (declaration: WalkedDeclaration): boolean => {
       if (proofKey === undefined) return false;
@@ -267,8 +275,9 @@ export function removedDeclarationCuts(
     if (isKnownReference(reference, known, unique)) continue;
     const key = referenceKey(reference);
     const proofKey = key !== undefined && unique.has(key) ? key : undefined;
-    const imported = isBareName(reference.name) && proofKey !== undefined ? bound.get(proofKey) : undefined;
-    for (const declaration of byName.get(nameTail(reference.name)) ?? []) {
+    const name = referencedName(reference);
+    const imported = isBareName(name) && proofKey !== undefined ? bound.get(proofKey) : undefined;
+    for (const declaration of byName.get(nameTail(name)) ?? []) {
       if (!mayReach(reference, declaration.file)) continue;
       if (imported !== undefined && imported !== declaration.file) continue;
       if (proofKey !== undefined && localParameters.has(proofKey) && reference.kind === "calls" && isBareName(reference.name) && reference.file !== declaration.file) continue;

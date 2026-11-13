@@ -176,7 +176,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           if (origins === undefined || edgeTargets?.bindings === undefined || reconciled === undefined) throw new Error("a trace binds calls through the base binder, which needs the syntax and the relations' proofs");
           const pageRoots = new Set(selections.flatMap(({ target, selection }) => (isEntrypointTarget(target) ? selection.seeds.map(({ symbol }) => symbol.id) : [])));
           const pages = pageRoots.size === 0 ? {} : { pages: { roots: pageRoots, of: pagePlans(store, reading.relations) } };
-          const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, bindings: edgeTargets.bindings, uses: reading.declarationUses(), reconciled, inScope: head.selected, memberDeclarations, syntaxOf, budget, ...pages, ...(signal === undefined ? {} : { signal }) });
+          const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, bindings: edgeTargets.bindings, uses: reading.declarationUses(), reconciled, inScope: head.selected, memberDeclarations, syntaxOf, budget, implemented: () => reading.implementedContracts(), ...pages, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
           const deferredValues = deps.deferredValues?.(head.tree.sources);
           const dataEffects = () => deps.dataEffects?.placed(head.tree.sources) ?? Promise.resolve([]);

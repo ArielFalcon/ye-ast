@@ -1,4 +1,4 @@
-import { isBareName, type UnresolvedUse } from "./impact-cuts.ts";
+import { isBareName, referencedName, type UnresolvedUse } from "./impact-cuts.ts";
 import { sharesRuntime } from "../languages/call-targets.ts";
 import { compareText } from "../shared/code-node.ts";
 
@@ -61,8 +61,9 @@ function unresolvedReferencesOf(file: string, declared: ReadonlySet<string>, qua
 }
 
 function namesIt(reference: UnresolvedUse, declared: ReadonlySet<string>, qualified: ReadonlySet<string>, stem: string): boolean {
-  if (segmentsOf(reference.name).includes(stem)) return true;
-  if (isBareName(reference.name)) return declared.has(reference.name);
+  const name = referencedName(reference);
+  if (segmentsOf(name).includes(stem)) return true;
+  if (isBareName(name)) return declared.has(name);
   return (reference.candidates ?? []).some((candidate) => qualified.has(candidate));
 }
 

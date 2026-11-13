@@ -298,3 +298,12 @@ test("a qualified reference with no candidate cuts nothing only when the base bi
   assert.deepEqual(reasons(awayFrom([SAVE, other])), ["name-only src/Use.java src/Use.java:5 repo.save"]);
   assert.deepEqual(reasons(awayFrom([SAVE])), ["name-only src/Use.java src/Use.java:3 repo.save src/Use.java:5 repo.save"]);
 });
+
+test("a supertype reference names a declaration by the name it writes without type arguments, a reference of another kind by its whole name", () => {
+  const walked: WalkedDeclaration[] = [{ file: "src/shop/Repo.java", name: "Repo", qualifiedName: "shop.Repo", kind: "interface" }];
+  const generic = use("Repo<Map<String, Long>>", "implements", "src/shop/Kept.java", 3);
+
+  assert.deepEqual(unresolvedLinkCuts([generic], walked, []).map(({ at, reason }) => [reason, ...at]), [["name-only", "src/shop/Kept.java", "src/shop/Kept.java:3 Repo<Map<String, Long>>"]]);
+  assert.deepEqual(unresolvedLinkCuts([{ ...generic, kind: "references" }], walked, []), []);
+  assert.deepEqual(removedDeclarationCuts([generic], [{ file: "src/shop/Repo.java", name: "Repo" }]).map(({ at }) => at), [["src/shop/Repo.java::Repo", "src/shop/Kept.java:3"]]);
+});

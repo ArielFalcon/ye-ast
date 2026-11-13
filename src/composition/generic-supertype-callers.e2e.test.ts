@@ -173,3 +173,14 @@ test("a supertype the sources do not place links nothing and cuts the answers ab
   assert.ok(ranked.ok && ranked.value.status !== "unknown");
   assert.deepEqual(relationUnread(ranked.value.status === "partial" ? ranked.value.cuts : []), []);
 });
+
+test("an answer that reached a type a supertype reference names with type arguments, and that no one placed, carries a cut naming that reference", async () => {
+  const result = await callersFact({ file: `${SHOP}/Repo.java`, symbol: "Repo.find" });
+  assert.ok(result.ok && result.value.status === "partial", JSON.stringify(result));
+  const nameOnly = result.value.cuts.filter((cut) => "reason" in cut && cut.reason === "name-only").map(({ at }) => at);
+  assert.deepEqual(nameOnly, [[`${SHOP}/Holder.java`, `${SHOP}/Holder.java:3 Repo<String>`]]);
+
+  const importers = await composeQueries({ scratchRoot }).impact.importers({ repo, repoId: "generic-supertype", revision: "HEAD", files: [`${SHOP}/Repo.java`] });
+  assert.ok(importers.ok && importers.value.status !== "unknown", JSON.stringify(importers));
+  assert.deepEqual(importers.value.value.files.map(({ unresolvedNamers }) => unresolvedNamers), [[`${SHOP}/Holder.java`]]);
+});

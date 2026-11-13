@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calleeOf, compareOccurrence, countedAlike, nameTail, normalizedSpelling, ownMemberOf, receiverOf, receiverRootOf, sameOccurrence, type OrderedPlace } from "./call-place.ts";
+import { calleeOf, compareOccurrence, countedAlike, nameTail, normalizedSpelling, ownMemberOf, receiverOf, receiverRootOf, sameOccurrence, withoutTypeArguments, type OrderedPlace } from "./call-place.ts";
 
 test("a bare name is a bare callee, a dotted or chained spelling a member callee named by its last name", () => {
   assert.deepEqual(calleeOf("helper"), { form: "bare", name: "helper" });
@@ -97,4 +97,9 @@ test("a column is counted alike up to its line's first character outside ASCII a
   assert.equal(countedAlike(8, "a.b(); 'é'.c()"), true);
   assert.equal(countedAlike(9, "a.b(); 'é'.c()"), false);
   assert.equal(countedAlike(40, "plain ascii"), true);
+});
+
+test("a written type name drops every type argument list, nested ones and those of a qualifier included", () => {
+  assert.equal(withoutTypeArguments("Repo<Map<String, List<Long>>>"), "Repo");
+  assert.equal(withoutTypeArguments("Outer<Map<K, V>, W>.Inner<B>"), "Outer.Inner");
 });

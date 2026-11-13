@@ -22,6 +22,18 @@ export function compactSpelling(spelling: string): string {
   return spelling.replace(/\s+/g, "");
 }
 
+/** A type's written name without whitespace or type arguments: `Repo` of `Repo<String>`, `Outer.Inner` of `Outer<A>.Inner<B>`. */
+export function withoutTypeArguments(written: string): string {
+  let name = "";
+  let depth = 0;
+  for (const char of compactSpelling(written)) {
+    if (char === "<") depth++;
+    else if (char === ">") depth = Math.max(0, depth - 1);
+    else if (depth === 0) name += char;
+  }
+  return name;
+}
+
 /**
  * A call's spelling without whitespace, comments, argument lists or the type arguments of a member (`.<T>m`), so two
  * readers that spell one link of a chain with and without its arguments agree: `a.b(x)\n  .c` and `a.b().c`.

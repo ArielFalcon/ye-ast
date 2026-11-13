@@ -124,9 +124,9 @@ export interface ImportOrigins {
    * One entry per site, in the order received: each supertype the `extends` and `implements` clauses of the type declared
    * at the site write, in source order, by the name written without its type arguments. A supertype is placed at the
    * repository declaration the language's scoping binds that name to, `outside` where the name is proven to bind a type
-   * outside the repository (by its qualified name), and `unknown` where the sources settle neither: a name that a type the
-   * snapshot does not declare may shadow, several declarations of the name, or any condition under which the reader proves
-   * no binding. A name is never placed by its simple name alone. Absent where the language pack implements none, which
+   * outside the repository (by its qualified name where the sources settle it), and `unknown` where the sources settle
+   * neither: a name that a type the snapshot does not declare may shadow, several declarations of the name, or any
+   * condition under which the reader proves no binding. A name is never placed by its simple name alone. Absent where the language pack implements none, which
    * reads as `capability-absent` for every site.
    */
   declaredSupertypes?(sites: readonly ConstructedClassSite[], signal?: AbortSignal): Promise<readonly DeclaredSupertypes[]>;
@@ -203,10 +203,14 @@ export interface ConstructedClassSite {
  */
 export type ImplicitChain = ({ kind: "constructor" | "supplied" } & MethodPlace) | { kind: "none" } | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT };
 
-/** A supertype clause entry: the relation its clause writes and the name it writes, without type arguments. */
+/**
+ * A supertype clause entry: the relation its clause writes and the name it writes, without type arguments. `outside`
+ * holds no `qualifiedName` where the sources prove that no declaration of the repository is what the name binds without
+ * settling which type outside it is.
+ */
 export type DeclaredSupertype = { relation: "extends" | "implements"; written: string } & (
   | ({ kind: "placed"; name: string } & MethodPlace)
-  | { kind: "outside"; qualifiedName: string }
+  | { kind: "outside"; qualifiedName?: string }
   | { kind: "unknown" }
 );
 

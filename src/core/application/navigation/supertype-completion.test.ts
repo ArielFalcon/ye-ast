@@ -59,8 +59,16 @@ test("a type whose pack declares the stage absent keeps the index as it is, with
   assert.deepEqual(completed.unplaced, []);
 });
 
-test("a supertype reference written without type arguments is the index's own reading, never asked of the pack", async () => {
-  const store = fakeCodeGraph(NODES, EDGES, [{ ...GENERIC, name: "Repo" }]);
+test("a supertype reference the index left unresolved without type arguments is asked of the pack and placed by the name it writes", async () => {
+  const store = fakeCodeGraph(NODES, EDGES, [{ ...GENERIC, name: "shop.Repo" }]);
+  const qualified: DeclaredSupertypes = { kind: "supertypes", supertypes: [{ ...PLACED.supertypes[0]!, written: "shop.Repo" }] };
+  const { reader } = await completedHierarchy(store, [NAMED], originsAnswering(qualified).origins);
+
+  assert.deepEqual(reader.outgoingEdges(["NameRepo" as never], ["implements"]).map(({ target }) => target), ["Repo", "Plain"]);
+});
+
+test("an unresolved reference of a kind other than a supertype's is the index's own reading, never asked of the pack", async () => {
+  const store = fakeCodeGraph(NODES, EDGES, [DECORATES]);
   const { origins, asked } = originsAnswering(PLACED);
   const completed = await completedHierarchy(store, [NAMED], origins);
 

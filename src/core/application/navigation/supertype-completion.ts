@@ -1,10 +1,11 @@
 import { EDGE_POLICY } from "../../domain/impact/edge-policy.ts";
+import { withoutTypeArguments } from "../../domain/shared/call-place.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOrigins, MethodPlace } from "../../ports/import-origins.port.ts";
 import { createGraphNavigation, isInside, SUPERTYPE_EDGES } from "./graph-navigation.ts";
 
-/** A supertype written with type arguments that the index left unresolved and the language pack did not place. */
+/** A supertype the index left unresolved and the language pack did not place. */
 export interface UnplacedSupertype {
   type: GraphSymbol;
   reference: GraphUnresolvedReference;
@@ -16,10 +17,7 @@ export interface CompletedHierarchy {
   unplaced: readonly UnplacedSupertype[];
 }
 
-/** Whether the index kept the reference's type arguments in its name, so it never resolved the type it names. */
-const writesTypeArguments = (reference: GraphUnresolvedReference): boolean => SUPERTYPE_EDGES.includes(reference.kind) && reference.name.includes("<");
-
-const writtenName = (reference: GraphUnresolvedReference): string => reference.name.slice(0, reference.name.indexOf("<")).replace(/\s+/g, "");
+const isSupertypeReference = (reference: GraphUnresolvedReference): boolean => SUPERTYPE_EDGES.includes(reference.kind);
 
 const referenceKey = (reference: GraphUnresolvedReference): string => JSON.stringify([reference.from, reference.kind, reference.line, reference.column, reference.name]);
 
@@ -38,13 +36,13 @@ function compareOutgoing(a: GraphEdge, b: GraphEdge): number {
 }
 
 /**
- * The hierarchy of a reading completed by the language pack's placement of each supertype the index left unresolved for
- * its type arguments (`files` are those whose pack answers `declaredSupertypes`): one `extends` or `implements` edge per
+ * The hierarchy of a reading completed by the language pack's placement of each supertype the index left unresolved
+ * (`files` are those whose pack answers `declaredSupertypes`): one `extends` or `implements` edge per
  * placed supertype, at the reference's place, and the reference no longer unresolved. Without such a reference the
  * reader is `store` itself. A supertype the pack proves outside the repository stays as the index left it.
  */
 export async function completedHierarchy(store: CodeGraphReader, files: readonly string[], origins: ImportOrigins | undefined, signal?: AbortSignal): Promise<CompletedHierarchy> {
-  const references = files.length === 0 || origins?.declaredSupertypes === undefined ? [] : store.unresolvedReferences(files).filter(writesTypeArguments);
+  const references = files.length === 0 || origins?.declaredSupertypes === undefined ? [] : store.unresolvedReferences(files).filter(isSupertypeReference);
   if (references.length === 0 || origins?.declaredSupertypes === undefined) return { reader: store, unplaced: [] };
   const types = store.symbolsByIds([...new Set(references.map(({ from }) => from))]);
   const answers = await origins.declaredSupertypes(types.map((type) => ({ file: type.file, line: type.startLine, name: type.name })), signal);
@@ -57,7 +55,7 @@ export async function completedHierarchy(store: CodeGraphReader, files: readonly
     if (found === undefined) continue;
     const { type, answer } = found;
     if (answer?.kind === "unknown" && answer.reason !== undefined) continue;
-    const entries = answer?.kind === "supertypes" ? answer.supertypes.filter(({ relation, written }) => relation === reference.kind && written === writtenName(reference)) : [];
+    const entries = answer?.kind === "supertypes" ? answer.supertypes.filter(({ relation, written }) => relation === reference.kind && written === withoutTypeArguments(reference.name)) : [];
     const entry = entries.length === 1 ? entries[0]! : undefined;
     if (entry?.kind === "outside") continue;
     const target = entry?.kind === "placed" ? typePlacedAt(store, entry) : undefined;
