@@ -55,6 +55,11 @@ function renderFull(result: CompositionResult): string {
   ].join("\n");
 }
 
+/** The leaf calls of the traced repository that issue the request, as `file:line`. */
+function issuedAtText(leaves: readonly { file: string; line: number }[] | undefined): string {
+  return leaves === undefined ? "" : ` issued at ${leaves.map(({ file, line }) => `${file}:${line}`).join(", ")}`;
+}
+
 function changedOperationsText(operations: NonNullable<PartOf<"workspace-link">["operations"]>): string {
   const listed = operations.map((operation) => `${operation.change} ${operation.method} ${operation.path}${operation.parts === undefined ? "" : ` (${operation.parts.join(", ")})`}`);
   return `calls changed operations ${listed.join(", ")} (a call, not proof the changed data is read)`;
@@ -518,9 +523,9 @@ class CompactView {
       case "workspace-link": {
         const link = part.link;
         const reach = part.reach?.map((reference) => (reference.status === "present" ? (reference.part === part.id ? "self" : "present") : `missing ${reference.linkId}`));
-        return `link ${link.id}${part.direction === undefined ? "" : ` ${part.direction}`}: ${link.from.repo} ${this.file(link.from.file)}:${link.from.line} ${link.from.symbol} → ${link.to.repo} ${link.to.kind} ${link.to.name} handler ${this.anchor(link.to.handler)} basis ${link.basis} ${link.transport} confidence ${link.confidence}${link.profiles === undefined ? "" : ` profiles ${link.profiles.join(", ")}`}${link.authority === undefined ? "" : " base-url undecided"}${link.drift === undefined ? "" : ` ${driftText(link.drift)}`}${link.deferred === true ? " deferred" : ""}${short || reach === undefined ? "" : `; reach ${reach.join(", ") || "none"}`}${short ? "" : `${part.operations === undefined ? "" : `; ${changedOperationsText(part.operations)}`}`}`;
+        return `link ${link.id}${part.direction === undefined ? "" : ` ${part.direction}`}: ${link.from.repo} ${this.file(link.from.file)}:${link.from.line} ${link.from.symbol} → ${link.to.repo} ${link.to.kind} ${link.to.name} handler ${this.anchor(link.to.handler)} basis ${link.basis} ${link.transport} confidence ${link.confidence}${link.profiles === undefined ? "" : ` profiles ${link.profiles.join(", ")}`}${link.authority === undefined ? "" : " base-url undecided"}${link.drift === undefined ? "" : ` ${driftText(link.drift)}`}${link.deferred === true ? " deferred" : ""}${issuedAtText(link.issuedAt)}${short || reach === undefined ? "" : `; reach ${reach.join(", ") || "none"}`}${short ? "" : `${part.operations === undefined ? "" : `; ${changedOperationsText(part.operations)}`}`}`;
       }
-      case "unlinked-call-site": return `${part.site.outcome} call site ${part.site.from.repo} ${this.file(part.site.from.file)}:${part.site.from.line} ${part.site.from.symbol} ${part.site.transport} ${quoted(part.site.name)}${part.site.repos === undefined ? "" : ` (${part.site.repos.join(", ")})`}${part.site.deferred === true ? " deferred" : ""}`;
+      case "unlinked-call-site": return `${part.site.outcome} call site ${part.site.from.repo} ${this.file(part.site.from.file)}:${part.site.from.line} ${part.site.from.symbol} ${part.site.transport} ${quoted(part.site.name)}${part.site.repos === undefined ? "" : ` (${part.site.repos.join(", ")})`}${part.site.deferred === true ? " deferred" : ""}${issuedAtText(part.site.issuedAt)}`;
       case "workspace-context": return `workspace context ${this.workspaceContext(part)}`;
       case "decision": return `decision ${part.kindName} ${quoted(part.subject)}`;
       case "impact-context": return `impact context ${this.readLabel(part.owner)}`;

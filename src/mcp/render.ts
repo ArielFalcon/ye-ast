@@ -13,7 +13,7 @@ import type { ModuleImpactValue } from "../core/domain/impact/module-dependency.
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineBinding, OutlineDeclaration, OutlineImport, OutlineUse, OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import { hasUnprovedUses } from "../core/domain/outline/outline-uses.ts";
-import type { ExternalCalls, TraceStep, TraceValue } from "../core/domain/trace/trace-fact.ts";
+import type { ExternalCalls, IssuingPlace, TraceLinked, TraceStep, TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
 import type { ChangeFrontier, ClassifiedDifference, ConsequenceFinding, ConsequencesValue, HypothesisAnswer, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
@@ -1215,7 +1215,7 @@ export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "
   return lines.join("\n");
 }
 
-const TRACE_FULL_GUIDE = "Select value.steps in pre-order: id, parent, depth, file, symbol, kind, line, endLine, at (the call in the parent), via, deferred, seen (the id that expanded it), leaves (folded terminal declarations with file, start, end) and external (calls leaving the repository by module), alternatives (every body a body-less method may run, when proven; one expands below it via dispatch) and effects (each HTTP request, published message or data operation a declared client makes in its body: kind http with target method, path and base, kind message with target protocol and destination, or kind data with operation, access and optional proven target, at its line). With workspace, value.links and value.unlinked retain matches at executed effects, and at effects marked deferred (a request inside a function value that a combinator such as defer or switchMap takes, which runs later, if at all; the match then carries deferred: true), and value.repositorySnapshots pins both endpoints; match basis does not prove host ownership. value.roots lists the root step ids per target; value.readingPlan.ranges lists file, start, end and the step ids each range covers, with the total lines. When partial, an unresolved-link cut is at[0] \"file:line spelling\" followed by its candidates, each \"file::Owner.member\" by containment path.";
+const TRACE_FULL_GUIDE = "Select value.steps in pre-order: id, parent, depth, file, symbol, kind, line, endLine, at (the call in the parent), via, deferred, seen (the id that expanded it), leaves (folded terminal declarations with file, start, end) and external (calls leaving the repository by module), alternatives (every body a body-less method may run, when proven; one expands below it via dispatch) and effects (each HTTP request, published message or data operation a declared client makes in its body: kind http with target method, path and base, kind message with target protocol and destination, or kind data with operation, access and optional proven target, at its line). With workspace, value.links and value.unlinked retain matches at executed effects, and at effects marked deferred (a request inside a function value that a combinator such as defer or switchMap takes, which runs later, if at all; the match then carries deferred: true; a match the workspace sites at an outer caller is also retained when the trace reaches the leaf calls that issue its request, listed in issuedAt), and value.repositorySnapshots pins both endpoints; match basis does not prove host ownership. value.roots lists the root step ids per target; value.readingPlan.ranges lists file, start, end and the step ids each range covers, with the total lines. When partial, an unresolved-link cut is at[0] \"file:line spelling\" followed by its candidates, each \"file::Owner.member\" by containment path.";
 
 const TRACE_BRANCHES = "branches are not evaluated: every call in a body is listed, whichever branch makes it";
 
@@ -1362,12 +1362,17 @@ function traceSettledLine(value: TraceValue): string[] {
 }
 
 /** One link as every answer lists it: its number, both ends, the basis and what the answer adds about how it was reached. */
-function linkLine(link: Link & { deferred?: true }, number: number | undefined, reached = ""): string {
+function linkLine(link: TraceLinked<Link>, number: number | undefined, reached = ""): string {
   const confidence = link.confidence < 1 ? `, confidence ${link.confidence}` : "";
   const profiles = link.profiles === undefined ? "" : `, under ${link.profiles.join(", ")}`;
   const authority = link.authority === undefined ? "" : ", base URL undecided";
   const drift = driftText(link.drift);
-  return `  - ${number}. ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} -> ${handlerText(link.to.handler)} (${link.basis}${confidence}${profiles}${authority}${drift === "" ? "" : `, ${drift}`}${link.deferred === true ? ", runs later, if at all" : ""}${reached})`;
+  return `  - ${number}. ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} -> ${handlerText(link.to.handler)} (${link.basis}${confidence}${profiles}${authority}${drift === "" ? "" : `, ${drift}`}${link.deferred === true ? ", runs later, if at all" : ""}${issuedText(link.issuedAt)}${reached})`;
+}
+
+/** The leaf calls a trace reached that issue a request the workspace sites at an outer caller. */
+function issuedText(leaves: readonly IssuingPlace[] | undefined): string {
+  return leaves === undefined ? "" : `, issued at ${leaves.map(({ file, line }) => placeText(file, line)).join(", ")}`;
 }
 
 function impactedLinkLine({ link, direction, reach, operations }: ImpactedLink, indexes: ReadonlyMap<string, number>): string {
@@ -1379,7 +1384,7 @@ function impactedLinkLine({ link, direction, reach, operations }: ImpactedLink, 
  * The links of a workspace map: each one in details; in summary the count per caller, callee and transport when that is
  * no longer than the list (RFC-0017), with the call sites the join reached without a link always listed.
  */
-function linkMapLines(links: readonly (Link & { deferred?: true })[], unlinked: readonly (UnlinkedCallSite & { deferred?: true })[], detail: ResponseMode, label = "links between the repositories read"): string[] {
+function linkMapLines(links: readonly TraceLinked<Link>[], unlinked: readonly TraceLinked<UnlinkedCallSite>[], detail: ResponseMode, label = "links between the repositories read"): string[] {
   const literal = links.map((link, index) => linkLine(link, index + 1));
   const pairs = new Map<string, number>();
   for (const { from, to, transport } of links) pairs.set(`${from.repo} -> ${to.repo} ${transport}`, (pairs.get(`${from.repo} -> ${to.repo} ${transport}`) ?? 0) + 1);
@@ -1387,7 +1392,7 @@ function linkMapLines(links: readonly (Link & { deferred?: true })[], unlinked: 
   const listed = detail === "details" || links.length === 0 || size(literal) < size(counted) ? literal : counted;
   return [
     `${label} (${links.length}):`, ...listed,
-    ...(unlinked.length === 0 ? [] : [`call sites the join reached without a link (${unlinked.length}):`, ...unlinked.map(({ from, transport, outcome, name, repos, routes, deferred }) => `  - ${from.repo}:${placeText(from.file, from.line)} ${from.symbol} ${transport} ${name}: ${outcome}${repos === undefined ? "" : ` (${repos.join(", ")})`}${routes === undefined ? "" : ` routes ${routes.join(", ")}`}${deferred === true ? " (runs later, if at all)" : ""}`)]),
+    ...(unlinked.length === 0 ? [] : [`call sites the join reached without a link (${unlinked.length}):`, ...unlinked.map(({ from, transport, outcome, name, repos, routes, deferred, issuedAt }) => `  - ${from.repo}:${placeText(from.file, from.line)} ${from.symbol} ${transport} ${name}: ${outcome}${repos === undefined ? "" : ` (${repos.join(", ")})`}${routes === undefined ? "" : ` routes ${routes.join(", ")}`}${deferred === true ? " (runs later, if at all)" : ""}${issuedText(issuedAt)}`)]),
   ];
 }
 

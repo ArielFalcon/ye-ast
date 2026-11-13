@@ -12,7 +12,7 @@ import type { ChangedContract } from "../domain/impact/changed-contracts.ts";
 import type { ModuleOrigin, ReachedModule } from "../domain/impact/module-dependency.ts";
 import type { ImportedFile, ImportersValue } from "../domain/impact/importers-fact.ts";
 import type { OutlineDeclaration, OutlineImport, OutlineValue } from "../domain/outline/outline-fact.ts";
-import type { ExternalCalls, TraceEffect, TraceStep, TraceValue } from "../domain/trace/trace-fact.ts";
+import type { ExternalCalls, IssuingPlace, TraceEffect, TraceStep, TraceValue } from "../domain/trace/trace-fact.ts";
 import type { CallSite, EventTarget, HttpTarget, UnresolvedCallSite } from "../domain/topology/call-site.ts";
 import type { ImpactedLink, Link, LinkBasis, UnlinkedCallSite } from "../domain/topology/link.ts";
 import type { NameCandidate, OutwardKind } from "../domain/topology/outward-name.ts";
@@ -189,12 +189,13 @@ export type CallSiteData = Omit<CallSite, "file" | "line" | "column" | "endLine"
 };
 export type LinkData = Omit<Link, "from" | "to"> & {
   deferred?: true;
+  issuedAt?: readonly IssuingPlace[];
   from: CallLocation & { repo: string; symbol: string };
   to: { repo: string; kind: Entrypoint["kind"]; name: string; handler: AnchorId };
 };
 
 /** A call site the join reached without a link; its file is the caller's. */
-export type UnlinkedCallSiteData = Omit<UnlinkedCallSite, "from"> & { deferred?: true; from: CallLocation & { repo: string; symbol: string } };
+export type UnlinkedCallSiteData = Omit<UnlinkedCallSite, "from"> & { deferred?: true; issuedAt?: readonly IssuingPlace[]; from: CallLocation & { repo: string; symbol: string } };
 
 /** A changed contract operation; its known handlers become anchors on the side that declares the operation. */
 export type ContractChangeData = Omit<ChangedContract, "handlers"> & { handlers?: readonly AnchorId[] };

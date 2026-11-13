@@ -153,7 +153,10 @@ computes artifact-proven dependency closures and supplies `LibrarySource` to pla
 and the walk stay within the root repository. With workspace reading, `repositorySnapshots`, `links` and `unlinked`
 retain the topology matches of exactly placed HTTP or message effects in the trace. Matches preserve their original
 basis, confidence and profile conditions; a suffix match does not become an exact destination. Source columns are
-required to associate a match with an executed effect. Unrelated and deferred occurrences contribute no executed link.
+required to associate a match with an executed effect. A match the workspace sites at an outer caller of a propagated call
+site is also retained when the trace expands a body the propagation passed through and an effect of that body states the
+request, and lists those effect places as `issuedAt`; an effect that supports matches of different destinations retains
+none of them (ADR-0061 decision 4). Unrelated and deferred occurrences contribute no executed link.
 The target handler and its repository snapshot provide the next trace target; producer bodies are not automatically
 expanded across an HTTP boundary. Incomplete workspace reading adds a section cut to the trace.
 A live root retains its existing `onStale` callback after the shared capture closes. Dependency-library live sidecars are not exposed by the Fact-returning trace port; the acceptance measurements use committed snapshots. Library snapshots participate in the composite input identity; library

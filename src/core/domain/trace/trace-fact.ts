@@ -79,8 +79,15 @@ export interface ReadingPlan {
   lines: number;
 }
 
-/** A workspace match as a trace reports it; `deferred` when only effects that run later, if at all, reach it. */
-export type TraceLinked<T> = T & { deferred?: true };
+/** A workspace match as a trace reports it; `deferred` when only effects that run later, if at all, reach it, and `issuedAt` when it is reached through the effects that issue a request the workspace sites at an outer caller. */
+export type TraceLinked<T> = T & { deferred?: true; issuedAt?: readonly IssuingPlace[] };
+
+/** An effect of the trace that issues a request the workspace sites at an outer caller (ADR-0044 decision 7); the column is 1-based like `CallPlace.column`. */
+export interface IssuingPlace {
+  file: string;
+  line: number;
+  column: number;
+}
 
 export interface TraceValue {
   /** Present with workspace reading; links are restricted to exactly placed effects in this trace. */

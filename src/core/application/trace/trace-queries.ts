@@ -1,3 +1,4 @@
+import type { PlacedCallSite } from "../../domain/topology/call-site.ts";
 import { WORKSPACE_SCOPE } from "../../domain/shared/scope.ts";
 import type { DeclarationModel } from "../navigation/declaration-model.ts";
 import { withCuts, type Asserted } from "../../domain/shared/question.ts";
@@ -28,7 +29,7 @@ import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { CallersTarget } from "../../ports/impact-queries.port.ts";
-import type { EntrypointTarget, TraceFault, TraceQueries, TraceTarget, UnknownEntrypointFault } from "../../ports/trace-queries.port.ts";
+import { ISSUING_SITES, type EntrypointTarget, type TraceFault, type TraceQueries, type TraceTarget, type UnknownEntrypointFault } from "../../ports/trace-queries.port.ts";
 import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey, type RootSelection } from "../navigation/root-selection.ts";
 import { heldPaths, snapshotFiles, type SnapshotFiles } from "../navigation/snapshot-files.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
@@ -95,11 +96,12 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             : selected?.kind === "sha" && plan?.kind === "read" ? { repo: request.repo, source: plan.at.source, revision: selected.sha, live: undefined } : undefined;
           if (at === undefined) return { ok: false as const, fault: { kind: "git-failed" as const, detail: "trace snapshot unavailable" } };
           const trace = createTraceQueries({ ...deps, preparation: context.preparation, heldLive: () => held, librarySources: context.librarySources?.get(request.repoId) ?? [] });
-          const answer = await trace.walk({ ...local, ...at, [WORKSPACE_SCOPE]: true });
+          let placed: readonly PlacedCallSite[] = [];
+          const answer = await trace.walk({ ...local, ...at, [WORKSPACE_SCOPE]: true, [ISSUING_SITES]: (sites) => { placed = sites; } });
           if (!answer.ok) return answer;
           const base = compositeBase({ ...answer.value, ...(read.fact.scopeSelection === undefined ? {} : { scopeSelection: read.fact.scopeSelection }) }, [{ kind: "trace", fact: answer.value }, { kind: "workspace", fact: read.fact }], request.workspace, (value) => deps.digest.of(value));
           if (answer.value.status === "unknown") return { ok: true as const, value: { ...answer.value, ...base } };
-          const value = read.fact.status === "unknown" ? answer.value.value : traceLinks(answer.value.value, request.repoId, read.fact.value);
+          const value = read.fact.status === "unknown" ? answer.value.value : traceLinks(answer.value.value, request.repoId, read.fact.value, placed);
           const cuts: Cut[] = [...(answer.value.status === "partial" ? answer.value.cuts : []), ...(read.fact.status === "complete" ? [] : [{ kind: "section" as const, at: ["workspace"], reason: read.fact.status === "partial" ? "section-partial" as const : "section-unknown" as const, reach: ANYTHING }])];
           return { ok: true as const, value: withCuts(base, value, cuts, { kind: "everything" }) };
         });
@@ -185,8 +187,11 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           }) && (deps.librarySources?.length ?? 0) === 0;
           const effectCuts = await placeEffects(walk.roots, {
             store, declarations: reading.declarations, ownedIn: reconciled.ownedIn, callsOf: (body) => reconciled.callsOf(body),
-            sites: async () => [...await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources, { completeSource, ...(typed.libraries === undefined ? {} : { libraries: typed.libraries }) }), ...await dataSites()]
-              .sort(comparePlacement).filter(({ site }) => head.selected(site.file)),
+            sites: async () => {
+              const calls = await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources, { completeSource, ...(typed.libraries === undefined ? {} : { libraries: typed.libraries }) });
+              request[ISSUING_SITES]?.(calls);
+              return [...calls, ...await dataSites()].sort(comparePlacement).filter(({ site }) => head.selected(site.file));
+            },
             lineOf, functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined),
             ...(deferredValues === undefined ? {} : { deferredValuesOf: (file: string) => deferredValues.of(file) }),
           });
