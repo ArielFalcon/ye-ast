@@ -180,7 +180,6 @@ class Svc { void run(Repo r) { r.findByLogin("x"); } }`;
 
 test("an open method type variable or inherited declarations leave the called signature unproven", async () => {
   const cases = [
-    `interface Repo<T> extends org.springframework.data.repository.Repository<T,Long> { T findByCode(T code); } class Service { void run(Repo repo) { repo.findByCode(null); } }`,
     `class Item {} interface Base extends org.springframework.data.repository.Repository<Item,Long> { int countByCode(long code); } interface Repo extends Base { int countByCode(long code); } class Service { void run(Repo repo) { repo.countByCode(1L); } }`,
   ];
   for (const content of cases) {
@@ -255,7 +254,7 @@ class Item {}
     prelude + `interface Repo extends JpaRepository<Item,Long> { ${reading} int save(int id); } class Svc { void run(Repo r, Item item) { r.save(item); } }`,
     prelude + `interface Repo extends JpaRepository<Item,Long> { ${reading} int deleteById(int id); } class Svc { void run(Repo r) { r.deleteById(1L); } }`,
     prelude + `interface Base extends JpaRepository<Item,Long> { ${modifying} int findById(int id); } interface Repo extends Base {} class Svc { void run(Repo r) { r.findById(1L); } }`,
-    prelude + `interface Repo extends JpaRepository<Item,Long> { ${modifying} int arbitrary(int id); } class Svc { int value() { return 1; } void run(Repo r) { r.arbitrary(value()); } }`,
+    prelude + `interface Repo extends JpaRepository<Item,Long> { ${modifying} int arbitrary(int id); ${reading} int arbitrary(long id); } class Svc { int value() { return 1; } void run(Repo r) { r.arbitrary(value()); } }`,
   ];
   for (const content of cases) {
     const sites = await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Overload.java", content }]);
@@ -278,7 +277,7 @@ class Svc { void run(Repo r, int id) { r.arbitrary(1); r.arbitrary(1L); r.arbitr
 
 test("reference argument identity is lexical; an unplaced local homonym cannot match a declared signature", async () => {
   const prelude = `class Item {}
-interface Named { @org.springframework.data.jpa.repository.Modifying @org.springframework.data.jpa.repository.Query("delete from Item") int named(Item item); }
+interface Named { @org.springframework.data.jpa.repository.Modifying @org.springframework.data.jpa.repository.Query("delete from Item") int named(Item item); @org.springframework.data.jpa.repository.Query("select 1") int named(String name); }
 interface Repo extends Named, org.springframework.data.jpa.repository.JpaRepository<Item,Long> {}
 `;
   for (const [body, expected] of [
@@ -289,4 +288,42 @@ interface Repo extends Named, org.springframework.data.jpa.repository.JpaReposit
     assert.equal(sites.length, 1);
     assert.equal(sites[0]!.site.effect?.access, expected);
   }
+});
+
+const placedEffects = async (path: string, content: string) => (await createJavaDataEffects(await createJavaParser()).placed([{ path, content }])).filter(({ site }) => site.effect !== undefined).map(({ site }) => [site.effect?.operation, site.effect?.access, site.effect?.target]);
+const ORDER_TARGET = { kind: "entity", name: "shop.Order" };
+
+test("a wildcard import of the Spring Data package reads the repository parent and its query annotations, but never one a visible type or another package names", async () => {
+  const body = (imports: string, declarations = "") => `package shop;
+${imports}
+class Order {}
+${declarations}
+interface Orders extends JpaRepository<Order, Long> {
+ @Query("select o from Order o") Order custom();
+ @Modifying @Query("delete from Order") void purge();
+}
+class Service { void run(Orders orders, Order order) { orders.save(order); orders.custom(); orders.purge(); } }
+`;
+  assert.deepEqual(await placedEffects("src/Wild.java", body("import org.springframework.data.jpa.repository.*;")), [["save", "write", ORDER_TARGET], ["custom", "read", ORDER_TARGET], ["purge", "write", ORDER_TARGET]]);
+  assert.deepEqual(await placedEffects("src/Visible.java", body("import org.springframework.data.jpa.repository.*;", "interface JpaRepository<T, I> {}")), []);
+  assert.deepEqual(await placedEffects("src/Other.java", body("import vendor.data.*;")), []);
+  assert.deepEqual(await placedEffects("src/Elsewhere.java", body("import org.springframework.data.repository.query.*;")), []);
+});
+
+test("a single declared method of the name and arity is the call's target whatever its arguments are, while overloads need a settled signature, also under an on-demand import of an unknown package", async () => {
+  const body = (members: string, call: string, imports = "") => `package shop;
+${imports}
+class Order { String code() { return null; } }
+interface Orders extends org.springframework.data.jpa.repository.JpaRepository<Order, Long> {
+${members}
+}
+class Service { void run(Orders orders, Order order, String text, java.lang.String qualified) { ${call}; } }
+`;
+  const single = " java.util.Optional<Order> findByCode(String code);";
+  assert.deepEqual(await placedEffects("src/Single.java", body(single, "orders.findByCode(order.code())")), [["findByCode", "read", ORDER_TARGET]]);
+  assert.deepEqual(await placedEffects("src/Fragment.java", body(single, "orders.findByCode(order.code())").replace("JpaRepository<Order, Long>", "JpaRepository<Order, Long>, vendor.Fragment")), []);
+  const overloads = `${single}\n java.util.Optional<Order> findByCode(Long code);`;
+  assert.deepEqual(await placedEffects("src/Unsettled.java", body(overloads, "orders.findByCode(order.code())")), []);
+  assert.deepEqual(await placedEffects("src/Settled.java", body(overloads, "orders.findByCode(text)", "import org.springframework.data.domain.*;")), [["findByCode", "read", ORDER_TARGET]]);
+  assert.deepEqual(await placedEffects("src/Hidden.java", body(overloads, "orders.findByCode(qualified)", "import org.springframework.data.domain.*;\nclass String {}")), []);
 });
