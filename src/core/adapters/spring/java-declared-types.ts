@@ -148,7 +148,7 @@ function resolveName(name: string, file: JavaFile, project: JavaProject, scope: 
   }
   if (typeVariableAround(at)?.namedChildren[0]?.text === head) return undefined;
   const bound = project.bindName(head, { ...where, at }, "strict");
-  if (bound === "unsettled") return vocabularyType(name, head, rest, { ...where, at }, project);
+  if (bound === "unsettled") return vocabularyType(head, rest, { ...where, at }, project);
   if (bound === "ambiguous") return undefined;
   if (bound !== undefined) {
     if ("local" in bound) return rest.length === 0 ? { kind: "repository" } : undefined;
@@ -160,7 +160,7 @@ function resolveName(name: string, file: JavaFile, project: JavaProject, scope: 
 }
 
 /** The vocabulary type a name an on-demand import leaves unsettled stands for: the one package the file imports that a closed vocabulary lists the name in. */
-function vocabularyType(name: string, head: string, rest: readonly string[], scope: Parameters<JavaProject["importedTypeSources"]>[1], project: JavaProject): Resolved {
+function vocabularyType(head: string, rest: readonly string[], scope: Parameters<JavaProject["importedTypeSources"]>[1], project: JavaProject): Resolved {
   const sources = project.importedTypeSources(head, scope);
   const containers = sources !== undefined && "containers" in sources ? sources.containers : [];
   const offered = containers.map((container) => `${container}.${head}`).filter((fqn) => CLOSED_VOCABULARIES.some((vocabulary) => vocabulary.has(fqn)));
