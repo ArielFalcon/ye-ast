@@ -416,8 +416,15 @@ test("a repository member is generated only for an interface receiver the declar
   assert.deepEqual(await repositoryCall("orders.findByCode(text)", klass, "findByCode"), unproven);
   assert.deepEqual(await methodAt([...sources, use("repository.findByCode(text)", [], "R repository, String text")].map((source) => source.path.endsWith("/Use.java") ? { ...source, content: source.content.replace("void run(", "<R extends Orders> void run(") } : source), "findByCode"), unproven);
   assert.deepEqual(await repositoryCall("Orders.findByCode(text)", sources, "findByCode"), unproven);
-  const supplier = orders([REPOSITORY_IMPORT, "import org.springframework.data.jpa.repository.JpaSpecificationExecutor;"], "extends JpaRepository<Order, Long>, JpaSpecificationExecutor<Order>", members);
-  assert.deepEqual(await repositoryCall("orders.findByCode(text)", supplier, "findByCode"), unproven);
+});
+
+test("a repository that also extends the specification executor keeps its members supplied, while another outside parent still leaves them open", async () => {
+  const unproven = { kind: "unproven" };
+  const members = ["  Order findByCode(String code);"];
+  const executor = (parent: string) => orders([REPOSITORY_IMPORT, `import org.springframework.data.${parent};`], `extends JpaRepository<Order, Long>, ${parent.split(".").at(-1)}<Order>`, members);
+  assert.deepEqual(await repositoryCall("orders.findByCode(text)", executor("jpa.repository.JpaSpecificationExecutor"), "findByCode"), { kind: "generated" });
+  assert.deepEqual(await repositoryCall("orders.findAll(null)", executor("jpa.repository.JpaSpecificationExecutor"), "findAll"), { kind: "generated" });
+  assert.deepEqual(await repositoryCall("orders.findByCode(text)", executor("repository.query.QueryByExampleExecutor"), "findByCode"), unproven);
 });
 
 test("a wildcard import of a package outside the vocabulary leaves the repository parent open", async () => {

@@ -11,7 +11,7 @@ import { enclosingType, heldJavaProject, thisType, withJavaSources, type Unparse
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
-import { REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
+import { REPOSITORY_FRAGMENTS, REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
 import { createJavaProject, MEMBERLESS_PLATFORM_INTERFACES, readArgumentSignature, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Signature, type TypeDecl } from "./java-symbols.ts";
 
 const SLOT = "java-receiver-methods";
@@ -338,7 +338,7 @@ export function createResolver(project: JavaProject, generated = false) {
     const vocabulary = outside.length > 0 && outside.every((gap) => {
       const owner = enclosingType(gap.node, gap.file, project);
       const found = resolve(gap.node, gap.file, project, owner?.outer, gap.node);
-      return found?.kind === "platform" && REPOSITORY_TYPES.has(found.fqn);
+      return found?.kind === "platform" && (REPOSITORY_TYPES.has(found.fqn) || REPOSITORY_FRAGMENTS.has(found.fqn));
     });
     return vocabulary ? above : undefined;
   };
