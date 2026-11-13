@@ -112,7 +112,7 @@ function setup(
     digest,
     matcher: scoped ? { matches: (path, glob) => path === glob || (glob.endsWith("/**") && path.startsWith(glob.slice(0, -2))) } : matcher,
     callSites,
-    evidence: { names: (sources) => scoped ? sources.map(({ path }) => configurationName(path, path, 1)) : repositories[exported ?? ""]?.names ?? [], artifacts: () => repositories[exported ?? ""]?.artifacts ?? [] },
+    evidence: { names: (sources) => [...(scoped ? sources.map(({ path }) => configurationName(path, path, 1)) : []), ...(repositories[exported ?? ""]?.names ?? [])], artifacts: () => repositories[exported ?? ""]?.artifacts ?? [] },
     producer: { name: "ye-ast", version: "0.0.0" },
     engines: {},
     ...(trust === undefined ? {} : { trust }),
@@ -589,18 +589,20 @@ test("a repository that depends on another one given reads its calls through tha
 test("a client library other members depend on and that serves nothing is no consumer of itself, while one that serves a route stays one", async () => {
   const unresolved = (repo: string): CallSite => ({ repo, file: "src/Client.java", line: 9, symbol: "Client.execute", transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [{ path: "src/Client.java", line: 9 }] } });
   const callSites: CallSiteReader = { of: async (_files, repo) => (repo === "orders" ? [] : [unresolved(repo)]) };
-  const files = { "pom.xml": "<project/>", "src/Client.java": "class Client {}" };
-  const read = async (served: readonly Finding<Entrypoint>[]) => {
+  const files = { "pom.xml": "<project/>", "src/Client.java": "class Client {}", "src/Routes.java": "class Routes {}" };
+  const read = async (served: readonly Finding<Entrypoint>[], scope?: { include: string[]; exclude: string[] }) => {
     const queries = setup({
       "/work/orders": { files: { "pom.xml": "<project/>" }, names: [dependencyName("com.shop:shop-clients", "pom.xml", 20)] },
       "/work/shop-clients": { files, artifacts: ["com.shop:shop-clients"], entrypoints: served },
       "/work/billing": { files },
-    }, callSites);
-    const value = valueOf(await queries.outwardNames({ repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-clients" }, { path: "/work/billing" }] }));
+    }, callSites, undefined, undefined, undefined, scope !== undefined);
+    const value = valueOf(await queries.outwardNames({ repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-clients" }, { path: "/work/billing" }], ...(scope === undefined ? {} : { scope }) }));
     return Object.fromEntries(Object.entries(value.sections).map(([repo, section]) => [repo, section.status === "complete" ? section.value.unresolved.length : -1]));
   };
   assert.deepEqual(await read([]), { billing: 1, orders: 0, "shop-clients": 0 });
   assert.deepEqual(await read([postRoute("/orders")]), { billing: 1, orders: 0, "shop-clients": 1 });
+  const excludedRoute = { ...postRoute("/orders"), evidence: [{ path: "src/Routes.java", line: 4 }] };
+  assert.deepEqual(await read([excludedRoute], { include: [], exclude: ["src/Routes.java"] }), { billing: 1, orders: 0, "shop-clients": 1 });
 });
 
 test("every repository of a request is read under its own trust declaration, and an undeclared one is untrusted", async () => {

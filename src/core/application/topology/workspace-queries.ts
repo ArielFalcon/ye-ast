@@ -140,7 +140,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
    * uniquely proven artifact the dependency states, reads the calls it makes through that repository's classes, and the
    * listeners it inherits from them, with its sources.
    */
-  async function withDependencies(read: readonly ReadRepository[], selected: PathSelection): Promise<Resolved[]> {
+  async function withDependencies(read: readonly ReadRepository[], selected: PathSelection, narrowed: boolean): Promise<Resolved[]> {
     const resolved: Resolved[] = [];
     const closures = dependencyClosures(read.map((entry) => ({ identity: entry.identity, names: entry.stated })));
     const byId = new Map(read.map((entry) => [entry.identity.id, entry]));
@@ -161,7 +161,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
       resolved.push({ ...entry, librarySources, cuts, repository: { ...entry.repository, entrypoints }, callSites, names: [...entry.stated, ...callSiteNames(entry.repository.repo, callSites)], library: false });
     }
     const depended = new Set([...closures.values()].flatMap(({ repositories }) => repositories));
-    return resolved.map((entry) => ({ ...entry, library: depended.has(entry.identity.id) && entry.repository.entrypoints.length === 0 }));
+    return resolved.map((entry) => ({ ...entry, library: !narrowed && depended.has(entry.identity.id) && entry.repository.entrypoints.length === 0 }));
   }
 
   return {
@@ -201,7 +201,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
         if (trigger === undefined) return { ok: false, fault: { kind: "git-failed", detail: "a workspace request names no repository" } };
 
         const identities = read.map((entry) => entry.identity);
-        const resolved = await withDependencies(read, pathSelection(scope, matcher.matches));
+        const resolved = await withDependencies(read, pathSelection(scope, matcher.matches), scope.include.length > 0 || scope.exclude.length > 0);
         const repositories = resolved.map((entry) => ({ ...entry.repository, callSites: entry.callSites })).sort((a, b) => compareText(a.repo, b.repo));
         const join = joinWorkspace(repositories, repositories.map(entrypointsOf), membership.gateways);
         const listened = destinationCandidates(join.joined);
