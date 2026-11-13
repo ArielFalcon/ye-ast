@@ -1,6 +1,7 @@
 import type { DependenceDerivation } from "./impact-fact.ts";
 import type { ImportOrigin } from "../relations/resolved-reference.ts";
 import type { Finding } from "../shared/fact.ts";
+import { JAVA_PROFILE, profileOf } from "../languages/profiles.ts";
 
 /** The edges the impact walk follows (RFC-0010 "Edge policy"). */
 
@@ -12,7 +13,8 @@ const REFERRER_KINDS = [...CODE_KINDS, "interface", "type_alias", "route"] as co
 const REFERENCED_KINDS = ["function", "method", "constant", "variable", "class", "component", "interface", "type_alias", "enum"] as const;
 /** Class fields: their initializer is code that runs, so it calls and instantiates; what a field references is its type. */
 export const FIELD_KINDS = ["property", "field"] as const;
-const TYPE_KINDS = ["class", "component", "interface"] as const;
+/** Declarations that are types: they own members and extend or implement other types. */
+const TYPE_KINDS = ["class", "component", "interface", "enum"] as const;
 /** Declarations that are classes: a class, or a component an Angular decorator declares. */
 const CLASS_KINDS = ["class", "component"] as const;
 /** Declarations that hold a value, which a call may find any object in. */
@@ -24,7 +26,7 @@ export const EDGE_POLICY = {
     { edges: ["references"], from: REFERRER_KINDS, to: REFERENCED_KINDS },
     { edges: ["extends", "implements"], from: TYPE_KINDS, to: TYPE_KINDS },
   ],
-  typeReferences: { from: [...TYPE_KINDS, "enum"], to: [...TYPE_KINDS, "enum"] },
+  typeReferences: { from: TYPE_KINDS, to: TYPE_KINDS },
   /**
    * Relations ye-ast reads from Angular sources (RFC-0007 rows A2 and A4): a class injects another, or uses it in its
    * template or as a host directive. The source depends on the target, as with a reference. They are read, not guessed,
@@ -92,9 +94,14 @@ export function isClassKind(kind: string): boolean {
   return (CLASS_KINDS as readonly string[]).includes(kind);
 }
 
-/** Declarations that can own a member a value receiver stands for: a class, a component, or an interface (JLS 9.2). */
+/** Declarations that can own a member a value receiver stands for: a class, a component, an enum, or an interface (JLS 9.2). */
 export function isOwnerKind(kind: string): boolean {
   return (EDGE_POLICY.ownerKinds as readonly string[]).includes(kind);
+}
+
+/** Whether a declaration of `kind` in `file` is a Java type target (RFC-0027 U0 condition a). */
+export function isJavaTypeKind(kind: string, file: string): boolean {
+  return isOwnerKind(kind) && profileOf(file) === JAVA_PROFILE;
 }
 
 export function holdsValue(kind: string): boolean {

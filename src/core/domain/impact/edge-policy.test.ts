@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { edgeConfidence, followsEdge, followsRelation, edgeVerdict, isIgnoredEdge, type EdgeScore } from "./edge-policy.ts";
+import { edgeConfidence, followsEdge, followsRelation, edgeVerdict, isIgnoredEdge, isJavaTypeKind, type EdgeScore } from "./edge-policy.ts";
 import type { ImportOrigin } from "../relations/resolved-reference.ts";
 
 const follows = (kind: string, sourceKind: string, targetKind: string): boolean => followsEdge({ kind, sourceKind, targetKind });
@@ -122,4 +122,10 @@ test("a root spelled alone that a parameter binds drops the edge, whatever the g
 
   assert.deepEqual(edgeVerdict({ status: "complete", value: parameter, evidence, bare: true }, undefined, { id: "redact", file: "src/redact.ts" }), { kind: "drop" });
   assert.deepEqual(edgeVerdict({ status: "complete", value: parameter, evidence }, undefined, { id: "redact", file: "src/redact.ts" }), { kind: "keep" });
+});
+
+test("the Java type kinds the index emits are the targets, an annotation type among them as an interface, and a method or a TypeScript class is not (RFC-0027 U0)", () => {
+  for (const kind of ["class", "interface", "enum"]) assert.equal(isJavaTypeKind(kind, "src/app/Target.java"), true, kind);
+  assert.equal(isJavaTypeKind("method", "src/app/Target.java"), false);
+  assert.equal(isJavaTypeKind("class", "src/app/target.ts"), false);
 });

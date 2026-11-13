@@ -280,17 +280,6 @@ export function removedDeclarationCuts(
 }
 
 /**
- * The Java type kinds codegraph emits: an annotation type arrives as `interface`, a record as `class` (java-symbols.ts
- * maps `record_declaration` to `class`). A record is therefore covered by `class`, with no rule of its own.
- */
-const JAVA_TYPE_KINDS: ReadonlySet<string> = new Set(["class", "interface", "enum"]);
-
-/** Whether a declaration of `kind` in `file` is a Java type target (RFC-0027 U0 condition a). */
-export function isJavaTypeKind(kind: string, file: string): boolean {
-  return JAVA_TYPE_KINDS.has(kind) && profileOf(file) === JAVA_PROFILE;
-}
-
-/**
  * A Java type target whose type references no stage reads (ADR-0042 decision 1, RFC-0027 U0): the answer about its
  * dependents is partial at the target, reached by its callers, never complete with zero dependents.
  */

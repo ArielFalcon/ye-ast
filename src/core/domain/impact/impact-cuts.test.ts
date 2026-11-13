@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { declarationUseKey, isJavaTypeKind, referenceKey, removedDeclarationCuts, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
+import { declarationUseKey, referenceKey, removedDeclarationCuts, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
 
 const SAVE: WalkedDeclaration = { file: "src/Repo.java", name: "save", kind: "method", qualifiedName: "Repo::save" };
 
@@ -20,12 +20,6 @@ test("a Java type target with unread type references is one cut at its declarati
     subReason: "capability-absent",
     reach: { kind: "callers-of", declarations: ["src/app/Target.java::Target"] },
   });
-});
-
-test("the Java type kinds codegraph emits are the targets, a record among them as a class, and a method or a TypeScript class is not (RFC-0027 U0)", () => {
-  for (const kind of ["class", "interface", "enum"]) assert.equal(isJavaTypeKind(kind, "src/app/Target.java"), true, kind);
-  assert.equal(isJavaTypeKind("method", "src/app/Target.java"), false);
-  assert.equal(isJavaTypeKind("class", "src/app/target.ts"), false);
 });
 
 test("a bare call that never resolved and shares a declared method's name is a cut at it, with every place", () => {
