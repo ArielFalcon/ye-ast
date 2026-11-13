@@ -3,6 +3,7 @@ export { CALL_SITE_CAUSES, type CallSiteDiagnostic } from "./call-site-diagnosti
 import type { LibrarySource } from "./library-source.ts";
 import { routeAfterUndecidedBase, type RequestUrlPart } from "./request-url.ts";
 import type { HttpMethod } from "../entrypoints/http-route.ts";
+import { canonicalJson } from "../shared/canonical-json.ts";
 import { compareText } from "../shared/code-node.ts";
 import { declarationSpan, type CallSiteReach, type Cut, type Evidence, type Finding, type UnknownReason } from "../shared/fact.ts";
 
@@ -198,4 +199,21 @@ export function unresolvedCallSite(site: CallSite): UnresolvedCallSite {
     ...(via === undefined ? {} : { via }),
     ...(site.stated === undefined ? {} : { stated: site.stated }),
   };
+}
+
+/**
+ * The unresolved call sites with the ones that differ only in evidence read as one: a call written once but read through
+ * several transport primitives of a wrapper is one entry that cites every primitive. Evidence keeps its first-seen order
+ * and holds each place once; the entries keep the order of their first occurrence.
+ */
+export function gatherUnresolvedCallSites(sites: readonly UnresolvedCallSite[]): UnresolvedCallSite[] {
+  const gathered = new Map<string, UnresolvedCallSite & { evidence: Evidence[] }>();
+  for (const site of sites) {
+    const key = canonicalJson({ ...site, evidence: undefined });
+    const held = gathered.get(key) ?? { ...site, evidence: [] };
+    const known = new Set(held.evidence.map((place) => canonicalJson(place)));
+    for (const place of site.evidence) if (!known.has(canonicalJson(place))) { known.add(canonicalJson(place)); held.evidence.push(place); }
+    gathered.set(key, held);
+  }
+  return [...gathered.values()];
 }

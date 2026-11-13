@@ -3,7 +3,7 @@ import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
 import type { PlacedDataEffect } from "../../domain/trace/data-effect-site.ts";
-import type { PlacedCallSite } from "../../domain/topology/call-site.ts";
+import { gatherUnresolvedCallSites, type PlacedCallSite } from "../../domain/topology/call-site.ts";
 import { cutOfPlaced, effectOf, unplacedEffect } from "../../domain/trace/trace-effects.ts";
 import { declarationSpan, executionIn, owningBody, type SourceSpan } from "../../domain/shared/owning-body.ts";
 import type { WalkedStep } from "../../domain/trace/trace-tree.ts";
@@ -142,9 +142,8 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, declar
       markCut(item.step, item.read.cut, cuts);
       const request = item.read.request;
       if (request !== undefined) {
-        const requests = (item.step.unresolvedEffects ??= []);
         const placed = { ...request, column: item.column, ...(item.deferred ? { deferred: true as const } : {}) };
-        if (!requests.some((existing) => canonicalJson(existing) === canonicalJson(placed))) requests.push(placed);
+        item.step.unresolvedEffects = gatherUnresolvedCallSites([...(item.step.unresolvedEffects ?? []), placed]);
       }
     }
   }

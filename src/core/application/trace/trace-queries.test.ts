@@ -1671,3 +1671,18 @@ test("trace refuses an include with no held path", async () => {
   const { answer } = await trace({ nodes: [SVC], matches: (path, glob) => path.startsWith(glob.replace(/\*\*$/, "")) }, undefined, { scope: { include: ["missing/**"] } });
   assert.equal(!answer.ok && answer.fault.kind, "unknown-scope-path");
 });
+
+test("one call site read through two transport primitives lists one unresolved request carrying both pieces of evidence", async () => {
+  const nodes = [PLACED_API, placedNode("run", "method", 9, 1, 9, 60)];
+  const edges = [{ from: "Api", to: "run", kind: "contains" }];
+  const through = (line: number): PlacedCallSite => ({
+    site: site(9, { target: { status: "unknown", reason: "unresolved", evidence: [{ path: A, line: 9, column: 14 }, { path: A, line }, { path: A, line: 9, column: 14 }] }, diagnostic: { cause: "destination-undecidable" }, stated: { method: "POST", expressions: [[{ kind: "text", text: "/orders" }]] } }),
+    column: 13,
+  });
+
+  const fact = await factOf({ nodes, edges, sources: [{ path: A, content: `${" ".repeat(80)}\n`.repeat(30) }], unresolved: [{ from: "run", name: "this.post", kind: "calls", file: A, line: 9, column: 13 }], placedSites: [through(20), through(24)] });
+
+  const requests = valueOf(fact).steps.flatMap((step) => step.unresolvedEffects ?? []);
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0]!.evidence, [{ path: A, line: 9, column: 14 }, { path: A, line: 20 }, { path: A, line: 24 }]);
+});

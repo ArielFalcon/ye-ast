@@ -13,7 +13,7 @@ import { entrypointsOf, joinWorkspace, linkMapOf } from "./workspace-join.ts";
 import { hostOf, prefixOf } from "../../domain/topology/link-match.ts";
 import type { HeadReaderDeps, HeldLive } from "../snapshot/head-reading.ts";
 import type { WorkspaceReadOperation } from "./workspace-operation.ts";
-import { callSiteEvidence, unresolvedCallSite, unsettledCallSiteCut, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
+import { callSiteEvidence, gatherUnresolvedCallSites, unresolvedCallSite, unsettledCallSiteCut, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
 import { nameCandidates, dependencyClosures, repositoryNameOf, type RepositoryIdentity } from "../../domain/topology/repository-identity.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
@@ -209,7 +209,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
         for (const entry of resolved) {
           const names = gatherNames(entry.names);
           const undecided = entry.callSites.filter((site) => site.target.status === "unknown");
-          const unresolved = undecided.map(unresolvedCallSite);
+          const unresolved = gatherUnresolvedCallSites(undecided.map(unresolvedCallSite));
           const unsettled = join.joined.filter(({ site, joined }) => site.repo === entry.repository.repo && (joined.ambiguous !== undefined || joined.undecided !== undefined)).map(({ site }) => site);
           const section: FactBase & { evidence: readonly { path: string; line: number }[] } = { ...(entry.base as FactBase), evidence: sortEvidence(names.flatMap((name) => name.evidence)) };
           const cuts = [...entry.cuts, ...unsettled.map(unsettledCallSiteCut)];

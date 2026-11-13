@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { callPlaceEvidence, compareCallSites, unresolvedCallSite, unsettledCallSiteCut, type CallSite } from "./call-site.ts";
+import { callPlaceEvidence, compareCallSites, gatherUnresolvedCallSites, unresolvedCallSite, unsettledCallSiteCut, type CallSite } from "./call-site.ts";
 
 function site(overrides: Partial<CallSite> = {}): CallSite {
   return { repo: "shop", file: "src/app/order.api.ts", line: 4, symbol: "OrderApi.create", transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [{ path: "src/app/order.api.ts", line: 4 }] }, ...overrides };
@@ -81,4 +81,12 @@ test("same-line target status precedes column, which only orders otherwise tied 
   const late = site({ column: 20, target: { status: "complete", value: { method: "GET", path: "/orders" }, evidence: [] } });
   const tied = site({ column: 5 });
   assert.deepEqual([early, late, tied].toSorted(compareCallSites), [late, early, tied]);
+});
+
+test("unresolved call sites that differ in anything but evidence stay separate entries", () => {
+  const base = unresolvedCallSite(site());
+  const kept = [{ ...base, line: 5 }, { ...base, symbol: "OrderApi.other" }, { ...base, stated: { method: "GET" as const } }, { ...base, deferred: true as const }, { ...base, column: 3 }];
+
+  assert.equal(gatherUnresolvedCallSites([base, ...kept]).length, kept.length + 1);
+  assert.deepEqual(gatherUnresolvedCallSites([base, { ...base, evidence: [{ path: "src/app/other.ts", line: 9 }] }]).map(({ evidence }) => evidence), [[{ path: "src/app/order.api.ts", line: 4 }, { path: "src/app/other.ts", line: 9 }]]);
 });

@@ -1272,3 +1272,15 @@ test("call-site readers receive source completeness only for an uncut export", a
   await setup({ "/work/app": { files: { "src/a.ts": "" }, stopped: { at: "src/b.ts", limit: 1 } } }, reader).outwardNames({ repo: { path: "/work/app" } });
   assert.deepEqual(seen, [true, false]);
 });
+
+test("a call site read twice through different transport primitives is one unresolved entry holding both pieces of evidence", async () => {
+  const place = { repo: "shop-web", file: "src/app/auth.service.ts", line: 48, symbol: "AuthService.refresh", transport: "http" as const };
+  const through = (line: number): CallSite => ({ ...place, target: { status: "unknown", reason: "unresolved", evidence: [{ path: place.file, line: 48 }, { path: "src/app/rest-client.ts", line }, { path: place.file, line: 48 }] } });
+  const queries = setup({ "/work/shop-web": { files: {} } }, { of: async (_files, repo) => (repo === "shop-web" ? [through(53), through(56)] : []) });
+
+  const section = valueOf(await queries.outwardNames({ repo: { path: "/work/shop-web" } })).sections["shop-web"];
+
+  assert.ok(section?.status === "complete");
+  assert.equal(section.value.unresolved.length, 1);
+  assert.deepEqual(section.value.unresolved[0]!.evidence, [{ path: place.file, line: 48 }, { path: "src/app/rest-client.ts", line: 53 }, { path: "src/app/rest-client.ts", line: 56 }]);
+});
