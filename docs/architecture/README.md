@@ -98,6 +98,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0079](adr/0079-an-unresolved-reference-is-attributed-by-its-receivers-type.md) | `callers` and `impact` bind the unresolved qualified references that would become a `name-only` cut through the base binding chain; a receiver declared outside the repository is an answer of the port, and a reached declaration stays attributed unless a proof excludes it; settles ADR-0041 open question 7 | Accepted |
 | [0080](adr/0080-the-type-hierarchy-is-completed-once-for-every-family.md) | A supertype the index leaves unresolved is placed by the language pack once, when a reading is opened, so every family reads the same completed hierarchy; an unplaced supertype is a `relation-unread` cut, never a type without supertypes | Accepted |
 | [0081](adr/0081-a-syntax-error-confined-to-a-body-leaves-its-sources-declarations-read.md) | A Java source whose syntax errors lie inside member bodies with matched braces has its declarations read: a proof about what a written name denotes holds, a proof that nothing else exists stays off, and the cut for the unread body stays | Accepted |
+| [0082](adr/0082-a-use-in-a-files-top-level-statements-names-the-file-as-its-dependent.md) | A declaration used by a statement a file writes outside every declaration has the file as its dependent: an entry of `symbols` of kind `file` with the lines of the use; an export is not a use, the walk stops at a file, and the stand-in of RFC-0010 ends where the sources are read | Accepted |
 
 ## Designs (RFC)
 
