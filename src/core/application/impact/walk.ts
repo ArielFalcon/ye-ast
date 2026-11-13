@@ -51,8 +51,10 @@ interface Rec {
   depth: number;
   /** Whether a changed contract can still flow down to the implementations. */
   contractChanged: boolean;
-  /** True when the walk entered it as the type that declares a reached member, which follows only whole-type rows. */
+  /** True while only a member it declares has reached it: the type then follows only whole-type rows (ADR-0017). */
   throughMember: boolean;
+  /** The level its own edge reached it at, after a member had: from that level on it follows every row. */
+  wholeFrom?: number;
   fanIn: number;
   callers: readonly InboundEdge[];
 }
@@ -70,7 +72,8 @@ function placeOn(symbol: GraphSymbol | ModelDeclaration, dependence: InboundEdge
 
 /**
  * Inbound from the seeds, level by level in position order, each symbol expanded once, so the walk ends on any graph.
- * A reached method also reaches its type at its own level. The seeds are distinct symbols.
+ * A reached method also reaches its type at its own level, and that type is expanded once more, for the rows a member
+ * does not open, at the level its own edge reaches it at. The seeds are distinct symbols.
  */
 export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges, budget: ImpactBudget = {}, syntax?: { seeds: readonly ModelDeclaration[]; callers: ReadonlyMap<string, readonly InboundEdge[]> }): Walk {
   const recs = new Map<string, Rec>();
@@ -96,7 +99,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
   for (const rec of seedRecs) enterOwners(rec, level);
 
   const stopped = { depth: [] as Rec[], hub: [] as Rec[], expansions: [] as Rec[] };
-  let expansions = 0;
+  const spent = new Set<Rec>();
   const expanded = new Set<GraphNodeId>();
   for (let depth = 0; level.length > 0; depth++) {
     const next: Rec[] = [];
@@ -108,13 +111,14 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
       if (handled.has(rec)) continue;
       handled.add(rec);
       const indexed = indexedDeclaration(rec.symbol);
-      rec.callers = indexed === undefined ? syntax?.callers.get(rec.symbol.id) ?? [] : inbound.callersOf(indexed, rec.contractChanged, rec.throughMember);
+      const membersOnly = rec.wholeFrom === undefined ? rec.throughMember : depth < rec.wholeFrom;
+      rec.callers = indexed === undefined ? syntax?.callers.get(rec.symbol.id) ?? [] : inbound.callersOf(indexed, rec.contractChanged, membersOnly);
       rec.fanIn = rec.callers.filter((caller) => caller.hasCall ?? caller.basis === "call").length;
       if (budget.depth !== undefined && depth >= budget.depth) stopped.depth.push(rec);
       else if (budget.hubFanIn !== undefined && rec.fanIn > budget.hubFanIn) stopped.hub.push(rec);
-      else if (budget.expansions !== undefined && expansions >= budget.expansions) stopped.expansions.push(rec);
+      else if (budget.expansions !== undefined && !spent.has(rec) && spent.size >= budget.expansions) stopped.expansions.push(rec);
       else {
-        expansions += 1;
+        spent.add(rec);
         if (indexed !== undefined) expanded.add(indexed.id);
         for (const caller of rec.callers) {
           const free = caller.bridge !== undefined;
@@ -123,6 +127,10 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
           if (target === undefined) {
             target = enter(caller.from, free ? depth : depth + 1, false, into);
             enterOwners(target, into);
+          } else if (target.throughMember) {
+            target.throughMember = false;
+            target.wholeFrom = depth + 1;
+            next.push(target);
           }
           links.push({ from: rec, to: target, confidence: caller.confidence, via: placeOn(rec.symbol, caller) });
         }
@@ -157,7 +165,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
     wholeDeclarations: new Set([...recs.values()].filter((rec) => !rec.throughMember).flatMap((rec) => indexedDeclaration(rec.symbol)?.id ?? [])),
     expanded,
     cuts: [...cutAt("depth", stopped.depth, budget.depth), ...cutAt("hub", stopped.hub, budget.hubFanIn), ...cutAt("caller-budget", stopped.expansions, budget.expansions)],
-    cost: { expansionsUsed: expansions },
+    cost: { expansionsUsed: spent.size },
   };
 }
 

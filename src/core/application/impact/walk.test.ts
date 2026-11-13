@@ -109,6 +109,20 @@ test("a type reached through one of its members expands only into a subtype, not
   assert.deepEqual(summary(walk(nodes, edges, ["a"])), ["a@0", "O@1", "m@1", "Sub@2"]);
 });
 
+test("a type one of its members reached first keeps every row from the level its own edge reaches it at", () => {
+  const type = [fakeNode("m", "method", "src/O.ts", 5, 6), fakeNode("O", "class", "src/O.ts", 1, 9), fn("user", 3, "src/U.ts")];
+  const owned: FakeEdge[] = [{ from: "O", to: "m", kind: "contains" }, call("user", "O")];
+  const sameLevel: FakeEdge[] = [...owned, call("m", "a"), call("x", "a"), { from: "O", to: "x", kind: "references" }];
+  const expandedBefore = walk([fn("a"), fn("x"), ...type], sameLevel, ["a"]);
+  assert.deepEqual(summary(expandedBefore), ["a@0", "O@1", "m@1", "x@1", "user@3"]);
+  assert.equal(expandedBefore.cost.expansionsUsed, 5);
+  assert.ok(expandedBefore.wholeDeclarations.has("O" as GraphNodeId));
+  assert.deepEqual(summary(walk([fn("a"), fn("x"), ...type], sameLevel, ["a"], { expansions: 4 })), summary(expandedBefore));
+  assert.deepEqual(summary(walk([fn("a"), fn("x", 1, "src/A.ts"), ...type], sameLevel, ["a"])), ["a@0", "x@1", "O@1", "m@1", "user@3"]);
+  const pending = walk([fn("a"), fn("p", 1, "src/A.ts"), fn("q", 1, "src/Z.ts"), ...type], [...owned, call("p", "a"), call("q", "a"), call("m", "p"), { from: "O", to: "q", kind: "references" }], ["a"]);
+  assert.deepEqual(summary(pending), ["a@0", "p@1", "q@1", "O@2", "m@2", "user@3"]);
+});
+
 test("a type reached through one of its members does not expand through the importers of its file", () => {
   const nodes = [fn("a"), fakeNode("m", "method", "src/N.ts", 5, 6), fakeNode("N", "class", "src/N.ts", 1, 9), fakeNode("main.ts", "file", "src/main.ts", 1, 30), fakeNode("boot", "function", "src/main.ts", 2, 9)];
   const edges: FakeEdge[] = [
