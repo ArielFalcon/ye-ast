@@ -59,12 +59,20 @@ Rules:
    entries sharing an identity pair in order: an identity one side alone holds is gained or lost, one both hold with
    different content is changed. The report's summary states cuts base → candidate and entries gained, lost and changed.
 5. Beside both ledgers, an occurrence oracle reads from git, at each `callers` or `impact` answer's snapshot, every line
-   that writes a seed's name as a word, and classes it `target`, `listed` (inside a declaration or at a place the answer
-   lists), `cut` (at a place a cut names or in a file its reach covers), `out-of-scope` (a path or language the declared
-   scope leaves out) or `unaccounted`. It resolves nothing, so `unaccounted` is an upper bound of the silent omissions
-   and each such line is a lead to audit: a homonym gives correct ones, a name in a comment or string is counted, and a
-   dependent that does not write the name is not seen. No filter narrows it. The report lists the candidate's leads
-   and the lines that left and entered the class.
+   that writes a seed's name as a word in a file of the seed's own runtime, and classes it by the first rule that holds:
+   `target`; `listed` (inside a declaration or at a place the answer lists, in the template of a component it lists or
+   seeds, or on an import statement or a decorator line of a listed declaration's file); `unnamed-markup` (a markup
+   file no component names as its template); `cut` (at a place a cut names or in a file its reach covers);
+   `cut-by-reach` (under a cut whose `callers-of` reach lists the seed); `out-of-scope` (a path or language the declared
+   scope leaves out); `test-source` (a test, whose edges are not callers, RFC-0010); `text` (the name only inside
+   comments and string literals, by a lexical rule that reads anything it cannot tell as code); `cannot-name` (a file
+   that neither is the seed's, imports its module through the aliases and barrels the engine resolves, nor, in Java,
+   shares its package, imports its type or package or writes its qualified name); or `unaccounted`. What relates files
+   is what the engine's own readers read from the snapshot. It resolves no reference, so `unaccounted` is an upper bound
+   of the silent omissions and each such line is a lead to audit: a homonym in a file that can name the seed gives
+   correct ones, a member reached through a receiver whose type the file never imports is `cannot-name`, and a
+   dependent that does not write the name is not seen. The report prints every class and lists the candidate's leads,
+   the lines that left and entered `unaccounted`, and, in a second file, the lines of the classes set apart.
 6. The ledger sets no threshold. It is a report a reviewer reads, and an expectation the author may declare (open
    question 1). No branch of the engine reads it.
 

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Answer } from "./corpus-gate-diff.ts";
 import { EXIT, passMarkerPath, runGate, runGroups } from "./corpus-gate.ts";
+import { OCCURRENCE_CLASSES } from "./corpus-gate-occurrences.ts";
 
 const GIT_IDENTITY = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" };
 
@@ -80,6 +81,7 @@ else console.log(JSON.stringify({ status: "complete", snapshot, value: { seeds: 
 
 const OCCURRENCE_SOURCES = {
   "src/Target.java": "public class Target {\n  Target() {}\n}\n",
+  "src/target.ts": "export const Target = 1;\n",
   "src/Listed.java": "class Listed {\n  Target held = null;\n}\n",
   "src/Placed.java": "class Placed {\n  Target placed;\n\n  // Target\n}\n",
   "src/covered.ts": "import { Target } from './target';\n",
@@ -99,7 +101,7 @@ const callersFact = (symbols: object[]) => ({
   status: "partial",
   inputs: { declaredScope: { languages: ["java", "typescript"], frameworks: [], include: [], exclude: ["docs/**"] } },
   value: {
-    seeds: [{ file: "src/Target.java", symbol: "Target", line: 1, endLine: 3, basis: "lines" }],
+    seeds: [{ file: "src/Target.java", symbol: "Target", line: 1, endLine: 3, basis: "lines" }, { file: "src/target.ts", symbol: "Target", line: 1, endLine: 1, basis: "lines" }],
     symbols,
     entrypoints: [{ kind: "ui-route", name: "/", handler: { path: "src/Handler.java", symbol: "Handler", line: 1, endLine: 3 }, depth: 0, confidence: 1, seeds: [0], declaredAt: { path: "src/routes.ts", line: 1 } }],
     modules: { origins: [], modules: [{ file: "src/Whole.java", snapshot: "head", depth: 1, origins: [0] }], cost: { expansionsUsed: 1 } },
@@ -108,10 +110,57 @@ const callersFact = (symbols: object[]) => ({
   cuts: [
     { kind: "unresolved-link", at: ["src/Imported.java", "src/Imported.java:9"], reason: "specifier", reach: { kind: "module", importer: "src/Imported.java", specifiers: [{ specifier: "x" }] } },
     { kind: "unresolved-link", at: ["src/Other.java::Other.go"], reason: "callee-unknown", reach: { kind: "call-at", place: "src/Called.java:2" } },
-    { kind: "unresolved-link", at: ["src/Placed.java", "src/Placed.java:2 Target"], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/Target.java::Target"] } },
+    { kind: "unresolved-link", at: ["src/Placed.java", "src/Placed.java:2 Target"], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/Other.java::Other"] } },
     { kind: "unresolved-link", at: ["src/other.ts"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } },
   ],
 });
+const placed = (file: string, symbol: string, line: number, endLine: number) => ({ ...declaration(file, symbol, endLine), line });
+
+/** One fixture per rule of the occurrence oracle: a TypeScript target `Code`, and Java targets `Store` and `Repo`. */
+const RULE_SOURCES = {
+  "package.json": JSON.stringify({ dependencies: { "@angular/core": "1.0.0" } }),
+  "tsconfig.json": JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@lib/*": ["src/lib/*"] } } }),
+  "src/lib/codes.ts": "export const Code = 1;\n",
+  "src/lib/index.ts": "export * from './codes';\n",
+  "src/alias-user.ts": "import { Code } from '@lib/index';\nexport const viaAlias = Code;\n",
+  "src/homonym.ts": "export const other = { Code: 2 };\n",
+  "src/legacy/tsconfig.json": JSON.stringify({ extends: "./missing.json" }),
+  "src/legacy/unproven.ts": "import { x } from './gone';\nexport const y = { Code: x };\n",
+  "src/comment.ts": "import { Code } from './lib/codes';\n// Code is read\nconst s = 'Code';\nexport const t = `${Code}`;\nexport const u = `Code`;\n",
+  "src/shown.ts": "import { Code } from './lib/codes';\n\n@Decorated({\n  uses: [Code],\n})\nexport class Shown {\n  read() { return 0; }\n}\nexport const after = Code;\n",
+  "src/app.component.ts": "import { Component } from '@angular/core';\n@Component({ selector: 'app-root', templateUrl: './app.component.html' })\nexport class AppComponent {}\n",
+  "src/app.component.html": "<p>{{ Code }}</p>\n",
+  "src/other.component.ts": "import { Component } from '@angular/core';\n@Component({ selector: 'app-other', templateUrl: './other.component.html' })\nexport class OtherComponent {}\n",
+  "src/other.component.html": "<p class=\"Code\"></p>\n",
+  "src/named.component.ts": "import { Component } from '@angular/core';\nimport { Code } from './lib/codes';\n@Component({ selector: 'app-named', templateUrl: './named.component.html' })\nexport class NamedComponent {}\n",
+  "src/named.component.html": "<p>{{ Code }}</p>\n",
+  "docs/page.html": "<h1>Code</h1>\n",
+  "src/codes.spec.ts": "import { Code } from './lib/codes';\n",
+  "src/main/java/app/Mention.java": "package app;\nclass Mention { int Code; }\n",
+  "src/main/java/app/store/Store.java": "package app.store;\npublic interface Store {\n  String CACHE = \"c\";\n}\n",
+  "src/main/java/app/store/Neighbor.java": "package app.store;\nclass Neighbor {\n  Store held;\n  // the Store\n}\n",
+  "src/main/java/app/config/Qualified.java": "package app.config;\nclass Qualified {\n  String n() { return app.store.Store.CACHE; }\n}\n",
+  "src/main/java/app/config/Imported.java": "package app.config;\nimport app.store.Store;\nclass Imported {\n  Store held;\n}\n",
+  "src/main/java/app/other/Wild.java": "package app.other;\nimport app.store.*;\nclass Wild {\n  Store held;\n}\n",
+  "src/main/java/app/other/Elsewhere.java": "package app.other;\nclass Elsewhere {\n  String Store = \"x\";\n}\n",
+  "src/test/java/app/StoreTest.java": "package app;\nclass StoreTest { app.store.Store s; }\n",
+  "src/main/java/app/store/Repo.java": "package app.store;\npublic class Repo {}\n",
+  "src/main/java/app/store/Holder.java": "package app.store;\nclass Holder {\n  Repo first;\n  Repo second;\n}\n",
+};
+const rulesFact = {
+  schema: "0.24.0",
+  status: "partial",
+  inputs: { declaredScope: { languages: ["java", "typescript"], frameworks: [], include: [], exclude: [] } },
+  value: {
+    seeds: [
+      { file: "src/lib/codes.ts", symbol: "Code", line: 1, endLine: 1, basis: "lines" },
+      { file: "src/main/java/app/store/Store.java", symbol: "Store", line: 2, endLine: 4, basis: "lines" },
+      { file: "src/main/java/app/store/Repo.java", symbol: "Repo", line: 2, endLine: 2, basis: "lines" },
+    ],
+    symbols: [placed("src/shown.ts", "Shown", 6, 8), placed("src/app.component.ts", "AppComponent", 3, 3)],
+  },
+  cuts: [{ kind: "unresolved-link", at: ["src/main/java/app/store/Holder.java:3 Repo"], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/main/java/app/store/Repo.java::Repo"] } }],
+};
 const listedSymbols = [
   declaration("src/Target.java", "Target", 3),
   declaration("src/Listed.java", "Listed", 3),
@@ -128,11 +177,12 @@ describe("corpus gate", () => {
   let parallelManifest: string;
   let workspaceManifest: string;
   let store: string;
-  const commits: Record<"base" | "same" | "adds" | "lockfile" | "cuts" | "unknownCut" | "values" | "valuesSame" | "valuesGained" | "valuesChanged" | "valuesUnread" | "importers" | "importerGained" | "importerDropped" | "effectChanged" | "occurrences" | "occurrencesSame" | "occurrenceListed" | "occurrencesBounded", string> = {
+  const commits: Record<"base" | "same" | "adds" | "lockfile" | "cuts" | "unknownCut" | "values" | "valuesSame" | "valuesGained" | "valuesChanged" | "valuesUnread" | "importers" | "importerGained" | "importerDropped" | "effectChanged" | "occurrences" | "occurrencesSame" | "occurrenceListed" | "occurrencesBounded" | "occurrenceRules" | "occurrenceRulesSame", string> = {
     base: "", same: "", adds: "", lockfile: "", cuts: "", unknownCut: "", values: "", valuesSame: "", valuesGained: "", valuesChanged: "", valuesUnread: "",
-    importers: "", importerGained: "", importerDropped: "", effectChanged: "", occurrences: "", occurrencesSame: "", occurrenceListed: "", occurrencesBounded: "",
+    importers: "", importerGained: "", importerDropped: "", effectChanged: "", occurrences: "", occurrencesSame: "", occurrenceListed: "", occurrencesBounded: "", occurrenceRules: "", occurrenceRulesSame: "",
   };
   let occurrenceManifest: string;
+  let rulesManifest: string;
 
   before(() => {
     root = mkdtempSync(join(tmpdir(), "corpus-gate-test-"));
@@ -188,12 +238,19 @@ describe("corpus gate", () => {
     const bounded = callersFact(listedSymbols);
     commits.occurrencesBounded = commit(engine, { "main.ts": callersEngine({ ...bounded, cuts: [...bounded.cuts, { kind: "depth", at: ["src/Listed.java::Listed"], limit: 1, reason: "depth", reach: { kind: "anything" } }] }) }, "occurrences bounded");
     git(engine, "checkout", "--quiet", "--detach", commits.base);
+    commits.occurrenceRules = commit(engine, { "main.ts": callersEngine(rulesFact) }, "occurrence rules");
+    commits.occurrenceRulesSame = commit(engine, { "main.ts": `// same rules\n${callersEngine(rulesFact)}` }, "same occurrence rules");
+    git(engine, "checkout", "--quiet", "--detach", commits.base);
     store = join(engine, ".git", "corpus-gate");
 
     const sources = join(root, "corpus", "src");
     for (const directory of ["src", "docs"]) mkdirSync(join(sources, directory), { recursive: true });
     git(sources, "init", "--quiet");
     const sourcesSha = commit(sources, OCCURRENCE_SOURCES, "sources");
+    const rules = join(root, "corpus", "rules");
+    for (const directory of ["docs", "src/lib", "src/legacy", "src/main/java/app/store", "src/main/java/app/config", "src/main/java/app/other", "src/test/java/app"]) mkdirSync(join(rules, directory), { recursive: true });
+    git(rules, "init", "--quiet");
+    const rulesSha = commit(rules, RULE_SOURCES, "rules");
 
     manifest = join(root, "manifest", "corpus.json");
     mkdirSync(join(root, "manifest"));
@@ -229,6 +286,9 @@ describe("corpus gate", () => {
         ],
       }],
     }));
+
+    rulesManifest = join(root, "manifest", "rules.json");
+    writeFileSync(rulesManifest, JSON.stringify({ groups: [{ id: "rules", repos: [{ id: "src", path: "../corpus/rules", sha: rulesSha }], queries: [{ id: "callers", family: "callers", argv: ["callers", "{repo:src}"] }] }] }));
 
     workspaceManifest = join(root, "manifest", "workspace.json");
     const workspaceGroup = (query: object) => ({
@@ -361,18 +421,22 @@ describe("corpus gate", () => {
   const classesOf = (report: { occurrences: { rows: OccurrenceRow[] } }, side: "base" | "candidate") => report.occurrences.rows.map((row) => [row.family, row.language, row[side]]);
   const place = (lead: Lead) => `${lead.file}:${lead.line}`;
   const leadsFile = (report: { occurrences: { leads: string } }) => readFileSync(report.occurrences.leads, "utf8");
+  const counts = (some: Record<string, number>) => ({ ...Object.fromEntries(OCCURRENCE_CLASSES.map((name) => [name, 0])), ...some });
 
   it("classes an occurrence no listed declaration and no cut accounts for as unaccounted, and lists it among the leads with its place", async () => {
     const { report, markdown } = await occurrenceGate(commits.occurrencesSame);
-    assert.deepEqual(report.occurrences.candidate.unaccounted.map(place), ["src/Placed.java:4", "src/Silent.java:2"]);
-    assert.deepEqual(report.occurrences.candidate.unaccounted[1], { family: "callers", language: "java", answer: "occ/callers", target: "src/Target.java::Target", file: "src/Silent.java", line: 2, text: "Object held = new Target();", fileListed: false });
+    assert.deepEqual(report.occurrences.candidate.unaccounted.map(place), ["src/Silent.java:2"]);
+    assert.deepEqual(report.occurrences.candidate.unaccounted[0], { family: "callers", language: "java", answer: "occ/callers", target: "src/Target.java::Target", file: "src/Silent.java", line: 2, text: "Object held = new Target();", fileListed: false });
     assert.ok(leadsFile(report).includes("occ/callers\tsrc/Target.java::Target\tsrc/Silent.java:2\tunlisted-file\tObject held = new Target();\n"));
-    assert.ok(markdown?.includes("unaccounted occurrences 2 → 2."));
+    assert.ok(markdown?.includes("unaccounted occurrences 1 → 1."));
   });
 
   it("classes an occurrence inside a listed declaration, at a place a symbol's via, an entrypoint or a route names, or in a reached module's file as listed; at a cut's place, a call-at place, a module importer or under a runtime reach as cut; outside the declared languages or globs as out of scope", async () => {
     const { report } = await occurrenceGate(commits.occurrencesSame);
-    assert.deepEqual(classesOf(report, "candidate"), [["callers", "java", { target: 2, listed: 5, cut: 4, "out-of-scope": 2, unaccounted: 2 }]]);
+    assert.deepEqual(classesOf(report, "candidate"), [
+      ["callers", "java", counts({ target: 2, listed: 3, cut: 3, "out-of-scope": 1, text: 1, unaccounted: 1 })],
+      ["callers", "typescript", counts({ target: 1, listed: 2, cut: 1 })],
+    ]);
   });
 
   it("classes an occurrence in the target's own lines as target", async () => {
@@ -382,29 +446,106 @@ describe("corpus gate", () => {
 
   it("reports an occurrence a newly listed dependent accounts for as having left the unaccounted class", async () => {
     const { report, markdown } = await occurrenceGate(commits.occurrenceListed, "--expect", "callers:±");
-    assert.deepEqual(report.occurrences.difference.rows.map((row: { family: string; language: string; base: number; candidate: number; left: Lead[]; entered: Lead[] }) => [row.family, row.language, row.base, row.candidate, row.left.map(place), row.entered.map(place)]), [["callers", "java", 2, 1, ["src/Silent.java:2"], []]]);
-    assert.deepEqual(classesOf(report, "candidate"), [["callers", "java", { target: 2, listed: 6, cut: 4, "out-of-scope": 2, unaccounted: 1 }]]);
-    assert.ok(markdown?.includes("unaccounted occurrences 2 → 1."));
+    assert.deepEqual(report.occurrences.difference.rows.map((row: { family: string; language: string; base: number; candidate: number; left: Lead[]; entered: Lead[] }) => [row.family, row.language, row.base, row.candidate, row.left.map(place), row.entered.map(place)]), [["callers", "java", 1, 0, ["src/Silent.java:2"], []], ["callers", "typescript", 0, 0, [], []]]);
+    assert.deepEqual(classesOf(report, "candidate")[0], ["callers", "java", counts({ target: 2, listed: 4, cut: 3, "out-of-scope": 1, text: 1 })]);
+    assert.ok(markdown?.includes("unaccounted occurrences 1 → 0."));
   });
 
   it("classes every line the answer does not list as cut under a cut whose reach is anything in any runtime", async () => {
     const { report } = await occurrenceGate(commits.occurrencesBounded, "--expect", "callers:±");
-    assert.deepEqual(classesOf(report, "candidate"), [["callers", "java", { target: 2, listed: 5, cut: 8, "out-of-scope": 0, unaccounted: 0 }]]);
+    assert.deepEqual(classesOf(report, "candidate"), [["callers", "java", counts({ target: 2, listed: 3, cut: 6 })], ["callers", "typescript", counts({ target: 1, listed: 2, cut: 1 })]]);
   });
 
   it("takes no occurrence from a family without declaration targets, from an answer that is not a fact or from an unknown one", async () => {
     const { code, report } = await occurrenceGate(commits.occurrencesSame);
     assert.equal(code, EXIT.pass);
-    assert.deepEqual(report.occurrences.rows.map((row: OccurrenceRow) => row.family), ["callers"]);
+    assert.deepEqual([...new Set(report.occurrences.rows.map((row: OccurrenceRow) => row.family))], ["callers"]);
     assert.deepEqual(report.occurrences.candidate.answers, 1);
   });
 
-  it("gives the same occurrence report and leads bytes to the same inputs", async () => {
-    const first = await occurrenceGate(commits.occurrencesSame);
-    const firstLeads = leadsFile(first.report);
-    const second = await occurrenceGate(commits.occurrencesSame);
+  it("gives the same occurrence report, leads and set-apart bytes to the same inputs", async () => {
+    const first = await rulesGate();
+    const firstFiles = [leadsFile(first.report), readFileSync(first.report.occurrences.setApart, "utf8")];
+    const second = await rulesGate();
     assert.equal(JSON.stringify(second.report.occurrences), JSON.stringify(first.report.occurrences));
-    assert.equal(leadsFile(second.report), firstLeads);
+    assert.deepEqual([leadsFile(second.report), readFileSync(second.report.occurrences.setApart, "utf8")], firstFiles);
+  });
+
+  const rulesGate = () => gateWith(rulesManifest, "--base", commits.occurrenceRules, "--candidate", commits.occurrenceRulesSame);
+  /** Each line the rules answer leaves unaccounted or sets apart, as `class target-name place`, in report order. */
+  const linesOf = (report: { occurrences: { candidate: { unaccounted: Lead[] }; setApart: string } }) => [
+    ...report.occurrences.candidate.unaccounted.map((lead) => `unaccounted ${lead.target.slice(lead.target.indexOf("::") + 2)} ${place(lead)}`),
+    ...readFileSync(report.occurrences.setApart, "utf8").split("\n").slice(1).filter(Boolean).map((row) => {
+      const [kind, , target, at] = row.split("\t");
+      return `${kind} ${target!.slice(target!.indexOf("::") + 2)} ${at}`;
+    }),
+  ];
+  let rules: { report: { occurrences: { rows: OccurrenceRow[]; candidate: { unaccounted: Lead[] }; setApart: string } }; markdown: string | undefined; lines: string[] };
+  const rulesRun = async () => {
+    if (rules === undefined) {
+      const { report, markdown } = await rulesGate();
+      rules = { report, markdown, lines: linesOf(report) };
+    }
+    return rules;
+  };
+  const linesIn = (lines: string[], file: string) => lines.filter((line) => line.endsWith(` ${file}`) || line.includes(` ${file}:`));
+
+  it("counts an occurrence only in a file of the target's own runtime", async () => {
+    const { report, lines } = await rulesRun();
+    assert.deepEqual(linesIn(lines, "src/main/java/app/Mention.java"), []);
+    assert.deepEqual(classesOf(report, "candidate"), [
+      ["callers", "java", counts({ target: 2, cut: 1, "cut-by-reach": 1, "test-source": 1, text: 1, "cannot-name": 1, unaccounted: 5 })],
+      ["callers", "typescript", counts({ target: 1, listed: 3, "unnamed-markup": 1, "test-source": 1, text: 3, "cannot-name": 2, unaccounted: 8 })],
+    ]);
+  });
+
+  it("sets apart a line of a test source, by the engine's own test predicate, as test-source", async () => {
+    const { lines } = await rulesRun();
+    assert.deepEqual(lines.filter((line) => line.startsWith("test-source ")), ["test-source Code src/codes.spec.ts:1", "test-source Store src/test/java/app/StoreTest.java:2"]);
+  });
+
+  it("reads a template where a component names it: listed under a listed component, nameable through its component, and a markup file no component names as unnamed-markup", async () => {
+    const { lines } = await rulesRun();
+    assert.deepEqual(linesIn(lines, "src/app.component.html"), []);
+    assert.deepEqual(linesIn(lines, "docs/page.html"), ["unnamed-markup Code docs/page.html:1"]);
+    assert.deepEqual(linesIn(lines, "src/named.component.html"), ["unaccounted Code src/named.component.html:1"]);
+    assert.deepEqual(linesIn(lines, "src/other.component.html"), ["cannot-name Code src/other.component.html:1"]);
+  });
+
+  it("counts the import statement and the decorator lines of a file whose declaration the answer lists as listed, and no other line of that file", async () => {
+    const { lines } = await rulesRun();
+    assert.deepEqual(linesIn(lines, "src/shown.ts"), ["unaccounted Code src/shown.ts:9"]);
+  });
+
+  it("sets apart a line that writes the name only in comments and string literals as text, and leaves one inside a template literal with an expression unaccounted", async () => {
+    const { lines } = await rulesRun();
+    assert.deepEqual([...linesIn(lines, "src/comment.ts"), ...linesIn(lines, "src/main/java/app/store/Neighbor.java")].sort(), [
+      "text Code src/comment.ts:2", "text Code src/comment.ts:3", "text Code src/comment.ts:5", "text Store src/main/java/app/store/Neighbor.java:4",
+      "unaccounted Code src/comment.ts:1", "unaccounted Code src/comment.ts:4", "unaccounted Store src/main/java/app/store/Neighbor.java:3",
+    ]);
+  });
+
+  it("leaves unaccounted only a line whose file can name the target, through an alias and a barrel, an import the reader cannot prove names no file, the same package, an import of the type or its package, or the qualified name, and sets apart the others as cannot-name", async () => {
+    const { lines } = await rulesRun();
+    assert.deepEqual(lines.filter((line) => line.startsWith("cannot-name ")), ["cannot-name Code src/homonym.ts:1", "cannot-name Code src/other.component.html:1", "cannot-name Store src/main/java/app/other/Elsewhere.java:3"]);
+    assert.deepEqual(lines.filter((line) => line.startsWith("unaccounted ")), [
+      "unaccounted Code src/alias-user.ts:1", "unaccounted Code src/alias-user.ts:2", "unaccounted Code src/comment.ts:1", "unaccounted Code src/comment.ts:4",
+      "unaccounted Code src/legacy/unproven.ts:2", "unaccounted Code src/named.component.html:1", "unaccounted Code src/named.component.ts:2", "unaccounted Code src/shown.ts:9",
+      "unaccounted Store src/main/java/app/config/Imported.java:2", "unaccounted Store src/main/java/app/config/Imported.java:4", "unaccounted Store src/main/java/app/config/Qualified.java:3",
+      "unaccounted Store src/main/java/app/other/Wild.java:4", "unaccounted Store src/main/java/app/store/Neighbor.java:3",
+    ]);
+  });
+
+  it("sets apart every line under a cut whose callers-of reach lists the target as cut-by-reach, apart from the cut's own place and from other targets", async () => {
+    const { lines, report } = await rulesRun();
+    assert.deepEqual(lines.filter((line) => line.startsWith("cut-by-reach ")), ["cut-by-reach Repo src/main/java/app/store/Holder.java:4"]);
+    assert.equal(report.occurrences.rows[0]!.candidate.cut, 1);
+  });
+
+  it("prints every class per family, language and side, and names the set-apart file", async () => {
+    const { markdown, report } = await rulesRun();
+    assert.ok(markdown?.includes("| callers | typescript | candidate | 1 | 3 | 1 | 0 | 0 | 0 | 1 | 3 | 2 | 8 |"));
+    assert.ok(markdown?.includes(report.occurrences.setApart));
   });
 
   it("faults on a cut reason outside the facts contract before writing a report", async () => {

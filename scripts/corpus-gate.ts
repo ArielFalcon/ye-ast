@@ -4,9 +4,9 @@
  * when a difference is not one the change declared with `--expect`. The report carries the cut ledger of each side and
  * their difference (RFC-0031), and the value ledger: the entries the facts hold by collection, with the entries gained,
  * lost and changed; and the occurrence oracle: the lines that write a target's name, classed by what each answer says
- * about them, with the unaccounted ones listed as leads. It fails the run only for a reason declared with
- * `--expect-cuts` that did not move as declared. A pass is recorded where the `.githooks` reference hook looks for it.
- * Nothing is written to the corpus repositories.
+ * about them, with the unaccounted ones listed as leads and those of the classes it sets apart in a second file. It
+ * fails the run only for a reason declared with `--expect-cuts` that did not move as declared. A pass is recorded where
+ * the `.githooks` reference hook looks for it. Nothing is written to the corpus repositories.
  *
  *   node --import tsx scripts/corpus-gate.ts --corpus <manifest> [--base <rev>] [--candidate <rev>]
  *     [--expect none | --expect <family>:<+|-|±>]... [--expect-cuts <reason>:<+|-|±>]... [--engine <repo>] [--out <dir>]
@@ -21,7 +21,15 @@ import { parseArgs } from "node:util";
 import { z } from "zod";
 import { type Answer, type AnswerComparison, type Expectation, ExpectationError, type Violation, compareAnswers, parseExpectations, violations } from "./corpus-gate-diff.ts";
 import { type CutExpectation, type CutLedger, CutLedgerError, type CutViolation, type LedgerDifference, type LedgerValues, cutLedger, cutViolations, ledgerDifference, parseCutExpectations } from "./corpus-gate-ledger.ts";
-import { type ClassCounts, type Lead, type OccurrenceDifferenceRow, type OccurrenceKey, type OccurrenceLedger, OCCURRENCE_CLASSES, type WrittenAt, type WrittenLine, leadsText, occurrenceDifference, occurrenceLedger } from "./corpus-gate-occurrences.ts";
+import { type ClassCounts, type Lead, type OccurrenceDifferenceRow, type OccurrenceKey, type OccurrenceLedger, OCCURRENCE_CLASSES, type RelationsAt, SET_APART_CLASSES, type SnapshotRelations, type WrittenAt, type WrittenLine, leadsText, occurrenceDifference, occurrenceLedger, occurrenceSnapshots, setApartText } from "./corpus-gate-occurrences.ts";
+import { createJavaImportsReader } from "../src/core/adapters/spring/java-imports.adapter.ts";
+import { withJavaSources } from "../src/core/adapters/spring/java-project.ts";
+import { createJavaParser } from "../src/core/adapters/tree-sitter/java-parser.adapter.ts";
+import { createAngularDeclarationReader } from "../src/core/adapters/typescript/angular-declarations.adapter.ts";
+import { createModuleDependenciesReader } from "../src/core/adapters/typescript/module-dependencies.adapter.ts";
+import { isJavaSource } from "../src/core/domain/languages/java.ts";
+import { isModuleConfigFile, isPackageManifest, isTypeScriptFile } from "../src/core/domain/languages/typescript.ts";
+import type { SourceFile } from "../src/core/ports/entrypoint-extractor.port.ts";
 import { type ValueDifference, type ValueKey, type ValueLedger, valueDifference, valueLedger } from "./corpus-gate-values.ts";
 
 export const EXIT = { pass: 0, fail: 1, usage: 2, fault: 3 } as const;
@@ -165,7 +173,7 @@ async function gate(options: ReturnType<typeof parseOptions>, io: Io): Promise<n
     try {
       const baseResult = await runSide(context, base, options.concurrency);
       const candidateResult = await runSide(context, candidate, options.concurrency);
-      return report(context, options, commonDirectory, [base, baseResult], [candidate, candidateResult]);
+      return await report(context, options, commonDirectory, [base, baseResult], [candidate, candidateResult]);
     } finally {
       git(engineRoot, ["worktree", "prune"]);
       rmSync(scratch, { recursive: true, force: true });
@@ -405,7 +413,7 @@ function cliCommand(engine: string): string[] {
   return rest;
 }
 
-function report(context: Context, options: ReturnType<typeof parseOptions>, commonDirectory: string, [base, baseResult]: [Revision, SideResult], [candidate, candidateResult]: [Revision, SideResult]): number {
+async function report(context: Context, options: ReturnType<typeof parseOptions>, commonDirectory: string, [base, baseResult]: [Revision, SideResult], [candidate, candidateResult]: [Revision, SideResult]): Promise<number> {
   const candidateById = new Map(candidateResult.answers.map((answer) => [answer.id, answer]));
   const comparisons = baseResult.answers.map((answer) => compareAnswers(answer, candidateById.get(answer.id) as Answer));
   const found = violations(comparisons, options.expectations);
@@ -413,7 +421,8 @@ function report(context: Context, options: ReturnType<typeof parseOptions>, comm
   const foundCuts = cutViolations(ledgers.base, ledgers.candidate, options.cutExpectations);
   const verdict = found.length === 0 && foundCuts.length === 0 ? "pass" : "fail";
   const writtenAt = corpusWrittenAt(context);
-  const occurrences = { base: occurrenceLedger(baseResult.answers, writtenAt), candidate: occurrenceLedger(candidateResult.answers, writtenAt) };
+  const relationsAt = await corpusRelations(context, [...baseResult.answers, ...candidateResult.answers]);
+  const occurrences = { base: occurrenceLedger(baseResult.answers, writtenAt, relationsAt), candidate: occurrenceLedger(candidateResult.answers, writtenAt, relationsAt) };
   const out = options.out ?? join(context.store, "reports", `${base.tree}-${candidate.tree}`);
   const differing = comparisons.filter((comparison) => !comparison.identical);
   const sideSummary = (side: Revision, result: SideResult): SideSummary => ({ rev: side.rev, commit: side.commit, tree: side.tree, cached: result.cached, wallMs: result.wallMs, answers: result.directory });
@@ -439,10 +448,12 @@ function report(context: Context, options: ReturnType<typeof parseOptions>, comm
       candidate: { answers: occurrences.candidate.answers, unaccounted: occurrences.candidate.unaccounted },
       difference: { rows: occurrenceDifference(occurrences.base, occurrences.candidate) },
       leads: join(out, LEADS_FILE),
+      setApart: join(out, SET_APART_FILE),
     },
   };
   mkdirSync(out, { recursive: true });
   writeFileSync(join(out, LEADS_FILE), leadsText(occurrences.candidate));
+  writeFileSync(join(out, SET_APART_FILE), setApartText(occurrences.candidate));
   const reportJson = `${JSON.stringify(body, null, 2)}\n`;
   writeFileSync(join(out, "report.json"), reportJson);
   writeFileSync(join(out, "report.md"), readable(body));
@@ -475,6 +486,71 @@ function occurrenceRows(base: OccurrenceLedger, candidate: OccurrenceLedger): Oc
   return [...rows.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, row]) => row);
 }
 
+/** The corpus repository the manifest names for an answer's group, as a path. */
+function corpusSource(context: Context, answer: Answer, repo: string): string {
+  const group = context.manifest.groups.find((candidate) => candidate.id === answer.id.slice(0, answer.id.indexOf("/")));
+  const entry = group?.repos.find((candidate) => candidate.id === repo);
+  if (entry === undefined) throw new GateFault("unknown-repository", `${answer.id}: ${repo}`);
+  return resolve(context.manifestDirectory, entry.path);
+}
+
+/**
+ * What the engine's own readers relate at each snapshot an answer names: its TypeScript module statements (resolved
+ * through the snapshot's own configuration), its Java imports and packages, and the templates its Angular components
+ * name. The sources are read from the corpus repository's commit, once per repository and commit, and the readers are
+ * the runner's, the same for both sides.
+ */
+async function corpusRelations(context: Context, answers: readonly Answer[]): Promise<RelationsAt> {
+  const read = new Map<string, SnapshotRelations>();
+  const keyOf = (answer: Answer, repo: string, commit: string) => [corpusSource(context, answer, repo), commit].join("\0");
+  let parser: Awaited<ReturnType<typeof createJavaParser>> | undefined;
+  for (const { answer, repo, commit } of occurrenceSnapshots(answers)) {
+    const key = keyOf(answer, repo, commit);
+    if (read.has(key)) continue;
+    const { listing, sources } = snapshotSources(corpusSource(context, answer, repo), commit, (path) => isTypeScriptFile(path) || isJavaSource(path) || isModuleConfigFile(path) || isPackageManifest(path));
+    const typescript = sources.filter(({ path }) => !isJavaSource(path));
+    const java = sources.filter(({ path }) => isJavaSource(path));
+    const modules = await createModuleDependenciesReader().extract(typescript, { listing });
+    const javaParser = java.length === 0 ? undefined : (parser ??= await createJavaParser());
+    const imports = javaParser === undefined ? { dependencies: [], unread: [] } : await createJavaImportsReader(javaParser).extract(java);
+    const packages = new Map(javaParser === undefined ? [] : withJavaSources(javaParser, (parse) => parse(java).files.map((file): [string, string] => [file.path, file.packageName])));
+    const untraversed = (modules.untraversed ?? []).map((reference) => ({ file: reference.file, line: reference.line, endLine: reference.endLine ?? reference.line, specifier: reference.specifier ?? "", kind: "import" as const, form: reference.form, target: reference.target ?? { kind: "unresolved" as const, reason: reference.form } }));
+    const texts = new Map(sources.map(({ path, content }) => [path, content]));
+    read.set(key, {
+      dependencies: [...modules.dependencies, ...untraversed, ...imports.dependencies],
+      unread: new Set([...modules.unread, ...imports.unread].map(({ file }) => file)),
+      packages,
+      components: await createAngularDeclarationReader().read(typescript),
+      textOf: (file) => texts.get(file),
+    });
+  }
+  return (answer, repo, commit) => read.get(keyOf(answer, repo, commit)) as SnapshotRelations;
+}
+
+/** Every path of a commit's tree, and the files `select` keeps with their contents, read through one `git cat-file --batch`. */
+function snapshotSources(source: string, commit: string, select: (path: string) => boolean): { listing: string[]; sources: SourceFile[] } {
+  const listing = git(source, ["ls-tree", "-r", "-z", "--full-tree", "--name-only", commit]).split("\0").filter((path) => path !== "");
+  const paths = listing.filter(select);
+  if (paths.length === 0) return { listing, sources: [] };
+  const result = spawnSync("git", ["cat-file", "--batch"], { cwd: source, input: paths.map((path) => `${commit}:${path}\n`).join(""), maxBuffer: 1 << 30, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+  if (result.status !== 0) throw new GateFault("git-failed", `git cat-file --batch: ${result.stderr.toString().trim()}`);
+  const output = result.stdout;
+  const files: SourceFile[] = [];
+  let offset = 0;
+  for (const path of paths) {
+    const header = output.subarray(offset, output.indexOf(10, offset)).toString();
+    const [, type, size] = header.split(" ");
+    const start = offset + header.length + 1;
+    if (type !== "blob") {
+      offset = start;
+      continue;
+    }
+    files.push({ path, content: output.subarray(start, start + Number(size)).toString("utf8") });
+    offset = start + Number(size) + 1;
+  }
+  return { listing, sources: files };
+}
+
 /**
  * The lines of a corpus repository's commit that write a name as a word, read from the repository the manifest names
  * for the answer's group, never from a clone's working tree; one read per repository, commit and name.
@@ -482,10 +558,7 @@ function occurrenceRows(base: OccurrenceLedger, candidate: OccurrenceLedger): Oc
 function corpusWrittenAt(context: Context): WrittenAt {
   const read = new Map<string, readonly WrittenLine[]>();
   return (answer, repo, commit, name) => {
-    const group = context.manifest.groups.find((candidate) => candidate.id === answer.id.slice(0, answer.id.indexOf("/")));
-    const entry = group?.repos.find((candidate) => candidate.id === repo);
-    if (entry === undefined) throw new GateFault("unknown-repository", `${answer.id}: ${repo}`);
-    const source = resolve(context.manifestDirectory, entry.path);
+    const source = corpusSource(context, answer, repo);
     const key = [source, commit, name].join("\0");
     const known = read.get(key);
     if (known !== undefined) return known;
@@ -558,6 +631,7 @@ interface OccurrenceRow extends OccurrenceKey {
 }
 
 const LEADS_FILE = "occurrence-leads.tsv";
+const SET_APART_FILE = "occurrence-set-apart.tsv";
 
 interface ReportBody {
   schema: 1;
@@ -581,6 +655,7 @@ interface ReportBody {
     candidate: { answers: number; unaccounted: Lead[] };
     difference: { rows: OccurrenceDifferenceRow[] };
     leads: string;
+    setApart: string;
   };
 }
 
@@ -650,14 +725,13 @@ function readableValues(values: ReportBody["values"]): string[] {
 }
 
 function readableOccurrences(occurrences: ReportBody["occurrences"]): string[] {
-  const counts = (side: ClassCounts) => OCCURRENCE_CLASSES.map((name) => side[name]).join("/");
   const place = (lead: Lead) => `- ${lead.answer} ${lead.target}: ${lead.file}:${lead.line} ${lead.text}`;
   return [
     "", "## Occurrence oracle", "",
-    `For each answer of \`callers\` and \`impact\`, every line of its snapshot that writes the name of a seed as a word, read from git at the snapshot's commit (${occurrences.base.answers} answers on the base, ${occurrences.candidate.answers} on the candidate). A line is \`target\` inside the seed's own lines, \`listed\` inside a declaration or at a place the answer lists, \`cut\` at a place a cut names or in a file a cut's reach covers, \`out-of-scope\` in a path or language the declared scope leaves out, and \`unaccounted\` otherwise. The oracle resolves nothing: \`unaccounted\` is an upper bound of the silent omissions and each of its lines is a lead to audit. A homonym gives unaccounted lines that are correct; a name in a comment or a string is counted; a dependent that does not write the name is not seen. Other families state no declaration as a target and contribute nothing.`, "",
-    `Counts ${OCCURRENCE_CLASSES.join("/")}, base → candidate. The candidate's unaccounted lines are in ${occurrences.leads}.`, "",
-    "| Family | Language | Base | Candidate |", "|---|---|---|---|",
-    ...occurrences.rows.map((row) => `| ${row.family} | ${row.language} | ${counts(row.base)} | ${counts(row.candidate)} |`),
+    `For each answer of \`callers\` and \`impact\`, every line of its snapshot that writes the name of a seed as a word in a file of the seed's own runtime, read from git at the snapshot's commit (${occurrences.base.answers} answers on the base, ${occurrences.candidate.answers} on the candidate), classed by the first rule that holds. A line is \`target\` inside the seed's own lines; \`listed\` inside a declaration or at a place the answer lists, in the template of a component it lists or seeds, or on an import statement or a decorator line of a listed declaration's file; \`unnamed-markup\` in a markup file no component names as its template; \`cut\` at a place a cut names or in a file a cut's reach covers; \`cut-by-reach\` under a cut whose \`callers-of\` reach lists the seed; \`out-of-scope\` in a path or language the declared scope leaves out; \`test-source\` in a test, whose edges are not callers; \`text\` when the line writes the name only inside comments and string literals; \`cannot-name\` in a file that neither is the seed's, imports its module (through aliases and barrels) nor, in Java, shares its package, imports its type or package or writes its qualified name; and \`unaccounted\` otherwise. The oracle resolves no reference: \`unaccounted\` is an upper bound of the silent omissions and each of its lines is a lead to audit. A homonym in a file that can name the seed gives unaccounted lines that are correct; a member reached through a receiver whose type the file never imports is \`cannot-name\`; a dependent that does not write the name is not seen. Other families state no declaration as a target and contribute nothing.`, "",
+    `The candidate's unaccounted lines are in ${occurrences.leads}, and its lines of the classes set apart (${SET_APART_CLASSES.map((name) => `\`${name}\``).join(", ")}) in ${occurrences.setApart}.`, "",
+    `| Family | Language | Side | ${OCCURRENCE_CLASSES.join(" | ")} |`, `|---|---|---|${OCCURRENCE_CLASSES.map(() => "---|").join("")}`,
+    ...occurrences.rows.flatMap((row) => (["base", "candidate"] as const).map((side) => `| ${row.family} | ${row.language} | ${side} | ${OCCURRENCE_CLASSES.map((name) => row[side][name]).join(" | ")} |`)),
     ...occurrences.difference.rows.flatMap((row) => {
       const moved = row.candidate - row.base;
       return [
