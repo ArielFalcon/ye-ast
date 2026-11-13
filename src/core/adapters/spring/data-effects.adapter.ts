@@ -1,5 +1,5 @@
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
-import { comparePlacement, type DataEffectReader, type PlacedDataEffect } from "../../domain/trace/data-effect-site.ts";
+import { comparePlacement, type DataEffectReader, type PlacedDataEffect, type UnplacedCause } from "../../domain/trace/data-effect-site.ts";
 import type { DataEffect } from "../../domain/trace/trace-fact.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import type { Node } from "web-tree-sitter";
@@ -11,6 +11,7 @@ import { argumentsOf, typeNameOf } from "./java-members.ts";
 import { invocationsOf, type Invocation } from "./java-invocations.ts";
 import { callKey, hasVarargs } from "./java-receiver-methods.ts";
 import { createJavaProject, readArgumentSignature, readSignature, sameSignature, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { mapperDeclarations, mapperEffect, mapperStatements, type MapperDeclarations, type MapperStatements } from "./mybatis-mappers.ts";
 import { DATA_CLIENTS, ENTITY_OPERATIONS, QUERY_CONFIGURATION, QUERY_FACTORIES, QUERY_OPERATIONS, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
 
 export function createJavaDataEffects(parser: JavaParser): DataEffectReader {
@@ -19,17 +20,23 @@ export function createJavaDataEffects(parser: JavaParser): DataEffectReader {
       const { files, unparsed } = parse(sources.filter(({ path }) => isJavaSource(path) && !isJvmTestFile(path)));
       const sites: PlacedDataEffect[] = unparsed.map(({ path, line }) => ({ site: { file: path, line, effect: undefined } }));
       const project = createJavaProject(files);
+      const mappers = { declarations: mapperDeclarations(project), statements: mapperStatements(sources) };
       const bindings = new Map(files.map((file) => [file, new Map(javaReceiverBindings(file.root, { includeUnproven: true }).map((binding) => [callKey(binding.line, binding.column, binding.member), binding]))]));
       for (const type of project.types) for (const call of invocationsOf(type)) {
-        const effect = effectAt(call, project, bindings.get(type.file)!);
-        if (effect !== undefined) sites.push({ site: { file: type.file.path, line: call.node.startPosition.row + 1, effect: effect === false ? undefined : effect }, column: call.node.startPosition.column });
+        const effect = effectAt(call, project, bindings.get(type.file)!, mappers);
+        if (effect !== undefined) sites.push({ site: { file: type.file.path, line: call.node.startPosition.row + 1, effect: effect === false || "unplaced" in effect ? undefined : effect, ...(effect !== false && "unplaced" in effect ? { cause: effect.unplaced } : {}) }, column: call.node.startPosition.column });
       }
       return sites.sort(comparePlacement);
     });
   } };
 }
 
-function effectAt(call: Invocation, project: JavaProject, bindings: ReadonlyMap<string, ReceiverBinding>): DataEffect | false | undefined {
+interface Mappers {
+  declarations: MapperDeclarations;
+  statements: MapperStatements;
+}
+
+function effectAt(call: Invocation, project: JavaProject, bindings: ReadonlyMap<string, ReceiverBinding>, mappers: Mappers): DataEffect | { unplaced: UnplacedCause } | false | undefined {
   const object = call.node.childForFieldName("object");
   const operation = call.node.childForFieldName("name")?.text ?? "";
   if (object === null) return undefined;
@@ -71,6 +78,7 @@ function effectAt(call: Invocation, project: JavaProject, bindings: ReadonlyMap<
   if (resolved.kind === "repository") {
     if (resolved.type === undefined) return undefined;
     const type = resolved.type;
+    if (mappers.declarations.isMapper(type)) return receiver?.unproven === true ? false : mapperEffect(call.node.startPosition.row + 1, operation, type, project, mappers.statements);
     const entities = repositoryEntities(type, project, new Map([...type.typeVariables].map((variable, index) => [variable, actuals[index] === undefined ? undefined : entityName(actuals[index], call.type, project)])));
     if (entities.length === 0) return candidate && REPOSITORY_OPERATIONS.has(operation) && hasOpenAncestry(type, project) ? false : undefined;
     if (receiver?.unproven === true) return false;

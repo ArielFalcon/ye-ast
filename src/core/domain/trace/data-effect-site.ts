@@ -1,10 +1,14 @@
 import { compareText } from "../shared/code-node.ts";
 import type { DataEffect } from "./trace-fact.ts";
 
+/** Why a call that is a data operation could not be placed as one. */
+export type UnplacedCause = "mapper-statement-absent" | "mapper-statement-ambiguous";
+
 export interface DataEffectSite {
   file: string;
   line: number;
   effect: DataEffect | undefined;
+  cause?: UnplacedCause;
 }
 
 export interface PlacedDataEffect {

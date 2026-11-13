@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<mapper namespace="shop.mapper.UserMapper">
+  <sql id="columns">id, name</sql>
+  <insert id="insert">insert into users (id, name) values (#{id}, #{name})</insert>
+  <select id="findById"><![CDATA[ select <include refid="columns"/> from users where id = #{id} and age < 3 ]]></select>
+  <update id="touch">update users <set><if test="x">name = #{name}</if></set> where id = #{id}</update>
+  <select id="twice">select * from users</select>
+  <delete id="twice">delete from users</delete>
+  <delete id="renamed">delete from users u join audit a on a.id = u.id</delete>
+</mapper>
