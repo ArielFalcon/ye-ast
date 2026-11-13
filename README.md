@@ -175,6 +175,14 @@ generator has a conventional directory. Declaring one is accepted and validated,
 reading that uses generated sources is a later change, so every answer is unchanged by it today
 ([ADR-0044](docs/architecture/adr/0044-one-implementation-closure-with-scoped-vetoes.md), decision 13).
 
+A registration may also declare the JDK your own machine has with repeatable `--jdk [<at>=]<path>` (`trace`, `mcp` and
+`init`; the other commands refuse it): `<path>` is a JDK home, whose `lib/ct.sym` and `release` are read as data and never
+run, as the library signatures of the Java sources under `<at>` (the root without `<at>=`), at the JDK's own feature
+release. It is allowed with `--live`. Each answer that used one lists it in `inputs.buildOutputs` as an unverified `jdk`
+with the digest of `ct.sym`, and one it could not use (unreadable, without its release, or older than a release a build
+file states as a literal) is a `build-output` cut. Nothing is shipped from a JDK, and no answer's steps or links change yet
+([ADR-0063](docs/architecture/adr/0063-a-jdk-the-host-declares-is-the-library-signature-source.md)).
+
 <details open>
 <summary><b>Claude Code</b></summary>
 

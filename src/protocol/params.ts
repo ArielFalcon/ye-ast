@@ -82,18 +82,19 @@ function scopeOf(params: Params): { scope?: ScopeRequest } {
   return { scope };
 }
 
-/** Build outputs a host declares: each an absolute host path and the repository directory it stands for. */
-function buildOutputsOf(params: Params): { buildOutputs?: readonly DeclaredBuildOutput[] } {
+/** Build outputs a host declares: each an absolute host path and the repository directory it stands for; `kinds` are the ones the method reads. */
+function buildOutputsOf(params: Params, kinds: readonly DeclaredBuildOutput["kind"][] = ["node-modules", "java-sources"]): { buildOutputs?: readonly DeclaredBuildOutput[] } {
   if (params.buildOutputs === undefined) return {};
   return {
     buildOutputs: list(params, "buildOutputs", (value): DeclaredBuildOutput => {
       const output = only(value, ["kind", "at", "path"]);
-      if (output.kind !== "node-modules" && output.kind !== "java-sources") throw new InvalidParamsError("buildOutputs.kind must be node-modules or java-sources");
+      const kind = kinds.find((known) => known === output.kind);
+      if (kind === undefined) throw new InvalidParamsError(`buildOutputs.kind must be ${kinds.join(" or ")}`);
       const at = output.at ?? "";
-      if (typeof at !== "string" || !isRepositoryDirectory(at) || (output.kind === "java-sources" && at === "")) throw new InvalidParamsError("buildOutputs.at must be a relative, normalized repository directory");
+      if (typeof at !== "string" || !isRepositoryDirectory(at) || (kind === "java-sources" && at === "")) throw new InvalidParamsError("buildOutputs.at must be a relative, normalized repository directory");
       const path = text(output, "path");
       if (!isAbsolute(path)) throw new InvalidParamsError("buildOutputs.path must be an absolute path");
-      return { kind: output.kind, at, path };
+      return { kind, at, path };
     }),
   };
 }
@@ -198,11 +199,11 @@ export function readImporters(params: unknown): Omit<AtRevision<ImpactImportersR
 type Unsignaled<T> = T extends unknown ? Omit<T, "signal"> : never;
 
 export function readTrace(params: unknown): Unsignaled<Extract<TraceRequest, { live?: undefined }>> {
-  const p = only(params, ["repo", "repoId", "revision", "targets", "scope", "budget", "workspace", "offline"]);
+  const p = only(params, ["repo", "repoId", "revision", "targets", "scope", "budget", "workspace", "offline", "buildOutputs"]);
   const workspace = p.workspace === undefined ? undefined : membershipOf(only(p.workspace, ["repos", "gateways"]));
   const targets = list(p, "targets", traceTargetOf);
   if (mixesTargetKinds(targets)) throw new InvalidParamsError("targets are declarations or entrypoints, not both");
-  return { repo: text(p, "repo"), repoId: text(p, "repoId"), revision: text(p, "revision"), targets, ...(workspace === undefined ? {} : { workspace }), ...(p.offline === undefined ? {} : { offline: flag(p, "offline") }), ...scopeOf(p), ...budgetOf(p, TRACE_BOUND_FIELDS) };
+  return { repo: text(p, "repo"), repoId: text(p, "repoId"), revision: text(p, "revision"), targets, ...(workspace === undefined ? {} : { workspace }), ...(p.offline === undefined ? {} : { offline: flag(p, "offline") }), ...scopeOf(p), ...budgetOf(p, TRACE_BOUND_FIELDS), ...buildOutputsOf(p, ["jdk"]) };
 }
 
 /** A declaration target, or an entrypoint of the map by its kind and name. */

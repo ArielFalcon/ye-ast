@@ -1,6 +1,6 @@
 import { test, after, before } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { EntrypointMapFact } from "../core/domain/map/entrypoint-map.ts";
@@ -792,14 +792,6 @@ after(async () => {
   await rm(scratch, { recursive: true, force: true });
 });
 
-/** A host JDK home holding a `lib/ct.sym`: the CLI checks that the file is readable, never what it holds. */
-async function jdkHome(): Promise<string> {
-  const home = await mkdtemp(join(scratch, "jdk-home-"));
-  await mkdir(join(home, "lib"));
-  await writeFile(join(home, "lib", "ct.sym"), "");
-  return home;
-}
-
 /** A manifest file in the scratch directory; the CLI reads it, the core never does. */
 async function workspaceFile(content: string): Promise<string> {
   counter += 1;
@@ -1244,29 +1236,43 @@ test("--java-sources declares a generated source directory for callers and impac
   }
 });
 
-test("init with --jdk registers the MCP server with that host JDK path, resolved, and never hands it to the install", async () => {
-  const home = await jdkHome();
-  const { io, deps, installs } = setupInstall();
-
-  assert.equal(await run(["init", "--trust", "untrusted", "--jdk", home, "/work/shop"], io, deps), EXIT_CODE.ok);
-
-  assert.ok(io.stdout.includes(`claude mcp add ye-ast -- npx --yes tsx ${MCP_ENTRYPOINT} mcp /work/shop --jdk ${home}`), io.stdout.join("\n"));
-  assert.equal(installs.some((request) => "jdk" in request || "jdkPath" in request), false);
-  const refused = setupInstall();
-  assert.equal(await run(["init", "--trust", "untrusted", "--jdk"], refused.io, refused.deps), EXIT_CODE.usage);
-  assert.equal(refused.installs.length, 0);
+test("--jdk declares a JDK for a trace, at the root or at <at>=, allowed with --live, and a spec that is no declaration is a usage error", async () => {
+  const trace = setupTrace();
+  assert.equal(await run(["trace", "--live", "--jdk", "/host/jdk", "--jdk", "svc=/host/svc-jdk", ".", "src/A.java:load"], trace.io, trace.deps), EXIT_CODE.ok);
+  assert.deepEqual(trace.requests[0]?.buildOutputs, [{ kind: "jdk", at: "", path: "/host/jdk" }, { kind: "jdk", at: "svc", path: "/host/svc-jdk" }]);
+  assert.equal(trace.requests[0]?.live, true);
+  for (const wrong of ["../up=/host/jdk", "svc=", "/abs=/host/jdk", ""]) {
+    const refused = setupTrace();
+    assert.equal(await run(["trace", "--jdk", wrong, ".", "src/A.java:load"], refused.io, refused.deps), EXIT_CODE.usage, wrong);
+    assert.deepEqual(refused.requests, []);
+  }
+  const bare = setupTrace();
+  assert.equal(await run(["trace", ".", "src/A.java:load"], bare.io, bare.deps), EXIT_CODE.ok);
+  assert.equal("buildOutputs" in (bare.requests[0] ?? {}), false);
 });
 
-test("init with --jdk names a home without a readable lib/ct.sym as a usage error before any install, and accepts a readable one whatever its digest", async () => {
-  const home = await jdkHome();
-  const missing = setupInstall();
-  assert.equal(await run(["init", "--trust", "untrusted", "--jdk", join(home, "absent"), "/work/shop"], missing.io, missing.deps), EXIT_CODE.usage);
-  assert.ok(missing.io.stderr.join("\n").startsWith("usage:"), missing.io.stderr.join("\n"));
-  assert.equal(missing.installs.length, 0);
+test("--jdk is a usage error on every command that reads no library signatures, and asks nothing", async () => {
+  await refuses(["callers", "--jdk", "/host/jdk", ".", "src/A.java:load"], setupCallers);
+  await refuses(["impact", "--base", "main", "--jdk", "/host/jdk", "."], setupImpact);
+  await refuses(["importers", "--jdk", "/host/jdk", ".", "src/A.java"], setupImporters);
+  await refuses(["outline", "--jdk", "/host/jdk", ".", "src/A.java"], setupOutline);
+  await refuses(["workspace", "--jdk", "/host/jdk", "."], setupWorkspace);
+  await refuses(["decisions", "--jdk", "/host/jdk", "."], setupDecisions);
+  await refuses(["contract-consequences", "--base", "main", "--jdk", "/host/jdk", "."], setupConsequences);
+});
 
-  const present = setupInstall();
-  assert.equal(await run(["init", "--trust", "untrusted", "--jdk", home, "/work/shop"], present.io, present.deps), EXIT_CODE.ok);
-  assert.equal(present.installs.length, 1);
+test("init with --jdk registers the MCP server with that declaration, resolved, and never hands it to the install", async () => {
+  const { io, deps, installs } = setupInstall();
+
+  assert.equal(await run(["init", "--trust", "untrusted", "--jdk", "svc=/host/svc-jdk", "--jdk", "/host/jdk", "/work/shop"], io, deps), EXIT_CODE.ok);
+
+  assert.ok(io.stdout.includes(`claude mcp add ye-ast -- npx --yes tsx ${MCP_ENTRYPOINT} mcp /work/shop --jdk /host/jdk --jdk svc=/host/svc-jdk`), io.stdout.join("\n"));
+  assert.equal(installs.some((request) => "jdk" in request || "buildOutputs" in request), false);
+  for (const wrong of [["--jdk", "../up=/x"], ["--jdk", ""]]) {
+    const refused = setupInstall();
+    assert.equal(await run(["init", "--trust", "untrusted", ...wrong, "/work/shop"], refused.io, refused.deps), EXIT_CODE.usage, wrong.join(" "));
+    assert.equal(refused.installs.length, 0);
+  }
 });
 
 test("init carries every declared output into the registration: node modules as given, then java sources sorted by at", async () => {

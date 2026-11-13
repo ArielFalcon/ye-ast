@@ -99,11 +99,13 @@ export interface FactInputs {
 
 /** A declared build output a fact read: whether the snapshot's lockfile verified it, and the digest of what was read from it. */
 export interface BuildOutputInput {
-  kind: "node-modules" | "java-sources";
+  kind: "node-modules" | "java-sources" | "jdk";
   /** The repository directory the output stands for, `""` for the root. */
   at: string;
   verified: boolean;
   digest: string;
+  /** Which JDK a `jdk` output is and the release of the signatures read from it (ADR-0063). */
+  jdk?: { vendor?: string; version: string; feature: number; release: number; basis: "declared-jdk" };
 }
 
 export interface Evidence {
@@ -149,7 +151,7 @@ export const CUT_REASONS = [
   "depth", "hub", "caller-budget", "node-cap", "deadline", "export-budget",
   ...EXPORT_SKIP_REASONS, "unwritten",
   "language", "template-uncovered", "not-source", "not-indexed", "no-symbols", "unmodelled", "module-unread", "contract-unread",
-  "live-tree", "inputs-unreadable", "version-mismatch", "outputs-unreadable", "checker-failed", "link-outside",
+  "live-tree", "inputs-unreadable", "version-mismatch", "outputs-unreadable", "checker-failed", "jdk-unreadable", "jdk-older-than-build", "release-not-held", "link-outside",
   "hidden-caller", "dynamic-load", "name-only", "specifier", "removed-declaration", "relation-unread", "use-unproven",
   "receiver-unproven", "callee-unknown", "constructor-unsettled", "contradicted", "unowned", "dispatch", "function-value",
   "page-unplanned", "handler-unplaced", "effect-unplaced", "request-possible",

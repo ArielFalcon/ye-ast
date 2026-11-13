@@ -27,6 +27,8 @@ import { memberProofContextOf, retainedRelations } from "../relations/retained-r
 import { declaredScope } from "../../domain/map/entrypoint-map.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
+import type { LibrarySignatureSource } from "../../ports/library-signatures.port.ts";
+import { readLibraries, type LibraryReading } from "./library-reading.ts";
 import type { FrameworkPlugin } from "../../ports/framework-plugin.port.ts";
 import type { CommitExtraction, PreparedCommit } from "./read-snapshot.ts";
 
@@ -36,7 +38,9 @@ export interface TypedReading {
   typed?: ReadonlyMap<string, TypeTarget>;
   outputs?: readonly BuildOutputInput[];
   /** What the run states about the declared outputs; absent when none was declared. */
-  buildOutputs?: BuildOutputEvidence;
+  buildOutputs?: BuildOutputEvidence | readonly BuildOutputEvidence[];
+  /** The library signatures the declared JDKs gave, by the directory a path is in; absent when none was declared. */
+  libraries?: LibraryReading;
   /** What reading the checker's inputs left out, as the revision sources answer it. */
   inputsLeftOut: readonly Cut[];
 }
@@ -63,6 +67,8 @@ export interface BaseReadingDeps {
   checkerInputs?: RevisionSources | undefined;
   /** The build outputs a host declared for the repository at a root, for a request that declares none itself. */
   declaredOutputs?: ((repo: string) => readonly DeclaredBuildOutput[] | undefined) | undefined;
+  /** Opens the library signatures of a JDK a host declared (ADR-0063); without it a declared JDK is not read. */
+  libraries?: LibrarySignatureSource | undefined;
   /** The stages each language pack declares it cannot implement, by path (ADR-0045 decision 12); none declared without it. */
   absentCapabilities?: ((path: string) => ReadonlySet<AbsentCapability>) | undefined;
 }
@@ -183,10 +189,23 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
    * contradicts, one that would not be read, or a failing checker withholds them all; then every declaration is named
    * in a `build-output` cut, at what withheld it where that is known.
    */
-  async function typedReading({ request, snapshot, tree, prepared }: ReadingSource): Promise<TypedReading | "aborted"> {
+  async function typedReading(source: ReadingSource): Promise<TypedReading | "aborted"> {
+    const declared = source.request.buildOutputs ?? deps.declaredOutputs?.(source.request.repo) ?? [];
+    const typed = await nodeModulesReading(source, declared.filter(({ kind }) => kind === "node-modules"));
+    if (typed === "aborted" || deps.libraries === undefined || !declared.some(({ kind }) => kind === "jdk")) return typed;
+    const { libraries, outputs, evidence } = readLibraries(declared, source.tree.sources, deps.libraries);
+    const reasons = [...(typed.buildOutputs === undefined ? [] : [typed.buildOutputs].flat()), ...evidence];
+    return {
+      ...typed,
+      ...(outputs.length === 0 && typed.outputs === undefined ? {} : { outputs: [...(typed.outputs ?? []), ...outputs] }),
+      ...(reasons.length === 0 ? {} : { buildOutputs: reasons.length === 1 ? reasons[0]! : reasons }),
+      libraries,
+    };
+  }
+
+  async function nodeModulesReading({ request, snapshot, tree, prepared }: ReadingSource, outputs: readonly DeclaredBuildOutput[]): Promise<TypedReading | "aborted"> {
     const bindings = deps.typeBindings;
     const inputs = deps.checkerInputs;
-    const outputs = (request.buildOutputs ?? deps.declaredOutputs?.(request.repo) ?? []).filter(({ kind }) => kind === "node-modules");
     if (bindings === undefined || inputs === undefined || outputs.length === 0) return NOT_TYPED;
     const { signal } = request;
     const unread = (reason: UnreadOutputReason, named?: ReadonlyMap<string, readonly string[]>): BuildOutputEvidence => ({ used: false, outputs, reason, ...(named === undefined ? {} : { named }) });

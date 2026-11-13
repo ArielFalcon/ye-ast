@@ -44,3 +44,25 @@ function lineAt(content: string, index: number): number {
   for (let at = content.indexOf("\n"); at !== -1 && at < index; at = content.indexOf("\n", at + 1)) line++;
   return line;
 }
+
+const MAVEN_RELEASE_LITERAL = /<(release|maven\.compiler\.(?:release|source|target)|java\.version)\s*>\s*(1[._]\d+|\d+)\s*<\/\1>/g;
+const GRADLE_RELEASE_LITERALS: readonly RegExp[] = [
+  /\bsourceCompatibility\b\s*=?\s*(?:JavaVersion\.VERSION_)?['"]?(1[._]\d+|\d+)['"]?/g,
+  /\blanguageVersion\b[^\n]*?JavaLanguageVersion\.of\(\s*(\d+)\s*\)/g,
+  /\boptions\.release(?:\.set\(\s*|\s*=\s*)(\d+)/g,
+];
+
+/**
+ * The Java releases a build file states as literals: Maven's `<release>`, `maven.compiler.release|source|target` and
+ * `java.version`, and Gradle's `sourceCompatibility`, `languageVersion` and `options.release`. A text scan, not a
+ * resolution: a value that is a property reference or an expression is not read, and a match inside a comment counts,
+ * since a false positive only refuses a JDK declaration where a missed literal would accept a table older than the build.
+ */
+export function declaredJavaReleases(path: string, content: string): readonly number[] {
+  const literals = MAVEN_BUILD_FILE.test(path)
+    ? [...content.matchAll(MAVEN_RELEASE_LITERAL)].map((match) => match[2]!)
+    : /\.gradle(\.kts)?$/.test(path)
+      ? GRADLE_RELEASE_LITERALS.flatMap((pattern) => [...content.matchAll(pattern)].map((match) => match[1]!))
+      : [];
+  return literals.map((literal) => Number(/^1[._]/.test(literal) ? literal.slice(2) : literal));
+}

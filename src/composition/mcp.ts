@@ -1,26 +1,25 @@
 import { basename, resolve } from "node:path";
 import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
-import { EXIT_CODE, isJdkHome } from "../cli/main.ts";
+import { EXIT_CODE } from "../cli/main.ts";
 import { repositoryCatalog, type RepositoryBinding } from "../mcp/repository-targeting.ts";
 import { createMcpServer } from "../mcp/server.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import type { ProcessHost } from "./process-host.ts";
 import { createEvidenceComposition } from "../core/application/composition/evidence-composition.ts";
-import { javaSourcesDeclared, nodeModulesDeclared, type DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
+import { javaSourcesDeclared, jdkDeclared, nodeModulesDeclared, type DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
 
-const USAGE = "usage: ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]... [--jdk <path>] [--answer-bytes <n>]";
+const USAGE = "usage: ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]... [--jdk [<at>=]<path>]... [--answer-bytes <n>]";
 
 /**
- * `ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]...`:
+ * `ye-ast mcp [<launch-root>] [--repo <id> <root>]... [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]... [--jdk [<at>=]<path>]...`:
  * serves declared repositories over stdio. Only the launch repository is warmed; each request retains its own trust
- * check. A `--node-modules` or `--java-sources` declares a build output of the launch repository (ADR-0037, ADR-0044).
+ * check. A `--node-modules`, `--java-sources` or `--jdk` declares a build output of the launch repository (ADR-0037, ADR-0044, ADR-0063).
  */
 export async function runMcp(args: readonly string[], host: ProcessHost): Promise<number> {
   let index = 0;
   const launchPath = args[0] !== undefined && !args[0].startsWith("-") ? args[index++] : ".";
   const declarations: { repoId: string; path: string }[] = [];
   const outputs: DeclaredBuildOutput[] = [];
-  let jdkPath: string | undefined;
   let answerBytes: number | undefined;
   while (index < args.length) {
     const flag = args[index++];
@@ -30,18 +29,9 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
       answerBytes = Number(value);
       continue;
     }
-    if (flag === "--jdk") {
-      const path = args[index++];
-      if (!path || path.startsWith("-") || jdkPath !== undefined) {
-        host.err(USAGE);
-        return EXIT_CODE.usage;
-      }
-      jdkPath = resolve(host.cwd, path);
-      continue;
-    }
-    if (flag === "--node-modules" || flag === "--java-sources") {
+    if (flag === "--node-modules" || flag === "--java-sources" || flag === "--jdk") {
       const spec = args[index++] ?? "";
-      const declared = flag === "--node-modules" ? nodeModulesDeclared(spec) : javaSourcesDeclared(spec);
+      const declared = flag === "--node-modules" ? nodeModulesDeclared(spec) : flag === "--jdk" ? jdkDeclared(spec) : javaSourcesDeclared(spec);
       if (declared === undefined) {
         host.err(USAGE);
         return EXIT_CODE.usage;
@@ -57,7 +47,7 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
     }
     declarations.push({ repoId, path });
   }
-  if (!launchPath || (jdkPath !== undefined && !(await isJdkHome(jdkPath)))) {
+  if (!launchPath) {
     host.err(USAGE);
     return EXIT_CODE.usage;
   }

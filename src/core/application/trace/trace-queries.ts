@@ -45,7 +45,7 @@ import { pagePlans } from "./page-plans.ts";
 import { createBaseReadings, withOutputs, type BaseReadingDeps } from "../snapshot/base-reading.ts";
 import { buildOutputCuts } from "../../domain/shared/build-outputs.ts";
 
-export interface TraceQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, "typeBindings" | "checkerInputs" | "declaredOutputs" | "frameworks"> {
+export interface TraceQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, "typeBindings" | "checkerInputs" | "declaredOutputs" | "libraries" | "frameworks"> {
   workspace?: WorkspaceReadOperation;
   librarySources?: readonly LibrarySource[];
   /** Reads where the bare names a file calls come from, so a call to a package or a language global is external. */

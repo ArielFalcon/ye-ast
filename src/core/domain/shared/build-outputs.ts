@@ -8,21 +8,23 @@ export const LOCKFILE_NAMES = ["npm-shrinkwrap.json", "package-lock.json"] as co
 /**
  * A directory or file tree a host declared and produced, standing for a repository directory (ADR-0037). `node-modules`
  * is an installed `node_modules` standing for `<at>/node_modules`; `java-sources` is a directory of generated Java
- * sources standing for `at` itself (ADR-0044 decision 13). `path` is a host path, `at` repository-relative.
+ * sources standing for `at` itself (ADR-0044 decision 13); `jdk` is a JDK home whose `ct.sym` is the library signature
+ * source of the sources under `at` (ADR-0063). `path` is a host path, `at` repository-relative.
  */
 export interface DeclaredBuildOutput {
-  kind: "node-modules" | "java-sources";
+  kind: "node-modules" | "java-sources" | "jdk";
   at: string;
   path: string;
 }
 
-/** Where a declared output stands in the snapshot: `<at>/node_modules`, or a directory of generated sources at `at`. */
+/** Where a declared output stands in the snapshot: `<at>/node_modules`, a directory of generated sources at `at`, or the directory a JDK compiles (`.` for the root). */
 export function mountOf(output: Pick<DeclaredBuildOutput, "kind" | "at">): string {
+  if (output.kind === "jdk") return output.at === "" ? "." : output.at;
   return output.kind === "java-sources" ? output.at : output.at === "" ? "node_modules" : `${output.at}/node_modules`;
 }
 
 /** Why a typed reading read none of its declared outputs. */
-export type UnreadOutputReason = "live-tree" | "inputs-unreadable" | "version-mismatch" | "outputs-unreadable" | "checker-failed";
+export type UnreadOutputReason = "live-tree" | "inputs-unreadable" | "version-mismatch" | "outputs-unreadable" | "checker-failed" | "jdk-unreadable" | "jdk-older-than-build" | "release-not-held";
 
 /**
  * What a typed reading states about the declared outputs (ADR-0042 decision 10): that it read none of them, why, and
@@ -33,9 +35,11 @@ export type BuildOutputEvidence =
   | { used: true; refused: readonly string[] };
 
 /** The one builder of `build-output` cuts, for every family that reads the typed reading: none without evidence. */
-export function buildOutputCuts(evidence: BuildOutputEvidence | undefined): Cut[] {
+export function buildOutputCuts(evidence: BuildOutputEvidence | readonly BuildOutputEvidence[] | undefined): Cut[] {
   if (evidence === undefined) return [];
-  return evidence.used ? refusedLinkCuts(evidence.refused) : unreadOutputCuts(evidence.outputs, evidence.reason, evidence.named);
+  if (Array.isArray(evidence)) return evidence.flatMap((part) => buildOutputCuts(part));
+  const one = evidence as BuildOutputEvidence;
+  return one.used ? refusedLinkCuts(one.refused) : unreadOutputCuts(one.outputs, one.reason, one.named);
 }
 
 /**
@@ -63,6 +67,12 @@ export function nodeModulesDeclared(spec: string): DeclaredBuildOutput | undefin
   const at = split === -1 ? "" : spec.slice(0, split);
   const path = split === -1 ? spec : spec.slice(split + 1);
   return path === "" || !isRepositoryDirectory(at) ? undefined : { kind: "node-modules", at, path };
+}
+
+/** A `jdk` declaration, `[<at>=]<path>` as a `node_modules` one: `at` is the repository directory the JDK compiles, the root without `<at>=`. */
+export function jdkDeclared(spec: string): DeclaredBuildOutput | undefined {
+  const declared = nodeModulesDeclared(spec);
+  return declared === undefined ? undefined : { ...declared, kind: "jdk" };
 }
 
 /** A `java-sources` declaration, `<at>=<path>`: both parts required, and `at` names a repository directory, never the root. */

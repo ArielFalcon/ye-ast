@@ -32,6 +32,7 @@ import { createIndexCache } from "../core/adapters/codegraph/cached-index.adapte
 import { createCodeGraph, SUPPORTED_STORE } from "../core/adapters/codegraph/codegraph.adapter.ts";
 import { STAGING_RULES_VERSION } from "../core/adapters/codegraph/stage-snapshot.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
+import { createJdkLibrarySource } from "../core/adapters/jdk/jdk-library.adapter.ts";
 import { createFixedLayerStore } from "../core/adapters/fs/fixed-layer-store.adapter.ts";
 import { createWorkspaceDefaults } from "../core/adapters/fs/workspace-defaults.adapter.ts";
 import { createTrustRecords } from "../core/adapters/fs/trust-record.adapter.ts";
@@ -348,6 +349,7 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
     sourceSelection: isWritten,
     typeBindings: impactDeps.typeBindings,
     checkerInputs: createRevisionSources({ ...headDeps, sourceSelection: isTypeCheckerInput }),
+    libraries: createJdkLibrarySource(),
     ...(options.buildOutputs === undefined ? {} : { declaredOutputs: options.buildOutputs }),
   });
   const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isJvmBuildFile, sourceGeneratorDeclaration } from "./jvm-build.ts";
+import { declaredJavaReleases, isJvmBuildFile, sourceGeneratorDeclaration } from "./jvm-build.ts";
 
 function plugin(groupId: string, artifactId: string): string {
   return `<project>
@@ -82,4 +82,16 @@ test("a declaration inside a comment counts: a false positive only adds unknown 
     sourceGeneratorDeclaration("pom.xml", `<!--\n<groupId>org.openapitools</groupId><artifactId>openapi-generator-maven-plugin</artifactId>\n-->`),
     { line: 2 },
   );
+});
+
+test("the release literals of a build file are read, a reference or an expression is not, and another file states none", () => {
+  const maven = `<project><properties><java.version>1.8</java.version><maven.compiler.release>21</maven.compiler.release>
+    <maven.compiler.source>${"$"}{java.version}</maven.compiler.source></properties>
+    <build><plugins><plugin><configuration><release> 17 </release></configuration></plugin></plugins></build></project>`;
+  assert.deepEqual(declaredJavaReleases("svc/pom.xml", maven), [8, 21, 17]);
+  const gradle = `sourceCompatibility = JavaVersion.VERSION_1_8\nsourceCompatibility = '11'\njava { toolchain { languageVersion = JavaLanguageVersion.of(17) } }\ntasks.withType(JavaCompile) { options.release.set(21) }\nsourceCompatibility = javaVersion`;
+  assert.deepEqual(declaredJavaReleases("build.gradle", gradle), [8, 11, 17, 21]);
+  assert.deepEqual(declaredJavaReleases("build.gradle.kts", "options.release = 25"), [25]);
+  assert.deepEqual(declaredJavaReleases("gradle/libs.versions.toml", "java = '99'"), []);
+  assert.deepEqual(declaredJavaReleases("src/App.java", "<release>99</release>"), []);
 });

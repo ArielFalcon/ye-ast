@@ -1,12 +1,11 @@
 import { parseWorkspaceManifest } from "../core/domain/topology/workspace-manifest.ts";
 import { entrypointCandidateText, unknownEntryText, unknownTargetKey } from "../core/domain/shared/unknown-target.ts";
-import { basename, join, resolve } from "node:path";
-import { constants } from "node:fs";
-import { access, readFile, stat } from "node:fs/promises";
+import { basename, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import type { Result } from "../core/domain/shared/result.ts";
 import { isValidGlob, type ScopeRequest } from "../core/domain/shared/scope.ts";
-import { javaSourcesDeclared, nodeModulesDeclared, type DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
+import { javaSourcesDeclared, jdkDeclared, nodeModulesDeclared, type DeclaredBuildOutput } from "../core/domain/shared/build-outputs.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactBudget } from "../core/domain/impact/impact-fact.ts";
@@ -72,15 +71,15 @@ const USAGE = [
   "       ye-ast importers [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
   "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
   "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] --focus <file>:<symbol> | --focus <file>:<line> ... <repo>",
-  "       ye-ast trace [--revision <rev> | --live] [--repo-id <id>] [--workspace <file>] [--offline] [scope] [--depth <n>] [--expansions <n>] [--entrypoint <kind>:<name>]... <repo> [<file>:<symbol> | <file>:<start>-<end>] ...   (declarations or entrypoints, not both: what they execute, in source order, with a reading plan)",
+  "       ye-ast trace [--revision <rev> | --live] [--repo-id <id>] [--workspace <file>] [--offline] [scope] [--depth <n>] [--expansions <n>] [--jdk [<at>=]<path>]... [--entrypoint <kind>:<name>]... <repo> [<file>:<symbol> | <file>:<start>-<end>] ...   (declarations or entrypoints, not both: what they execute, in source order, with a reading plan)",
   "       ye-ast workspace [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast decisions [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast contract-consequences --hypothesis <json> [--hypothesis <json>]... [--revision <rev>] [--repo-id <id>] [scope] <repo>",
   "       ye-ast contract-consequences --base <rev> [--head <rev>] [--repo-id <id>] [scope] <repo>",
-  "       ye-ast init --trust trusted|untrusted [--workspace <file>] [outputs] [--jdk <path>] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration, which carries the outputs)",
+  "       ye-ast init --trust trusted|untrusted [--workspace <file>] [outputs] [--jdk [<at>=]<path>]... [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration, which carries the outputs and the JDKs)",
   "       ye-ast init --trust trusted|untrusted [--workspace <file>] --repo <id> <path> [--repo <id> <path>]... <launch-repo>",
   "       ye-ast serve   (the query protocol, JSON-RPC 2.0, one message per line on stdin/stdout)",
-  "       ye-ast mcp [<launch-root>] [--repo <id> <root>]... [outputs]   (read-only stdio MCP server; the outputs are the launch repository's)",
+  "       ye-ast mcp [<launch-root>] [--repo <id> <root>]... [outputs] [--jdk [<at>=]<path>]...   (read-only stdio MCP server; the outputs are the launch repository's)",
   "--repo-id: the name every fact carries; the directory name of the repository's main worktree when omitted, so every worktree of one repository answers the same name",
   "--live: reads the working tree of a repository declared trusted (ye-ast init --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr and as a live sibling of the fact in the JSON",
   "--focus: outline only, repeatable, instead of files: <file>:<symbol> selects the declarations whose dotted containment path ends with it at whole names (Class.member, or a bare name at any depth); <file>:<line> the innermost declaration holding that line. Each match comes with its containers, how many of the file's declarations were left out, and what its own body uses outside itself (a declaration, a package or a global, with the lines of each use; an unproved use is a cut), without imports",
@@ -92,7 +91,7 @@ const USAGE = [
   "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default; trace takes no --hub-fan-in, which counts callers)",
   "outputs: [--node-modules [<at>=]<path>]... [--java-sources <at>=<path>]...   (a node_modules directory your own install produced, standing for <at>/node_modules in the repository, the root's without <at>=; read as data, never run, checked against the commit's lockfile, and used at a revision only, never with --live; each answer that used one lists it in inputs.buildOutputs, and one it could not use is a build-output cut. Write =<path> for a path that holds =. --java-sources names the repository directory <at> its generated Java sources stand for, both required; no answer reads it yet and it never appears in inputs.buildOutputs)",
   "--answer-bytes: init and mcp, once: nonnegative UTF-8 text byte limit; init includes it in the registration; requests may override it",
-  "jdk: init and mcp, once: --jdk <path>   (a host JDK home whose lib/ct.sym is read as data, accepted only at a pinned digest (ADR-0044 decision 10); init prints it into the MCP registration; no answer reads the table yet, so every obligation that needs it stays unsettled)",
+  "jdk: trace, init and mcp, repeatable: --jdk [<at>=]<path>   (a JDK home your own machine has, whose lib/ct.sym and release are read as data, never run, as the library signatures of the Java sources under <at>, the root without <at>=; its feature release is the release of the signatures, and a build file that states a larger release makes it unusable. Write =<path> for a path that holds =. It is allowed with --live; init prints it into the MCP registration. Each answer that used one lists it in inputs.buildOutputs as an unverified jdk with its digest, and one it could not use is a build-output cut. Callers, impact, importers, outline, workspace, decisions and contract-consequences read no library signatures and refuse it. No answer changes steps or links yet)",
   "workspace: --workspace <file>   (the workspace init persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\", \"remote\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository, and a remote is the source of truth a trusted repository's queries refresh into ye-ast's own mirror)",
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
 ].join("\n");
@@ -160,7 +159,7 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promi
       io.err(USAGE);
       return EXIT_CODE.usage;
     }
-    const { workspaceFile, buildOutputs, jdkPath, answerBytes, ...request } = parsed;
+    const { workspaceFile, buildOutputs, answerBytes, ...request } = parsed;
     const workspace = workspaceFile === undefined ? undefined : await readWorkspaceFile(workspaceFile);
     if (workspace !== undefined && !workspace.ok) {
       io.err(deps.redaction.redact(`ye-ast: ${workspace.fault.kind}: ${workspace.fault.detail}`));
@@ -172,7 +171,7 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promi
       io.err(`ye-ast: ${result.fault.kind}: ${deps.redaction.redact(result.fault.detail.trim())}`);
       return result.fault.kind === "aborted" ? EXIT_CODE.interrupted : EXIT_CODE.queryFailed;
     }
-    for (const line of initReport(result.value, request.repo, deps.mcpCommand, buildOutputs ?? [], jdkPath, answerBytes)) io.out(line);
+    for (const line of initReport(result.value, request.repo, deps.mcpCommand, buildOutputs ?? [], answerBytes)) io.out(line);
     return EXIT_CODE.ok;
   } catch (error) {
     io.err(`ye-ast: internal fault: ${deps.redaction.redact(firstLine(error))}`);
@@ -291,14 +290,14 @@ async function readWorkspaceFile(path: string): Promise<Result<{ path: string; t
   }
 }
 
-/** The declarations a registration prints: `--node-modules` in the order given, then `--java-sources` sorted by `at`. */
+/** The declarations a registration prints: `--node-modules` in the order given, then `--java-sources` and `--jdk` sorted by `at`. */
 function registrationDeclarations(outputs: readonly DeclaredBuildOutput[]): string[] {
   const nodeModules = outputs.filter(({ kind }) => kind === "node-modules");
-  const javaSources = outputs.filter(({ kind }) => kind === "java-sources").toSorted((a, b) => compareText(a.at, b.at));
-  return [...nodeModules, ...javaSources].flatMap(({ kind, at, path }) => [`--${kind}`, shellWord(kind === "node-modules" && at === "" && !path.includes("=") ? path : `${at}=${path}`)]);
+  const sorted = (kind: DeclaredBuildOutput["kind"]) => outputs.filter((output) => output.kind === kind).toSorted((a, b) => compareText(a.at, b.at));
+  return [...nodeModules, ...sorted("java-sources"), ...sorted("jdk")].flatMap(({ kind, at, path }) => [`--${kind}`, shellWord(kind !== "java-sources" && at === "" && !path.includes("=") ? path : `${at}=${path}`)]);
 }
 
-function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo: string, mcpCommand: readonly string[], outputs: readonly DeclaredBuildOutput[], jdkPath: string | undefined, answerBytes: number | undefined): string[] {
+function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo: string, mcpCommand: readonly string[], outputs: readonly DeclaredBuildOutput[], answerBytes: number | undefined): string[] {
   const declared = registrationDeclarations(outputs);
   const layerLines =
     layer.outcome === "not-written"
@@ -310,7 +309,7 @@ function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo:
     ...layerLines,
     ...(workspace === undefined ? [] : [`${FIXED_LAYER_DIRECTORY}/${WORKSPACE_MANIFEST_FILE}: ${workspace.outcome}`]),
     "register the MCP server with Claude Code:",
-    `claude mcp add ye-ast -- ${[...mcpCommand.map(shellWord), "mcp", shellWord(repo), ...declared, ...(jdkPath === undefined ? [] : ["--jdk", shellWord(jdkPath)]), ...(answerBytes === undefined ? [] : ["--answer-bytes", String(answerBytes)])].join(" ")}`,
+    `claude mcp add ye-ast -- ${[...mcpCommand.map(shellWord), "mcp", shellWord(repo), ...declared, ...(answerBytes === undefined ? [] : ["--answer-bytes", String(answerBytes)])].join(" ")}`,
   ];
 }
 
@@ -408,38 +407,20 @@ interface ParsedInit extends Omit<InstallRequest, "signal" | "workspace"> {
   workspaceFile?: string;
   /** The build outputs the printed MCP registration declares (ADR-0037); `init` itself reads none. */
   buildOutputs?: readonly DeclaredBuildOutput[];
-  /** The host JDK home the printed MCP registration names (ADR-0044 decision 10); `init` reads no table from it. */
-  jdkPath?: string;
   answerBytes?: number;
 }
 
 async function parseInitRequest(args: readonly string[], deps: RepositoryNaming): Promise<ParsedInit | undefined> {
   try {
-    const { values, positionals, tokens } = parseArgs({ args: [...args], options: { trust: { type: "string" }, workspace: { type: "string" }, jdk: { type: "string" }, "answer-bytes": { type: "string" }, ...NODE_MODULES_OPTION }, allowPositionals: true, tokens: true });
+    const { values, positionals, tokens } = parseArgs({ args: [...args], options: { trust: { type: "string" }, workspace: { type: "string" }, "answer-bytes": { type: "string" }, ...NODE_MODULES_OPTION, ...JDK_OPTION }, allowPositionals: true, tokens: true });
     if (tokens.filter((token) => token.kind === "option" && token.name === "answer-bytes").length > 1) return undefined;
     const [path = ".", ...extra] = positionals;
     const outputs = parseBuildOutputs(values);
     if (values["answer-bytes"] !== undefined && (!/^\d+$/.test(values["answer-bytes"]) || !Number.isSafeInteger(Number(values["answer-bytes"])))) return undefined;
-    if (!isTrustMode(values.trust) || extra.length > 0 || values.workspace === "" || values.jdk === "" || outputs === undefined) return undefined;
-    if (values.jdk !== undefined && !(await isJdkHome(resolve(values.jdk)))) return undefined;
-    return { ...(await repositoryOf(deps, path, undefined)), trust: values.trust, ...(values["answer-bytes"] === undefined ? {} : { answerBytes: Number(values["answer-bytes"]) }), ...(values.workspace === undefined ? {} : { workspaceFile: resolve(values.workspace) }), ...(values.jdk === undefined ? {} : { jdkPath: resolve(values.jdk) }), ...outputs };
+    if (!isTrustMode(values.trust) || extra.length > 0 || values.workspace === "" || outputs === undefined) return undefined;
+    return { ...(await repositoryOf(deps, path, undefined)), trust: values.trust, ...(values["answer-bytes"] === undefined ? {} : { answerBytes: Number(values["answer-bytes"]) }), ...(values.workspace === undefined ? {} : { workspaceFile: resolve(values.workspace) }), ...outputs };
   } catch {
     return undefined;
-  }
-}
-
-/**
- * Whether a host JDK home holds a readable `lib/ct.sym`: the one thing a `--jdk` path must hold before a registration names
- * it. Whether the archive is pinned is a later, silent outcome (no table), not a refusal.
- */
-export async function isJdkHome(home: string): Promise<boolean> {
-  const archive = join(home, "lib", "ct.sym");
-  try {
-    if (!(await stat(archive)).isFile()) return false;
-    await access(archive, constants.R_OK);
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -454,9 +435,12 @@ const SCOPE_OPTIONS = { include: { type: "string", multiple: true }, exclude: { 
 const CHANGED_OPTION = { changed: { type: "string", multiple: true } } as const;
 const NODE_MODULES_OPTION = { "node-modules": { type: "string", multiple: true }, "java-sources": { type: "string", multiple: true } } as const;
 
-/** The `--node-modules` and `--java-sources` declarations, each path resolved; `undefined` for one that declares nothing. */
-function parseBuildOutputs(values: { "node-modules"?: string[] | undefined; "java-sources"?: string[] | undefined }): { buildOutputs?: readonly DeclaredBuildOutput[] } | undefined {
-  const declared = [...(values["node-modules"] ?? []).map(nodeModulesDeclared), ...(values["java-sources"] ?? []).map(javaSourcesDeclared)];
+/** Only the commands that read the closure take it (ADR-0063 decision 7): the others refuse the flag as unknown. */
+const JDK_OPTION = { jdk: { type: "string", multiple: true } } as const;
+
+/** The `--node-modules`, `--java-sources` and `--jdk` declarations, each path resolved; `undefined` for one that declares nothing. */
+function parseBuildOutputs(values: { "node-modules"?: string[] | undefined; "java-sources"?: string[] | undefined; jdk?: string[] | undefined }): { buildOutputs?: readonly DeclaredBuildOutput[] } | undefined {
+  const declared = [...(values["node-modules"] ?? []).map(nodeModulesDeclared), ...(values["java-sources"] ?? []).map(javaSourcesDeclared), ...(values.jdk ?? []).map(jdkDeclared)];
   if (declared.some((output) => output === undefined)) return undefined;
   const outputs = declared.map((output) => ({ ...output!, path: resolve(output!.path) }));
   return outputs.length === 0 ? {} : { buildOutputs: outputs };
@@ -554,7 +538,7 @@ async function parseTraceRequest(args: readonly string[], deps: RepositoryNaming
   try {
     const { values, positionals } = parseArgs({
       args: [...args],
-      options: { workspace: { type: "string" }, offline: { type: "boolean" }, revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, entrypoint: { type: "string", multiple: true }, ...SCOPE_OPTIONS, ...TRACE_BUDGET_OPTIONS },
+      options: { workspace: { type: "string" }, offline: { type: "boolean" }, revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, entrypoint: { type: "string", multiple: true }, ...SCOPE_OPTIONS, ...TRACE_BUDGET_OPTIONS, ...JDK_OPTION },
       allowPositionals: true,
     });
     const [path, ...specs] = positionals;
@@ -568,8 +552,9 @@ async function parseTraceRequest(args: readonly string[], deps: RepositoryNaming
     const declared = file?.ok ? parseWorkspaceManifest(file.value.text) : undefined;
     if (declared !== undefined && !declared.ok) return undefined;
     if (values.live && values.offline !== undefined && declared === undefined) return undefined;
-    if (path === undefined || targets.length === 0 || budget === undefined || scope === undefined || at === undefined || targets.some((target) => target === undefined)) return undefined;
-    return { ...(await repositoryOf(deps, path, values["repo-id"])), ...at, targets: targets as TraceRequest["targets"], ...scope, ...withBudget(budget), ...(declared?.ok ? { workspace: declared.value } : {}), ...(values.offline === undefined ? {} : { offline: values.offline }) };
+    const outputs = parseBuildOutputs(values);
+    if (path === undefined || targets.length === 0 || budget === undefined || scope === undefined || outputs === undefined || at === undefined || targets.some((target) => target === undefined)) return undefined;
+    return { ...(await repositoryOf(deps, path, values["repo-id"])), ...at, targets: targets as TraceRequest["targets"], ...scope, ...outputs, ...withBudget(budget), ...(declared?.ok ? { workspace: declared.value } : {}), ...(values.offline === undefined ? {} : { offline: values.offline }) };
   } catch {
     return undefined;
   }

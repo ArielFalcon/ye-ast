@@ -1,6 +1,7 @@
 import type { WorkspaceRequest } from "./workspace-queries.port.ts";
 import type { WorkspaceFault } from "./workspace-repos.port.ts";
 import type { Entrypoint } from "../domain/entrypoints/entrypoint.ts";
+import type { DeclaredBuildOutput } from "../domain/shared/build-outputs.ts";
 import type { Fact, WalkBounds } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
 import { WORKSPACE_SCOPE, type ScopeRequest } from "../domain/shared/scope.ts";
@@ -50,6 +51,11 @@ interface TraceBase {
   /** Stable name of the repository in the snapshot of every fact; never a path. */
   repoId: string;
   targets: readonly TraceTarget[];
+  /**
+   * The JDK a host declares for this repository (ADR-0063), read as data; a trace takes no other kind. Without one the
+   * answer is the one given before.
+   */
+  buildOutputs?: readonly DeclaredBuildOutput[];
   budget?: TraceBudget;
   scope?: ScopeRequest;
   /** Aborting stops the work, removes every temporary directory and answers an `aborted` fault. */

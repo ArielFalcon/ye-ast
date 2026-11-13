@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { InvalidParamsError, readCallers, readDecisions, readOfChange, readWorkspace } from "./params.ts";
+import { InvalidParamsError, readCallers, readDecisions, readOfChange, readTrace, readWorkspace } from "./params.ts";
 
 const replay = { version: 1, declaration: `ws-r1:${"a".repeat(64)}`, snapshots: [{ kind: "sha", repo: "orders", sha: "b".repeat(40) }] };
 
@@ -38,4 +38,17 @@ test("a java-sources declaration reaches callers with the directory it stands fo
   for (const wrong of [{ ...output, path: "generated" }, { ...output, at: "" }]) {
     assert.throws(() => readCallers({ ...callers, buildOutputs: [wrong] }), InvalidParamsError, JSON.stringify(wrong));
   }
+});
+
+test("a jdk declaration reaches a trace with an absolute path, and the methods that read no library signatures refuse it", () => {
+  const trace = { repo: "/r", repoId: "r", revision: "HEAD", targets: [{ file: "A.java", symbol: "f" }] };
+  const output = { kind: "jdk", at: "svc", path: "/host/jdk" };
+
+  assert.deepEqual(readTrace({ ...trace, buildOutputs: [output] }).buildOutputs, [output]);
+  assert.deepEqual(readTrace({ ...trace, buildOutputs: [{ kind: "jdk", path: "/host/jdk" }] }).buildOutputs, [{ kind: "jdk", at: "", path: "/host/jdk" }]);
+  assert.equal("buildOutputs" in readTrace(trace), false);
+  for (const wrong of [{ ...output, path: "jdk" }, { ...output, at: "../up" }, { ...output, kind: "node-modules" }]) {
+    assert.throws(() => readTrace({ ...trace, buildOutputs: [wrong] }), InvalidParamsError, JSON.stringify(wrong));
+  }
+  assert.throws(() => readCallers({ repo: "/r", repoId: "r", revision: "HEAD", targets: [{ file: "a.ts", symbol: "f" }], buildOutputs: [output] }), InvalidParamsError);
 });

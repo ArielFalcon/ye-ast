@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { installVerdict, javaSourcesDeclared, mountOf, nodeModulesDeclared } from "./build-outputs.ts";
+import { buildOutputCuts, installVerdict, javaSourcesDeclared, jdkDeclared, mountOf, nodeModulesDeclared } from "./build-outputs.ts";
 
 test("a package read at a version its install path does not lock makes the directory unusable, naming each such package", () => {
   const locked = new Map([["a", "1.0.0"], ["b", "2.0.0"]]);
@@ -30,4 +30,15 @@ test("a node-modules declaration keeps its parsing and stands for <at>/node_modu
   assert.deepEqual(nodeModulesDeclared("web=/host/web/node_modules"), { kind: "node-modules", at: "web", path: "/host/web/node_modules" });
   assert.equal(mountOf({ kind: "node-modules", at: "" }), "node_modules");
   assert.equal(mountOf({ kind: "node-modules", at: "web" }), "web/node_modules");
+});
+
+test("a jdk declaration parses as a node-modules one does, stands for the directory it compiles and is a cut at it", () => {
+  assert.deepEqual(jdkDeclared("/host/jdk"), { kind: "jdk", at: "", path: "/host/jdk" });
+  assert.deepEqual(jdkDeclared("svc=/host/jdk"), { kind: "jdk", at: "svc", path: "/host/jdk" });
+  assert.deepEqual(jdkDeclared("=/host/a=b"), { kind: "jdk", at: "", path: "/host/a=b" });
+  for (const refused of ["", "svc=", "../up=/host/jdk", "/abs=/host/jdk"]) assert.equal(jdkDeclared(refused), undefined, refused);
+  assert.equal(mountOf({ kind: "jdk", at: "" }), ".");
+  assert.equal(mountOf({ kind: "jdk", at: "svc" }), "svc");
+  const parts = [{ used: false as const, outputs: [{ kind: "jdk" as const, at: "svc" }], reason: "jdk-older-than-build" as const }, { used: true as const, refused: ["a/link"] }];
+  assert.deepEqual(buildOutputCuts(parts).map(({ at, reason }) => ({ at, reason })), [{ at: ["svc"], reason: "jdk-older-than-build" }, { at: ["a/link"], reason: "link-outside" }]);
 });
