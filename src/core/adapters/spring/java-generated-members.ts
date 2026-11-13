@@ -3,7 +3,8 @@ import { resolve } from "./java-declared-types.ts";
 import type { JavaFile, JavaProject, TypeDecl } from "./java-symbols.ts";
 
 /**
- * A member the sources do not declare but a record or a Lombok annotation on the class adds (ADR-0066). `accessor`
+ * A member the sources do not declare but a record or a Lombok annotation on the class adds (ADR-0066), or one a Spring
+ * Data repository interface has its proxy supply (`proxied`, ADR-0070). `accessor`
  * returns the field's declared type; `mutator` returns nothing; `builder` yields the builder of `of`, which has the
  * fields' setters and `build()`; `built` yields `of`.
  */
@@ -11,7 +12,8 @@ export type GeneratedMember =
   | { kind: "accessor"; type: Node | undefined; file: JavaFile }
   | { kind: "mutator" }
   | { kind: "builder"; of: TypeDecl }
-  | { kind: "built"; of: TypeDecl };
+  | { kind: "built"; of: TypeDecl }
+  | { kind: "proxied" };
 
 interface Field {
   name: string;

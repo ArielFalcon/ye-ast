@@ -366,3 +366,61 @@ test("constructor references preserve private and package accessibility", async 
   assert.deepEqual(await methodAt([hidden, caller], "Target", undefined, "Target::new"), { kind: "unproven" });
   assert.deepEqual(await methodAt([packageLocal, use("consume(app.other.Target::new)", [], "")], "Target", undefined, "app.other.Target::new"), { kind: "unproven", candidates: [] });
 });
+
+const REPOSITORY_IMPORT = "import org.springframework.data.jpa.repository.JpaRepository;";
+const orders = (imports: readonly string[], header: string, members: readonly string[] = []) => [
+  java("Order.java", ["package app;", "class Order {}"]),
+  java("Orders.java", ["package app;", ...imports, `interface Orders ${header} {`, ...members, "}"]),
+];
+const repositoryCall = (call: string, sources: readonly SourceFile[], member: string) => methodAt([...sources, use(call, [], "Orders orders, Order order, String text")], member);
+
+test("a call on a repository interface whose every outside parent is the Spring Data vocabulary is generated when it names a body-less repository method or a vocabulary operation nothing redeclares", async () => {
+  const derived = ["  Order findByCode(String code);", "  @org.springframework.data.jpa.repository.Query(\"select o from Order o\") Order custom();"];
+  const sources = orders([REPOSITORY_IMPORT], "extends JpaRepository<Order, Long>", derived);
+  assert.deepEqual(await repositoryCall("orders.findByCode(text)", sources, "findByCode"), { kind: "generated" });
+  assert.deepEqual(await repositoryCall("orders.custom()", sources, "custom"), { kind: "generated" });
+  assert.deepEqual(await repositoryCall("orders.findById(1L)", sources, "findById"), { kind: "generated" });
+  assert.deepEqual(await repositoryCall("orders.save(order)", sources, "save"), { kind: "generated" });
+  assert.deepEqual(await repositoryCall("orders.findByCode(text).get()", sources, "findByCode"), { kind: "generated" });
+  const wildcard = orders(["import org.springframework.data.jpa.repository.*;"], "extends JpaRepository<Order, Long>", derived);
+  assert.deepEqual(await repositoryCall("orders.findByCode(text)", wildcard, "findByCode"), { kind: "generated" });
+});
+
+test("a default method of a repository interface is a child, not a generated member", async () => {
+  const sources = orders([REPOSITORY_IMPORT], "extends JpaRepository<Order, Long>", ["  default Order named() { return null; }"]);
+  assert.deepEqual(await repositoryCall("orders.named()", sources, "named"), method(sources[1]!, 4));
+});
+
+test("a repository member stays unproven when the hierarchy has a parent outside the vocabulary, the interface has no Spring Data parent, the repository redeclares the operation, or no signature settles overloads", async () => {
+  const derived = ["  Order findByCode(String code);"];
+  const cases: readonly [string, readonly string[], string, readonly string[], string][] = [
+    ["a custom fragment parent", [REPOSITORY_IMPORT, "import vendor.Fragment;"], "extends JpaRepository<Order, Long>, Fragment", derived, "orders.findByCode(text)"],
+    ["an unresolved parent", [], "extends Fragment", derived, "orders.findByCode(text)"],
+    ["a look-alike parent of another package", ["import vendor.JpaRepository;"], "extends JpaRepository<Order, Long>", derived, "orders.findByCode(text)"],
+    ["a redeclared operation", [REPOSITORY_IMPORT], "extends JpaRepository<Order, Long>", ["  <S extends Order> S save(S entity);"], "orders.save(order)"],
+    ["two overloads no signature settles", [REPOSITORY_IMPORT], "extends JpaRepository<Order, Long>", ["  Order findByCode(String code);", "  Order findByCode(Long code);"], "orders.findByCode(order.code())"],
+    ["a member neither declared nor an operation", [REPOSITORY_IMPORT], "extends JpaRepository<Order, Long>", derived, "orders.missing()"],
+  ];
+  for (const [label, imports, header, members, call] of cases) {
+    const member = call.slice(call.indexOf(".") + 1, call.indexOf("("));
+    assert.deepEqual(await repositoryCall(call, orders(imports, header, members), member), { kind: "unproven" }, label);
+  }
+});
+
+test("a repository member is generated only for an interface receiver the declared type states, not a class, a type variable or a type name", async () => {
+  const header = "extends JpaRepository<Order, Long>";
+  const members = ["  Order findByCode(String code);"];
+  const sources = orders([REPOSITORY_IMPORT], header, members);
+  const unproven = { kind: "unproven" };
+  const klass = [sources[0]!, java("Orders.java", ["package app;", REPOSITORY_IMPORT, "abstract class Orders implements JpaRepository<Order, Long> {", "  abstract Order findByCode(String code);", "}"])];
+  assert.deepEqual(await repositoryCall("orders.findByCode(text)", klass, "findByCode"), unproven);
+  assert.deepEqual(await methodAt([...sources, use("repository.findByCode(text)", [], "R repository, String text")].map((source) => source.path.endsWith("/Use.java") ? { ...source, content: source.content.replace("void run(", "<R extends Orders> void run(") } : source), "findByCode"), unproven);
+  assert.deepEqual(await repositoryCall("Orders.findByCode(text)", sources, "findByCode"), unproven);
+  const supplier = orders([REPOSITORY_IMPORT, "import org.springframework.data.jpa.repository.JpaSpecificationExecutor;"], "extends JpaRepository<Order, Long>, JpaSpecificationExecutor<Order>", members);
+  assert.deepEqual(await repositoryCall("orders.findByCode(text)", supplier, "findByCode"), unproven);
+});
+
+test("a wildcard import of a package outside the vocabulary leaves the repository parent open", async () => {
+  const sources = orders(["import org.springframework.data.repository.query.*;"], "extends JpaRepository<Order, Long>", ["  Order findByCode(String code);"]);
+  assert.deepEqual(await repositoryCall("orders.findByCode(text)", sources, "findByCode"), { kind: "unproven" });
+});

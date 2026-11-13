@@ -11,12 +11,14 @@ import { enclosingType, heldJavaProject, thisType, withJavaSources, type Unparse
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
+import { REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
 import { createJavaProject, MEMBERLESS_PLATFORM_INTERFACES, readArgumentSignature, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Signature, type TypeDecl } from "./java-symbols.ts";
 
 const SLOT = "java-receiver-methods";
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
 const GENERATED: ReceiverMethod = { kind: "generated" };
+const PROXIED: GeneratedMember = { kind: "proxied" };
 const LOMBOK_CONFIG = /(^|\/)lombok\.config$/;
 const UNKNOWN_DECLARATIONS: ImplementedDeclarations = { kind: "unknown" };
 /** Methods every class inherits from `Object` (JLS 4.3.2): a call of one of these names may resolve to `Object`'s. */
@@ -313,13 +315,50 @@ export function createResolver(project: JavaProject, generated = false) {
       const made = generated ? builderMember(held.type, project, name, argumentCount(invocation)) : undefined;
       return made === undefined ? undefined : { generated: made };
     }
-    const offered = memberOf(held.type, name, invocation, source.file, enclosingType(invocation, source.file, project));
+    const caller = enclosingType(invocation, source.file, project);
+    const supplied = held.bound || held.typeName ? undefined : repositoryMemberOf(held.type, name, invocation, caller);
+    if (supplied !== undefined) return "method" in supplied ? { method: supplied.method, bound: false } : { generated: PROXIED };
+    const offered = memberOf(held.type, name, invocation, source.file, caller);
     if (offered === undefined) {
       const made = generated && !held.bound ? generatedOf(held, name, argumentCount(invocation)) : undefined;
       return made === undefined ? undefined : { generated: made };
     }
     if ("candidates" in offered) return { candidates: offered.candidates.map(placeOf).sort(byPlace) };
     return held.typeName && !offered.method.modifiers.includes("static") ? undefined : { method: offered.method, bound: held.bound };
+  };
+
+  /**
+   * The hierarchy of an interface whose every supertype outside the sources is a Spring Data repository interface of the
+   * closed vocabulary (ADR-0070): its members are the ones the sources state and the vocabulary's operations.
+   */
+  const dataRepositoryHierarchy = (type: TypeDecl): ReturnType<JavaProject["hierarchy"]> | undefined => {
+    if (type.kind !== "interface") return undefined;
+    const above = declaredHierarchy(type);
+    const outside = unsettledGaps(above);
+    const vocabulary = outside.length > 0 && outside.every((gap) => {
+      const owner = enclosingType(gap.node, gap.file, project);
+      const found = resolve(gap.node, gap.file, project, owner?.outer, gap.node);
+      return found?.kind === "platform" && REPOSITORY_TYPES.has(found.fqn);
+    });
+    return vocabulary ? above : undefined;
+  };
+
+  /**
+   * What a call on a repository interface of the vocabulary names: a body-less method the repository hierarchy declares,
+   * or an operation of the vocabulary nothing in it declares, is supplied by the Spring proxy; a method with a body is its
+   * own. An operation name the repository redeclares, overloads no signature settles and members the hierarchy does not
+   * state name nothing.
+   */
+  const repositoryMemberOf = (type: TypeDecl, name: string, invocation: Node, caller: TypeDecl | undefined): { method: MethodDecl } | GeneratedMember | undefined => {
+    const above = dataRepositoryHierarchy(type);
+    if (above === undefined || OBJECT_METHODS.has(name)) return undefined;
+    const named = above.types.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
+    if (named.length === 0) return REPOSITORY_OPERATIONS.has(name) ? PROXIED : undefined;
+    if (REPOSITORY_MEMBER_NAMES.has(name) || named.some(hasVarargs)) return undefined;
+    const candidates = named.filter((method) => method.parameterTypes.length === argumentCount(invocation));
+    const chosen = candidates.length === 1 ? candidates[0] : caller === undefined ? undefined : exactCandidate(candidates, invocation, caller);
+    if (chosen === undefined) return undefined;
+    return chosen.hasBody ? { method: chosen } : PROXIED;
   };
 
   /** A member that a record or a Lombok annotation adds, when no type of the closed hierarchy declares the name and a static call names a static member. */
@@ -458,6 +497,8 @@ export function createResolver(project: JavaProject, generated = false) {
   return {
     constructorOf,
     referenceOf,
+    /** Whether every supertype of the interface outside the sources is a Spring Data repository interface of the closed vocabulary. */
+    isDataRepository: (type: TypeDecl): boolean => dataRepositoryHierarchy(type) !== undefined,
     hasDeclaredReceiver: (invocation: Node, source: ReceiverSource): boolean => receiverOf(invocation, source) !== undefined,
     /** The method the call names through its declared receiver and one settled signature; dispatch decides its body separately. */
     methodOf: methodNamed,
