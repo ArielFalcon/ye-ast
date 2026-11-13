@@ -1304,22 +1304,36 @@ function candidatePath(candidate: string): string {
   return separator === -1 ? candidate : candidate.slice(separator + 2);
 }
 
+/** The causes whose calls a summary counts as one line when that is shorter than a line per name: template expressions the page plan does not cover, and receivers the walk could not prove. */
+const COUNTED_CAUSES: readonly string[] = ["page-unplanned", "receiver-unproven"];
+
 /**
  * One line per reason, trailing name and candidate set, most calls first, then by name: why they are cut, its calls, its
- * files and its candidates by containment path, counted when that is shorter or when two candidates share a path.
+ * files and its candidates by containment path, counted when that is shorter or when two candidates share a path. The
+ * calls of a counted cause collapse to one line of calls, files and names when that line is shorter than theirs.
  */
 function traceCallGroupLines(places: readonly TracePlace[]): string[] {
-  const groups = [...Map.groupBy(places, (place) => JSON.stringify([place.why, trailingName(place.spelling), place.candidates.toSorted(compareText)]))]
+  const named = [...Map.groupBy(places, (place) => JSON.stringify([place.why, trailingName(place.spelling), place.candidates.toSorted(compareText)]))]
     .map(([key, inGroup]) => ({ key, why: inGroup[0]!.why, name: trailingName(inGroup[0]!.spelling), candidates: inGroup[0]!.candidates.toSorted(compareText), calls: inGroup.length, files: new Set(inGroup.map(({ file }) => file)).size }))
-    .sort((a, b) => b.calls - a.calls || compareText(a.name, b.name) || compareText(a.key, b.key));
-  return groups.map(({ why, name, candidates, calls, files }) => {
-    const shown = [...new Set(candidates.map(candidatePath))].sort(compareText);
-    const listed = shown.join(", ");
-    const counted = `${candidates.length} ${candidates.length === 1 ? "candidate" : "candidates"}`;
-    const listable = shown.length === candidates.length && preferShorterText(listed, counted) === listed;
-    const could = candidates.length === 0 ? "" : listable ? ` → could be: ${listed}` : ` → ${counted}`;
-    return `    ${why}: ${name} ×${calls} in ${files} ${files === 1 ? "file" : "files"}${could}`;
+    .map((group) => {
+      const shown = [...new Set(group.candidates.map(candidatePath))].sort(compareText);
+      const listed = shown.join(", ");
+      const counted = `${group.candidates.length} ${group.candidates.length === 1 ? "candidate" : "candidates"}`;
+      const listable = shown.length === group.candidates.length && preferShorterText(listed, counted) === listed;
+      const could = group.candidates.length === 0 ? "" : listable ? ` → could be: ${listed}` : ` → ${counted}`;
+      return { ...group, line: `    ${group.why}: ${group.name} ×${group.calls} in ${group.files} ${group.files === 1 ? "file" : "files"}${could}` };
+    });
+  const collapsed = [...Map.groupBy(places.filter(({ why }) => COUNTED_CAUSES.includes(why.split(" ")[0]!)), (place) => place.why)].flatMap(([why, inCause]) => {
+    const files = new Set(inCause.map(({ file }) => file)).size;
+    const names = new Set(inCause.map(({ spelling }) => trailingName(spelling))).size;
+    const line = `    ${why}: ${inCause.length} calls in ${files} ${files === 1 ? "file" : "files"}, ${names} ${names === 1 ? "name" : "names"}`;
+    const own = named.filter((group) => group.why === why);
+    return own.length > 1 && size([line]) < size(own.map((group) => group.line)) ? [{ key: why, why, name: "", calls: inCause.length, line, replaces: own }] : [];
   });
+  const replaced = new Set(collapsed.flatMap(({ replaces }) => replaces));
+  return [...named.filter((group) => !replaced.has(group)), ...collapsed]
+    .sort((a, b) => b.calls - a.calls || compareText(a.name, b.name) || compareText(a.key, b.key))
+    .map(({ line }) => line);
 }
 
 /** The calls no rule settled: grouped by call in summary, then the modes that list each place; one per line with every candidate in details. */

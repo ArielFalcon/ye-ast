@@ -283,6 +283,19 @@ test("a trace summary lists candidates by their containment path when shorter th
   assert.ok(text.includes("    callee-unknown: run ×1 in 1 file → 2 candidates\n"), text);
 });
 
+test("a trace summary counts template and receiver cuts by cause when that is shorter, and keeps the name of a cause that holds one call name", () => {
+  const unplanned = ["dirty", "invalid", "errors", "typeId"].flatMap((name, index) => [{ reason: "page-unplanned", kind: "unresolved-link", at: [`src/pet-edit.html:${index + 3} ${name}`] }, { reason: "page-unplanned", kind: "unresolved-link", at: [`src/pet-form.html:${index + 9} ${name}`] }]);
+  const receivers = [{ reason: "receiver-unproven", kind: "unresolved-link", at: ["src/a.ts:3 x.replace", "src/s.ts::Store.replace"] }, { reason: "receiver-unproven", kind: "unresolved-link", at: ["src/b.ts:5 y.format", "src/f.ts::Fmt.format", "src/g.ts::Gmt.format"] }, { reason: "receiver-unproven", subReason: "capability-absent", kind: "unresolved-link", at: ["src/c.ts:7 z.save", "src/s.ts::Store.save"] }];
+  const text = renderTrace(traceFact([...unplanned, ...receivers, { reason: "function-value", kind: "unresolved-link", at: ["src/d.ts:2 handler"] }, { reason: "function-value", kind: "unresolved-link", at: ["src/d.ts:4 other"] }]));
+
+  assert.ok(text.includes("    page-unplanned: 8 calls in 2 files, 4 names\n"), text);
+  assert.ok(text.includes("    receiver-unproven: 2 calls in 2 files, 2 names\n"), text);
+  assert.ok(text.includes("    receiver-unproven (capability-absent): save ×1 in 1 file → could be: Store.save\n"), text);
+  assert.ok(text.includes("    function-value: handler ×1 in 1 file\n"), text);
+  assert.ok(!text.includes("page-unplanned: dirty"), text);
+  assert.ok(renderTrace(traceFact(unplanned), "details").includes("page-unplanned: src/pet-edit.html:3 dirty"));
+});
+
 test("a trace summary that groups unresolved calls ends the cut block by naming the modes that list each place", () => {
   const text = renderTrace(traceFact([{ kind: "unresolved-link", at: ["src/order.ts:15 this.handler.handle"] }]));
   assert.ok(text.endsWith('\n    Call places omitted; mode "details" lists them, mode "full" gives the structured fact.'), text);
