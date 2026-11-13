@@ -172,10 +172,56 @@ test("an open method type variable or inherited declarations leave the called si
 });
 
 test("a shared receiver candidate without value ownership is a cut, never an annotated effect", async () => {
-  for (const member of ['protected org.springframework.jdbc.core.JdbcTemplate db;', 'private org.springframework.jdbc.core.JdbcTemplate db; Service(org.springframework.jdbc.core.JdbcTemplate db) { this.db = db; }']) {
-    const sites = await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Service.java", content: `class Service { ${member} void run() { db.update("x"); } }` }]);
-    assert.equal(sites.length, 1);
-    assert.equal(sites[0]!.site.effect, undefined);
+  const sites = await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Service.java", content: `class Service { protected org.springframework.jdbc.core.JdbcTemplate db; void run() { db.update("x"); } }` }]);
+  assert.equal(sites.length, 1);
+  assert.equal(sites[0]!.site.effect, undefined);
+});
+
+const REPOSITORY = `package shop;
+import org.springframework.data.repository.CrudRepository;
+class Item {}
+interface ItemRepository extends CrudRepository<Item, Long> {}
+`;
+
+test("a constructor parameter named like the injected field does not shadow the field in other methods", async () => {
+  const content = `${REPOSITORY}class Service {
+ private final ItemRepository repo;
+ Service(ItemRepository repo) { this.repo = repo; }
+ void run(Item item) { repo.save(item); }
+}`;
+  const sites = await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Service.java", content }]);
+  assert.deepEqual(sites.map(({ site }) => site.effect), [{ kind: "data", line: 8, operation: "save", access: "write", target: { kind: "entity", name: "shop.Item" } }]);
+});
+
+test("an untyped local or lambda variable of the field's name in the same method still shadows the field", async () => {
+  for (const body of ["void run(Item item, ItemRepository other) { var repo = other; repo.save(item); }", "void run(Item item) { java.util.function.Consumer<Item> c = repo -> repo.save(item); }", "void run(Item item, Object repo) { repo.save(item); }"]) {
+    const sites = await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Service.java", content: `${REPOSITORY}class Service {\n private final ItemRepository repo;\n ${body}\n}` }]);
+    assert.deepEqual(sites.filter(({ site }) => site.effect !== undefined), [], body);
+  }
+});
+
+test("Spring Data derived names with a subject between the verb and By read or delete", async () => {
+  const names = ["findOneByActive", "findUserByActive", "findDistinctByActive", "getOneByActive", "countDistinctByActive", "existsUserByActive", "findFirst3ByActive", "findTopByActive"];
+  const declarations = names.map((name) => `Item ${name}(boolean active);`).join(" ") + " void deleteUserByActive(boolean active); void removeDistinctByActive(boolean active); Item findings(boolean a);";
+  const calls = [...names, "deleteUserByActive", "removeDistinctByActive", "findings"].map((name) => `r.${name}(true);`).join(" ");
+  const content = `package shop;
+import org.springframework.data.repository.Repository;
+class Item {}
+interface ItemRepository extends Repository<Item, Long> { ${declarations} }
+class Service { void run(ItemRepository r) { ${calls} } }`;
+  const sites = await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Derived.java", content }]);
+  assert.deepEqual(sites.map(({ site }) => site.effect?.access), [...names.map(() => "read"), "write", "write", undefined]);
+});
+
+test("a repository-named call on a type with an unknown ancestor is an explicit unplaced effect", async () => {
+  const content = `package shop;
+interface ItemRepository extends org.unknown.Base<Long> {}
+class Service { void run(ItemRepository repo) { repo.findById(1L); } }`;
+  const sites = await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Unknown.java", content }]);
+  assert.equal(sites.length, 1);
+  assert.equal(sites[0]!.site.effect, undefined);
+  for (const quiet of [content.replace("org.unknown.Base<Long>", "java.io.Serializable"), content.replace("org.unknown.Base<Long>", "Base") + " interface Base {}", content.replace("repo.findById(1L)", "repo.describe(1L)")]) {
+    assert.deepEqual(await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Closed.java", content: quiet }]), [], quiet);
   }
 });
 

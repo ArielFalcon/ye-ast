@@ -15,7 +15,9 @@ const REFLECTIVE = /Field|VarHandle|Getter|Setter/;
  * body declares it once and `private`, and the file names it through no receiver but `this` and reads no field by
  * reflection. The binding holds the type where it is written, by its first name (ADR-0029 decision 9).
  * `declaredFields` admits other fields for nominal repository-member selection, never external-leaf proof.
- * `includeUnproven` also retains annotation candidates marked unproven; they prove no receiver value.
+ * `includeUnproven` also retains annotation candidates marked unproven; they prove no receiver value. Both options scope
+ * the shadowing variable to the method or constructor that declares it, so a constructor parameter named like its field
+ * does not shadow the field in other methods.
  */
 export function javaReceiverBindings(root: Node, { includeUnproven = false, declaredFields = false }: { includeUnproven?: boolean; declaredFields?: boolean } = {}): ReceiverBinding[] {
   const invocations: Node[] = [];
@@ -65,7 +67,7 @@ export function javaReceiverBindings(root: Node, { includeUnproven = false, decl
       const local = localBinding(object);
       if (local !== undefined) type = statedType(local);
       else {
-        const shadowed = declaresVariable(enclosingBody(object), receiver, declaredFields ? object : undefined);
+        const shadowed = declaresVariable(enclosingBody(object), receiver, declaredFields || includeUnproven ? object : undefined);
         if (!shadowed || includeUnproven) {
           type = fieldAt(object, receiver);
           unproven ||= shadowed;

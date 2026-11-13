@@ -72,7 +72,7 @@ function effectAt(call: Invocation, project: JavaProject, bindings: ReadonlyMap<
     if (resolved.type === undefined) return undefined;
     const type = resolved.type;
     const entities = repositoryEntities(type, project, new Map([...type.typeVariables].map((variable, index) => [variable, actuals[index] === undefined ? undefined : entityName(actuals[index], call.type, project)])));
-    if (entities.length === 0) return undefined;
+    if (entities.length === 0) return candidate && REPOSITORY_OPERATIONS.has(operation) && hasOpenAncestry(type, project) ? false : undefined;
     if (receiver?.unproven === true) return false;
     const named = project.hierarchy(type).types.flatMap((owner) => owner.methods.filter((method) => method.name === operation));
     let methods = named.filter((method) => method.parameterTypes.length === argumentsOf(call.node).length);
@@ -91,8 +91,8 @@ function effectAt(call: Invocation, project: JavaProject, bindings: ReadonlyMap<
     if (annotations.has(undefined)) return false;
     let access = annotations.has("org.springframework.data.jpa.repository.Modifying") ? "write" as const : annotations.has("org.springframework.data.jpa.repository.Query") ? "read" as const : REPOSITORY_OPERATIONS.get(operation);
     if (access === undefined && methods.length > 0) {
-      if (/^(?:find|read|get|query|search|stream|count|exists)(?:By|AllBy|First|Top)/.test(operation)) access = "read";
-      else if (/^(?:delete|remove)(?:By|AllBy)/.test(operation)) access = "write";
+      if (/^(?:find|read|get|query|search|stream|count|exists)(?:\p{Lu}.*?)?(?:By|AllBy|First|Top)/u.test(operation)) access = "read";
+      else if (/^(?:delete|remove)(?:\p{Lu}.*?)?(?:By|AllBy)/u.test(operation)) access = "write";
     }
     if (access === undefined) return methods.length > 0 ? false : undefined;
     const distinct = [...new Set(entities)];
@@ -124,13 +124,26 @@ function entityName(node: Node, type: TypeDecl, project: JavaProject, scope = { 
   return project.typeIdentity(typeNameOf(node), { file: type.file, type: scope.type, at: node }) === found.type.fqn ? found.type.fqn : undefined;
 }
 
+function parentsOf(type: TypeDecl): Node[] {
+  const clause = type.kind === "interface" ? type.node.namedChildren.find((child) => child.type === "extends_interfaces") : type.node.childForFieldName("interfaces");
+  return [...(clause?.namedChildren.find((child) => child.type === "type_list")?.namedChildren ?? []), ...(type.node.childForFieldName("superclass")?.namedChildren ?? [])];
+}
+
+/** Whether an interface extends a type the sources do not state, which may be the Spring Data repository it cannot be proven to be. */
+function hasOpenAncestry(type: TypeDecl, project: JavaProject, seen = new Set<TypeDecl>()): boolean {
+  if (type.kind !== "interface" || seen.has(type)) return false;
+  const next = new Set([...seen, type]);
+  return parentsOf(type).some((parent) => {
+    const resolved = resolve(parent, type.file, project, type.outer, parent);
+    return resolved?.kind === "platform" ? false : resolved?.kind === "repository" && resolved.type !== undefined ? hasOpenAncestry(resolved.type, project, next) : true;
+  });
+}
+
 /** Undefined entries retain proven repository membership without inventing an entity for a raw or open generic. */
 function repositoryEntities(type: TypeDecl, project: JavaProject, env: ReadonlyMap<string, string | undefined>, seen = new Set<TypeDecl>()): (string | undefined)[] {
   if (seen.has(type)) return [];
   const next = new Set([...seen, type]);
-  const clause = type.kind === "interface" ? type.node.namedChildren.find((child) => child.type === "extends_interfaces") : type.node.childForFieldName("interfaces");
-  const parents = [...(clause?.namedChildren.find((child) => child.type === "type_list")?.namedChildren ?? []), ...(type.node.childForFieldName("superclass")?.namedChildren ?? [])];
-  return parents.flatMap((parent) => {
+  return parentsOf(type).flatMap((parent) => {
     const args = parent.namedChildren.find((child) => child.type === "type_arguments")?.namedChildren ?? [];
     const values = args.map((arg) => env.has(arg.text) ? env.get(arg.text) : type.typeVariables.has(arg.text) || arg.type === "wildcard" ? undefined : entityName(arg, type, project, { type: type.outer }));
     const parentType = resolve(parent, type.file, project, type.outer, parent);
