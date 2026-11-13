@@ -1634,6 +1634,27 @@ test("reading a value cell where no request can run leaves no unresolved call si
   assert.ok(unresolved(await reader.of([CELL_PACKAGE, file], "repo")).length > 0);
 });
 
+test("a name another scope binds does not defeat the cell it only shares a name with", async () => {
+  const page = "class Page { constructor(private store: Store) {} click() { return this.store.read() } }";
+  const store = "class Store { items = cell([]); other() { const cell = 1; return cell } nested = () => { let cell: any; return cell } read() { return this.items() } }";
+  const file = source("cells-free.ts", [CELL_IMPORTS, store, page].join("\n"));
+  assert.deepEqual(unresolved(await cellReader.of([CELL_PACKAGE, file], "repo")), []);
+  const written = source("cells-written.ts", [CELL_IMPORTS, store.replace("const cell = 1; return cell", "let cell: any; cell = 1; return cell"), page].join("\n"));
+  assert.deepEqual(unresolved(await cellReader.of([CELL_PACKAGE, written], "repo")), []);
+});
+
+test("a name the module rebinds keeps the field an undecided dispatch", async () => {
+  const page = "class Page { constructor(private store: Store) {} click() { return this.store.read() } }";
+  const variants: Record<string, string> = {
+    "module binding": "let cell: any = opaque;\nclass Store { items = cell([]); read() { return this.items() } }",
+    "module write": "cell = opaque;\nclass Store { items = cell([]); read() { return this.items() } }",
+  };
+  for (const [name, classes] of Object.entries(variants)) {
+    const file = source("cells-rebound.ts", [CELL_IMPORTS, classes, page].join("\n"));
+    assert.deepEqual(unresolved(await cellReader.of([CELL_PACKAGE, file], "repo")).map((site) => site.symbol), ["Page.click"], name);
+  }
+});
+
 test("a derived cell whose callback issues a request still yields that request at its callers", async () => {
   const file = source("cells-request.ts", [
     CELL_IMPORTS,

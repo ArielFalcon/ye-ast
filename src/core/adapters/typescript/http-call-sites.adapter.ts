@@ -125,14 +125,21 @@ export function createHttpCallSites(values: readonly FrameworkValueFactory[] = [
   return { of: async (files, repo, _libraries, options) => (await readPlaced(files, repo, options, values, cells)).map(({ site, column }) => ({ ...site, ...(column === undefined ? {} : { column: column + 1 }) })), placed: (files, repo, _libraries, options) => readPlaced(files, repo, options, values, cells) };
 }
 
+/** The import a name stands for where it is read: no scope around the read and no module binding rebinds it, and no code writes it. */
+function importBoundAt(shape: FileShape, at: ts.Identifier, written: (source: ts.SourceFile, name: string) => boolean): ReturnType<FileShape["imports"]["get"]> {
+  const imported = shape.imports.get(at.text);
+  if (imported === undefined || imported.typeOnly || shape.module.reimported.has(at.text) || shape.bindings.has(at.text) || lexicalScope(at).names.has(at.text) || written(shape.source, at.text)) return undefined;
+  return imported;
+}
+
 /** The export of a package a callee names, when its root is an import of that package nothing in the file rebinds. */
 async function packageExportOf(shape: FileShape, callee: ts.Expression, modules: ModuleResolver, written: (source: ts.SourceFile, name: string) => boolean): Promise<CellFactory | undefined> {
   const path: string[] = [];
   let root = callee;
   while (ts.isPropertyAccessExpression(root)) { path.unshift(root.name.text); root = unwrapped(root.expression); }
   if (!ts.isIdentifier(root)) return undefined;
-  const imported = shape.imports.get(root.text);
-  if (imported === undefined || imported.typeOnly || shape.module.reimported.has(root.text) || shape.declared.has(root.text) || lexicalScope(root).names.has(root.text) || reboundIn(shape.source).has(root.text) || written(shape.source, root.text)) return undefined;
+  const imported = importBoundAt(shape, root, written);
+  if (imported === undefined) return undefined;
   if (!("external" in await modules.resolve(shape.source.fileName, imported.module))) return undefined;
   return { module: imported.module, path: imported.imported === "*" ? path : [imported.imported, ...path] };
 }
@@ -956,8 +963,8 @@ class Reader {
         let root: ts.Expression = unwrapped(initializer.expression);
         while (ts.isPropertyAccessExpression(root)) root = unwrapped(root.expression);
         if (!ts.isIdentifier(root)) return false;
-        const imported = current.shape.imports.get(root.text);
-        if (imported === undefined || imported.typeOnly || current.shape.module.reimported.has(root.text) || current.shape.declared.has(root.text) || lexicalScope(root).names.has(root.text) || reboundIn(current.shape.source).has(root.text) || this.importedMemberWritten(current.shape.source, root.text)) return false;
+        const imported = importBoundAt(current.shape, root, (source, name) => this.importedMemberWritten(source, name));
+        if (imported === undefined) return false;
         if (!("external" in await this.modules.resolve(current.shape.source.fileName, imported.module))) return false;
         for (const argument of initializer.arguments) {
           const value = unwrapped(argument);
@@ -1552,7 +1559,7 @@ function baseClassName(declaration: ts.ClassDeclaration): string | undefined {
 
 function writesImportedMember(source: ts.SourceFile, name: string): boolean {
   const target = (node: ts.Node): boolean => {
-    if (ts.isIdentifier(node)) return node.text === name;
+    if (ts.isIdentifier(node)) return node.text === name && !lexicalScope(node).names.has(name);
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) return target(node.expression);
     return false;
   };
