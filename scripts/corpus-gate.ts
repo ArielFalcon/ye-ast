@@ -49,7 +49,8 @@ const ManifestSchema = z.strictObject({
          * `trusted` queries run on the workspace's clones, every other one on clones no trust was ever declared for; only a
          * trusted query of a workspace with members may name `{workspace}`.
          */
-        queries: z.array(z.strictObject({ id: Id, family: Id, trusted: z.boolean().optional(), argv: z.array(z.string()).min(1) })).min(1),
+        /** `candidateArgs` follow the command on the candidate side only: an option the base does not know yet. */
+        queries: z.array(z.strictObject({ id: Id, family: Id, trusted: z.boolean().optional(), argv: z.array(z.string()).min(1), candidateArgs: z.array(z.string()).min(1).optional() })).min(1),
       }),
     )
     .min(1),
@@ -249,7 +250,8 @@ function acquireLock(store: string): () => void {
  * with this runner. Every side runs in the same directory, so both engines see the same paths.
  */
 async function runSide(context: Context, side: Revision, concurrency: number): Promise<SideResult> {
-  const key = sha256(JSON.stringify({ engine: side.commit, manifest: context.manifestDigest, node: process.version, runner: RUNNER_DIGEST })).slice(0, 32);
+  const withCandidateArgs = side.label === "candidate" && context.manifest.groups.some((group) => group.queries.some((query) => query.candidateArgs !== undefined));
+  const key = sha256(JSON.stringify({ engine: side.commit, manifest: context.manifestDigest, node: process.version, runner: RUNNER_DIGEST, ...(withCandidateArgs ? { candidateArgs: true } : {}) })).slice(0, 32);
   const directory = join(context.store, "answers", key);
   if (existsSync(join(directory, "answers.json"))) {
     context.io.err(`${side.label} ${side.commit.slice(0, 12)}: answers reused from ${directory}`);
@@ -362,7 +364,8 @@ async function runQueries(context: Context, side: Revision, sideDirectory: strin
     }
     for (const query of group.queries) {
       const clones = query.trusted === true ? (trusted as Map<string, string>) : untrusted;
-      const argv = query.argv.map((argument) => (argument === WORKSPACE_PLACEHOLDER ? (queryWorkspace as string) : argument.replace(REPO_PLACEHOLDER, (_, id: string) => clones.get(id) as string)));
+      const sideArgv = side.label === "candidate" && query.candidateArgs !== undefined ? [...query.argv.slice(0, 1), ...query.candidateArgs, ...query.argv.slice(1)] : query.argv;
+      const argv = sideArgv.map((argument) => (argument === WORKSPACE_PLACEHOLDER ? (queryWorkspace as string) : argument.replace(REPO_PLACEHOLDER, (_, id: string) => clones.get(id) as string)));
       await execute(`${group.id}/${query.id}`, query.family, query.argv, argv);
     }
     return { answers, timings };

@@ -32,7 +32,7 @@ if (command === "init") {
   const trusted = existsSync(trustFile) && readFileSync(trustFile, "utf8").split("\\n").includes(repo);
   const workspace = args.indexOf("--workspace");
   const members = workspace === -1 ? undefined : JSON.parse(readFileSync(args[workspace + 1], "utf8")).repos.map((member) => member.path);
-  console.log(JSON.stringify({ status: "complete", repo, reversed: [...repo].reverse().join(""), trusted, protocols: process.env.GIT_ALLOW_PROTOCOL, members, files: [...files, ${extra}] }));
+  console.log(JSON.stringify({ status: "complete", repo, reversed: [...repo].reverse().join(""), trusted, protocols: process.env.GIT_ALLOW_PROTOCOL, members, options: args.slice(0, -1), files: [...files, ${extra}] }));
 }
 `;
 }
@@ -192,6 +192,21 @@ describe("corpus gate", () => {
     assert.deepEqual([traced.trusted, traced.members.map((member) => member.split("/").slice(-3).join("/"))], [true, ["trusted/w/b"]]);
     const refused = await gateWith(join(root, "manifest", "untrusted-workspace.json"), "--base", commits.base, "--candidate", commits.same);
     assert.equal(refused.code, EXIT.fault);
+  });
+
+  it("adds a query's candidate arguments on the candidate side only, so their effect is a declared difference", async () => {
+    const candidateArgsManifest = join(root, "manifest", "candidate-args.json");
+    const declared = JSON.parse(readFileSync(parallelManifest, "utf8"));
+    declared.groups[0].queries[0].candidateArgs = ["--extra", "value"];
+    writeFileSync(candidateArgsManifest, JSON.stringify(declared));
+    assert.equal((await gateWith(candidateArgsManifest, "--base", commits.same, "--candidate", commits.base, "--expect", "files:±")).code, EXIT.pass);
+    const undeclared = await gateWith(candidateArgsManifest, "--base", commits.base, "--candidate", commits.same);
+    assert.equal(undeclared.code, EXIT.fail);
+    const { code, report } = await gateWith(candidateArgsManifest, "--base", commits.base, "--candidate", commits.same, "--expect", "files:±");
+    assert.equal(code, EXIT.pass);
+    const optionsOf = (side: { answers: string }) => (JSON.parse(readFileSync(join(side.answers, "answers.json"), "utf8")) as Answer[]).map((answer) => (answer.stdout as { options: string[] }).options);
+    assert.deepEqual(optionsOf(report.base), [[], []]);
+    assert.deepEqual(optionsOf(report.candidate), [["--extra", "value"], []]);
   });
 
   it("refuses a concurrency that is not a positive integer", async () => {
