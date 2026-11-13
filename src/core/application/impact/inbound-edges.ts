@@ -9,6 +9,7 @@ import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresol
 import type { ImplementedDeclarations } from "../../ports/import-origins.port.ts";
 import { createGraphNavigation, isInside } from "../navigation/graph-navigation.ts";
 import { edgeKey, type FollowedEdge } from "../navigation/edge-targets.ts";
+import type { HeldUse } from "../navigation/written-uses.ts";
 
 /**
  * A symbol that depends on another, and how sure the store is of the dependence: 0 to 1. `bridge` says the dependence
@@ -90,6 +91,14 @@ export interface EdgeCorrections {
   implemented?: ReadonlyMap<GraphNodeId, ImplementedDeclarations>;
   /** By method, the one implementation of its structural overload set (ADR-0046 decision 2); the set is one declaration of its file. */
   overloads?: ReadonlyMap<GraphNodeId, GraphNodeId>;
+  /** What the sources write of reached declarations the index records no edge for (`WrittenUses`). */
+  written?: WrittenUseCorrections;
+}
+
+/** By node: the files whose uses of it were read from the sources, and the declarations that hold those uses. */
+export interface WrittenUseCorrections {
+  read: ReadonlyMap<GraphNodeId, ReadonlySet<string>>;
+  held: ReadonlyMap<GraphNodeId, readonly HeldUse[]>;
 }
 
 const NO_CORRECTIONS: EdgeCorrections = { dropped: new Set(), into: new Map() };
@@ -168,16 +177,21 @@ export function createInboundEdges(
     return code;
   }
 
-  /** The top-level code of the files whose own top-level statements use the node, or that import a node nothing else uses. */
+  /**
+   * The top-level code of the files whose own top-level statements use the node, or that import a node nothing else uses;
+   * none of a file whose uses of the node were read from its source, which `writtenUsesOf` answers for.
+   */
   function importersOf(node: GraphSymbol, otherwiseUnused: boolean): InboundEdge[] {
-    const users = followedEdgesInto(node).filter(({ edge, source }) => source.kind === "file" && USAGE_EDGES.includes(edge.kind));
+    const read = corrections.written?.read.get(node.id);
+    const unread = ({ source }: { source: GraphSymbol }): boolean => read?.has(source.file) !== true;
+    const users = followedEdgesInto(node).filter((into) => into.source.kind === "file" && USAGE_EDGES.includes(into.edge.kind) && unread(into));
     const importing: { file: string; confidence: number }[] = users.map(({ edge, source }) => ({ file: source.file, confidence: edgeConfidence(edge) }));
     if (users.length === 0 && otherwiseUnused && (EDGE_POLICY.injectableKinds as readonly string[]).includes(node.kind)) {
       const imports = reader.incomingEdges([node.id], ["imports"]);
       load(imports.map((edge) => edge.source));
       for (const edge of imports) {
         const source = symbolOf(edge.source);
-        if (source?.kind === "file") importing.push({ file: source.file, confidence: edgeConfidence(edge) });
+        if (source?.kind === "file" && unread({ source })) importing.push({ file: source.file, confidence: edgeConfidence(edge) });
       }
     }
     return importing.filter(({ file }) => !isTestFile(file)).flatMap(({ file, confidence }) => topLevelCodeOf(file).map((from) => ({ from, confidence, basis: "import" as const, derivation: "resolved" as const, lines: [] })));
@@ -324,6 +338,14 @@ export function createInboundEdges(
     return memberCallers.get(node.id) ?? [];
   }
 
+  /** The declarations the sources prove write a use of `node` that no other dependence of `found` already names. */
+  function writtenUsesOf(node: GraphSymbol, found: readonly InboundEdge[]): InboundEdge[] {
+    const named = new Set(found.map(({ from }) => from.id));
+    return (corrections.written?.held.get(node.id) ?? [])
+      .filter(({ from }) => !named.has(from.id) && !isTestFile(from.file))
+      .map(({ from, line }) => ({ from, confidence: EDGE_POLICY.relations.confidence, basis: "reference" as const, derivation: "proven" as const, lines: [line] }));
+  }
+
   type Gathered = InboundEdge & { provenance?: GraphEdge["provenance"] };
   function gather(node: GraphSymbol, contractChanged: boolean, throughMember: boolean): Gathered[] {
     const followed = followedEdgesInto(node).filter(({ edge, source }) => !isTestFile(source.file) && followsEdge({ kind: edge.kind, sourceKind: source.kind, targetKind: node.kind }));
@@ -336,7 +358,8 @@ export function createInboundEdges(
       provenance: edge.provenance,
     }));
     const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...provenMemberUsesOf(node), ...ownUsesOf(node)];
-    const found = [...bridged, ...relatedTo(node, throughMember ? EDGE_POLICY.ownerThroughMember.relations : undefined)];
+    const related = [...bridged, ...relatedTo(node, throughMember ? EDGE_POLICY.ownerThroughMember.relations : undefined)];
+    const found = throughMember ? related : [...related, ...writtenUsesOf(node, related)];
     /** Individual target lookups do not prove incoming-reference coverage. */
     const whole = throughMember ? found : [...found, ...importersOf(node, found.length === 0)];
     return whole.filter(({ from }) => from.id !== node.id);

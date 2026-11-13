@@ -63,6 +63,7 @@ import type { DeclaredMemberNamesReader } from "../../ports/declared-member-name
 import type { ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
 import { edgeKey, type EdgeTargets, type FollowedEdge } from "../navigation/edge-targets.ts";
 import type { AttributedCall, ReverseCalls, SettledReference } from "../navigation/reverse-calls.ts";
+import { createWrittenUses, type HeldUse, type WrittenUses } from "../navigation/written-uses.ts";
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { syntaxRootCuts, distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey } from "../navigation/root-selection.ts";
@@ -687,7 +688,9 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
     syntaxCallers.set(call.declaration.id, found);
   }
   const syntaxWalk = { seeds: selection.syntaxSeeds.map(({ symbol }) => symbol), callers: syntaxCallers };
-  const { inbound, walk, attributed, references, cuts: contradictedCuts } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls, contradictions, syntaxWalk);
+  const origins = input.reading.origins();
+  const written = targets === undefined || origins === undefined ? undefined : createWrittenUses({ store, sources: headTree.sources, tokensOf: (file) => input.reading.tokensOf(file), syntaxOf: input.reading.syntaxOf, origins, importedDeclarations: targets.importedDeclarations });
+  const { inbound, walk, attributed, references, cuts: contradictedCuts } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls, contradictions, syntaxWalk, written);
 
   const walked = walk.reached.flatMap(({ symbol }) => indexedDeclaration(symbol) ?? []);
   const reachedIds = new Set(walked.map((symbol) => symbol.id));
@@ -774,8 +777,10 @@ async function boundUses(references: readonly SettledReference[], expanded: Read
  * symbol depends on, the walk runs again, because a bound it frees, or an edge it moves, can read edges no earlier walk
  * read. `attributed` holds the unbound written calls attributed to a symbol it reached.
  */
-async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = [], reverse?: ReverseCalls, originCalls?: OriginCalls, contradictions?: ContradictedCalls, syntax?: { seeds: readonly ModelDeclaration[]; callers: ReadonlyMap<string, readonly import("./inbound-edges.ts").InboundEdge[]> }): Promise<{ inbound: InboundEdges; walk: Walk; attributed: readonly AttributedCall[]; references: readonly SettledReference[]; cuts: readonly Cut[] }> {
+async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = [], reverse?: ReverseCalls, originCalls?: OriginCalls, contradictions?: ContradictedCalls, syntax?: { seeds: readonly ModelDeclaration[]; callers: ReadonlyMap<string, readonly import("./inbound-edges.ts").InboundEdge[]> }, written?: WrittenUses): Promise<{ inbound: InboundEdges; walk: Walk; attributed: readonly AttributedCall[]; references: readonly SettledReference[]; cuts: readonly Cut[] }> {
   const attributed: AttributedCall[] = [];
+  const writtenRead = new Map<GraphNodeId, ReadonlySet<string>>();
+  const writtenHeld = new Map<GraphNodeId, HeldUse[]>();
   const references: SettledReference[] = [];
   const contradictedByEdge = new Map<string, ContradictedCall>();
   const contradicted: ContradictedCall[] = [];
@@ -816,7 +821,7 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
   }
   const cuts = (): readonly Cut[] => contradictedCallCuts(contradicted);
   for (;;) {
-    const inbound = build({ dropped, into: new Map([...into].map(([id, edges]) => [id, [...edges.values()]])), settled });
+    const inbound = build({ dropped, into: new Map([...into].map(([id, edges]) => [id, [...edges.values()]])), settled, written: { read: writtenRead, held: writtenHeld } });
     const walk = walkImpact(seeds, inbound, budget, syntax);
     if (targets === undefined || signal?.aborted) return { inbound, walk, attributed, references, cuts: cuts() };
     const fresh = inbound.followed().filter(({ edge }) => !checked.has(edgeKey(edge)));
@@ -868,6 +873,12 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
       for (const followed of recovered.edges) if (moveTo(followed.target, followed)) changed = true;
       attributed.push(...recovered.attributed);
       references.push(...recovered.settled);
+    }
+    if (written !== undefined && reached.length > 0) {
+      const uses = await written.into(reached, signal);
+      for (const [id, files] of uses.read) writtenRead.set(id, files);
+      for (const use of uses.held) writtenHeld.set(use.node.id, [...(writtenHeld.get(use.node.id) ?? []), use]);
+      if (uses.read.size > 0) changed = true;
     }
     if (!changed) return { inbound, walk, attributed, references, cuts: cuts() };
   }
