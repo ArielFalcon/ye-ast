@@ -242,6 +242,17 @@ would answer the single body that the probe with the veto disabled shows.
    `java-dispatch-targets.ts:83`). The platform-type veto of `declaredTypes` (`subtypedTypes`,
    `java-declared-types.ts:66-80`) keeps its current form: a library context may target any platform interface, so
    this reading proves nothing there.
+
+   As built, V1a (`java-function-values.ts`): `Hierarchy.functionValues` reads each lambda and method reference to
+   `FunctionTargets`, repository types or `library`, or `unsettled`. The veto on a functional interface `F` holds when a
+   value is unsettled or targets `F` or a type below it. Settled contexts are a declaration with a written type (never
+   `var`), a cast, a `return`, conditional, switch and parenthesized arms, a value that is the result of another (the
+   one abstract method of a repository target; a library target leaves it unsettled), and an argument of a call written
+   without a receiver or on `this`, resolved in the innermost enclosing type that has a member of the name, over every
+   declaration the arity may select. An assignment to an existing variable, a constructor argument and every call on
+   another receiver are unsettled. Name resolution is the strict reading's, so a file whose on-demand imports could
+   bind the written name keeps the veto. V1b adds the library-invocation reading at the receiver branch of
+   `argumentTargets`.
 6. **An undeclared supertype is never guessed.** A supertype the snapshot does not declare keeps the strict reading
    `unsettled` and the call a cut. Generated Java sources enter as an ADR-0037 build-output kind (its decision 1 lists
    "generated sources" for a later kind that has measured evidence, which this ADR supplies): a directory the host

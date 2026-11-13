@@ -6,6 +6,7 @@ import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, heldJavaProject, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
+import { targetsOfFunctionValue, type FunctionTargets, type FunctionValue } from "./java-function-values.ts";
 import { createJavaProject, isTypeDeclaration, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: DispatchTargets = { kind: "unknown", reason: "dispatch not proven" };
@@ -37,8 +38,8 @@ export interface Hierarchy {
   unsettledSupertypes: ReadonlyMap<TypeDecl, readonly string[]>;
   /** Anonymous and local classes, which the project does not place: the repository types they extend or implement and the unsettled names. */
   unplaced: readonly { file: JavaFile; node: Node; types: readonly TypeDecl[]; names: readonly string[]; fqns: readonly string[] }[];
-  /** Whether a source holds a lambda or a method reference, which implements a functional interface no declaration names. */
-  functionValues: boolean;
+  /** What each lambda and method reference of the sources may implement: a functional interface no declaration names (ADR-0044 decision 5). */
+  functionValues(): readonly FunctionTargets[];
   /** A method's parameter types as the strict reading settles them; `undefined` when one of them is not settled. */
   signatureOf(method: MethodDecl): Signature | undefined;
 }
@@ -51,7 +52,8 @@ export interface Hierarchy {
  * owner or the method other than the language's own (a generator or a proxy may implement it); an owner whose
  * hierarchy reaches a type outside the repository; a supertype the strict reading leaves unsettled under the name of
  * the owner or a type below it; an anonymous or local class below it; a lambda or method reference while the owner is a
- * functional interface; an enum below it; or a class whose chain reaches no single body of the method's signature.
+ * functional interface, unless every function value's context proves a type that is neither a functional interface of
+ * the owner's closure nor below one; an enum below it; or a class whose chain reaches no single body of the method's signature.
  * The candidates and the closure verdict are read apart (`closureOf`), and the port's answer is derived from them.
  */
 export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): ImportOrigins["dispatchTargets"] {
@@ -151,6 +153,13 @@ export function closureOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeD
   return { kind: "closed", candidates: sortCandidates(closed) };
 }
 
+/** Whether a function value may implement one of the functional interfaces: its context leaves a target unsettled, or proves one that is an interface or below one. */
+function functionValueMayImplement(functional: readonly TypeDecl[], hierarchy: Hierarchy): boolean {
+  if (functional.length === 0) return false;
+  const reached = new Set(functional.flatMap((type) => [type, ...belowOf(type, hierarchy)]));
+  return hierarchy.functionValues().some((targets) => targets === "unsettled" || targets.some((target) => target !== "library" && reached.has(target)));
+}
+
 /** The first veto `targetsOf` applies, in its order; none means every concrete class below the owner may be walked for a body. */
 function vetoOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl): DispatchUnknownReason | undefined {
   if (isAnnotated(owner.node) || isAnnotated(method.node)) return "generated implementation";
@@ -159,7 +168,7 @@ function vetoOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl): Disp
   const names = new Set([owner, ...below].map((type) => type.name));
   if ([...hierarchy.unsettled].some((name) => names.has(name))) return "dispatch not proven";
   if (hierarchy.unplaced.some(({ types, names: unsettled }) => types.some((type) => type === owner || below.has(type)) || unsettled.some((name) => names.has(name)))) return "dispatch not proven";
-  if (hierarchy.functionValues && [owner, ...below].some((type) => type.kind === "interface" && isFunctional(type, hierarchy))) return "dispatch not proven";
+  if (functionValueMayImplement([owner, ...below].filter((type) => type.kind === "interface" && isFunctional(type, hierarchy)), hierarchy)) return "dispatch not proven";
   if ([...below].some((type) => type.kind === "other")) return "dispatch not proven";
   return undefined;
 }
@@ -235,6 +244,19 @@ function isFunctional(type: TypeDecl, hierarchy: Hierarchy): boolean {
   if (members === undefined) return true;
   const abstract = [...members].filter(([, member]) => member.abstract).map(([signature]) => signature).filter((signature) => !OBJECT_METHODS.has(arityOf(signature)));
   return abstract.length <= 1;
+}
+
+/**
+ * The one abstract method of a functional interface, when no other declaration of its name and arity sits in the
+ * interface or above it, so no return type of an overridden or merged declaration can differ from it.
+ */
+function functionalMethodOf(type: TypeDecl, hierarchy: Hierarchy): MethodDecl | undefined {
+  const members = type.kind === "interface" ? membersOf(type, hierarchy, new Map()) : undefined;
+  const abstract = [...(members ?? [])].filter(([signature, member]) => member.abstract && !OBJECT_METHODS.has(arityOf(signature)));
+  const only = abstract.length === 1 ? abstract[0]![1].method : undefined;
+  if (only === undefined) return undefined;
+  const same = ancestorsOf(type, hierarchy).flatMap((ancestor) => ancestor.methods).filter((method) => method.name === only.name && method.parameterTypes.length === only.parameterTypes.length && !method.modifiers.includes("static"));
+  return same.length === 1 ? only : undefined;
 }
 
 /**
@@ -333,11 +355,11 @@ export function readHierarchy(files: readonly JavaFile[], project: JavaProject):
   const unplaced: { file: JavaFile; node: Node; types: TypeDecl[]; names: string[]; fqns: string[] }[] = [];
   const invokedSupertypes = new Map<string, TypeDecl[]>();
   const unsettledSupertypes = new Map<TypeDecl, string[]>();
-  let functionValues = false;
+  const values: FunctionValue[] = [];
   for (const file of files) {
     const pending: Node[] = [file.root];
     for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-      if (FUNCTION_VALUES.has(node.type)) functionValues = true;
+      if (FUNCTION_VALUES.has(node.type)) values.push({ file, node });
       if (isTypeDeclaration(node) || isAnonymous(node)) {
         const scope = enclosingType(node.parent ?? node, file, project);
         const declared = placed.get(node.id);
@@ -383,7 +405,16 @@ export function readHierarchy(files: readonly JavaFile[], project: JavaProject):
     if (!signatures.has(method)) signatures.set(method, readSignature(method, project));
     return signatures.get(method);
   };
-  return { subtypes, supertypes, superclasses, outside, unsettled, unplaced, invokedSupertypes, unsettledSupertypes, functionValues, signatureOf };
+  let read: FunctionTargets[] | undefined;
+  const hierarchy: Hierarchy = {
+    subtypes, supertypes, superclasses, outside, unsettled, unplaced, invokedSupertypes, unsettledSupertypes, signatureOf,
+    functionValues: () => (read ??= values.map((value) => targetsOfFunctionValue(value, {
+      project,
+      ancestors: (type) => { const above = ancestorsOf(type, hierarchy); return above.some((ancestor) => outside.has(ancestor)) ? undefined : above; },
+      functionalMethod: (type) => functionalMethodOf(type, hierarchy),
+    }))),
+  };
+  return hierarchy;
 }
 
 function isAnnotated(declaration: Node): boolean {

@@ -828,9 +828,19 @@ test("a port with two implementations stays a dispatch cut", async () => {
   assert.deepEqual(httpPaths(found.value), []);
 });
 
-test("a function value anywhere in the repository keeps the veto of a one-method port (ADR-0044 decision 5)", async () => {
+test("a function value whose context proves a library type leaves the one-method port closed, so the trace reaches the adapter's request", async () => {
   commit({ ...HEXAGONAL, "src/main/java/shop/Util.java": "package shop;\nclass Util { Runnable r = () -> {}; }\n" });
   const found = await trace(HEXAGONAL_ROOT);
-  assert.equal(found.status, "partial");
-  assert.deepEqual(httpPaths(found.value), []);
+  assert.deepEqual(found.value.steps.map((step) => step.symbol), ["get", "checkout", "customer", "customer"]);
+  assert.deepEqual(httpPaths(found.value), ["/customers/1"]);
+  assert.equal(found.status, "complete");
+});
+
+test("a function value that may implement the port, or whose context is unsettled, keeps the dispatch cut (ADR-0044 decision 5)", async () => {
+  for (const util of ["CustomersPort p = id -> \"\";", "Object o = java.util.stream.Stream.of(1).map(x -> x);"]) {
+    commit({ ...HEXAGONAL, "src/main/java/shop/Util.java": `package shop;\nclass Util { ${util} }\n` });
+    const found = await trace(HEXAGONAL_ROOT);
+    assert.equal(found.status, "partial", util);
+    assert.deepEqual(httpPaths(found.value), [], util);
+  }
 });

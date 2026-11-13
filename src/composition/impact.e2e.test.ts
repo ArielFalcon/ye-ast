@@ -810,6 +810,16 @@ test("callers walks from a symbol and from a line range alike, to the same route
   assert.equal("mergeBase" in bySymbol.fact.value, false);
 });
 
+test("callers reaches the caller of a port through its implementation with or without a function value that may implement the port (ADR-0044 fixture 10)", async () => {
+  commit(SHOP, "base");
+  const without = await ye("callers", [], ["src/main/java/shop/Util.java:fmt"]);
+  commit({ "src/main/java/shop/Handlers.java": "package shop;\nclass Handlers { OrderService service = () -> \"x\"; }\n" }, "function value");
+  const withValue = await ye("callers", [], ["src/main/java/shop/Util.java:fmt"]);
+
+  assert.deepEqual(without.fact.value.entrypoints.map((entry) => entry.name), ["GET /orders/{id}"]);
+  assert.deepEqual(withValue.fact.value, without.fact.value);
+});
+
 test("callers of a symbol the revision does not hold fails with the query code and prints no fact", async () => {
   commit(SHOP, "base");
   const result = await ye("callers", [], ["src/main/java/shop/Util.java:gone"]);

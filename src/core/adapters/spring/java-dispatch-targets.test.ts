@@ -62,7 +62,7 @@ test("an anonymous or a local class that implements the owner or a type below it
 test("a lambda or a method reference makes the bodies of a functional interface unknown, not those of an interface with two abstract methods", async () => {
   const functional = java("Port.java", ["package app;", "", "public interface Port {", "  void send(String message);", "  boolean equals(Object other);", "}"]);
   const single = java("Sender.java", ["package app;", "", "public class Sender implements Port {", "  public void send(String message) {}", "}"]);
-  const lambda = java("Tasks.java", ["package app;", "", "class Tasks {", "  Runnable task = () -> {};", "}"]);
+  const lambda = java("Tasks.java", ["package app;", "", "class Tasks {", "  Object task = java.util.stream.Stream.of(1).map(x -> x);", "}"]);
 
   assert.deepEqual(await targetsOf([single, lambda], functional), { kind: "unknown", reason: "dispatch not proven" });
   assert.deepEqual(await targetsOf([single], functional), { kind: "bodies", bodies: [body(single, 4)] });
@@ -117,7 +117,7 @@ test("an inherited method of one name and arity spelled with other parameter typ
   const base = java("Base.java", ["package app; public interface Base<T> { void send(T message); }"]);
   const port = java("Port.java", ["package app;", "public interface Port extends Base<String> {", " void close();", " void send(String message);", "}"]);
   const plain = java("Port.java", ["package app;", "public interface Port {", " void close();", " void send(String message);", " void send(Integer message);", "}"]);
-  const lambda = java("Refs.java", ["package app; class Refs { Runnable task = () -> {}; }"]);
+  const lambda = java("Refs.java", ["package app; class Refs { Object task = java.util.stream.Stream.of(1).map(x -> x); }"]);
   const sender = java("Sender.java", ["package app;", "public class Sender implements Port {", " public void close() {}", " public void send(String message) {}", " public void send(Integer message) {}", "}"]);
   const closeOf = async (owner: SourceFile) => (await createJavaNameBindings(createJavaParser, [owner, base, lambda, sender]).dispatchTargets([{ file: owner.path, line: 3, name: "close" }]))[0];
 
@@ -129,7 +129,7 @@ test("an abstract method a more specific interface declares again overrides the 
   const base = java("Base.java", ["package app; public interface Base { default void close() {} }"]);
   const strict = java("Strict.java", ["package app; public interface Strict extends Base { void close(); }"]);
   const port = java("Port.java", ["package app;", "public interface Port extends Strict, Base {", " void send(String message);", "}"]);
-  const lambda = java("Refs.java", ["package app; class Refs { Runnable task = () -> {}; }"]);
+  const lambda = java("Refs.java", ["package app; class Refs { Object task = java.util.stream.Stream.of(1).map(x -> x); }"]);
 
   assert.deepEqual(await targetsOf([base, strict, lambda, SENDER], port, 3), { kind: "bodies", bodies: [body(SENDER, 4)] });
 });
@@ -228,7 +228,7 @@ async function reading<T>(sources: readonly SourceFile[], owner: string, method:
 test("the owner states the candidate bodies of a vetoed closure and the port still answers unknown", async () => {
   const port = java("Port.java", ["package app;", "", "public interface Port {", "  void send(String m);", "}"]);
   const sender = java("Sender.java", ["package app;", "", "public class Sender implements Port {", "  public void send(String m) {}", "}"]);
-  const lambda = java("Tasks.java", ["package app;", "", "class Tasks {", "  Runnable task = () -> {};", "}"]);
+  const lambda = java("Tasks.java", ["package app;", "", "class Tasks {", "  Object task = java.util.stream.Stream.of(1).map(x -> x);", "}"]);
 
   assert.deepEqual(await targetsOf([sender, lambda], port), { kind: "unknown", reason: "dispatch not proven" });
   await reading([port, sender, lambda], "Port", "send", ({ project, hierarchy, method }) => {
