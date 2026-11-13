@@ -87,14 +87,6 @@ test("a record's canonical constructor, a class's default constructor and T::new
   assert.deepEqual(fact.value.steps.filter((step) => step.kind === "class").map((step) => step.symbol), []);
 });
 
-test("a construction of a type outside the repository keeps its cut", async () => {
-  commit(use('    throw new IllegalArgumentException("x");'));
-
-  const fact = await trace("Use.java:run");
-
-  assert.deepEqual(cutsOf(fact), [["callee-unknown", `${JAVA}/Use.java:7 IllegalArgumentException`]]);
-});
-
 test("a compact canonical constructor is a written body, so a construction is never settled as supplied", async () => {
   commit({
     [`${JAVA}/Range.java`]: "package com.acme;\n\npublic record Range(int lo, int hi) {\n  public Range {\n    Check.count();\n  }\n}\n",

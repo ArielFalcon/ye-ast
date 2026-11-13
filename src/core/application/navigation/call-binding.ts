@@ -31,7 +31,8 @@ type Outside = Extract<ImportOrigin, { kind: "external" | "ambient" }>;
  *   When the receiver type declares several members of the name without a selection, the edge keeps the index target
  *   as a name match rather than proven (RFC-0024 U3).
  * - `receiver`: a member call whose receiver a proof decides, with the declaration the proof binds it to, if any;
- * - `outside`: a bare name or a plain chain rooted at a package or the language's libraries;
+ * - `outside`: a bare name, a plain chain or a nominal language's constructor reference rooted at a package or the
+ *   language's libraries;
  * - `unbound`: nothing binds it, with the declarations of its name the language rule admits (`candidates`) and those
  *   the call is attributed to (`attributed`): the members of `this` it may run, the constructors its chaining may run,
  *   the declarations of its file a bare name may name, or the members of its receiver's proven type.
@@ -199,7 +200,7 @@ export function createCallBindings({ store, navigation, origins, binder, declara
     for (const [index, call] of calls.entries()) {
       const { body, reference } = call;
       if (reference.kind === "references" && hasTyping(reference.file, "nominal")) {
-        typed.push({ index, member: reference.name, site: call });
+        rooted.push({ index, member: reference.name });
         continue;
       }
       const own = ownMemberOf(compactSpelling(reference.name));

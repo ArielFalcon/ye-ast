@@ -593,6 +593,10 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     let nextAnswer = 0;
     for (const [index, reference] of references.entries()) {
       const read = referencedRead[index]!;
+      if (read.kind === "outside") {
+        await settleBinding(reference, read);
+        continue;
+      }
       const answer = read.kind === "declared" ? answered[nextAnswer++] : undefined;
       if (answer?.kind === "generated") continue;
       if (answer?.kind === "supplied") {
