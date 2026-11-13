@@ -1,17 +1,11 @@
-import { isJvmTestFile } from "./java.ts";
-
-const JVM_SOURCE_WITHOUT_EXTRACTOR = /\.(kt|kts|groovy|scala)$/;
-const GRADLE_BUILD_SCRIPT = /\.gradle\.kts$/;
-const GRADLE_BUILD_LOGIC = /(^|\/)buildSrc\//;
-const UNCOVERED_LANGUAGE = /\.(js|jsx|mjs|cjs|py|go|rs|rb|php|cs|c|h|cc|cpp|hpp|swift|dart|vue|svelte)$/;
+import { classOfPath, isUncoveredJvmSource } from "./path-class.ts";
 
 /**
- * Code in a language ye-ast declares no extractor for, so it may hold what an answer cannot read. Gradle build scripts,
- * `buildSrc` and JVM tests declare no entrypoints and are not callers.
+ * Code in a language ye-ast declares no extractor for, so it may hold what an answer cannot read. Build configuration
+ * and JVM tests declare no entrypoints and are not callers.
  */
 export function isUncoveredSource(path: string): boolean {
-  if (JVM_SOURCE_WITHOUT_EXTRACTOR.test(path)) return !GRADLE_BUILD_SCRIPT.test(path) && !GRADLE_BUILD_LOGIC.test(path) && !isJvmTestFile(path);
-  return UNCOVERED_LANGUAGE.test(path);
+  return classOfPath(path).kind === "uncovered-source";
 }
 
 /**
@@ -22,5 +16,5 @@ export function isUncoveredSource(path: string): boolean {
  * nothing else could explain it. A JVM source cuts either way: Spring reads it and no extractor parses it.
  */
 export function cutsCompleteness(path: string, declaredSource: boolean): boolean {
-  return isUncoveredSource(path) && (!declaredSource || JVM_SOURCE_WITHOUT_EXTRACTOR.test(path));
+  return isUncoveredSource(path) && (!declaredSource || isUncoveredJvmSource(path));
 }

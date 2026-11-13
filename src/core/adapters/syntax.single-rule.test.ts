@@ -106,6 +106,12 @@ const RULES: readonly Rule[] = [
     owners: ["spring/java-symbols.ts"],
     pending: ["tree-sitter/java-member-names.adapter.ts"],
   },
+  {
+    concept: "the paths of a JVM language no reader reads (the owner is core/domain/languages/path-class.ts, ADR-0072)",
+    pattern: /\b(?:kts?|groovy|scala)\|(?:kts?|groovy|scala)\b/,
+    owners: [],
+    pending: [],
+  },
 ];
 
 function sourceFiles(directory: string): string[] {

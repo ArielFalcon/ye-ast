@@ -1,4 +1,5 @@
 import type { Node } from "web-tree-sitter";
+import { isUncoveredJvmSource } from "../../domain/languages/path-class.ts";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
@@ -9,7 +10,7 @@ import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, heldJavaProject, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
-import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
+import { annotationAt, namesDynamicImplementation, resolve } from "./java-declared-types.ts";
 import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
 import { REPOSITORY_FRAGMENTS, REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
 import { createJavaProject, MEMBERLESS_PLATFORM_INTERFACES, readArgumentSignature, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Signature, type TypeDecl } from "./java-symbols.ts";
@@ -69,7 +70,7 @@ interface ReadFile extends ReceiverSource {
  * target proves it. Non-Java and non-invocation sites remain unknown.
  */
 export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts, hold?: ParseHold, build: ProjectBuild = {}): ImportOrigins["receiverMethods"] {
-  const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
+  const unreadJvm = paths.some(isUncoveredJvmSource);
   let layout: string | undefined;
   const resolved = async (sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ReceiverMethod[]> => {
     const results: ReceiverMethod[] = sites.map(() => UNKNOWN);
@@ -146,7 +147,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
  * established only from a hierarchy the reader read in full.
  */
 export function createJavaImplementedDeclarations(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): ImportOrigins["implementedDeclarations"] {
-  const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
+  const unreadJvm = paths.some(isUncoveredJvmSource);
   const analyze = (sites: readonly ImplementingSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly ImplementedDeclarations[] => {
     if (!provesBinding(files, project, unparsed, unreadJvm)) return sites.map(() => UNKNOWN_DECLARATIONS);
     const methods = methodsByPlace(project);

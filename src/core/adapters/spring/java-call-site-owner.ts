@@ -6,6 +6,7 @@
  */
 import type { JavaFile, JavaProject, MethodDecl, TypeDecl } from "./java-symbols.ts";
 import { scopeOf } from "./java-symbols.ts";
+import { isUncoveredJvmSource } from "../../domain/languages/path-class.ts";
 import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchTargets } from "../../ports/import-origins.port.ts";
@@ -16,7 +17,6 @@ import { argumentsOf, descendants, typeNameOf } from "./java-members.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { callKey, createResolver, provesBinding, type ReceiverSource } from "./java-receiver-methods.ts";
 import { dispatchReadingOf, type DispatchReading } from "./java-dispatch-targets.ts";
-import { UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import type { UnparsedSource } from "./java-project.ts";
 import { annotationUses, isAnnotation } from "./request-mapping.ts";
 import { BEAN, NAMED_COMPONENTS, PRIMARY, QUALIFIER } from "./java-value-vocabulary.ts";
@@ -49,7 +49,7 @@ export const NO_PROOF: CallSiteProof = { unparsed: [], unreadJvm: false };
  * it reads, and every JVM source no extractor reads in the universe it was handed.
  */
 export function callSiteProofOf(files: readonly SourceFile[], libraries: readonly LibrarySource[], unparsed: readonly UnparsedSource[], unreadableLibraries: readonly UnparsedSource[], jdks?: LibraryReading): CallSiteProof {
-  return { unparsed: [...unparsed, ...unreadableLibraries], unreadJvm: [...files, ...libraries].some(({ path }) => UNREAD_JVM_SOURCE.test(path)), ...(jdks === undefined ? {} : { libraries: jdks }) };
+  return { unparsed: [...unparsed, ...unreadableLibraries], unreadJvm: [...files, ...libraries].some(({ path }) => isUncoveredJvmSource(path)), ...(jdks === undefined ? {} : { libraries: jdks }) };
 }
 
 interface ProjectReading {

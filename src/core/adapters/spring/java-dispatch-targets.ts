@@ -1,4 +1,5 @@
 import type { Node } from "web-tree-sitter";
+import { isUncoveredJvmSource } from "../../domain/languages/path-class.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchSite, DispatchTargets, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { DispatchUnknownReason } from "../../domain/shared/fact.ts";
@@ -6,7 +7,7 @@ import type { LibraryReading } from "../../ports/library-signatures.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, heldJavaProject, withJavaSources, type UnparsedSource } from "./java-project.ts";
-import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
+import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf } from "./java-declared-types.ts";
 import { targetsOfFunctionValue, type FunctionTargets, type FunctionValue } from "./java-function-values.ts";
 import { createJavaProject, isTypeDeclaration, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type TypeDecl } from "./java-symbols.ts";
 
@@ -58,7 +59,7 @@ export interface Hierarchy {
  * The candidates and the closure verdict are read apart (`closureOf`), and the port's answer is derived from them.
  */
 export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}, libraries?: LibraryReading): ImportOrigins["dispatchTargets"] {
-  const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
+  const unreadJvm = paths.some(isUncoveredJvmSource);
   return async (sites, signal) => {
     if (sites.length === 0) return [];
     const read = await parser();

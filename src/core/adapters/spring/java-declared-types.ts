@@ -1,4 +1,5 @@
 import type { Node } from "web-tree-sitter";
+import { isUncoveredJvmSource } from "../../domain/languages/path-class.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredType, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
@@ -31,8 +32,6 @@ const DYNAMIC_IMPLEMENTATIONS: ReadonlyMap<string, string> = new Map([
   ["MethodHandleProxies", "java.lang.invoke.MethodHandleProxies"],
   ["LambdaMetafactory", "java.lang.invoke.LambdaMetafactory"],
 ]);
-/** Sources of JVM languages no extractor reads: their classes may implement any platform type. */
-export const UNREAD_JVM_SOURCE = /\.(kt|kts|groovy|scala)$/;
 /** The supertypes every repository class, enum and record has without writing them (JLS 8.1.4, 8.9, 8.10). */
 const IMPLICIT_SUPERTYPES: readonly string[] = ["java.lang.Object", "java.lang.Enum", "java.lang.Comparable", "java.io.Serializable", "java.lang.constant.Constable", "java.lang.Record"];
 
@@ -49,7 +48,7 @@ export type Resolved = { kind: "repository"; type?: TypeDecl } | { kind: "platfo
  * aspect, a Java source that does not parse, or a source of a JVM language no extractor reads (ADR-0029 decision 9).
  */
 export function createJavaDeclaredTypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], build: ProjectBuild = {}): ImportOrigins["declaredTypes"] {
-  const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
+  const unreadJvm = paths.some(isUncoveredJvmSource);
   return async (sites, signal) => {
     const results: DeclaredType[] = sites.map(() => UNKNOWN);
     if (unreadJvm || sites.length === 0) return results;

@@ -2,6 +2,7 @@ import type { Node } from "web-tree-sitter";
 import { fileCut, type UnresolvedUse } from "../../domain/impact/impact-cuts.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import { isJvmTestFile } from "../../domain/languages/java.ts";
+import { isUncoveredJvmSource } from "../../domain/languages/path-class.ts";
 import { JAVA_PROFILE } from "../../domain/languages/profiles.ts";
 import { relation, type Relation, type SymbolRef } from "../../domain/relations/relation.ts";
 import type { Cut, Finding } from "../../domain/shared/fact.ts";
@@ -9,7 +10,6 @@ import type { LanguageRelationsReader, LanguageRelations } from "../../ports/lan
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { javaTypeReferences } from "../tree-sitter/java-relations.adapter.ts";
-import { UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import { enclosingType, heldJavaProject, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { createJavaProject, platformTypeName, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
@@ -20,7 +20,7 @@ export function createJavaRelations(parser: () => Promise<JavaParser>): Language
     async extract(sources, options = {}) {
       const paths = options.paths ?? sources.map(({ path }) => path);
       const present = new Set(sources.map(({ path }) => path));
-      const missing = paths.filter((path) => !isJvmTestFile(path) && (UNREAD_JVM_SOURCE.test(path) || (JAVA_PROFILE.reads(path) && !present.has(path))));
+      const missing = paths.filter((path) => isUncoveredJvmSource(path) || (JAVA_PROFILE.reads(path) && !isJvmTestFile(path) && !present.has(path)));
       const derive = (files: readonly JavaFile[], project: JavaProject, unparsed: readonly UnparsedSource[]): LanguageRelations => {
         const relations: Finding<Relation>[] = [];
         const cuts: Cut[] = [];
@@ -31,7 +31,7 @@ export function createJavaRelations(parser: () => Promise<JavaParser>): Language
         const unread = (path: string, line: number, name: string) => cuts.push({ kind: "unresolved-link", at: [`${path}:${line} ${name}`], reason: "relation-unread", reach: { kind: "anything", runtime: "java" } });
         const unplaced = (file: JavaFile, node: Node, candidates: readonly TypeDecl[] = []) => unresolved.push({ kind: "references", file: file.path, line: node.startPosition.row + 1, column: node.startPosition.column, name: node.text, candidates: candidates.map((type) => type.fqn).toSorted() });
         for (const path of missing) {
-          if (UNREAD_JVM_SOURCE.test(path)) cuts.push(fileCut("no-extractor", path, "language"));
+          if (isUncoveredJvmSource(path)) cuts.push(fileCut("no-extractor", path, "language"));
           else unread(path, 1, "unread");
         }
         for (const source of unparsed) unread(source.path, source.line, "source-unreadable");
