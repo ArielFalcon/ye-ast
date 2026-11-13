@@ -104,3 +104,12 @@ test("one undecided condition yields an alternative per outcome only when the ou
   const twice = readRequestValue(plus(lit("/a"), { kind: "choose", condition, yes: lit("/b"), no: lit("") }, { kind: "choose", condition, yes: lit("/c"), no: lit("") }));
   assert.equal(twice.alternatives, undefined);
 });
+
+test("trimming whitespace keeps a partial string's stated parts and decides nothing a hole at an edge could change", () => {
+  const trim = (value: RequestValue, mode: string): RequestValue => ({ kind: "operation", operator: "trim", operands: [value, lit(mode)] });
+  const hole: RequestValue = { kind: "parameter", index: 0 };
+  assert.deepEqual(readRequestValue(trim(plus(lit(" /orders/"), hole), "both")).url, [{ kind: "text", text: "/orders/" }, { kind: "runtime" }]);
+  assert.deepEqual(readRequestValue(trim(lit(" /orders "), "start")).url, [{ kind: "text", text: "/orders " }]);
+  assert.deepEqual(readRequestValue(trim(lit(" /orders "), "end")).url, [{ kind: "text", text: " /orders" }]);
+  assert.ok(readRequestValue(trim(plus(lit("/orders/"), hole, lit(" ")), "end")).url.every((part) => part.kind === "unknown"), "the hole may end in whitespace");
+});

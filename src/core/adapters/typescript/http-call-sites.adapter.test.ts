@@ -1963,3 +1963,31 @@ test("a field both a class and its base class write in their constructors stays 
   const found = await reader.of(fieldOwner("this.handlerError = this.handler.createHandleError('a');", "", outside), "repo");
   assert.ok(found.some((site) => site.line === 9 && site.target.status === "unknown" && site.diagnostic?.cause === "dispatch-disagreement"));
 });
+
+test("a request path derived through a string method is linked where the method is modeled and unresolved where it is not, never absent", async () => {
+  const derive = async (body: string, path = "'/addresses/' + id") => {
+    const files = [source("derive.ts", [
+      "import { HttpClient } from '@angular/common/http'",
+      `function build(path: string, params: any) { ${body} }`,
+      "class Rest { constructor(private http: HttpClient) {}",
+      "  get(path: string, options?: any) { return this.http.get(build(path, options?.pathParams)) } }",
+      `class Addresses { constructor(private rest: Rest) {} one(id: string) { return this.rest.get(${path}, { pathParams: { id } }) } }`,
+    ].join("\n"))];
+    const sites = (await reader.of(files, "repo")).filter((site) => site.symbol === "Addresses.one");
+    return sites.map((site) => site.target.status === "complete" && "path" in site.target.value ? site.target.value.path : site.diagnostic?.cause ?? site.target.status);
+  };
+  for (const body of [
+    "return path", "const same = path; return same",
+    "return path.trim()", "const trimmed = path.trim(); return trimmed", "return path.trimStart().trimEnd()", "let r = path; r = r.trim(); return r",
+  ]) assert.deepEqual(await derive(body), body.includes("r = r.trim()") ? ["destination-undecidable"] : ["/addresses/{}"], body);
+  assert.deepEqual(await derive("return path.trim()", "' /addresses/' + id"), ["/addresses/{}"], "leading whitespace goes");
+  assert.deepEqual(await derive("return path.trim()", "'/addresses/' + id + ' '"), ["destination-undecidable"], "a trailing space may end a hole's whitespace");
+  for (const body of [
+    "return path.split('/').join('/')",
+    "const parts = path.split('/'); return parts.join('/')",
+    "return path.split('/').reduce((acc: string, part: string) => acc + '/' + part, '')",
+    "return path.padEnd(30, '-')",
+    "const padded = path.padEnd(30, '-'); return padded",
+    "return path.slice(0).toLowerCase()",
+  ]) assert.deepEqual(await derive(body), ["destination-undecidable"], body);
+});

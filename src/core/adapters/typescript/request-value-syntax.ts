@@ -2,6 +2,8 @@ import ts from "typescript";
 import { ABSENT_VALUE, UNKNOWN_VALUE, valueMayBeObject, valueUnknown, type RequestValue } from "./request-values.ts";
 import { unwrapped } from "./syntax.ts";
 
+const TRIMS: ReadonlyMap<string, string> = new Map([["trim", "both"], ["trimStart", "start"], ["trimEnd", "end"]]);
+
 interface ValueSyntaxDeps {
   binding(node: ts.Identifier): { parameter: number; stable: Promise<boolean>; initializer?: ts.Expression } | { expression: ts.Expression; replacing?: readonly ts.Expression[]; stable: () => Promise<boolean> } | { unsafe: true } | undefined;
   callee(node: ts.CallExpression): Promise<readonly (ts.Node | undefined)[] | undefined>;
@@ -142,6 +144,8 @@ export function requestValueSyntax(deps: ValueSyntaxDeps): (node: ts.Expression)
       if (ts.isPropertyAccessExpression(node.expression) && deps.stringsSafe) {
         const receiver = node.expression.expression;
         if (node.expression.name.text === "startsWith" && node.arguments.length === 1) return operation("startsWith", await expression(receiver, trail), await expression(node.arguments[0]!, trail));
+        const trimming = TRIMS.get(node.expression.name.text);
+        if (trimming !== undefined && node.arguments.length === 0) return operation("trim", await expression(receiver, trail), { kind: "literal", value: trimming });
         if (node.expression.name.text === "replace" && node.arguments.length === 2 && ts.isStringLiteralLike(node.arguments[1]!) && node.arguments[1]!.text === "") {
           const writtenPattern = node.arguments[0]!;
           const pattern = ts.isIdentifier(writtenPattern) ? await deps.initializer(writtenPattern) : writtenPattern;

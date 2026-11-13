@@ -1005,6 +1005,11 @@ function hasParameterConditional(declaration: Declaration, node: ts.Node): boole
   return ts.forEachChild(node, (child) => (hasParameterConditional(declaration, child) ? true : undefined)) ?? false;
 }
 
+/** A whole path the code fills at run time from nothing it states: the engine knows no shape for it, so it is an unknown, never a path of one hole. */
+function isBareRunTimeValue(read: Awaited<ReturnType<SummaryResolver["evaluate"]>>): boolean {
+  return read.status === "known" && read.value === undefined && read.text === RUN_TIME_HOLE && read.holes.length === 1 && read.holes[0] === undefined;
+}
+
 /** The text and holes one branch states: its literal segments written as the code writes them, its expressions folded. */
 async function readBranch(declaration: Declaration, branch: Branch, resolver: SummaryResolver): Promise<(PathRead & { encodings: readonly boolean[] }) | { status: "undecided"; cause: SummaryCause; evidence: readonly Evidence[] }> {
   let text = "";
@@ -1025,7 +1030,8 @@ async function readBranch(declaration: Declaration, branch: Branch, resolver: Su
       values.push({ kind: "literal", value: node.text });
       continue;
     }
-    const read = await resolver.evaluate(declaration.file, part.node);
+    const evaluated = await resolver.evaluate(declaration.file, part.node);
+    const read = branch.parts.length === 1 && isBareRunTimeValue(evaluated) ? { status: "undecided" as const, cause: "destination-undecidable" as const, evidence: [placeOf(declaration.file, part.node)] } : evaluated;
     if (read.status === "undecided") {
       undecided = true;
       const value = resolver.valueFacts === undefined ? valueUnknown(read.evidence, read.cause) : await resolver.valueFacts(declaration.file, part.node);

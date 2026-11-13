@@ -13,7 +13,7 @@ export type RequestValue =
   | { kind: "object"; fields: ReadonlyMap<string, RequestValue> }
   | { kind: "property"; owner: RequestValue; name: string; optional: boolean }
   | { kind: "choose"; condition: RequestValue; yes: RequestValue; no: RequestValue }
-  | { kind: "operation"; operator: "+" | "!" | "||" | "&&" | "??" | "startsWith" | "trim-start" | "trim-end" | "encode" | "substitute"; operands: readonly RequestValue[] }
+  | { kind: "operation"; operator: "+" | "!" | "||" | "&&" | "??" | "startsWith" | "trim-start" | "trim-end" | "trim" | "encode" | "substitute"; operands: readonly RequestValue[] }
   | { kind: "apply"; body: RequestValue; arguments: readonly RequestValue[] };
 
 type Value = (
@@ -241,6 +241,12 @@ function reduceRequestValue(root: RequestValue, work: { evaluations: number; ins
           break;
         }
         const second = secondTerm === undefined ? unknown() : evaluate(secondTerm, args);
+        if (term.operator === "trim") {
+          const mode = second.kind === "literal" ? second.value : undefined;
+          const trimmed = first.kind === "literal" && typeof first.value === "string" ? { kind: "literal" as const, value: whitespaceTrimmed(first.value, mode), supplied: first.supplied } : first.kind === "text" ? trimmedWhitespace(first, mode) : undefined;
+          result = trimmed ?? (first.kind === "unknown" ? first : { ...unknown(), supplied: first.supplied });
+          break;
+        }
         if (term.operator === "+") {
           if (first.kind === "literal" && second.kind === "literal" && typeof first.value === "string" && typeof second.value === "string") result = { kind: "literal", value: first.value + second.value, supplied: supplied([first, second]) };
           else result = { kind: "text", parts: [first, second], supplied: supplied([first, second]) };
@@ -309,6 +315,24 @@ function substitutedText(subject: Value, patterns: readonly Value[], unknown: ()
     kept.push(part);
   }
   return subject;
+}
+
+function whitespaceTrimmed(text: string, mode: unknown): string {
+  return mode === "start" ? text.trimStart() : mode === "end" ? text.trimEnd() : text.trim();
+}
+
+/** A text keeps its stated parts when only whitespace at its edges goes: an edge that is a hole stays the hole, and an edge made only of whitespace leaves the neighbour undecided. */
+function trimmedWhitespace(value: Value & { kind: "text" }, mode: unknown): Value | undefined {
+  const parts = flattened(value);
+  const edges = mode === "start" ? [0] : mode === "end" ? [parts.length - 1] : [0, parts.length - 1];
+  for (const index of edges) {
+    const part = parts[index]!;
+    if (part.kind !== "literal" || typeof part.value !== "string") continue;
+    const text = whitespaceTrimmed(part.value, index === 0 ? "start" : "end");
+    if (text === "" && parts.length > 1) return undefined;
+    parts[index] = { ...part, value: text };
+  }
+  return { kind: "text", parts, supplied: value.supplied };
 }
 
 interface StatedPrefix { text: string; closed: boolean }

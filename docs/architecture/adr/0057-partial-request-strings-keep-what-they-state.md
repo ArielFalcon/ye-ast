@@ -38,6 +38,13 @@ the RealWorld sample:
    alternative that is ambiguous across repositories does not block the others: the call site reports the merged
    ambiguity beside its links. Of the alternatives some route could take, the first path in sorted order is reported
    undecided. Gateway inference and gateway decisions read every such path.
+5. Amendment, lead decision under the owner's standing instruction (2026-11-13). A string derivation the evaluator does
+   not model (`split`, `join`, `reduce`, `padEnd`, `slice` and any other method) yields an explicit unknown, never a
+   guess, and never an absent request: the request stays present as an unresolved call site with the cause
+   (ADR-0051). A path the code fills at run time from nothing it states, taken whole as the request's path, is that same
+   unknown instead of a path of one hole; a hole inside a text stays a hole. `trim`, `trimStart` and `trimEnd` are
+   modeled exactly: a literal is trimmed, and a text keeps its stated parts, since only whitespace at its edges goes; an
+   edge that is a hole stays the hole, and an edge made only of whitespace next to another part is undecided.
 
 ## Consequences
 
