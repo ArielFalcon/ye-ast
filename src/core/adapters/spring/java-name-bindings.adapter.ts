@@ -9,7 +9,7 @@ import type { ImportOrigins, ResolvedNameSite } from "../../ports/import-origins
 import { createJavaRootBindings } from "./java-root-bindings.ts";
 import { createJavaDeclaredTypes } from "./java-declared-types.ts";
 import { createJavaDispatchTargets } from "./java-dispatch-targets.ts";
-import { createJavaImplementedDeclarations, createJavaImplicitChains, createJavaReceiverMethods, provesBinding } from "./java-receiver-methods.ts";
+import { createJavaDeclaredSupertypes, createJavaImplementedDeclarations, createJavaImplicitChains, createJavaReceiverMethods, provesBinding } from "./java-receiver-methods.ts";
 import { declaredVariablesOnce, declaresAnyVariable, type DeclaredVariables } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
@@ -56,6 +56,7 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
     receiverMethods: createJavaReceiverMethods(parser, sources, paths, facts, hold, build),
     implementedDeclarations: createJavaImplementedDeclarations(parser, sources, paths, hold, build),
     implicitChains: createJavaImplicitChains(parser, sources, paths, hold, build),
+    declaredSupertypes: createJavaDeclaredSupertypes(parser, sources, paths, hold, build),
     replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),
     rootOrigins: async (sites, signal) => {
       const results: RootOrigin[] = sites.map((site) => unresolved(site));

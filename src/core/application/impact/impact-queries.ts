@@ -17,7 +17,7 @@ import { isSeedable, type ComponentRef, type SelectedSeed } from "../../domain/c
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { EDGE_POLICY, isJavaTypeKind } from "../../domain/impact/edge-policy.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
-import { attributedCallCuts, contradictedCallCuts, declarationAnchor, declarationUseKey, fileCut, removedDeclarationCuts, unheldCut, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation, type UnresolvedUse } from "../../domain/impact/impact-cuts.ts";
+import { attributedCallCuts, contradictedCallCuts, declarationAnchor, declarationUseKey, fileCut, removedDeclarationCuts, unheldCut, unplacedSupertypeCuts, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation, type UnresolvedUse } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
 import { impactFact, impactWalk, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
@@ -160,8 +160,8 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   const importerSource = (file: string): boolean => moduleSource(file) || isTypeScriptFile(file) || isJavaSource(file);
   const importerReader = createHeadReader({ ...deps, sourceSelection: importerSource });
   const readings = createBaseReadings({ ...deps, modules: bindingModules, checkerInputs: deps.typeBindings === undefined ? undefined : createRevisionSources({ ...deps, sourceSelection: isTypeCheckerInput }) });
-  const readingOf = (head: HeadReading<Pick<CommitExtraction, "export" | "sources">>, index: HeadIndex, snapshot: SnapshotRef, request: ReadingRequest): BaseReading =>
-    readings.of({ tree: head.tree, prepared: head.prepared, hold: head.hold, store: index.store, digest: index.digest, snapshot, request });
+  const readingOf = (head: HeadReading<Pick<CommitExtraction, "export" | "sources">>, index: HeadIndex, snapshot: SnapshotRef, request: ReadingRequest): Promise<BaseReading> =>
+    readings.open({ tree: head.tree, prepared: head.prepared, hold: head.hold, store: index.store, digest: index.digest, snapshot, request });
 
   return {
     async ofChange(request) {
@@ -201,7 +201,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const { store, summary } = index;
         try {
           const snapshot = snapshotFiles(store, listing);
-          const reading = readingOf(head, index, head.base(content).snapshot, request);
+          const reading = await readingOf(head, index, head.base(content).snapshot, request);
           const unknown = await missingTargets(reading.declarations, requested, isSeedable);
           const ranges = await requestedRanges(changes, headTree.sources, { tokensOf: (file) => readings.tokensOf(file, head.prepared) }, snapshot, reading.declarations);
           if (signal?.aborted) return ABORTED;
@@ -222,7 +222,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const typed = await reading.typed();
           if (typed === "aborted") return ABORTED;
-          const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
+          const read = await impactOf({ store: reading.store, changes: ranges.changes, requested, componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
           if (signal?.aborted) return ABORTED;
           const settled = settledRangeChanges(ranges.settled);
           const value = settled.length === 0 ? read.value : { ...read.value, settled };
@@ -259,14 +259,14 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         try {
           const written = headTree.export.files.filter((file) => file.written && isReadableFile(file.path)).map((file) => file.path);
           const held = new Set(listing ?? headTree.export.files.map((file) => file.path));
-          const references = unresolvedReferencesIn(store, written);
+          const reading = await readingOf(head, index, head.base(content).snapshot, request);
+          const references = unresolvedReferencesIn(reading.store, written);
           const modules = deps.moduleDependencies === undefined ? undefined : await moduleDependenciesOf(deps.moduleDependencies, head.prepared, headTree, request.signal);
           if (request.signal?.aborted) return ABORTED;
-          const reading = readingOf(head, index, head.base(content).snapshot, request);
           const typed = await reading.typed();
           if (typed === "aborted") return ABORTED;
           const targets = reading.edgeTargets(typed.typed);
-          const read = await readImporters(store, covered, references, modules, targets, targets === undefined ? undefined : boundInto(reading, targets), request.signal);
+          const read = await readImporters(reading.store, covered, references, modules, targets, targets === undefined ? undefined : boundInto(reading, targets), request.signal);
           if (request.signal?.aborted) return ABORTED;
           const moduleOnly = new Set(modules?.files.filter((file) => file.moduleOnly).map((file) => file.file));
           const loadPlaces = await deps.dynamicLoads.extract(headTree.sources);
@@ -282,6 +282,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
             ),
             ...summary.filesNotIndexed.filter((file) => !moduleOnly.has(file)).map((file) => fileCut("no-extractor", file, "not-indexed")),
             ...read.unheld.map((file) => unheldCut(file, held)),
+            ...unplacedSupertypeCuts(reading.unplacedSupertypes(reading.store.symbolsInFiles(covered))),
             ...(modules?.unread.map(({ file }) => fileCut("no-extractor", file, "module-unread")) ?? []),
             ...unresolvedSpecifierCuts(modules?.dependencies.filter((edge) => edge.target.kind === "unresolved") ?? []),
           ];
@@ -460,7 +461,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     if ("fault" in index) return { ok: false, fault: index.fault };
     const { store, summary } = index;
     try {
-      const reading = readingOf(head, index, head.base(content).snapshot, request);
+      const reading = await readingOf(head, index, head.base(content).snapshot, request);
       const { relations: found, fields, locals, memberUses, externalUses, cuts: relationCuts = [], unresolved: unresolvedRelations = [] } = await reading.relations();
       if (signal?.aborted) return ABORTED;
       const loads = await deps.dynamicLoads.extract(headTree.sources);
@@ -485,7 +486,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (signal?.aborted) return ABORTED;
       const typed = await reading.typed();
       if (typed === "aborted") return ABORTED;
-      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
+      const read = await impactOf({ store: reading.store, changes: validatedChanges, requested: [], componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
       if (signal?.aborted) return ABORTED;
       const reached = { ...value, ...read.value };
       return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), reached, [...unaccounted([...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts]), ...moduleCuts], impactWalk(changes.map(({ path }) => path), reached)) };
@@ -699,6 +700,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
     ...walk.cuts,
     ...input.relationCuts ?? [],
     ...unreadTypeReferenceCuts(seeds, selection.removalHolders, input.reading),
+    ...unplacedSupertypeCuts(input.reading.unplacedSupertypes([...seeds.map(({ symbol }) => symbol), ...walked])),
     ...contradictedCuts,
     ...attributedCallCuts(attributed.map(({ node, call: { reference } }) => ({ declaration: node, place: { ...reference, name: compactSpelling(reference.name) } }))),
     ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(walk.expanded, reachedIds), knownPlaces, input.proofs?.bound, inbound.memberProofs(walk.expanded), new Set(await boundUses(references, walk.expanded, reachedIds, implemented, input.reading.origins(), input.signal))),

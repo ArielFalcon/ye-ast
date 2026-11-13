@@ -281,6 +281,30 @@ function claimedPlatformPackage(packageName: string): string | undefined {
   return next ? `${prefix}${next}.` : undefined;
 }
 
+/** The name a supertype clause entry writes, without its type arguments. */
+export function typeNodeName(node: Node): string {
+  return (node.type === "generic_type" ? node.namedChildren[0] : node)?.text ?? "";
+}
+
+function interfaceNodes(type: TypeDecl): Node[] {
+  const clause =
+    type.kind === "interface"
+      ? type.node.namedChildren.find((child) => child.type === "extends_interfaces")
+      : type.node.childForFieldName("interfaces");
+  const list = clause?.namedChildren.find((child) => child.type === "type_list");
+  return list === undefined ? [] : namedChildren(list);
+}
+
+function superclassNode(type: TypeDecl): Node | undefined {
+  return type.node.childForFieldName("superclass")?.namedChildren[0];
+}
+
+/** The entries of a type's `implements` (or an interface's `extends`) clause, then its superclass, in source order. */
+export function supertypeClauses(type: TypeDecl): { node: Node; isInterface: boolean }[] {
+  const superclass = superclassNode(type);
+  return [...interfaceNodes(type).map((node) => ({ node, isInterface: true })), ...(superclass === undefined ? [] : [{ node: superclass, isInterface: false }])];
+}
+
 export function createJavaProject(files: readonly JavaFile[], build: ProjectBuild = {}): JavaProject {
   const types: TypeDecl[] = [];
   const unreadable: JavaFile[] = [];
@@ -563,23 +587,6 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
     return resolved === undefined || resolved === "unsettled" || (typeof resolved === "object" && "local" in resolved) ? byFqn(name) : resolved;
   }
 
-  function typeNodeName(node: Node): string {
-    return (node.type === "generic_type" ? node.namedChildren[0] : node)?.text ?? "";
-  }
-
-  function interfaceNodes(type: TypeDecl): Node[] {
-    const clause =
-      type.kind === "interface"
-        ? type.node.namedChildren.find((child) => child.type === "extends_interfaces")
-        : type.node.childForFieldName("interfaces");
-    const list = clause?.namedChildren.find((child) => child.type === "type_list");
-    return list === undefined ? [] : namedChildren(list);
-  }
-
-  function superclassNode(type: TypeDecl): Node | undefined {
-    return type.node.childForFieldName("superclass")?.namedChildren[0];
-  }
-
   function superclassOf(type: TypeDecl): TypeDecl | undefined {
     const node = superclassNode(type);
     const found = node === undefined ? undefined : lookupType(typeNodeName(node), scopeOf(type));
@@ -602,12 +609,7 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
       if (visited.has(type)) return;
       visited.add(type);
       members.push(type);
-      const superclass = superclassNode(type);
-      const parents = [
-        ...interfaceNodes(type).map((node) => ({ node, isInterface: true })),
-        ...(superclass === undefined ? [] : [{ node: superclass, isInterface: false }]),
-      ];
-      frames.push({ type, parents, next: 0 });
+      frames.push({ type, parents: supertypeClauses(type), next: 0 });
     }
     enter(root);
     for (let frame = frames.at(-1); frame !== undefined; frame = frames.at(-1)) {

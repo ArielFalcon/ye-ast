@@ -17,6 +17,7 @@ import { createDeclarationUses, unresolvedOncePerFile, type DeclarationUses, typ
 import { createEdgeTargets, edgeKey, NOTHING_DECLARED, type EdgeTargets } from "../navigation/edge-targets.ts";
 import { implementedContractsOf } from "../navigation/implemented-contracts.ts";
 import { createGraphNavigation } from "../navigation/graph-navigation.ts";
+import { completedHierarchy, unplacedReached, type CompletedHierarchy, type UnplacedSupertype } from "../navigation/supertype-completion.ts";
 import { createDeclarationModel, type DeclarationModel } from "../navigation/declaration-model.ts";
 import { callsThroughOrigins, createOriginCalls, type OriginCalls } from "../navigation/origin-calls.ts";
 import { typedCallsOf } from "../navigation/proven-calls.ts";
@@ -119,6 +120,10 @@ export type ContradictedCalls = (sources: readonly GraphSymbol[]) => Promise<Rea
  * is asked and shared by every consumer of the read.
  */
 export interface BaseReading {
+  /** The index of the read, its hierarchy completed where `BaseReadings.open` built the reading; every stage reads it. */
+  store: CodeGraphReader;
+  /** The supertypes neither the index nor the language pack placed, of the types holding `reached` or above them. */
+  unplacedSupertypes(reached: readonly GraphSymbol[]): readonly UnplacedSupertype[];
   declarations: DeclarationModel;
   /** B1: what a source's syntax states, read once per file; absent without a syntax reader. */
   syntaxOf: ((path: string) => Promise<DeclaredMemberNames>) | undefined;
@@ -159,7 +164,10 @@ export interface BaseReading {
 }
 
 export interface BaseReadings {
+  /** The reading over the index as it is. */
   of(source: ReadingSource, narrowing?: ReadingNarrowing): BaseReading;
+  /** The reading over the index with the hierarchy the language packs place for it, read once before any stage. */
+  open(source: ReadingSource, narrowing?: ReadingNarrowing): Promise<BaseReading>;
   /**
    * B11 for one source, without an index: retained per file under `prepared`, so `impact` can settle hunks before it
    * decides whether the graph is needed (ADR-0043 decisions 4 and 8). Never prebuilt; asked only for a changed file.
@@ -234,123 +242,138 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
     return { typed: typedCallsOf(answer.bindings), outputs: answer.outputs, buildOutputs: { used: true, refused: answer.refused }, inputsLeftOut };
   }
 
+  const asIndexed = (source: ReadingSource): CompletedHierarchy => ({ reader: source.store, unplaced: [] });
+  const originsOf = (source: ReadingSource, narrowing: ReadingNarrowing, jdks: () => LibrariesRead | undefined) => once(() => deps.importOrigins?.(source.tree.sources, narrowing.originPaths, source.prepared?.facts, source.hold, undefined, jdks()?.libraries));
+
   return {
     tokensOf: (file, prepared) => tokensOfSource(deps, file, prepared),
     of(source, narrowing = {}) {
-      const { tree, prepared, store, request } = source;
-      const facts = prepared?.facts;
-      const sources = new Map(tree.sources.map((file) => [file.path, file]));
-      const reader = deps.memberNames;
-      const syntax = new Map<string, Promise<DeclaredMemberNames>>();
-      const syntaxOf =
-        reader === undefined
-          ? undefined
-          : (path: string): Promise<DeclaredMemberNames> => {
-              const file = sources.get(path);
-              if (file === undefined) return Promise.resolve(NOTHING_DECLARED);
-              let read = syntax.get(path);
-              if (read === undefined) {
-                read = reader.memberNames(file, facts);
-                syntax.set(path, read);
-              }
-              return read;
-            };
-      const lineOf = linesOncePerFile(sources);
-      const memberStages = (deps.frameworks ?? []).flatMap((plugin) => plugin.members === undefined ? [] : [{ languages: plugin.languages, stage: plugin.members(tree.sources) }]);
-      const declarations = createDeclarationModel({ store, declarationsIn: async (file) => (await syntaxOf?.(file))?.declarations ?? [], bindingsIn: async (path) => {
-        const file = sources.get(path);
-        const language = profileOf(path)?.language;
-        return file === undefined || language === undefined ? [] : (await Promise.all(memberStages.filter(({ languages }) => languages.includes(language)).map(({ stage }) => stage.bindings(file)))).flat();
-      }, sources: tree.sources, facts });
-      const tokens = new Map<string, Promise<SourceReading>>();
-      const tokensOf = (file: SourceFile): Promise<SourceReading> => {
-        let read = tokens.get(file.path);
-        if (read === undefined) {
-          read = tokensOfSource(deps, file, prepared);
-          tokens.set(file.path, read);
-        }
-        return read;
-      };
-      const unresolvedIn = unresolvedOncePerFile(store);
-      const navigation = once(() => createGraphNavigation(store, () => false));
       const jdks = once(() => jdksOf(source));
-      const origins = once(() => deps.importOrigins?.(tree.sources, narrowing.originPaths, facts, source.hold, undefined, jdks()?.libraries));
-      const implementedContracts = once(() => implementedContractsOf(store, tree.sources.map(({ path }) => path), navigation(), origins()));
-      const overloadImplementations = once(async (): Promise<ReadonlyMap<GraphNodeId, GraphNodeId>> => (syntaxOf === undefined ? new Map() : overloadImplementationsOf(store, tree.sources.map(({ path }) => path), navigation(), async (file) => (await syntaxOf(file)).callables)));
-      const unresolved = once(() => unresolvedOf(store, tree));
-      const relations = once(() => retainedRelations(deps.relations, prepared, tree, request, source.hold));
-      const declarationUses = once(() => createDeclarationUses(store, navigation(), unresolvedIn));
-      const retained = facts === undefined || source.digest === undefined ? undefined : { facts, index: source.digest };
-      /** Kept between requests under the index it read and the relations its origins come from. */
-      const throughOrigins = once(async () => {
-        const origins = await relations();
-        const produce = async () => callsThroughOrigins(store, origins);
-        if (prepared?.retained === undefined || source.digest === undefined) return produce();
-        const memberProofs = memberProofContextOf(deps.relations, tree, declaredScope(request.scope));
-        return prepared.retained(canonicalJson({ output: "origin-calls", index: source.digest, memberProofs }), produce, request.signal);
-      });
-      let reconciled: { targets: EdgeTargets; calls: ReconciledCalls } | undefined;
-      const reconciledCalls = (targets: EdgeTargets, uses: DeclarationUses): ReconciledCalls | undefined => {
-        if (syntaxOf === undefined) return undefined;
-        if (reconciled?.targets !== targets) reconciled = { targets, calls: createReconciledCalls({ store, uses, declarations, syntaxOf, lineOf, importedDeclarations: targets.importedDeclarations }) };
-        return reconciled.calls;
-      };
-
-      return {
-        declarations,
-        syntaxOf,
-        tokensOf,
-        lineOf,
-        unresolvedIn,
-        unresolved,
-        origins,
-        relations,
-        referenceProofs: once(() => referenceProofsOf(origins(), store, tree, request.signal, unresolved())),
-        typed: once(() => typedReading(source, jdks())),
-        edgeTargets(typed) {
-          const read = origins();
-          if (read === undefined) return undefined;
-          return createEdgeTargets({ origins: read, store, declarations, modules: deps.modules === undefined ? undefined : { reader: deps.modules, sources: tree.sources }, syntaxOf, proofs: relations, typed, inScope: narrowing.inScope });
-        },
-        reconciledCalls,
-        contradictedCalls(targets) {
-          const calls = reconciledCalls(targets, declarationUses());
-          if (calls === undefined) return undefined;
-          const contents = new Map<string, string>();
-          const recordsIn = (file: string): Promise<readonly ContradictedRecord[]> => {
-            const written = sources.get(file);
-            if (retained === undefined || written === undefined) return calls.contradictedIn(file);
-            let content = contents.get(file);
-            if (content === undefined) {
-              content = retained.facts.fingerprint({ content: written.content });
-              contents.set(file, content);
-            }
-            return retained.facts.ofInputs(CONTRADICTED_CALLS, { index: retained.index, path: file, content }, () => calls.contradictedIn(file));
-          };
-          return async (bodies) => {
-            const found = new Map<string, ContradictedCall>();
-            for (const file of new Set(bodies.map((body) => body.file))) {
-              for (const { record, target } of await recordsIn(file)) {
-                if (target !== undefined) found.set(contradictionKey({ record, target }), { record, target });
-              }
-            }
-            return found;
-          };
-        },
-        declarationUses,
-        originCalls: (targets) => (targets.bindings === undefined ? undefined : createOriginCalls(targets.bindings, throughOrigins)),
-        implementedContracts,
-        overloadImplementations,
-        absentCapabilitiesOf: (path) => deps.absentCapabilities?.(path) ?? NO_ABSENT,
-        reverseCalls(targets) {
-          const reconciled = reconciledCalls(targets, declarationUses());
-          const read = origins();
-          if (targets.bindings === undefined || reconciled === undefined || syntaxOf === undefined || read === undefined) return undefined;
-          const constructs = async (node: GraphSymbol): Promise<boolean> => (await syntaxOf(node.file)).callables.some((callable) => callable.construction && callable.name === node.name && callable.start <= node.startLine && node.startLine <= callable.nameLine);
-          const readable = tree.sources.filter((file) => isReadSource(file.path));
-          return createReverseCalls({ store, navigation: navigation(), reconciled, bindings: targets.bindings, origins: read, importedDeclarations: targets.importedDeclarations, sources: readable, constructs, ...(retained === undefined ? {} : { retained }) });
-        },
-      };
+      return readingOf(source, narrowing, asIndexed(source), jdks, originsOf(source, narrowing, jdks));
+    },
+    async open(source, narrowing = {}) {
+      const jdks = once(() => jdksOf(source));
+      const origins = originsOf(source, narrowing, jdks);
+      const files = source.tree.sources.map(({ path }) => path).filter((path) => isReadSource(path) && !(deps.absentCapabilities?.(path) ?? NO_ABSENT).has("declaredSupertypes"));
+      return readingOf(source, narrowing, await completedHierarchy(source.store, files, origins(), source.request.signal), jdks, origins);
     },
   };
+
+  function readingOf(source: ReadingSource, narrowing: ReadingNarrowing, hierarchy: CompletedHierarchy, jdks: () => LibrariesRead | undefined, origins: () => ImportOrigins | undefined): BaseReading {
+    const { tree, prepared, request } = source;
+    const store = hierarchy.reader;
+    const facts = prepared?.facts;
+    const sources = new Map(tree.sources.map((file) => [file.path, file]));
+    const reader = deps.memberNames;
+    const syntax = new Map<string, Promise<DeclaredMemberNames>>();
+    const syntaxOf =
+      reader === undefined
+        ? undefined
+        : (path: string): Promise<DeclaredMemberNames> => {
+            const file = sources.get(path);
+            if (file === undefined) return Promise.resolve(NOTHING_DECLARED);
+            let read = syntax.get(path);
+            if (read === undefined) {
+              read = reader.memberNames(file, facts);
+              syntax.set(path, read);
+            }
+            return read;
+          };
+    const lineOf = linesOncePerFile(sources);
+    const memberStages = (deps.frameworks ?? []).flatMap((plugin) => plugin.members === undefined ? [] : [{ languages: plugin.languages, stage: plugin.members(tree.sources) }]);
+    const declarations = createDeclarationModel({ store, declarationsIn: async (file) => (await syntaxOf?.(file))?.declarations ?? [], bindingsIn: async (path) => {
+      const file = sources.get(path);
+      const language = profileOf(path)?.language;
+      return file === undefined || language === undefined ? [] : (await Promise.all(memberStages.filter(({ languages }) => languages.includes(language)).map(({ stage }) => stage.bindings(file)))).flat();
+    }, sources: tree.sources, facts });
+    const tokens = new Map<string, Promise<SourceReading>>();
+    const tokensOf = (file: SourceFile): Promise<SourceReading> => {
+      let read = tokens.get(file.path);
+      if (read === undefined) {
+        read = tokensOfSource(deps, file, prepared);
+        tokens.set(file.path, read);
+      }
+      return read;
+    };
+    const unresolvedIn = unresolvedOncePerFile(store);
+    const navigation = once(() => createGraphNavigation(store, () => false));
+    const implementedContracts = once(() => implementedContractsOf(store, tree.sources.map(({ path }) => path), navigation(), origins()));
+    const overloadImplementations = once(async (): Promise<ReadonlyMap<GraphNodeId, GraphNodeId>> => (syntaxOf === undefined ? new Map() : overloadImplementationsOf(store, tree.sources.map(({ path }) => path), navigation(), async (file) => (await syntaxOf(file)).callables)));
+    const unresolved = once(() => unresolvedOf(store, tree));
+    const relations = once(() => retainedRelations(deps.relations, prepared, tree, request, source.hold));
+    const declarationUses = once(() => createDeclarationUses(store, navigation(), unresolvedIn));
+    const retained = facts === undefined || source.digest === undefined ? undefined : { facts, index: source.digest };
+    /** Kept between requests under the index it read and the relations its origins come from. */
+    const throughOrigins = once(async () => {
+      const origins = await relations();
+      const produce = async () => callsThroughOrigins(store, origins);
+      if (prepared?.retained === undefined || source.digest === undefined) return produce();
+      const memberProofs = memberProofContextOf(deps.relations, tree, declaredScope(request.scope));
+      return prepared.retained(canonicalJson({ output: "origin-calls", index: source.digest, memberProofs }), produce, request.signal);
+    });
+    let reconciled: { targets: EdgeTargets; calls: ReconciledCalls } | undefined;
+    const reconciledCalls = (targets: EdgeTargets, uses: DeclarationUses): ReconciledCalls | undefined => {
+      if (syntaxOf === undefined) return undefined;
+      if (reconciled?.targets !== targets) reconciled = { targets, calls: createReconciledCalls({ store, uses, declarations, syntaxOf, lineOf, importedDeclarations: targets.importedDeclarations }) };
+      return reconciled.calls;
+    };
+
+    return {
+      store,
+      unplacedSupertypes: (reached) => unplacedReached(hierarchy, reached),
+      declarations,
+      syntaxOf,
+      tokensOf,
+      lineOf,
+      unresolvedIn,
+      unresolved,
+      origins,
+      relations,
+      referenceProofs: once(() => referenceProofsOf(origins(), store, tree, request.signal, unresolved())),
+      typed: once(() => typedReading(source, jdks())),
+      edgeTargets(typed) {
+        const read = origins();
+        if (read === undefined) return undefined;
+        return createEdgeTargets({ origins: read, store, declarations, modules: deps.modules === undefined ? undefined : { reader: deps.modules, sources: tree.sources }, syntaxOf, proofs: relations, typed, inScope: narrowing.inScope });
+      },
+      reconciledCalls,
+      contradictedCalls(targets) {
+        const calls = reconciledCalls(targets, declarationUses());
+        if (calls === undefined) return undefined;
+        const contents = new Map<string, string>();
+        const recordsIn = (file: string): Promise<readonly ContradictedRecord[]> => {
+          const written = sources.get(file);
+          if (retained === undefined || written === undefined) return calls.contradictedIn(file);
+          let content = contents.get(file);
+          if (content === undefined) {
+            content = retained.facts.fingerprint({ content: written.content });
+            contents.set(file, content);
+          }
+          return retained.facts.ofInputs(CONTRADICTED_CALLS, { index: retained.index, path: file, content }, () => calls.contradictedIn(file));
+        };
+        return async (bodies) => {
+          const found = new Map<string, ContradictedCall>();
+          for (const file of new Set(bodies.map((body) => body.file))) {
+            for (const { record, target } of await recordsIn(file)) {
+              if (target !== undefined) found.set(contradictionKey({ record, target }), { record, target });
+            }
+          }
+          return found;
+        };
+      },
+      declarationUses,
+      originCalls: (targets) => (targets.bindings === undefined ? undefined : createOriginCalls(targets.bindings, throughOrigins)),
+      implementedContracts,
+      overloadImplementations,
+      absentCapabilitiesOf: (path) => deps.absentCapabilities?.(path) ?? NO_ABSENT,
+      reverseCalls(targets) {
+        const reconciled = reconciledCalls(targets, declarationUses());
+        const read = origins();
+        if (targets.bindings === undefined || reconciled === undefined || syntaxOf === undefined || read === undefined) return undefined;
+        const constructs = async (node: GraphSymbol): Promise<boolean> => (await syntaxOf(node.file)).callables.some((callable) => callable.construction && callable.name === node.name && callable.start <= node.startLine && node.startLine <= callable.nameLine);
+        const readable = tree.sources.filter((file) => isReadSource(file.path));
+        return createReverseCalls({ store, navigation: navigation(), reconciled, bindings: targets.bindings, origins: read, importedDeclarations: targets.importedDeclarations, sources: readable, constructs, ...(retained === undefined ? {} : { retained }) });
+      },
+    };
+  }
 }

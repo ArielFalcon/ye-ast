@@ -121,6 +121,16 @@ export interface ImportOrigins {
    */
   implicitChains?(sites: readonly ConstructedClassSite[], signal?: AbortSignal): Promise<readonly ImplicitChain[]>;
   /**
+   * One entry per site, in the order received: each supertype the `extends` and `implements` clauses of the type declared
+   * at the site write, in source order, by the name written without its type arguments. A supertype is placed at the
+   * repository declaration the language's scoping binds that name to, `outside` where the name is proven to bind a type
+   * outside the repository (by its qualified name), and `unknown` where the sources settle neither: a name that a type the
+   * snapshot does not declare may shadow, several declarations of the name, or any condition under which the reader proves
+   * no binding. A name is never placed by its simple name alone. Absent where the language pack implements none, which
+   * reads as `capability-absent` for every site.
+   */
+  declaredSupertypes?(sites: readonly ConstructedClassSite[], signal?: AbortSignal): Promise<readonly DeclaredSupertypes[]>;
+  /**
    * Where the repository may run its own code where a library's is expected: the path of every global the snapshot
    * declares, every member path a source writes from a global (`Math.max = f`, `Array.prototype[k] = f`,
    * `globalThis.fetch = f`, `Object.assign(process.env, vars)`), and every package a source writes through an import of
@@ -192,6 +202,19 @@ export interface ConstructedClassSite {
  * the site's file declares it cannot answer (ADR-0045 decision 12).
  */
 export type ImplicitChain = ({ kind: "constructor" | "supplied" } & MethodPlace) | { kind: "none" } | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT };
+
+/** A supertype clause entry: the relation its clause writes and the name it writes, without type arguments. */
+export type DeclaredSupertype = { relation: "extends" | "implements"; written: string } & (
+  | ({ kind: "placed"; name: string } & MethodPlace)
+  | { kind: "outside"; qualifiedName: string }
+  | { kind: "unknown" }
+);
+
+/**
+ * The supertypes a type declaration writes; `unknown` when the type is not placed or no binding is proven.
+ * `capability-absent`: the language pack of the site's file declares it cannot answer (ADR-0045 decision 12).
+ */
+export type DeclaredSupertypes = { kind: "supertypes"; supertypes: readonly DeclaredSupertype[] } | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT };
 
 /** A method declaration by its file, the 1-based line of its first token, and its name. */
 export interface ImplementingSite {

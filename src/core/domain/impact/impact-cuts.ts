@@ -288,6 +288,17 @@ export function unreadTypeReferenceCut(target: { file: string; name: string }): 
   return { kind: "unresolved-link", at: [anchor], reason: "relation-unread", subReason: CAPABILITY_ABSENT, reach: callersOf([anchor]) };
 }
 
+/**
+ * A supertype a type's clause writes that neither the index nor the language pack placed: what the type inherits through
+ * it is unread, so an answer that reached the type, a member of it or a type below it may miss a dependent arriving
+ * through that supertype. One cut per type, led by its anchor and followed by each such clause's place.
+ */
+export function unplacedSupertypeCuts(unplaced: readonly { type: { file: string; name: string }; reference: { file: string; line: number; name: string } }[]): Cut[] {
+  return [...Map.groupBy(unplaced, ({ type }) => declarationAnchor(type.file, type.name))]
+    .toSorted(([a], [b]) => compareText(a, b))
+    .map(([anchor, here]) => unresolvedLinkAt(anchor, new Set(here.map(({ reference }) => placeAt(reference.file, reference.line, reference.name))), "relation-unread", callersOf([anchor])));
+}
+
 /** An injection or template use the relation reader named but could not place: where, and why. */
 export interface UnreadRelation {
   path: string;

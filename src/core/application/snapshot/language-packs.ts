@@ -112,6 +112,7 @@ export function routedReaders(packs: readonly LanguagePack[]): RoutedReaders {
         receiverMethods: (sites, signal) => routed(sites, readers, (reader, asked, owner) => unlessAbsent(owner, "receiverMethods", asked) ?? reader.receiverMethods(asked, signal), () => UNKNOWN),
         implementedDeclarations: (sites, signal) => routed(sites, readers, (reader, asked) => reader.implementedDeclarations(asked, signal), () => UNKNOWN),
         implicitChains: (sites, signal) => routed(sites, readers, (reader, asked, owner) => unlessAbsent(owner, "implicitChains", asked) ?? reader.implicitChains?.(asked, signal) ?? Promise.resolve(asked.map(() => ABSENT)), () => UNKNOWN),
+        declaredSupertypes: (sites, signal) => routed(sites, readers, (reader, asked, owner) => unlessAbsent(owner, "declaredSupertypes", asked) ?? reader.declaredSupertypes?.(asked, signal) ?? Promise.resolve(asked.map(() => ABSENT)), () => UNKNOWN),
         replacedRoots: async (signal) => {
           const replaced = await Promise.all([...readers.values()].map((reader) => reader.replacedRoots(signal)));
           return { paths: replaced.flatMap(({ paths }) => paths).toSorted((a, b) => compareText(a.join("\u0000"), b.join("\u0000"))), globalObjects: new Set(replaced.flatMap(({ globalObjects }) => [...globalObjects])), packages: new Set(replaced.flatMap(({ packages }) => [...packages])) };

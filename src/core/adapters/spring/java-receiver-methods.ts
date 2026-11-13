@@ -4,7 +4,7 @@ import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts"
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
-import type { ConstructedClassSite, ImplementedDeclarations, ImplementingSite, ImplicitChain, ImportOrigins, MethodPlace, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
+import type { ConstructedClassSite, DeclaredSupertype, DeclaredSupertypes, ImplementedDeclarations, ImplementingSite, ImplicitChain, ImportOrigins, MethodPlace, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
@@ -13,7 +13,7 @@ import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve } from "./java-declared-types.ts";
 import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
 import { REPOSITORY_FRAGMENTS, REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
-import { createJavaProject, MEMBERLESS_PLATFORM_INTERFACES, readArgumentSignature, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Signature, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, MEMBERLESS_PLATFORM_INTERFACES, readArgumentSignature, readSignature, sameSignature, supertypeClauses, typeNodeName, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Signature, type TypeDecl } from "./java-symbols.ts";
 
 const SLOT = "java-receiver-methods";
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
@@ -24,6 +24,7 @@ const NO_CHAIN: ImplicitChain = { kind: "none" };
 const PROXIED: GeneratedMember = { kind: "proxied" };
 const LOMBOK_CONFIG = /(^|\/)lombok\.config$/;
 const UNKNOWN_DECLARATIONS: ImplementedDeclarations = { kind: "unknown" };
+const UNKNOWN_SUPERTYPES: DeclaredSupertypes = { kind: "unknown" };
 /** Methods every class inherits from `Object` (JLS 4.3.2): a call of one of these names may resolve to `Object`'s. */
 export const OBJECT_METHODS: ReadonlySet<string> = new Set(["clone", "equals", "finalize", "getClass", "hashCode", "notify", "notifyAll", "toString", "wait"]);
 /** Nodes the grammar places among a call's arguments that are no argument. */
@@ -214,12 +215,27 @@ export function createJavaImplementedDeclarations(parser: () => Promise<JavaPars
  * varargs constructor, or writes constructors and none of no arguments.
  */
 export function createJavaImplicitChains(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): NonNullable<ImportOrigins["implicitChains"]> {
+  return perPlacedType(parser, sources, paths, hold, build, UNKNOWN_CHAIN, implicitChainOf);
+}
+
+/**
+ * `ImportOrigins.declaredSupertypes` for Java sources: each entry of a type's clauses bound by the project's one resolver
+ * in its strict reading, from the scope around the type, since a clause is outside the type's body (JLS 6.3, 8.1.4). A
+ * name the strict reading leaves unsettled, ambiguous or bound to a local type is `unknown`; a platform type, or a name an
+ * import or a package qualifier proves outside the repository, is `outside`.
+ */
+export function createJavaDeclaredSupertypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): NonNullable<ImportOrigins["declaredSupertypes"]> {
+  return perPlacedType(parser, sources, paths, hold, build, UNKNOWN_SUPERTYPES, declaredSupertypesOf);
+}
+
+/** One answer per site from the one type the site places, `unknown` where none or several are placed or no binding is proven. */
+function perPlacedType<A>(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold: ParseHold | undefined, build: ProjectBuild, unknown: A, answer: (type: TypeDecl, project: JavaProject) => A): (sites: readonly ConstructedClassSite[]) => Promise<readonly A[]> {
   const unreadJvm = paths.some(isUncoveredJvmSource);
-  const analyze = (sites: readonly ConstructedClassSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly ImplicitChain[] => {
-    if (!provesBinding(files, project, unparsed, unreadJvm)) return sites.map(() => UNKNOWN_CHAIN);
+  const analyze = (sites: readonly ConstructedClassSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly A[] => {
+    if (!provesBinding(files, project, unparsed, unreadJvm)) return sites.map(() => unknown);
     return sites.map((site) => {
       const placed = project.types.filter((type) => type.file.path === site.file && type.name === site.name && typePlace(type).start <= site.line && site.line <= typePlace(type).nameLine);
-      return placed.length === 1 ? implicitChainOf(placed[0]!, project) : UNKNOWN_CHAIN;
+      return placed.length === 1 ? answer(placed[0]!, project) : unknown;
     });
   };
   return async (sites) => {
@@ -232,6 +248,17 @@ export function createJavaImplicitChains(parser: () => Promise<JavaParser>, sour
       return analyze(sites, files, unparsed, createJavaProject(files, build));
     });
   };
+}
+
+function declaredSupertypesOf(type: TypeDecl, project: JavaProject): DeclaredSupertypes {
+  const scope = enclosingType(type.node.parent ?? type.node, type.file, project);
+  const supertypes = supertypeClauses(type).map(({ node, isInterface }): DeclaredSupertype => {
+    const clause = { relation: isInterface && type.kind !== "interface" ? "implements" : "extends", written: typeNodeName(node).replace(/\s+/g, "") } as const;
+    const found = resolve(node, type.file, project, scope, node, true);
+    if (found?.kind === "repository") return found.type === undefined ? { ...clause, kind: "unknown" } : { ...clause, kind: "placed", name: found.type.name, ...typePlace(found.type) };
+    return found === undefined ? { ...clause, kind: "unknown" } : { ...clause, kind: "outside", qualifiedName: found.fqn };
+  });
+  return { kind: "supertypes", supertypes };
 }
 
 function implicitChainOf(type: TypeDecl, project: JavaProject): ImplicitChain {

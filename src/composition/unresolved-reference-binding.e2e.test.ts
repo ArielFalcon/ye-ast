@@ -11,7 +11,8 @@ import type { Cut } from "../core/domain/shared/fact.ts";
 /**
  * Qualified references the index leaves unresolved, whose name tail is a reached declaration's name (ADR-0079 U1): the
  * base binding settles each one that binds elsewhere, and every other keeps its `name-only` cut. `Api` and `Store` both
- * declare `get` and `save`, so the index matches no `get` or `save` call by its name alone.
+ * declare `get` and `save`, so the index matches no `get` or `save` call by its name alone. `NameRepo.Kept` names `Repo`
+ * inside a class whose superclass, outside the repository, may declare a member type `Repo`, so its supertype is unsettled.
  */
 const JAVA = "src/main/java/com/acme";
 const JAVA_FILES: Record<string, string> = {
@@ -27,9 +28,9 @@ const JAVA_FILES: Record<string, string> = {
   [`${JAVA}/Base.java`]: "package com.acme;\n\npublic class Base {\n    public int size() {\n        return 0;\n    }\n}\n",
   [`${JAVA}/Sub.java`]: "package com.acme;\n\npublic class Sub extends Base {\n    @Override\n    public int size() {\n        return 1;\n    }\n}\n",
   [`${JAVA}/Repo.java`]: "package com.acme;\n\npublic interface Repo<T> {\n    T find();\n}\n",
-  [`${JAVA}/NameRepo.java`]: "package com.acme;\n\npublic class NameRepo implements Repo<String> {\n    public String find() {\n        return \"\";\n    }\n}\n",
+  [`${JAVA}/NameRepo.java`]: "package com.acme;\n\npublic class NameRepo extends org.lib.Names {\n    public static class Kept implements Repo<String> {\n        public String find() {\n            return \"\";\n        }\n    }\n}\n",
   [`${JAVA}/Other.java`]: "package com.acme;\n\npublic class Other {\n    public int area() {\n        return 2;\n    }\n\n    public int size() {\n        return 2;\n    }\n\n    public String find() {\n        return \"\";\n    }\n}\n",
-  [`${JAVA}/Maker.java`]: "package com.acme;\n\npublic class Maker {\n    public Shape shape() {\n        return new Square();\n    }\n\n    public Base base() {\n        return new Sub();\n    }\n\n    public Repo<String> repo() {\n        return new NameRepo();\n    }\n}\n",
+  [`${JAVA}/Maker.java`]: "package com.acme;\n\npublic class Maker {\n    public Shape shape() {\n        return new Square();\n    }\n\n    public Base base() {\n        return new Sub();\n    }\n\n    public Repo<String> repo() {\n        return new NameRepo.Kept();\n    }\n}\n",
   [`${JAVA}/Client.java`]: "package com.acme;\n\npublic class Client {\n    public int shape(Maker maker) {\n        return maker.shape().area();\n    }\n\n    public int base(Maker maker) {\n        return maker.base().size();\n    }\n\n    public String repo(Maker maker) {\n        return maker.repo().find();\n    }\n}\n",
 };
 const JAVA_CHANGE = { [`${JAVA}/Api.java`]: JAVA_FILES[`${JAVA}/Api.java`]!.replace("return key;", "return key.trim();") };

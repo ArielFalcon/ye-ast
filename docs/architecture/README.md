@@ -96,6 +96,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0077](adr/0077-derived-facts-persist-by-content-in-ye-asts-own-store.md) | The derived facts of ADR-0035 gain a disk tier behind the same port, keyed by content and reader version, in a directory a host may name; no fact changes; extends ADR-0035; designed in RFC-0037 | Accepted |
 | [0078](adr/0078-locating-a-declaration-is-a-query-family.md) | A new query family answers the declarations and files a name or a path fragment designates, with a match class and no score; faults carry the same answer; the fixed layer is readable as MCP resources; designed in RFC-0038 | Accepted |
 | [0079](adr/0079-an-unresolved-reference-is-attributed-by-its-receivers-type.md) | `callers` and `impact` bind the unresolved qualified references that would become a `name-only` cut through the base binding chain; a receiver declared outside the repository is an answer of the port, and a reached declaration stays attributed unless a proof excludes it; settles ADR-0041 open question 7 | Accepted |
+| [0080](adr/0080-the-type-hierarchy-is-completed-once-for-every-family.md) | A supertype the index leaves unresolved is placed by the language pack once, when a reading is opened, so every family reads the same completed hierarchy; an unplaced supertype is a `relation-unread` cut, never a type without supertypes | Accepted |
 
 ## Designs (RFC)
 

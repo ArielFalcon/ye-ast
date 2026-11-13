@@ -131,13 +131,14 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         if (index === "aborted") return ABORTED;
         if (index === "unavailable") return { ok: true, value: { ...head.base(content), status: "unknown", reason: "index-unavailable" } };
         if ("fault" in index) return { ok: false, fault: index.fault };
-        const { store, summary } = index;
+        const { store: indexed, summary } = index;
         try {
-          const snapshot = snapshotFiles(store, heldPaths(head.tree.export) ?? head.tree.export.files.map(({ path }) => path));
-          const reading = readings.of(
-            { tree: head.tree, prepared: head.prepared, hold: head.hold, store, digest: index.digest, snapshot: head.base(content).snapshot, request },
+          const snapshot = snapshotFiles(indexed, heldPaths(head.tree.export) ?? head.tree.export.files.map(({ path }) => path));
+          const reading = await readings.open(
+            { tree: head.tree, prepared: head.prepared, hold: head.hold, store: indexed, digest: index.digest, snapshot: head.base(content).snapshot, request },
             { originPaths: head.tree.export.files.map(({ path }) => path).filter(head.selected), inScope: head.selected },
           );
+          const { store } = reading;
           const tokens = { tokensOf: (file: SourceFile) => reading.tokensOf(file) };
           const { unresolvedIn, lineOf } = reading;
           const syntaxOf = reading.syntaxOf ?? (async (): Promise<DeclaredMemberNames> => NOTHING_DECLARED);
@@ -216,7 +217,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const base = withOutputs(head.base(content, true), typed.outputs);
           return { ok: true, value: withCuts({ ...base, evidence: [...base.evidence, ...walk.evidence] }, value, cuts, walked) };
         } finally {
-          store.close();
+          indexed.close();
         }
       };
       return entrypoints.length === 0

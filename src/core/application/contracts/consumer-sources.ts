@@ -178,7 +178,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             if (indexed !== "unavailable") stores.push(indexed.store);
             const reading = indexed === "unavailable"
               ? undefined
-              : line.of(
+              : await line.open(
                   { tree: loaded.value, prepared: prepared.value, hold: prepared.value.hold, store: indexed.store, digest: indexed.digest, snapshot: { repo: plan.at.repoId, kind: "sha", sha: plan.at.revision }, request: { repo: plan.at.source, scope: context.scope, ...(context.signal === undefined ? {} : { signal: context.signal }) } },
                 );
             const typed = await reading?.typed();
@@ -187,7 +187,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             const proofs = await reading?.referenceProofs();
             const targets = reading?.edgeTargets(typed?.typed);
             const contradictions = reading === undefined || targets === undefined ? undefined : reading.contradictedCalls(targets);
-            const corrections = indexed === "unavailable" || origins === undefined || targets === undefined ? undefined : await receiverCorrectionsOf(indexed.store, targets, origins, sources.map((file) => file.path), context.signal, contradictions);
+            const corrections = reading === undefined || origins === undefined || targets === undefined ? undefined : await receiverCorrectionsOf(reading.store, targets, origins, sources.map((file) => file.path), context.signal, contradictions);
             if (context.signal?.aborted) return ABORTED;
             const typedCuts = typed === undefined ? [] : [...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs)];
             if (typed !== undefined) for (const output of typed.outputs ?? []) buildOutputs.set(canonicalJson(output), output);
@@ -203,8 +203,8 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
                 ...await deps.consumerReaders(sources, plan.at.repoId, { completeSource }),
                 templates: await createConsumerTemplateReader({ metadata: deps.metadata, flow: deps.templateFlow }, sources),
                 placedSites,
-                graph: indexed === "unavailable" ? undefined : indexed.store,
-                inbound: indexed === "unavailable" || origins === undefined ? undefined : inboundEdgesOf(indexed.store, origins, proofs, corrections),
+                graph: reading?.store,
+                inbound: reading === undefined || origins === undefined ? undefined : inboundEdgesOf(reading.store, origins, proofs, corrections),
                 reading,
                 targets,
                 cuts: typedCuts,
