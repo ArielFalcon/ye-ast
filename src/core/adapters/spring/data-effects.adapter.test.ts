@@ -152,11 +152,30 @@ interface Repo extends Repository<Item,Long> {
  @org.springframework.data.jpa.repository.Modifying @org.springframework.data.jpa.repository.Query("delete from Item") int findByCode(int s);
 }
 class Overload { void run(Repo r) { r.findByCode("x"); } }`;
-  for (const [variant, access] of [[content, undefined], [content.replace("java.lang.String s", "long s").replace('findByCode("x")', "findByCode(1L)"), "read"]] as const) {
+  const unsettledArgument = content.replace("import org.springframework.data.repository.Repository;", "import org.springframework.data.repository.Repository;\nimport com.acme.Mystery;").replace('findByCode("x")', "findByCode(Mystery.of())");
+  for (const [variant, access] of [[content, "read"], [unsettledArgument, undefined], [content.replace("java.lang.String s", "long s").replace('findByCode("x")', "findByCode(1L)"), "read"]] as const) {
     const sites = await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Overload.java", content: variant }]);
     assert.equal(sites.length, 1);
     assert.equal(sites[0]!.site.effect?.access, access);
   }
+});
+
+test("a query method of a repository below a Spring Data interface settles its signature, a repository below any other interface does not", async () => {
+  const repository = (parent: string, imports: string) => `${imports}
+import org.springframework.data.jpa.repository.Query;
+class User {}
+interface Repo extends ${parent}<User,Long> {
+ @Query("select u from User u") User findByLogin(String login);
+}
+class Svc { void run(Repo r) { r.findByLogin("x"); } }`;
+  const access = async (content: string, ...others: readonly { path: string; content: string }[]) => (await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Svc.java", content }, ...others]))[0]?.site.effect?.access;
+  const claimsPackage = { path: "src/Claim.java", content: "package org.springframework.data.repository;\ninterface Claim {}\n" };
+
+  assert.equal(await access(repository("JpaRepository", "import org.springframework.data.jpa.repository.JpaRepository;")), "read");
+  assert.equal(await access(repository("CrudRepository", "import org.springframework.data.repository.CrudRepository;")), "read");
+  assert.equal(await access(repository("Base", "import com.acme.Base;")), undefined);
+  assert.equal(await access(repository("JpaRepository", "import com.acme.JpaRepository;")), undefined);
+  assert.equal(await access(repository("CrudRepository", "import org.springframework.data.repository.CrudRepository;"), claimsPackage), undefined);
 });
 
 test("an open method type variable or inherited declarations leave the called signature unproven", async () => {

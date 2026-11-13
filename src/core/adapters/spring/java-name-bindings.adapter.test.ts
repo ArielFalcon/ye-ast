@@ -84,15 +84,17 @@ test("a simple type name inside a class with a supertype the snapshot does not d
   assert.deepEqual(await rootOf([USER, use], site), unknownAt(site));
 });
 
-test("a name only on-demand imports offer is bound only when exactly one of them declares it and every other is a package of the repository", async () => {
+test("a name only on-demand imports offer is bound when exactly one repository package declares it, whatever other packages are imported", async () => {
   const both = java("src/main/java/app/api/Both.java", ["package app.api;", "", "import app.other.*;", "import app.more.*;", "", "class Both {", "  Limits limits;", "}"]);
   const external = java("src/main/java/app/api/External.java", ["package app.api;", "", "import app.other.*;", "import com.acme.*;", "", "class External {", "  Limits limits;", "}"]);
   const single = java("src/main/java/app/api/Single.java", ["package app.api;", "", "import app.other.*;", "", "class Single {", "  Limits limits;", "}"]);
-  const sources = [LIMITS, MORE, both, external, single];
+  const none = java("src/main/java/app/api/None.java", ["package app.api;", "", "import com.acme.*;", "import org.springframework.web.bind.annotation.*;", "", "class None {", "  Limits limits;", "}"]);
+  const sources = [LIMITS, MORE, both, external, single, none];
 
   assert.deepEqual(await rootOf(sources, at(both, "Limits", "references", "Limits")), unknownAt(at(both, "Limits", "references", "Limits")));
-  assert.deepEqual(await rootOf(sources, at(external, "Limits", "references", "Limits")), unknownAt(at(external, "Limits", "references", "Limits")));
+  assert.deepEqual((await rootOf(sources, at(external, "Limits", "references", "Limits"))).status, "complete");
   assert.deepEqual((await rootOf(sources, at(single, "Limits", "references", "Limits"))).status, "complete");
+  assert.deepEqual(await rootOf(sources, at(none, "Limits", "references", "Limits")), unknownAt(at(none, "Limits", "references", "Limits")));
 });
 
 test("a call on a type name is rooted at that type and is not bare", async () => {

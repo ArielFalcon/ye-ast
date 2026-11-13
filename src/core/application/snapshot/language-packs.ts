@@ -54,6 +54,9 @@ export function routedReaders(packs: readonly LanguagePack[]): RoutedReaders {
     return lists.get(pack)!;
   };
 
+  const contextOf = (pack: LanguagePack, sources: readonly SourceFile[]): readonly SourceFile[] =>
+    pack.contextFiles === undefined ? [] : sources.filter(({ path }) => ownerOf(path) === undefined && pack.contextFiles!(path));
+
   /** Each site answered by the pack that owns its file, in the sites' order; a site no pack owns keeps `absent`. */
   async function routed<S extends { file: string }, A>(sites: readonly S[], readers: ReadonlyMap<LanguagePack, ImportOrigins>, ask: (reader: ImportOrigins, sites: readonly S[], owner: LanguagePack) => Promise<readonly A[]>, absent: (site: S) => NoInfer<A>): Promise<A[]> {
     const results = sites.map(absent);
@@ -99,7 +102,7 @@ export function routedReaders(packs: readonly LanguagePack[]): RoutedReaders {
     },
     importOrigins(sources, paths, facts, hold) {
       const universe = paths ?? sources.map(({ path }) => path);
-      const readers = new Map(packs.map((pack) => [pack, pack.origins(sourcesOf(pack, sources), universe, facts, hold)]));
+      const readers = new Map(packs.map((pack) => [pack, pack.origins(sourcesOf(pack, sources), universe, facts, hold, contextOf(pack, sources))]));
       return {
         origins: (sites, signal) => routed(sites, readers, (reader, asked) => reader.origins(asked, signal), unresolved),
         rootOrigins: (sites, signal) => routed(sites, readers, (reader, asked) => reader.rootOrigins(asked, signal), unresolved),

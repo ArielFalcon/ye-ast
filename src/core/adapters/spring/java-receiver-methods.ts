@@ -10,7 +10,7 @@ import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, heldJavaProject, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
-import { createJavaProject, readArgumentSignature, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type Signature, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, MEMBERLESS_PLATFORM_INTERFACES, readArgumentSignature, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Signature, type TypeDecl } from "./java-symbols.ts";
 
 const SLOT = "java-receiver-methods";
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
@@ -26,8 +26,6 @@ const NOT_ARGUMENTS: ReadonlySet<string> = new Set(["line_comment", "block_comme
  * no member accepts run a static method of another class.
  */
 const CALL_REWRITING_ANNOTATIONS: ReadonlySet<string> = new Set(["Delegate", "ExtensionMethod"]);
-/** Platform interfaces that declare no members, so a type below one inherits no method from it. */
-const MEMBERLESS_PLATFORM_INTERFACES: ReadonlySet<string> = new Set(["java.io.Serializable", "java.lang.Cloneable", "java.util.RandomAccess", "java.util.EventListener"]);
 const PRIMITIVES: ReadonlySet<string> = new Set(["boolean", "byte", "char", "short", "int", "long", "float", "double"]);
 /** Platform classes a signature names that declare no type parameter, so a value of one is never raw. */
 const PLAIN_PLATFORM_TYPES: ReadonlySet<string> = new Set(["java.lang.Object", "java.lang.String"]);
@@ -65,7 +63,7 @@ interface ReadFile extends ReceiverSource {
  * naming the declarations of the call's arity its type offers where the whole hierarchy was read; no name-only index
  * target proves it. Non-Java and non-invocation sites remain unknown.
  */
-export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts, hold?: ParseHold): ImportOrigins["receiverMethods"] {
+export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts, hold?: ParseHold, build: ProjectBuild = {}): ImportOrigins["receiverMethods"] {
   const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
   let layout: string | undefined;
   const resolved = async (sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ReceiverMethod[]> => {
@@ -109,17 +107,17 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
       return results;
     };
     const read = await parser();
-    const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources);
+    const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources, [], build);
     if (held !== undefined) return analyze(held.files.map(({ file }) => file), held.unparsed, held.project);
     return withJavaSources(read, (parse) => {
       const { files, unparsed } = parse(sources);
-      return analyze(files, unparsed, createJavaProject(files));
+      return analyze(files, unparsed, createJavaProject(files, build));
     });
   };
   return async (sites, signal) => {
     if (sites.length === 0) return [];
     if (facts === undefined) return resolved(sites, signal);
-    layout ??= facts.fingerprint({ java: sources.map(({ path, content }) => [path, content]), paths });
+    layout ??= facts.fingerprint({ java: sources.map(({ path, content }) => [path, content]), paths, generatesInterfaces: build.generatesInterfaces === true });
     try {
       return await facts.ofInputs(SLOT, { layout, sites }, async () => {
         const results = await resolved(sites, signal);
@@ -141,7 +139,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
  * platform type aside), since such a supertype may declare the contract. `declarations`, possibly empty, is therefore
  * established only from a hierarchy the reader read in full.
  */
-export function createJavaImplementedDeclarations(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold): ImportOrigins["implementedDeclarations"] {
+export function createJavaImplementedDeclarations(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): ImportOrigins["implementedDeclarations"] {
   const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
   const analyze = (sites: readonly ImplementingSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly ImplementedDeclarations[] => {
     if (!provesBinding(files, project, unparsed, unreadJvm)) return sites.map(() => UNKNOWN_DECLARATIONS);
@@ -180,11 +178,11 @@ export function createJavaImplementedDeclarations(parser: () => Promise<JavaPars
   return async (sites) => {
     if (sites.length === 0) return [];
     const read = await parser();
-    const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources);
+    const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources, [], build);
     if (held !== undefined) return analyze(sites, held.files.map(({ file }) => file), held.unparsed, held.project);
     return withJavaSources(read, (parse) => {
       const { files, unparsed } = parse(sources);
-      return analyze(sites, files, unparsed, createJavaProject(files));
+      return analyze(sites, files, unparsed, createJavaProject(files, build));
     });
   };
 }
@@ -228,6 +226,15 @@ export function createResolver(project: JavaProject) {
   /** The supertype clauses, by file and offset, that name a platform interface declaring no members. */
   const memberless = new Set<string>();
   const clauseKey = (file: JavaFile, node: Node): string => `${file.path}:${node.startIndex}`;
+  /**
+   * Whether a type's hierarchy leaves its members unsettled: a supertype the sources do not declare, but for a platform
+   * interface that declares none and a generated interface of operations, which is open to nothing a class of the
+   * hierarchy declares (ADR-0062).
+   */
+  const hierarchyOpen = (above: ReturnType<JavaProject["hierarchy"]>, declared: readonly MethodDecl[]): boolean => {
+    const unsettled = above.gaps.filter((gap) => !memberless.has(clauseKey(gap.file, gap.node)));
+    return unsettled.some((gap) => !(gap.kind === "missing" && gap.isInterface && project.isGeneratedInterface(gap.name, gap.file))) || (unsettled.length > 0 && declared.some((method) => method.owner.kind !== "class"));
+  };
   const declaredHierarchy = (type: TypeDecl) => {
     let known = hierarchies.get(type);
     if (known === undefined) {
@@ -304,8 +311,8 @@ export function createResolver(project: JavaProject) {
     if (type === undefined) return undefined;
     if (!constructor && (name === undefined || OBJECT_METHODS.has(name))) return undefined;
     const above = declaredHierarchy(type);
-    if (!constructor && above.gaps.some((gap) => !memberless.has(clauseKey(gap.file, gap.node)))) return undefined;
     const candidates = constructor ? type.constructors : above.types.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
+    if (!constructor && hierarchyOpen(above, candidates)) return undefined;
     if (candidates.some((method) => reachability(method, file) === "unknown" || (method.modifiers.includes("private") && method.owner !== enclosingType(reference, file, project)))) return undefined;
     const reachable = candidates.filter((method) => reachability(method, file) === "reachable");
     return reachable.length === 1 ? { method: reachable[0]! } : { candidates: reachable };
@@ -333,8 +340,8 @@ export function createResolver(project: JavaProject) {
   const memberOf = (type: TypeDecl, name: string, invocation: Node, file: JavaFile, caller: TypeDecl | undefined): { method: MethodDecl } | { candidates: readonly MethodDecl[] } | undefined => {
     if (OBJECT_METHODS.has(name)) return undefined;
     const above = declaredHierarchy(type);
-    if (above.gaps.some((gap) => !memberless.has(clauseKey(gap.file, gap.node)))) return undefined;
     const named = above.types.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
+    if (hierarchyOpen(above, named)) return undefined;
     if (named.some(hasVarargs)) return undefined;
     const candidates = named.filter((method) => method.parameterTypes.length === argumentCount(invocation));
     if (candidates.some((method) => method.modifiers.includes("private") && (method.owner !== type || method.owner !== caller))) return undefined;

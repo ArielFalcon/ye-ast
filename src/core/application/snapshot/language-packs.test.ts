@@ -71,6 +71,20 @@ test("a site, a file or a source of one language reaches only its pack, and a si
   assert.deepEqual((await readers.memberNames.memberNames({ path: TS_TEST, content: "" })).names, []);
 });
 
+test("a pack that declares context files receives those no pack owns as context, apart from its sources, and one that declares none receives none", async () => {
+  const contexts = new Map<string, readonly string[]>();
+  const pack = (profile: LanguageProfile, contextFiles?: (path: string) => boolean): LanguagePack => {
+    const base = recordingPack(profile, []);
+    return { ...base, ...(contextFiles === undefined ? {} : { contextFiles }), origins: (sources, paths, facts, hold, context) => (contexts.set(profile.language, (context ?? []).map(({ path }) => path)), base.origins(sources, paths, facts, hold)) };
+  };
+  const readers = routedReaders([pack(TYPESCRIPT_PROFILE), pack(JAVA_PROFILE, (path) => path === MANIFEST || path === JAVA)]);
+
+  readers.importOrigins(SOURCES);
+
+  assert.deepEqual(contexts.get("java"), [MANIFEST]);
+  assert.deepEqual(contexts.get("typescript"), []);
+});
+
 test("a stage a pack declares absent answers each of its sites capability-absent and is never asked, while another pack's stays its own", async () => {
   const typescript: string[] = [];
   const java: string[] = [];

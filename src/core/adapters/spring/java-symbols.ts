@@ -106,6 +106,12 @@ export interface TypeDecl {
   constructors: MethodDecl[];
 }
 
+/** What the build says about the sources the project is read over. */
+export interface ProjectBuild {
+  /** A build file declares a generator of OpenAPI interfaces, which git does not hold (ADR-0062). */
+  generatesInterfaces?: boolean;
+}
+
 export interface JavaProject {
   types: readonly TypeDecl[];
   /** The files whose declarations could not be read; none of their types is in the project. */
@@ -119,7 +125,8 @@ export interface JavaProject {
    * package and an on-demand import. `lenient` reads the imports as `lookupType` does; `strict` answers `unsettled`
    * where the snapshot cannot exclude another meaning: a supertype it does not declare may declare a member type of the
    * name, a static import may import one, a member type shadows a single-type import of the name, or no single on-demand
-   * import is the only one that can offer it.
+   * import of the repository declares it. A repository type that one on-demand import declares is the name's: a package
+   * outside the repository cannot declare it too, since a reference both offer does not compile.
    */
   bindName(name: string, scope: Scope, reading: "strict" | "lenient"): TypeLookup | "unsettled" | LocalType;
   /** A written type name, including qualifiers, resolved with the strict lexical and import rules. */
@@ -129,6 +136,12 @@ export interface JavaProject {
    * sources declare claims the segment after that prefix.
    */
   isPlatformName(fqn: string): boolean;
+  /**
+   * Whether an interface the sources do not declare is one the build generates, whose members are the API's operations
+   * and which declares no member type: the build declares a generator, the interface is written in a way no platform
+   * type is, and the sources do not declare it (ADR-0062).
+   */
+  isGeneratedInterface(name: string, file: JavaFile): boolean;
   /** The type, its interfaces and superclass in Spring order; a supplied parent resolver leaves every unread parent as a gap. */
   hierarchy(type: TypeDecl, resolveParent?: (node: Node, owner: TypeDecl) => TypeLookup): Hierarchy;
   /** The type and its superclasses declared in the project. */
@@ -139,6 +152,17 @@ export interface JavaProject {
   evaluateLong(expr: Expr): Evaluation;
 }
 
+/** Platform interfaces that declare no members, so a type below one inherits no method from it. */
+export const MEMBERLESS_PLATFORM_INTERFACES: ReadonlySet<string> = new Set(["java.io.Serializable", "java.lang.Cloneable", "java.util.RandomAccess", "java.util.EventListener"]);
+/** Spring Data repository interfaces: they declare methods, never member types (ADR-0013 evidence: ADR-0062). */
+const DATA_REPOSITORY_INTERFACES: ReadonlySet<string> = new Set([
+  "org.springframework.data.repository.Repository",
+  "org.springframework.data.repository.CrudRepository",
+  "org.springframework.data.repository.ListCrudRepository",
+  "org.springframework.data.repository.PagingAndSortingRepository",
+  "org.springframework.data.repository.ListPagingAndSortingRepository",
+  "org.springframework.data.jpa.repository.JpaRepository",
+]);
 const PLATFORM_PACKAGES = ["org.springframework.", "java.", "javax.", "jakarta.", "lombok."];
 /** A package starts lowercase, so a qualified name whose first segment does is one. */
 const PACKAGE_SEGMENT = /^[a-z]/;
@@ -254,7 +278,7 @@ function claimedPlatformPackage(packageName: string): string | undefined {
   return next ? `${prefix}${next}.` : undefined;
 }
 
-export function createJavaProject(files: readonly JavaFile[]): JavaProject {
+export function createJavaProject(files: readonly JavaFile[], build: ProjectBuild = {}): JavaProject {
   const types: TypeDecl[] = [];
   const unreadable: JavaFile[] = [];
   const namesToTypes = new Map<string, TypeDecl[]>();
@@ -317,8 +341,7 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     if (offered.length === 0) return undefined;
     if (offered.includes("ambiguous")) return "ambiguous";
     const found = offered.filter((type): type is TypeDecl => type !== undefined);
-    const repositoryPackage = (container: string): boolean => types.some((type) => type.file.packageName === container);
-    return found.length === 1 && file.onDemandImports.every((container, index) => offered[index] !== undefined || repositoryPackage(container)) ? found[0] : "unsettled";
+    return found.length === 1 ? found[0] : "unsettled";
   }
 
   function typeIdentity(name: string, scope: Scope): string | undefined {
@@ -451,8 +474,24 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     return result;
   }
 
+  /** The direct supertypes that can declare a member type: an interface known to declare none is left out. */
   function supertypesOf(type: TypeDecl): (TypeLookup | "unsettled" | LocalType)[] {
-    return [...interfaceNodes(type), ...[superclassNode(type)].filter((parent) => parent !== undefined)].map((node) => lookupType(typeNodeName(node), { file: type.file, type: type.outer }));
+    const interfaces = new Set(interfaceNodes(type).map((node) => node.id));
+    const nodes = [...interfaceNodes(type), ...[superclassNode(type)].filter((parent) => parent !== undefined)];
+    return nodes.flatMap((node) => {
+      const name = typeNodeName(node);
+      const found = lookupType(name, { file: type.file, type: type.outer });
+      return found === undefined && (declaresNoMemberTypes(name, type.file) || (interfaces.has(node.id) && isGeneratedInterface(name, type.file))) ? [] : [found];
+    });
+  }
+
+  function isGeneratedInterface(name: string, file: JavaFile): boolean {
+    return build.generatesInterfaces === true && externalNames(name, file, false).every((fqn) => !isPlatformName(fqn));
+  }
+
+  function declaresNoMemberTypes(name: string, file: JavaFile): boolean {
+    const named = externalNames(name, file, false);
+    return named.length > 0 && named.every((fqn) => (MEMBERLESS_PLATFORM_INTERFACES.has(fqn) || DATA_REPOSITORY_INTERFACES.has(fqn)) && isPlatformName(fqn));
   }
 
   /** The member type of the name a type whose direct supertypes are `parents` inherits from them (`inheritedMember`). */
@@ -679,6 +718,7 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     bindName,
     resolveTypeName: (name, scope) => resolveName(name.replace(/\s+/g, ""), scope, true),
     isPlatformName,
+    isGeneratedInterface,
     hierarchy,
     classChain,
     evaluate(expr) {

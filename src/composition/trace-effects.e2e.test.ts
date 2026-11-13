@@ -358,11 +358,12 @@ class Store {
 test("compiled review counterexamples cannot invent framework identity, entity identity or overload access", async () => {
   const fixture = (name: string) => readFileSync(new URL(`../core/adapters/spring/fixtures/data-effects/${name}.java`, import.meta.url), "utf8");
   commit({ "src/LocalType.java": fixture("local-type"), "src/WrongTarget.java": fixture("wrong-target"), "src/LoopShadow.java": fixture("loop-shadow"), "src/QueryOverload.java": fixture("query-overload") });
-  for (const [file, symbol] of [["LocalType", "LocalType.run"], ["LoopShadow", "LoopShadow.run"], ["QueryOverload", "QueryOverload.run"]]) {
+  for (const [file, symbol] of [["LocalType", "LocalType.run"], ["LoopShadow", "LoopShadow.run"]]) {
     const result = await trace(`src/${file}.java:${symbol}`);
     assert.deepEqual(result.value.steps.flatMap((step) => step.effects ?? []).filter((effect) => effect.kind === "data"), []);
-    if (file === "QueryOverload") assert.ok(result.cuts?.some((cut) => cut.at.some((at) => at.includes("data effect"))));
   }
+  const overload = await trace("src/QueryOverload.java:QueryOverload.run");
+  assert.deepEqual(overload.value.steps.flatMap((step) => step.effects ?? []).filter((effect) => effect.kind === "data").map((effect) => [effect.operation, effect.access]), [["findByCode", "read"]]);
   const entity = await trace("src/WrongTarget.java:WrongTarget.run");
   const effects = entity.value.steps.flatMap((step) => step.effects ?? []).filter((effect) => effect.kind === "data");
   assert.equal(effects.length, 1);
@@ -732,4 +733,47 @@ test("a request a wrapper defers is a deferred effect of the caller that runs th
   });
   const found = await trace("src/order.api.ts:OrderApi.checkout");
   assert.deepEqual(requestsOf(found.value), [["checkout", "POST", "/api/orders/checkout", true]]);
+});
+
+const GENERATOR_POM = (generator: boolean): string =>
+  `<project><groupId>shop</groupId><artifactId>orders</artifactId>${generator ? "<build><plugins><plugin><groupId>org.openapitools</groupId><artifactId>openapi-generator-maven-plugin</artifactId></plugin></plugins></build>" : ""}</project>`;
+
+const IMPLEMENTING_CONTROLLER: Readonly<Record<string, string>> = {
+  "src/main/java/shop/domain/Order.java": "package shop.domain;\npublic class Order { public Order() {} }\n",
+  "src/main/java/shop/OrdersService.java": `package shop;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.stereotype.Service;
+import shop.domain.*;
+@Service
+public class OrdersService {
+  private RestTemplate http;
+  public Order fetch(long id) { http.getForObject("/users/1", String.class); return new Order(); }
+}
+`,
+  "src/main/java/shop/OrdersController.java": `package shop;
+import org.springframework.web.bind.annotation.*;
+import shop.api.OrdersApi;
+import shop.domain.*;
+@RestController
+public class OrdersController implements OrdersApi {
+  private OrdersService service;
+  public Order get(long id) { return load(id); }
+  private Order load(long id) { return service.fetch(id); }
+}
+`,
+};
+
+test("a controller implementing an interface that a declared OpenAPI generator emits keeps its own, private and typed receivers, and the trace places the request below it", async () => {
+  commit({ ...IMPLEMENTING_CONTROLLER, "pom.xml": GENERATOR_POM(true) });
+  const found = await trace("src/main/java/shop/OrdersController.java:OrdersController.get");
+  assert.deepEqual(found.value.steps.map((step) => step.symbol), ["get", "load", "fetch"]);
+  assert.deepEqual(found.value.steps.flatMap((step) => step.effects ?? []).map((effect) => (effect.kind === "http" ? effect.target.path : undefined)), ["/users/1"]);
+  assert.equal(found.status, "complete");
+});
+
+test("the same controller without a declared generator keeps the cut at its first step", async () => {
+  commit({ ...IMPLEMENTING_CONTROLLER, "pom.xml": GENERATOR_POM(false) });
+  const found = await trace("src/main/java/shop/OrdersController.java:OrdersController.get");
+  assert.deepEqual(effectsOf(found.value), []);
+  assert.equal(found.status, "partial");
 });

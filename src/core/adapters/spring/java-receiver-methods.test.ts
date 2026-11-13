@@ -80,6 +80,28 @@ test("a platform interface that declares no members leaves the receiver's method
   assert.deepEqual(await select(entity("implements Serializable", ["import com.vendor.Serializable;"])), { kind: "unproven" });
 });
 
+test("an interface a declared generator emits and the sources do not hold leaves the implementing class's own, private and typed receivers selectable, and nothing it could declare", async () => {
+  const GENERATOR: SourceFile = { path: "pom.xml", content: "<project><build><plugins><plugin><groupId>org.openapitools</groupId><artifactId>openapi-generator-maven-plugin</artifactId></plugin></plugins></build></project>" };
+  const implementing = (call: string, heritage = "implements Api", members: readonly string[] = []) => java("Use.java", ["package app; import app.api.Api;", "", `class Use ${heritage} {`, `  void run(Store store) { ${call}; }`, ...members, "}"]);
+  const select = (use: SourceFile, member: string, generated = true) => {
+    const line = use.content.split("\n")[3]!;
+    return createJavaNameBindings(createJavaParser, [STORE, JDBC, use], undefined, undefined, undefined, generated ? [GENERATOR] : []).receiverMethods([{ file: use.path, line: 4, column: line.indexOf("{ ") + 3, member }]).then(([found]) => found!);
+  };
+  const helped = implementing("helper()", "implements Api", ["  private void helper() {}"]);
+  const typed = implementing("store.save(\"x\")");
+
+  assert.deepEqual(await select(typed, "save"), method(STORE, 4));
+  assert.deepEqual(await select(helped, "helper"), method(helped, 5));
+  assert.deepEqual(await select(typed, "save", false), { kind: "unproven" });
+  assert.deepEqual(await select(helped, "helper", false), { kind: "unproven" });
+  assert.notEqual((await select(implementing("getRequest()"), "getRequest")).kind, "method");
+  const alsoStore = implementing("save(\"x\")", "implements Api, Store", ["  public void save(String value) {}"]);
+  assert.deepEqual(await select(alsoStore, "save"), { kind: "unproven" });
+  assert.deepEqual(await select({ ...typed, content: typed.content.replace("implements Api", "extends Api") }, "save"), { kind: "unproven" });
+  assert.deepEqual(await select({ ...helped, content: helped.content.replace("implements Api", "extends Api") }, "helper"), { kind: "unproven" });
+  assert.deepEqual(await select({ ...typed, content: typed.content.replace("implements Api", "implements org.springframework.context.ApplicationListener<Object>") }, "save"), { kind: "unproven" });
+});
+
 test("a call at an arity no member takes, varargs, inaccessible private members and Object methods retain an unproven call", async () => {
   const varargs = java("Store.java", ["package app;", "", "public interface Store {", "  void save(String... value);", "  Store find();", "}"]);
   const hidden = java("Plain.java", ["package app;", "", "class Plain {", "  private void save(String value) {}", "}"]);

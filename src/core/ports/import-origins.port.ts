@@ -235,5 +235,8 @@ export type RootBinding =
  * Reads the import bindings of one snapshot; composition supplies it, so no use case imports a parser. `paths` is every path
  * of the snapshot's scope, files no reader parses included; the sources' own paths when not given.
  */
-/** `facts` keeps what the reader derives from one file or from named inputs between requests (ADR-0035). */
-export type ImportOriginsReader = (sources: readonly SourceFile[], paths?: readonly string[], facts?: DerivedFacts, hold?: ParseHold) => ImportOrigins;
+/**
+ * `facts` keeps what the reader derives from one file or from named inputs between requests (ADR-0035). `context` is the
+ * snapshot's files the reader's language declares as stating facts about its build; they are no sources of the reader.
+ */
+export type ImportOriginsReader = (sources: readonly SourceFile[], paths?: readonly string[], facts?: DerivedFacts, hold?: ParseHold, context?: readonly SourceFile[]) => ImportOrigins;

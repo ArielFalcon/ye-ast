@@ -78,6 +78,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0059](adr/0059-a-field-written-once-in-the-constructor-from-a-readable-value-is-a-decided-callee.md) | A function-typed field written exactly once, unconditionally in the constructor, from a function or a readable factory's returned function is that function; any other write keeps the undecided dispatch | Accepted |
 | [0060](adr/0060-a-request-to-a-host-evidenced-as-a-repository-is-unmatched.md) | A request to a host evidenced as one repository's (a call under its origin links to it and none to another) that matches no route is `unmatched` instead of `external`; a host with no link, or linked to two repositories, stays external | Accepted |
 | [0061](adr/0061-a-trace-returns-the-links-of-requests-under-deferred-steps.md) | A trace returns the links of requests under deferred steps (a step is deferred when it or an ancestor is), marked deferred; a call that may reach a request is a `request-possible` cut, not an "http effect" | Accepted |
+| [0062](adr/0062-java-names-and-receivers-resolve-under-the-repository-compiles-assumption.md) | A name one repository on-demand import declares is bound whatever other packages are imported; Spring Data repository interfaces declare no member type; an interface a declared OpenAPI generator emits does not make own, private and typed receivers unproven | Accepted |
 
 ## Designs (RFC)
 

@@ -9,7 +9,7 @@ import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { Node } from "web-tree-sitter";
 import { enclosingBody } from "../tree-sitter/java-function-value-calls.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
-import { createJavaProject, describeFile, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, describeFile, type JavaFile, type JavaProject, type ProjectBuild, type TypeDecl } from "./java-symbols.ts";
 
 /** A Java source that does not parse, at the line of its first syntax error (line 1 when the parser throws). */
 export interface UnparsedSource {
@@ -59,33 +59,33 @@ const heldProjects = new WeakMap<ParseHold, Map<string, Promise<HeldJavaProject>
  * The identity is every input the project reads — each source's path and content, on each side of the owned/declared
  * split — never the list that carries them, so a changed source or a declared file is another project.
  */
-export function heldJavaProject(hold: ParseHold, parser: () => Promise<JavaParser>, sources: readonly SourceFile[], declared: readonly SourceFile[] = []): Promise<HeldJavaProject> {
+export function heldJavaProject(hold: ParseHold, parser: () => Promise<JavaParser>, sources: readonly SourceFile[], declared: readonly SourceFile[] = [], build: ProjectBuild = {}): Promise<HeldJavaProject> {
   if (!hold.open()) return Promise.reject(new ReleasedParseHoldError());
   let byKey = heldProjects.get(hold);
   if (byKey === undefined) {
     byKey = new Map();
     heldProjects.set(hold, byKey);
   }
-  const key = projectKey(sources, declared);
+  const key = projectKey(sources, declared, build);
   let held = byKey.get(key);
   if (held === undefined) {
-    held = buildHeldJavaProject(hold, parser, sources, declared);
+    held = buildHeldJavaProject(hold, parser, sources, declared, build);
     byKey.set(key, held);
   }
   return held;
 }
 
-function projectKey(sources: readonly SourceFile[], declared: readonly SourceFile[]): string {
-  return JSON.stringify([sources.map(({ path, content }) => [path, content]), declared.map(({ path, content }) => [path, content])]);
+function projectKey(sources: readonly SourceFile[], declared: readonly SourceFile[], build: ProjectBuild): string {
+  return JSON.stringify([sources.map(({ path, content }) => [path, content]), declared.map(({ path, content }) => [path, content]), build.generatesInterfaces === true]);
 }
 
-async function buildHeldJavaProject(hold: ParseHold, parser: () => Promise<JavaParser>, sources: readonly SourceFile[], declared: readonly SourceFile[]): Promise<HeldJavaProject> {
+async function buildHeldJavaProject(hold: ParseHold, parser: () => Promise<JavaParser>, sources: readonly SourceFile[], declared: readonly SourceFile[], build: ProjectBuild): Promise<HeldJavaProject> {
   const kept = hold.keep([...sources, ...declared]);
   const read = await parser();
   return withJavaSources(read, (parse) => {
     const { files, unparsed } = parse(kept);
     const owned = new Set(sources.map(({ path }) => path));
-    return { files: files.map((file) => ({ file, owned: owned.has(file.path) })), project: createJavaProject(files), unparsed, owns: (path: string) => owned.has(path) };
+    return { files: files.map((file) => ({ file, owned: owned.has(file.path) })), project: createJavaProject(files, build), unparsed, owns: (path: string) => owned.has(path) };
   });
 }
 

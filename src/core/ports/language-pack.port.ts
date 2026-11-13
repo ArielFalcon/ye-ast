@@ -23,6 +23,8 @@ export interface LanguagePack {
   absent?: readonly AbsentCapability[];
   /** Whether it also reads the project's files no pack owns: manifests, configurations, declarations, resources. */
   readsProjectFiles?: true;
+  /** The files, of those no pack owns, that state facts about the pack's build: the reader of origins receives them as context, not as sources. */
+  contextFiles?: (path: string) => boolean;
   memberNames: DeclaredMemberNamesReader;
   /** Over the pack's sources, with every path of the snapshot, which its proofs may read. */
   origins: ImportOriginsReader;
