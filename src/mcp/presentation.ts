@@ -1,4 +1,5 @@
 import type { UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
+import type { Link } from "../core/domain/topology/link.ts";
 import { z } from "zod";
 import type { Cut, Fact } from "../core/domain/shared/fact.ts";
 import type { TraceEffect } from "../core/domain/trace/trace-fact.ts";
@@ -35,4 +36,9 @@ export function effectText(effect: TraceEffect): string {
 export function statedRequestText(site: Pick<UnresolvedCallSite, "stated" | "transport" | "symbol">): string {
   const expressions = site.stated?.expressions?.map((parts) => parts.map((part) => part.kind === "text" ? JSON.stringify(part.text) : part.kind === "runtime" ? part.encoded ? "encode(runtime)" : "runtime" : `unknown(${part.cause})`).join(" + ")).join(" | ");
   return site.stated === undefined ? `${site.transport} ${site.symbol}` : `${site.stated.method}${site.stated.path === undefined ? "" : ` ${site.stated.path}`}${expressions === undefined ? "" : `; URL expression: ${expressions} (destination unresolved)`}`;
+}
+
+/** The segments a producer variable cannot parse: the link dispatches and fails there at run time. */
+export function driftText(drift: Link["drift"]): string {
+  return drift === undefined ? "" : `drift: ${drift.map(({ segment, parameter, type }) => `"${segment}" fills ${parameter} (${type})`).join("; ")}`;
 }

@@ -1,4 +1,5 @@
 import type { Finding } from "../shared/fact.ts";
+import type { RouteParameterTypes } from "./route-parameter.ts";
 
 export const HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "ANY"] as const;
 
@@ -65,5 +66,7 @@ export interface HttpRoute {
   path: string;
   version?: string;
   handler: Handler;
+  /** The parse-strict types the handler declares for the path variables; a variable of any other type, or of a framework that gives none, is absent. */
+  parameterTypes?: RouteParameterTypes;
   basePath: Finding<BasePath>;
 }

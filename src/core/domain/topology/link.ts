@@ -1,11 +1,19 @@
 import type { Entrypoint } from "../entrypoints/entrypoint.ts";
 import type { Handler } from "../entrypoints/http-route.ts";
+import type { ParseStrictType } from "../entrypoints/route-parameter.ts";
 import type { ChangedContract } from "../impact/changed-contracts.ts";
 import { compareText } from "../shared/code-node.ts";
 import type { CallPlace } from "./call-site.ts";
 
 /** How a call site was matched to the entrypoint it reaches. */
 export type LinkBasis = "exact" | "base-path" | "suffix" | "event-destination" | "gateway-prefix" | "route-overlap";
+
+/** A literal segment of the request that fills a path variable of the producer whose declared type cannot parse it: dispatch that reaches the handler and fails there. */
+export interface LinkDrift {
+  segment: string;
+  parameter: string;
+  type: ParseStrictType;
+}
 
 /** A call site of one repository joined to an entrypoint of another, or of its own when the transport stays inside it. */
 export interface Link {
@@ -19,6 +27,8 @@ export interface Link {
   profiles?: readonly string[];
   /** `undecided` when the snapshot states the call's path but not the base URL it is sent to (ADR-0054). */
   authority?: "undecided";
+  /** The literal segments the producer's variables cannot parse, in path order; the link stays (ADR-0065). */
+  drift?: readonly LinkDrift[];
   confidence: number;
 }
 

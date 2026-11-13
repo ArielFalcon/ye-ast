@@ -81,6 +81,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0062](adr/0062-java-names-and-receivers-resolve-under-the-repository-compiles-assumption.md) | A name one repository on-demand import declares is bound whatever other packages are imported; Spring Data repository interfaces declare no member type; an interface a declared OpenAPI generator emits does not make own, private and typed receivers unproven | Accepted |
 | [0063](adr/0063-a-jdk-the-host-declares-is-the-library-signature-source.md) | The library signatures come from a JDK the host declares with `--jdk [<at>=]<path>`, read as data from `ct.sym` at the JDK's own release with no pin and no shipped table; it is a build output, stated unverified, and a cut when unusable or older than a build file's literal release | Accepted |
 | [0064](adr/0064-a-supertype-outside-the-repository-redefines-no-java-name.md) | A supertype outside the repository is assumed to declare no member type and no inherited field named like a type that resolves to `java.*` by an import, an on-demand import or `java.lang`; it also covers a name a single-type import binds, and never a name a same-package reference or a non-java on-demand import supplies | Accepted |
+| [0065](adr/0065-a-link-marks-the-literal-segment-a-producer-variable-cannot-parse.md) | A link keeps its place and gains a `drift` field when a literal request segment fills a producer path variable whose declared parse-strict type (`UUID`, integers, floats) cannot parse it; any other type or framework states no type and no mark | Accepted |
 
 ## Designs (RFC)
 

@@ -108,6 +108,15 @@ test("a workspace summary keeps the link list when it is shorter than the counts
   assert.match(summary, /call sites the join reached without a link \(1\):\n  - a:x\.ts:9 h http shared: ambiguous \(b, c\) routes GET \/shared$/m);
 });
 
+test("a link whose literal segment a producer variable cannot parse is listed with its drift", () => {
+  const drifting = { ...linkOf(7), drift: [{ segment: "daily-menus", parameter: "id", type: "UUID" }] };
+
+  const details = renderWorkspace({ ...base, status: "complete", value: mapValue([drifting, linkOf(9)]) } as never, "details");
+
+  assert.match(details, /OrdersClient\.call7 -> .* \(exact, drift: "daily-menus" fills id \(UUID\)\)\n/);
+  assert.match(details, /OrdersClient\.call9 -> .* \(exact\)$/);
+});
+
 test("unresolved diagnostics stay compact in summaries and retain causal evidence in details", () => {
   const sites = [
     { path: "src/Calls.java", line: 4, symbol: "Calls.send", transport: "event", reason: "unresolved", evidence: [{ path: "src/Calls.java", line: 4 }], diagnostic: { cause: "source-not-read", source: "not-read" }, via: "com.acme.Messenger" },

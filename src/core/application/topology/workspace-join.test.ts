@@ -151,3 +151,42 @@ test("a request to an origin the workspace links into, matching no route, is lis
   assert.deepEqual(links.map(({ to }) => to.name), ["GET /orders"]);
   assert.deepEqual(unlinked.map(({ outcome, name }) => `${outcome} ${name}`), ["unmatched http://localhost:8080/refunds"]);
 });
+
+/** A request that states its path in full, as a client call to a service of the workspace. */
+function calling(path: string, method: HttpRoute["method"] = "GET"): CallSite {
+  return { repo: "web", file: "src/app/menus.service.ts", line: 4, symbol: "MenusService.load", transport: "http", target: { status: "complete", value: { method, path }, evidence: [] } };
+}
+
+function typed(route: HttpRoute, parameterTypes: NonNullable<HttpRoute["parameterTypes"]>): HttpRoute {
+  return { ...route, parameterTypes };
+}
+
+test("a link whose literal segment fills a producer variable of a type that cannot parse it stays and carries the drift", () => {
+  const web = repository("web", [calling("/restaurants/daily-menus"), calling("/private/product/new", "PUT")], []);
+  const api = repository("api", [], [
+    typed(serving("GET", "/restaurants/{id}", "Restaurants.get"), { id: "UUID" }),
+    typed(serving("PUT", "/private/product/{productId}", "Products.update"), { productId: "Long" }),
+  ]);
+
+  assert.deepEqual(joined([web, api]).links.map(({ to, drift }) => [to.name, drift]), [
+    ["GET /restaurants/{id}", [{ segment: "daily-menus", parameter: "id", type: "UUID" }]],
+    ["PUT /private/product/{productId}", [{ segment: "new", parameter: "productId", type: "Long" }]],
+  ]);
+});
+
+test("a link carries no drift when the literal parses, the variable is untyped or the value is filled at run time", () => {
+  const web = repository("web", [calling("/private/product/42"), calling("/names/daily-menus"), calling("/restaurants/{}")], []);
+  const api = repository("api", [], [
+    typed(serving("GET", "/private/product/{id}", "Products.get"), { id: "Long" }),
+    serving("GET", "/names/{name}", "Names.get"),
+    typed(serving("GET", "/restaurants/{id}", "Restaurants.get"), { id: "UUID" }),
+  ]);
+
+  const { links } = joined([web, api]);
+
+  assert.deepEqual(links.map(({ to, drift }) => [to.name, drift]), [
+    ["GET /names/{name}", undefined],
+    ["GET /private/product/{id}", undefined],
+    ["GET /restaurants/{id}", undefined],
+  ]);
+});

@@ -6,6 +6,7 @@ import { dependencyDiagnostic } from "./dependency-schema.ts";
  */
 import { z } from "zod";
 import { HTTP_METHODS } from "../core/domain/entrypoints/http-route.ts";
+import { PARSE_STRICT_TYPES } from "../core/domain/entrypoints/route-parameter.ts";
 import { CALL_SITE_CAUSES } from "../core/domain/topology/call-site.ts";
 import { SUMMARY_CAUSES } from "../core/domain/topology/request-summary.ts";
 import { CUT_REASONS, CUT_SUB_REASONS, TRUST_MODES, UNKNOWN_REASONS, type DeclaredConfig } from "../core/domain/shared/fact.ts";
@@ -162,6 +163,7 @@ export const unresolvedCallSiteSchema = z.strictObject({
   via: z.string().exactOptional(), stated: stated.exactOptional(), deferred: z.literal(true).exactOptional(),
 });
 
+export const linkDrift = z.array(z.strictObject({ segment: z.string(), parameter: z.string(), type: z.enum(PARSE_STRICT_TYPES) }));
 export const linkBasis = z.enum(["exact", "base-path", "suffix", "event-destination", "gateway-prefix", "route-overlap"]);
 export const linkEndpoints = {
   from: z.strictObject({ ...callLocation.shape, repo: z.string(), symbol: z.string(), place: ids.evidence.exactOptional() }),
@@ -355,7 +357,7 @@ export const partSchema = z.discriminatedUnion("kind", [
   part("workspace-link", {
     link: z.strictObject({
       id: z.string(), from: linkEndpoints.from, to: linkEndpoints.to(ids.anchor), transport, basis: linkBasis,
-      profiles: strings.exactOptional(), authority: z.literal("undecided").exactOptional(), deferred: z.literal(true).exactOptional(), confidence: z.number(),
+      profiles: strings.exactOptional(), authority: z.literal("undecided").exactOptional(), drift: linkDrift.exactOptional(), deferred: z.literal(true).exactOptional(), confidence: z.number(),
     }),
     direction: z.enum(["upstream", "downstream"]).exactOptional(),
     reach: z.array(z.discriminatedUnion("status", [

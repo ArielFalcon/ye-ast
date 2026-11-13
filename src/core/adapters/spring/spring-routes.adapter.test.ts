@@ -2564,6 +2564,19 @@ test("an @Override method that a contract operationId names is a route with the 
   );
 });
 
+test("a contract-joined override records the type of the parameter that carries the name of a path variable of the contract", async () => {
+  extractor = contracting([operation("getDetail", "GET", "/restaurants/{id}")]);
+
+  const findings = await extractor.extract([
+    app("RestaurantsController", `@RestController class RestaurantsController implements RestaurantsApi {\n  @Override public String getDetail(UUID id, Optional<String> locale, Long other) { return null; }\n}`, "import java.util.UUID;"),
+    MAIN,
+  ]);
+
+  const [route] = findings.flatMap((finding) => (finding.status === "complete" && finding.value.kind === "http-route" ? [finding.value] : []));
+
+  assert.deepEqual(route?.parameterTypes, { id: "UUID" });
+});
+
 test("a contract whose operations no class of the snapshot implements gives no route", async () => {
   extractor = contracting([operation("addPet", "POST", "/pet"), operation("getPet", "GET", "/pet/{petId}")]);
 
@@ -2725,4 +2738,32 @@ test("an unmapped inherited declaration with unread external ancestry does not a
     file("src/main/java/app/Sender.java", "package app; import ext.Event; import org.springframework.stereotype.Component; @Component public class Sender implements Port { public void send(Event event) {} }"),
   ]);
   assert.deepEqual(findings, []);
+});
+
+test("a route records the parse-strict types of its path variables, by the name the annotation or the parameter gives", async () => {
+  const findings = await extractor.extract([
+    app(
+      "Typed",
+      `@RestController class Typed {
+  @GetMapping("/a/{id}/{n}/{slug}/{free}/{count}/{ref}/{plain}")
+  void one(@PathVariable UUID id, @PathVariable("n") Long number, @PathVariable(name = "slug") String slug, @PathVariable Object free, @PathVariable int count, @PathVariable java.util.UUID ref, Long plain) {}
+}`,
+      "import java.util.UUID;",
+    ),
+  ]);
+
+  const [route] = findings.flatMap((finding) => (finding.status === "complete" && finding.value.kind === "http-route" ? [finding.value] : []));
+
+  assert.deepEqual(route?.parameterTypes, { id: "UUID", n: "Long", count: "int", ref: "UUID" });
+});
+
+test("a path variable states no type when its type is a repository class named like a closed one or the handler declares none", async () => {
+  const findings = await extractor.extract([
+    app("Local", `@RestController class Local { @GetMapping("/b/{id}") void one(@PathVariable UUID id) {} @GetMapping("/c") void two() {} }`),
+    file("src/main/java/app/UUID.java", "package app;\nclass UUID {}"),
+  ]);
+
+  const typed = findings.flatMap((finding) => (finding.status === "complete" && finding.value.kind === "http-route" ? [finding.value.parameterTypes] : []));
+
+  assert.deepEqual(typed, [undefined, undefined]);
 });

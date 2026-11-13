@@ -1,4 +1,5 @@
 import { CUT_REASONS, CUT_SUB_REASONS, UNKNOWN_REASONS } from "../core/domain/shared/fact.ts";
+import { PARSE_STRICT_TYPES } from "../core/domain/entrypoints/route-parameter.ts";
 import { dependencyDiagnostic } from "./dependency-schema.ts";
 import { z } from 'zod';
 import { RESULT_IDENTITY_PATTERN } from './evidence-cursor.ts';
@@ -174,7 +175,7 @@ export function selectedOutputFor(tool: Tool, deps: SelectedOutputDeps) {
     z.strictObject({kind:z.literal('callback'),name:z.string(),contract:z.strictObject({type:z.string(),member:z.string().optional()}),handler}),
   ]);
   const finding = z.discriminatedUnion('status', [z.strictObject({status:z.literal('complete'),identity}),z.strictObject({status:z.literal('unknown'),reason})]);
-  const link = z.strictObject({id:z.string(),from:z.strictObject({repo:z.string(),file:z.string(),line:z.number(),symbol:z.string()}),to:z.strictObject({repo:z.string(),kind:z.enum(['http-route','ui-route','listener','job']),name:z.string(),handler}),transport:z.enum(['http','event']),basis:z.enum(['exact','base-path','suffix','event-destination','gateway-prefix','route-overlap']),profiles:z.array(z.string()).optional(),authority:z.literal('undecided').optional(),confidence:z.number()});
+  const link = z.strictObject({id:z.string(),from:z.strictObject({repo:z.string(),file:z.string(),line:z.number(),symbol:z.string()}),to:z.strictObject({repo:z.string(),kind:z.enum(['http-route','ui-route','listener','job']),name:z.string(),handler}),transport:z.enum(['http','event']),basis:z.enum(['exact','base-path','suffix','event-destination','gateway-prefix','route-overlap']),profiles:z.array(z.string()).optional(),authority:z.literal('undecided').optional(),drift:z.array(z.strictObject({segment:z.string(),parameter:z.string(),type:z.enum(PARSE_STRICT_TYPES)})).optional(),confidence:z.number()});
   const moduleVia = z.strictObject({file:z.string(),line:z.number(),specifier:z.string(),kind:z.enum(['import','reexport']),typeOnly:z.boolean(),form:z.enum(['dynamic-import','type-query']).optional()});
   const categories = [
     {select:handlerSelection, context:z.strictObject({owner:impactOwner,snapshot,handler,matchedEntrypointCount:index,interpretation:z.literal('recorded-origin-union')}), item:z.strictObject({seedIndex:index,seed:z.strictObject({file:z.string(),symbol:z.string(),line:z.number(),endLine:z.number().optional(),basis:z.enum(['lines','top-level','resource','requested'])})})},

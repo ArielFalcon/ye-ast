@@ -5,7 +5,8 @@ import { compareText } from "../shared/code-node.ts";
 import type { CallSiteReach } from "../shared/fact.ts";
 import { callPlaceOf, httpTargetOf, undecidedAuthorityTargetsOf, type CallSite, type EventTarget, type HttpTarget } from "./call-site.ts";
 import { consumption, delivers } from "./event-destination.ts";
-import { linkIdentity, type Link, type LinkBasis } from "./link.ts";
+import { parsesAs, variableOfSegment } from "../entrypoints/route-parameter.ts";
+import { linkIdentity, type Link, type LinkBasis, type LinkDrift } from "./link.ts";
 import { callTemplate, CANNOT_MATCH, isRunTimeValue, literalText, looseness, namesHost, prefixText, routeSegments, statedLength, unify, unifyPathSegment, type CallTemplate, type SegmentRule, type TemplateSegment, type Unification } from "./path-template.ts";
 
 /** A repository's entrypoints, as the join reads them. */
@@ -233,7 +234,27 @@ export function servedBehindGateway(target: HttpTarget, routes: readonly HttpRou
   return landing === undefined || landing === "could" ? [] : "tie" in landing ? landing.tie : [landing.match.route];
 }
 
-function linkTo(site: CallSite, repo: string, match: Match, authority?: Link["authority"]): Link {
+/**
+ * The literal segments of the call that fill a variable of the route whose declared type cannot parse them. The route
+ * lines up with the end of the call on every rung (a base path, a gateway prefix or a suffix only cut leading segments);
+ * a route that takes the rest of the path is not lined up.
+ */
+function driftOf(target: HttpTarget, route: HttpRoute): LinkDrift[] {
+  if (route.parameterTypes === undefined) return [];
+  const call = callTemplate(target).segments;
+  const own = routeSegments(route.path);
+  if (own.some((segment) => segment.kind === "any-tail")) return [];
+  const names = route.path.split("/").filter((segment) => segment !== "").map(variableOfSegment);
+  return names.flatMap((name, index): LinkDrift[] => {
+    const type = name === undefined ? undefined : route.parameterTypes?.[name];
+    const segment = call[index + call.length - names.length];
+    const text = segment === undefined ? undefined : literalText(segment);
+    return name === undefined || type === undefined || text === undefined || parsesAs(type, text) ? [] : [{ segment: text, parameter: name, type }];
+  });
+}
+
+function linkTo(site: CallSite, repo: string, match: Match, target: HttpTarget, authority?: Link["authority"]): Link {
+  const drift = driftOf(target, match.route);
   const link: Omit<Link, "id"> = {
     from: callPlaceOf(site),
     to: { repo, kind: match.route.kind, name: match.route.name, handler: match.route.handler },
@@ -242,6 +263,7 @@ function linkTo(site: CallSite, repo: string, match: Match, authority?: Link["au
     confidence: match.confidence,
     ...(match.profiles === undefined ? {} : { profiles: match.profiles }),
     ...(authority === undefined ? {} : { authority }),
+    ...(drift.length === 0 ? {} : { drift }),
   };
   return { ...link, id: linkIdentity(link) };
 }
@@ -285,7 +307,7 @@ export function matchDeclaredOperation(target: HttpTarget, repositories: readonl
  * the service's drift.
  */
 export function matchCallSite(site: CallSite, target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[], hosts: readonly HostAttribution[] = []): JoinResult {
-  return ladder(target, repositories, gateways, hosts, (repo, match) => ({ links: [linkTo(site, repo, match)] }));
+  return ladder(target, repositories, gateways, hosts, (repo, match) => ({ links: [linkTo(site, repo, match, target)] }));
 }
 
 /**
@@ -303,7 +325,7 @@ export function matchUndecidedAuthority(site: CallSite, target: HttpTarget, repo
   if (landed === undefined) return {};
   if (landed === "could") return { undecided: target.path };
   if ("ambiguous" in landed) return { ambiguous: { key: prefix ?? target.path, repos: landed.ambiguous, routes: landed.routes } };
-  return { links: [linkTo(site, landed.repo, { ...landed.match, basis: "suffix", confidence: SUFFIX_CONFIDENCE }, "undecided")] };
+  return { links: [linkTo(site, landed.repo, { ...landed.match, basis: "suffix", confidence: SUFFIX_CONFIDENCE }, target, "undecided")] };
 }
 
 /**

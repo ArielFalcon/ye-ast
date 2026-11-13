@@ -149,6 +149,14 @@ test("cross-id integrity uses the materializer checker: a dangling reference pas
   assert.equal(runtime(outOfRange), false);
 });
 
+test("a workspace link carries a drift of the closed types and rejects one of another type", () => {
+  const withDrift = (type: string) => mutated((copy) => { (first(copy, "parts", (part) => part.kind === "workspace-link").link as Record<string, unknown>).drift = [{ segment: "daily-menus", parameter: "id", type }]; });
+
+  assert.equal(runtime(withDrift("UUID")), true);
+  assert.equal(ajv(json(withDrift("UUID"))).valid, true);
+  assert.equal(runtime(withDrift("String")), false);
+});
+
 test("legal missing-reference and unknown variants stay valid", () => {
   const parts = full.graph.parts;
   assert.ok(parts.some((part) => part.kind === "workspace-link" && (part.reach ?? []).some((reach) => reach.status === "missing")));

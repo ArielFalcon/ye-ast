@@ -1,4 +1,4 @@
-import { dependencyDiagnosticText, effectText, statedRequestText, unresolvedLabel } from "./presentation.ts";
+import { dependencyDiagnosticText, driftText, effectText, statedRequestText, unresolvedLabel } from "./presentation.ts";
 import { canSelect, categoryRecovery, literalSelection, sharedLookup } from "./presentation-guidance.ts";
 import type { ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
@@ -1366,7 +1366,8 @@ function linkLine(link: Link & { deferred?: true }, number: number | undefined, 
   const confidence = link.confidence < 1 ? `, confidence ${link.confidence}` : "";
   const profiles = link.profiles === undefined ? "" : `, under ${link.profiles.join(", ")}`;
   const authority = link.authority === undefined ? "" : ", base URL undecided";
-  return `  - ${number}. ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} -> ${handlerText(link.to.handler)} (${link.basis}${confidence}${profiles}${authority}${link.deferred === true ? ", runs later, if at all" : ""}${reached})`;
+  const drift = driftText(link.drift);
+  return `  - ${number}. ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} -> ${handlerText(link.to.handler)} (${link.basis}${confidence}${profiles}${authority}${drift === "" ? "" : `, ${drift}`}${link.deferred === true ? ", runs later, if at all" : ""}${reached})`;
 }
 
 function impactedLinkLine({ link, direction, reach, operations }: ImpactedLink, indexes: ReadonlyMap<string, number>): string {

@@ -1,4 +1,4 @@
-import { dependencyDiagnosticText, effectText, statedRequestText, unresolvedLabel } from "./presentation.ts";
+import { dependencyDiagnosticText, driftText, effectText, statedRequestText, unresolvedLabel } from "./presentation.ts";
 import { cutLabel } from "./presentation-context.ts";
 /**
  * Deterministic text of a composition. Summary and details are self-sufficient: every subject they
@@ -518,7 +518,7 @@ class CompactView {
       case "workspace-link": {
         const link = part.link;
         const reach = part.reach?.map((reference) => (reference.status === "present" ? (reference.part === part.id ? "self" : "present") : `missing ${reference.linkId}`));
-        return `link ${link.id}${part.direction === undefined ? "" : ` ${part.direction}`}: ${link.from.repo} ${this.file(link.from.file)}:${link.from.line} ${link.from.symbol} → ${link.to.repo} ${link.to.kind} ${link.to.name} handler ${this.anchor(link.to.handler)} basis ${link.basis} ${link.transport} confidence ${link.confidence}${link.profiles === undefined ? "" : ` profiles ${link.profiles.join(", ")}`}${link.authority === undefined ? "" : " base-url undecided"}${link.deferred === true ? " deferred" : ""}${short || reach === undefined ? "" : `; reach ${reach.join(", ") || "none"}`}${short ? "" : `${part.operations === undefined ? "" : `; ${changedOperationsText(part.operations)}`}`}`;
+        return `link ${link.id}${part.direction === undefined ? "" : ` ${part.direction}`}: ${link.from.repo} ${this.file(link.from.file)}:${link.from.line} ${link.from.symbol} → ${link.to.repo} ${link.to.kind} ${link.to.name} handler ${this.anchor(link.to.handler)} basis ${link.basis} ${link.transport} confidence ${link.confidence}${link.profiles === undefined ? "" : ` profiles ${link.profiles.join(", ")}`}${link.authority === undefined ? "" : " base-url undecided"}${link.drift === undefined ? "" : ` ${driftText(link.drift)}`}${link.deferred === true ? " deferred" : ""}${short || reach === undefined ? "" : `; reach ${reach.join(", ") || "none"}`}${short ? "" : `${part.operations === undefined ? "" : `; ${changedOperationsText(part.operations)}`}`}`;
       }
       case "unlinked-call-site": return `${part.site.outcome} call site ${part.site.from.repo} ${this.file(part.site.from.file)}:${part.site.from.line} ${part.site.from.symbol} ${part.site.transport} ${quoted(part.site.name)}${part.site.repos === undefined ? "" : ` (${part.site.repos.join(", ")})`}${part.site.deferred === true ? " deferred" : ""}`;
       case "workspace-context": return `workspace context ${this.workspaceContext(part)}`;

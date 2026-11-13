@@ -15,6 +15,8 @@ import { basePathOf, configurationsOf } from "./application-config.ts";
 import { spanOf, unknown, unknownAt, type MappedEntrypoint, type MappedRoute } from "./findings.ts";
 import { foreignEndpointsOf } from "./foreign-endpoints.ts";
 import { callbacksOf } from "./callbacks.ts";
+import { pathVariableTypesOf } from "./route-parameter-types.ts";
+import { variableOfSegment } from "../../domain/entrypoints/route-parameter.ts";
 import { INVOKED_CONTRACTS } from "./invoked-contracts.ts";
 import { readHierarchy } from "./java-dispatch-targets.ts";
 import { listenersOf } from "./listeners.ts";
@@ -356,6 +358,8 @@ function contractJoin(controller: Controller, method: MethodDecl): { operation: 
   const [operation] = candidates;
   if (operation === undefined) return undefined;
   const path = operation.basePath === undefined || operation.basePath === "" ? operation.path : joinPath(operation.basePath, operation.path);
+  const variables = new Set(path.split("/").flatMap((segment) => variableOfSegment(segment) ?? []));
+  const parameterTypes = pathVariableTypesOf(method, controller.project, variables);
   const finding: Finding<MappedRoute> = {
     status: "complete",
     value: {
@@ -364,6 +368,7 @@ function contractJoin(controller: Controller, method: MethodDecl): { operation: 
       method: operation.method,
       path,
       handler: { path: span.path, symbol: `${method.owner.qualifiedName}.${method.name}`, line: span.line, ...declarationSpan(span.line, span.endLine) },
+      ...(parameterTypes === undefined ? {} : { parameterTypes }),
     },
     evidence: [span, { path: operation.document, line: operation.line }],
   };
@@ -411,6 +416,7 @@ function routesOfHandler(handler: MethodDecl, mapping: Mapping, classMapping: Ma
   const methods = resolveMethods([classMapping, mapping]);
   const versions = resolveVersion(mapping.attributes.get("version") ?? classAttributes.get("version"), project);
 
+  const parameterTypes = pathVariableTypesOf(handler, project);
   const routes: Finding<MappedRoute>[] = [];
   for (const prefix of prefixes.values) {
     for (const path of paths.values) {
@@ -426,6 +432,7 @@ function routesOfHandler(handler: MethodDecl, mapping: Mapping, classMapping: Ma
               path: routePath,
               ...(version === undefined ? {} : { version }),
               handler: { path: span.path, symbol: `${handler.owner.qualifiedName}.${handler.name}`, line: span.line, ...declarationSpan(span.line, span.endLine) },
+              ...(parameterTypes === undefined ? {} : { parameterTypes }),
             },
             evidence: [span],
           });
