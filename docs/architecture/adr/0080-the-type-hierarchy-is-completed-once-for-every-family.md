@@ -66,7 +66,12 @@ already follow: the language pack binds exactly (names, imports, packages), the 
   covers the direction below: an answer that reached a type whose name an unplaced reference writes carries a cut, and
   `importers` reads that name without its type arguments.
 - **U3:** the TypeScript pack answers `declaredSupertypes`. Observed on main: `class NameRepo implements Repo<string>`
-  loses its caller through a `Repo<string>` receiver with `complete`.
+  lost its caller through a `Repo<string>` receiver with `complete`. Landed: every heritage entry of a class or
+  interface is bound by the pack's own heritage proof (the binder's lexical bindings, the file's type scopes, imports
+  through module resolution, re-exports, namespace imports and constants). It is `placed` at the one named class or
+  interface declaration it binds, `outside` as the global name of a library type (`Error`) or `<package>#<export>`
+  (`lib#OnInit`), and `unknown` for a call, a class expression, a type literal, an unbound name, a global the snapshot
+  declares, and a name the language merges from several declarations.
 - **U4:** a Java enum constant with a body is a type below its enum. Observed on main: a method overridden in a constant
   body is reached, and the callers of the enum's method are not.
 

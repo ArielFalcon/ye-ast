@@ -12,7 +12,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { readsPastRoot, type RootOrigin } from "../../domain/impact/edge-policy.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { DeclaredType, ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
+import type { ConstructedClassSite, DeclaredSupertype, DeclaredSupertypes, DeclaredType, ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { moduleResolverOf, packageOf, rememberedModuleResolver } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 import { moduleShape, type ModuleShape } from "./module-shape.ts";
@@ -241,6 +241,12 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
   /** For the same reason a declared type does not name the class whose method a call runs. */
   receiverMethods: async (sites) => sites.map(() => ({ kind: "unknown" })),
   implementedDeclarations: async (sites) => sites.map(() => ({ kind: "unknown" })),
+  declaredSupertypes: async (sites, signal) => {
+    const boundOf = bindsOncePerFile();
+    const results: DeclaredSupertypes[] = [];
+    for (const site of sites) results.push(signal?.aborted ? UNKNOWN_SUPERTYPES : await supertypesAt(site, boundOf));
+    return results;
+  },
   declaredTypes: async (sites, signal) => {
     const results: DeclaredType[] = sites.map(() => UNKNOWN_TYPE);
     for (const [file, group] of Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file)) {
@@ -256,6 +262,26 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
     }
     return results;
   } };
+
+  /**
+   * Each heritage entry of the one class or interface the site places, bound by the heritage proof `subtypedTypes` reads:
+   * placed at the one named class or interface declaration it names, outside by the key of the library or package type it
+   * names, and `unknown` for anything else (several declarations the language merges, a class expression, a type literal).
+   */
+  async function supertypesAt(site: ConstructedClassSite, boundOf: (path: string) => BoundFile): Promise<DeclaredSupertypes> {
+    const source = indexOf(site.file)?.index.source;
+    const placed = source === undefined ? [] : typesPlacedAt(source, site);
+    if (placed.length !== 1) return UNKNOWN_SUPERTYPES;
+    const supertypes: DeclaredSupertype[] = [];
+    for (const clause of placed[0]!.heritageClauses ?? []) {
+      for (const type of clause.types) {
+        const entry = { relation: clause.token === ts.SyntaxKind.ImplementsKeyword ? "implements" : "extends", written: type.expression.getText(source).replace(/\s+/g, "") } as const;
+        const proven = await heritageOf(site.file, type.expression, boundOf, 0);
+        supertypes.push(typeof proven === "string" ? { ...entry, kind: "outside", qualifiedName: proven } : placedAt(entry, proven));
+      }
+    }
+    return { kind: "supertypes", supertypes };
+  }
 
   /**
    * The repository class an annotation names alone, when it is nominal: its one declaration itself declares a `private`,
@@ -415,7 +441,27 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
 }
 
 const UNKNOWN_BINDING: RootBinding = { kind: "unknown" };
+const UNKNOWN_SUPERTYPES: DeclaredSupertypes = { kind: "unknown" };
 const UNKNOWN_TYPE = { kind: "unknown" } as const;
+
+/** The classes and interfaces named as the site names, whose lines from their first token to their name hold the site's line. */
+function typesPlacedAt(source: ts.SourceFile, site: ConstructedClassSite): (ts.ClassDeclaration | ts.InterfaceDeclaration)[] {
+  const placed: (ts.ClassDeclaration | ts.InterfaceDeclaration)[] = [];
+  const visit = (node: ts.Node): void => {
+    if ((ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node)) && node.name?.text === site.name && lineOf(source, node) <= site.line && site.line <= lineOf(source, node.name)) placed.push(node);
+    node.forEachChild(visit);
+  };
+  visit(source);
+  return placed;
+}
+
+/** A heritage entry placed at the one named class or interface its proof names, `unknown` for anything else. */
+function placedAt(entry: Pick<DeclaredSupertype, "relation" | "written">, proven: Exclude<Heritage, string> | undefined): DeclaredSupertype {
+  const [only, ...others] = proven?.declarations ?? [];
+  if (proven === undefined || only === undefined || others.length > 0 || !(ts.isClassDeclaration(only) || ts.isInterfaceDeclaration(only)) || only.name === undefined) return { ...entry, kind: "unknown" };
+  const source = only.getSourceFile();
+  return { ...entry, kind: "placed", name: only.name.text, file: proven.file, start: lineOf(source, only), nameLine: lineOf(source, only.name) };
+}
 
 /** A type from outside the repository, or none proven. */
 type ExternalType = Extract<DeclaredType, { kind: "global" | "package" | "unknown" }>;
