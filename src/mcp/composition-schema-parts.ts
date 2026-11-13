@@ -22,6 +22,7 @@ export const ids = {
 const int = z.int();
 const count = z.int().min(0);
 const strings = z.array(z.string());
+const propagatedPlaces = z.array(z.strictObject({ kind: z.enum(["body", "leaf"]), file: z.string(), line: count, column: count }));
 const issuingPlaces = z.array(z.strictObject({ file: z.string(), line: count, column: count }));
 const recordedCollectionState = z.discriminatedUnion("state", [z.strictObject({ state: z.literal("absent") }), z.strictObject({ state: z.literal("present"), count })]);
 
@@ -343,7 +344,7 @@ export const partSchema = z.discriminatedUnion("kind", [
     site: z.strictObject({
       repo: z.string(), symbol: z.string(),
       ancestors: z.array(z.strictObject({ symbol: z.string(), line: int, endLine: int })).exactOptional(),
-      transport, diagnostic: callSiteDiagnostic.exactOptional(), stated: stated.exactOptional(), location: z.strictObject({ ...callLocation.shape, place: ids.evidence.exactOptional() }),
+      transport, diagnostic: callSiteDiagnostic.exactOptional(), stated: stated.exactOptional(), propagatedThrough: propagatedPlaces.exactOptional(), location: z.strictObject({ ...callLocation.shape, place: ids.evidence.exactOptional() }),
       target: evidenceFinding(z.union([httpTarget, eventTarget])),
     }),
     disposition: z.enum(["matched", "unmatched", "external"]),
@@ -353,12 +354,12 @@ export const partSchema = z.discriminatedUnion("kind", [
     repo: z.string().exactOptional(),
   }),
   part("unlinked-call-site", {
-    site: z.strictObject({ from: linkEndpoints.from, transport, outcome: z.enum(["unmatched", "ambiguous", "could-match"]), name: z.string(), repos: strings.exactOptional(), routes: strings.exactOptional(), deferred: z.literal(true).exactOptional(), issuedAt: issuingPlaces.exactOptional() }),
+    site: z.strictObject({ from: linkEndpoints.from, transport, outcome: z.enum(["unmatched", "ambiguous", "could-match"]), name: z.string(), repos: strings.exactOptional(), routes: strings.exactOptional(), deferred: z.literal(true).exactOptional(), issuedAt: issuingPlaces.exactOptional(), propagatedThrough: propagatedPlaces.exactOptional() }),
   }),
   part("workspace-link", {
     link: z.strictObject({
       id: z.string(), from: linkEndpoints.from, to: linkEndpoints.to(ids.anchor), transport, basis: linkBasis,
-      profiles: strings.exactOptional(), authority: z.literal("undecided").exactOptional(), drift: linkDrift.exactOptional(), deferred: z.literal(true).exactOptional(), issuedAt: issuingPlaces.exactOptional(), confidence: z.number(),
+      profiles: strings.exactOptional(), authority: z.literal("undecided").exactOptional(), drift: linkDrift.exactOptional(), deferred: z.literal(true).exactOptional(), issuedAt: issuingPlaces.exactOptional(), propagatedThrough: propagatedPlaces.exactOptional(), confidence: z.number(),
     }),
     direction: z.enum(["upstream", "downstream"]).exactOptional(),
     reach: z.array(z.discriminatedUnion("status", [

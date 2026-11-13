@@ -3,7 +3,7 @@ import { basename } from "node:path";
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
 import { isSpringConfigFile } from "../../domain/languages/spring-config.ts";
 import type { LibraryPlacedCallSiteReader, LibraryReading } from "../../ports/library-signatures.port.ts";
-import { compareCallSites, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
+import { compareCallSites, propagationOf, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
 import { CALL_PLACES } from "./findings.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
@@ -51,6 +51,8 @@ export function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[]
         const origins = placement.origins.filter((origin) => ownedPaths.has(origin.file));
         const { origins: _origins, ...place } = placement;
         CALL_PLACES.set(site, origins.length === 0 ? place : { ...place, origins });
+        const through = propagationOf(origins);
+        if (through !== undefined) site.propagatedThrough = through;
       }
       const column = CALL_PLACES.get(site)?.column;
       if (column !== undefined) site.column = column + 1;

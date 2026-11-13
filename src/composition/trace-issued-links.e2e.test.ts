@@ -15,6 +15,8 @@ const PRODUCER = { "Users.java": `import org.springframework.web.bind.annotation
 class Users {
   @GetMapping("/users/{id}")
   String user(@PathVariable String id) { return id; }
+  @GetMapping("/users/me")
+  String me() { return "me"; }
   @GetMapping("/orders/{id}")
   String order(@PathVariable String id) { return id; }
 }` };
@@ -119,5 +121,50 @@ test("an effect that supports outer callers reaching different destinations deci
     const below = await trace("UseCase.java:UseCase.run");
     assert.deepEqual([below.links, below.unlinked], [[], []]);
     assert.deepEqual(placesOf(await trace(`${CONTROLLER}:Controller.other`)).map((one) => one.split(" via ")[0]), ["Controller.other -> GET /orders/{id}"]);
+  });
+});
+
+test("two requests propagated from one outer call stay apart by the body that issues each, though their paths are compatible", async () => {
+  const files = {
+    "Controller.java": `package shop;
+import org.springframework.web.bind.annotation.*;
+@RestController
+public class Controller {
+  private UseCase useCase;
+  @GetMapping("/checkout")
+  public String checkout() { return useCase.run("1"); }
+}
+`,
+    "UseCase.java": `package shop;
+import org.springframework.stereotype.Service;
+@Service
+public class UseCase {
+  private ById byId;
+  private Mine mine;
+  public String run(String id) { return byId.user(id) + mine.user(); }
+}
+`,
+    "ById.java": `package shop;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestTemplate;
+@Component
+public class ById {
+  private RestTemplate http;
+  public String user(String id) { return http.getForObject("/users/" + id, String.class); }
+}
+`,
+    "Mine.java": `package shop;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestTemplate;
+@Component
+public class Mine {
+  private RestTemplate http;
+  public String user() { return http.getForObject("/users/me", String.class); }
+}
+`,
+  };
+  await withShop(files, async (trace) => {
+    assert.deepEqual(placesOf(await trace("ById.java:ById.user")).map((one) => one.split(" via ")[0]), ["Controller.checkout -> GET /users/{id}"]);
+    assert.deepEqual(placesOf(await trace("Mine.java:Mine.user")).map((one) => one.split(" via ")[0]), ["Controller.checkout -> GET /users/me"]);
   });
 });

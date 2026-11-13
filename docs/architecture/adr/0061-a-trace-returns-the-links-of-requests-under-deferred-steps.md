@@ -31,15 +31,17 @@ workspace were these calls.
    dropped (ADR-0051): the gap is a real unknown.
 3. `effect-unplaced` ("<kind> effect") stays for direct request sites, stated requests (including base-undecided
    ones), message sites and sites naming a library (`via`).
-4. A link or unlinked call site the workspace sites at an outer caller (a propagated call site, ADR-0044 decision 7) is
-   also returned when the trace expands a body the propagation passed through (an `origins` body of the placed site at
-   that caller) and an effect of that body states the request the site states (same method, paths equal segment by
-   segment, a `{}` segment standing for any), and the route or unlinked path takes that request. The same execution and
-   deferral rules apply, and the match carries `issuedAt`: the effect places (`file`, `line`, 1-based `column`, in the
-   traced repository) that issue it. The workspace fact keeps its call sites as they are. An effect that supports
-   matches of different destinations says nothing about which one the trace runs, so it establishes none of them: the
-   trace returns no link through it rather than a guess. Lead decision under the owner's standing instruction
-   (2026-11-13), applying the owner's words above on backend-to-backend relations.
+4. A call site that was propagated outward (ADR-0044 decision 7) records the places it passed through: the call-site
+   fact carries `propagatedThrough` (the `body` places the propagation passed through and the `leaf` call that issues
+   the request, 1-based, sorted, repository-owned; absent for a direct site or one proven at its own site), and the
+   workspace join copies it onto the link or unlinked entry it makes from that site (merged, sorted, when several sites
+   make one link). A trace also returns such a match when it expanded one of those bodies: the effects of the innermost
+   expanded body that has any establish it, under the execution and deferral rules above, and the match carries
+   their places as `issuedAt`. The join owns which site made which match, so the trace compares no method or path. An
+   effect that supports matches of different destinations says nothing about which of them the trace runs (one body
+   that issues several requests when the library client leaves no leaf), so it establishes none of them rather than a
+   guess. Lead decision under the owner's standing instruction (2026-11-13), option A (a field of the workspace fact,
+   additive, no SCHEMA change), applying the owner's words above on backend-to-backend relations.
 
 ## Consequences
 

@@ -1,7 +1,7 @@
 import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
-import { compareCallSites, type CallSite, type CallSiteDiagnostic, type CallSiteReadOptions, type CallSiteReader, type HttpTarget, type PlacedCallSite, type PlacedCallSiteReader, type PlacedOrigin, type StatedRequest } from "../../domain/topology/call-site.ts";
+import { compareCallSites, propagationOf, type CallSite, type CallSiteDiagnostic, type CallSiteReadOptions, type CallSiteReader, type HttpTarget, type PlacedCallSite, type PlacedCallSiteReader, type PlacedOrigin, type StatedRequest } from "../../domain/topology/call-site.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import { requestMethodOf } from "../../domain/entrypoints/http-route.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -415,7 +415,8 @@ async function readPlaced(files: readonly SourceFile[], repo: string, options?: 
         identified ||= site.target.status === "complete";
         const origins = occurrence?.flatMap(({ calls: chain }) => originsOfChain(chain)) ?? [];
         const proven = occurrence !== undefined && occurrence.length > 0 && occurrence.every((selection) => selection.bound && selection.calls.at(-1) === call) && summary !== undefined && summary.gaps.length === 0 && !groupGap && site.target.status === "complete";
-        found.push({ site, column, ...(origins.length === 0 && direct.has(call) ? {} : { origins }), ...(proven ? { issuingBoundary: "site" as const } : {}) });
+        const through = proven ? undefined : propagationOf(origins);
+        found.push({ site: through === undefined ? site : { ...site, propagatedThrough: through }, column, ...(origins.length === 0 && direct.has(call) ? {} : { origins }), ...(proven ? { issuingBoundary: "site" as const } : {}) });
       }
       if (identified && summary !== undefined && summary.gaps.length > 0) {
         found.push({ site: siteOf(shape, call, repo, summaryTarget(shape, call, [], summary, destinations, group)), column, origins: [] });

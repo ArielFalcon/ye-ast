@@ -24,6 +24,23 @@ export interface CallSite {
   diagnostic?: CallSiteDiagnostic;
   /** The request components the code establishes independently of its undecided target. */
   stated?: StatedRequest;
+  /** Present when the site is a call propagated outward from the bodies it passed through; absent for a direct site. */
+  propagatedThrough?: readonly PropagatedPlace[];
+}
+
+/** A body the propagation of a call site passed through (`body`, at its name) or the call in a body that issues the request (`leaf`); the column is 1-based like `CallSite.column`. */
+export interface PropagatedPlace {
+  kind: "body" | "leaf";
+  file: string;
+  line: number;
+  column: number;
+}
+
+/** The places of a propagated site's origins as a fact carries them: 1-based, deduplicated and sorted; undefined when it has none. */
+export function propagationOf(origins: readonly PlacedOrigin[] | undefined): readonly PropagatedPlace[] | undefined {
+  if (origins === undefined || origins.length === 0) return undefined;
+  const places = new Map(origins.map(({ kind, file, line, column }): [string, PropagatedPlace] => [JSON.stringify([kind, file, line, column]), { kind, file, line, column: column + 1 }]));
+  return [...places.values()].sort((a, b) => compareText(a.file, b.file) || a.line - b.line || a.column - b.column || compareText(a.kind, b.kind));
 }
 
 /** The established HTTP method and, when read, its path independently of the destination base. */

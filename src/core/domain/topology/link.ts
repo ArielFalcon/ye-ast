@@ -3,7 +3,7 @@ import type { Handler } from "../entrypoints/http-route.ts";
 import type { ParseStrictType } from "../entrypoints/route-parameter.ts";
 import type { ChangedContract } from "../impact/changed-contracts.ts";
 import { compareText } from "../shared/code-node.ts";
-import type { CallPlace } from "./call-site.ts";
+import type { CallPlace, PropagatedPlace } from "./call-site.ts";
 
 /** How a call site was matched to the entrypoint it reaches. */
 export type LinkBasis = "exact" | "base-path" | "suffix" | "event-destination" | "gateway-prefix" | "route-overlap";
@@ -29,6 +29,8 @@ export interface Link {
   authority?: "undecided";
   /** The literal segments the producer's variables cannot parse, in path order; the link stays (ADR-0065). */
   drift?: readonly LinkDrift[];
+  /** The bodies the call site was propagated through, when it was; absent for a direct site. Not part of the link's identity. */
+  propagatedThrough?: readonly PropagatedPlace[];
   confidence: number;
 }
 
@@ -47,6 +49,8 @@ export interface UnlinkedCallSite {
   repos?: readonly string[];
   /** The routes that took the call equally, sorted; only when an HTTP call is `ambiguous`. */
   routes?: readonly string[];
+  /** The bodies the call site was propagated through, when it was; absent for a direct site. */
+  propagatedThrough?: readonly PropagatedPlace[];
 }
 
 /** The ids of the links crossed from the change, nearest first. */

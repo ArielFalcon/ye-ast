@@ -5,7 +5,6 @@ import type { DeclaredBuildOutput } from "../domain/shared/build-outputs.ts";
 import type { Fact, WalkBounds } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
 import { WORKSPACE_SCOPE, type ScopeRequest } from "../domain/shared/scope.ts";
-import type { PlacedCallSite } from "../domain/topology/call-site.ts";
 import type { TraceValue } from "../domain/trace/trace-fact.ts";
 import type { CallersTarget, UnknownSymbolFault } from "./impact-queries.port.ts";
 import type { LiveSelector } from "./live-queries.port.ts";
@@ -40,12 +39,8 @@ export interface UnknownEntrypointFault {
   entries: readonly (EntrypointTarget & { candidates: readonly string[] })[];
 }
 
-/** Internal: receives the placed call sites of the repository once the walk has read them, for the workspace link join. */
-export const ISSUING_SITES: unique symbol = Symbol("placed call sites of the walk");
-
 interface TraceBase {
   [WORKSPACE_SCOPE]?: true;
-  [ISSUING_SITES]?: (sites: readonly PlacedCallSite[]) => void;
   /** Omitted reads only this repository; {} uses eligible workspace defaults. */
   workspace?: Pick<WorkspaceRequest, "repos" | "gateways">;
   offline?: boolean;

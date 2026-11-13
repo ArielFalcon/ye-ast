@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { PlacedCallSite } from "../topology/call-site.ts";
 import type { Link } from "../topology/link.ts";
 import type { TraceStep, TraceValue } from "./trace-fact.ts";
 import { traceLinks } from "./trace-links.ts";
@@ -41,44 +40,40 @@ test("an unresolved request owned as deferred marks the unlinked call site it re
   assert.deepEqual(answer.unlinked, [{ ...unlinked, deferred: true }]);
 });
 
-const GET = (path: string) => ({ status: "complete" as const, value: { method: "GET" as const, path }, evidence: [] });
-const outer = (line: number, bodies: readonly number[], path = "/x"): PlacedCallSite => ({
-  site: { repo: "shop", file: "a.ts", line, symbol: "Api.run", transport: "http", target: GET(path) },
-  column: 0,
-  origins: bodies.map((at) => ({ kind: "body" as const, file: "a.ts", line: at, column: 0 })),
-});
-const outerLink = (id: string, line: number, name = "GET /x"): Link => ({ ...link(id, line, 1), to: { ...link(id, line, 1).to, name } });
+const through = (...lines: number[]): NonNullable<Link["propagatedThrough"]> => lines.map((line) => ({ kind: "body" as const, file: "a.ts", line, column: 1 }));
+const outerLink = (id: string, line: number, lines: number[], name = "GET /x"): Link => ({ ...link(id, line, 1), to: { ...link(id, line, 1).to, name }, propagatedThrough: through(...lines) });
 const body = (id: number, line: number, effects: TraceStep["effects"], extra: Partial<TraceStep> = {}): TraceStep => step(id, effects, { line, endLine: line + 5, ...extra });
-const through = (steps: TraceStep[], all: Link[], placed: PlacedCallSite[]) => traceLinks(value(steps), "shop", { repositorySnapshots: SNAPSHOTS, links: all, unlinked: [] }, placed).links;
+const traced = (steps: TraceStep[], all: Link[]) => traceLinks(value(steps), "shop", { repositorySnapshots: SNAPSHOTS, links: all, unlinked: [] }).links;
 
-test("a link sited at an outer caller is returned when the trace expands a body its propagation passed through and that body states its request", () => {
-  const reached = through([body(0, 30, [effect(31, 4)])], [outerLink("outer", 8)], [outer(8, [30, 20])]);
+test("a link sited at an outer caller is returned when the trace expands a body its propagation passed through, and lists the effect that issues it", () => {
+  const reached = traced([body(0, 30, [effect(31, 4)])], [outerLink("outer", 8, [30, 20])]);
   assert.deepEqual(reached?.map((one) => [one.id, one.deferred ?? false, one.issuedAt]), [["outer", false, [{ file: "a.ts", line: 31, column: 4 }]]]);
 });
 
+test("the innermost expanded body that issues requests decides: an outer body's other requests do not establish the link", () => {
+  const steps = [body(0, 30, [effect(31, 4), effect(32, 4)]), body(1, 40, [effect(41, 4)], { parent: 0, depth: 1 })];
+  const reached = traced(steps, [outerLink("inner", 8, [30, 40])]);
+  assert.deepEqual(reached?.map((one) => one.issuedAt), [[{ file: "a.ts", line: 41, column: 4 }]]);
+});
+
 test("a link reached only by deferred effects of such a body is marked deferred, and one an executed effect also reaches is not", () => {
-  const placed = [outer(8, [30]), outer(9, [40])];
-  const all = [outerLink("later", 8), outerLink("both", 9)];
-  const reached = through([body(0, 30, [effect(31, 4, true)]), body(1, 40, [effect(41, 4, true), effect(42, 4)])], all, placed);
+  const all = [outerLink("later", 8, [30]), outerLink("both", 9, [40])];
+  const reached = traced([body(0, 30, [effect(31, 4, true)]), body(1, 40, [effect(41, 4, true), effect(42, 4)])], all);
   assert.deepEqual(reached?.map((one) => [one.id, one.deferred ?? false]), [["later", true], ["both", false]]);
 });
 
-test("a body that states another request, or one the propagation did not pass through, establishes no link", () => {
-  const placed = [outer(8, [30])];
-  assert.deepEqual(through([body(0, 30, [effect(31, 4, false, "/y")])], [outerLink("a", 8)], placed), []);
-  assert.deepEqual(through([body(0, 50, [effect(51, 4)])], [outerLink("a", 8)], placed), []);
-  assert.deepEqual(through([body(0, 30, [effect(31, 4)])], [outerLink("a", 8, "GET /z")], placed), []);
+test("a body the propagation did not pass through, or a direct link, gains nothing from another body's effects", () => {
+  assert.deepEqual(traced([body(0, 50, [effect(51, 4)])], [outerLink("a", 8, [30])]), []);
+  assert.deepEqual(traced([body(0, 30, [effect(31, 4)])], [link("direct", 8, 1)]), []);
 });
 
-test("a site that is its own issuing boundary, or a place outside the trace's repository, gains no link", () => {
-  const boundary: PlacedCallSite = { ...outer(8, [30]), issuingBoundary: "site" };
-  assert.deepEqual(through([body(0, 30, [effect(31, 4)])], [outerLink("outer", 8)], [boundary]), []);
-  const elsewhere = { ...outerLink("other", 8), from: { ...outerLink("other", 8).from, repo: "orders" } };
-  assert.deepEqual(through([body(0, 30, [effect(31, 4)])], [elsewhere], [outer(8, [30])]), []);
+test("a body issuing requests of different destinations establishes none of the matches that pass through it", () => {
+  const steps = [body(0, 30, [effect(31, 4)])];
+  assert.deepEqual(traced(steps, [outerLink("a", 8, [30], "GET /a"), outerLink("b", 9, [30], "GET /b")]), []);
+  assert.deepEqual(traced(steps, [outerLink("a", 8, [30], "GET /a"), outerLink("same", 9, [30], "GET /a")])?.map((one) => one.id), ["a", "same"]);
 });
 
-test("a route name takes a request by its method and the end of its path, a parameter segment standing for any", () => {
-  const placed = [outer(8, [30], "http://users.host:8080/api/users/{customerId}?x=1")];
-  const served = (name: string) => through([body(0, 30, [effect(31, 4, false, "http://users.host:8080/api/users/{customerId}?x=1")])], [outerLink("a", 8, name)], placed)?.length;
-  assert.deepEqual(["GET /users/{userId}", "ANY /users/{id}", "POST /users/{id}", "GET /orders/{id}", "GET /{id}"].map(served), [1, 1, 0, 0, 1]);
+test("a link of another repository gains nothing from the traced repository's effects", () => {
+  const elsewhere = { ...outerLink("other", 8, [30]), from: { ...link("other", 8, 1).from, repo: "orders" } };
+  assert.deepEqual(traced([body(0, 30, [effect(31, 4)])], [elsewhere]), []);
 });
