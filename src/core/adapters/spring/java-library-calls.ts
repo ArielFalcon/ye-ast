@@ -79,7 +79,7 @@ export function libraryClassOf(type: Node, file: JavaFile, sources: LibraryCallS
     return resolved === undefined || resolved.kind === "repository" || signatures.typeOf(resolved.fqn) === undefined ? undefined : resolved.fqn;
   }
   const origin = project.importedTypeSources(head, { file, type: scope, at: type });
-  if (origin === undefined) return undefined;
+  if (origin === undefined || "type" in origin) return undefined;
   const named = "imported" in origin ? [[origin.imported, ...rest].join(".")] : [...new Set(origin.containers)].map((container) => [container, head, ...rest].join("."));
   const held = named.filter((fqn) => signatures.typeOf(fqn) !== undefined);
   return held.length === 1 ? held[0] : undefined;
@@ -201,12 +201,22 @@ function writtenType(type: Node, file: JavaFile, sources: LibraryCallSources): R
   const { project, signatures } = sources;
   const resolved = resolve(type, file, project, enclosingType(type, file, project), type, true);
   if (resolved?.kind === "repository") return resolved.type === undefined ? undefined : { kind: "repository", type: resolved.type };
+  const imported = resolved === undefined ? singleImportedType(type, file, sources) : undefined;
+  if (imported !== undefined) return { kind: "repository", type: imported };
   const fqn = libraryClassOf(type, file, sources);
   if (fqn === undefined) return undefined;
   const stated = type.type === "generic_type" ? type.namedChildren.find((child) => child?.type === "type_arguments")?.namedChildren : undefined;
   const variables = signatures.typeOf(fqn)?.typeParameters.length;
   const args = stated === undefined || stated.length !== variables ? undefined : stated.map((argument) => (argument === null ? undefined : writtenType(argument, file, sources)));
   return { kind: "library", fqn, typeName: false, ...(args === undefined ? {} : { args }) };
+}
+
+/** The repository type a simple name that a single-type import binds denotes: a supertype outside the repository is assumed not to redefine it (ADR-0064 decision 1). */
+function singleImportedType(type: Node, file: JavaFile, sources: LibraryCallSources): TypeDecl | undefined {
+  const written = (type.type === "generic_type" ? type.namedChildren[0] : type)?.text ?? "";
+  if (!/^[A-Za-z_$][\w$]*$/.test(written) || typeVariableAround(type, written) !== undefined) return undefined;
+  const origin = sources.project.importedTypeSources(written, { file, type: enclosingType(type, file, sources.project), at: type });
+  return origin !== undefined && "type" in origin ? origin.type : undefined;
 }
 
 function agreed(receivers: readonly (Receiver | undefined)[]): Receiver | undefined {

@@ -117,6 +117,17 @@ test("a supertype outside the repository is assumed not to redefine a name that 
   for (const [context, member] of Object.entries(kept)) assert.deepEqual(await answer(member, librariesOf(), ["import java.util.List;", ...WILDCARDS], basket), VETOED, context);
 });
 
+test("a repository type that a single-type import binds is assumed not to be redefined by a supertype outside the repository (ADR-0064)", async () => {
+  const model: SourceFile = { path: "src/main/java/org/model/Basket.java", content: "package org.model;\nimport java.util.List;\npublic record Basket(List<String> lines) { }\n" };
+  const body = "class Child extends org.other.Base { void run(Basket basket) { basket.lines().removeIf(x -> true); } }";
+  const outcome = (imports: readonly string[]) => answer(body, librariesOf(), [...imports, ...WILDCARDS], model);
+  assert.deepEqual(await outcome(["import org.model.Basket;"]), BODIES, "a single-type import");
+  assert.deepEqual(await outcome(["import org.model.*;"]), VETOED, "a non-java on-demand import");
+  assert.deepEqual(await outcome([]), VETOED, "a name that resolves by no import");
+  assert.deepEqual(await outcome(["import org.model.Basket;", "import org.other.Basket;"]), VETOED, "a conflicting single-type import");
+  assert.deepEqual(await outcome(["import static org.model.Basket.*;", "import org.model.Basket;"]), VETOED, "a static import of the name");
+});
+
 test("the type arguments of a receiver are substituted through the declared type, the supertypes and the arguments of a generic method", async () => {
   const released: Readonly<Record<string, string>> = {
     "an optional of a list": "void run(List<String> items) { Optional.ofNullable(items).orElse(null).stream().map(x -> x); }",

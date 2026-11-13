@@ -26,8 +26,8 @@ export interface JavaFile {
 
 export type TypeKind = "class" | "interface" | "annotation" | "other";
 
-/** A simple type name's imports: the qualified name a single-type import gives it, or the packages it may come from. */
-export type ImportedTypeSources = { imported: string } | { containers: readonly string[] };
+/** A simple type name's imports: the repository type a single-type import names, the qualified name it gives a type the repository does not hold, or the packages the name may come from. */
+export type ImportedTypeSources = { type: TypeDecl } | { imported: string } | { containers: readonly string[] };
 
 export interface Scope {
   file: JavaFile;
@@ -360,7 +360,10 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
     if (file.conflictingSingleImports.has(head) || lexicalType(head, scope, false, false) !== undefined) return undefined;
     if (file.staticImports.some(({ member }) => member === head) || file.staticOnDemandImports.length > 0) return undefined;
     const imported = file.singleImports.get(head);
-    if (imported !== undefined) return byFqn(imported) === undefined ? { imported } : undefined;
+    if (imported !== undefined) {
+      const declared = byFqn(imported);
+      return declared === undefined ? { imported } : declared === "ambiguous" ? undefined : { type: declared };
+    }
     if (byFqn(file.packageName === "" ? head : `${file.packageName}.${head}`) !== undefined) return undefined;
     if (file.onDemandImports.some((container) => byFqn(`${container}.${head}`) !== undefined)) return undefined;
     return { containers: ["java.lang", ...file.onDemandImports] };
