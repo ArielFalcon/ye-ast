@@ -21,6 +21,7 @@
   8c5f181a; the corpus repositories' lines are as reproduced at engine 3ffd2fe4.
   Revised the same day after an independent review: decision 10 gained complete release keys, the Gradle release and
   toolchain precedence, the access flags the table must carry, and the redistribution precondition of V1b.
+- Amended by: [ADR-0063](0063-a-jdk-the-host-declares-is-the-library-signature-source.md) (decision 10: the library signature source is a JDK the host declares, with no pin, a lazy index, the JDK's own release and an upper-bound refusal; the table no longer ships and the redistribution risk is resolved)
 - Related: [ADR-0013](0013-coverage-grows-only-with-evidence.md), [ADR-0029](0029-lexical-bindings-from-the-typescript-binder.md),
   [ADR-0036](0036-dependence-is-the-compile-time-binding.md), [ADR-0037](0037-host-declared-build-outputs.md),
   [ADR-0039](0039-behavior-changes-pass-a-corpus-gate.md), [ADR-0041](0041-one-call-reconciliation-for-every-family.md),

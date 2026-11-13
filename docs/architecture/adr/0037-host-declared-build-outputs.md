@@ -14,6 +14,7 @@
   answering the tech lead's "¿Vamos con A y dejo registrada en ADR-0037 esa revisión para cuando salga la 7.1 estable?"
   (shall we go with A, and I record that revisit in ADR-0037 for when 7.1 ships stable?): "si, vamos asi" (yes, let's
   go that way).
+- Amended by: [ADR-0063](0063-a-jdk-the-host-declares-is-the-library-signature-source.md) (decisions 1, 5 and 9: the kinds gain `jdk`, declared and stated unverified, with the reasons `jdk-unreadable`, `jdk-older-than-build` and `release-not-held`)
 - Supersedes in part: [ADR-0010](0010-trust-modes.md) decisions 2 and 6, [ADR-0013](0013-coverage-grows-only-with-evidence.md)
   decision 2, [ADR-0014](0014-angular-and-spring-from-own-extractors.md) the definition-of-done item on fixtures,
   [ADR-0036](0036-dependence-is-the-compile-time-binding.md) decision 3. Reopens the host contract that
