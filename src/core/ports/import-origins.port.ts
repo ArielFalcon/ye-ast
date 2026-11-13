@@ -196,7 +196,13 @@ export type ReceiverMethod =
    * never widens them.
    */
   | { kind: "unproven"; candidates?: readonly MethodPlace[] }
-  | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT };
+  | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT }
+  /**
+   * A member that no source declares and a record or a processor annotation on the receiver's class adds (an accessor, a
+   * builder), so the call is settled and has no declaration to place: it runs generated code that reads or writes the
+   * class's fields (ADR-0066).
+   */
+  | { kind: "generated" };
 
 /** A place a declaration uses a name, where the index places the use: repository-relative and 1-based. */
 export interface UseSite {

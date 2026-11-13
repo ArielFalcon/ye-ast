@@ -2,6 +2,7 @@
 
 - Status: Accepted, 2026-11-13, owner
 - Decision source: Owner, 2026-11-13: "Implementa los 3. Es de extrema importancia que se resuelvan bien la relaciones entre frontend -backend y backend -backend", applying the recommendation that an unresolved generated supertype must not invalidate own, private and local receivers
+- Amended by: [ADR-0067](0067-record-and-lombok-members-and-mybatis-statements-are-settled-from-the-snapshot.md) (a record or plain-Lombok member the class adds is a settled receiver method)
 - Related: ADR-0013, ADR-0029, ADR-0051
 
 ## Context

@@ -357,6 +357,19 @@ test("a call the index resolved on a receiver whose method nothing proves is a c
   assert.deepEqual(valueOf(await factOf(options)).steps[0]?.leaves?.map(({ file, start }) => [file, start]), [[B, 3]]);
 });
 
+test("a call the receivers settle to a generated member is neither a step nor a cut, for a resolved call and for an unsettled member call", async () => {
+  const nodes = [SVC, RUN, fakeNode("Repo.save", "method", B, 3, 5, "save"), fakeNode("Repo.find", "method", B, 11, 13, "find")];
+  const unresolved: FakeUnresolved[] = [{ from: "run", name: "this.repo.find", kind: "calls", file: A, line: 10, column: 4 }];
+  const options = { nodes, edges: [...CONTAINS, call("run", "Repo.save", 9, 4)], unresolved, sources: [{ path: B, content: "" }] };
+
+  const generated = await factOf({ ...options, receivers: { save: { kind: "generated" }, find: { kind: "generated" } } });
+  const unproven = await factOf({ ...options, receivers: { save: { kind: "unproven" }, find: { kind: "unproven" } } });
+
+  assert.deepEqual(cutsOf(generated), []);
+  assert.deepEqual(valueOf(generated).steps.map((step) => [step.symbol, step.leaves]), [["run", undefined]]);
+  assert.notDeepEqual(cutsOf(unproven), []);
+});
+
 test("a member call whose name no declaration has leaves the repository, unnamed, and cuts nothing", async () => {
   const fact = await factOf({ nodes: [SVC, RUN], edges: CONTAINS, unresolved: [{ from: "run", name: "items.map", kind: "calls", file: A, line: 9, column: 4 }] });
   assert.equal(fact.status, "complete");

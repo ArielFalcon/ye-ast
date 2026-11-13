@@ -1846,7 +1846,7 @@ test("a trace over a real index keeps a member call a cut when the code declares
   ].sort((a, b) => (a[0]! < b[0]! ? -1 : 1)));
 });
 
-test("a trace over a real index keeps a call to a Java record accessor a cut, and a call to an anonymous class method never external", async () => {
+test("a trace over a real index settles a call to a Java record accessor as a generated member, and keeps a call to an anonymous class method a cut, never external", async () => {
   writeFileSync(join(repo, "src", "Point.java"), ["public record Point(int coordinate) {}", ""].join("\n"));
   writeFileSync(join(repo, "src", "Shapes.java"), [
     "public class Shapes {",
@@ -1869,7 +1869,24 @@ test("a trace over a real index keeps a call to a Java record accessor a cut, an
 
   assert.ok(answer.ok && answer.value.status === "partial");
   assert.equal(answer.value.value.steps[0]?.external, undefined);
-  assert.deepEqual(answer.value.cuts.map((entry) => entry.at), [["src/Shapes.java:7 p.coordinate", "src/Point.java::coordinate"], ["src/Shapes.java:8 anonymousOnly", "src/Shapes.java::Shapes.task.<Runnable$anon@2>.anonymousOnly"]]);
+  assert.deepEqual(answer.value.cuts.map((entry) => entry.at), [["src/Shapes.java:8 anonymousOnly", "src/Shapes.java::Shapes.task.<Runnable$anon@2>.anonymousOnly"]]);
+});
+
+test("a trace over a real index places a MyBatis mapper call as a data effect from the XML mapper of the snapshot, and an undecided statement as an unplaced effect", async () => {
+  mkdirSync(join(repo, "src", "main", "java", "shop"), { recursive: true });
+  mkdirSync(join(repo, "src", "main", "resources", "mapper"), { recursive: true });
+  writeFileSync(join(repo, "src", "main", "java", "shop", "UserMapper.java"), ["package shop;", "import org.apache.ibatis.annotations.Mapper;", "@Mapper", "public interface UserMapper {", "  void insert(String user);", "  void ghost(String user);", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "main", "resources", "mapper", "UserMapper.xml"), ["<mapper namespace=\"shop.UserMapper\">", "  <insert id=\"insert\">insert into users (id) values (#{user})</insert>", "</mapper>", ""].join("\n"));
+  writeFileSync(join(repo, "src", "main", "java", "shop", "Use.java"), ["package shop;", "class Use {", "  private UserMapper users;", "  void run(String user) {", "    users.insert(user);", "    users.ghost(user);", "  }", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "mapper");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/main/java/shop/Use.java", symbol: "Use.run" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.value.steps[0]?.effects, [{ kind: "data", line: 5, column: 5, operation: "insert", access: "write", target: { kind: "table", name: "users" } }]);
+  assert.deepEqual(answer.value.cuts.filter((entry) => entry.reason === "effect-unplaced").map((entry) => entry.at), [["src/main/java/shop/Use.java:6 data effect (mapper-statement-absent)"]]);
 });
 
 test("trace accounts for every syntactic call even when the index omits its receiver shape", async () => {

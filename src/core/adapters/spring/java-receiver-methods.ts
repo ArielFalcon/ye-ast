@@ -10,11 +10,14 @@ import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, heldJavaProject, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
+import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
 import { createJavaProject, MEMBERLESS_PLATFORM_INTERFACES, readArgumentSignature, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Signature, type TypeDecl } from "./java-symbols.ts";
 
 const SLOT = "java-receiver-methods";
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
+const GENERATED: ReceiverMethod = { kind: "generated" };
+const LOMBOK_CONFIG = /(^|\/)lombok\.config$/;
 const UNKNOWN_DECLARATIONS: ImplementedDeclarations = { kind: "unknown" };
 /** Methods every class inherits from `Object` (JLS 4.3.2): a call of one of these names may resolve to `Object`'s. */
 export const OBJECT_METHODS: ReadonlySet<string> = new Set(["clone", "equals", "finalize", "getClass", "hashCode", "notify", "notifyAll", "toString", "wait"]);
@@ -82,7 +85,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         }
         return known;
       };
-      const resolver = createResolver(project);
+      const resolver = createResolver(project, !paths.some((path) => LOMBOK_CONFIG.test(path)));
       for (const [index, site] of sites.entries()) {
         if (signal?.aborted) break;
         const source = readFile(site.file);
@@ -101,6 +104,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         }
         const named = proves ? resolver.methodOf(invocation, source) : undefined;
         if (named !== undefined && "method" in named) results[index] = { ...placedAt(named.method), ...(named.bound ? { bound: true as const } : {}) };
+        else if (named !== undefined && "generated" in named) results[index] = GENERATED;
         else if (named !== undefined) results[index] = { kind: "unproven", candidates: named.candidates };
         else if (resolver.hasDeclaredReceiver(invocation, source) || resolver.holdsValue(invocation, source.file)) results[index] = UNPROVEN;
       }
@@ -221,7 +225,8 @@ export function provesBinding(files: readonly JavaFile[], project: JavaProject, 
   return unparsed.length === 0 && !unreadJvm && project.unreadable.length === 0 && !files.some((file) => namesAnyDynamicImplementation(file, project)) && !files.some(({ root }) => rewritesCalls(root));
 }
 
-export function createResolver(project: JavaProject) {
+/** `generated`: whether the members that a record or a Lombok annotation adds are settled (no `lombok.config` may rename them). */
+export function createResolver(project: JavaProject, generated = false) {
   const hierarchies = new Map<TypeDecl, ReturnType<JavaProject["hierarchy"]>>();
   /** The supertype clauses, by file and offset, that name a platform interface declaring no members. */
   const memberless = new Set<string>();
@@ -256,14 +261,16 @@ export function createResolver(project: JavaProject) {
   /**
    * The repository type the receiver of an invocation is declared to hold; none when nothing proves one. `bound` when a
    * type variable types the receiver, or a receiver up its chain: the type is the variable's one bound (JLS 4.4).
-   * `typeName` when the receiver is a name that denotes the type itself, so the call must name a static method.
+   * `typeName` when the receiver is a name that denotes the type itself, so the call must name a static method. `builder`
+   * when the receiver is the generated builder of the type.
    */
-  const receiverOf = (invocation: Node, source: ReceiverSource): { type: TypeDecl; bound: boolean; typeName: boolean } | undefined => {
+  const receiverOf = (invocation: Node, source: ReceiverSource): { type: TypeDecl; bound: boolean; typeName: boolean; builder?: true } | undefined => {
     const object = invocation.childForFieldName("object");
     const declared = (type: TypeDecl | undefined, bound = false, typeName = false) => (type === undefined ? undefined : { type, bound, typeName });
     if (object === null || object.type === "this") return declared(thisType(invocation, source.file, project));
     if (object.type === "method_invocation") {
       const called = methodNamed(object, source);
+      if (called !== undefined && "generated" in called) return generatedResult(called.generated);
       return called === undefined || !("method" in called) ? undefined : declared(returnTypeOf(called.method), called.bound);
     }
     const binding = source.bindings.get(callKey(invocation.startPosition.row + 1, invocation.startPosition.column + 1, invocation.childForFieldName("name")?.text ?? ""));
@@ -283,14 +290,37 @@ export function createResolver(project: JavaProject) {
    * The one method of the name that the receiver's declared type offers for the call's arguments, or the declarations of
    * the call's arity it cannot single one out of.
    */
-  const methodNamed = (invocation: Node, source: ReceiverSource): { method: MethodDecl; bound: boolean } | { candidates: readonly MethodPlace[] } | undefined => {
+  const methodNamed = (invocation: Node, source: ReceiverSource): { method: MethodDecl; bound: boolean } | { candidates: readonly MethodPlace[] } | { generated: GeneratedMember } | undefined => {
     const held = receiverOf(invocation, source);
     const name = invocation.childForFieldName("name")?.text;
     if (held === undefined || name === undefined) return undefined;
+    if (held.builder === true) {
+      const made = generated ? builderMember(held.type, project, name, argumentCount(invocation)) : undefined;
+      return made === undefined ? undefined : { generated: made };
+    }
     const offered = memberOf(held.type, name, invocation, source.file, enclosingType(invocation, source.file, project));
-    if (offered === undefined) return undefined;
+    if (offered === undefined) {
+      const made = generated && !held.bound ? generatedOf(held, name, argumentCount(invocation)) : undefined;
+      return made === undefined ? undefined : { generated: made };
+    }
     if ("candidates" in offered) return { candidates: offered.candidates.map(placeOf).sort(byPlace) };
     return held.typeName && !offered.method.modifiers.includes("static") ? undefined : { method: offered.method, bound: held.bound };
+  };
+
+  /** A member that a record or a Lombok annotation adds, when no type of the closed hierarchy declares the name and a static call names a static member. */
+  const generatedOf = (held: { type: TypeDecl; typeName: boolean }, name: string, arity: number): GeneratedMember | undefined => {
+    const above = declaredHierarchy(held.type);
+    if (OBJECT_METHODS.has(name) || hierarchyOpen(above, []) || above.types.some((owner) => owner.methods.some((method) => method.name.toLowerCase() === name.toLowerCase()))) return undefined;
+    const made = generatedMember(held.type, project, name, arity);
+    return made === undefined || (held.typeName && made.kind !== "builder") ? undefined : made;
+  };
+
+  /** The receiver a generated member yields: the field's type for an accessor, the builder or the built type for a builder. */
+  const generatedResult = (made: GeneratedMember): { type: TypeDecl; bound: boolean; typeName: boolean; builder?: true } | undefined => {
+    if (made.kind === "builder") return { type: made.of, bound: false, typeName: false, builder: true };
+    if (made.kind === "built") return { type: made.of, bound: false, typeName: false };
+    const type = made.kind === "accessor" && made.type !== undefined ? repositoryType(made.type, made.file, made.type) : undefined;
+    return type === undefined ? undefined : { type, bound: false, typeName: false };
   };
 
   const referenceOf = (reference: Node, file: JavaFile): { method: MethodDecl } | { candidates: readonly MethodDecl[] } | undefined => {

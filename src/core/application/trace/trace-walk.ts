@@ -529,6 +529,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
       if (verdict.kind === "keep" || verdict.kind === "redirect") {
         const receiver = value ? undefined : receivers.get(followed);
         const proven = receiver?.kind === "method" ? placedMethod(receiver, CALLABLE_KINDS) : undefined;
+        if (receiver?.kind === "generated") continue;
         let reached = proven ?? (verdict.kind === "redirect" ? verdict.to : target);
         if (edge.kind === "instantiates" && isClassKind(reached.kind)) {
           const constructors = await constructorsOf(reached);
@@ -551,6 +552,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     for (const [index, { reference, name, named, declared }] of typed.entries()) {
       const receiver = found[placedCalls.length + index];
       const absent = receiver?.kind === "unknown" ? receiver.reason : undefined;
+      if (receiver?.kind === "generated") continue;
       if (declared !== undefined) {
         await settleBinding(reference, bindings.settleDeclared(declared, receiver), absent);
         continue;

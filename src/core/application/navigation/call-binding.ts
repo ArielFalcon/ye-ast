@@ -281,7 +281,8 @@ export function createCallBindings({ store, navigation, origins, binder, declara
   }
 
   /** What the method a `declared` binding's receiver reading names settles it to. */
-  function settleDeclared({ member, form, call }: DeclaredBinding, method: ReceiverMethod | undefined): SettledBinding {
+  function settleDeclared({ member, form, call }: DeclaredBinding, answered: ReceiverMethod | undefined): SettledBinding {
+    const method: ReceiverMethod | undefined = answered?.kind === "generated" ? { kind: "unproven", candidates: [] } : answered;
     const target = method?.kind === "method" ? placed(method.file, method.start, method.nameLine) : undefined;
     if (target !== undefined) return { kind: "declaration", target, link: form === "chain" ? "chain" : method?.kind === "method" && method.bound === true ? "bound-receiver" : "declared-receiver" };
     if (form === "chain") {
