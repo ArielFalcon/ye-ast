@@ -4,6 +4,7 @@
 - Decision source: Owner, 2026-11-13: "Implementa los 3. Es de extrema importancia que se resuelvan bien la relaciones entre frontend -backend y backend -backend", applying the recommendation that a trace returns the links of requests under deferred steps, marked deferred, and labels a call that may reach a request by what it is.
 - Supersedes: ADR-0056 decision 3, last sentence ("A step that is itself deferred contributes nothing"), in part.
 - Related: ADR-0042, ADR-0051, ADR-0056, RFC-0013
+- Superseded in part by: [ADR-0069](0069-a-request-whose-route-is-stated-after-an-undecided-base-is-a-placed-effect.md) (decision 3: a request with one stated route after an undecided base is a placed effect)
 
 ## Context
 

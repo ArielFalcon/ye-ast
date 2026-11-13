@@ -3,7 +3,7 @@ import { resolve } from "./java-declared-types.ts";
 import type { JavaFile, JavaProject, TypeDecl } from "./java-symbols.ts";
 
 /**
- * A member the sources do not declare but a record or a Lombok annotation on the class adds (ADR-0066), or one a Spring
+ * A member the sources do not declare but a record or a Lombok annotation on the class adds (ADR-0067), or one a Spring
  * Data repository interface has its proxy supply (`proxied`, ADR-0070). `accessor`
  * returns the field's declared type; `mutator` returns nothing; `builder` yields the builder of `of`, which has the
  * fields' setters and `build()`; `built` yields `of`.

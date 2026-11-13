@@ -7,6 +7,7 @@
   cannot resolve the base URL", which kept such a call site a cut unless a gateway prefix was declared.
 - Superseded in part by: ADR-0057, decision 1 only (each URL expression that states its route).
 - Related: ADR-0042, ADR-0051, ADR-0052, ADR-0053, RFC-0011
+- Superseded in part by: [ADR-0069](0069-a-request-whose-route-is-stated-after-an-undecided-base-is-a-placed-effect.md), decision 4 for the trace only
 
 ## Context
 

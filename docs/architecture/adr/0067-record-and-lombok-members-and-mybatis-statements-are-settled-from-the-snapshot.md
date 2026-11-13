@@ -3,6 +3,7 @@
 - Status: Accepted, 2026-11-13, lead decision under the owner's standing instruction (2026-11-13)
 - Decision source: Lead decision under the owner's standing instruction (2026-11-13) to pick the recommended option on any fork, for spec S24 of the multirepo-quality evaluation: "a MyBatis mapper call is a data effect, or an explicit unplaced cut with its cause, never a silent leaf; a Lombok `@Builder`/`@Data`/`@Getter` generated member is a settled receiver method when the annotation is on the class in the snapshot".
 - Related: [ADR-0013](0013-coverage-grows-only-with-evidence.md), [ADR-0044](0044-one-implementation-closure-with-scoped-vetoes.md), [ADR-0062](0062-java-names-and-receivers-resolve-under-the-repository-compiles-assumption.md) (amended in spirit: the receiver reading keeps its closed-hierarchy conditions)
+- Amended by: [ADR-0068](0068-lombok-access-levels-superbuilder-and-inherited-members-are-settled.md) (decision 2: access levels, `@SuperBuilder`, `@Builder.Default`, inherited members)
 
 **In short:** a call whose member no source declares but a record, or a plain Lombok annotation on the class, adds is a settled receiver method (`generated`): the trace shows neither a step nor a cut. A call of a MyBatis mapper method is a data effect whose access comes from the statement the snapshot holds, or an explicit `effect-unplaced` cut that names why no statement decides it.
 

@@ -2,7 +2,7 @@
 
 - Status: Accepted, 2026-11-13, owner
 - Decision source: Owner, 2026-11-13: "Implementa los 3. Es de extrema importancia que se resuelvan bien la relaciones entre frontend -backend y backend -backend", applying the recommendation that an unresolved generated supertype must not invalidate own, private and local receivers
-- Amended by: [ADR-0067](0067-record-and-lombok-members-and-mybatis-statements-are-settled-from-the-snapshot.md) (a record or plain-Lombok member the class adds is a settled receiver method)
+- Amended by: [ADR-0067](0067-record-and-lombok-members-and-mybatis-statements-are-settled-from-the-snapshot.md) (a record or plain-Lombok member the class adds is a settled receiver method), [ADR-0068](0068-lombok-access-levels-superbuilder-and-inherited-members-are-settled.md) (a Lombok member a class generates for its own field is settled when only outside superclasses open the hierarchy), [ADR-0070](0070-a-spring-data-repository-call-is-a-proxy-supplied-member-and-a-vocabulary-name-an-on-demand-import-leaves-unsettled-is-read-from-its-package.md) decision 1 (a closed-vocabulary name an on-demand import leaves unsettled; Spring Data proxy members)
 - Related: ADR-0013, ADR-0029, ADR-0051
 
 ## Context
