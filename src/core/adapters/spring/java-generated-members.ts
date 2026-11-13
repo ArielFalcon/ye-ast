@@ -115,13 +115,14 @@ function accessorOf(type: TypeDecl, project: JavaProject, name: string, arity: n
 /**
  * The fields the builder of a class sets; none when the class carries no plain `@Builder` or `@SuperBuilder`, declares
  * what the builder would, or (for `@SuperBuilder`) has a superclass of the project without `@SuperBuilder`, whose fields
- * the builder would also set. A superclass outside the project is the caller's open hierarchy.
+ * the builder would also set, or one outside the project, whose builder members are unknown.
  */
 function builderFields(type: TypeDecl, project: JavaProject): Field[] | undefined {
   const own = lombokAnnotations(type.node, type, project);
   if (own === undefined || own.some((use) => use.fqn === BUILDER) === own.some((use) => use.fqn === SUPER_BUILDER)) return undefined;
   const marker = own.some((use) => use.fqn === SUPER_BUILDER) ? SUPER_BUILDER : BUILDER;
   const chain = marker === SUPER_BUILDER ? project.classChain(type) : [type];
+  if (marker === SUPER_BUILDER && chain.at(-1)!.node.childForFieldName("superclass") !== null) return undefined;
   const fields: Field[] = [];
   for (const owner of chain) {
     const uses = lombokAnnotations(owner.node, owner, project);
@@ -168,7 +169,8 @@ function fieldsOf(type: TypeDecl): Field[] {
  * The Lombok annotations of the vocabulary a declaration (or a list of its annotations) carries; none when one carries an
  * argument the vocabulary does not model or is a name-changing annotation, since the generated names or access are then
  * not those of the plain annotation. `@Getter` and `@Setter` may state an access level: a call that names the member is
- * accessible when the repository compiles, so only `AccessLevel.NONE` changes what is generated.
+ * accessible when the repository compiles, so only `AccessLevel.NONE` changes what is generated. Names are read from the
+ * scope around the class, so a supertype outside the sources does not withhold an annotation's name (ADR-0064).
  */
 function lombokAnnotations(declaration: Node | readonly Node[], type: TypeDecl, project: JavaProject): LombokUse[] | undefined {
   const nodes = Array.isArray(declaration) ? declaration : (declaration as Node).namedChildren.find((child) => child.type === "modifiers")?.namedChildren ?? [];
@@ -176,7 +178,7 @@ function lombokAnnotations(declaration: Node | readonly Node[], type: TypeDecl, 
   for (const annotation of nodes) {
     if (annotation.type !== "annotation" && annotation.type !== "marker_annotation") continue;
     const name = annotation.childForFieldName("name");
-    const resolved = name === null ? undefined : resolve(name, type.file, project, type, name, true);
+    const resolved = name === null ? undefined : resolve(name, type.file, project, type.outer, name, true);
     if (resolved === undefined || resolved.kind === "repository" || !("fqn" in resolved) || !resolved.fqn.startsWith(LOMBOK)) continue;
     if (UNMODELLED.has(resolved.fqn)) return undefined;
     if (resolved.fqn === BUILDER_DEFAULT) {
@@ -201,7 +203,7 @@ function accessLevelOf(argumentNodes: readonly Node[], type: TypeDecl, project: 
   let argument: Node | null = argumentNodes[0]!;
   if (argument.type === "element_value_pair") argument = argument.childForFieldName("key")?.text === "value" ? argument.childForFieldName("value") : null;
   if (argument === null) return undefined;
-  const resolved = resolve(argument, type.file, project, type, argument, true);
+  const resolved = resolve(argument, type.file, project, type.outer, argument, true);
   if (resolved === undefined || resolved.kind === "repository" || !("fqn" in resolved) || !resolved.fqn.startsWith(ACCESS_LEVEL)) return undefined;
   const level = resolved.fqn.slice(ACCESS_LEVEL.length);
   return ACCESS_LEVELS.has(level) ? level : undefined;

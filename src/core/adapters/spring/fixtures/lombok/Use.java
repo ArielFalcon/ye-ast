@@ -1,6 +1,6 @@
 package app;
 class Use {
-  void run(Person person, Declared declared, FieldOnly only, NotLombok not, Restricted restricted, Immutable value, Order order, Plain plain, Pair pair, Levels levels, Conflicting conflicting, Unmodelled unmodelled, Fluent fluent, Child child, Redeclaring redeclaring, Leaf leaf, Under under) {
+  void run(Person person, Declared declared, FieldOnly only, NotLombok not, Restricted restricted, Immutable value, Order order, Plain plain, Pair pair, Levels levels, Conflicting conflicting, Unmodelled unmodelled, Fluent fluent, Child child, Redeclaring redeclaring, Leaf leaf, Under under, Libbed libbed, LibbedChild libbedChild, Unresolved unresolved, Wild wild, Implementing implementing) {
     person.getName();
     person.setName("n");
     person.isActive();
@@ -58,5 +58,13 @@ class Use {
     Defaults.builder().kind("k");
     Defaults.builder().version(1);
     Singles.builder().items(null);
+    libbed.getTitle();
+    libbed.setTitle("t");
+    libbed.getParentOnly();
+    libbedChild.getTitle();
+    Libbuilt.builder().title("t");
+    unresolved.getTitle();
+    wild.getTitle();
+    implementing.getTitle();
   }
 }

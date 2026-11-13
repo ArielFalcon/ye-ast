@@ -106,7 +106,7 @@ test("a member Lombok generates on a superclass of the project settles a call on
   assert.deepEqual(await callOf("redeclaring.getShadowed", "getShadowed"), { kind: "method", file: "src/main/java/app/Redeclaring.java", start: 3, nameLine: 3 });
   assert.deepEqual(await callOf("redeclaring.getBaseName", "getBaseName"), GENERATED);
   assert.deepEqual(await callOf("leaf.getBaseName", "getBaseName"), UNPROVEN);
-  assert.deepEqual(await callOf("under.getName", "getName"), UNPROVEN);
+  assert.deepEqual(await callOf("under.getName", "getName"), GENERATED);
 });
 
 test("@SuperBuilder generates the builder of the class and of every superclass that also carries it, and none when a superclass does not", async () => {
@@ -132,4 +132,18 @@ test("@Builder.Default makes a final field with an initializer settable by the b
 
 test("a @Singular field leaves the builder unsettled", async () => {
   assert.deepEqual(await callOf("Singles.builder().items", "builder"), UNPROVEN);
+});
+
+test("a member Lombok generates for a field of a class of the sources is settled when the hierarchy is open only through superclasses that resolve to a known outside type", async () => {
+  assert.deepEqual(await callOf("libbed.getTitle", "getTitle"), GENERATED);
+  assert.deepEqual(await callOf("libbed.setTitle", "setTitle"), GENERATED);
+  assert.deepEqual(await callOf("libbedChild.getTitle", "getTitle"), GENERATED);
+  assert.deepEqual(await callOf("Libbuilt.builder().title", "builder"), GENERATED);
+  assert.deepEqual(await callOf("libbed.getParentOnly", "getParentOnly"), UNPROVEN);
+});
+
+test("an outside supertype that does not resolve to a known type, or an outside interface, keeps the members unsettled", async () => {
+  assert.deepEqual(await callOf("unresolved.getTitle", "getTitle"), UNPROVEN);
+  assert.deepEqual(await callOf("wild.getTitle", "getTitle"), UNPROVEN);
+  assert.deepEqual(await callOf("implementing.getTitle", "getTitle"), UNPROVEN);
 });
