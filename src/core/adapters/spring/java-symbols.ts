@@ -129,6 +129,13 @@ export interface JavaProject {
    * outside the repository cannot declare it too, since a reference both offer does not compile.
    */
   bindName(name: string, scope: Scope, reading: "strict" | "lenient"): TypeLookup | "unsettled" | LocalType;
+  /**
+   * The packages a simple type name that no declaration binds may come from, under the assumption that the repository
+   * compiles: `java.lang` and the on-demand imports. `undefined` when a single or static import, a member or local type,
+   * the file's package or a package of the repository an on-demand import names binds it, or the strict reading leaves it
+   * open for another reason.
+   */
+  unboundTypeSources(name: string, scope: Scope): readonly string[] | undefined;
   /** A written type name, including qualifiers, resolved with the strict lexical and import rules. */
   resolveTypeName(name: string, scope: Scope): TypeLookup | "unsettled" | LocalType;
   /**
@@ -342,6 +349,15 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
     if (offered.includes("ambiguous")) return "ambiguous";
     const found = offered.filter((type): type is TypeDecl => type !== undefined);
     return found.length === 1 ? found[0] : "unsettled";
+  }
+
+  function unboundTypeSources(head: string, scope: Scope): readonly string[] | undefined {
+    const { file } = scope;
+    if (file.conflictingSingleImports.has(head) || file.singleImports.has(head) || lexicalType(head, scope, true) !== undefined) return undefined;
+    if (file.staticImports.some(({ member }) => member === head) || file.staticOnDemandImports.length > 0) return undefined;
+    if (byFqn(file.packageName === "" ? head : `${file.packageName}.${head}`) !== undefined) return undefined;
+    if (file.onDemandImports.some((container) => byFqn(`${container}.${head}`) !== undefined)) return undefined;
+    return ["java.lang", ...file.onDemandImports];
   }
 
   function typeIdentity(name: string, scope: Scope): string | undefined {
@@ -716,6 +732,7 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
     lookupType,
     typeIdentity,
     bindName,
+    unboundTypeSources,
     resolveTypeName: (name, scope) => resolveName(name.replace(/\s+/g, ""), scope, true),
     isPlatformName,
     isGeneratedInterface,

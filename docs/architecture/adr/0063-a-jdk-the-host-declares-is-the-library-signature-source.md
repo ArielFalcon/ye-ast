@@ -81,8 +81,14 @@ that followed measured the consequences:
 - ADR-0044's fixtures 20, 25 and 26 and the Maven and Gradle release resolution move to a deferred precision unit.
 - The release basis is the JDK's, not the build's: a snapshot whose parent sits outside it and states a smaller release
   than F is served at F. That is sound for the proof (decision 3) and is recorded as unverified.
-- Nothing consumes the signatures yet, so a declared JDK changes no step or link today; it appears in `inputs` and, when
-  unusable, in the cuts. The plumbing into the Java pack and the proof are separate units, each passing the corpus gate.
+- The signatures reach the Java pack as the trailing `libraries` argument of the origins reader (by path, so each `at`
+  keeps its own JDK), and the dispatch reader's function-value proof is the only consumer (ADR-0044 decision 5, V1b). The
+  held Java project is not read through them, so its identity is unchanged and a reading with a JDK never reuses an answer
+  of one without. A snapshot that declares none answers as before; one that declares a JDK may follow a one-implementation
+  port the veto cut, which is the change the corpus gate reports.
+- The proof inherits the strict reading's limits: a class with a supertype outside the repository leaves a library name
+  unsettled, since that supertype may declare a member type of the name (JLS 6.4.1), and a bare class name used as a
+  receiver is unsettled, since such a supertype may declare a field of that name (JLS 6.4.2).
 - The additive `inputs.buildOutputs` fields need no SCHEMA bump (no consumer yet).
 
 ## Not decided here

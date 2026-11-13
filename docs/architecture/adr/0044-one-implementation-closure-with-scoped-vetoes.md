@@ -251,8 +251,20 @@ would answer the single body that the probe with the veto disabled shows.
    without a receiver or on `this`, resolved in the innermost enclosing type that has a member of the name, over every
    declaration the arity may select. An assignment to an existing variable, a constructor argument and every call on
    another receiver are unsettled. Name resolution is the strict reading's, so a file whose on-demand imports could
-   bind the written name keeps the veto. V1b adds the library-invocation reading at the receiver branch of
-   `argumentTargets`.
+   bind the written name keeps the veto.
+
+   As built, V1b (`java-library-calls.ts`, ADR-0063): where the host declared a JDK for the file, an argument of a call
+   on another receiver is read in the JDK's signatures. The receiver is typed to one raw class: a local, parameter or field
+   with a written non-`var` type whose declaration's scope holds the use, a record component accessor, a repository
+   method's written return type, `new C(..)`, a cast, a class name no variable can obscure, or a library call whose
+   candidates agree on one non-variable class. Every member of the name at the arity is a candidate (variable arity from
+   one argument fewer; an interface's static members only through the interface; a class name selects static members
+   only), and the value is settled only when each candidate's parameter at that position is a library class: a type
+   variable, an array, a primitive, a receiver or a type above it that the JDK does not hold, and a receiver chain through
+   a repository type whose supertypes are not all repository types stay unsettled. A simple type name no declaration binds
+   is the one `java.lang` or on-demand `java.*` type the JDK holds under the repository-compiles assumption (ADR-0062
+   decision 1), and a name two of them hold is unsettled. A nested value takes the type argument its written library
+   target states for the target's own single abstract method. A constructor argument stays unsettled.
 6. **An undeclared supertype is never guessed.** A supertype the snapshot does not declare keeps the strict reading
    `unsettled` and the call a cut. Generated Java sources enter as an ADR-0037 build-output kind (its decision 1 lists
    "generated sources" for a later kind that has measured evidence, which this ADR supplies): a directory the host
