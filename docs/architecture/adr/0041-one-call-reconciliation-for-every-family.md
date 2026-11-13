@@ -502,3 +502,4 @@ Open questions, each with the recommended answer:
    from 3.6 s and 5.2 s to about 140 s. The cause is attribution: an unresolved reference with no candidates is
    attributed to every homonym of its name, not to the candidates at its receiver's type, so a decision here first needs
    the receiver type's candidates for those references.
+   Settled 2026-11-13 by [ADR-0079](0079-an-unresolved-reference-is-attributed-by-its-receivers-type.md).

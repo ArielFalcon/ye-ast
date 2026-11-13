@@ -95,6 +95,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0076](adr/0076-a-transport-is-a-protocol-plugin-and-a-link-inside-a-repository-is-kept.md) | A transport is a protocol plugin with a registered identity; a link whose ends share a repository is listed, followed and returned; a trace with a workspace continues through a link that names one entrypoint; designed in RFC-0036 | Accepted |
 | [0077](adr/0077-derived-facts-persist-by-content-in-ye-asts-own-store.md) | The derived facts of ADR-0035 gain a disk tier behind the same port, keyed by content and reader version, in a directory a host may name; no fact changes; extends ADR-0035; designed in RFC-0037 | Accepted |
 | [0078](adr/0078-locating-a-declaration-is-a-query-family.md) | A new query family answers the declarations and files a name or a path fragment designates, with a match class and no score; faults carry the same answer; the fixed layer is readable as MCP resources; designed in RFC-0038 | Accepted |
+| [0079](adr/0079-an-unresolved-reference-is-attributed-by-its-receivers-type.md) | `callers` and `impact` bind the unresolved qualified references that would become a `name-only` cut through the base binding chain; a receiver declared outside the repository is an answer of the port, and a reached declaration stays attributed unless a proof excludes it; settles ADR-0041 open question 7 | Accepted |
 
 ## Designs (RFC)
 
