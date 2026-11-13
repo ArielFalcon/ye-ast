@@ -1,17 +1,18 @@
 import { isSeedable } from "../../domain/change/seeds.ts";
+import { profileOf } from "../../domain/languages/profiles.ts";
 import { mayRunDeclarationOf } from "../../domain/languages/call-targets.ts";
 import { CALL_EDGE_KINDS, EDGE_POLICY, FIELD_KINDS, isClassKind } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor, placeAt } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique } from "../../domain/impact/importers-fact.ts";
 import { branchesOf, declarationPath } from "../../domain/shared/declaration-tree.ts";
 import { joinsFact } from "../../domain/shared/code-node.ts";
-import { boundCut, distinctEvidence, type Evidence, type Cut, type CutReason, type CutSubReason } from "../../domain/shared/fact.ts";
+import { boundCut, CAPABILITY_ABSENT, distinctEvidence, type Evidence, type Cut, type CutReason, type CutSubReason } from "../../domain/shared/fact.ts";
 import { calleeOf, compactSpelling, compareOccurrence, receiverOf, type OrderedPlace } from "../../domain/shared/call-place.ts";
 import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import type { DeclaredType, DispatchTargets, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { DeclaredType, DispatchTargets, ImplicitChain, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, placedBetween, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
@@ -33,6 +34,8 @@ const TYPE_KINDS: readonly string[] = EDGE_POLICY.ownerKinds;
 /** Declarations whose syntax says whether they have a body and whether a subtype can override them. */
 const CALLABLE_KINDS: readonly string[] = ["method", "function"];
 
+/** Declarations a construction the language supplies can stand for. */
+const CLASS_KINDS: readonly string[] = ["class"];
 
 /** What a trace can start from: what an impact walk seeds, or a property or field whose initializer makes calls. */
 export function isTraceRoot(store: CodeGraphReader, unresolvedIn: UnresolvedIn, syntaxCalls: ReadonlySet<GraphNodeId> = new Set()): (symbol: GraphSymbol) => boolean {
@@ -93,6 +96,8 @@ export interface TraceWalk {
   cuts: readonly Cut[];
   expanded: number;
   evidence: readonly Evidence[];
+  /** Each class walked as a construction, with the lines its own body runs there; its field initializers are steps of their own. */
+  constructions: ReadonlyMap<WalkedStep, readonly number[]>;
 }
 
 /**
@@ -136,12 +141,16 @@ type Child = ({ symbol: GraphSymbol; declaration?: never } | { declaration: Mode
   place: OrderedPlace;
   via: TraceVia;
   deferred?: true;
+  /** A class that stands for the constructor the language supplies it, walked as that construction. */
+  construction?: true;
 }
 
 interface Body {
   children: Child[];
   external: ExternalCall[];
   cuts: Cut[];
+  /** For a class walked as a construction, the lines of the calls its own body makes there, sorted. */
+  runs?: readonly number[];
 }
 
 /**
@@ -303,25 +312,89 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     return navigation.membersOf(type).filter((member) => declarations.some((declared) => declared.name === member.name && declared.start <= member.startLine && member.startLine <= declared.nameLine));
   };
 
-  /** The members of a class root that run code, by their declaration: methods, and properties or fields whose initializer makes calls. */
+  /** Whether a property's or field's initializer makes a call its own execution runs. */
+  const initializerCalls = async (member: GraphSymbol): Promise<boolean> =>
+    (await reconciled.ownedIn(member.file)).get(member.id)?.some((call) => !call.deferred) === true || callEdgesOf(store, member).length > 0 || callsFrom(member).length > 0;
+
+  /**
+   * The members of a class that run code, by their declaration: for a root, methods and the properties or fields whose
+   * initializer makes calls; for a construction, every property or field whose initializer the syntax lists.
+   */
   const membersOf = async (node: GraphSymbol, construction = false): Promise<Child[]> => {
     if (!isClassKind(node.kind)) return [];
-    const syntax = await reconciled.ownedIn(node.file);
     const initializers = (await syntaxOf(node.file)).initializedFields ?? [];
-    return navigation
-      .membersOf(node)
-      .filter((member) => {
-        const field = (FIELD_KINDS as readonly string[]).includes(member.kind);
-        if (construction) return field && initializers.some(initializer => initializer.name === member.name && initializer.start <= member.startLine && member.startLine <= initializer.nameLine);
-        return member.kind === "method" || (field && (syntax.get(member.id)?.some((call) => !call.deferred) || callEdgesOf(store, member).length > 0 || callsFrom(member).length > 0));
-      })
-      .map((member) => childAt(member, member.startLine, null, member.name, "member"));
+    const members: GraphSymbol[] = [];
+    for (const member of navigation.membersOf(node)) {
+      const field = (FIELD_KINDS as readonly string[]).includes(member.kind);
+      if (construction ? field && initializers.some((initializer) => initializer.name === member.name && initializer.start <= member.startLine && member.startLine <= initializer.nameLine) : member.kind === "method" || (field && (await initializerCalls(member)))) members.push(member);
+    }
+    return members.map((member) => childAt(member, member.startLine, null, member.name, "member"));
   };
 
-  async function bodyOf(node: GraphSymbol, root: boolean): Promise<Body> {
-    const values = valueEdgesOf(store, node);
+  /** What the chaining call a construction of `type` makes without writing it runs, as its language pack proves it, asked once per class. */
+  const implicitChainOf = memoizedBy((type: GraphSymbol) => type.id, async (type): Promise<ImplicitChain> => {
+    const [chain] = origins.implicitChains === undefined ? [] : await origins.implicitChains([{ file: type.file, line: type.startLine, name: type.name }], signal);
+    return chain ?? { kind: "unknown", reason: CAPABILITY_ABSENT };
+  });
+
+  /** Whether the class's body holds a call outside its members (an initializer block), between its first and last line. */
+  const runsOwnCalls = async (type: GraphSymbol): Promise<boolean> => {
+    const within = (line: number | null): boolean => line !== null && type.startLine <= line && line <= type.endLine;
+    const { edges, references, contradicted, writtenOnly, ambiguous } = await reconciled.callsOf(type);
+    return edges.some(({ edge }) => within(edge.line)) || [...references, ...writtenOnly, ...ambiguous].some((reference) => within(reference.line)) || contradicted.some(({ record }) => within(record.line));
+  };
+
+  /**
+   * Whether constructing `type` through the constructor the language supplies runs code of the repository: a call its
+   * body holds outside its members, a field initializer that makes a call, or the superclass constructor its implicit
+   * `super()` runs. `seen` holds the classes already asked on this chain, so a cycle of classes answers no.
+   */
+  const constructionRuns = async (type: GraphSymbol, seen: Set<GraphNodeId> = new Set()): Promise<boolean> => {
+    if (seen.has(type.id)) return false;
+    seen.add(type.id);
+    if (await runsOwnCalls(type)) return true;
+    for (const child of await membersOf(type, true)) if (await initializerCalls(child.symbol!)) return true;
+    const chain = await implicitChainOf(type);
+    if (chain.kind === "none") return false;
+    const above = chain.kind === "supplied" ? placedBetween(store, chain.file, chain.start, chain.nameLine, CLASS_KINDS) : undefined;
+    return above === undefined || constructionRuns(above, seen);
+  };
+
+  /** The class as the step a construction of it runs where the language supplies its constructor; none when that construction runs no code of the repository. */
+  const suppliedConstruction = async (type: GraphSymbol, line: number | null, column: number | null, spelling: string, via: TraceVia, deferred?: true): Promise<Child | undefined> =>
+    (await constructionRuns(type)) ? { ...childAt(type, line, column, spelling, via, deferred), construction: true } : undefined;
+
+  /**
+   * What the chaining call a construction of `type` makes without writing it runs, anchored at the class's first line:
+   * the superclass constructor its language pack names, or that superclass walked as the construction the language
+   * supplies; nothing when it extends nothing of the repository; a cut at the class's place when the pack proves
+   * neither, or names a declaration the index does not place.
+   */
+  const implicitSuperOf = async (type: GraphSymbol): Promise<Child | Cut | undefined> => {
+    const chain = await implicitChainOf(type);
+    if (chain.kind === "none") return undefined;
+    const unsettled = callCut(placeAt(type.file, type.startLine, type.name), [], "constructor-unsettled", chain.kind === "unknown" ? chain.reason : undefined);
+    if (chain.kind === "unknown") return unsettled;
+    const above = placedBetween(store, chain.file, chain.start, chain.nameLine, chain.kind === "constructor" ? CALLABLE_KINDS : CLASS_KINDS);
+    if (above === undefined) return unsettled;
+    return chain.kind === "constructor" ? childAt(above, type.startLine, null, above.name, "call") : suppliedConstruction(above, type.startLine, null, above.name, "call");
+  };
+
+  /**
+   * What a declaration's execution runs. `construction` walks a class as what constructing it runs beside a written
+   * constructor's own body: the calls its body holds outside its members, between its first and last line (so neither a
+   * decorator before it nor a member's calls), its field initializers, and, with `implicitSuper`, what its implicit
+   * `super()` runs.
+   */
+  async function bodyOf(node: GraphSymbol, root: boolean, construction?: { implicitSuper: boolean }): Promise<Body> {
+    const within = (line: number | null): boolean => construction === undefined || (line !== null && node.startLine <= line && line <= node.endLine);
+    const values = valueEdgesOf(store, node).filter((edge) => within(edge.line));
     const syntax = await syntaxOf(node.file);
-    const { edges: called, references: indexed, contradicted, writtenOnly: missing, ambiguous, deferredOnly } = await reconciled.callsOf(node);
+    const calls = await reconciled.callsOf(node);
+    const called = calls.edges.filter(({ edge }) => within(edge.line));
+    const placed = (references: readonly GraphUnresolvedReference[]): GraphUnresolvedReference[] => references.filter((reference) => within(reference.line));
+    const [indexed, missing, ambiguous, deferredOnly] = [placed(calls.references), placed(calls.writtenOnly), placed(calls.ambiguous), placed(calls.deferredOnly)];
+    const contradicted = calls.contradicted.filter(({ record }) => within(record.line));
     const passed = uses.followed(node, values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));
     const verdicts = await targets.verdictsOf([...called, ...passed], signal);
     const valueRoots = new Map(
@@ -332,13 +405,23 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     );
     const external: ExternalCall[] = [];
     const children: Child[] = root ? await membersOf(node) : [];
-    const construction = syntax.callables.some(callable => callable.construction && callable.start <= node.startLine && node.startLine <= callable.nameLine && callable.name === node.name);
-    if (construction) {
-      for (const owner of navigation.ownersOf(node)) {
-        children.push(...await membersOf(owner, true));
+    const cuts: Cut[] = contradicted.map(({ record, target }) => unresolvedAt(record, target === undefined ? [] : [target], "contradicted"));
+    if (construction !== undefined) {
+      children.push(...await membersOf(node, true));
+      const above = construction.implicitSuper ? await implicitSuperOf(node) : undefined;
+      if (above !== undefined && "kind" in above) cuts.push(above);
+      else if (above !== undefined) children.push(above);
+    } else if (!isClassKind(node.kind) && syntax.callables.some((callable) => callable.construction && callable.start <= node.startLine && node.startLine <= callable.nameLine && callable.name === node.name)) {
+      /** A language whose constructors chain by keyword runs the inherited one first when the constructor writes no chaining call. */
+      const chaining = profileOf(node.file)?.chaining;
+      const chains = chaining === undefined || ((await reconciled.ownedIn(node.file)).get(node.id) ?? []).some((call) => call.name === chaining.inherited || call.name === chaining.own);
+      for (const owner of navigation.ownersOf(node).filter((owner) => isClassKind(owner.kind))) {
+        const initializers = await bodyOf(owner, false, { implicitSuper: !chains });
+        children.push(...initializers.children);
+        external.push(...initializers.external);
+        cuts.push(...initializers.cuts);
       }
     }
-    const cuts: Cut[] = contradicted.map(({ record, target }) => unresolvedAt(record, target === undefined ? [] : [target], "contradicted"));
     /** An external call is a leaf only while the repository writes nothing over what it names; otherwise `replaced` decides. */
     const leafUnlessReplaced = async (call: ExternalCall, root: LeafRoot, replaced: () => unknown): Promise<void> => {
       if (await isReplaced(root)) await replaced();
@@ -364,6 +447,30 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
       const cut = () => cuts.push(callCut(placeAt(reference.file, reference.line, reference.name), sortedUnique([...reference.candidates, ...declared]), undefined, subReason));
       if (declared.length === 0 && !replaced) await leafUnlessReplaced({ kind: "unnamed", name: reference.name }, { path: [], member: name }, cut);
       else cut();
+    };
+    /**
+     * A construction the receiver reading settles as one the language supplies, of the class at the place it names:
+     * walked as its construction when it is in scope and runs code of the repository, nothing when it runs none, and a
+     * cut when the index places no class there.
+     */
+    const suppliedAt = async (supplied: Extract<ReceiverMethod, { kind: "supplied" }>, reference: GraphUnresolvedReference, via: TraceVia, deferred?: true): Promise<void> => {
+      const type = placedBetween(store, supplied.file, supplied.start, supplied.nameLine, CLASS_KINDS);
+      if (type === undefined) return void cuts.push(unresolvedAt(reference, [], "constructor-unsettled"));
+      const step = inScope(type.file) ? await suppliedConstruction(type, reference.line, reference.column, reference.name, via, deferred) : undefined;
+      if (step !== undefined) children.push(step);
+    };
+    /**
+     * A written `super()` the base binds to a superclass that writes no constructor runs what the language pack names for
+     * the class around it: that superclass walked as the construction the language supplies, or its constructor of no
+     * arguments; nothing when the class extends nothing of the repository, and a cut where the pack proves neither.
+     */
+    const chainedToSupplied = async (reference: GraphUnresolvedReference): Promise<void> => {
+      const owners = navigation.ownersOf(node).filter((owner) => isClassKind(owner.kind));
+      const chain = owners.length === 1 ? await implicitChainOf(owners[0]!) : undefined;
+      if (chain?.kind === "none") return;
+      const above = chain === undefined || chain.kind === "unknown" ? undefined : placedBetween(store, chain.file, chain.start, chain.nameLine, chain.kind === "constructor" ? CALLABLE_KINDS : CLASS_KINDS);
+      if (above === undefined) return void cuts.push(unresolvedAt(reference, [], "constructor-unsettled", chain?.kind === "unknown" ? chain.reason : undefined));
+      children.push({ ...childAt(above, reference.line, reference.column, reference.name, "call"), ...(chain!.kind === "supplied" ? { construction: true as const } : {}) });
     };
     /** Constructed receivers whose class the binder places in no repository declaration: a global's instance is a leaf. */
     const constructed: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; holds: Extract<ReceiverBinding["holds"], { kind: "constructed" }> }[] = [];
@@ -436,6 +543,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
       if (binding.kind === "declared") return void typed.push({ reference, name: binding.member, named: [], declared: binding });
       if (binding.kind === "declaration") {
         if (binding.link === "own-member") return void children.push(childAt(binding.target, reference.line, reference.column, reference.name, "own-member"));
+        if (binding.link === "chain" && isClassKind(binding.target.kind)) return chainedToSupplied(reference);
         const constructors = reference.kind === "instantiates" && isClassKind(binding.target.kind) ? await constructorsOf(binding.target) : [binding.target];
         if (constructors.length !== 1) return void cuts.push(unresolvedAt(reference, constructors.length > 0 ? constructors : [binding.target], "constructor-unsettled"));
         return void children.push(childAt(constructors[0]!, reference.line, reference.column, reference.name, "call"));
@@ -487,6 +595,10 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
       const read = referencedRead[index]!;
       const answer = read.kind === "declared" ? answered[nextAnswer++] : undefined;
       if (answer?.kind === "generated") continue;
+      if (answer?.kind === "supplied") {
+        await suppliedAt(answer, reference, "reference", true);
+        continue;
+      }
       const binding = read.kind === "declared" ? bindings.settleDeclared(read, answer) : read;
       const target = binding.kind === "declaration" || binding.kind === "receiver" ? binding.target : undefined;
       if (target !== undefined) children.push(childAt(target, reference.line, reference.column, reference.name, "reference", true));
@@ -537,6 +649,10 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
         const receiver = value ? undefined : receivers.get(followed);
         const proven = receiver?.kind === "method" ? placedMethod(receiver, CALLABLE_KINDS) : undefined;
         if (receiver?.kind === "generated") continue;
+        if (receiver?.kind === "supplied") {
+          if (edge.kind === "instantiates") await suppliedAt(receiver, { from: node.id, file: node.file, line: edge.line!, column: edge.column!, kind: edge.kind, name: target.name, candidates: [] }, "call");
+          continue;
+        }
         let reached = proven ?? (verdict.kind === "redirect" ? verdict.to : target);
         if (edge.kind === "instantiates" && isClassKind(reached.kind)) {
           const constructors = await constructorsOf(reached);
@@ -560,6 +676,10 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
       const receiver = found[placedCalls.length + index];
       const absent = receiver?.kind === "unknown" ? receiver.reason : undefined;
       if (receiver?.kind === "generated") continue;
+      if (receiver?.kind === "supplied") {
+        if (reference.kind === "instantiates") await suppliedAt(receiver, reference, "call");
+        continue;
+      }
       if (declared !== undefined) {
         await settleBinding(reference, bindings.settleDeclared(declared, receiver), absent);
         continue;
@@ -568,7 +688,10 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
       if (method !== undefined) children.push(childAt(method, reference.line, reference.column, reference.name, "call"));
       else await settleByName(reference, name, named, false, absent);
     }
-    return { children: children.sort((a, b) => compareOccurrence(a.place, b.place)), external, cuts };
+    const sorted = children.sort((a, b) => compareOccurrence(a.place, b.place));
+    if (construction === undefined) return { children: sorted, external, cuts };
+    const lines = [...values.map((edge) => edge.line), ...called.map(({ edge }) => edge.line), ...[...indexed, ...missing, ...ambiguous, ...deferredOnly].map((reference) => reference.line), ...contradicted.map(({ record }) => record.line)];
+    return { children: sorted, external, cuts, runs: [...new Set(lines.filter((line) => line !== null))].sort((a, b) => a - b) };
   }
 
   async function syntaxBody(declaration: ModelDeclaration): Promise<Body> {
@@ -599,9 +722,10 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
   const rootExpansions = new Set<WalkedStep>();
   const stopped = { depth: new Set<string>(), expansions: new Set<string>() };
   const cuts: Cut[] = [];
+  const constructions = new Map<WalkedStep, readonly number[]>();
   let expansions = 0;
 
-  async function visit(step: WalkedStep, node: TraceNode, depth: number): Promise<void> {
+  async function visit(step: WalkedStep, node: TraceNode, depth: number, construction?: true): Promise<void> {
     if (signal?.aborted) return;
     const symbol = indexedDeclaration(node);
     const declaration = symbol ?? node;
@@ -622,7 +746,8 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     if (first === undefined) expandedAt.set(declaration.id, step);
     if (ownsMembers) rootExpansions.add(step);
     step.expanded = true;
-    const body = symbol === undefined ? await syntaxBody(node as ModelDeclaration) : await bodyOf(symbol, ownsMembers);
+    const body = symbol === undefined ? await syntaxBody(node as ModelDeclaration) : await bodyOf(symbol, ownsMembers, construction && !ownsMembers ? { implicitSuper: true } : undefined);
+    if (body.runs !== undefined) constructions.set(step, body.runs);
     if ("bindingConflict" in node && node.bindingConflict) body.cuts.push(callCut(placeAt(node.file, node.startLine, node.name), (node.bindingEvidence ?? []).map(({ path, line, via }) => placeAt(path, line, via ?? node.name))));
     if (page) {
       const plan = await pages!.of(symbol);
@@ -646,7 +771,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
         ...(child.deferred === undefined ? {} : { deferred: child.deferred }),
       });
       step.children.push(walked);
-      await visit(walked, next, depth + 1);
+      await visit(walked, next, depth + 1, child.construction);
     }
   }
 
@@ -663,6 +788,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     cuts: [...cuts, ...boundCuts("depth", stopped.depth, budget.depth), ...boundCuts("caller-budget", stopped.expansions, budget.expansions)],
     expanded: expansions,
     evidence: distinctEvidence(evidence),
+    constructions,
   };
 }
 

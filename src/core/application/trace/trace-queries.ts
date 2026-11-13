@@ -19,8 +19,8 @@ import { sortedUnique } from "../../domain/impact/importers-fact.ts";
 import { ANYTHING, sortedEngines, type Cut, type Fact, type Finding } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { readingPlan } from "../../domain/trace/reading-plan.ts";
-import type { TraceValue } from "../../domain/trace/trace-fact.ts";
-import { traceSteps } from "../../domain/trace/trace-tree.ts";
+import type { TraceStep, TraceValue } from "../../domain/trace/trace-fact.ts";
+import { traceSteps, type WalkedStep } from "../../domain/trace/trace-tree.ts";
 import { traceLinks } from "../../domain/trace/trace-links.ts";
 import type { CodeGraphReader, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -198,7 +198,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             roots: selections.map(({ target, selection }) => ({ target: traceTargetKey(target), steps: [...selection.seeds, ...selection.syntaxSeeds].map(({ symbol }) => rootIds.get(symbol.id)!).sort((a, b) => a - b) })),
             ...(settled.length === 0 ? {} : { settled }),
             steps,
-            readingPlan: readingPlan(steps),
+            readingPlan: readingPlan(planned(steps, ids, walk.constructions)),
             cost: { expanded: walk.expanded },
           };
           const cuts = [
@@ -302,4 +302,10 @@ async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file:
 async function rangeRoots(changes: readonly FileChange[], sources: readonly SourceFile[], tokens: SourceTokens, snapshot: SnapshotFiles, isRoot: (symbol: GraphSymbol) => boolean, declarations: DeclarationModel): Promise<RootSelection> {
   const ranges = await requestedRanges(changes, sources, tokens, snapshot, declarations);
   return selectRoots(declarations, ranges.changes, [], NO_COMPONENTS, ranges.uncovered, isRoot, ranges.settled);
+}
+
+/** The steps as the reading plan reads them: a class walked as a construction spans only the lines its own body runs there. */
+function planned(steps: readonly TraceStep[], ids: ReadonlyMap<WalkedStep, number>, constructions: ReadonlyMap<WalkedStep, readonly number[]>): TraceStep[] {
+  const runs = new Map([...constructions].flatMap(([step, lines]) => (ids.has(step) ? [[ids.get(step)!, lines] as const] : [])));
+  return steps.flatMap((step) => runs.get(step.id)?.map((line) => ({ ...step, line, endLine: line })) ?? [step]);
 }

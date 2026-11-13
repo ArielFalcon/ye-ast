@@ -87,3 +87,46 @@ test("a written reference is deferred and an unresolved reference remains a cut"
   assert.equal(result.cuts.length, 1);
   assert.equal(dispatched, 0);
 });
+
+test("a construction the index left unresolved that the receiver reading answers supplied walks the class at the place it names, and a place holding no class is a cut", async () => {
+  const holder = "src/main/java/p/Holder.java";
+  const store = fakeCodeGraph([fakeNode("run", "method", use, 1, 12), fakeNode("Holder", "class", holder, 3, 7), fakeNode("other.Holder", "class", port, 3, 7, "Holder")], []);
+  const run = store.symbolsInFiles([use])[0]!;
+  const type = store.symbolsInFiles([holder])[0]!;
+  const construction = { from: run.id, file: use, name: "Holder", kind: "instantiates", line: 3, column: 11, candidates: [] };
+  const block = { from: type.id, file: holder, name: "Check.count", kind: "calls", line: 5, column: 4, candidates: [] };
+  let placed = holder;
+  const input = {
+    store, unresolvedIn: () => [],
+    origins: {
+      replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),
+      dispatchTargets: async () => [{ kind: "unknown" }],
+      receiverMethods: async (sites: readonly { member: string }[]) => sites.map((site) => (site.member === "Holder" ? { kind: "supplied", file: placed, start: 2, nameLine: 3 } : { kind: "unknown" })),
+      implicitChains: async (sites: readonly unknown[]) => sites.map(() => ({ kind: "none" })),
+    },
+    targets: { verdictsOf: async () => [] },
+    bindings: {
+      bindCalls: async (calls: readonly { reference: { name: string } }[]) => calls.map(({ reference }) => (reference.name === "Holder" ? { kind: "declared", member: "Holder", form: "bare", call: calls[0] } : { kind: "outside", form: "chain", origin: { kind: "external", module: "library" } })),
+      boundCalls: async () => [], namedDeclarations: () => [],
+      settleDeclared: () => ({ kind: "unbound", form: "bare", candidates: [], attributed: [] }),
+    },
+    uses: { followed: () => [], referencesFrom: () => [] },
+    reconciled: {
+      callsOf: async (node: typeof run) => ({ edges: [], references: node.id === run.id ? [construction] : node.id === type.id ? [block] : [], contradicted: [], writtenOnly: [], ambiguous: [], deferredOnly: [] }),
+      ownedIn: async () => new Map(),
+    },
+    inScope: () => true, memberDeclarations: async () => new Map(), syntaxOf: async () => ({ callables: [], functionValueCalls: [] }), budget: {},
+  } as unknown as TraceWalkInput;
+
+  const walked = await walkTrace([run], input);
+  assert.notEqual(walked, "aborted");
+  if (walked === "aborted") return;
+  assert.deepEqual(walked.roots[0]!.children.map(({ declaration, via }) => [declaration.file, declaration.kind, via]), [[holder, "class", "call"]]);
+  assert.deepEqual([walked.cuts, [...walked.constructions.values()]], [[], [[5]]]);
+
+  placed = use;
+  const unplaced = await walkTrace([run], input);
+  assert.notEqual(unplaced, "aborted");
+  if (unplaced === "aborted") return;
+  assert.deepEqual([unplaced.roots[0]!.children, unplaced.cuts.map((cut) => [cut.reason, cut.at])], [[], [["constructor-unsettled", [`${use}:3 Holder`]]]]);
+});

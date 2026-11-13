@@ -431,3 +431,15 @@ test("a wildcard import of a package outside the vocabulary leaves the repositor
   const sources = orders(["import org.springframework.data.repository.query.*;"], "extends JpaRepository<Order, Long>", ["  Order findByCode(String code);"]);
   assert.deepEqual(await repositoryCall("orders.findByCode(text)", sources, "findByCode"), { kind: "unproven" });
 });
+
+test("the implicit super() of a class names nothing outside the repository, and is unknown where the superclass is ambiguous or the reading proves no binding", async () => {
+  const first = javaIn("a", "Base.java", ["package a;", "", "public class Base {}"]);
+  const second = javaIn("b", "Base.java", ["package b;", "", "public class Base {}"]);
+  const ambiguous = java("Amb.java", ["package app;", "", "import a.*;", "import b.*;", "", "class Amb extends Base {}"]);
+  const platform = java("Plat.java", ["package app;", "", "class Plat extends RuntimeException {}"]);
+  const sources = [first, second, ambiguous, platform];
+  const sites = [{ file: ambiguous.path, line: 6, name: "Amb" }, { file: platform.path, line: 3, name: "Plat" }];
+
+  assert.deepEqual(await createJavaNameBindings(createJavaParser, sources).implicitChains!(sites), [{ kind: "unknown" }, { kind: "none" }]);
+  assert.deepEqual(await createJavaNameBindings(createJavaParser, sources, KOTLIN(sources)).implicitChains!(sites), [{ kind: "unknown" }, { kind: "unknown" }]);
+});

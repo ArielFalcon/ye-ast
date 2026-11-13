@@ -110,6 +110,17 @@ export interface ImportOrigins {
    */
   implementedDeclarations(sites: readonly ImplementingSite[], signal?: AbortSignal): Promise<readonly ImplementedDeclarations[]>;
   /**
+   * One entry per site, in the order received: what the chaining call a construction of the class at the site makes
+   * without writing it (a Java constructor that writes no `super(...)` or `this(...)`, or the one the language supplies)
+   * runs, by the superclass the sources declare: its one placed constructor of no arguments, or the superclass itself
+   * where the language supplies its constructor too; `none` when the class extends nothing of the repository. `unknown`
+   * when the sources do not prove it: a superclass the reading does not settle, a varargs constructor or none of no
+   * arguments among its constructors, an annotation by which a processor may add constructors to it, or any condition
+   * under which the reader proves no binding. Absent where the language pack implements none, which reads as
+   * `capability-absent` for every site.
+   */
+  implicitChains?(sites: readonly ConstructedClassSite[], signal?: AbortSignal): Promise<readonly ImplicitChain[]>;
+  /**
    * Where the repository may run its own code where a library's is expected: the path of every global the snapshot
    * declares, every member path a source writes from a global (`Math.max = f`, `Array.prototype[k] = f`,
    * `globalThis.fetch = f`, `Object.assign(process.env, vars)`), and every package a source writes through an import of
@@ -167,6 +178,21 @@ export interface MethodPlace {
   nameLine: number;
 }
 
+/** A class by its file, a 1-based line from its declaration's first token to its name, and its name. */
+export interface ConstructedClassSite {
+  file: string;
+  line: number;
+  name: string;
+}
+
+/**
+ * What an unwritten chaining call runs: the superclass constructor it names (`constructor`), or the superclass whose
+ * constructor the language supplies (`supplied`), each by its file and the 1-based lines from its first token to its
+ * name; nothing of the repository (`none`); or what the reading does not prove. `capability-absent`: the language pack of
+ * the site's file declares it cannot answer (ADR-0045 decision 12).
+ */
+export type ImplicitChain = ({ kind: "constructor" | "supplied" } & MethodPlace) | { kind: "none" } | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT };
+
 /** A method declaration by its file, the 1-based line of its first token, and its name. */
 export interface ImplementingSite {
   file: string;
@@ -201,10 +227,16 @@ export type ReceiverMethod =
    * A member that no source declares and a record or a processor annotation on the receiver's class adds (an accessor, a
    * builder), or a Spring Data repository interface has its proxy supply (a derived or `@Query` method, an inherited
    * operation), so the call is settled and has no declaration to place: it runs generated code that reads or writes the
-   * class's fields (ADR-0067), or a data effect the effect reader places (ADR-0070). Also a constructor the language
-   * supplies (a record's canonical one, a class's default one) when the construction runs no code of the repository.
+   * class's fields (ADR-0067), or a data effect the effect reader places (ADR-0070). Also a record's canonical
+   * constructor that no source writes, which only assigns the components.
    */
-  | { kind: "generated" };
+  | { kind: "generated" }
+  /**
+   * A construction that runs the default constructor the language supplies a class, by the place of the constructed
+   * class: no declaration of the constructor exists, and what it runs, the class's initializers and its implicit chaining
+   * call (`implicitChains`), is the class's.
+   */
+  | ({ kind: "supplied" } & MethodPlace);
 
 /** A place a declaration uses a name, where the index places the use: repository-relative and 1-based. */
 export interface UseSite {

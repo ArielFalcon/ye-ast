@@ -27,6 +27,7 @@ function recordingPack(profile: LanguageProfile, received: string[], readsProjec
     dispatchTargets: async (sites) => sites.map((site) => (received.push(site.file), { kind: "unknown", reason: tag === "java" ? "aspect may replace the body" : "dispatch not proven" })),
     receiverMethods: async (sites) => sites.map((site) => (received.push(site.file), { kind: "unproven" })),
     implementedDeclarations: async (sites) => sites.map(() => ({ kind: "unknown" })),
+    implicitChains: async (sites) => sites.map((site) => (received.push(site.file), { kind: "none" })),
     replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),
   };
   return {
@@ -103,16 +104,28 @@ test("relations of a pack that declares context files receive those no pack owns
 test("a stage a pack declares absent answers each of its sites capability-absent and is never asked, while another pack's stays its own", async () => {
   const typescript: string[] = [];
   const java: string[] = [];
-  const readers = routedReaders([{ ...recordingPack(TYPESCRIPT_PROFILE, typescript, true), absent: ["dispatchTargets", "receiverMethods"] }, recordingPack(JAVA_PROFILE, java)]);
+  const readers = routedReaders([{ ...recordingPack(TYPESCRIPT_PROFILE, typescript, true), absent: ["dispatchTargets", "receiverMethods", "implicitChains"] }, recordingPack(JAVA_PROFILE, java)]);
   const origins = readers.importOrigins(SOURCES);
   typescript.length = 0;
 
   const dispatch = await origins.dispatchTargets([{ file: TS, line: 1, name: "a" }, { file: JAVA, line: 2, name: "a" }]);
   const receivers = await origins.receiverMethods([{ file: TS, line: 1, column: 1, member: "a" }, { file: JAVA, line: 2, column: 1, member: "a" }]);
+  const chains = await origins.implicitChains!([{ file: TS, line: 1, name: "A" }, { file: JAVA, line: 2, name: "A" }]);
 
   assert.deepEqual(dispatch, [{ kind: "unknown", reason: "capability-absent" }, { kind: "unknown", reason: "aspect may replace the body" }]);
   assert.deepEqual(receivers, [{ kind: "unknown", reason: "capability-absent" }, { kind: "unproven" }]);
+  assert.deepEqual(chains, [{ kind: "unknown", reason: "capability-absent" }, { kind: "none" }]);
   assert.deepEqual(typescript, []);
+});
+
+test("a pack whose reader implements no implicit chains answers capability-absent for its sites", async () => {
+  const pack = recordingPack(JAVA_PROFILE, []);
+  const readers = routedReaders([{ ...pack, origins: (...read) => {
+    const { implicitChains: _implemented, ...reader } = pack.origins(...read);
+    return reader;
+  } }]);
+
+  assert.deepEqual(await readers.importOrigins(SOURCES).implicitChains!([{ file: JAVA, line: 2, name: "A" }]), [{ kind: "unknown", reason: "capability-absent" }]);
 });
 
 test("a path no pack owns is unread no-language, and a pack that declares tokens absent answers capability-absent for its own files", async () => {

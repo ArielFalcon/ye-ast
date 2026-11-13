@@ -4,7 +4,7 @@ import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts"
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
-import type { ImplementedDeclarations, ImplementingSite, ImportOrigins, MethodPlace, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
+import type { ConstructedClassSite, ImplementedDeclarations, ImplementingSite, ImplicitChain, ImportOrigins, MethodPlace, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
@@ -19,6 +19,8 @@ const SLOT = "java-receiver-methods";
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
 const GENERATED: ReceiverMethod = { kind: "generated" };
+const UNKNOWN_CHAIN: ImplicitChain = { kind: "unknown" };
+const NO_CHAIN: ImplicitChain = { kind: "none" };
 const PROXIED: GeneratedMember = { kind: "proxied" };
 const LOMBOK_CONFIG = /(^|\/)lombok\.config$/;
 const UNKNOWN_DECLARATIONS: ImplementedDeclarations = { kind: "unknown" };
@@ -201,6 +203,48 @@ export function createJavaImplementedDeclarations(parser: () => Promise<JavaPars
       return analyze(sites, files, unparsed, createJavaProject(files, build));
     });
   };
+}
+
+/**
+ * `ImportOrigins.implicitChains` for Java sources: the implicit `super()` of a class's construction (JLS 8.8.7) passes no
+ * arguments, so it names the superclass's constructor of no arguments, or the default constructor the language supplies a
+ * superclass that writes none (JLS 8.8.9). A record or an enum chains to the platform, and so does a class whose
+ * superclass the sources do not declare. `unknown` when the strict reading proves no binding, the class is not placed, the
+ * strict lexical and import rules do not settle its superclass, or that superclass holds an annotation by which a processor may add constructors, declares a
+ * varargs constructor, or writes constructors and none of no arguments.
+ */
+export function createJavaImplicitChains(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): NonNullable<ImportOrigins["implicitChains"]> {
+  const unreadJvm = paths.some(isUncoveredJvmSource);
+  const analyze = (sites: readonly ConstructedClassSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly ImplicitChain[] => {
+    if (!provesBinding(files, project, unparsed, unreadJvm)) return sites.map(() => UNKNOWN_CHAIN);
+    return sites.map((site) => {
+      const placed = project.types.filter((type) => type.file.path === site.file && type.name === site.name && typePlace(type).start <= site.line && site.line <= typePlace(type).nameLine);
+      return placed.length === 1 ? implicitChainOf(placed[0]!, project) : UNKNOWN_CHAIN;
+    });
+  };
+  return async (sites) => {
+    if (sites.length === 0) return [];
+    const read = await parser();
+    const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources, [], build);
+    if (held !== undefined) return analyze(sites, held.files.map(({ file }) => file), held.unparsed, held.project);
+    return withJavaSources(read, (parse) => {
+      const { files, unparsed } = parse(sources);
+      return analyze(sites, files, unparsed, createJavaProject(files, build));
+    });
+  };
+}
+
+function implicitChainOf(type: TypeDecl, project: JavaProject): ImplicitChain {
+  const written = type.node.type === "class_declaration" ? type.node.childForFieldName("superclass")?.namedChildren[0] : undefined;
+  const raw = written?.type === "generic_type" ? written.namedChildren[0] : written;
+  if (raw === undefined || raw === null) return NO_CHAIN;
+  const above = project.resolveTypeName(raw.text, { file: type.file, type: type.outer });
+  if (above === undefined) return NO_CHAIN;
+  if (above === "ambiguous" || above === "unsettled" || "local" in above || above.node.type !== "class_declaration" || mayGenerateConstructors(above.node)) return UNKNOWN_CHAIN;
+  if (above.constructors.length === 0) return { kind: "supplied", ...typePlace(above) };
+  if (above.constructors.some(hasVarargs)) return UNKNOWN_CHAIN;
+  const runs = above.constructors.filter((constructor) => constructorArity(constructor) === 0);
+  return runs.length === 1 ? { kind: "constructor", ...placeOf(runs[0]!) } : UNKNOWN_CHAIN;
 }
 
 /** The methods of a project by file, first line and name, each place with every declaration it names. */
@@ -505,26 +549,14 @@ export function createResolver(project: JavaProject, generated = false) {
   };
 
   /**
-   * What a construction of `type` with `arity` arguments runs, when the language supplies its constructor (JLS 8.8.9,
-   * 8.10.4): a record's canonical constructor that no source writes, or the default constructor of a class that writes
-   * none. Such a constructor runs the class's initializers and then its superclass's constructor: `generated` when
-   * neither runs repository code (every field initializer is a literal, no initializer block, and the chain of
-   * superclasses that write no constructor ends outside the repository), the superclass's one written
-   * constructor of no arguments when the chain reaches it, and none otherwise: a constructor the sources write, a
-   * processor annotation that may add one, an abstract class, or an initializer that may run code.
+   * What a construction of `type` with `arity` arguments runs where the language supplies its constructor: `generated` for
+   * a record's canonical constructor that no source writes, which only assigns the components (JLS 8.10.4), and
+   * `supplied`, at `type`'s place, for the default constructor of a concrete class that writes none and holds no
+   * annotation by which a processor may add one (JLS 8.8.9); none for any other construction.
    */
   const suppliedConstruction = (type: TypeDecl, arity: number): ReceiverMethod | undefined => {
     if (type.node.type === "record_declaration") return arity === recordComponents(type.node) && !type.constructors.some((constructor) => constructorArity(constructor) === arity) ? GENERATED : undefined;
-    if (type.node.type !== "class_declaration" || type.isAbstract || arity !== 0) return undefined;
-    for (const current of project.classChain(type)) {
-      if (current.node.type !== "class_declaration" || mayGenerateConstructors(current.node)) return undefined;
-      if (current !== type && current.constructors.length > 0) {
-        const runs = current.constructors.filter((constructor) => constructorArity(constructor) === 0);
-        return runs.length === 1 && !current.constructors.some(hasVarargs) ? placedAt(runs[0]!) : undefined;
-      }
-      if (current.constructors.length > 0 || initializerMayRunCode(current.node)) return undefined;
-    }
-    return GENERATED;
+    return type.node.type === "class_declaration" && !type.isAbstract && arity === 0 && type.constructors.length === 0 && !mayGenerateConstructors(type.node) ? { kind: "supplied", ...typePlace(type) } : undefined;
   };
 
   /** What `new T(...)` runs where the language supplies `T`'s constructor; none for a class body, a qualified creation or any other type. */
@@ -632,22 +664,6 @@ function mayGenerateConstructors(declaration: Node): boolean {
   return (modifiers?.namedChildren ?? []).some((annotation) => (annotation?.type === "marker_annotation" || annotation?.type === "annotation") && CONSTRUCTOR_GENERATING_ANNOTATIONS.has(annotation.childForFieldName("name")?.text.split(".").at(-1) ?? ""));
 }
 
-/** Whether constructing the class may run code its constructor does not write: an initializer block, or a field initialized by anything but a literal. */
-function initializerMayRunCode(declaration: Node): boolean {
-  return (declaration.childForFieldName("body")?.namedChildren ?? []).some((member) => {
-    if (member?.type === "block" || member?.type === "static_initializer") return true;
-    if (member?.type !== "field_declaration") return false;
-    return member.childrenForFieldName("declarator").some((declarator) => {
-      const value = declarator?.childForFieldName("value");
-      return value !== null && value !== undefined && !isLiteral(value);
-    });
-  });
-}
-
-function isLiteral(value: Node): boolean {
-  if (value.type === "unary_expression" && value.namedChildCount === 1) return isLiteral(value.namedChildren[0]!);
-  return value.type.endsWith("_literal") || value.type === "true" || value.type === "false";
-}
 
 function argumentCount(invocation: Node): number {
   return (invocation.childForFieldName("arguments")?.namedChildren ?? []).filter((argument) => argument !== null && !NOT_ARGUMENTS.has(argument.type)).length;
@@ -685,6 +701,11 @@ function hasTypeVariables(type: TypeDecl): boolean {
 /** A method the index places by its file and the lines from its first token to its name (a compact constructor's first line). */
 function placeOf(method: MethodDecl): MethodPlace {
   return { file: method.owner.file.path, start: method.node.startPosition.row + 1, nameLine: (method.node.childForFieldName("name") ?? method.node).startPosition.row + 1 };
+}
+
+/** A type by its file and the lines from its first token to its name. */
+function typePlace(type: TypeDecl): MethodPlace {
+  return { file: type.file.path, start: type.node.startPosition.row + 1, nameLine: (type.node.childForFieldName("name") ?? type.node).startPosition.row + 1 };
 }
 
 function placedAt(method: MethodDecl): Extract<ReceiverMethod, { kind: "method" }> {

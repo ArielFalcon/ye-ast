@@ -11,8 +11,9 @@ import { composeCli } from "./compose.ts";
 
 /**
  * A construction of a repository type whose constructor the language supplies (a record's canonical constructor, the
- * default constructor of a class that writes none) runs what the sources prove: nothing of the repository, or the
- * superclass constructor its implicit `super()` reaches. Whatever else construction may run stays a cut.
+ * default constructor of a class that writes none) runs what the sources prove: nothing of the repository, or the class
+ * walked as that construction, down to the superclass constructor its implicit `super()` reaches. A constructor a
+ * processor may add stays a cut.
  */
 
 const GIT_ENV = {
@@ -83,6 +84,7 @@ test("a record's canonical constructor, a class's default constructor and T::new
 
   assert.deepEqual([fact.status, cutsOf(fact)], ["complete", []]);
   assert.ok(reached(fact).includes(`${JAVA}/Plain.java:one`));
+  assert.deepEqual(fact.value.steps.filter((step) => step.kind === "class").map((step) => step.symbol), []);
 });
 
 test("a construction of a type outside the repository keeps its cut", async () => {
@@ -114,22 +116,19 @@ test("the default constructor of a class runs the body of the constructor its su
   const fact = await trace("Use.java:run");
 
   assert.deepEqual([fact.status, cutsOf(fact)], ["complete", []]);
-  assert.deepEqual(fact.value.steps.filter((step) => step.symbol === "Base").map((step) => [step.file, step.line, step.via, step.at]), [[`${JAVA}/Base.java`, 4, "reference", { line: 7, column: 27 }], [`${JAVA}/Base.java`, 4, "call", { line: 8, column: 12 }]]);
+  assert.deepEqual(fact.value.steps.filter((step) => step.symbol === "Sub" || step.symbol === "Base").map((step) => [step.symbol, step.kind, step.line, step.via, step.at]), [
+    ["Sub", "class", 3, "reference", { line: 7, column: 27 }],
+    ["Base", "method", 4, "call", { line: 3 }],
+    ["Sub", "class", 3, "call", { line: 8, column: 12 }],
+  ]);
   assert.ok(reached(fact).includes(`${JAVA}/Check.java:count`));
 });
 
-for (const [held, files] of [
-  ["an instance field initializer that calls repository code", { [`${JAVA}/Holder.java`]: "package com.acme;\n\npublic class Holder {\n  private final int n = Check.count();\n}\n" }],
-  ["an instance initializer block", { [`${JAVA}/Holder.java`]: "package com.acme;\n\npublic class Holder {\n  {\n    Check.count();\n  }\n}\n" }],
-  ["an annotation by which a processor may add a constructor", { [`${JAVA}/Holder.java`]: "package com.acme;\n\nimport lombok.NoArgsConstructor;\n\n@NoArgsConstructor\npublic class Holder {\n}\n" }],
-  ["a superclass that writes no constructor and initializes a field with repository code", { [`${JAVA}/Mid.java`]: "package com.acme;\n\npublic class Mid {\n  private final int n = Check.count();\n}\n", [`${JAVA}/Holder.java`]: "package com.acme;\n\npublic class Holder extends Mid {\n}\n" }],
-] as const) {
-  test(`a supplied constructor of a class with ${held} stays a cut`, async () => {
-    commit({ ...files, ...use("    return new Holder();") });
+test("a supplied constructor of a class with an annotation by which a processor may add a constructor stays a cut", async () => {
+  commit({ [`${JAVA}/Holder.java`]: "package com.acme;\n\nimport lombok.NoArgsConstructor;\n\n@NoArgsConstructor\npublic class Holder {\n  private final int n = Check.count();\n}\n", ...use("    return new Holder();") });
 
-    const fact = await trace("Use.java:run");
+  const fact = await trace("Use.java:run");
 
-    assert.equal(fact.status, "partial");
-    assert.deepEqual(cutsOf(fact), [["constructor-unsettled", `${JAVA}/Use.java:7 Holder`]]);
-  });
-}
+  assert.equal(fact.status, "partial");
+  assert.deepEqual(cutsOf(fact), [["constructor-unsettled", `${JAVA}/Use.java:7 Holder`]]);
+});
