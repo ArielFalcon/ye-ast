@@ -60,6 +60,8 @@ interface Resolved extends ReadRepository {
   librarySources: readonly LibrarySource[];
   names: readonly OutwardName[];
   callSites: readonly CallSite[];
+  /** Another repository of the workspace depends on this one's artifact and it serves no route or listener: a client library, never a consumer of itself. */
+  library: boolean;
 }
 
 export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): WorkspaceReadOperation {
@@ -156,9 +158,10 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
       const librarySources = libraries.flatMap((library) => library.sources.toSorted((a, b) => compareText(a.path, b.path)).map((source) => ({ ...source, repo: library.identity.id })));
       const callSites = (await deps.callSites.of(entry.sources, entry.repository.repo, librarySources, { completeSource: entry.completeSource && librarySources.length === 0 })).filter((site) => selected(site.file));
       const entrypoints = librarySources.length === 0 ? entry.repository.entrypoints : selectedFindings((await deps.extractor.extract(entry.sources, librarySources)).findings, selected);
-      resolved.push({ ...entry, librarySources, cuts, repository: { ...entry.repository, entrypoints }, callSites, names: [...entry.stated, ...callSiteNames(entry.repository.repo, callSites)] });
+      resolved.push({ ...entry, librarySources, cuts, repository: { ...entry.repository, entrypoints }, callSites, names: [...entry.stated, ...callSiteNames(entry.repository.repo, callSites)], library: false });
     }
-    return resolved;
+    const depended = new Set([...closures.values()].flatMap(({ repositories }) => repositories));
+    return resolved.map((entry) => ({ ...entry, library: depended.has(entry.identity.id) && entry.repository.entrypoints.length === 0 }));
   }
 
   return {
@@ -209,7 +212,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
         for (const entry of resolved) {
           const names = gatherNames(entry.names);
           const undecided = entry.callSites.filter((site) => site.target.status === "unknown");
-          const unresolved = gatherUnresolvedCallSites(undecided.map(unresolvedCallSite));
+          const unresolved = entry.library ? [] : gatherUnresolvedCallSites(undecided.map(unresolvedCallSite));
           const unsettled = join.joined.filter(({ site, joined }) => site.repo === entry.repository.repo && (joined.ambiguous !== undefined || joined.undecided !== undefined)).map(({ site }) => site);
           const section: FactBase & { evidence: readonly { path: string; line: number }[] } = { ...(entry.base as FactBase), evidence: sortEvidence(names.flatMap((name) => name.evidence)) };
           const cuts = [...entry.cuts, ...unsettled.map(unsettledCallSiteCut)];

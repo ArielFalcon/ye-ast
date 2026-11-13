@@ -586,6 +586,23 @@ test("a repository that depends on another one given reads its calls through tha
   ]);
 });
 
+test("a client library other members depend on and that serves nothing is no consumer of itself, while one that serves a route stays one", async () => {
+  const unresolved = (repo: string): CallSite => ({ repo, file: "src/Client.java", line: 9, symbol: "Client.execute", transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [{ path: "src/Client.java", line: 9 }] } });
+  const callSites: CallSiteReader = { of: async (_files, repo) => (repo === "orders" ? [] : [unresolved(repo)]) };
+  const files = { "pom.xml": "<project/>", "src/Client.java": "class Client {}" };
+  const read = async (served: readonly Finding<Entrypoint>[]) => {
+    const queries = setup({
+      "/work/orders": { files: { "pom.xml": "<project/>" }, names: [dependencyName("com.shop:shop-clients", "pom.xml", 20)] },
+      "/work/shop-clients": { files, artifacts: ["com.shop:shop-clients"], entrypoints: served },
+      "/work/billing": { files },
+    }, callSites);
+    const value = valueOf(await queries.outwardNames({ repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-clients" }, { path: "/work/billing" }] }));
+    return Object.fromEntries(Object.entries(value.sections).map(([repo, section]) => [repo, section.status === "complete" ? section.value.unresolved.length : -1]));
+  };
+  assert.deepEqual(await read([]), { billing: 1, orders: 0, "shop-clients": 0 });
+  assert.deepEqual(await read([postRoute("/orders")]), { billing: 1, orders: 0, "shop-clients": 1 });
+});
+
 test("every repository of a request is read under its own trust declaration, and an undeclared one is untrusted", async () => {
   const declared: Record<string, "trusted"> = { "/work/orders-svc": "trusted" };
   const queries = setup({ "/work/shop-web": { files: {} }, "/work/orders-svc": { files: {} } }, undefined, { read: async (repo) => (declared[repo] === undefined ? { ok: true, value: undefined } : { ok: true, value: declared[repo] }) });

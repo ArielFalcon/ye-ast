@@ -152,7 +152,7 @@ test("dependency ambiguity remains visible with its candidates in both workspace
   }
 });
 
-type Site = { path: string; line: number; symbol: string; transport: string; reason: string; evidence: unknown[]; diagnostic?: { cause: string }; stated?: { method: string; path?: string } };
+type Site = { path: string; line: number; symbol: string; transport: string; reason: string; evidence: unknown[]; diagnostic?: { cause: string }; stated?: { method: string; path?: string }; via?: string };
 
 function unresolvedWorkspace(perRepo: Record<string, Site[]>, anchors: { links?: { repo: string; file: string }[]; unlinked?: { repo: string; file: string }[] } = {}): never {
   const repos = Object.keys(perRepo);
@@ -195,6 +195,15 @@ test("a summary lists the unresolved sites that show a request and counts the re
   assert.match(block, /unknown-extra \(1\):\n {2} {2}not listed: 1 in 1 file \(beta 1\)/);
   assert.equal(block.split("A wrapper request is sited").length - 1, 1);
   assert.ok(block.length < unresolvedSection(renderWorkspace(fact, "details")).length);
+});
+
+test("a summary names the libraries an unresolved cause goes through, with their counts, even for the sites it does not list", () => {
+  const fact = unresolvedWorkspace({ alpha: [
+    ...Array.from({ length: 3 }, (_, i) => site("src/a.ts", i + 1, "source-not-read", { via: "com.acme.rest.Client" })),
+    site("src/b.ts", 9, "source-not-read", { via: "com.acme.bus.Bus" }),
+    site("src/c.ts", 10, "source-not-read"),
+  ] });
+  assert.match(unresolvedSection(renderWorkspace(fact, "summary")), /^ {2}source-not-read \(5; through com\.acme\.bus\.Bus 1, com\.acme\.rest\.Client 3\):$/m);
 });
 
 test("details keeps every unresolved site under its repository", () => {

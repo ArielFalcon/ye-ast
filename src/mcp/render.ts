@@ -1591,7 +1591,7 @@ function unresolvedByCause(sections: readonly (readonly [string, readonly Unreso
       const perRepo = sections.map(([repo]) => [repo, omitted.filter((entry) => entry.repo === repo).length] as const).filter(([, count]) => count > 0);
       const files = new Set(omitted.map(({ repo, site }) => JSON.stringify([repo, site.path])));
       return [
-        `  ${cause} (${inCause.length}):`,
+        `  ${cause} (${inCause.length}${throughLibraries(inCause.map(({ site }) => site))}):`,
         ...sections.flatMap(([repo]) => {
           const listed = inCause.filter((entry) => entry.repo === repo && shown(entry));
           return listed.length === 0 ? [] : [`    ${repo}:`, ...unresolvedFiles(listed.map(({ site }) => site), "summary").map((line) => `  ${line}`)];
@@ -1601,6 +1601,12 @@ function unresolvedByCause(sections: readonly (readonly [string, readonly Unreso
     }),
     `  ${REQUEST_SITE_GUIDE}`,
   ];
+}
+
+/** The libraries the sites of a cause go through, with their counts: what the code calls and the workspace does not serve. */
+function throughLibraries(sites: readonly UnresolvedCallSite[]): string {
+  const counts = [...Map.groupBy(sites.flatMap((site) => (site.via === undefined ? [] : [site.via])), (via) => via)].toSorted(([a], [b]) => compareText(a, b));
+  return counts.length === 0 ? "" : `; through ${counts.map(([via, group]) => `${via} ${group.length}`).join(", ")}`;
 }
 
 function unresolvedLine(site: UnresolvedCallSite, detail: ResponseMode): string {
