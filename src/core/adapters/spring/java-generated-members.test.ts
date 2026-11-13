@@ -82,3 +82,54 @@ test("a record generates the accessor of each component it does not declare, typ
   assert.deepEqual(await callOf("pair.left", "left"), { kind: "method", file: "src/main/java/app/Pair.java", start: 3, nameLine: 3 });
   assert.deepEqual(await callOf("pair.right", "right"), UNPROVEN);
 });
+
+test("an access level on @Getter or @Setter keeps the generated names, a field-level NONE removes only its field, and other annotations of the class unsettle nothing", async () => {
+  assert.deepEqual(await callOf("levels.getName", "getName"), GENERATED);
+  assert.deepEqual(await callOf("levels.setName", "setName"), GENERATED);
+  assert.deepEqual(await callOf("levels.setHidden", "setHidden"), GENERATED);
+  assert.deepEqual(await callOf("levels.getSecret", "getSecret"), UNPROVEN);
+  assert.deepEqual(await callOf("levels.setFrozen", "setFrozen"), UNPROVEN);
+});
+
+test("an annotation whose arguments or siblings may change the names stays unsettled", async () => {
+  assert.deepEqual(await callOf("conflicting.getName", "getName"), UNPROVEN);
+  assert.deepEqual(await callOf("unmodelled.getCached", "getCached"), UNPROVEN);
+  assert.deepEqual(await callOf("unmodelled.setMarked", "setMarked"), UNPROVEN);
+  assert.deepEqual(await callOf("unmodelled.getPlain", "getPlain"), UNPROVEN);
+  assert.deepEqual(await callOf("fluent.getName", "getName"), UNPROVEN);
+});
+
+test("a member Lombok generates on a superclass of the project settles a call on a subclass receiver, unless the hierarchy hides it", async () => {
+  assert.deepEqual(await callOf("child.getBaseName", "getBaseName"), GENERATED);
+  assert.deepEqual(await callOf("child.setBaseName", "setBaseName"), GENERATED);
+  assert.deepEqual(await callOf("child.getOwn", "getOwn"), UNPROVEN);
+  assert.deepEqual(await callOf("redeclaring.getShadowed", "getShadowed"), { kind: "method", file: "src/main/java/app/Redeclaring.java", start: 3, nameLine: 3 });
+  assert.deepEqual(await callOf("redeclaring.getBaseName", "getBaseName"), GENERATED);
+  assert.deepEqual(await callOf("leaf.getBaseName", "getBaseName"), UNPROVEN);
+  assert.deepEqual(await callOf("under.getName", "getName"), UNPROVEN);
+});
+
+test("@SuperBuilder generates the builder of the class and of every superclass that also carries it, and none when a superclass does not", async () => {
+  assert.deepEqual(await callOf("SuperLeaf.builder().rootField", "builder"), GENERATED);
+  assert.deepEqual(await callOf("SuperLeaf.builder().rootField", "rootField"), GENERATED);
+  assert.deepEqual(await callOf("SuperLeaf.builder().rootField(\"r\").leafField", "leafField"), GENERATED);
+  assert.deepEqual(await callOf("SuperLeaf.builder().rootField(\"r\").leafField(\"l\").build()", "build"), GENERATED);
+  assert.deepEqual(await callOf("SuperLeaf.builder().rootField(\"r\").leafField(\"l\").build().getRootField", "getRootField"), GENERATED);
+  assert.deepEqual(await callOf("SuperLeaf.builder().missing", "missing"), UNPROVEN);
+  assert.deepEqual(await callOf("SuperUnmarked.builder().ownField", "ownField"), UNPROVEN);
+  assert.deepEqual(await callOf("SuperOrphan.builder().ownField", "ownField"), UNPROVEN);
+});
+
+test("@Builder.Default makes a final field with an initializer settable by the builder, a static or an undefaulted final field is not", async () => {
+  assert.deepEqual(await callOf("Defaults.builder().label", "label"), GENERATED);
+  assert.deepEqual(await callOf("Defaults.builder().kind", "kind"), UNPROVEN);
+  assert.deepEqual(await callOf("Defaults.builder().version", "version"), UNPROVEN);
+  assert.deepEqual(await callOf("SuperLeaf.builder().defaulted", "defaulted"), GENERATED);
+  assert.deepEqual(await callOf("SuperLeaf.builder().locked", "locked"), GENERATED);
+  assert.deepEqual(await callOf("SuperLeaf.builder().version", "version"), UNPROVEN);
+  assert.deepEqual(await callOf("SuperLeaf.builder().kind", "kind"), UNPROVEN);
+});
+
+test("a @Singular field leaves the builder unsettled", async () => {
+  assert.deepEqual(await callOf("Singles.builder().items", "builder"), UNPROVEN);
+});
