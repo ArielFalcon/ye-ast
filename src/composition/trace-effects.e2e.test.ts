@@ -51,20 +51,33 @@ async function trace(target: string, ...also: string[]): Promise<{ status: strin
 
 const effectsOf = (value: TraceValue) => value.steps.flatMap((step) => (step.effects ?? []).map(({ column: _column, ...effect }) => [step.symbol, effect]));
 
-test("an unresolved request retains URL knowledge without becoming a complete trace effect", async () => {
+test("a direct request whose route follows an undecided base is a placed effect marked undecided, with no unresolved request left", async () => {
   commit({ "src/partial.ts": [
     "import { HttpClient } from '@angular/common/http';",
     "declare const BASE: string;",
     "export class Api { constructor(private http: HttpClient) {} load(id: string) { return this.http.get(`${BASE}/orders/${id}`) } }",
   ].join("\n") });
   const found = await trace("src/partial.ts:Api.load");
-  assert.equal(found.status, "partial");
-  assert.equal(effectsOf(found.value).length, 0);
-  const request = found.value.steps.flatMap((step) => step.unresolvedEffects ?? [])[0];
-  assert.equal(request?.stated?.method, "GET");
-  assert.equal(request?.stated?.path, undefined);
-  assert.ok(request?.stated?.expressions?.[0]?.some((part) => part.kind === "text" && part.text === "/orders/"));
-  assert.ok(found.cuts?.some((cut) => cut.reason === "effect-unplaced"));
+  assert.deepEqual(effectsOf(found.value).map(([symbol, effect]) => [symbol, (effect as { target: unknown }).target, (effect as { authority?: string }).authority]), [["load", { method: "GET", path: "/orders/{}" }, "undecided"]]);
+  assert.deepEqual(found.value.steps.flatMap((step) => step.unresolvedEffects ?? []), []);
+  assert.deepEqual(effectCuts(found), []);
+});
+
+test("a direct request that states no route after an undecided base, or states several, keeps its cut and its stated request", async () => {
+  for (const [name, url] of [["no route", "`${BASE}${id}`"], ["alternatives", "id ? `${BASE}/a` : `${BASE}/b`"]]) {
+    rmSync(repo, { recursive: true, force: true });
+    mkdirSync(repo);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo, env: GIT_ENV });
+    commit({ "src/partial.ts": [
+      "import { HttpClient } from '@angular/common/http';",
+      "declare const BASE: string;",
+      `export class Api { constructor(private http: HttpClient) {} load(id: string) { return this.http.get(${url}) } }`,
+    ].join("\n") });
+    const found = await trace("src/partial.ts:Api.load");
+    assert.equal(found.status, "partial", name);
+    assert.equal(effectsOf(found.value).length, 0, name);
+    assert.ok(found.cuts?.some((cut) => cut.reason === "effect-unplaced"), name);
+  }
 });
 
 test("an immediately invoked function contributes its request while a stored callback stays deferred", async () => {
@@ -709,7 +722,7 @@ test("a callback no listed factory takes, or a factory the file does not import 
   }
 });
 
-test("an unresolved request inside a listed combinator is owned by the declaration and marked deferred", async () => {
+test("a request with an undecided base inside a listed combinator is owned by the declaration and a deferred effect", async () => {
   commit({
     "package.json": RXJS_PACKAGE,
     "src/partial.ts": [
@@ -721,8 +734,8 @@ test("an unresolved request inside a listed combinator is owned by the declarati
   });
   const found = await trace("src/partial.ts:Api.load");
   const requests = found.value.steps.flatMap((step) => step.unresolvedEffects ?? []);
-  assert.deepEqual(requests.map((request) => [request.stated?.method, request.deferred ?? false]), [["GET", true]]);
-  assert.deepEqual(effectsOf(found.value), []);
+  assert.deepEqual(requests, []);
+  assert.deepEqual(requestsOf(found.value), [["load", "GET", "/orders/{}", true]]);
 });
 
 test("a request a wrapper defers is a deferred effect of the caller that runs the wrapper", async () => {

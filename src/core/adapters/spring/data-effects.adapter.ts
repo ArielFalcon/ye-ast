@@ -9,10 +9,10 @@ import { annotationAt, resolve } from "./java-declared-types.ts";
 import { enclosingType, withJavaSources } from "./java-project.ts";
 import { argumentsOf, typeNameOf } from "./java-members.ts";
 import { invocationsOf, type Invocation } from "./java-invocations.ts";
-import { callKey, hasVarargs } from "./java-receiver-methods.ts";
+import { callKey, createResolver, hasVarargs } from "./java-receiver-methods.ts";
 import { createJavaProject, readArgumentSignature, readSignature, sameSignature, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 import { mapperDeclarations, mapperEffect, mapperStatements, type MapperDeclarations, type MapperStatements } from "./mybatis-mappers.ts";
-import { DATA_CLIENTS, ENTITY_OPERATIONS, QUERY_CONFIGURATION, QUERY_FACTORIES, QUERY_OPERATIONS, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
+import { DATA_CLIENTS, ENTITY_OPERATIONS, QUERY_CONFIGURATION, QUERY_FACTORIES, MODIFYING_ANNOTATION, QUERY_ANNOTATION, QUERY_OPERATIONS, REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
 
 export function createJavaDataEffects(parser: JavaParser): DataEffectReader {
   return { placed: async (sources) => {
@@ -20,10 +20,11 @@ export function createJavaDataEffects(parser: JavaParser): DataEffectReader {
       const { files, unparsed } = parse(sources.filter(({ path }) => isJavaSource(path) && !isJvmTestFile(path)));
       const sites: PlacedDataEffect[] = unparsed.map(({ path, line }) => ({ site: { file: path, line, effect: undefined } }));
       const project = createJavaProject(files);
+      const resolver = createResolver(project);
       const mappers = { declarations: mapperDeclarations(project), statements: mapperStatements(sources) };
       const bindings = new Map(files.map((file) => [file, new Map(javaReceiverBindings(file.root, { includeUnproven: true }).map((binding) => [callKey(binding.line, binding.column, binding.member), binding]))]));
       for (const type of project.types) for (const call of invocationsOf(type)) {
-        const effect = effectAt(call, project, bindings.get(type.file)!, mappers);
+        const effect = effectAt(call, project, bindings.get(type.file)!, mappers, resolver);
         if (effect !== undefined) sites.push({ site: { file: type.file.path, line: call.node.startPosition.row + 1, effect: effect === false || "unplaced" in effect ? undefined : effect, ...(effect !== false && "unplaced" in effect ? { cause: effect.unplaced } : {}) }, column: call.node.startPosition.column });
       }
       return sites.sort(comparePlacement);
@@ -36,7 +37,7 @@ interface Mappers {
   statements: MapperStatements;
 }
 
-function effectAt(call: Invocation, project: JavaProject, bindings: ReadonlyMap<string, ReceiverBinding>, mappers: Mappers): DataEffect | { unplaced: UnplacedCause } | false | undefined {
+function effectAt(call: Invocation, project: JavaProject, bindings: ReadonlyMap<string, ReceiverBinding>, mappers: Mappers, resolver: ReturnType<typeof createResolver>): DataEffect | { unplaced: UnplacedCause } | false | undefined {
   const object = call.node.childForFieldName("object");
   const operation = call.node.childForFieldName("name")?.text ?? "";
   if (object === null) return undefined;
@@ -85,8 +86,9 @@ function effectAt(call: Invocation, project: JavaProject, bindings: ReadonlyMap<
     const named = project.hierarchy(type).types.flatMap((owner) => owner.methods.filter((method) => method.name === operation));
     let methods = named.filter((method) => method.parameterTypes.length === argumentsOf(call.node).length);
     if (named.some(hasVarargs)) return false;
-    const signatures = methods.map((method) => readSignature(method, project));
-    if (methods.length > 0) {
+    const unique = methods.length === 1 && !REPOSITORY_MEMBER_NAMES.has(operation) && resolver.isDataRepository(type);
+    if (methods.length > 0 && !unique) {
+      const signatures = methods.map((method) => readSignature(method, project));
       const argumentsSignature = readArgumentSignature(call.node, { file: call.type.file, type: call.type, at: call.node }, project);
       if (argumentsSignature === undefined || signatures.some((signature) => signature === undefined)) return false;
       const matching = methods.filter((_, index) => sameSignature(signatures[index]!, argumentsSignature));
@@ -97,7 +99,7 @@ function effectAt(call: Invocation, project: JavaProject, bindings: ReadonlyMap<
     if (methods.some((method) => method.hasBody)) return undefined;
     const annotations = queryAnnotations(methods, project);
     if (annotations.has(undefined)) return false;
-    let access = annotations.has("org.springframework.data.jpa.repository.Modifying") ? "write" as const : annotations.has("org.springframework.data.jpa.repository.Query") ? "read" as const : REPOSITORY_OPERATIONS.get(operation);
+    let access = annotations.has(MODIFYING_ANNOTATION) ? "write" as const : annotations.has(QUERY_ANNOTATION) ? "read" as const : REPOSITORY_OPERATIONS.get(operation);
     if (access === undefined && methods.length > 0) {
       if (/^(?:find|read|get|query|search|stream|count|exists)(?:\p{Lu}.*?)?(?:By|AllBy|First|Top)/u.test(operation)) access = "read";
       else if (/^(?:delete|remove)(?:\p{Lu}.*?)?(?:By|AllBy)/u.test(operation)) access = "write";

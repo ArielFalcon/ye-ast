@@ -1,6 +1,9 @@
 package app;
 class Use {
-  void run(Person person, Declared declared, FieldOnly only, NotLombok not, Restricted restricted, Immutable value, Order order, Plain plain, Pair pair) {
+  void run(Person person, Declared declared, FieldOnly only, NotLombok not, Restricted restricted, Immutable value, Order order, Plain plain, Pair pair, Levels levels, Conflicting conflicting, Unmodelled unmodelled, Fluent fluent, Child child, Redeclaring redeclaring, Leaf leaf, Under under, Libbed libbed, LibbedChild libbedChild, Unresolved unresolved, Wild wild, Implementing implementing, Wildcarded wildcarded) {
+    wildcarded.getName();
+    wildcarded.setName("n");
+    wildcarded.getSecret();
     person.getName();
     person.setName("n");
     person.isActive();
@@ -29,5 +32,42 @@ class Use {
     pair.owner().getName();
     pair.left();
     pair.right();
+    levels.getName();
+    levels.setName("n");
+    levels.setHidden("h");
+    levels.getSecret();
+    levels.setFrozen("f");
+    conflicting.getName();
+    unmodelled.getPlain();
+    unmodelled.getCached();
+    unmodelled.setMarked("m");
+    fluent.getName();
+    child.getBaseName();
+    child.setBaseName("b");
+    child.getOwn();
+    redeclaring.getShadowed();
+    redeclaring.getBaseName();
+    leaf.getBaseName();
+    under.getName();
+    SuperLeaf.builder().rootField("r").leafField("l").build().getRootField();
+    SuperLeaf.builder().defaulted("d");
+    SuperLeaf.builder().locked(2);
+    SuperLeaf.builder().version(2);
+    SuperLeaf.builder().kind("k");
+    SuperLeaf.builder().missing(1);
+    SuperUnmarked.builder().ownField("o");
+    SuperOrphan.builder().ownField("o");
+    Defaults.builder().label("l");
+    Defaults.builder().kind("k");
+    Defaults.builder().version(1);
+    Singles.builder().items(null);
+    libbed.getTitle();
+    libbed.setTitle("t");
+    libbed.getParentOnly();
+    libbedChild.getTitle();
+    Libbuilt.builder().title("t");
+    unresolved.getTitle();
+    wild.getTitle();
+    implementing.getTitle();
   }
 }

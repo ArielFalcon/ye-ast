@@ -8,6 +8,7 @@ import type { DeclaredType, DispatchSite, DispatchTargets, ImportOriginSite, Rec
 import type { TraceBudget, TraceRequest, TraceTarget } from "../../ports/trace-queries.port.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import type { CallSite, PlacedCallSite } from "../../domain/topology/call-site.ts";
+import type { RequestUrlPart } from "../../domain/topology/request-url.ts";
 import type { SourceSpan } from "../../domain/shared/owning-body.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
@@ -1433,6 +1434,56 @@ test("a selected issuing boundary does not hide an unreachable trace origin", as
   const missing = await factOf({ ...options, unresolved: [], syntaxCalls: { [A]: [{ kind: "calls", line: 9, column: 14, name: "post", callee: "post", owners: [] }] } });
   assert.deepEqual(effectPaths(missing), []);
   assert.deepEqual(effectCuts(missing).map(([, at]) => (at as readonly string[])[0]), [`${A}:9 http effect`]);
+});
+
+/** `run` calls `post`, the body of a wrapper whose own request site (line 13) leaves its destination to the caller; each caller's propagated site states its route (one caller per route, on lines 9, 10, ...). */
+function wrapperFixture(...routes: (readonly RequestUrlPart[][])[]): Options {
+  const nodes = [PLACED_API, placedNode("run", "method", 9, 1, 9, 60), placedNode("post", "method", 12, 1, 14, 2)];
+  const edges = [{ from: "Api", to: "run", kind: "contains" }, { from: "Api", to: "post", kind: "contains" }];
+  const baseless: CallSite["target"] = { status: "unknown", reason: "unresolved", evidence: [{ path: A, line: 13, column: 5 }] };
+  const caller = (line: number): PlacedCallSite => ({
+    site: site(line, { target: baseless, stated: { method: "GET", expressions: routes[line - 9]! }, diagnostic: { cause: "destination-undecidable" } }),
+    column: 13,
+    origins: [{ kind: "body", file: A, line: 12, column: 1 }, { kind: "leaf", file: A, line: 13, column: 4 }],
+  });
+  const inner: PlacedCallSite = { site: site(13, { symbol: "Api.post", target: baseless, diagnostic: { cause: "destination-undecidable" } }), column: 4 };
+  const lines = routes.map((_, index) => 9 + index);
+  return {
+    nodes: [...nodes, ...lines.slice(1).map((line) => placedNode(`run${line}`, "method", line, 1, line, 60))],
+    edges: [...edges, ...lines.slice(1).map((line) => ({ from: "Api", to: `run${line}`, kind: "contains" }))],
+    sources: [{ path: A, content: `${" ".repeat(80)}\n`.repeat(30) }],
+    syntaxCalls: { [A]: [...lines.map((line) => ({ kind: "calls" as const, line, column: 14, name: "this.post", callee: "post", owners: [] })), { kind: "calls" as const, line: 13, column: 5, name: "send", callee: "send", owners: [] }] },
+    unresolved: [...lines.map((line) => ({ from: line === 9 ? "run" : `run${line}`, name: "this.post", kind: "calls", file: A, line, column: 13 })), { from: "post", name: "send", kind: "calls", file: A, line: 13, column: 4 }],
+    placedSites: [...lines.map(caller), inner],
+  };
+}
+const BASE: RequestUrlPart = { kind: "unknown", cause: "destination-undecidable", evidence: [{ path: A, line: 13 }] };
+
+test("a request a wrapper issues for its caller is a placed effect at the caller that states its route, and the wrapper body adds no cut for it", async () => {
+  const fact = await factOf(wrapperFixture([[BASE, { kind: "text", text: "/orders/" }, { kind: "runtime" }]]));
+  assert.deepEqual(valueOf(fact).steps.flatMap((step) => (step.effects ?? []).map((effect) => [step.symbol, effect])), [["run", { kind: "http", line: 9, column: 14, target: { method: "GET", path: "/orders/{}" }, authority: "undecided" }]]);
+  assert.deepEqual(effectCuts(fact), []);
+});
+
+test("a wrapper request whose route the caller does not state, or states in several, stays an unplaced effect", async () => {
+  const unstated = await factOf(wrapperFixture([[BASE, { kind: "runtime" }]]));
+  assert.deepEqual(valueOf(unstated).steps.flatMap((step) => step.effects ?? []), []);
+  assert.deepEqual(effectCuts(unstated).map(([, at]) => (at as readonly string[])[0]).sort(), [`${A}:13 http effect`, `${A}:9 http effect`]);
+  const alternatives = await factOf(wrapperFixture([[BASE, { kind: "text", text: "/a" }], [BASE, { kind: "text", text: "/b" }]]));
+  assert.deepEqual(valueOf(alternatives).steps.flatMap((step) => step.effects ?? []), []);
+  assert.deepEqual(effectCuts(alternatives).map(([, at]) => (at as readonly string[])[0]).sort(), [`${A}:13 http effect`, `${A}:9 http effect`]);
+});
+
+test("a direct request site that states its route after an undecided base is the same placed effect as a propagated one", async () => {
+  const direct = wrapperFixture([[BASE, { kind: "text", text: "/orders" }]]);
+  const fact = await factOf({ ...direct, placedSites: direct.placedSites!.map((placed) => ({ site: placed.site, column: placed.column! })) });
+  assert.deepEqual(effectPaths(fact), [["run", "/orders"]]);
+});
+
+test("a caller that states no route keeps its own cut while another caller of the same wrapper is placed", async () => {
+  const fact = await factOf(wrapperFixture([[BASE, { kind: "text", text: "/orders" }]], [[BASE, { kind: "runtime" }]]), [{ file: A, symbol: "run" }, { file: A, symbol: "run10" }]);
+  assert.deepEqual(effectPaths(fact), [["run", "/orders"]]);
+  assert.deepEqual(effectCuts(fact).map(([, at]) => (at as readonly string[])[0]), [`${A}:10 http effect`]);
 });
 
 test("a call that may reach a request is a request-possible cut with its cause and place, while a stated or direct unknown site keeps the effect cut", async () => {

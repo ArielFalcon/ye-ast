@@ -4,6 +4,7 @@
 - Decision source: Owner, 2026-11-13 (D3), choosing how the library-call proof of ADR-0044 decision 5 treats the supertypes the snapshot does not hold: "Assume, scoped (Recommended)". Translated: assume it, with the scope stated (the recommended option). The need behind it is the standing rule that backend-to-backend relations must resolve correctly (ADR-0062).
 - Decision source, amendment: Owner, 2026-11-13 (D4), extending the assumption to the names a file binds through a single-type import: "Extend to explicit imports (Recommended)". Translated: extend it to explicit imports (the recommended option).
 - Related: [ADR-0044](0044-one-implementation-closure-with-scoped-vetoes.md) decision 5, [ADR-0062](0062-java-names-and-receivers-resolve-under-the-repository-compiles-assumption.md), [ADR-0063](0063-a-jdk-the-host-declares-is-the-library-signature-source.md)
+- Amended by: [ADR-0070](0070-a-spring-data-repository-call-is-a-proxy-supplied-member-and-a-vocabulary-name-an-on-demand-import-leaves-unsettled-is-read-from-its-package.md) (a closed-vocabulary name an on-demand import leaves unsettled is read from its package)
 
 **In short:** where a Java file's simple name is bound by a single-type import, or resolves to a `java.*` type by an on-demand import or `java.lang`, a supertype outside the repository is assumed to declare no member type of that name and no field of that name. The assumption serves only the library-call proof of ADR-0044 decision 5, and only for names the declared JDK holds or a single-type import binds.
 

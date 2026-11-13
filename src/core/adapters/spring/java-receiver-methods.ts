@@ -11,12 +11,14 @@ import { enclosingType, heldJavaProject, thisType, withJavaSources, type Unparse
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
+import { REPOSITORY_FRAGMENTS, REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
 import { createJavaProject, MEMBERLESS_PLATFORM_INTERFACES, readArgumentSignature, readSignature, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Signature, type TypeDecl } from "./java-symbols.ts";
 
 const SLOT = "java-receiver-methods";
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
 const GENERATED: ReceiverMethod = { kind: "generated" };
+const PROXIED: GeneratedMember = { kind: "proxied" };
 const LOMBOK_CONFIG = /(^|\/)lombok\.config$/;
 const UNKNOWN_DECLARATIONS: ImplementedDeclarations = { kind: "unknown" };
 /** Methods every class inherits from `Object` (JLS 4.3.2): a call of one of these names may resolve to `Object`'s. */
@@ -236,10 +238,25 @@ export function createResolver(project: JavaProject, generated = false) {
    * interface that declares none and a generated interface of operations, which is open to nothing a class of the
    * hierarchy declares (ADR-0062).
    */
+  const unsettledGaps = (above: ReturnType<JavaProject["hierarchy"]>) => above.gaps.filter((gap) => !memberless.has(clauseKey(gap.file, gap.node)));
   const hierarchyOpen = (above: ReturnType<JavaProject["hierarchy"]>, declared: readonly MethodDecl[]): boolean => {
-    const unsettled = above.gaps.filter((gap) => !memberless.has(clauseKey(gap.file, gap.node)));
+    const unsettled = unsettledGaps(above);
     return unsettled.some((gap) => !(gap.kind === "missing" && gap.isInterface && project.isGeneratedInterface(gap.name, gap.file))) || (unsettled.length > 0 && declared.some((method) => method.owner.kind !== "class"));
   };
+  /** Whether a supertype gap is a superclass the sources do not declare whose name resolves to one known outside type, by import or qualified name. */
+  const isOutsideSuperclass = (gap: ReturnType<JavaProject["hierarchy"]>["gaps"][number]): boolean => {
+    if (gap.isInterface || gap.kind !== "missing") return false;
+    const owner = enclosingType(gap.node, gap.file, project);
+    const found = resolve(gap.node, gap.file, project, owner === undefined ? undefined : enclosingType(owner.node.parent ?? owner.node, gap.file, project), gap.node, true);
+    return found?.kind === "library" || found?.kind === "platform";
+  };
+  /**
+   * Whether the hierarchy is open only through superclasses outside the sources that resolve to a known type. A member a
+   * class of the sources generates for its own field is declared in that class, so such a supertype can add only an
+   * overload whose body is outside the repository.
+   */
+  const hierarchyOpenOnlyOutsideSuperclasses = (above: ReturnType<JavaProject["hierarchy"]>): boolean =>
+    unsettledGaps(above).every((gap) => (gap.kind === "missing" && gap.isInterface && project.isGeneratedInterface(gap.name, gap.file)) || isOutsideSuperclass(gap));
   const declaredHierarchy = (type: TypeDecl) => {
     let known = hierarchies.get(type);
     if (known === undefined) {
@@ -298,7 +315,10 @@ export function createResolver(project: JavaProject, generated = false) {
       const made = generated ? builderMember(held.type, project, name, argumentCount(invocation)) : undefined;
       return made === undefined ? undefined : { generated: made };
     }
-    const offered = memberOf(held.type, name, invocation, source.file, enclosingType(invocation, source.file, project));
+    const caller = enclosingType(invocation, source.file, project);
+    const supplied = held.bound || held.typeName ? undefined : repositoryMemberOf(held.type, name, invocation, caller);
+    if (supplied !== undefined) return "method" in supplied ? { method: supplied.method, bound: false } : { generated: PROXIED };
+    const offered = memberOf(held.type, name, invocation, source.file, caller);
     if (offered === undefined) {
       const made = generated && !held.bound ? generatedOf(held, name, argumentCount(invocation)) : undefined;
       return made === undefined ? undefined : { generated: made };
@@ -307,10 +327,44 @@ export function createResolver(project: JavaProject, generated = false) {
     return held.typeName && !offered.method.modifiers.includes("static") ? undefined : { method: offered.method, bound: held.bound };
   };
 
+  /**
+   * The hierarchy of an interface whose every supertype outside the sources is a Spring Data repository interface of the
+   * closed vocabulary (ADR-0070): its members are the ones the sources state and the vocabulary's operations.
+   */
+  const dataRepositoryHierarchy = (type: TypeDecl): ReturnType<JavaProject["hierarchy"]> | undefined => {
+    if (type.kind !== "interface") return undefined;
+    const above = declaredHierarchy(type);
+    const outside = unsettledGaps(above);
+    const vocabulary = outside.length > 0 && outside.every((gap) => {
+      const owner = enclosingType(gap.node, gap.file, project);
+      const found = resolve(gap.node, gap.file, project, owner?.outer, gap.node);
+      return found?.kind === "platform" && (REPOSITORY_TYPES.has(found.fqn) || REPOSITORY_FRAGMENTS.has(found.fqn));
+    });
+    return vocabulary ? above : undefined;
+  };
+
+  /**
+   * What a call on a repository interface of the vocabulary names: a body-less method the repository hierarchy declares,
+   * or an operation of the vocabulary nothing in it declares, is supplied by the Spring proxy; a method with a body is its
+   * own. An operation name the repository redeclares, overloads no signature settles and members the hierarchy does not
+   * state name nothing.
+   */
+  const repositoryMemberOf = (type: TypeDecl, name: string, invocation: Node, caller: TypeDecl | undefined): { method: MethodDecl } | GeneratedMember | undefined => {
+    const above = dataRepositoryHierarchy(type);
+    if (above === undefined || OBJECT_METHODS.has(name)) return undefined;
+    const named = above.types.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
+    if (named.length === 0) return REPOSITORY_OPERATIONS.has(name) ? PROXIED : undefined;
+    if (REPOSITORY_MEMBER_NAMES.has(name) || named.some(hasVarargs)) return undefined;
+    const candidates = named.filter((method) => method.parameterTypes.length === argumentCount(invocation));
+    const chosen = candidates.length === 1 ? candidates[0] : caller === undefined ? undefined : exactCandidate(candidates, invocation, caller);
+    if (chosen === undefined) return undefined;
+    return chosen.hasBody ? { method: chosen } : PROXIED;
+  };
+
   /** A member that a record or a Lombok annotation adds, when no type of the closed hierarchy declares the name and a static call names a static member. */
   const generatedOf = (held: { type: TypeDecl; typeName: boolean }, name: string, arity: number): GeneratedMember | undefined => {
     const above = declaredHierarchy(held.type);
-    if (OBJECT_METHODS.has(name) || hierarchyOpen(above, []) || above.types.some((owner) => owner.methods.some((method) => method.name.toLowerCase() === name.toLowerCase()))) return undefined;
+    if (OBJECT_METHODS.has(name) || (hierarchyOpen(above, []) && !hierarchyOpenOnlyOutsideSuperclasses(above)) || above.types.some((owner) => owner.methods.some((method) => method.name.toLowerCase() === name.toLowerCase()))) return undefined;
     const made = generatedMember(held.type, project, name, arity);
     return made === undefined || (held.typeName && made.kind !== "builder") ? undefined : made;
   };
@@ -443,6 +497,8 @@ export function createResolver(project: JavaProject, generated = false) {
   return {
     constructorOf,
     referenceOf,
+    /** Whether every supertype of the interface outside the sources is a Spring Data repository interface of the closed vocabulary. */
+    isDataRepository: (type: TypeDecl): boolean => dataRepositoryHierarchy(type) !== undefined,
     hasDeclaredReceiver: (invocation: Node, source: ReceiverSource): boolean => receiverOf(invocation, source) !== undefined,
     /** The method the call names through its declared receiver and one settled signature; dispatch decides its body separately. */
     methodOf: methodNamed,
