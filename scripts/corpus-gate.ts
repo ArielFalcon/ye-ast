@@ -2,8 +2,8 @@
  * The corpus gate (ADR-0039). Runs the queries a corpus manifest declares through the CLI of a base and a candidate
  * engine revision, each from its own clean worktree over fresh clones of the corpus, compares every answer, and fails
  * when a difference is not one the change declared with `--expect`. The report carries the cut ledger of each side and
- * their difference (RFC-0031), and the value ledger: the entries the facts hold by collection, with the entries gained
- * and lost; it fails the run only for a reason declared with `--expect-cuts` that did not move as declared. A pass is recorded where the `.githooks` reference hook looks for it. Nothing is written to the corpus
+ * their difference (RFC-0031), and the value ledger: the entries the facts hold by collection, with the entries gained,
+ * lost and changed; it fails the run only for a reason declared with `--expect-cuts` that did not move as declared. A pass is recorded where the `.githooks` reference hook looks for it. Nothing is written to the corpus
  * repositories.
  *
  *   node --import tsx scripts/corpus-gate.ts --corpus <manifest> [--base <rev>] [--candidate <rev>]
@@ -516,7 +516,7 @@ function readable(body: ReportBody): string {
     "",
     `Base ${run(body.base)}, candidate ${run(body.candidate)}. Answers ${body.counts.answers}, identical ${body.counts.identical}, differing ${body.counts.differing}. Expected: ${body.expectations.length === 0 ? "none" : body.expectations.map((expectation) => `${expectation.family}:${expectation.direction}`).join(", ")}. Expected cuts: ${body.cutExpectations.length === 0 ? "none" : body.cutExpectations.map(cutExpectationText).join(", ")}.`,
     "",
-    `Ledgers: cuts ${body.ledger.difference.totals.base} → ${body.ledger.difference.totals.candidate}; entries ${body.values.base.entries} → ${body.values.candidate.entries}, gained ${body.values.difference.totals.gained}, lost ${body.values.difference.totals.lost}.`,
+    `Ledgers: cuts ${body.ledger.difference.totals.base} → ${body.ledger.difference.totals.candidate}; entries ${body.values.base.entries} → ${body.values.candidate.entries}, gained ${body.values.difference.totals.gained}, lost ${body.values.difference.totals.lost}, changed ${body.values.difference.totals.changed}.`,
     "",
     "| Family | Answers | Differing | Added | Removed | Changed |",
     "|---|---|---|---|---|---|",
@@ -564,13 +564,13 @@ function readableValues(values: ReportBody["values"]): string[] {
   const allRows = [...new Set([...baseRows.keys(), ...candidateRows.keys()])].sort();
   return [
     "", "## Value ledger", "",
-    "Entries the facts hold, by collection: an array reached from the fact's value through object keys alone, the arrays the per-answer counters read, so no family's shape is assumed. An entry's language is the one of the shallowest `file` it states. An answer that exited non-zero or printed no fact with a value holds none.", "",
+    "Entries the facts hold, by collection: an array reached through object keys alone from the fact's value or from an entry of another collection (`files/importers`), so no family's shape is assumed; an array of numbers inside an entry is part of that entry. An entry's language is the one of the shallowest `file` it states. An answer that exited non-zero or printed no fact with a value holds none.", "",
     "| Family | Language | Collection | Base | Candidate |", "|---|---|---|---|---|",
     ...allRows.map((cells) => `${cells} ${baseRows.get(cells) ?? "—"} | ${candidateRows.get(cells) ?? "—"} |`),
-    "", `### Difference: entries gained ${values.difference.totals.gained}, lost ${values.difference.totals.lost}`, "",
-    "An entry is identified as the per-answer comparison identifies it: a modified entry is one lost and one gained. Gained and lost are never netted.", "",
-    "| Family | Language | Collection | Gained | Lost |", "|---|---|---|---|---|",
-    ...values.difference.rows.map((row) => `${keyCells(row)} ${row.gained} | ${row.lost} |`),
+    "", `### Difference: entries gained ${values.difference.totals.gained}, lost ${values.difference.totals.lost}, changed ${values.difference.totals.changed}`, "",
+    "An entry is identified by its place (the file, path, symbol or name it states, with its kind, line and the call that reached it), or by its whole content when it states none, and a nested entry together with the entry that holds it; entries sharing an identity are paired in order. Gained and lost are identities one side alone holds, changed one both hold with different content; the three are never netted.", "",
+    "| Family | Language | Collection | Gained | Lost | Changed |", "|---|---|---|---|---|---|",
+    ...values.difference.rows.map((row) => `${keyCells(row)} ${row.gained} | ${row.lost} | ${row.changed} |`),
   ];
 }
 

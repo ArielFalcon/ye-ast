@@ -54,8 +54,14 @@ const baseValue = {
   readingPlan: { ranges: [{ file: "src/a.ts", start: 1 }] },
 };
 const gainedSymbol = { file: "src/c.ts", symbol: "c" };
+const importedA = { file: "src/a.ts", lines: [1, 2], importers: ["src/b.ts"] };
+const importedC = { file: "src/c.ts", importers: ["src/b.ts"] };
+const importersValue = {
+  files: [importedA, importedC],
+  effects: [{ kind: "data", line: 3, operation: "save" }],
+};
 
-interface ValueRow { family: string; language: string; collection: string; entries?: number; gained?: number; lost?: number }
+interface ValueRow { family: string; language: string; collection: string; entries?: number; gained?: number; lost?: number; changed?: number }
 
 describe("corpus gate", () => {
   let root: string;
@@ -65,8 +71,9 @@ describe("corpus gate", () => {
   let parallelManifest: string;
   let workspaceManifest: string;
   let store: string;
-  const commits: Record<"base" | "same" | "adds" | "lockfile" | "cuts" | "unknownCut" | "values" | "valuesSame" | "valuesGained" | "valuesSwapped" | "valuesUnread", string> = {
-    base: "", same: "", adds: "", lockfile: "", cuts: "", unknownCut: "", values: "", valuesSame: "", valuesGained: "", valuesSwapped: "", valuesUnread: "",
+  const commits: Record<"base" | "same" | "adds" | "lockfile" | "cuts" | "unknownCut" | "values" | "valuesSame" | "valuesGained" | "valuesChanged" | "valuesUnread" | "importers" | "importerGained" | "importerDropped" | "effectChanged", string> = {
+    base: "", same: "", adds: "", lockfile: "", cuts: "", unknownCut: "", values: "", valuesSame: "", valuesGained: "", valuesChanged: "", valuesUnread: "",
+    importers: "", importerGained: "", importerDropped: "", effectChanged: "",
   };
 
   before(() => {
@@ -102,10 +109,18 @@ describe("corpus gate", () => {
     git(engine, "checkout", "--quiet", "--detach", commits.values);
     commits.valuesGained = commit(engine, { "main.ts": withValue({ ...baseValue, symbols: [...baseValue.symbols, gainedSymbol], entrypoints: [...baseValue.entrypoints, { kind: "http", handler: { file: "src/c.ts" } }] }) }, "values gained");
     git(engine, "checkout", "--quiet", "--detach", commits.values);
-    commits.valuesSwapped = commit(engine, { "main.ts": withValue({ ...baseValue, symbols: [{ ...baseValue.symbols[0], depth: 2 }, baseValue.symbols[1], gainedSymbol] }) }, "values swapped");
+    const reachedAnew = { ...baseValue.symbols[0], depth: 2, confidence: 0.5, via: { file: "src/c.ts" } };
+    commits.valuesChanged = commit(engine, { "main.ts": withValue({ ...baseValue, symbols: [reachedAnew, baseValue.symbols[1], gainedSymbol, { file: "src/d.ts", symbol: "d" }] }) }, "values changed");
     git(engine, "checkout", "--quiet", "--detach", commits.values);
     const unread = withValue(baseValue).replace("console.log(JSON.stringify({ status:", "if (trusted) { console.log(\"not json\"); process.exit(0); } process.exitCode = 1; console.log(JSON.stringify({ status:");
     commits.valuesUnread = commit(engine, { "main.ts": unread }, "values unread");
+    git(engine, "checkout", "--quiet", "--detach", commits.base);
+    commits.importers = commit(engine, { "main.ts": withValue(importersValue) }, "importers");
+    commits.importerGained = commit(engine, { "main.ts": withValue({ ...importersValue, files: [{ ...importedA, importers: [...importedA.importers, "src/d.ts"] }, importedC] }) }, "importer gained");
+    git(engine, "checkout", "--quiet", "--detach", commits.importers);
+    commits.importerDropped = commit(engine, { "main.ts": withValue({ ...importersValue, files: [importedA, { ...importedC, importers: [] }] }) }, "importer dropped");
+    git(engine, "checkout", "--quiet", "--detach", commits.importers);
+    commits.effectChanged = commit(engine, { "main.ts": withValue({ ...importersValue, effects: [{ ...importersValue.effects[0], operation: "load" }] }) }, "effect changed");
     git(engine, "checkout", "--quiet", "--detach", commits.base);
     store = join(engine, ".git", "corpus-gate");
 
@@ -200,42 +215,59 @@ describe("corpus gate", () => {
     assert.equal(existsSync(passMarkerPath(join(engine, ".git"), tree(commits.base), tree(commits.cuts))), false);
   });
 
-  const valueRows = (rows: ValueRow[], ...fields: ("entries" | "gained" | "lost")[]) => rows.map((row) => [row.family, row.language, row.collection, ...fields.map((field) => row[field])]);
+  const valueRows = (rows: ValueRow[], ...fields: ("entries" | "gained" | "lost" | "changed")[]) => rows.map((row) => [row.family, row.language, row.collection, ...fields.map((field) => row[field])]);
 
   it("reports the entries a candidate gained while every cut count stayed equal, by family, language and collection, sorted", async () => {
     const { code, report, markdown } = await gate("--base", commits.values, "--candidate", commits.valuesGained, "--expect", "files:+");
     assert.equal(code, EXIT.pass);
     assert.deepEqual(report.ledger.difference.totals, { base: 0, candidate: 0 });
-    assert.deepEqual(valueRows(report.values.difference.rows, "gained", "lost"), [["files", "typescript", "entrypoints", 2, 0], ["files", "typescript", "symbols", 2, 0]]);
+    assert.deepEqual(valueRows(report.values.difference.rows, "gained", "lost", "changed"), [["files", "typescript", "entrypoints", 2, 0, 0], ["files", "typescript", "symbols", 2, 0, 0]]);
     assert.deepEqual(valueRows(report.values.base.rows, "entries"), [
       ["files", "java", "symbols", 2],
       ["files", "typescript", "entrypoints", 2],
       ["files", "typescript", "readingPlan/ranges", 2],
       ["files", "typescript", "symbols", 2],
     ]);
-    assert.deepEqual([report.values.base.entries, report.values.candidate.entries, report.values.difference.totals], [8, 12, { gained: 4, lost: 0 }]);
-    assert.ok(markdown?.includes("| files | typescript | symbols | 2 | 0 |"));
+    assert.deepEqual([report.values.base.entries, report.values.candidate.entries, report.values.difference.totals], [8, 12, { gained: 4, lost: 0, changed: 0 }]);
+    assert.ok(markdown?.includes("| files | typescript | symbols | 2 | 0 | 0 |"));
     const again = await gate("--base", commits.values, "--candidate", commits.valuesGained, "--expect", "files:+");
     assert.equal(JSON.stringify(again.report.values), JSON.stringify(report.values));
   });
 
-  it("reports the entries a candidate lost apart from those it gained, a modified entry as one of each", async () => {
-    const { report } = await gate("--base", commits.values, "--candidate", commits.valuesSwapped, "--expect", "files:±");
-    assert.deepEqual(valueRows(report.values.difference.rows, "gained", "lost"), [["files", "typescript", "symbols", 4, 2]]);
-    assert.deepEqual(report.values.difference.totals, { gained: 4, lost: 2 });
+  it("identifies an entry by its place, so one reached at another depth, confidence and via is changed, neither lost nor gained", async () => {
+    const { report, markdown } = await gate("--base", commits.values, "--candidate", commits.valuesChanged, "--expect", "files:±");
+    assert.deepEqual(valueRows(report.values.difference.rows, "gained", "lost", "changed"), [["files", "typescript", "symbols", 4, 0, 2]]);
+    assert.deepEqual([report.values.base.entries, report.values.candidate.entries, report.values.difference.totals], [8, 12, { gained: 4, lost: 0, changed: 2 }]);
+    assert.ok(markdown?.includes("entries 8 → 12, gained 4, lost 0, changed 2.\n"));
+  });
+
+  it("counts an importer a file gained in the nested collection, the file as changed, and no loss anywhere", async () => {
+    const { report } = await gate("--base", commits.importers, "--candidate", commits.importerGained, "--expect", "files:±");
+    assert.deepEqual(valueRows(report.values.difference.rows, "gained", "lost", "changed"), [["files", "typescript", "files", 0, 0, 2], ["files", "typescript", "files/importers", 2, 0, 0]]);
+  });
+
+  it("identifies a nested entry with the entry that holds it, so the same importer under two files is two entries", async () => {
+    const { report } = await gate("--base", commits.importers, "--candidate", commits.importerDropped, "--expect", "files:±");
+    assert.deepEqual(valueRows(report.values.base.rows, "entries"), [["files", "none", "effects", 2], ["files", "typescript", "files", 4], ["files", "typescript", "files/importers", 4]]);
+    assert.deepEqual(valueRows(report.values.difference.rows, "gained", "lost", "changed"), [["files", "typescript", "files", 0, 0, 2], ["files", "typescript", "files/importers", 0, 2, 0]]);
+  });
+
+  it("identifies an entry that states no place by its whole content, so a modified one is one lost and one gained", async () => {
+    const { report } = await gate("--base", commits.importers, "--candidate", commits.effectChanged, "--expect", "files:±");
+    assert.deepEqual(valueRows(report.values.difference.rows, "gained", "lost", "changed"), [["files", "none", "effects", 2, 2, 0]]);
   });
 
   it("counts no entry of an answer that exited non-zero or printed no JSON, and still writes the report", async () => {
     const { code, report } = await gate("--base", commits.values, "--candidate", commits.valuesUnread, "--expect", "files:±");
     assert.equal(code, EXIT.fail);
     assert.deepEqual([report.values.candidate.rows, report.values.candidate.entries], [[], 0]);
-    assert.deepEqual(report.values.difference.totals, { gained: 0, lost: 8 });
+    assert.deepEqual(report.values.difference.totals, { gained: 0, lost: 8, changed: 0 });
   });
 
   it("gives an empty value difference to sides whose answers hold the same entries", async () => {
     const { report } = await gate("--base", commits.values, "--candidate", commits.valuesSame);
     assert.equal(report.values.candidate.entries, 8);
-    assert.deepEqual(report.values.difference, { rows: [], totals: { gained: 0, lost: 0 } });
+    assert.deepEqual(report.values.difference, { rows: [], totals: { gained: 0, lost: 0, changed: 0 } });
   });
 
   it("faults on a cut reason outside the facts contract before writing a report", async () => {

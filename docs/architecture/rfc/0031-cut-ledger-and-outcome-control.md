@@ -52,8 +52,12 @@ Rules:
 4. The gate prints the ledger of the base, of the candidate, and their difference. The report stays outside the
    repository with the gate's other reports.
    Beside it, a value ledger counts the entries the facts hold by family, language and collection (each array reached
-   from the fact's value through object keys alone), with the entries gained and lost, never netted, as the per-answer
-   comparison identifies them; the report's summary states cuts base → candidate and entries gained and lost.
+   through object keys alone from the fact's value or from an entry of another collection, such as `files/importers`;
+   an array of numbers inside an entry is part of that entry), with the entries gained, lost and changed, never netted.
+   An entry is identified by its place (the file, path, symbol or name it states, with its kind, line and the call that
+   reached it), or by its whole content when it states none, a nested entry together with the entry that holds it, and
+   entries sharing an identity pair in order: an identity one side alone holds is gained or lost, one both hold with
+   different content is changed. The report's summary states cuts base → candidate and entries gained, lost and changed.
 5. The ledger sets no threshold. It is a report a reviewer reads, and an expectation the author may declare (open
    question 1). No branch of the engine reads it.
 
