@@ -2,8 +2,8 @@
  * The corpus gate (ADR-0039). Runs the queries a corpus manifest declares through the CLI of a base and a candidate
  * engine revision, each from its own clean worktree over fresh clones of the corpus, compares every answer, and fails
  * when a difference is not one the change declared with `--expect`. The report carries the cut ledger of each side and
- * their difference (RFC-0031); it fails the run only for a reason declared with `--expect-cuts` that did not move as
- * declared. A pass is recorded where the `.githooks` reference hook looks for it. Nothing is written to the corpus
+ * their difference (RFC-0031), and the value ledger: the entries the facts hold by collection, with the entries gained
+ * and lost; it fails the run only for a reason declared with `--expect-cuts` that did not move as declared. A pass is recorded where the `.githooks` reference hook looks for it. Nothing is written to the corpus
  * repositories.
  *
  *   node --import tsx scripts/corpus-gate.ts --corpus <manifest> [--base <rev>] [--candidate <rev>]
@@ -19,6 +19,7 @@ import { parseArgs } from "node:util";
 import { z } from "zod";
 import { type Answer, type AnswerComparison, type Expectation, ExpectationError, type Violation, compareAnswers, parseExpectations, violations } from "./corpus-gate-diff.ts";
 import { type CutExpectation, type CutLedger, CutLedgerError, type CutViolation, type LedgerDifference, type LedgerValues, cutLedger, cutViolations, ledgerDifference, parseCutExpectations } from "./corpus-gate-ledger.ts";
+import { type ValueDifference, type ValueKey, type ValueLedger, valueDifference, valueLedger } from "./corpus-gate-values.ts";
 
 export const EXIT = { pass: 0, fail: 1, usage: 2, fault: 3 } as const;
 
@@ -425,6 +426,7 @@ function report(context: Context, options: ReturnType<typeof parseOptions>, comm
     cutExpectations: options.cutExpectations,
     cutViolations: foundCuts,
     ledger: { ...ledgers, difference: ledgerDifference(ledgers.base, ledgers.candidate) },
+    values: { base: valueLedger(baseResult.answers), candidate: valueLedger(candidateResult.answers), difference: valueDifference(baseResult.answers, candidateResult.answers) },
   };
   const out = options.out ?? join(context.store, "reports", `${base.tree}-${candidate.tree}`);
   mkdirSync(out, { recursive: true });
@@ -504,6 +506,7 @@ interface ReportBody {
   cutExpectations: readonly CutExpectation[];
   cutViolations: readonly CutViolation[];
   ledger: { base: CutLedger; candidate: CutLedger; difference: LedgerDifference };
+  values: { base: ValueLedger; candidate: ValueLedger; difference: ValueDifference };
 }
 
 function readable(body: ReportBody): string {
@@ -513,6 +516,8 @@ function readable(body: ReportBody): string {
     "",
     `Base ${run(body.base)}, candidate ${run(body.candidate)}. Answers ${body.counts.answers}, identical ${body.counts.identical}, differing ${body.counts.differing}. Expected: ${body.expectations.length === 0 ? "none" : body.expectations.map((expectation) => `${expectation.family}:${expectation.direction}`).join(", ")}. Expected cuts: ${body.cutExpectations.length === 0 ? "none" : body.cutExpectations.map(cutExpectationText).join(", ")}.`,
     "",
+    `Ledgers: cuts ${body.ledger.difference.totals.base} → ${body.ledger.difference.totals.candidate}; entries ${body.values.base.entries} → ${body.values.candidate.entries}, gained ${body.values.difference.totals.gained}, lost ${body.values.difference.totals.lost}.`,
+    "",
     "| Family | Answers | Differing | Added | Removed | Changed |",
     "|---|---|---|---|---|---|",
     ...body.families.map((family) => `| ${family.family} | ${family.answers} | ${family.differing} | ${family.added} | ${family.removed} | ${family.changed} |`),
@@ -521,7 +526,7 @@ function readable(body: ReportBody): string {
     lines.push("", "## Violations", "", ...body.violations.map((violation) => `- ${violation.answer} (${violation.family}): ${violation.rule}`));
     lines.push(...body.cutViolations.map((violation) => `- cuts ${violation.reason} (${violation.direction}): ${violation.rule}, ${violation.base} → ${violation.candidate}`));
   }
-  lines.push(...readableLedger(body.ledger));
+  lines.push(...readableLedger(body.ledger), ...readableValues(body.values));
   for (const comparison of body.differing) {
     lines.push("", `## ${comparison.id} (${comparison.family})`, "", `exit ${comparison.base.exit} → ${comparison.candidate.exit}, status ${comparison.base.status} → ${comparison.candidate.status}, +${comparison.added} −${comparison.removed} ~${comparison.changed}`);
     lines.push(...comparison.counters.map((counter) => `- ${counter.path}: ${counter.base} → ${counter.candidate}`));
@@ -549,6 +554,23 @@ function readableLedger(ledger: ReportBody["ledger"]): string[] {
     ...allRows.map((cells) => `${cells} ${values(baseRows.get(cells) ?? null)} | ${values(candidateRows.get(cells) ?? null)} |`),
     "", `### Difference: cuts ${ledger.difference.totals.base} → ${ledger.difference.totals.candidate}`, "", ...table,
     ...ledger.difference.rows.map((row) => `${keyCells(row)} ${values(row.base)} | ${values(row.candidate)} |`),
+  ];
+}
+
+function readableValues(values: ReportBody["values"]): string[] {
+  const keyCells = (row: ValueKey) => `| ${row.family} | ${row.language} | ${row.collection} |`;
+  const baseRows = new Map(values.base.rows.map((row) => [keyCells(row), row.entries]));
+  const candidateRows = new Map(values.candidate.rows.map((row) => [keyCells(row), row.entries]));
+  const allRows = [...new Set([...baseRows.keys(), ...candidateRows.keys()])].sort();
+  return [
+    "", "## Value ledger", "",
+    "Entries the facts hold, by collection: an array reached from the fact's value through object keys alone, the arrays the per-answer counters read, so no family's shape is assumed. An entry's language is the one of the shallowest `file` it states. An answer that exited non-zero or printed no fact with a value holds none.", "",
+    "| Family | Language | Collection | Base | Candidate |", "|---|---|---|---|---|",
+    ...allRows.map((cells) => `${cells} ${baseRows.get(cells) ?? "—"} | ${candidateRows.get(cells) ?? "—"} |`),
+    "", `### Difference: entries gained ${values.difference.totals.gained}, lost ${values.difference.totals.lost}`, "",
+    "An entry is identified as the per-answer comparison identifies it: a modified entry is one lost and one gained. Gained and lost are never netted.", "",
+    "| Family | Language | Collection | Gained | Lost |", "|---|---|---|---|---|",
+    ...values.difference.rows.map((row) => `${keyCells(row)} ${row.gained} | ${row.lost} |`),
   ];
 }
 

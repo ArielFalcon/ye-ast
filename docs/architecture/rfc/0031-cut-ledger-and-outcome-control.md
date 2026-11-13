@@ -51,6 +51,9 @@ Rules:
    seam as the gate's diff.
 4. The gate prints the ledger of the base, of the candidate, and their difference. The report stays outside the
    repository with the gate's other reports.
+   Beside it, a value ledger counts the entries the facts hold by family, language and collection (each array reached
+   from the fact's value through object keys alone), with the entries gained and lost, never netted, as the per-answer
+   comparison identifies them; the report's summary states cuts base → candidate and entries gained and lost.
 5. The ledger sets no threshold. It is a report a reviewer reads, and an expectation the author may declare (open
    question 1). No branch of the engine reads it.
 

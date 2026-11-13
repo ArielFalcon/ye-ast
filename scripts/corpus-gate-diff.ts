@@ -132,10 +132,15 @@ function arrayDifferences(base: readonly unknown[], candidate: readonly unknown[
 }
 
 /** The length of every array reached through object keys alone (never inside an array), by its path. */
-export function arrayLengths(value: unknown, path = "", lengths = new Map<string, number>()): Map<string, number> {
-  if (Array.isArray(value)) lengths.set(path, value.length);
-  else if (isObject(value)) for (const key of Object.keys(value)) arrayLengths(value[key], `${path}/${key}`, lengths);
-  return lengths;
+export function arrayLengths(value: unknown): Map<string, number> {
+  return new Map([...arraysAt(value)].map(([path, array]) => [path, array.length]));
+}
+
+/** Every array reached through object keys alone (never inside an array), by its path. */
+export function arraysAt(value: unknown, path = "", found = new Map<string, readonly unknown[]>()): Map<string, readonly unknown[]> {
+  if (Array.isArray(value)) found.set(path, value);
+  else if (isObject(value)) for (const key of Object.keys(value)) arraysAt(value[key], `${path}/${key}`, found);
+  return found;
 }
 
 /** The status of the shallowest object that states one, reached through object keys alone. */
