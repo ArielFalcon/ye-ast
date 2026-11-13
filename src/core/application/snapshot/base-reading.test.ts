@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SnapshotRef } from "../../domain/shared/fact.ts";
 import type { CodeGraphReader, GraphNodeId } from "../../ports/code-graph.port.ts";
+import type { DeclaredCallable } from "../../ports/declared-member-names.port.ts";
 import type { ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { LibraryReading } from "../../ports/library-signatures.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
@@ -263,3 +264,38 @@ test("the Java pack receives the signatures of a declared JDK by path, and reads
   assert.equal(received[1]?.of("ms-orders/src/Use.java"), signatures);
   assert.equal(received[1]?.of("ms-users/src/Use.java"), undefined);
 });
+
+test("each structural overload set of one owner reads its one implementation, parsing only the files that repeat a name in one owner", async () => {
+  const JAVA = "src/main/java/p/Svc.java";
+  const callables: Record<string, readonly DeclaredCallable[]> = {
+    "src/client.ts": [callable("post", 2, false), callable("post", 3, false), callable("post", 4, true), callable("get", 7, true)],
+    "src/many.ts": [callable("save", 2, true), callable("save", 3, true)],
+    "src/none.ts": [callable("load", 2, false), callable("load", 3, false)],
+    "src/plain.ts": [callable("run", 2, true)],
+    [JAVA]: [callable("find", 2, false), callable("find", 3, true)],
+  };
+  const owned = (owner: string, file: string, members: readonly [string, string, number][]) => ({
+    nodes: [fakeNode(owner, "class", file, 1, 20), ...members.map(([id, name, line]) => fakeNode(id, "method", file, line, line, name))],
+    edges: members.map(([id]) => ({ from: owner, to: id, kind: "contains" })),
+  });
+  const parts = [
+    owned("Client", "src/client.ts", [["post2", "post", 2], ["post3", "post", 3], ["post4", "post", 4], ["get7", "get", 7]]),
+    owned("Many", "src/many.ts", [["save2", "save", 2], ["save3", "save", 3]]),
+    owned("None", "src/none.ts", [["load2", "load", 2], ["load3", "load", 3]]),
+    owned("Plain", "src/plain.ts", [["run2", "run", 2]]),
+    owned("Svc", JAVA, [["find2", "find", 2], ["find3", "find", 3]]),
+  ];
+  const parsed: string[] = [];
+  const memberNames = { memberNames: async (file: { path: string }) => (parsed.push(file.path), { ...NOTHING_DECLARED, callables: callables[file.path] ?? [] }) };
+  const readings = createBaseReadings({ relations: {} as RelationExtractor, memberNames });
+  const sources = Object.keys(callables).map((path) => ({ path, content: "" }));
+  const store = fakeCodeGraph(parts.flatMap(({ nodes }) => nodes), parts.flatMap(({ edges }) => edges));
+  const reading = readings.of({ tree: { export: { files: [], skipped: [] }, sources }, prepared: undefined, store, snapshot: SHA, request: { repo: "/work/shop" } });
+
+  assert.deepEqual([...(await reading.overloadImplementations())], [["post2", "post4"], ["post3", "post4"], ["post4", "post4"]]);
+  assert.deepEqual(parsed.sort(), ["src/client.ts", "src/many.ts", "src/none.ts"]);
+});
+
+function callable(name: string, start: number, body: boolean): DeclaredCallable {
+  return { name, start, nameLine: start, body, overridable: true };
+}

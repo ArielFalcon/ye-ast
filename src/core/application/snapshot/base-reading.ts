@@ -12,6 +12,7 @@ import type { SourceReading } from "../../domain/change/source-tokens.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { SourceTokens } from "../../ports/source-tokens.port.ts";
 import type { TypeBindings, TypeTarget } from "../../ports/type-bindings.port.ts";
+import { overloadImplementationsOf } from "../navigation/call-binder.ts";
 import { createDeclarationUses, unresolvedOncePerFile, type DeclarationUses, type UnresolvedIn } from "../navigation/declaration-uses.ts";
 import { createEdgeTargets, edgeKey, NOTHING_DECLARED, type EdgeTargets } from "../navigation/edge-targets.ts";
 import { implementedContractsOf } from "../navigation/implemented-contracts.ts";
@@ -151,6 +152,8 @@ export interface BaseReading {
   originCalls(targets: EdgeTargets): OriginCalls | undefined;
   /** The supertype declarations of each Java method of a class with a repository supertype, asked of the origins once (RFC-0024 U4); empty without origins. */
   implementedContracts(): Promise<ReadonlyMap<GraphNodeId, ImplementedDeclarations>>;
+  /** By method, the one implementation of its structural overload set (ADR-0046 decision 2), read once; empty without syntax. */
+  overloadImplementations(): Promise<ReadonlyMap<GraphNodeId, GraphNodeId>>;
   /** The stages the language pack of `path` declares absent (ADR-0045 decision 12); none where no pack reads it. */
   absentCapabilitiesOf(path: string): ReadonlySet<AbsentCapability>;
 }
@@ -273,6 +276,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       const jdks = once(() => jdksOf(source));
       const origins = once(() => deps.importOrigins?.(tree.sources, narrowing.originPaths, facts, source.hold, undefined, jdks()?.libraries));
       const implementedContracts = once(() => implementedContractsOf(store, tree.sources.map(({ path }) => path), navigation(), origins()));
+      const overloadImplementations = once(async (): Promise<ReadonlyMap<GraphNodeId, GraphNodeId>> => (syntaxOf === undefined ? new Map() : overloadImplementationsOf(store, tree.sources.map(({ path }) => path), navigation(), async (file) => (await syntaxOf(file)).callables)));
       const unresolved = once(() => unresolvedOf(store, tree));
       const relations = once(() => retainedRelations(deps.relations, prepared, tree, request, source.hold));
       const declarationUses = once(() => createDeclarationUses(store, navigation(), unresolvedIn));
@@ -336,6 +340,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
         declarationUses,
         originCalls: (targets) => (targets.bindings === undefined ? undefined : createOriginCalls(targets.bindings, throughOrigins)),
         implementedContracts,
+        overloadImplementations,
         absentCapabilitiesOf: (path) => deps.absentCapabilities?.(path) ?? NO_ABSENT,
         reverseCalls(targets) {
           const reconciled = reconciledCalls(targets, declarationUses());

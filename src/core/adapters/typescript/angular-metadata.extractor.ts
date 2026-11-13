@@ -627,8 +627,9 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
       for (const [name, members] of byName) {
         if (members.length > 1) redeclared.add(key(node, name));
         if (cannotProveMembers) continue;
-        const member = members[0];
-        if (members.length !== 1 || member === undefined || !ts.isMethodDeclaration(member) || member.body === undefined || isStatic(member) || (ts.canHaveDecorators(member) && (ts.getDecorators(member)?.length ?? 0) > 0)) continue;
+        const implementations = members.filter((one): one is ts.MethodDeclaration => ts.isMethodDeclaration(one) && one.body !== undefined);
+        const member = implementations.length === 1 && members.every(ts.isMethodDeclaration) ? implementations[0] : undefined;
+        if (member === undefined || members.some((one) => isStatic(one) || (ts.canHaveDecorators(one) && (ts.getDecorators(one)?.length ?? 0) > 0))) continue;
         result.methods.push({ className: owner, classLine, name, line: lineAt(member.name) });
       }
     }

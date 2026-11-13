@@ -441,6 +441,35 @@ for (const kind of ["function", "constant", "variable"]) {
 }
 
 
+/** `Store.write` is two signatures and one implementation; `homonym` adds a `write` to another owner of the same file. */
+function overloadedMember(overloads: ReadonlyMap<string, string> | undefined, homonym = false): { inbound: InboundEdges; implementation: GraphSymbol } {
+  const nodes = [fakeNode("Store", "class", SVC, 1, 10), fakeNode("first", "method", SVC, 2, 2, "write"), fakeNode("second", "method", SVC, 3, 3, "write"), fakeNode("body", "method", SVC, 4, 6, "write"), fakeNode("Owner", "class", CMP, 1, 20), fakeNode("caller", "method", CMP, 5, 9)];
+  const edges: FakeEdge[] = [{ from: "Store", to: "first", kind: "contains" }, { from: "Store", to: "second", kind: "contains" }, { from: "Store", to: "body", kind: "contains" }, { from: "Owner", to: "caller", kind: "contains" }];
+  if (homonym) { nodes.push(fakeNode("Other", "class", SVC, 12, 16), fakeNode("other", "method", SVC, 13, 14, "write")); edges.push({ from: "Other", to: "other", kind: "contains" }); }
+  const graph = fakeCodeGraph(nodes, edges, [{ from: "caller", name: "this.store.write", kind: "calls", file: CMP, line: 7, column: 4 }]);
+  const proof = { owner: ref(CMP, "Owner", 1), receiver: ref(SVC, "Store", 1), member: ref(SVC, "write", 4), reference: { file: CMP, line: 7, column: 5, name: "this.store.write", kind: "calls" as const } };
+  const corrections = overloads === undefined ? undefined : { dropped: new Set<string>(), into: new Map(), overloads: new Map([...overloads].map(([member, implementation]) => [member as GraphSymbol["id"], implementation as GraphSymbol["id"]])) };
+  const inbound = createInboundEdges(graph, isTestFile, [], undefined, [proof], undefined, corrections);
+  return { inbound, implementation: graph.symbolsByIds(["body" as GraphSymbol["id"]])[0]! };
+}
+const STORE_WRITE = new Map([["first", "body"], ["second", "body"], ["body", "body"]]);
+
+test("a proven member use of an overload set's one implementation settles the use and anchors the set once", () => {
+  const { inbound, implementation } = overloadedMember(STORE_WRITE);
+  assert.deepEqual(inbound.callersOf(implementation, false).map((edge) => edge.from.id), ["caller"]);
+  assert.equal(inbound.settledUses().size, 1);
+  assert.deepEqual([...inbound.memberProofs(new Set([implementation.id])).expanded], [declarationAnchor(SVC, "write")]);
+});
+
+for (const [label, overloads, homonym] of [["without the overload reading", undefined, false], ["with a homonym in another owner of the file", STORE_WRITE, true]] as const) {
+  test(`a proven member use of an overload set settles nothing ${label}, and keeps its caller`, () => {
+    const { inbound, implementation } = overloadedMember(overloads, homonym);
+    assert.deepEqual(inbound.callersOf(implementation, false).map((edge) => edge.from.id), ["caller"]);
+    assert.equal(inbound.settledUses().size, 0);
+    assert.equal(inbound.memberProofs(new Set([implementation.id])).expanded.size, 0);
+  });
+}
+
 test("competing member proofs for one occurrence cannot settle it or invent calls", () => {
   const graph = fakeCodeGraph([fakeNode("Svc", "class", SVC, 1, 10), fakeNode("hit", "method", SVC, 3, 4), fakeNode("boot", "function", CMP, 5, 9)], [{ from: "Svc", to: "hit", kind: "contains" }], [{ from: "boot", name: "inject().hit", kind: "calls", file: CMP, line: 7, column: 0 }]);
   const proof = { owner: ref(CMP, "boot", 5), receiver: ref(SVC, "Svc", 1), member: ref(SVC, "hit", 3), reference: { file: CMP, line: 7, column: 1, name: "inject().hit", kind: "calls" as const } };

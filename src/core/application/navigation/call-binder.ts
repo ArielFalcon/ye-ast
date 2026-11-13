@@ -4,7 +4,7 @@ import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-orig
 import type { ExternalMemberUseOrigin, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import { joinsFact } from "../../domain/shared/code-node.ts";
-import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
+import type { CodeGraphReader, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { DeclaredCallable, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { GraphNavigation } from "./graph-navigation.ts";
 import { provenCallsOf, provenKey, spelledKey, type ProvenCalls } from "./proven-calls.ts";
@@ -123,6 +123,41 @@ export interface CallBinderDeps {
   callablesIn: (file: string) => Promise<readonly DeclaredCallable[]>;
 }
 
+/**
+ * A structural language's overload set's one implementation: the only body of `member` among the files that declare it,
+ * placed on the member the index holds there. Several bodies, or none, bind nothing: signatures are never guessed from
+ * arity. A nominal language has no such collapse — its overloads are distinct methods — so it is never asked of one.
+ */
+export async function implementationOf(members: readonly GraphSymbol[], member: string, callablesIn: (file: string) => Promise<readonly DeclaredCallable[]>): Promise<GraphSymbol | undefined> {
+  const files = [...new Set(members.map((symbol) => symbol.file))];
+  const bodies = await Promise.all(files.map(async (file) => (await callablesIn(file)).filter((callable) => callable.name === member && callable.body).map((callable) => ({ file, callable }))));
+  const found = bodies.flat();
+  if (found.length !== 1) return undefined;
+  const { file, callable } = found[0]!;
+  const placed = members.filter((symbol) => symbol.file === file && callable.start <= symbol.startLine && symbol.startLine <= callable.nameLine);
+  return placed.length === 1 ? placed[0] : undefined;
+}
+
+/**
+ * By method, the one implementation of the overload set it belongs to: every owner of a structural-language file among
+ * `files` that declares a method name more than once, collapsed by `implementationOf`. Only the files that hold such a
+ * repeated name are read for their callables; a set with several bodies, or none, is absent.
+ */
+export async function overloadImplementationsOf(store: CodeGraphReader, files: readonly string[], navigation: GraphNavigation, callablesIn: (file: string) => Promise<readonly DeclaredCallable[]>): Promise<ReadonlyMap<GraphNodeId, GraphNodeId>> {
+  const symbols = store.symbolsInFiles(files.filter((file) => hasTyping(file, "structural")));
+  const methodsByPlace = Map.groupBy(symbols.filter((symbol) => symbol.kind === "method"), (method) => JSON.stringify([method.file, method.name]));
+  const repeating = new Set([...methodsByPlace.values()].filter((methods) => methods.length > 1).map((methods) => methods[0]!.file));
+  const found = new Map<GraphNodeId, GraphNodeId>();
+  for (const owner of symbols.filter((symbol) => isOwnerKind(symbol.kind) && repeating.has(symbol.file))) {
+    for (const [name, members] of Map.groupBy(navigation.methodsOf(owner), (method) => method.name)) {
+      if (members.length < 2) continue;
+      const implementation = await implementationOf(members, name, callablesIn);
+      if (implementation !== undefined) for (const member of members) found.set(member.id, implementation.id);
+    }
+  }
+  return found;
+}
+
 export function createCallBinder({ store, navigation, syntaxIn, proofs, importedDeclarations, callablesIn, declarations }: CallBinderDeps): CallBinder {
   let read: Promise<{ held: ReceiverProofs; calls: ProvenCalls }> | undefined;
   const proven = () => (read ??= proofs().then((held) => ({ held, calls: provenCallsOf(held.memberUses, held.externalUses) })));
@@ -186,21 +221,6 @@ export function createCallBinder({ store, navigation, syntaxIn, proofs, imported
 
   const above = (type: GraphSymbol): GraphSymbol[] => [type, ...navigation.typesAround(type, "up").map((around) => around.type)];
 
-  /**
-   * A structural language's overload set's one implementation: the only body of `member` among the files that declare it,
-   * placed on the member the index holds there. Several bodies, or none, bind nothing: signatures are never guessed from
-   * arity. A nominal language has no such collapse — its overloads are distinct methods — so `memberOf` never asks this.
-   */
-  async function implementationOf(members: readonly GraphSymbol[], member: string): Promise<GraphSymbol | undefined> {
-    const files = [...new Set(members.map((symbol) => symbol.file))];
-    const bodies = await Promise.all(files.map(async (file) => (await callablesIn(file)).filter((callable) => callable.name === member && callable.body).map((callable) => ({ file, callable }))));
-    const found = bodies.flat();
-    if (found.length !== 1) return undefined;
-    const { file, callable } = found[0]!;
-    const placed = members.filter((symbol) => symbol.file === file && callable.start <= symbol.startLine && symbol.startLine <= callable.nameLine);
-    return placed.length === 1 ? placed[0] : undefined;
-  }
-
   const binder: CallBinder = {
     receiverOf,
     async memberOfDeclaration(holder, member, place) {
@@ -216,7 +236,7 @@ export function createCallBinder({ store, navigation, syntaxIn, proofs, imported
       for (const declaring of above(type).filter((candidate) => isOwnerKind(candidate.kind))) {
         const own = navigation.methodsOf(declaring).filter((method) => method.name === member);
         if (own.length === 1) return own[0];
-        if (own.length > 1) return hasTyping(declaring.file, "structural") ? implementationOf(own, member) : undefined;
+        if (own.length > 1) return hasTyping(declaring.file, "structural") ? implementationOf(own, member, callablesIn) : undefined;
       }
       return undefined;
     },

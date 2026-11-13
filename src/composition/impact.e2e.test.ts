@@ -1015,7 +1015,7 @@ test("a constant injection local reaches its real method caller through exact ev
   assert.equal(answer.fact.value.symbols.some(({ symbol }) => symbol === "peer"), false);
 });
 
-test("a bound constant local retains potential callers of an overloaded method despite unrelated mutation", async () => {
+test("a bound constant local reaches the one implementation of an overloaded method despite unrelated mutation", async () => {
   const errors = (value: number): string => `export class ErrorService {\n  notify(code: string): void;\n  notify(code: number): void;\n  notify(code: string | number) { const changed = ${value}; }\n}\n`;
   commit({
     "package.json": '{"dependencies":{"@angular/core":"21"}}',
@@ -1027,6 +1027,5 @@ test("a bound constant local retains potential callers of an overloaded method d
   const answer = await impact("--base", "HEAD~1", "--changed", "src/errors.ts");
   assert.ok(answer.fact.value.symbols.some(({ symbol }) => symbol === "guard"), JSON.stringify(answer.fact));
   assert.equal(answer.fact.value.symbols.some(({ symbol }) => symbol === "peer"), false);
-  assert.equal(answer.fact.status, "partial", JSON.stringify(answer.fact));
-  assert.ok(answer.fact.cuts?.some((cut) => cut.at.some((place) => place.includes("errors.notify"))), JSON.stringify(answer.fact.cuts));
+  assert.equal(answer.fact.status, "complete", JSON.stringify(answer.fact));
 });

@@ -88,6 +88,8 @@ export interface EdgeCorrections {
   settled?: ReadonlyMap<string, ReceiverSettlement>;
   /** By method: the supertype declarations the port answered for it (RFC-0024 U4); a method without an answer keeps the by-name bridge. */
   implemented?: ReadonlyMap<GraphNodeId, ImplementedDeclarations>;
+  /** By method, the one implementation of its structural overload set (ADR-0046 decision 2); the set is one declaration of its file. */
+  overloads?: ReadonlyMap<GraphNodeId, GraphNodeId>;
 }
 
 const NO_CORRECTIONS: EdgeCorrections = { dropped: new Set(), into: new Map() };
@@ -221,7 +223,13 @@ export function createInboundEdges(
     let unique = uniqueAnchors.get(node.file);
     if (unique === undefined) {
       const counts = new Map<string, number>();
-      for (const candidate of symbolsInFile(node.file)) counts.set(candidate.name, (counts.get(candidate.name) ?? 0) + 1);
+      const collapsed = new Set<GraphNodeId>();
+      for (const candidate of symbolsInFile(node.file)) {
+        const implementation = corrections.overloads?.get(candidate.id);
+        if (implementation !== undefined && collapsed.has(implementation)) continue;
+        if (implementation !== undefined) collapsed.add(implementation);
+        counts.set(candidate.name, (counts.get(candidate.name) ?? 0) + 1);
+      }
       unique = new Set([...counts].filter(([, count]) => count === 1).map(([name]) => name));
       uniqueAnchors.set(node.file, unique);
     }

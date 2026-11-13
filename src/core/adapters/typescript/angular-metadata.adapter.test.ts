@@ -318,9 +318,15 @@ test("only unique own concrete instance methods can be proved", async () => {
     "export class Store { static write() {} }",
     "export class Store { get write() { return () => {}; } }",
     "class Base { write() {} } export class Store extends Base {}",
-    "export class Store { write(x: string): void; write(x?: string) {} }",
+    "export class Store { write(x: string): void; write(x?: string) {} write(x?: string, y?: string) {} }",
+    "export class Store { write(x?: string) {} write = () => {}; }",
     "export class Store {}",
   ]) assert.deepEqual((await memberProofs(OWNER, target)).memberUses, [], target);
+});
+
+test("an overload set proves the member at its one implementation", async () => {
+  const meta = await memberProofs(OWNER, "export class Store {\n  write(x: string): void;\n  write(x?: string) {}\n}");
+  assert.deepEqual(meta.memberUses?.map(({ member }) => member), [{ path: "src/store.ts", symbol: "write", line: 3 }]);
 });
 
 test("optional or computed receiver and member calls cannot prove a member", async () => {
@@ -661,10 +667,10 @@ test("a reassigned or shadowed injection local is not an exact member target", a
   ]) assert.deepEqual((await memberProofs(source)).memberUses, [], source);
 });
 
-test("const local calls retain potential sites despite unrelated mutation and overloads", async () => {
+test("const local calls retain potential sites despite unrelated mutation and a member with two bodies", async () => {
   const source = "export function boot() { const svc = inject(Store); svc.write(); }";
   for (const complete of [true, false]) {
-    const meta = await memberProofs(source, "export class Store { write(x: string): void; write(x: number): void; write(x: any) {} }", { "src/other.ts": "Object.assign({}, {});" }, complete);
+    const meta = await memberProofs(source, "export class Store { write(x: string): void; write(x: any) {} write(x?: any) {} }", { "src/other.ts": "Object.assign({}, {});" }, complete);
     assert.deepEqual(meta.memberUses, []);
     assert.deepEqual(meta.locals[0]?.calls?.map(({ name }) => name), ["svc.write"]);
   }

@@ -669,7 +669,8 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
 
   const { seeds } = selection;
   const implemented = await input.reading.implementedContracts();
-  const build = (corrections: EdgeCorrections): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, { ...corrections, implemented });
+  const overloads = await input.reading.overloadImplementations();
+  const build = (corrections: EdgeCorrections): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, { ...corrections, implemented, overloads });
   const targets = input.reading.edgeTargets(input.typed);
   const typedReferences = input.typed === undefined ? undefined : typedReferencesOf(store, unresolved, input.typed);
   const originCalls = targets === undefined ? undefined : input.reading.originCalls(targets);

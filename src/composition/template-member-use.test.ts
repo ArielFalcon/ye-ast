@@ -135,7 +135,7 @@ test("no reach is claimed through a callable field of the receiver", async () =>
   assert.ok(!callerNames(value).includes("CallablePage"), JSON.stringify(value.symbols));
 });
 
-test("no reach is claimed for a member the receiver declares more than once", async () => {
+test("a template call of an overloaded member reaches its one implementation", async () => {
   const value = await callersOf("src/app/overload.api.ts", "archive");
-  assert.ok(!callerNames(value).includes("OverloadPage"), JSON.stringify(value.symbols));
+  assert.ok(callerNames(value).includes("OverloadPage"), JSON.stringify(value.symbols));
 });
