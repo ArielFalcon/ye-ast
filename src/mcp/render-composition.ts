@@ -1,4 +1,4 @@
-import { dependencyDiagnosticText, effectText, unresolvedLabel } from "./presentation.ts";
+import { dependencyDiagnosticText, effectText, statedRequestText, unresolvedLabel } from "./presentation.ts";
 import { cutLabel } from "./presentation-context.ts";
 /**
  * Deterministic text of a composition. Summary and details are self-sufficient: every subject they
@@ -178,7 +178,7 @@ class CompactView {
       ...(this.details ? [] : [this.joinedLine()]),
       ...(this.result.verification.status === "available" ? [] : [verificationLine(this.result)]),
       ...this.identityLines(),
-      ...(graph.sources.some(source => source.family === "trace") ? [`effects (${graph.parts.reduce((count, part) => count + (part.kind === "trace-step" ? part.effects?.length ?? 0 : 0), 0)})`] : []),
+      ...(graph.sources.some(source => source.family === "trace") ? this.traceRequestLines() : []),
       ...connections,
       ...this.contextLines(),
       ...subjects,
@@ -188,6 +188,13 @@ class CompactView {
       ...section("Coverage", coverage),
       ...navigation,
     ];
+  }
+
+  private traceRequestLines(): string[] {
+    const steps = this.result.graph.parts.filter(part => part.kind === "trace-step");
+    const effects = steps.reduce((count, part) => count + (part.effects?.length ?? 0), 0);
+    const requests = steps.reduce((count, part) => count + (part.unresolvedEffects?.length ?? 0), 0);
+    return [...(effects === 0 && requests > 0 ? [] : [`effects (${effects})`]), ...(requests === 0 ? [] : [`unresolved requests (${requests}, destination undecided)`])];
   }
 
   // ----- context -----
@@ -496,6 +503,7 @@ class CompactView {
         part.external === undefined ? "" : `; external ${part.external.map((group) => `${group.kind === "import" ? group.module : group.kind}: ${group.names.join(", ")}`).join("; ")}`,
         part.alternatives === undefined ? "" : `; dispatch alternatives ${part.alternatives.map((alternative) => this.anchor(alternative)).join(", ")}`,
         part.effects === undefined ? "" : `; effects ${part.effects.map((effect) => `${effectText(effect)} at line ${effect.line}`).join("; ")}`,
+        part.unresolvedEffects === undefined ? "" : `; unresolved requests (destination undecided) ${part.unresolvedEffects.map((site) => `${statedRequestText(site)} at line ${site.line}${site.deferred === true ? " (deferred)" : ""}`).join("; ")}`,
       ].join("");
       case "trace-root": return `trace root ${quoted(part.target)} selects ${part.steps.map((step) => `#${step}`).join(", ") || "nothing"}`;
       case "reading-range": return `reading range ${this.file(part.file)}:${part.start}-${part.end} for ${part.steps.map((step) => `#${step}`).join(", ")}`;

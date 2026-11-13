@@ -1,3 +1,4 @@
+import type { UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -489,6 +490,16 @@ test("composition text retains dependency selection diagnostics next to their cu
 test("details states a trace step's effects with their targets and lines", () => {
   const text = renderComposition(resultOf([sourceFixture("trace")]), "details");
   assert.match(text, /trace step #1 .*; effects http GET \/stock\/\{\} at line 34; message kafka orders\.found at line 36/);
+});
+
+test("a trace whose requests are all unplaced counts them and states each destination, never effects (0)", () => {
+  const site: UnresolvedCallSite = { path: "src/api.ts", line: 12, symbol: "get", transport: "http", reason: "unresolved", evidence: [{ path: "src/api.ts", line: 12, column: 3 }], stated: { method: "GET", path: "/orders" }, deferred: true };
+  const value = { roots: [], steps: [{ id: 0, depth: 0, file: "src/api.ts", symbol: "get", kind: "method", line: 10, unresolvedEffects: [site] }], readingPlan: { ranges: [], lines: 0 }, cost: { expanded: 1 } };
+  const result = resultOf([sourceFixture("trace", { value })]);
+  const summary = renderComposition(result, "summary");
+  assert.match(summary, /unresolved requests \(1, destination undecided\)/);
+  assert.doesNotMatch(summary, /effects \(0\)/);
+  assert.match(renderComposition(result, "details"), /trace step #0 .*; unresolved requests \(destination undecided\) GET \/orders at line 12 \(deferred\)/);
 });
 
 test("consequences: an unknown finding is named a consequence finding, and a use and a derived change state their place and handler", () => {

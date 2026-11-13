@@ -221,6 +221,34 @@ test("a trace summary with no effect says so, never leaving the line out", () =>
   assert.ok(renderTrace(traceFact()).includes("\neffects (0)\n"), renderTrace(traceFact()));
 });
 
+function requestsFact(placed: boolean): Fact<TraceValue> {
+  const fact = effectsFact();
+  const site = (line: number, stated: object, deferred?: true) => ({ path: "src/api.service.ts", line, symbol: "get", transport: "http" as const, reason: "unresolved" as const, evidence: [], stated, ...(deferred === undefined ? {} : { deferred }) });
+  const steps = (fact as { value: TraceValue }).value.steps.map((step) =>
+    step.id === 3 ? { ...step, unresolvedEffects: [site(20, { method: "GET", path: "/orders" }), site(30, { method: "POST", expressions: [[{ kind: "runtime" }, { kind: "text", text: "/x" }]] }, true)] }
+      : placed ? step : { ...step, effects: undefined });
+  return { ...fact, value: { ...(fact as { value: TraceValue }).value, steps } } as Fact<TraceValue>;
+}
+
+test("a trace of only unplaced requests never says effects (0): it counts them and states each destination and place", () => {
+  const text = renderTrace(requestsFact(false));
+  assert.ok(!text.includes("effects (0)"), text);
+  assert.ok(text.includes('unresolved requests (2, destination undecided): GET /orders at src/order.ts:20, POST; URL expression: runtime + "/x" (destination unresolved) at src/order.ts:30 (deferred)\n'), text);
+});
+
+test("a mixed trace lists its effects before its unplaced requests", () => {
+  const text = renderTrace(requestsFact(true));
+  assert.ok(text.includes("effects (2): http POST /orders/checkout base https://api at src/order.ts:15, message nats orders.created at src/tax.ts:7\nunresolved requests (2, destination undecided): GET /orders"), text);
+});
+
+test("the links of a trace are named for placed requests, never executed effects", () => {
+  const fact = requestsFact(false);
+  const linked = { ...fact, value: { ...(fact as { value: TraceValue }).value, repositorySnapshots: [], links: [], unlinked: [] } } as unknown as Fact<TraceValue>;
+  const text = renderTrace(linked);
+  assert.ok(text.includes("links from placed trace requests (0):"), text);
+  assert.ok(!text.includes("executed trace effects"), text);
+});
+
 test("a trace tree line carries the effects of its body with their lines", () => {
   const text = renderTrace(effectsFact(), "details");
   assert.ok(text.includes("      external: lodash: sum, map\n      effects: http POST /orders/checkout base https://api at 15\n"), text);

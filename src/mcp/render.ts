@@ -1,4 +1,4 @@
-import { dependencyDiagnosticText, effectText, unresolvedLabel } from "./presentation.ts";
+import { dependencyDiagnosticText, effectText, statedRequestText, unresolvedLabel } from "./presentation.ts";
 import { canSelect, categoryRecovery, literalSelection, sharedLookup } from "./presentation-guidance.ts";
 import type { ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
@@ -1243,10 +1243,14 @@ function readingPlanLines(value: TraceValue, detail: ResponseMode): string[] {
   return [`reading plan (${ranges.length} ${ranges.length === 1 ? "range" : "ranges"}, ${lines} lines):`, ...listed];
 }
 
-/** Every effect of the trace, in pre-order; a site whose target is undecided is among the cuts. */
+/** Every effect of the trace, in pre-order, then the requests whose destination is undecided; a trace with neither says so. */
 function effectLines(steps: readonly TraceStep[]): string[] {
   const effects = steps.flatMap((step) => (step.effects ?? []).map((effect) => `${effectText(effect)} at ${placeText(step.file, effect.line)}`));
-  return [`effects (${effects.length})${effects.length === 0 ? "" : `: ${effects.join(", ")}`}`];
+  const requests = steps.flatMap((step) => (step.unresolvedEffects ?? []).map((site) => `${statedRequestText(site)} at ${placeText(step.file, site.line)}${site.deferred === true ? " (deferred)" : ""}`));
+  return [
+    ...(effects.length === 0 && requests.length > 0 ? [] : [`effects (${effects.length})${effects.length === 0 ? "" : `: ${effects.join(", ")}`}`]),
+    ...(requests.length === 0 ? [] : [`unresolved requests (${requests.length}, destination undecided): ${requests.join(", ")}`]),
+  ];
 }
 
 function externalText(group: ExternalCalls): string {
@@ -1333,7 +1337,7 @@ export function renderTrace(fact: Fact<TraceValue>, detail: ResponseMode = "summ
   if (fact.status === "unknown") return lines.join("\n");
   lines.push(...traceRootLines(fact.value), ...traceSettledLine(fact.value), ...effectLines(fact.value.steps), TRACE_BRANCHES, ...readingPlanLines(fact.value, detail));
   if (detail === "details") lines.push("steps:", ...traceTreeLines(fact.value.steps));
-  if (fact.value.repositorySnapshots !== undefined) lines.push(...linkMapLines(fact.value.links ?? [], fact.value.unlinked ?? [], detail, "links from executed trace effects"));
+  if (fact.value.repositorySnapshots !== undefined) lines.push(...linkMapLines(fact.value.links ?? [], fact.value.unlinked ?? [], detail, "links from placed trace requests"));
   lines.push(...traceCutLines(cutsOf(fact), detail));
   return lines.join("\n");
 }
@@ -1581,8 +1585,7 @@ function unresolvedByCause(sections: readonly (readonly [string, readonly Unreso
 
 function unresolvedLine(site: UnresolvedCallSite, detail: ResponseMode): string {
   const through = site.via === undefined ? "" : `, through ${site.via}`;
-  const expressions = site.stated?.expressions?.map((parts) => parts.map((part) => part.kind === "text" ? JSON.stringify(part.text) : part.kind === "runtime" ? part.encoded ? "encode(runtime)" : "runtime" : `unknown(${part.cause})`).join(" + ")).join(" | ");
-  const stated = site.stated === undefined ? "" : ` ${site.stated.method}${site.stated.path === undefined ? "" : ` ${site.stated.path}`}${expressions === undefined ? "" : `; URL expression: ${expressions} (destination unresolved)`}`;
+  const stated = site.stated === undefined ? "" : ` ${statedRequestText(site)}`;
   const evidence = detail === "details" ? ` <- ${site.evidence.map(evidenceText).join(", ")}${site.diagnostic?.unreadableSources === undefined ? "" : `; unreadable libraries: ${site.diagnostic.unreadableSources.map(evidenceText).join(", ")}`}${site.diagnostic?.alternatives === undefined ? "" : `; chosen at run time, declared alternatives: ${site.diagnostic.alternatives.join(", ")}`}` : ` ${unresolvedLabel(site)}`;
   return `      ${spanText(site.line, site.endLine)} ${site.symbol} (${site.transport}${through}${site.deferred === true ? ", deferred" : ""})${stated}${evidence}`;
 }
