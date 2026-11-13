@@ -134,6 +134,18 @@ export function directoryNameOf(path: string): string {
   return trimmed.slice(Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\")) + 1);
 }
 
+const IN_REPOSITORY = "repository `";
+
+/** A fault detail of one workspace member, led by the member's id, so an answer says which repository failed. */
+export function inRepository(repoId: string, detail: string): string {
+  return `${IN_REPOSITORY}${repoId}\`: ${detail}`;
+}
+
+/** Whether a fault detail was written by `inRepository`. */
+export function namesRepository(detail: string): boolean {
+  return detail.startsWith(IN_REPOSITORY);
+}
+
 /** The repository name a remote URL ends with, without its `.git` suffix: `host/owner/name` names `name`. */
 export function repositoryNameOf(url: string): string {
   const withoutQuery = url.split(/[?#]/)[0] ?? url;

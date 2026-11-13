@@ -50,6 +50,7 @@ export const ERROR_CODE = {
   "invalid-hypothesis": -32024,
   "contradictory-revisions": -32025,
   "unknown-scope-path": -32026,
+  "unknown-gateway-repository": -32027,
 } as const;
 
 export type ErrorKind = keyof typeof ERROR_CODE;

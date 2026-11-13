@@ -3,7 +3,7 @@ import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { SnapshotRef } from "../../domain/shared/fact.ts";
-import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
+import { directoryNameOf, inRepository } from "../../domain/topology/repository-identity.ts";
 import { resolveRemoteSnapshot, type RemoteFreshness, type RepositoryResolution } from "../../domain/topology/remote-snapshot.ts";
 import type { RemoteRefresh } from "../../ports/remote-refresh.port.ts";
 import { DEFAULT_REVISION, type VcsFault } from "../../ports/vcs.port.ts";
@@ -130,7 +130,7 @@ export async function planWorkspace(deps: WorkspacePlanDeps, request: WorkspaceP
       if (snapshot === undefined) {
         const revision = await vcs.resolveCommit(candidate.declaration.path, candidate.declaration.revision ?? DEFAULT_REVISION, signal);
         if (signal?.aborted) return ABORTED;
-        if (!revision.ok) return revision;
+        if (!revision.ok) return revision.fault.kind === "unknown-revision" ? { ok: false, fault: { ...revision.fault, detail: inRepository(candidate.repoId, revision.fault.detail) } } : revision;
         snapshot = revision.value;
       }
       pins.set(candidate.repoId, { kind: "unavailable", sha: snapshot });
@@ -179,6 +179,13 @@ export async function planWorkspace(deps: WorkspacePlanDeps, request: WorkspaceP
       ? `repository \`${duplicate}\` is listed twice among the persisted members`
       : `${names.join(" and ")} name repository \`${duplicate}\``;
     return { ok: false, fault: { kind: "duplicate-repository", detail, repo: duplicate, entries, fromLaunch } };
+  }
+
+  const stray = inForce.value.gateways.findIndex((gateway) => !ids.includes(gateway.repo));
+  if (stray >= 0) {
+    if (request.replay !== undefined) return { ok: false, fault: { kind: "workspace-replay-mismatch", detail: "workspace replay context does not match the current declaration" } };
+    const { prefix, repo } = inForce.value.gateways[stray]!;
+    return { ok: false, fault: { kind: "unknown-gateway-repository", detail: `gateways[${stray}] routes \`${prefix}\` to repository \`${repo}\`, which is not a workspace member`, repo, entry: stray } };
   }
 
   const authority = inForce.value.source === "request"

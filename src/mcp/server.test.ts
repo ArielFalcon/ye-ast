@@ -25,6 +25,7 @@ import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../core/p
 import type { ConsequencesValue } from "../core/domain/contracts/consequence-fact.ts";
 import type { ChangeRequest, ConsequencesFault, ContractConsequencesQueries, HypothesesRequest } from "../core/ports/contract-consequences-queries.port.ts";
 import type { OutwardName } from "../core/domain/topology/outward-name.ts";
+import { inRepository } from "../core/domain/topology/repository-identity.ts";
 import type { EvidenceComposition } from "../core/ports/evidence-composition.port.ts";
 import type { FactRead, WorkspaceRefresh } from "../core/ports/workspace-queries.port.ts";
 import { createMcpServer, FAULT_META, RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, TRACE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT, CONTRACT_CONSEQUENCES_OUTPUT } from "./server.ts";
@@ -2247,6 +2248,31 @@ test("persisted workspace failures retain member ownership possibilities across 
     assert.match(stepOf(result), /persisted workspace member/);
     assert.doesNotMatch(stepOf(result), /\bhead\b|workspace\.repos/);
   } finally { await roots.session.close(); await revisions.session.close(); }
+});
+
+test("an unknown revision that names its repository no longer says the fault cannot tell which one failed", async () => {
+  const named = { kind: "unknown-revision" as const, detail: inRepository("lib", "bbbb") };
+  const anonymous = { kind: "unknown-revision" as const, detail: "bbbb" };
+  const { session } = await setup({ workspaceOfChange: async () => ({ ok: false, fault: named }), outwardNames: async () => ({ ok: false, fault: anonymous }) });
+  try {
+    const members = [{ path: "/work/lib", id: "lib", revision: "bbbb" }];
+    const withName = await session.callTool("ye_ast_impact", { base: "main", workspace: { repos: members } });
+    assert.match(textOf(withName), /`lib`/);
+    assert.doesNotMatch(stepOf(withName), /does not identify/);
+    assert.match(stepOf(withName), /revision/);
+    assert.match(stepOf(await session.callTool("ye_ast_workspace", { repos: members })), /does not identify which repository's revision failed/);
+  } finally { await session.close(); }
+});
+
+test("a gateway naming an unknown repository is a typed fault whose next step names the gateway entry and the argument that holds it", async () => {
+  const fault = { kind: "unknown-gateway-repository" as const, detail: "gateways[1] routes `orders` to repository `ghost`, which is not a workspace member", repo: "ghost", entry: 1 };
+  const { session } = await setup({ workspaceOfChange: async () => ({ ok: false, fault }), outwardNames: async () => ({ ok: false, fault }) });
+  try {
+    const impact = await session.callTool("ye_ast_impact", { base: "main", workspace: { repos: [{ path: "/work/lib", id: "lib" }], gateways: [{ prefix: "orders", repo: "ghost" }] } });
+    assert.deepEqual(impact._meta?.[FAULT_META], fault);
+    assert.match(stepOf(impact), /workspace\.gateways\[1\]\.repo/);
+    assert.match(stepOf(await session.callTool("ye_ast_workspace", {})), /Set gateways\[1\]\.repo/);
+  } finally { await session.close(); }
 });
 
 test("mixed live workspace trust failures retain both possible selector owners", async () => {
@@ -4560,24 +4586,26 @@ test("answerBytes limits the MCP text and preserves full facts or refusal metada
     assert.equal(CallToolResultSchema.safeParse(bounded).success, true);
     assert.deepEqual((bounded.structuredContent as Record<string, unknown>).value, resultFields(original).value);
     assert.ok(Buffer.byteLength(bounded.content[0]!.text) <= 100000);
-    const refused = await session.callTool("ye_ast_entrypoints", { mode: "details", answerBytes: 0 });
-    assert.equal(refused.isError, true);
-    assert.equal(refused.content.length, 0);
-    assert.equal(refused._meta?.kind, "answer-over-bound");
-    assert.equal(refused._meta?.bound, 0);
-    assert.equal(refused._meta?.status, "complete");
-    assert.ok(Array.isArray(refused._meta?.narrow));
-    assert.equal(CallToolResultSchema.safeParse(refused).success, true);
+    for (const args of [{ mode: "details" }, { mode: "full", select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } }] as const) {
+      const refused = await session.callTool("ye_ast_entrypoints", { ...args, answerBytes: 0 });
+      assert.equal(refused.isError, true);
+      assert.equal((refused._meta?.[FAULT_META] as { kind: string }).kind, "invalid-answer-bytes");
+      assert.match(textOf(refused), /answerBytes/);
+      assert.equal(CallToolResultSchema.safeParse(refused).success, true);
+    }
     const small = await session.callTool("ye_ast_entrypoints", { mode: "full", answerBytes: 150 });
     assert.equal(small.isError, true);
     assert.equal(small.content.length, 1);
     assert.ok(Buffer.byteLength(small.content[0]!.text) <= 150);
     assert.equal(CallToolResultSchema.safeParse(small).success, true);
-    const selected = await session.callTool("ye_ast_entrypoints", { mode: "full", answerBytes: 0, select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } });
-    assert.equal(selected.isError, true);
-    assert.equal(selected.content.length, 0);
-    assert.equal(selected._meta?.kind, "answer-over-bound");
-    assert.equal(CallToolResultSchema.safeParse(selected).success, true);
+    const overBound = await session.callTool("ye_ast_entrypoints", { mode: "details", answerBytes: 1 });
+    assert.equal(overBound.isError, true);
+    assert.equal(overBound.content.length, 0);
+    assert.equal(overBound._meta?.kind, "answer-over-bound");
+    assert.equal(overBound._meta?.bound, 1);
+    assert.equal(overBound._meta?.status, "complete");
+    assert.ok(Array.isArray(overBound._meta?.narrow));
+    assert.equal(CallToolResultSchema.safeParse(overBound).success, true);
     for (const invalid of [-1, 1.5]) {
       const rejected = await session.callTool("ye_ast_entrypoints", { answerBytes: invalid });
       assert.equal(rejected.isError, true);

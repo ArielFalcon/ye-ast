@@ -393,6 +393,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       return size <= limit ? result : { ...result, content: [] };
     };
     const selectionFailure = (fault: CodedFault): CallToolResult => boundedFailure(failure(controlFault(fault), context));
+    if ((requestedBytes ?? controls?.answerBytes) === 0) return failure(controlFault({ code: "invalid-answer-bytes" }), context);
     try {
       if (controls?.select !== undefined && canonicalJson(redaction.redactValue(controls.select)) !== canonicalJson(controls.select)) {
         return selectionFailure({ code: "replay-unavailable", reason: "redacted-context" });

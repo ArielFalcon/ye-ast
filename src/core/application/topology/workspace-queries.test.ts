@@ -22,6 +22,7 @@ import type { WorkspaceDefaults, WorkspaceManifest } from "../../ports/workspace
 import type { WorkspaceQueriesDeps } from "./workspace-queries.ts";
 import { createWorkspaceQueries } from "./workspace-queries.ts";
 import { createWorkspaceImpactQueries } from "./workspace-impact.ts";
+import { namesRepository } from "../../domain/topology/repository-identity.ts";
 import type { ImpactQueries } from "../../ports/impact-queries.port.ts";
 
 const SHA = "a".repeat(40);
@@ -1271,6 +1272,18 @@ test("call-site readers receive source completeness only for an uncut export", a
   await setup({ "/work/app": { files: { "src/a.ts": "" } } }, reader).outwardNames({ repo: { path: "/work/app" } });
   await setup({ "/work/app": { files: { "src/a.ts": "" }, stopped: { at: "src/b.ts", limit: 1 } } }, reader).outwardNames({ repo: { path: "/work/app" } });
   assert.deepEqual(seen, [true, false]);
+});
+
+test("an unknown revision of a workspace member names that member's repository", async () => {
+  const queries = setup({ "/work/app": { files: {} }, "/work/lib": { files: {}, holds: [SHA] } });
+
+  const result = await queries.outwardNames({ repo: { path: "/work/app", id: "app" }, repos: [{ path: "/work/lib", id: "lib", revision: "b".repeat(40) }], offline: true });
+
+  assert.ok(!result.ok);
+  assert.equal(result.fault.kind, "unknown-revision");
+  assert.equal(namesRepository(result.fault.detail), true);
+  assert.match(result.fault.detail, /`lib`/);
+  assert.match(result.fault.detail, new RegExp("b".repeat(40)));
 });
 
 test("a call site read twice through different transport primitives is one unresolved entry holding both pieces of evidence", async () => {

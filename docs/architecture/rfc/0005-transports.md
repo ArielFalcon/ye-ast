@@ -169,6 +169,7 @@ and once each, and `globs` for `unknown-change-path`. The set is closed:
 | `unknown-entrypoint` | -32023 | a trace target names an entrypoint kind and name the map at that revision does not hold |
 | `invalid-hypothesis` | -32024 | a contract consequences hypothesis is malformed or unsupported; data holds its `index` and refusal |
 | `contradictory-revisions` | -32025 | the bound repository's revision contradicts the change's `head` |
+| `unknown-gateway-repository` | -32027 | a declared gateway routes to a repository the workspace does not read; the message names the zero-based gateway entry and the repository id |
 
 ## Fixed layer (MVP)
 

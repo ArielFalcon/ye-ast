@@ -1,3 +1,4 @@
+import { inRepository } from "../../domain/topology/repository-identity.ts";
 import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import { declaredScope } from "../../domain/map/entrypoint-map.ts";
 import { isExtractorConfiguration } from "../../domain/languages/configuration.ts";
@@ -98,7 +99,7 @@ export async function withWorkspaceSnapshots<T, F = never>(deps: WorkspaceSnapsh
         plans.push({ kind: "unavailable", repoId: plan.at.repoId, sha: plan.at.pinnedSha });
         continue;
       }
-      return resolved;
+      return resolved.fault.kind === "unknown-revision" ? { ok: false, fault: { ...resolved.fault, detail: inRepository(plan.at.repoId, resolved.fault.detail) } } : resolved;
     }
     plans.push({ kind: "read", at: { ...plan.at, revision: resolved.value } });
   }

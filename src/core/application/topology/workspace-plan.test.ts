@@ -110,3 +110,16 @@ test("duplicate-repository names the colliding repos entries", async () => {
   assert.equal(persisted.ok, false);
   if (!persisted.ok) assert.deepEqual(persisted.fault, { kind: "duplicate-repository", detail: "repository `a` is listed twice among the persisted members", repo: "a", entries: [], fromLaunch: false });
 });
+
+test("a gateway naming a repository outside the workspace is refused with the gateway entry and the id", async () => {
+  const known = { repo: request.repo, repos: [{ path: "/lib", id: "lib" }], offline: true };
+  const accepted = await plan(setup().deps, { ...known, gateways: [{ prefix: "api", repo: "lib" }, { prefix: "own", repo: "app" }] });
+  assert.ok(accepted.ok);
+  const refused = await plan(setup().deps, { ...known, gateways: [{ prefix: "api", repo: "lib" }, { prefix: "orders", repo: "orders-svc" }] });
+  assert.equal(refused.ok, false);
+  if (!refused.ok) assert.deepEqual(refused.fault, { kind: "unknown-gateway-repository", detail: "gateways[1] routes `orders` to repository `orders-svc`, which is not a workspace member", repo: "orders-svc", entry: 1 });
+  const persisted = setup();
+  persisted.deps.defaults.of = async () => ({ ok: true, value: { repos: [{ path: "/lib", id: "lib" }], gateways: [{ prefix: "x", repo: "ghost" }] } });
+  const stale = await plan(persisted.deps, { repo: request.repo, offline: true });
+  assert.equal(stale.ok === false && stale.fault.kind, "unknown-gateway-repository");
+});

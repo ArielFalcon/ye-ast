@@ -1,3 +1,4 @@
+import { namesRepository } from "../core/domain/topology/repository-identity.ts";
 import { entrypointCandidateText, unknownEntryText, unknownTargetKey } from "../core/domain/shared/unknown-target.ts";
 import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
 import type { QueryFault } from "./query-runner.ts";
@@ -6,7 +7,7 @@ import type { ComposeFault, SourceIdentityCause, UnavailableReason } from "./com
 import type { SelectionFault } from "./select-evidence.ts";
 import type { SourceVerificationFault } from "./evidence-cursor.ts";
 
-export type CodedFault = SelectionFault | SourceVerificationFault;
+export type CodedFault = SelectionFault | SourceVerificationFault | { code: "invalid-answer-bytes" };
 type Published<F> = F extends { code: infer C extends string } ? (C extends string ? Omit<F, "code"> & { kind: C; detail: string } : never) : never;
 /** A selection, cursor or identity refusal of an original tool, published with `kind` like every other fault. */
 export type ControlFault = Published<CodedFault>;
@@ -59,7 +60,8 @@ export function controlFault(fault: CodedFault): ControlFault {
   switch (fault.code) {
     case "invalid-cursor":
     case "selection-not-found":
-    case "ambiguous-selection": return { kind: fault.code, detail: fault.code };
+    case "ambiguous-selection":
+    case "invalid-answer-bytes": return { kind: fault.code, detail: fault.code };
     case "replay-unavailable": return { kind: fault.code, detail: fault.code, reason: fault.reason };
     case "result-changed": return { kind: fault.code, detail: fault.code, expected: fault.expected, actual: fault.actual, stage: fault.stage };
   }
@@ -86,6 +88,7 @@ function displayDetail(fault: RenderedFault): string {
     case "invalid-cursor": return "The cursor cannot be used with this query, selection, page limit and identity";
     case "selection-not-found": return "The selection names no record of this result";
     case "ambiguous-selection": return "The selection matches more than one record of this result";
+    case "invalid-answer-bytes": return "answerBytes is 0, which leaves no room for any text";
     case "replay-unavailable": return `This result has no verifiable identity (${fault.reason})`;
     case "result-changed": return "The result differs from the asserted identity";
     default: return fault.detail;
@@ -122,7 +125,7 @@ function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-faul
         : query?.workspace ? "Also check persisted workspace member revisions in the host configuration." : undefined;
       return [
         `${argument} must resolve to a local commit: pass a branch, tag or sha the owning clone holds${query !== undefined && readsChange(query) ? "" : ", or omit it to read HEAD"}.`,
-        ...(member === undefined ? [] : [member, "This fault does not identify which repository's revision failed."]),
+        ...(member === undefined ? [] : [member, ...(namesRepository(fault.detail) ? [] : ["This fault does not identify which repository's revision failed."])]),
       ].join(" ");
     }
     case "no-merge-base":
@@ -182,6 +185,10 @@ function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-faul
       return "Correct the changed globs against the paths base..head touches. Remove changed to walk every change within the declared scope; mode or budget cannot fix a path-selection mismatch.";
     case "duplicate-repository":
       return `Drop all but one of the named ${membersArgument(query)} entries, keeping the id and revision intended; a duplicate among persisted members is corrected in the host's workspace declaration.`;
+    case "unknown-gateway-repository": {
+      const prefix = query?.family === "workspace" || query?.family === "decisions" ? "" : "workspace.";
+      return `Set ${prefix}gateways[${fault.entry}].repo to the ID of the launch repository or of a ${membersArgument(query)} entry, or drop that gateway; a gateway cannot route to a repository the workspace does not read.`;
+    }
     case "duplicate-workspace-source":
       return `Remove the duplicate workspace source identified by the repository IDs: one ${membersArgument(query)} entry per repository.`;
     case "workspace-capture-unavailable":
@@ -212,6 +219,8 @@ function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-faul
       return "Pass page.nextCursor from the previous page with the same query, select, page.limit and expect, or restart without page.cursor.";
     case "selection-not-found":
       return "Copy select's coordinates and owner from a details or full answer of this same query; indices are zero-based.";
+    case "invalid-answer-bytes":
+      return "Pass your client limit as answerBytes, at least 1, or omit it to leave the text unbounded; mode summary is the smallest presentation.";
     case "ambiguous-selection":
       return "Add the owner or coordinates that tell the matching records apart, as a details or full answer of this query prints them.";
     case "invalid-hypothesis":
