@@ -116,7 +116,7 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, declar
         markCut(step, cutOfPlaced(placed, site), cuts);
         continue;
       }
-      pending.push({ step, owner: owner.symbol.id, at: originKey({ file, ...at }), column: placed.column! + 1, origins, bodies: producingBodies, read: effectOf(site, origins !== undefined), deferred });
+      pending.push({ step, owner: owner.symbol.id, at: originKey({ file, ...at }), column: placed.column! + 1, origins, bodies: producingBodies, read: effectOf(site), deferred });
     }
   }
   const coveredBodies = new Set<string>();

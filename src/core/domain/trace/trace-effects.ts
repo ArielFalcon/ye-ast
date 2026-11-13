@@ -8,10 +8,9 @@ import type { TraceEffect } from "./trace-fact.ts";
  * What a call site the RFC-0011 extraction reads is in a trace (R12): an effect with its kind and target when the
  * extraction resolves the target, otherwise an `unresolved-link` cut at its place naming the library it goes through.
  * The kind is the extraction's transport, never a guess from a name. A request that states one route after a base the
- * snapshot does not decide is an effect with that route, marked `authority: "undecided"`, when a wrapper's caller
- * propagates it (`propagated`, ADR-0069); a direct site with such a request stays a cut that lists the request.
+ * snapshot does not decide is an effect with that route, marked `authority: "undecided"` (ADR-0069).
  */
-export function effectOf(site: CallSite | DataEffectSite, propagated = false): { effect: TraceEffect } | { cut: Cut; request?: UnresolvedCallSite } {
+export function effectOf(site: CallSite | DataEffectSite): { effect: TraceEffect } | { cut: Cut; request?: UnresolvedCallSite } {
   if (!("transport" in site)) return site.effect === undefined ? { cut: unplacedEffect(site) } : { effect: site.effect };
   const kind = site.transport === "http" ? "http" : "message";
   const { target } = site;
@@ -19,7 +18,7 @@ export function effectOf(site: CallSite | DataEffectSite, propagated = false): {
     if (kind === "http" && "path" in target.value) return { effect: { kind, line: site.line, target: target.value } };
     if (kind === "message" && "destination" in target.value) return { effect: { kind, line: site.line, target: target.value } };
   }
-  const [stated, ...alternatives] = kind === "http" && propagated ? undecidedAuthorityTargetsOf(site) : [];
+  const [stated, ...alternatives] = kind === "http" ? undecidedAuthorityTargetsOf(site) : [];
   if (stated !== undefined && alternatives.length === 0) return { effect: { kind: "http", line: site.line, target: stated, authority: "undecided" } };
   return { cut: unplacedEffect(site), ...(site.stated?.expressions === undefined ? {} : { request: unresolvedCallSite(site) }) };
 }

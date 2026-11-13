@@ -1465,17 +1465,19 @@ test("a request a wrapper issues for its caller is a placed effect at the caller
   assert.deepEqual(effectCuts(fact), []);
 });
 
-test("a wrapper request whose route the caller does not state, states in several, or a direct site states stays an unplaced effect", async () => {
+test("a wrapper request whose route the caller does not state, or states in several, stays an unplaced effect", async () => {
   const unstated = await factOf(wrapperFixture([[BASE, { kind: "runtime" }]]));
   assert.deepEqual(valueOf(unstated).steps.flatMap((step) => step.effects ?? []), []);
   assert.deepEqual(effectCuts(unstated).map(([, at]) => (at as readonly string[])[0]).sort(), [`${A}:13 http effect`, `${A}:9 http effect`]);
-  const direct = wrapperFixture([[BASE, { kind: "text", text: "/orders" }]]);
-  const directly = await factOf({ ...direct, placedSites: direct.placedSites!.map((placed) => ({ site: placed.site, column: placed.column! })) });
-  assert.deepEqual(valueOf(directly).steps.flatMap((step) => step.effects ?? []), []);
-  assert.ok(effectCuts(directly).some(([, at]) => (at as readonly string[])[0] === `${A}:9 http effect`));
   const alternatives = await factOf(wrapperFixture([[BASE, { kind: "text", text: "/a" }], [BASE, { kind: "text", text: "/b" }]]));
   assert.deepEqual(valueOf(alternatives).steps.flatMap((step) => step.effects ?? []), []);
   assert.deepEqual(effectCuts(alternatives).map(([, at]) => (at as readonly string[])[0]).sort(), [`${A}:13 http effect`, `${A}:9 http effect`]);
+});
+
+test("a direct request site that states its route after an undecided base is the same placed effect as a propagated one", async () => {
+  const direct = wrapperFixture([[BASE, { kind: "text", text: "/orders" }]]);
+  const fact = await factOf({ ...direct, placedSites: direct.placedSites!.map((placed) => ({ site: placed.site, column: placed.column! })) });
+  assert.deepEqual(effectPaths(fact), [["run", "/orders"]]);
 });
 
 test("a caller that states no route keeps its own cut while another caller of the same wrapper is placed", async () => {

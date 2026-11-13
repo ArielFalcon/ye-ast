@@ -2,10 +2,10 @@
 
 - Status: Accepted, 2026-11-13, lead decision under the owner's standing instruction (2026-11-13)
 - Decision source: Lead decision under the owner's standing instruction (2026-11-13) to pick the recommended option, for spec S2 of trace-coverage-followups: "Colocar efectos en frontends con wrapper".
-- Supersedes: ADR-0061 decision 3, in part (a base-undecided request that states one route stops being `effect-unplaced`); ADR-0054 decision 4, for the trace only (the unplaced request is no longer also listed in `unresolvedEffects`).
+- Supersedes: ADR-0061 decision 3, in part (for the trace, a base-undecided request that states one route, direct or propagated, stops being `effect-unplaced`, and ADR-0061 decision 3's "stated requests (including base-undecided ones)" keeps the cut only for several routes or none); ADR-0054 decision 4, for the trace only (the placed request is no longer also listed in `unresolvedEffects`). The end-to-end tests that pinned the direct case ("without becoming a complete trace effect") are replaced.
 - Related: [ADR-0044](0044-one-implementation-closure-with-scoped-vetoes.md), [ADR-0054](0054-a-stated-route-links-when-only-its-base-is-undecided.md), [ADR-0057](0057-partial-request-strings-keep-what-they-state.md), [ADR-0061](0061-a-trace-returns-the-links-of-requests-under-deferred-steps.md)
 
-**In short:** a wrapper's caller whose request states one method and one route after a base the snapshot does not decide,
+**In short:** a call site (a wrapper's caller, or a direct call) whose request states one method and one route after a base the snapshot does not decide,
 which is how every frontend that injects its API URL writes a request, is a placed `http` effect of the trace with that route and
 `authority: "undecided"`, instead of an `effect-unplaced` cut. The wrapper body that issues the request for several
 callers adds no cut when the callers reached in the trace are placed through it.
@@ -34,16 +34,15 @@ covered by a placed effect, so placing the caller is enough.
 
 ## Decision
 
-1. A call site that a wrapper's caller propagates (ADR-0044 decision 7: the placed site has `origins`), whose target is not
-   complete and whose stated request yields exactly one route through
+1. A call site, direct or propagated from a wrapper (ADR-0044 decision 7), whose target is not complete and whose stated
+   request yields exactly one route through
    `undecidedAuthorityTargetsOf` (the owner of that fact) is an `http` effect with `target: { method, path }`, the route
    as the code states it after the base, and `authority: "undecided"`, the same marker a link carries. The trace reads the
    topology's request and never derives one.
 2. Several routes (alternative URL expressions), a route not stated, or any other unknown stays `effect-unplaced` with its
    stated request in `unresolvedEffects`, as before.
-3. A direct site with an undecided base stays as ADR-0057 and the trace tests pin it: `effect-unplaced` plus its stated
-   request in `unresolvedEffects`. The scope is the wrapper case of the evidence; extending the rule to direct sites is a
-   separate decision (see below). A site with a complete target is unchanged byte for byte.
+3. The rule reads the request, not the call's shape: a direct site and a propagated one give the same effect. A site with
+   a complete target is unchanged byte for byte.
 4. A wrapper body's own call is not an additional cut when every origin of a placed propagated site is covered
    (existing rule of `placeEffects`); a caller whose request is not placed keeps its own cut, so an unresolved caller is
    never hidden by a placed one.
@@ -60,8 +59,5 @@ covered by a placed effect, so placing the caller is enough.
 
 ## Not decided here
 
-- Direct sites (`this.http.get(`${BASE}/orders`)`) with an undecided base keep their cut. Recommended: place them the same
-  way, since the request is the same fact; it moves the corpus gate's direct-request cases and two end-to-end tests that
-  pin the current behavior, so it needs the owner's word.
 - Several routes at one site (a conditional URL) stay unplaced; placing each as an alternative needs its own decision.
 - Which of several callers of one wrapper a path-parametric request belongs to is the workspace join's, not the trace's.
