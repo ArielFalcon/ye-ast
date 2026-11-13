@@ -1,6 +1,6 @@
 import type { Node } from "web-tree-sitter";
 import type { LibraryMember, LibraryReading, LibrarySignatures } from "../../ports/library-signatures.port.ts";
-import { resolve } from "./java-declared-types.ts";
+import { COMMENT_NODES, resolve, TYPE_NAMES } from "./java-declared-types.ts";
 import { classHead, libraryClassOf, libraryParameterClasses, type LibraryCallSources } from "./java-library-calls.ts";
 import { enclosingType, thisType } from "./java-project.ts";
 import type { JavaFile, JavaProject, MethodDecl, TypeDecl } from "./java-symbols.ts";
@@ -34,12 +34,12 @@ export interface FunctionValueSources {
   libraries?: LibraryReading;
   /** The type and every repository type above it, or `undefined` when one of its supertypes is not a repository type. */
   ancestors(type: TypeDecl): readonly TypeDecl[] | undefined;
+  /** The type and every repository type above it, whatever else its supertypes include. */
+  above(type: TypeDecl): readonly TypeDecl[];
   /** The one abstract method of a functional repository interface; `undefined` when the sources do not settle it. */
   functionalMethod(type: TypeDecl): MethodDecl | undefined;
 }
 
-const COMMENTS: ReadonlySet<string> = new Set(["line_comment", "block_comment"]);
-const TYPE_NAMES: ReadonlySet<string> = new Set(["type_identifier", "scoped_type_identifier", "generic_type"]);
 
 /**
  * The target types of a function value from the context it stands in: a written declaration type, a cast, a `return`,
@@ -171,7 +171,7 @@ function functionalMember(fqn: string, signatures: LibrarySignatures): LibraryMe
 /** The library signatures of the JDK declared for the file, as the library readers take them. */
 function librariesFor(file: JavaFile, sources: FunctionValueSources): LibraryCallSources | undefined {
   const signatures = sources.libraries?.of(file.path);
-  return signatures === undefined ? undefined : { project: sources.project, signatures, ancestors: sources.ancestors };
+  return signatures === undefined ? undefined : { project: sources.project, signatures, ancestors: sources.ancestors, above: sources.above };
 }
 
 /** A written type: a repository type, a library class, or unsettled for a type variable, a primitive, an array or a name the strict reading does not settle. */
@@ -208,11 +208,11 @@ function argumentTargets(list: Node, value: Node, file: JavaFile, sources: Funct
   const name = invocation?.childForFieldName("name")?.text;
   const object = invocation?.childForFieldName("object");
   if (invocation?.type !== "method_invocation" || name === undefined) return UNSETTLED;
-  const arguments_ = list.namedChildren.filter((child): child is Node => child !== null && !COMMENTS.has(child.type));
+  const arguments_ = list.namedChildren.filter((child): child is Node => child !== null && !COMMENT_NODES.has(child.type));
   const position = arguments_.findIndex((argument) => argument.id === value.id);
   if (object !== null && object?.type !== "this") {
     const libraries = librariesFor(file, sources);
-    const classes = libraries === undefined ? undefined : libraryParameterClasses(invocation, position, arguments_.length, file, libraries);
+    const classes = libraries === undefined ? undefined : libraryParameterClasses(invocation, position, file, libraries);
     return classes === undefined ? UNSETTLED : classes.map((library) => ({ library }));
   }
   for (let type = thisType(invocation, file, sources.project); type !== undefined; type = type.outer) {
@@ -221,14 +221,14 @@ function argumentTargets(list: Node, value: Node, file: JavaFile, sources: Funct
     const named = above.flatMap((ancestor) => ancestor.methods).filter((method) => method.name === name);
     if (named.length === 0) continue;
     if (named.some((method) => method.modifiers.includes("private") && method.owner !== type)) return UNSETTLED;
-    const parameters = named.flatMap((method) => parameterAt(method, position, arguments_.length));
+    const parameters = named.flatMap((method) => declaredParameterAt(method, position, arguments_.length));
     return parameters.length === 0 ? UNSETTLED : union(parameters.map(({ method, type: written }) => typeTargets(written, method.owner.file, sources)));
   }
   return UNSETTLED;
 }
 
 /** The written type a call of `count` arguments passes its argument at `position` as, for a declaration its arity may select; none otherwise. */
-function parameterAt(method: MethodDecl, position: number, count: number): { method: MethodDecl; type: Node }[] {
+function declaredParameterAt(method: MethodDecl, position: number, count: number): { method: MethodDecl; type: Node }[] {
   const parameters = (method.node.childForFieldName("parameters")?.namedChildren ?? []).filter((parameter): parameter is Node => parameter !== null && (parameter.type === "formal_parameter" || parameter.type === "spread_parameter"));
   const last = parameters.at(-1);
   const variable = last?.type === "spread_parameter";

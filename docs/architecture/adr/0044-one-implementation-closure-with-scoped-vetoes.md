@@ -263,7 +263,9 @@ would answer the single body that the probe with the veto disabled shows.
    variable, an array, a primitive, a receiver or a type above it that the JDK does not hold, and a receiver chain through
    a repository type whose supertypes are not all repository types stay unsettled. A simple type name no declaration binds
    is the one `java.lang` or on-demand `java.*` type the JDK holds under the repository-compiles assumption (ADR-0062
-   decision 1), and a name two of them hold is unsettled. A nested value takes the type argument its written library
+   decision 1), and a name two of them hold is unsettled; a supertype outside the repository is assumed to redefine no
+   such name (ADR-0064). Type arguments are substituted from the receiver's declared type through the supertypes, and a
+   method's own from its arguments; a wildcard, a raw type or any variable not settled leaves the value unsettled. A nested value takes the type argument its written library
    target states for the target's own single abstract method. A constructor argument stays unsettled.
 6. **An undeclared supertype is never guessed.** A supertype the snapshot does not declare keeps the strict reading
    `unsettled` and the call a cut. Generated Java sources enter as an ADR-0037 build-output kind (its decision 1 lists

@@ -36,9 +36,9 @@ export function readLibraries(declared: readonly DeclaredBuildOutput[], files: r
       unused.set(verdict.reason, [...(unused.get(verdict.reason) ?? []), output]);
       continue;
     }
-    const { digest, vendor, version, feature, release, basis } = verdict.signatures.basis;
+    const { digest, vendor, version, feature, basis } = verdict.signatures.basis;
     used.push({ at: output.at, signatures: verdict.signatures });
-    outputs.push({ kind: "jdk", at: output.at, verified: false, digest, jdk: { ...(vendor === undefined ? {} : { vendor }), version, feature, release, basis } });
+    outputs.push({ kind: "jdk", at: output.at, verified: false, digest, jdk: { ...(vendor === undefined ? {} : { vendor }), version, feature, basis } });
   }
   const libraries: LibraryReading = {
     of: (path) => used.filter(({ at }) => isUnder(at, path)).sort((a, b) => b.at.length - a.at.length)[0]?.signatures,

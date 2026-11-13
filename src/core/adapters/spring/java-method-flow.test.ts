@@ -5,10 +5,11 @@ import { createJavaProject, describeFile } from "./java-symbols.ts";
 import { fieldBindings } from "./java-members.ts";
 import { invocationsOf } from "./java-invocations.ts";
 import { JavaMethodFlow } from "./java-method-flow.ts";
-import { stagedSelections } from "./java-call-site-owner.ts";
+import { stagedSelections, NO_PROOF, type CallSiteProof } from "./java-call-site-owner.ts";
+import { librariesOf } from "./java-library.testing.ts";
 
 /** The staged selections of the call named `member`, as plain data, over one in-memory source. */
-async function staged(source: string, member: string): Promise<[string, boolean][]> {
+async function staged(source: string, member: string, proof?: CallSiteProof): Promise<[string, boolean][]> {
   const parsed = (await createJavaParser()).parse({ path: "src/Controller.java", content: source });
   assert.ok(parsed.ok);
   try {
@@ -20,7 +21,7 @@ async function staged(source: string, member: string): Promise<[string, boolean]
         const binding = fieldBindings(owner).get(name);
         return binding === undefined ? undefined : { binding, owner };
       },
-    }).map(({ method, proven }) => [`${method.owner.name}.${method.name}(${method.parameterTypes.join(",")})`, proven]);
+    }, call.type, proof).map(({ method, proven }) => [`${method.owner.name}.${method.name}(${method.parameterTypes.join(",")})`, proven]);
   } finally {
     parsed.value.dispose();
   }
@@ -99,4 +100,16 @@ test("nested dispatch reuses the same forwarded binding context", async () => {
     assert.ok(root);
     assert.equal(flow.expand(root, { type: root.type, locals: root.locals, env: new Map() })?.flat().length, 1);
   } finally { parsed.value.dispose(); }
+});
+
+test("the owner's proof reads the declared JDK's signatures as the dispatch port does, so a library function value no longer unproves the body (ADR-0044 decision 7)", async () => {
+  const source = `package app;
+import java.util.List;
+class Controller { private Port port; void run() { port.send("x"); } }
+interface Port { void send(String s); }
+class Sender implements Port { public void send(String s) {} }
+class Util { void each(List<String> items) { items.removeIf(x -> true); } }`;
+
+  assert.deepEqual(await staged(source, "send"), [["Sender.send(String)", false]], "no JDK declared: the function value may implement the port");
+  assert.deepEqual(await staged(source, "send", { ...NO_PROOF, libraries: librariesOf() }), [["Sender.send(String)", true]]);
 });

@@ -5,7 +5,7 @@
 - Amends: [ADR-0044](0044-one-implementation-closure-with-scoped-vetoes.md) decision 10 and its redistribution risk; [ADR-0037](0037-host-declared-build-outputs.md) decisions 1, 5 and 9
 - Related: [ADR-0007](0007-dependency-versions.md), [ADR-0013](0013-coverage-grows-only-with-evidence.md), [ADR-0039](0039-behavior-changes-pass-a-corpus-gate.md)
 
-**In short:** the library signatures come from the JDK the user already has and declares with `--jdk [<at>=]<path>`, read as data from `lib/ct.sym` and `release`, at the JDK's own feature release, with no digest pin and no shipped table. It is a build output (ADR-0037): recorded in `inputs.buildOutputs` as unverified, and a cut when unusable. This unit builds the input only; nothing consumes the signatures yet.
+**In short:** the library signatures come from the JDK the user already has and declares with `--jdk [<at>=]<path>`, read as data from `lib/ct.sym` and `release`, at the JDK's own feature release, with no digest pin and no shipped table. It is a build output (ADR-0037): recorded in `inputs.buildOutputs` as unverified, and a cut when unusable. The proof of ADR-0044 decision 5 is its one consumer.
 
 ## Context
 
@@ -39,7 +39,9 @@ that followed measured the consequences:
    is 23). Rule B replaces the per-source selection of decision 10 for this unit: the table of F is used for every
    source of the declaration's `at`. A newer table only adds candidates, and a library parameter is either a library
    class (never a repository interface) or a bare type variable (unsettled), so the proof does not turn on which release
-   the build used. The residual is a member removed between the build's release and F.
+   the build used. The residual is a member removed between the build's release and F. A stated limit of rule B: a `java.*`
+   type added after the build's release can bind a simple name that the code means from another on-demand package,
+   since only `java.*` types are held and the table of F then offers the one.
 4. **Upper-bound refusal.** If a build file in the snapshot, under the declaration's `at`, states a literal release
    greater than F, the declaration is unusable for that snapshot and the answer carries a `build-output` cut with the
    reason `jdk-older-than-build`, because an older table lacks real candidates. The literals read are `<release>`,
@@ -58,12 +60,12 @@ that followed measured the consequences:
 7. **It is a build output (ADR-0037).**
    - Decision 1 is amended: the closed union of kinds gains `jdk`, with `at` the repository directory the JDK compiles
      (`""` for the whole repository) and the declaration syntax `[<at>=]<path>`, `=<path>` for a path holding `=`. The
-     CLI flag is the repeatable `--jdk` of `trace`, `workspace`, `decisions`, `mcp` and `init` (which prints it into the
-     registration); the query-protocol kind is `jdk` with an absolute path. `callers`, `impact`, `importers`, `outline`
-     and `contract-consequences` refuse it as a usage error, since they never read the closure. It is allowed with
+     CLI flag is the repeatable `--jdk` of `trace`, `mcp` and `init` (which prints it into the registration); the
+     query-protocol kind is `jdk` with an absolute path. `callers`, `impact`, `importers`, `outline`, `workspace`,
+     `decisions` and `contract-consequences` refuse it as a usage error, since none of them opens a typed reading. It is allowed with
      `--live`: it costs milliseconds and is keyed by content, unlike a `node_modules` check.
    - Decision 5 is amended: a JDK has no lockfile analogue, so every answer that used one states it `verified: false`,
-     with `digest` the `ct.sym` SHA-256 and `jdk: { vendor?, version, feature, release, basis: "declared-jdk" }`.
+     with `digest` the `ct.sym` SHA-256 and `jdk: { vendor?, version, feature, basis: "declared-jdk" }` (the feature release is the release of the signatures).
    - Decision 9 is amended: the reasons `jdk-unreadable` (missing, a link, not an archive of the supported kind, or a
      JDK 8 home, which has no release-set `ct.sym`), `jdk-older-than-build` (decision 4) and `release-not-held` (the
      table of F is absent from the archive) name a `build-output` cut. Without a declaration every answer is
@@ -86,10 +88,8 @@ that followed measured the consequences:
   held Java project is not read through them, so its identity is unchanged and a reading with a JDK never reuses an answer
   of one without. A snapshot that declares none answers as before; one that declares a JDK may follow a one-implementation
   port the veto cut, which is the change the corpus gate reports.
-- The proof inherits the strict reading's limits: a class with a supertype outside the repository leaves a library name
-  unsettled, since that supertype may declare a member type of the name (JLS 6.4.1), and a bare class name used as a
-  receiver is unsettled, since such a supertype may declare a field of that name (JLS 6.4.2).
-- The additive `inputs.buildOutputs` fields need no SCHEMA bump (no consumer yet).
+- The proof inherits the strict reading's limits except one: a supertype outside the repository is assumed not to redefine
+  a name that resolves to a `java.*` type (ADR-0064). Names the repository declares stay unsettled below such a supertype.
 
 ## Not decided here
 

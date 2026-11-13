@@ -80,6 +80,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0061](adr/0061-a-trace-returns-the-links-of-requests-under-deferred-steps.md) | A trace returns the links of requests under deferred steps (a step is deferred when it or an ancestor is), marked deferred; a call that may reach a request is a `request-possible` cut, not an "http effect" | Accepted |
 | [0062](adr/0062-java-names-and-receivers-resolve-under-the-repository-compiles-assumption.md) | A name one repository on-demand import declares is bound whatever other packages are imported; Spring Data repository interfaces declare no member type; an interface a declared OpenAPI generator emits does not make own, private and typed receivers unproven | Accepted |
 | [0063](adr/0063-a-jdk-the-host-declares-is-the-library-signature-source.md) | The library signatures come from a JDK the host declares with `--jdk [<at>=]<path>`, read as data from `ct.sym` at the JDK's own release with no pin and no shipped table; it is a build output, stated unverified, and a cut when unusable or older than a build file's literal release | Accepted |
+| [0064](adr/0064-a-supertype-outside-the-repository-redefines-no-java-name.md) | A supertype outside the repository is assumed to declare no member type and no inherited field named like a type that resolves to `java.*` by an import, an on-demand import or `java.lang`; it never covers a name the repository declares or a non-java name | Accepted |
 
 ## Designs (RFC)
 

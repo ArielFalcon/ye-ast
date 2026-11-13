@@ -115,7 +115,6 @@ test("the release file states the feature, the version and the vendor", async ()
     const home = await writeJdkHome(nextDirectory(), { release: text, signatures: [{ set: "89ABCDEFGHIJKLMNOPQ", spec: OBJECT_SPEC }] });
     const { basis } = used(createJdkLibrarySource().open({ path: home }));
     assert.equal(basis.feature, feature, text);
-    assert.equal(basis.release, feature, text);
     assert.equal(basis.version, version, text);
     assert.equal(basis.vendor, vendor, text);
     assert.equal(basis.basis, "declared-jdk");

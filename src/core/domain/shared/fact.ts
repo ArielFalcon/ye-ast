@@ -104,8 +104,8 @@ export interface BuildOutputInput {
   at: string;
   verified: boolean;
   digest: string;
-  /** Which JDK a `jdk` output is and the release of the signatures read from it (ADR-0063). */
-  jdk?: { vendor?: string; version: string; feature: number; release: number; basis: "declared-jdk" };
+  /** Which JDK a `jdk` output is; its feature release is the release of the signatures read from it (ADR-0063). */
+  jdk?: { vendor?: string; version: string; feature: number; basis: "declared-jdk" };
 }
 
 export interface Evidence {

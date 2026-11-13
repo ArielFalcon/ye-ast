@@ -114,7 +114,7 @@ function buildOutputLines(fact: Fact<unknown>): string[] {
   return (fact.inputs.buildOutputs ?? []).map((output) =>
     output.jdk === undefined
       ? `build output: ${mountOf(output)}, ${output.verified ? "verified by the snapshot's lockfile" : "unverified (no lockfile at the snapshot)"}`
-      : `build output: ${mountOf(output)}, declared JDK ${output.jdk.version} (library signatures at release ${output.jdk.release}), unverified`,
+      : `build output: ${mountOf(output)}, declared JDK ${output.jdk.version} (library signatures at release ${output.jdk.feature}), unverified`,
   );
 }
 

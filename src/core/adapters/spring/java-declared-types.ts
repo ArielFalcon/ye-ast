@@ -7,6 +7,10 @@ import { createJavaProject, isTypeDeclaration, qualifiedTypeName, type JavaFile,
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 
 const UNKNOWN: DeclaredType = { kind: "unknown" };
+/** The nodes a type is written as: a name, a qualified name or a name with type arguments. */
+export const TYPE_NAMES: ReadonlySet<string> = new Set(["type_identifier", "scoped_type_identifier", "generic_type"]);
+/** Nodes the grammar places among a call's arguments or members that are no part of them. */
+export const COMMENT_NODES: ReadonlySet<string> = new Set(["line_comment", "block_comment"]);
 /** Values whose class is one no declaration names: an implementation of an interface the sources do not state. */
 export const FUNCTION_VALUES: ReadonlySet<string> = new Set(["lambda_expression", "method_reference"]);
 const QUALIFIED = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;

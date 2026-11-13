@@ -82,7 +82,7 @@ test("a declared JDK is recorded in the inputs as an unverified jdk and changes 
       at: "",
       verified: false,
       digest: createHash("sha256").update(readFileSync(join(home, "lib", "ct.sym"))).digest("hex"),
-      jdk: { vendor: "Eclipse Adoptium", version: "25.0.5", feature: 25, release: 25, basis: "declared-jdk" },
+      jdk: { vendor: "Eclipse Adoptium", version: "25.0.5", feature: 25, basis: "declared-jdk" },
     },
   ]);
   const { buildOutputs: _recorded, ...otherInputs } = declared.inputs;

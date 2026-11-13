@@ -412,6 +412,7 @@ export function readHierarchy(files: readonly JavaFile[], project: JavaProject, 
     functionValues: () => (read ??= values.map((value) => targetsOfFunctionValue(value, {
       project,
       ...(libraries === undefined ? {} : { libraries }),
+      above: (type) => ancestorsOf(type, hierarchy),
       ancestors: (type) => { const above = ancestorsOf(type, hierarchy); return above.some((ancestor) => outside.has(ancestor)) ? undefined : above; },
       functionalMethod: (type) => functionalMethodOf(type, hierarchy),
     }))),

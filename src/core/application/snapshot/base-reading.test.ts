@@ -246,7 +246,7 @@ test("a file's contradiction alignment is kept between readings by its content a
 });
 
 test("the Java pack receives the signatures of a declared JDK by path, and reads none when no JDK is declared", () => {
-  const signatures = { basis: { version: "25", feature: 25, release: 25, basis: "declared-jdk", digest: "d" }, typeOf: () => undefined } as const;
+  const signatures = { basis: { version: "25", feature: 25, basis: "declared-jdk", digest: "d" }, typeOf: () => undefined } as const;
   const received: (LibraryReading | undefined)[] = [];
   const readings = createBaseReadings({
     relations: {} as RelationExtractor,

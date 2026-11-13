@@ -70,7 +70,7 @@ export const factInputs = z.strictObject({
   }),
   origin: z.discriminatedUnion("kind", [z.strictObject({ kind: z.literal("full") }), z.strictObject({ kind: z.literal("sync"), base: z.string() })]).exactOptional(),
   engines: z.record(z.string(), z.string()),
-  buildOutputs: z.array(z.strictObject({ kind: z.enum(["node-modules", "java-sources", "jdk"]), at: z.string(), verified: z.boolean(), digest: z.string(), jdk: z.strictObject({ vendor: z.string().exactOptional(), version: z.string(), feature: z.number(), release: z.number(), basis: z.literal("declared-jdk") }).exactOptional() })).exactOptional(),
+  buildOutputs: z.array(z.strictObject({ kind: z.enum(["node-modules", "java-sources", "jdk"]), at: z.string(), verified: z.boolean(), digest: z.string(), jdk: z.strictObject({ vendor: z.string().exactOptional(), version: z.string(), feature: z.number(), basis: z.literal("declared-jdk") }).exactOptional() })).exactOptional(),
 });
 
 /** The strict schema refuses a key the fact may carry, so it names every key of `DeclaredConfig`, and only those. */

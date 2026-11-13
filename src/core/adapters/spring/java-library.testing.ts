@@ -43,6 +43,7 @@ export function jdkTypes(): Record<string, LibraryType> {
       members: [member("add", ["E"], "boolean", { abstract: true }), member("get", ["int"], "E", { abstract: true }), member("subList", ["int", "int"], "java.util.List<E>", { abstract: true }), member("of", ["E[]"], "java.util.List<E>", { static: true, varargs: true, typeParameters: ["E"] })],
     }),
     "java.util.ArrayList": type({ kind: "class", typeParameters: ["E"], supertypes: ["java.lang.Object", "java.util.List<E>"] }),
+    "java.util.Holder": type({ kind: "class", typeParameters: ["T"], supertypes: ["java.lang.Object"], members: [member("rr", ["java.lang.Runnable"], "boolean")] }),
     "java.awt.List": type({ kind: "class", supertypes: ["java.lang.Object"] }),
     "java.util.Optional": type({
       kind: "class",
@@ -51,6 +52,8 @@ export function jdkTypes(): Record<string, LibraryType> {
       members: [
         member("orElseThrow", ["java.util.function.Supplier<? extends X>"], "T", { typeParameters: ["X extends java.lang.Throwable"] }),
         member("orElse", ["T"], "T"),
+        member("get", [], "T"),
+        member("ofNullable", ["T"], "java.util.Optional<T>", { static: true, typeParameters: ["T"] }),
         member("map", ["java.util.function.Function<? super T, ? extends U>"], "java.util.Optional<U>", { typeParameters: ["U"] }),
       ],
     }),
@@ -105,7 +108,7 @@ export function jdkTypes(): Record<string, LibraryType> {
 /** The declared JDK for every path, over the given types. */
 export function librariesOf(types: Readonly<Record<string, LibraryType>> = jdkTypes()): LibraryReading {
   const signatures: LibrarySignatures = {
-    basis: { version: "25", feature: 25, release: 25, basis: "declared-jdk", digest: "fake" },
+    basis: { version: "25", feature: 25, basis: "declared-jdk", digest: "fake" },
     typeOf: (fqn) => types[fqn],
   };
   return { of: () => signatures };

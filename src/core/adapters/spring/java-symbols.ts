@@ -26,6 +26,9 @@ export interface JavaFile {
 
 export type TypeKind = "class" | "interface" | "annotation" | "other";
 
+/** A simple type name's imports: the qualified name a single-type import gives it, or the packages it may come from. */
+export type ImportedTypeSources = { imported: string } | { containers: readonly string[] };
+
 export interface Scope {
   file: JavaFile;
   type: TypeDecl | undefined;
@@ -130,12 +133,13 @@ export interface JavaProject {
    */
   bindName(name: string, scope: Scope, reading: "strict" | "lenient"): TypeLookup | "unsettled" | LocalType;
   /**
-   * The packages a simple type name that no declaration binds may come from, under the assumption that the repository
-   * compiles: `java.lang` and the on-demand imports. `undefined` when a single or static import, a member or local type,
-   * the file's package or a package of the repository an on-demand import names binds it, or the strict reading leaves it
-   * open for another reason.
+   * Where a simple type name that no declaration of the repository binds comes from, under the assumptions that the
+   * repository compiles and that a supertype outside it declares no member type of the name (ADR-0064): the type a
+   * single-type import names, or the packages `java.lang` and the on-demand imports offer. `undefined` when a member or
+   * local type, a static import, a conflicting import, the file's package or a package of the repository an on-demand
+   * import names binds it. The caller decides which of these sources it may rely on.
    */
-  unboundTypeSources(name: string, scope: Scope): readonly string[] | undefined;
+  importedTypeSources(name: string, scope: Scope): ImportedTypeSources | undefined;
   /** A written type name, including qualifiers, resolved with the strict lexical and import rules. */
   resolveTypeName(name: string, scope: Scope): TypeLookup | "unsettled" | LocalType;
   /**
@@ -351,13 +355,15 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
     return found.length === 1 ? found[0] : "unsettled";
   }
 
-  function unboundTypeSources(head: string, scope: Scope): readonly string[] | undefined {
+  function importedTypeSources(head: string, scope: Scope): ImportedTypeSources | undefined {
     const { file } = scope;
-    if (file.conflictingSingleImports.has(head) || file.singleImports.has(head) || lexicalType(head, scope, true) !== undefined) return undefined;
+    if (file.conflictingSingleImports.has(head) || lexicalType(head, scope, false, false) !== undefined) return undefined;
     if (file.staticImports.some(({ member }) => member === head) || file.staticOnDemandImports.length > 0) return undefined;
+    const imported = file.singleImports.get(head);
+    if (imported !== undefined) return byFqn(imported) === undefined ? { imported } : undefined;
     if (byFqn(file.packageName === "" ? head : `${file.packageName}.${head}`) !== undefined) return undefined;
     if (file.onDemandImports.some((container) => byFqn(`${container}.${head}`) !== undefined)) return undefined;
-    return ["java.lang", ...file.onDemandImports];
+    return { containers: ["java.lang", ...file.onDemandImports] };
   }
 
   function typeIdentity(name: string, scope: Scope): string | undefined {
@@ -732,7 +738,7 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
     lookupType,
     typeIdentity,
     bindName,
-    unboundTypeSources,
+    importedTypeSources,
     resolveTypeName: (name, scope) => resolveName(name.replace(/\s+/g, ""), scope, true),
     isPlatformName,
     isGeneratedInterface,

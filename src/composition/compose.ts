@@ -59,14 +59,14 @@ import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loa
 import { composeAngularRelations } from "./angular-relations.ts";
 import { composeConsumerSources, composeContractConsequences } from "./consumer-queries.ts";
 import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
-import { compareCallPlaces, type CallSiteReader, type PlacedCallSiteReader } from "../core/domain/topology/call-site.ts";
+import { compareCallPlaces, type CallSiteReader } from "../core/domain/topology/call-site.ts";
 import type { EntrypointExtractor, SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
 import { absentCapabilitiesOf, routedReaders } from "../core/application/snapshot/language-packs.ts";
 import { composeLanguagePacks } from "./language-packs.ts";
 import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
 import type { DerivedFacts } from "../core/ports/derived-facts.port.ts";
-import type { LibraryReading } from "../core/ports/library-signatures.port.ts";
+import type { LibraryPlacedCallSiteReader, LibraryReading } from "../core/ports/library-signatures.port.ts";
 import type { ParseHold } from "../core/ports/parse-holds.port.ts";
 import type { ModuleDependenciesReader } from "../core/ports/module-dependencies.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
@@ -178,9 +178,9 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
       return [...(await typescriptCallSites.of(files, repo, libraries, options)), ...java].sort(compareCallPlaces);
     },
   }, { of: "call-sites" });
-  const placedCallSites = staged<PlacedCallSiteReader>({
+  const placedCallSites = staged<LibraryPlacedCallSiteReader>({
     placed: async (files, repo, libraries, options) => {
-      const java = await createJavaCallSites(await javaParser()).placed(files, repo, libraries);
+      const java = await createJavaCallSites(await javaParser()).placed(files, repo, libraries, options);
       return [...(await typescriptCallSites.placed(files, repo, libraries, options)), ...java].sort(({ site: a }, { site: b }) => compareCallPlaces(a, b));
     },
   }, { placed: "call-sites" });

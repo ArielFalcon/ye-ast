@@ -2,7 +2,8 @@ import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import { basename } from "node:path";
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
 import { isSpringConfigFile } from "../../domain/languages/spring-config.ts";
-import { compareCallSites, type CallSite, type CallSiteReader, type PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
+import type { LibraryPlacedCallSiteReader, LibraryReading } from "../../ports/library-signatures.port.ts";
+import { compareCallSites, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
 import { CALL_PLACES } from "./findings.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
@@ -28,7 +29,7 @@ const eventSites: JavaSiteReader = { transport: "event", read: (project, configu
  * parser rejects is one site whose target is `unknown` with `source-unreadable`, at the parser's fault line and under
  * the first reader's transport: none of its calls can be read.
  */
-export function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[], libraries: readonly LibrarySource[], repo: string, readers: readonly JavaSiteReader[], includeNested = false): CallSite[] {
+export function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[], libraries: readonly LibrarySource[], repo: string, readers: readonly JavaSiteReader[], includeNested = false, jdks?: LibraryReading): CallSite[] {
   const readable = <T extends SourceFile>(sources: readonly T[]): T[] => sources.filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path));
   return withJavaSources(parser, (parse) => {
     const { files: owned, unparsed: unreadable } = parse(readable(files));
@@ -38,7 +39,7 @@ export function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[]
     const held = new Set(owned);
     const transport = readers[0]?.transport;
     const unread = transport === undefined ? [] : unreadable.map((at): CallSite => ({ repo, file: at.path, line: at.line, symbol: basename(at.path, ".java"), transport, target: { status: "unknown", reason: "source-unreadable", evidence: [at] } }));
-    const proof = callSiteProofOf(files, libraries, unreadable, unreadableLibraries);
+    const proof = callSiteProofOf(files, libraries, unreadable, unreadableLibraries, jdks);
     const sites = readers.flatMap((reader) => reader.read(project, configuration, held, repo, includeNested, proof));
     for (const site of sites) if (site.diagnostic?.source === "not-read" && unreadableLibraries.length > 0) {
       site.diagnostic = { ...site.diagnostic, unreadableSources: unreadableLibraries };
@@ -67,9 +68,9 @@ export function createJavaEventCallSites(parser: JavaParser): CallSiteReader {
 }
 
 /** Every call site a Java snapshot states: the HTTP requests it makes and the messages it publishes, in one parse. */
-export function createJavaCallSites(parser: JavaParser): CallSiteReader & PlacedCallSiteReader {
+export function createJavaCallSites(parser: JavaParser): CallSiteReader & LibraryPlacedCallSiteReader {
   return {
     of: async (files, repo, libraries = []) => javaCallSitesOf(parser, files, libraries, repo, [httpSites, eventSites]),
-    placed: async (files, repo, libraries = []) => javaCallSitesOf(parser, files, libraries, repo, [httpSites, eventSites], true).map((site) => ({ site, ...CALL_PLACES.get(site) })),
+    placed: async (files, repo, libraries = [], options) => javaCallSitesOf(parser, files, libraries, repo, [httpSites, eventSites], true, options?.libraries).map((site) => ({ site, ...CALL_PLACES.get(site) })),
   };
 }

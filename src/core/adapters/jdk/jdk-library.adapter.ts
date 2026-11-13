@@ -130,7 +130,7 @@ function tableOf(archive: JdkArchive, feature: number): Table {
       if (listed === 0) return UNREADABLE;
       if (entryOf(OBJECT) === undefined) return NOT_HELD;
       const signatures: LibrarySignatures = {
-        basis: { ...(release.vendor === undefined ? {} : { vendor: release.vendor }), version: release.version, feature: release.feature, release: feature, basis: "declared-jdk", digest: archive.digest },
+        basis: { ...(release.vendor === undefined ? {} : { vendor: release.vendor }), version: release.version, feature: release.feature, basis: "declared-jdk", digest: archive.digest },
         typeOf,
       };
       return { kind: "used", signatures };

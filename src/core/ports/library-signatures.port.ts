@@ -1,3 +1,6 @@
+import type { CallSiteReadOptions, PlacedCallSite } from "../domain/topology/call-site.ts";
+import type { LibrarySource } from "../domain/topology/library-source.ts";
+
 /** A method or constructor (`<init>`) of a library type, with its types as the generic signature writes them. */
 export interface LibraryMember {
   name: string;
@@ -23,7 +26,6 @@ export interface LibraryBasis {
   vendor?: string;
   version: string;
   feature: number;
-  release: number;
   basis: "declared-jdk";
   digest: string;
 }
@@ -47,4 +49,14 @@ export type LibraryOutcome = { kind: "used"; signatures: LibrarySignatures } | {
 /** Opens the signatures of a library the host declared at a host path. */
 export interface LibrarySignatureSource {
   open(declared: { path: string }): LibraryOutcome;
+}
+
+/** The options of a placed read of call sites when the host declared JDKs: the signatures the owner's proof of a body reads by path (ADR-0044 decision 7). */
+export interface LibraryCallSiteOptions extends CallSiteReadOptions {
+  libraries?: LibraryReading;
+}
+
+/** `PlacedCallSiteReader` for a reader that can use the declared JDKs' signatures. */
+export interface LibraryPlacedCallSiteReader {
+  placed(files: readonly { path: string; content: string }[], repo: string, libraries?: readonly LibrarySource[], options?: LibraryCallSiteOptions): Promise<readonly PlacedCallSite[]>;
 }

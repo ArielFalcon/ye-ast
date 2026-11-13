@@ -59,6 +59,87 @@ test("a record's accessor types a receiver by its component unless a method of t
   assert.deepEqual(await answer("void run(Basket basket) { basket.missing().removeIf(x -> true); }", librariesOf(), WILDCARDS, record("static List<String> missing = null;")), VETOED, "a static field is no accessor");
 });
 
+/** A repository class whose `rr` takes the port, beside a library `Holder.rr(Runnable)`: a field `h` of the library type is released, and a repository `Foo h` is not. */
+const FOO = java("Foo.java", ["package app;", "public class Foo {", "  boolean rr(Port p) { return true; }", "}"]);
+const HOLDER = "Holder<String> h; ";
+
+test("a variable that any binding form of the grammar declares in the member is never the library-typed field of its name", async () => {
+  assert.deepEqual(await answer(`${HOLDER}void r(Object o) { h.rr(() -> {}); }`, librariesOf(), WILDCARDS, FOO), BODIES, "the field alone is the library type");
+  const hidden: Readonly<Record<string, string>> = {
+    "an instanceof pattern": "void r(Object o) { if (o instanceof Foo h) { h.rr(id -> \"\"); } }",
+    "a final instanceof pattern": "void r(Object o) { if (o instanceof final Foo h) { h.rr(id -> \"\"); } }",
+    "an instanceof pattern in a conjunction": "void r(Object o) { if (o instanceof Foo h && h.rr(id -> \"\")) { } }",
+    "a negated instanceof pattern that returns early": "void r(Object o) { if (!(o instanceof Foo h)) return; h.rr(id -> \"\"); }",
+    "an instanceof pattern declared after the use": "void r(Object o) { h.rr(() -> {}); boolean b = o instanceof Foo h; }",
+    "a type pattern of a switch": "void r(Object o) { switch (o) { case Foo h -> h.rr(id -> \"\"); default -> {} } }",
+    "a record pattern component": "record Pair(Foo first) {} void r(Object o) { if (o instanceof Pair(Foo h)) { h.rr(id -> \"\"); } }",
+    "a local in an old-style switch group, in scope in the next group": "void r(int k) { switch (k) { case 1: Foo h = new Foo(); break; case 2: h = new Foo(); h.rr(id -> \"\"); } }",
+    "a local": "void r() { Foo h = new Foo(); h.rr(id -> \"\"); }",
+    "a parameter": "void r(Foo h) { h.rr(id -> \"\"); }",
+    "a for variable": "void r() { for (Foo h = new Foo(); h != null; h = null) { h.rr(id -> \"\"); } }",
+    "an enhanced for variable": "void r(java.util.List<Foo> foos) { for (Foo h : foos) { h.rr(id -> \"\"); } }",
+    "a resource": "void r() throws Exception { try (Foo h = new Foo()) { h.rr(id -> \"\"); } }",
+    "a catch parameter": "void r() { try { } catch (RuntimeException h) { h.rr(id -> \"\"); } }",
+    "an inferred lambda parameter": "void r(Consumer<Foo> c) { Consumer<Foo> d = h -> h.rr(id -> \"\"); }",
+    "a typed lambda parameter": "void r() { Consumer<Foo> d = (Foo h) -> h.rr(id -> \"\"); }",
+    "a var": "void r() { var h = new Foo(); h.rr(id -> \"\"); }",
+    "a variable-arity parameter": "void r(Foo... h) { h.rr(id -> \"\"); }",
+  };
+  for (const [form, member] of Object.entries(hidden)) assert.deepEqual(await answer(`${HOLDER}${member}`, librariesOf(), WILDCARDS, FOO), VETOED, form);
+});
+
+test("a local declared in an old-style switch group is in scope in the groups after it, and a block that has ended hides its locals", async () => {
+  const library = "void r(int k) { switch (k) { case 1: Holder<String> h = null; break; case 2: h.rr(() -> {}); } }";
+  const ended = "void r(int k) { { Foo h = new Foo(); } h.rr(() -> {}); }";
+
+  assert.deepEqual(await answer(`${HOLDER}${library}`, librariesOf(), WILDCARDS, FOO), BODIES, "the local of the first group types the use in the second");
+  assert.deepEqual(await answer(`${HOLDER}${ended}`, librariesOf(), WILDCARDS, FOO), BODIES, "the block's local is out of scope, so the field is meant");
+});
+
+test("a supertype outside the repository is assumed not to redefine a name that resolves to java.* by an import (ADR-0064)", async () => {
+  const outside = (body: string) => `class Child extends org.other.Base { ${body} }`;
+  const released: Readonly<Record<string, string>> = {
+    "a single-type import": outside("void run(List<String> items) { items.removeIf(x -> true); }"),
+    "an on-demand import": outside("void run(Optional<String> items) { items.map(x -> x); }"),
+    "a type name used as a receiver": outside("void run() { Objects.requireNonNullElseGet(null, () -> \"x\"); }"),
+    "an interface outside the repository": "class Child implements java.io.Serializable { void run(List<String> items) { items.removeIf(x -> true); } }",
+  };
+  for (const [context, member] of Object.entries(released)) assert.deepEqual(await answer(member, librariesOf(), ["import java.util.List;", ...WILDCARDS]), BODIES, context);
+
+  const kept: Readonly<Record<string, string>> = {
+    "a name the repository declares": outside("void run(Basket basket) { basket.lines().removeIf(x -> true); }"),
+    "a name a non-java import gives": outside("void run(org.acme.List<String> items) { items.removeIf(x -> true); }"),
+    "a field of the repository that obscures the type name": outside("List<Port> Objects; void run() { Objects.requireNonNullElseGet(null, () -> \"x\"); }"),
+    "a method of a repository class that extends a library class": outside("List<String> names() { return null; } void run() { names().removeIf(x -> true); }"),
+    "a variable that may be inherited": outside("void run() { items.removeIf(x -> true); }"),
+  };
+  const basket = java("Basket.java", ["package app;", "import java.util.List;", "public record Basket(List<String> lines) { }"]);
+  for (const [context, member] of Object.entries(kept)) assert.deepEqual(await answer(member, librariesOf(), ["import java.util.List;", ...WILDCARDS], basket), VETOED, context);
+});
+
+test("the type arguments of a receiver are substituted through the declared type, the supertypes and the arguments of a generic method", async () => {
+  const released: Readonly<Record<string, string>> = {
+    "an optional of a list": "void run(List<String> items) { Optional.ofNullable(items).orElse(null).stream().map(x -> x); }",
+    "a get of a declared argument": "void run(List<List<String>> lists) { lists.get(0).removeIf(x -> true); }",
+    "an argument through a supertype": "void run(ArrayList<List<String>> lists) { lists.get(0).removeIf(x -> true); }",
+    "an argument of a cast": "void run(Object o) { ((Optional<List<String>>) o).get().removeIf(x -> true); }",
+    "an argument of a constructed receiver": "void run() { new ArrayList<List<String>>().get(0).removeIf(x -> true); }",
+    "a nested library argument": "void run(Optional<Optional<List<String>>> maybe) { maybe.get().get().removeIf(x -> true); }",
+  };
+  for (const [context, member] of Object.entries(released)) assert.deepEqual(await answer(member), BODIES, context);
+
+  const kept: Readonly<Record<string, string>> = {
+    "a wildcard argument": "void run(Optional<? extends List<String>> maybe) { maybe.get().removeIf(x -> true); }",
+    "a diamond, which states no argument": "void run() { new ArrayList<>().get(0).removeIf(x -> true); }",
+    "an argument whose type is not settled": "void run(Object o) { Optional.ofNullable(o).get().removeIf(x -> true); }",
+    "an argument of a generic method that disagrees with a second": "void run(List<String> a, Object b) { Objects.requireNonNullElse(a, b).get(0).removeIf(x -> true); }",
+    "a raw receiver": "void run(Optional maybe) { maybe.get().removeIf(x -> true); }",
+    "a result the arguments do not give": "void run(List<String> items) { items.stream().map(x -> x).reduce((a, b) -> a).get().removeIf(x -> true); }",
+    "an argument that is a primitive": "void run() { Optional.ofNullable(1).get().removeIf(x -> true); }",
+  };
+  for (const [context, member] of Object.entries(kept)) assert.deepEqual(await answer(member), VETOED, context);
+});
+
 test("a name that only on-demand imports can supply is the library class exactly one of them holds", async () => {
   const names = (imports: readonly string[]) => answer("void run(List<String> items) { items.removeIf(x -> true); }", librariesOf(), imports);
 
@@ -87,7 +168,9 @@ test("a function value whose library parameter, receiver or candidates are not s
     "a receiver imported from outside the JDK": "void run(Mapper mapper) { mapper.map(x -> x); }",
     "a var receiver": "void run() { var items = new ArrayList<String>(); items.removeIf(x -> true); }",
     "a lambda parameter receiver": "void run(List<List<String>> lists) { lists.forEach(inner -> inner.removeIf(x -> true)); }",
-    "a result that is a type variable": "void run(List<List<String>> lists) { lists.get(0).removeIf(x -> true); }",
+    "a result that is a wildcard argument": "void run(List<? extends List<String>> lists) { lists.get(0).removeIf(x -> true); }",
+    "a result that is a raw type's variable": "void run(List lists) { lists.get(0).removeIf(x -> true); }",
+    "a result whose argument is a type variable": "<T> void run(List<T> lists) { lists.get(0).removeIf(x -> true); }",
     "a result of a call through a type variable of the repository": "<T extends List<String>> T make() { return null; } void run() { make().removeIf(x -> true); }",
     "a receiver chain through a repository class that extends a library class (fixture 1)": "class Slots extends java.util.ArrayList<Port> {} void run(Slots slots) { slots.add(() -> \"lambda\"); }",
     "a sublist of a repository class that extends a library class (fixture 1)": "class Slots extends java.util.ArrayList<Port> {} void run(Slots slots) { slots.subList(0, 0).add(() -> \"sub\"); }",
@@ -97,7 +180,6 @@ test("a function value whose library parameter, receiver or candidates are not s
     "repository overloads of the arity that return different classes": "List<String> pick(int i) { return null; } Optional<String> pick(Integer i) { return null; } void run() { pick(1).removeIf(x -> true); }",
     "a call of a name that is also one of Object's": "List<String> toString(int i) { return null; } void run() { toString(1).removeIf(x -> true); }",
     "a receiver whose name is a variable that shadows a type": "List<Port> Objects; void run() { Objects.requireNonNullElseGet(null, () -> \"x\"); }",
-    "a receiver whose name may be a field inherited from outside the repository": "class Child implements java.io.Serializable { void run2() { Objects.requireNonNullElseGet(null, () -> \"x\"); } }",
     "a variable declared in a block that has ended, so a field is meant": "Object items; void run() { { List<String> items = null; } items.removeIf(x -> true); }",
     "a variable declared after its use, so a field it hides is meant": "void run() { items.removeIf(x -> true); List<String> items = null; } List<Port> ports; Object items;",
     "a receiver declared as a pattern variable": "void run(Object o) { if (o instanceof List<?> items) { items.removeIf(x -> true); } }",

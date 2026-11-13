@@ -40,7 +40,7 @@ import { isTraceRoot, walkTrace } from "./trace-walk.ts";
 import { placeEffects } from "./trace-effects.ts";
 import { comparePlacement, type DataEffectReader } from "../../domain/trace/data-effect-site.ts";
 import type { DeferredValueReader } from "../../ports/framework-deferrals.port.ts";
-import type { PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
+import type { LibraryPlacedCallSiteReader } from "../../ports/library-signatures.port.ts";
 import { pagePlans } from "./page-plans.ts";
 import { createBaseReadings, withOutputs, type BaseReadingDeps } from "../snapshot/base-reading.ts";
 import { buildOutputCuts } from "../../domain/shared/build-outputs.ts";
@@ -57,7 +57,7 @@ export interface TraceQueriesDeps extends HeadReaderDeps, Pick<BaseReadingDeps, 
   /** Reads the relations impact reads, under the same retained key, for the member calls they prove (RFC-0013 R3). */
   relations: RelationExtractor;
   /** Reads the snapshot's call sites (RFC-0011), the declared rows a trace's effects come from (RFC-0013 R12). */
-  callSites: PlacedCallSiteReader;
+  callSites: LibraryPlacedCallSiteReader;
   dataEffects?: DataEffectReader;
   /** Reads the function values a registered vocabulary lists as run later, so the requests inside them are owned by the declaration around them. */
   deferredValues?: DeferredValueReader;
@@ -185,7 +185,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           }) && (deps.librarySources?.length ?? 0) === 0;
           const effectCuts = await placeEffects(walk.roots, {
             store, declarations: reading.declarations, ownedIn: reconciled.ownedIn, callsOf: (body) => reconciled.callsOf(body),
-            sites: async () => [...await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources, { completeSource }), ...await dataSites()]
+            sites: async () => [...await deps.callSites.placed(head.tree.sources, request.repoId, deps.librarySources, { completeSource, ...(typed.libraries === undefined ? {} : { libraries: typed.libraries }) }), ...await dataSites()]
               .sort(comparePlacement).filter(({ site }) => head.selected(site.file)),
             lineOf, functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined),
             ...(deferredValues === undefined ? {} : { deferredValuesOf: (file: string) => deferredValues.of(file) }),

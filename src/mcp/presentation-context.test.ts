@@ -39,6 +39,6 @@ test("a partial scope selection is presented without changing the fact status", 
 });
 
 test("a declared JDK in a header is stated as unverified with the release of its signatures, not as a missing lockfile", () => {
-  const fact = { ...base, inputs: { ...base.inputs, buildOutputs: [{ kind: "jdk", at: "", verified: false, digest: "d", jdk: { version: "25.0.5", feature: 25, release: 25, basis: "declared-jdk" } }] }, status: "complete", value: null } as Fact<null>;
+  const fact = { ...base, inputs: { ...base.inputs, buildOutputs: [{ kind: "jdk", at: "", verified: false, digest: "d", jdk: { version: "25.0.5", feature: 25, basis: "declared-jdk" } }] }, status: "complete", value: null } as Fact<null>;
   assert.ok(renderFactHeader(fact).includes("build output: ., declared JDK 25.0.5 (library signatures at release 25), unverified"));
 });

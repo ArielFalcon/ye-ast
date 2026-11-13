@@ -9,6 +9,7 @@ import { scopeOf } from "./java-symbols.ts";
 import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchTargets } from "../../ports/import-origins.port.ts";
+import type { LibraryReading } from "../../ports/library-signatures.port.ts";
 import type { FieldLookup, Invocation } from "./java-invocations.ts";
 import { receiverOf } from "./java-invocations.ts";
 import { argumentsOf, descendants, typeNameOf } from "./java-members.ts";
@@ -36,6 +37,8 @@ export interface StagedSelection {
 export interface CallSiteProof {
   unparsed: readonly UnparsedSource[];
   unreadJvm: boolean;
+  /** The signatures of the JDKs the host declared, which the dispatch proof reads as `dispatchTargets` does (ADR-0044 decision 7). */
+  libraries?: LibraryReading;
 }
 
 /** The proof of a read that handed the flow only its parsed sources. */
@@ -45,8 +48,8 @@ export const NO_PROOF: CallSiteProof = { unparsed: [], unreadJvm: false };
  * The owner's proof over the call-site flow's own inputs: every source the parse left unread, its own and the libraries
  * it reads, and every JVM source no extractor reads in the universe it was handed.
  */
-export function callSiteProofOf(files: readonly SourceFile[], libraries: readonly LibrarySource[], unparsed: readonly UnparsedSource[], unreadableLibraries: readonly UnparsedSource[]): CallSiteProof {
-  return { unparsed: [...unparsed, ...unreadableLibraries], unreadJvm: [...files, ...libraries].some(({ path }) => UNREAD_JVM_SOURCE.test(path)) };
+export function callSiteProofOf(files: readonly SourceFile[], libraries: readonly LibrarySource[], unparsed: readonly UnparsedSource[], unreadableLibraries: readonly UnparsedSource[], jdks?: LibraryReading): CallSiteProof {
+  return { unparsed: [...unparsed, ...unreadableLibraries], unreadJvm: [...files, ...libraries].some(({ path }) => UNREAD_JVM_SOURCE.test(path)), ...(jdks === undefined ? {} : { libraries: jdks }) };
 }
 
 interface ProjectReading {
@@ -127,7 +130,7 @@ function ownerProofOf(project: JavaProject, proof: CallSiteProof): OwnerProof {
   if (held === undefined) {
     const files = readingOf(project).files;
     const proves = provesBinding(files, project, proof.unparsed, proof.unreadJvm);
-    held = { proves, dispatch: proves ? dispatchReadingOf(files, project, proof.unparsed, proof.unreadJvm) : undefined, answers: new Map() };
+    held = { proves, dispatch: proves ? dispatchReadingOf(files, project, proof.unparsed, proof.unreadJvm, proof.libraries) : undefined, answers: new Map() };
     byProof.set(proof, held);
   }
   return held;

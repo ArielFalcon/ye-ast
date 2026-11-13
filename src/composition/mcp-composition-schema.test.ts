@@ -244,7 +244,7 @@ test("a read whose fact used a declared build output, and one that names an unre
 
 test("a read whose fact used a declared JDK, and one that names an unusable one, pass the schema", () => {
   const plain = sourceFixture("callers-local").read.fact;
-  const declared = { ...plain, inputs: { ...plain.inputs, buildOutputs: [{ kind: "jdk" as const, at: "", verified: false, digest: "d", jdk: { vendor: "Acme", version: "25.0.5", feature: 25, release: 25, basis: "declared-jdk" as const } }] } };
+  const declared = { ...plain, inputs: { ...plain.inputs, buildOutputs: [{ kind: "jdk" as const, at: "", verified: false, digest: "d", jdk: { vendor: "Acme", version: "25.0.5", feature: 25, basis: "declared-jdk" as const } }] } };
   const unread = { ...plain, status: "partial" as const, cuts: [{ kind: "build-output" as const, at: ["."], reason: "jdk-older-than-build", reach: { kind: "anything" } }] } as typeof plain;
   for (const fact of [declared, unread]) {
     const value = composeFull(resultOf([sourceFixture("callers-local", { fact })]));

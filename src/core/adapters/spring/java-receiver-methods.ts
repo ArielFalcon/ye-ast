@@ -17,7 +17,7 @@ const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
 const UNKNOWN_DECLARATIONS: ImplementedDeclarations = { kind: "unknown" };
 /** Methods every class inherits from `Object` (JLS 4.3.2): a call of one of these names may resolve to `Object`'s. */
-const OBJECT_METHODS: ReadonlySet<string> = new Set(["clone", "equals", "finalize", "getClass", "hashCode", "notify", "notifyAll", "toString", "wait"]);
+export const OBJECT_METHODS: ReadonlySet<string> = new Set(["clone", "equals", "finalize", "getClass", "hashCode", "notify", "notifyAll", "toString", "wait"]);
 /** Nodes the grammar places among a call's arguments that are no argument. */
 const NOT_ARGUMENTS: ReadonlySet<string> = new Set(["line_comment", "block_comment"]);
 /**
