@@ -443,3 +443,12 @@ test("the implicit super() of a class names nothing outside the repository, and 
   assert.deepEqual(await createJavaNameBindings(createJavaParser, sources).implicitChains!(sites), [{ kind: "unknown" }, { kind: "none" }]);
   assert.deepEqual(await createJavaNameBindings(createJavaParser, sources, KOTLIN(sources)).implicitChains!(sites), [{ kind: "unknown" }, { kind: "unknown" }]);
 });
+
+test("the class body of an enum constant extends its enum, settled by its own file where an unread source leaves every clause unproven; a constant without a body places nothing", async () => {
+  const unit = java("Unit.java", ["package app;", "", "public enum Unit {", "  ONE {", "    int area() { return 1; }", "  },", "  TWO;", "", "  int area() { return 2; }", "}"]);
+  const sites = [{ file: unit.path, line: 4, name: "ONE" }, { file: unit.path, line: 7, name: "TWO" }];
+  const placed = { kind: "supertypes", supertypes: [{ relation: "extends", written: "Unit", kind: "placed", name: "Unit", ...place(unit, 3) }] };
+
+  assert.deepEqual(await createJavaNameBindings(createJavaParser, [unit]).declaredSupertypes!(sites), [placed, { kind: "unknown" }]);
+  assert.deepEqual(await createJavaNameBindings(createJavaParser, [unit], KOTLIN([unit])).declaredSupertypes!(sites), [placed, { kind: "unknown" }]);
+});

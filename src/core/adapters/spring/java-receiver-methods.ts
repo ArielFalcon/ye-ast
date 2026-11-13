@@ -13,7 +13,7 @@ import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve } from "./java-declared-types.ts";
 import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
 import { REPOSITORY_FRAGMENTS, REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
-import { createJavaProject, MEMBERLESS_PLATFORM_INTERFACES, readArgumentSignature, readSignature, sameSignature, scopeOf, supertypeClauses, typeNodeName, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Scope, type Signature, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, MEMBERLESS_PLATFORM_INTERFACES, namedChildren, readArgumentSignature, readSignature, sameSignature, scopeOf, supertypeClauses, typeNodeName, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Scope, type Signature, type TypeDecl } from "./java-symbols.ts";
 import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
 
 const SLOT = "java-receiver-methods";
@@ -225,18 +225,24 @@ export function createJavaImplicitChains(parser: () => Promise<JavaParser>, sour
  * name the strict reading leaves unsettled, ambiguous or bound to a local type is `unknown`; a platform type, or a name an
  * import or a package qualifier proves outside the repository, is `outside`. A written name binds at compile time, so
  * only a source the reader does not read leaves it unproven: a dynamic implementation or a call-rewriting annotation
- * changes what runs, never which type a name denotes.
+ * changes what runs, never which type a name denotes. The class body of an enum constant extends its enum (JLS 8.9.1),
+ * which its own file settles.
  */
 export function createJavaDeclaredSupertypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): NonNullable<ImportOrigins["declaredSupertypes"]> {
-  return perPlacedType(parser, sources, paths, hold, build, UNKNOWN_SUPERTYPES, declaredSupertypesOf, readsEverySource);
+  return perPlacedType(parser, sources, paths, hold, build, UNKNOWN_SUPERTYPES, declaredSupertypesOf, readsEverySource, enumConstantSupertypes);
 }
 
-/** One answer per site from the one type the site places, `unknown` where none or several are placed or `proves` proves no binding. */
-function perPlacedType<A>(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold: ParseHold | undefined, build: ProjectBuild, unknown: A, answer: (type: TypeDecl, project: JavaProject) => A, proves: typeof provesBinding = provesBinding): (sites: readonly ConstructedClassSite[]) => Promise<readonly A[]> {
+/**
+ * One answer per site from the one type the site places, `unknown` where none or several are placed or `proves` proves no
+ * binding; `settled` answers first a site its own file settles.
+ */
+function perPlacedType<A>(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold: ParseHold | undefined, build: ProjectBuild, unknown: A, answer: (type: TypeDecl, project: JavaProject) => A, proves: typeof provesBinding = provesBinding, settled?: (site: ConstructedClassSite, project: JavaProject) => A | undefined): (sites: readonly ConstructedClassSite[]) => Promise<readonly A[]> {
   const unreadJvm = paths.some(isUncoveredJvmSource);
   const analyze = (sites: readonly ConstructedClassSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly A[] => {
-    if (!proves(files, project, unparsed, unreadJvm)) return sites.map(() => unknown);
+    if (!proves(files, project, unparsed, unreadJvm)) return sites.map((site) => settled?.(site, project) ?? unknown);
     return sites.map((site) => {
+      const own = settled?.(site, project);
+      if (own !== undefined) return own;
       const placed = project.types.filter((type) => type.file.path === site.file && type.name === site.name && typePlace(type).start <= site.line && site.line <= typePlace(type).nameLine);
       return placed.length === 1 ? answer(placed[0]!, project) : unknown;
     });
@@ -251,6 +257,18 @@ function perPlacedType<A>(parser: () => Promise<JavaParser>, sources: readonly S
       return analyze(sites, files, unparsed, createJavaProject(files, build));
     });
   };
+}
+
+/** The enum an enum constant with a class body at the site extends, by the enum's name; none for any other site. */
+function enumConstantSupertypes(site: ConstructedClassSite, project: JavaProject): DeclaredSupertypes | undefined {
+  const isBodiedAtSite = (constant: Node): boolean => {
+    const name = constant.childForFieldName("name");
+    return constant.type === "enum_constant" && constant.childForFieldName("body") !== null && name?.text === site.name && constant.startPosition.row + 1 <= site.line && site.line <= name.startPosition.row + 1;
+  };
+  const enums = project.types.filter((type) => type.file.path === site.file && type.node.type === "enum_declaration" && namedChildren(type.node.childForFieldName("body") ?? type.node).some(isBodiedAtSite));
+  if (enums.length !== 1) return undefined;
+  const { name } = enums[0]!;
+  return { kind: "supertypes", supertypes: [{ relation: "extends", written: name, kind: "placed", name, ...typePlace(enums[0]!) }] };
 }
 
 function declaredSupertypesOf(type: TypeDecl, project: JavaProject): DeclaredSupertypes {

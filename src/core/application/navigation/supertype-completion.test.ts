@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { EDGE_POLICY } from "../../domain/impact/edge-policy.ts";
 import { CAPABILITY_ABSENT } from "../../domain/shared/fact.ts";
 import type { GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { DeclaredSupertypes, ImportOrigins } from "../../ports/import-origins.port.ts";
@@ -85,4 +86,55 @@ test("a supertype the pack does not place is unplaced for the answers reaching i
   assert.deepEqual(unplacedReached(completed, [find!]).map(({ type, reference }) => [type.id, reference.name]), [["NameRepo", "Repo<String>"]]);
   assert.deepEqual(ids(unplacedReached(completed, [size!]).map(({ type }) => type)), ["NameRepo"]);
   assert.deepEqual(unplacedReached(completed, [other!]), []);
+});
+
+const UNIT = "src/Unit.java";
+const ENUM_NODES = [
+  fakeNode("Unit", "enum", UNIT, 3, 11),
+  fakeNode("ONE", "enum_member", UNIT, 4, 7),
+  fakeNode("bodyArea", "method", UNIT, 5, 6, "area"),
+  fakeNode("TWO", "enum_member", UNIT, 8, 8),
+  fakeNode("area", "method", UNIT, 10, 10),
+];
+const ENUM_EDGES: FakeEdge[] = [
+  { from: "Unit", to: "ONE", kind: "contains" },
+  { from: "ONE", to: "bodyArea", kind: "contains" },
+  { from: "Unit", to: "TWO", kind: "contains" },
+  { from: "Unit", to: "area", kind: "contains" },
+];
+const EXTENDS_UNIT: DeclaredSupertypes = { kind: "supertypes", supertypes: [{ relation: "extends", written: "Unit", kind: "placed", name: "Unit", file: UNIT, start: 3, nameLine: 3 }] };
+
+test("an enum member holding a declaration is asked of the pack, and one it places below a type reads as a type extending it at its own place", async () => {
+  const store = fakeCodeGraph(ENUM_NODES, ENUM_EDGES);
+  const { origins, asked } = originsAnswering(EXTENDS_UNIT);
+  const { reader } = await completedHierarchy(store, [UNIT], origins);
+
+  assert.deepEqual(asked, [{ file: UNIT, line: 4, name: "ONE" }]);
+  assert.deepEqual(reader.outgoingEdges(["ONE" as never], SUPERTYPE_EDGES).map(({ target, kind, line, column }) => [target, kind, line, column]), [["Unit", "extends", 4, 1]]);
+  assert.deepEqual(reader.symbolsInFiles([UNIT]).map(({ id, kind }) => [id, kind]), [["Unit", "enum"], ["ONE", EDGE_POLICY.bodiedMemberType], ["bodyArea", "method"], ["TWO", "enum_member"], ["area", "method"]]);
+  assert.deepEqual(reader.symbolsByIds(["ONE" as never]).map(({ kind }) => kind), [EDGE_POLICY.bodiedMemberType]);
+  assert.deepEqual(reader.declarationsNamed(["ONE"]).map(({ kind }) => kind), [EDGE_POLICY.bodiedMemberType]);
+});
+
+test("an enum member that holds nothing is never asked, and the reader is the index's own", async () => {
+  const store = fakeCodeGraph(ENUM_NODES.filter(({ id }) => id !== "bodyArea"), ENUM_EDGES.filter(({ to }) => to !== "bodyArea"));
+  const { origins, asked } = originsAnswering(EXTENDS_UNIT);
+  const completed = await completedHierarchy(store, [UNIT], origins);
+
+  assert.equal(completed.reader, store);
+  assert.deepEqual(asked, []);
+  assert.deepEqual(completed.unplaced, []);
+});
+
+test("an enum member holding a declaration that the pack does not place is unplaced for the answers reaching it, and a pack that declares the stage absent leaves it as it is", async () => {
+  const store = fakeCodeGraph(ENUM_NODES, ENUM_EDGES);
+  const unknown = await completedHierarchy(store, [UNIT], originsAnswering({ kind: "unknown" }).origins);
+  const absent = await completedHierarchy(store, [UNIT], originsAnswering({ kind: "unknown", reason: CAPABILITY_ABSENT }).origins);
+  const [bodyArea, area] = ["bodyArea", "area"].map((id) => store.symbolsByIds([id as never])[0]!);
+
+  assert.equal(unknown.reader, store);
+  assert.deepEqual(unplacedReached(unknown, [bodyArea!]).map(({ type, reference }) => [type.id, reference.file, reference.line, reference.name]), [["ONE", UNIT, 4, "ONE"]]);
+  assert.deepEqual(unplacedReached(unknown, [area!]), []);
+  assert.equal(absent.reader, store);
+  assert.deepEqual(absent.unplaced, []);
 });

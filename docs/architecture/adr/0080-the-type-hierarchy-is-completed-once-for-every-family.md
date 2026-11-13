@@ -87,6 +87,15 @@ already follow: the language pack binds exactly (names, imports, packages), the 
   declares, and a name the language merges from several declarations.
 - **U4:** a Java enum constant with a body is a type below its enum. Observed on main: a method overridden in a constant
   body is reached, and the callers of the enum's method are not.
+  Landed: the completion also asks `declaredSupertypes` for every member of a bodied kind (`EDGE_POLICY.bodiedMemberKinds`,
+  the index's `enum_member`) that holds a declaration; a member that holds nothing, as every TypeScript enum member and
+  every Java constant without a body, is never asked. The Java pack answers a constant with a class body by its enum,
+  which the language makes the body's superclass (JLS 8.9.1), from the constant's own file, so a source the reader does
+  not read elsewhere leaves it placed. A placed body reads, in the completed reader, as a type of
+  `EDGE_POLICY.bodiedMemberType` (`class`) with an `extends` edge to its enum at its own place, so its methods are
+  members that override the enum's in every family that opens its reading; a body the pack does not place is a
+  `relation-unread` cut led by the constant. `outline` reads the index's kinds. `trace` is unchanged: a receiver of an
+  enum type already names no method, so a call through it stays a `receiver-unproven` cut that names the body's method.
 
 ## Alternatives considered
 

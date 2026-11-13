@@ -36,6 +36,13 @@ export const EDGE_POLICY = {
   /** A member stands for the type that declares it, at the same depth. */
   ownerKinds: TYPE_KINDS,
   /**
+   * Members that may declare a class body of their own (a Java enum constant's): one that holds a declaration is asked of
+   * its language pack, and a body the pack places below a type reads as a class.
+   */
+  bodiedMemberKinds: ["enum_member"],
+  /** The type kind a bodied member the language pack places below a type reads as. */
+  bodiedMemberType: "class",
+  /**
    * The members that stand for their type. A reference named `this.<member>` or `this.<member>.<rest>`, made inside the
    * type that declares the member, is a use of that member.
    */

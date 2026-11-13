@@ -126,7 +126,9 @@ export interface ImportOrigins {
    * repository declaration the language's scoping binds that name to, `outside` where the name is proven to bind a type
    * outside the repository (by its qualified name where the sources settle it), and `unknown` where the sources settle
    * neither: a name that a type the snapshot does not declare may shadow, several declarations of the name, or any
-   * condition under which the reader proves no binding. A name is never placed by its simple name alone. Absent where the language pack implements none, which
+   * condition under which the reader proves no binding. A name is never placed by its simple name alone. A site may name a
+   * member that declares a class body of its own (a Java enum constant's): its one entry is the type the language makes
+   * that body extend, written as that type's name. Absent where the language pack implements none, which
    * reads as `capability-absent` for every site.
    */
   declaredSupertypes?(sites: readonly ConstructedClassSite[], signal?: AbortSignal): Promise<readonly DeclaredSupertypes[]>;
