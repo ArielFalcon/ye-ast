@@ -2,13 +2,9 @@ import { declaredJavaReleases, isJvmBuildFile } from "../../domain/languages/jvm
 import type { BuildOutputEvidence, DeclaredBuildOutput, UnreadOutputReason } from "../../domain/shared/build-outputs.ts";
 import type { BuildOutputInput } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { LibraryOutcome, LibrarySignatures, LibrarySignatureSource } from "../../ports/library-signatures.port.ts";
+import type { LibraryOutcome, LibraryReading, LibrarySignatures, LibrarySignatureSource } from "../../ports/library-signatures.port.ts";
 
-/** The library signatures a snapshot read holds, by the longest declared `at` that contains a path. */
-export interface LibraryReading {
-  /** The signatures declared for the directory a path is in; `undefined` where none was declared or none was usable. */
-  of(path: string): LibrarySignatures | undefined;
-}
+export type { LibraryReading };
 
 export interface LibrariesRead {
   libraries: LibraryReading;

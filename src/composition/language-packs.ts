@@ -15,6 +15,6 @@ import type { ModuleDependenciesReader } from "../core/ports/module-dependencies
 export function composeLanguagePacks(javaParser: () => Promise<JavaParser>, modules: { typescript: ModuleDependenciesReader; java: ModuleDependenciesReader }): readonly LanguagePack[] {
   return [
     { profile: TYPESCRIPT_PROFILE, readsProjectFiles: true, absent: ["dispatchTargets", "receiverMethods"], memberNames: createTypeScriptMemberNames(), origins: (sources, _paths, facts) => createImportOrigins(sources, facts === undefined ? {} : { facts }), modules: modules.typescript, tokens: createTypeScriptTokens() },
-    { profile: JAVA_PROFILE, relations: createJavaRelations(javaParser), memberNames: createJavaMemberNames(javaParser), contextFiles: isJvmBuildFile, origins: (sources, paths, facts, hold, context) => createJavaNameBindings(javaParser, sources, paths, facts, hold, context), modules: modules.java, tokens: createJavaTokens(javaParser) },
+    { profile: JAVA_PROFILE, relations: createJavaRelations(javaParser), memberNames: createJavaMemberNames(javaParser), contextFiles: isJvmBuildFile, origins: (sources, paths, facts, hold, context, libraries) => createJavaNameBindings(javaParser, sources, paths, facts, hold, context, libraries), modules: modules.java, tokens: createJavaTokens(javaParser) },
   ];
 }

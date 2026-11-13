@@ -2,6 +2,7 @@ import type { Node } from "web-tree-sitter";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchSite, DispatchTargets, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { DispatchUnknownReason } from "../../domain/shared/fact.ts";
+import type { LibraryReading } from "../../ports/library-signatures.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, heldJavaProject, withJavaSources, type UnparsedSource } from "./java-project.ts";
@@ -56,16 +57,16 @@ export interface Hierarchy {
  * the owner's closure nor below one; an enum below it; or a class whose chain reaches no single body of the method's signature.
  * The candidates and the closure verdict are read apart (`closureOf`), and the port's answer is derived from them.
  */
-export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): ImportOrigins["dispatchTargets"] {
+export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}, libraries?: LibraryReading): ImportOrigins["dispatchTargets"] {
   const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
   return async (sites, signal) => {
     if (sites.length === 0) return [];
     const read = await parser();
     const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources, [], build);
-    if (held !== undefined) return dispatchAnswersOf(sites, held.files.map(({ file }) => file), held.project, held.unparsed, unreadJvm, signal);
+    if (held !== undefined) return dispatchAnswersOf(sites, held.files.map(({ file }) => file), held.project, held.unparsed, unreadJvm, signal, libraries);
     return withJavaSources(read, (parse) => {
       const { files, unparsed } = parse(sources);
-      return dispatchAnswersOf(sites, files, createJavaProject(files, build), unparsed, unreadJvm, signal);
+      return dispatchAnswersOf(sites, files, createJavaProject(files, build), unparsed, unreadJvm, signal, libraries);
     });
   };
 }
@@ -74,8 +75,8 @@ export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sou
  * What the port answers for one read's parsed files, every veto it applies included; the call-site flow reads this same
  * derivation for the proof of the body it would select, so the advice of an aspect and the closure cannot disagree.
  */
-export function dispatchAnswersOf(sites: readonly DispatchSite[], files: readonly JavaFile[], project: JavaProject, unparsed: readonly UnparsedSource[], unreadJvm: boolean, signal?: AbortSignal): DispatchTargets[] {
-  return dispatchReadingOf(files, project, unparsed, unreadJvm).of(sites, signal);
+export function dispatchAnswersOf(sites: readonly DispatchSite[], files: readonly JavaFile[], project: JavaProject, unparsed: readonly UnparsedSource[], unreadJvm: boolean, signal?: AbortSignal, libraries?: LibraryReading): DispatchTargets[] {
+  return dispatchReadingOf(files, project, unparsed, unreadJvm, libraries).of(sites, signal);
 }
 
 /** The port's answer over one read's parsed files, with the vetoes and hierarchy it reads once. */
@@ -89,13 +90,13 @@ interface PreparedDispatch {
   hierarchy?: Hierarchy;
 }
 
-export function dispatchReadingOf(files: readonly JavaFile[], project: JavaProject, unparsed: readonly UnparsedSource[], unreadJvm: boolean): DispatchReading {
+export function dispatchReadingOf(files: readonly JavaFile[], project: JavaProject, unparsed: readonly UnparsedSource[], unreadJvm: boolean, libraries?: LibraryReading): DispatchReading {
   const unread = (): boolean => unreadJvm || unparsed.length > 0 || project.unreadable.length > 0;
   let reading: PreparedDispatch | undefined;
   const read = (): PreparedDispatch => {
     if (reading !== undefined) return reading;
     const veto = globalVeto(files, project);
-    const held: PreparedDispatch = "reason" in veto ? { reason: veto.reason } : { advice: veto.advice, hierarchy: readHierarchy(files, project) };
+    const held: PreparedDispatch = "reason" in veto ? { reason: veto.reason } : { advice: veto.advice, hierarchy: readHierarchy(files, project, libraries) };
     reading = held;
     return held;
   };
@@ -345,7 +346,7 @@ export function hierarchyOf(files: readonly JavaFile[], project: JavaProject): H
   return "reason" in globalVeto(files, project) ? undefined : readHierarchy(files, project);
 }
 
-export function readHierarchy(files: readonly JavaFile[], project: JavaProject): Hierarchy {
+export function readHierarchy(files: readonly JavaFile[], project: JavaProject, libraries?: LibraryReading): Hierarchy {
   const placed = new Map(project.types.map((type) => [type.node.id, type]));
   const subtypes = new Map<TypeDecl, TypeDecl[]>();
   const supertypes = new Map<TypeDecl, TypeDecl[]>();
@@ -410,6 +411,7 @@ export function readHierarchy(files: readonly JavaFile[], project: JavaProject):
     subtypes, supertypes, superclasses, outside, unsettled, unplaced, invokedSupertypes, unsettledSupertypes, signatureOf,
     functionValues: () => (read ??= values.map((value) => targetsOfFunctionValue(value, {
       project,
+      ...(libraries === undefined ? {} : { libraries }),
       ancestors: (type) => { const above = ancestorsOf(type, hierarchy); return above.some((ancestor) => outside.has(ancestor)) ? undefined : above; },
       functionalMethod: (type) => functionalMethodOf(type, hierarchy),
     }))),

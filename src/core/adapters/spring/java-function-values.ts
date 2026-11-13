@@ -1,4 +1,5 @@
 import type { Node } from "web-tree-sitter";
+import type { LibraryReading } from "../../ports/library-signatures.port.ts";
 import { resolve } from "./java-declared-types.ts";
 import { enclosingType, thisType } from "./java-project.ts";
 import type { JavaFile, JavaProject, MethodDecl, TypeDecl } from "./java-symbols.ts";
@@ -19,6 +20,8 @@ export interface FunctionValue {
 /** What the reading takes from the hierarchy and the functional interfaces of the sources. */
 export interface FunctionValueSources {
   project: JavaProject;
+  /** The library signatures of the JDKs the host declared (ADR-0063); a library call is unsettled without them. */
+  libraries?: LibraryReading;
   /** The type and every repository type above it, or `undefined` when one of its supertypes is not a repository type. */
   ancestors(type: TypeDecl): readonly TypeDecl[] | undefined;
   /** The one abstract method of a functional repository interface; `undefined` when the sources do not settle it. */

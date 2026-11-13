@@ -34,6 +34,12 @@ export interface LibrarySignatures {
   typeOf(fqn: string): LibraryType | undefined;
 }
 
+/** The library signatures a snapshot read holds, by the longest declared `at` that contains a path. */
+export interface LibraryReading {
+  /** The signatures declared for the directory a path is in; `undefined` where none was declared or none was usable. */
+  of(path: string): LibrarySignatures | undefined;
+}
+
 export type LibraryUnusableReason = "jdk-unreadable" | "release-not-held";
 
 export type LibraryOutcome = { kind: "used"; signatures: LibrarySignatures } | { kind: "unused"; reason: LibraryUnusableReason };

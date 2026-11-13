@@ -3,6 +3,7 @@ import { test } from "node:test";
 import type { SnapshotRef } from "../../domain/shared/fact.ts";
 import type { CodeGraphReader, GraphNodeId } from "../../ports/code-graph.port.ts";
 import type { ImportOrigins } from "../../ports/import-origins.port.ts";
+import type { LibraryReading } from "../../ports/library-signatures.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { fakeCodeGraph, fakeNode } from "../navigation/fake-code-graph.testing.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
@@ -242,4 +243,23 @@ test("a file's contradiction alignment is kept between readings by its content a
   assert.equal(reads, 1);
   await read("index-2")([g!]);
   assert.equal(reads, 2);
+});
+
+test("the Java pack receives the signatures of a declared JDK by path, and reads none when no JDK is declared", () => {
+  const signatures = { basis: { version: "25", feature: 25, release: 25, basis: "declared-jdk", digest: "d" }, typeOf: () => undefined } as const;
+  const received: (LibraryReading | undefined)[] = [];
+  const readings = createBaseReadings({
+    relations: {} as RelationExtractor,
+    importOrigins: (_sources, _paths, _facts, _hold, _context, libraries) => (received.push(libraries), {} as ImportOrigins),
+    libraries: { open: () => ({ kind: "used", signatures }) },
+  });
+  const readOf = (buildOutputs: readonly { kind: "jdk" | "node-modules"; at: string; path: string }[]) =>
+    readings.of({ tree: { export: { files: [], skipped: [] }, sources: [] }, prepared: undefined, store: {} as CodeGraphReader, snapshot: SHA, request: { repo: "/work/shop", buildOutputs } }, {}).origins();
+
+  readOf(OUTPUTS);
+  readOf([{ kind: "jdk", at: "ms-orders", path: "/host/jdk" }]);
+
+  assert.equal(received[0], undefined);
+  assert.equal(received[1]?.of("ms-orders/src/Use.java"), signatures);
+  assert.equal(received[1]?.of("ms-users/src/Use.java"), undefined);
 });

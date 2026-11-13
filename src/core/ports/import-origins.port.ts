@@ -3,6 +3,7 @@ import type { ImportOrigin } from "../domain/relations/resolved-reference.ts";
 import type { CAPABILITY_ABSENT, DispatchUnknownReason, Finding } from "../domain/shared/fact.ts";
 import type { DerivedFacts } from "./derived-facts.port.ts";
 import type { SourceFile } from "./entrypoint-extractor.port.ts";
+import type { LibraryReading } from "./library-signatures.port.ts";
 import type { ParseHold } from "./parse-holds.port.ts";
 
 /** One place a file uses a name, as the index reports it: repository-relative and 1-based. */
@@ -238,5 +239,7 @@ export type RootBinding =
 /**
  * `facts` keeps what the reader derives from one file or from named inputs between requests (ADR-0035). `context` is the
  * snapshot's files the reader's language declares as stating facts about its build; they are no sources of the reader.
+ * `libraries` is the library signatures of the JDKs the host declared (ADR-0063), by the directory a path is in; absent
+ * when none was declared, and then every answer is the one without them.
  */
-export type ImportOriginsReader = (sources: readonly SourceFile[], paths?: readonly string[], facts?: DerivedFacts, hold?: ParseHold, context?: readonly SourceFile[]) => ImportOrigins;
+export type ImportOriginsReader = (sources: readonly SourceFile[], paths?: readonly string[], facts?: DerivedFacts, hold?: ParseHold, context?: readonly SourceFile[], libraries?: LibraryReading) => ImportOrigins;

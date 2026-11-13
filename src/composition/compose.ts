@@ -66,6 +66,7 @@ import { composeLanguagePacks } from "./language-packs.ts";
 import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
 import type { DerivedFacts } from "../core/ports/derived-facts.port.ts";
+import type { LibraryReading } from "../core/ports/library-signatures.port.ts";
 import type { ParseHold } from "../core/ports/parse-holds.port.ts";
 import type { ModuleDependenciesReader } from "../core/ports/module-dependencies.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
@@ -215,8 +216,8 @@ export function composeQueries(options: CompositionOptions = {}): ComposedQuerie
   const merged = routedReaders(packs);
   const { sourceTokens, modules: moduleReader } = merged;
   const memberNames = measurement === undefined ? merged.memberNames : measuredTalliedStages(merged.memberNames, { memberNames: "member-names" }, measurement);
-  const importOrigins = (sources: readonly SourceFile[], paths?: readonly string[], facts?: DerivedFacts, hold?: ParseHold) => {
-    const reader = merged.importOrigins(sources, paths, facts, hold);
+  const importOrigins = (sources: readonly SourceFile[], paths?: readonly string[], facts?: DerivedFacts, hold?: ParseHold, context?: readonly SourceFile[], libraries?: LibraryReading) => {
+    const reader = merged.importOrigins(sources, paths, facts, hold, context, libraries);
     return staged(measurement === undefined || facts === undefined ? reader : measuredDerivedFacts(reader, facts, "import-origins", measurement), { origins: "import-origins", rootOrigins: "root-origins", rootBindings: "root-bindings", receiverMethods: "receiver-methods", declaredTypes: "declared-types" });
   };
   const unmodelled = staged<UnmodelledConstructsReader>({ extract: async (sources) => createJavaRecordsReader(await javaParser()).extract(sources) }, { extract: "java-records" });

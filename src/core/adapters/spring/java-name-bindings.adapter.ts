@@ -2,6 +2,7 @@ import type { Node } from "web-tree-sitter";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { LibraryReading } from "../../ports/library-signatures.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import { readsPastRoot, type RootOrigin } from "../../domain/impact/edge-policy.ts";
 import type { ImportOrigins, ResolvedNameSite } from "../../ports/import-origins.port.ts";
@@ -34,13 +35,13 @@ interface Spelled {
  * outside the snapshot may declare, two on-demand imports that may both offer the name, a variable that obscures a
  * type, a class the reader does not place) is `unknown`. Nothing comes from the graph.
  */
-export function createJavaNameBindings(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[] = sources.map(({ path }) => path), facts?: DerivedFacts, hold?: ParseHold, context: readonly SourceFile[] = []): ImportOrigins {
+export function createJavaNameBindings(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[] = sources.map(({ path }) => path), facts?: DerivedFacts, hold?: ParseHold, context: readonly SourceFile[] = [], libraries?: LibraryReading): ImportOrigins {
   const build: ProjectBuild = { generatesInterfaces: sourceGeneratorIn(context) !== undefined };
   return {
     origins: async (sites) => sites.map((site) => unresolved(site)),
     rootBindings: (sites, signal) => createJavaRootBindings(parser(), sources, build)(sites, signal),
     declaredTypes: createJavaDeclaredTypes(parser, sources, paths, build),
-    dispatchTargets: createJavaDispatchTargets(parser, sources, paths, hold, build),
+    dispatchTargets: createJavaDispatchTargets(parser, sources, paths, hold, build, libraries),
     receiverMethods: createJavaReceiverMethods(parser, sources, paths, facts, hold, build),
     implementedDeclarations: createJavaImplementedDeclarations(parser, sources, paths, hold, build),
     replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),

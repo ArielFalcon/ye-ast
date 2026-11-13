@@ -28,7 +28,7 @@ import { declaredScope } from "../../domain/map/entrypoint-map.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { LibrarySignatureSource } from "../../ports/library-signatures.port.ts";
-import { readLibraries, type LibraryReading } from "./library-reading.ts";
+import { readLibraries, type LibrariesRead, type LibraryReading } from "./library-reading.ts";
 import type { FrameworkPlugin } from "../../ports/framework-plugin.port.ts";
 import type { CommitExtraction, PreparedCommit } from "./read-snapshot.ts";
 
@@ -189,11 +189,11 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
    * contradicts, one that would not be read, or a failing checker withholds them all; then every declaration is named
    * in a `build-output` cut, at what withheld it where that is known.
    */
-  async function typedReading(source: ReadingSource): Promise<TypedReading | "aborted"> {
+  async function typedReading(source: ReadingSource, jdks: LibrariesRead | undefined): Promise<TypedReading | "aborted"> {
     const declared = source.request.buildOutputs ?? deps.declaredOutputs?.(source.request.repo) ?? [];
     const typed = await nodeModulesReading(source, declared.filter(({ kind }) => kind === "node-modules"));
-    if (typed === "aborted" || deps.libraries === undefined || !declared.some(({ kind }) => kind === "jdk")) return typed;
-    const { libraries, outputs, evidence } = readLibraries(declared, source.tree.sources, deps.libraries);
+    if (typed === "aborted" || jdks === undefined) return typed;
+    const { libraries, outputs, evidence } = jdks;
     const reasons = [...(typed.buildOutputs === undefined ? [] : [typed.buildOutputs].flat()), ...evidence];
     return {
       ...typed,
@@ -201,6 +201,12 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       ...(reasons.length === 0 ? {} : { buildOutputs: reasons.length === 1 ? reasons[0]! : reasons }),
       libraries,
     };
+  }
+
+  /** The declared JDKs opened against the snapshot's build files; `undefined` when none was declared or no source can open one. */
+  function jdksOf({ request, tree }: ReadingSource): LibrariesRead | undefined {
+    const declared = request.buildOutputs ?? deps.declaredOutputs?.(request.repo) ?? [];
+    return deps.libraries === undefined || !declared.some(({ kind }) => kind === "jdk") ? undefined : readLibraries(declared, tree.sources, deps.libraries);
   }
 
   async function nodeModulesReading({ request, snapshot, tree, prepared }: ReadingSource, outputs: readonly DeclaredBuildOutput[]): Promise<TypedReading | "aborted"> {
@@ -264,7 +270,8 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
       };
       const unresolvedIn = unresolvedOncePerFile(store);
       const navigation = once(() => createGraphNavigation(store, () => false));
-      const origins = once(() => deps.importOrigins?.(tree.sources, narrowing.originPaths, facts, source.hold));
+      const jdks = once(() => jdksOf(source));
+      const origins = once(() => deps.importOrigins?.(tree.sources, narrowing.originPaths, facts, source.hold, undefined, jdks()?.libraries));
       const implementedContracts = once(() => implementedContractsOf(store, tree.sources.map(({ path }) => path), navigation(), origins()));
       const unresolved = once(() => unresolvedOf(store, tree));
       const relations = once(() => retainedRelations(deps.relations, prepared, tree, request, source.hold));
@@ -295,7 +302,7 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
         origins,
         relations,
         referenceProofs: once(() => referenceProofsOf(origins(), store, tree, request.signal, unresolved())),
-        typed: once(() => typedReading(source)),
+        typed: once(() => typedReading(source, jdks())),
         edgeTargets(typed) {
           const read = origins();
           if (read === undefined) return undefined;
