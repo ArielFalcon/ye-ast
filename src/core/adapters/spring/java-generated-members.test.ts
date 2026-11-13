@@ -147,3 +147,18 @@ test("an outside supertype that does not resolve to a known type, or an outside 
   assert.deepEqual(await callOf("wild.getTitle", "getTitle"), UNPROVEN);
   assert.deepEqual(await callOf("implementing.getTitle", "getTitle"), UNPROVEN);
 });
+
+test("an on-demand import of the Lombok package reads its annotations and AccessLevel, but not one a visible type or another Lombok package names", async () => {
+  assert.deepEqual(await callOf("wildcarded.getName", "getName"), GENERATED);
+  assert.deepEqual(await callOf("wildcarded.setName", "setName"), GENERATED);
+  assert.deepEqual(await callOf("wildcarded.getSecret", "getSecret"), UNPROVEN);
+  const files = (imports: string, extra: readonly { path: string; content: string }[] = []) => [
+    { path: "src/main/java/app/Use.java", content: "package app;\nclass Use {\n  void run(Holder holder) {\n    holder.getName();\n  }\n}\n" },
+    { path: "src/main/java/app/Holder.java", content: `package app;\n${imports}\n@Getter\npublic class Holder {\n  private String name;\n}\n` },
+    ...extra,
+  ];
+  assert.deepEqual(await callOf("holder.getName", "getName", files("import lombok.*;")), GENERATED);
+  assert.deepEqual(await callOf("holder.getName", "getName", files("import lombok.*;", [{ path: "src/main/java/app/Getter.java", content: "package app;\n@interface Getter {}\n" }])), UNPROVEN);
+  assert.deepEqual(await callOf("holder.getName", "getName", files("import lombok.experimental.*;")), UNPROVEN);
+  assert.deepEqual(await callOf("holder.getName", "getName", files("import vendor.*;")), UNPROVEN);
+});

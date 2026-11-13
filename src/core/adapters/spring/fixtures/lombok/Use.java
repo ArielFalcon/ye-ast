@@ -1,6 +1,9 @@
 package app;
 class Use {
-  void run(Person person, Declared declared, FieldOnly only, NotLombok not, Restricted restricted, Immutable value, Order order, Plain plain, Pair pair, Levels levels, Conflicting conflicting, Unmodelled unmodelled, Fluent fluent, Child child, Redeclaring redeclaring, Leaf leaf, Under under, Libbed libbed, LibbedChild libbedChild, Unresolved unresolved, Wild wild, Implementing implementing) {
+  void run(Person person, Declared declared, FieldOnly only, NotLombok not, Restricted restricted, Immutable value, Order order, Plain plain, Pair pair, Levels levels, Conflicting conflicting, Unmodelled unmodelled, Fluent fluent, Child child, Redeclaring redeclaring, Leaf leaf, Under under, Libbed libbed, LibbedChild libbedChild, Unresolved unresolved, Wild wild, Implementing implementing, Wildcarded wildcarded) {
+    wildcarded.getName();
+    wildcarded.setName("n");
+    wildcarded.getSecret();
     person.getName();
     person.setName("n");
     person.isActive();

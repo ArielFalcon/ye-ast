@@ -4,6 +4,7 @@ import { charLiteralValue, integerLiteralValue, stringLiteralValue, type Literal
 import { localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
+import { REPOSITORY_TYPES } from "./data-vocabulary.ts";
 
 export function isLibraryPath(path: string): boolean {
   return path.startsWith(`${LIBRARY_ROOT}/`);
@@ -165,15 +166,6 @@ export interface JavaProject {
 
 /** Platform interfaces that declare no members, so a type below one inherits no method from it. */
 export const MEMBERLESS_PLATFORM_INTERFACES: ReadonlySet<string> = new Set(["java.io.Serializable", "java.lang.Cloneable", "java.util.RandomAccess", "java.util.EventListener"]);
-/** Spring Data repository interfaces: they declare methods, never member types (ADR-0013 evidence: ADR-0062). */
-const DATA_REPOSITORY_INTERFACES: ReadonlySet<string> = new Set([
-  "org.springframework.data.repository.Repository",
-  "org.springframework.data.repository.CrudRepository",
-  "org.springframework.data.repository.ListCrudRepository",
-  "org.springframework.data.repository.PagingAndSortingRepository",
-  "org.springframework.data.repository.ListPagingAndSortingRepository",
-  "org.springframework.data.jpa.repository.JpaRepository",
-]);
 const PLATFORM_PACKAGES = ["org.springframework.", "java.", "javax.", "jakarta.", "lombok."];
 /** A package starts lowercase, so a qualified name whose first segment does is one. */
 const PACKAGE_SEGMENT = /^[a-z]/;
@@ -393,11 +385,11 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
     }
     const own = byFqn(file.packageName === "" ? head : `${file.packageName}.${head}`);
     if (own !== undefined) return typeof own === "object" ? memberIdentity(own, rest) : undefined;
-    const offers = [
-      ...[...new Set(["java.lang", ...file.onDemandImports])].map((container) => demandIdentity(container, head, false)),
-      ...file.staticOnDemandImports.map((container) => demandIdentity(container, head, true)),
-    ];
+    const typeOffers = [...new Set(["java.lang", ...file.onDemandImports])].map((container) => demandIdentity(container, head, false));
+    const staticOffers = file.staticOnDemandImports.map((container) => demandIdentity(container, head, true));
+    const offers = [...typeOffers, ...staticOffers];
     if (new Set(offers.filter((offer) => offer !== undefined && offer !== "")).size > 1) return undefined;
+    if (offers.includes(undefined) && !staticOffers.includes(undefined) && typeOffers[0] !== undefined && typeOffers[0] !== "") return extendIdentity(typeOffers[0], rest);
     if (offers.includes(undefined)) return rest.length === 0
       ? `context:${file.packageName}|${[...file.onDemandImports].sort().join(",")}|${[...file.staticOnDemandImports].sort().join(",")}|${head}`
       : undefined;
@@ -516,7 +508,7 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
 
   function declaresNoMemberTypes(name: string, file: JavaFile): boolean {
     const named = externalNames(name, file, false);
-    return named.length > 0 && named.every((fqn) => (MEMBERLESS_PLATFORM_INTERFACES.has(fqn) || DATA_REPOSITORY_INTERFACES.has(fqn)) && isPlatformName(fqn));
+    return named.length > 0 && named.every((fqn) => (MEMBERLESS_PLATFORM_INTERFACES.has(fqn) || REPOSITORY_TYPES.has(fqn)) && isPlatformName(fqn));
   }
 
   /** The member type of the name a type whose direct supertypes are `parents` inherits from them (`inheritedMember`). */

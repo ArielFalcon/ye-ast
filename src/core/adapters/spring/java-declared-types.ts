@@ -4,6 +4,7 @@ import type { DeclaredType, ImportOrigins } from "../../ports/import-origins.por
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, withJavaSources } from "./java-project.ts";
 import { createJavaProject, isTypeDeclaration, qualifiedTypeName, type JavaFile, type JavaProject, type ProjectBuild, type TypeDecl } from "./java-symbols.ts";
+import { LOMBOK_TYPES, SPRING_DATA_TYPES } from "./data-vocabulary.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 
 const UNKNOWN: DeclaredType = { kind: "unknown" };
@@ -18,6 +19,11 @@ const QUALIFIED = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
 const QUALIFIED_LINKS: ReadonlySet<string> = new Set(["scoped_identifier", "scoped_type_identifier", "field_access"]);
 /** A package starts lowercase, so a qualified name whose first segment does is one. */
 const PACKAGE_SEGMENT = /^[a-z]/;
+/**
+ * The closed vocabularies a simple name is read from when an on-demand import is the only thing that leaves it unsettled:
+ * a package both offers the name and the repository compiles, so no other package offers it too (ADR-0070).
+ */
+const CLOSED_VOCABULARIES: readonly ReadonlySet<string>[] = [SPRING_DATA_TYPES, LOMBOK_TYPES];
 /** The JDK APIs that make a value implementing an interface at run time, by their simple names. */
 const DYNAMIC_IMPLEMENTATIONS: ReadonlyMap<string, string> = new Map([
   ["Proxy", "java.lang.reflect.Proxy"],
@@ -142,7 +148,8 @@ function resolveName(name: string, file: JavaFile, project: JavaProject, scope: 
   }
   if (typeVariableAround(at)?.namedChildren[0]?.text === head) return undefined;
   const bound = project.bindName(head, { ...where, at }, "strict");
-  if (bound === "ambiguous" || bound === "unsettled") return undefined;
+  if (bound === "unsettled") return vocabularyType(name, head, rest, { ...where, at }, project);
+  if (bound === "ambiguous") return undefined;
   if (bound !== undefined) {
     if ("local" in bound) return rest.length === 0 ? { kind: "repository" } : undefined;
     const declared = project.lookupType(name, where);
@@ -150,6 +157,15 @@ function resolveName(name: string, file: JavaFile, project: JavaProject, scope: 
   }
   const fqn = qualifiedTypeName(name, where, project);
   return fqn === undefined ? undefined : project.isPlatformName(fqn) ? { kind: "platform", fqn } : libraries ? { kind: "library", fqn } : undefined;
+}
+
+/** The vocabulary type a name an on-demand import leaves unsettled stands for: the one package the file imports that a closed vocabulary lists the name in. */
+function vocabularyType(name: string, head: string, rest: readonly string[], scope: Parameters<JavaProject["importedTypeSources"]>[1], project: JavaProject): Resolved {
+  const sources = project.importedTypeSources(head, scope);
+  const containers = sources !== undefined && "containers" in sources ? sources.containers : [];
+  const offered = containers.map((container) => `${container}.${head}`).filter((fqn) => CLOSED_VOCABULARIES.some((vocabulary) => vocabulary.has(fqn)));
+  const fqn = [offered[0], ...rest].join(".");
+  return offered.length > 0 ? { kind: "platform", fqn } : undefined;
 }
 
 /** A platform type by its package, the segments before the first one that starts uppercase, and its name below it. */
