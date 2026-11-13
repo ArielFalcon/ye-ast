@@ -58,7 +58,14 @@ Rules:
    reached it), or by its whole content when it states none, a nested entry together with the entry that holds it, and
    entries sharing an identity pair in order: an identity one side alone holds is gained or lost, one both hold with
    different content is changed. The report's summary states cuts base → candidate and entries gained, lost and changed.
-5. The ledger sets no threshold. It is a report a reviewer reads, and an expectation the author may declare (open
+5. Beside both ledgers, an occurrence oracle reads from git, at each `callers` or `impact` answer's snapshot, every line
+   that writes a seed's name as a word, and classes it `target`, `listed` (inside a declaration or at a place the answer
+   lists), `cut` (at a place a cut names or in a file its reach covers), `out-of-scope` (a path or language the declared
+   scope leaves out) or `unaccounted`. It resolves nothing, so `unaccounted` is an upper bound of the silent omissions
+   and each such line is a lead to audit: a homonym gives correct ones, a name in a comment or string is counted, and a
+   dependent that does not write the name is not seen. No filter narrows it. The report lists the candidate's leads
+   and the lines that left and entered the class.
+6. The ledger sets no threshold. It is a report a reviewer reads, and an expectation the author may declare (open
    question 1). No branch of the engine reads it.
 
 ## The outcome control

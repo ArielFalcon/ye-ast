@@ -61,6 +61,63 @@ const importersValue = {
   effects: [{ kind: "data", line: 3, operation: "save" }],
 };
 
+/**
+ * A stand-in engine whose `callers` prints the fact given, at the commit its repository holds; `broken` prints no fact,
+ * `unknown` a fact without a value, and any other command a fact with seeds under a family that states no declaration targets.
+ */
+function callersEngine(fact: object): string {
+  return `import { execFileSync } from "node:child_process";
+const [command, ...args] = process.argv.slice(2);
+const repo = args.at(-1) ?? "";
+const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+const snapshot = { repo: "src", kind: "sha", sha };
+if (command === "callers") console.log(JSON.stringify({ ...${JSON.stringify(fact)}, snapshot }));
+else if (command === "broken") console.log("not a fact");
+else if (command === "unknown") console.log(JSON.stringify({ status: "unknown", reason: "out-of-scope", snapshot }));
+else console.log(JSON.stringify({ status: "complete", snapshot, value: { seeds: [{ file: "src/Target.java", symbol: "Target", line: 1 }], symbols: [] } }));
+`;
+}
+
+const OCCURRENCE_SOURCES = {
+  "src/Target.java": "public class Target {\n  Target() {}\n}\n",
+  "src/Listed.java": "class Listed {\n  Target held = null;\n}\n",
+  "src/Placed.java": "class Placed {\n  Target placed;\n\n  // Target\n}\n",
+  "src/covered.ts": "import { Target } from './target';\n",
+  "src/Silent.java": "class Silent {\n  Object held = new Target();\n}\n",
+  "src/view.html": "<a (click)=\"Target()\"></a>\n",
+  "src/routes.ts": "export const routes = [{ component: Target }];\n",
+  "src/Handler.java": "class Handler {\n  Target held;\n}\n",
+  "src/Whole.java": "class Whole {\n  Target held;\n}\n",
+  "src/Imported.java": "import x.Target;\n",
+  "src/Called.java": "class Called {\n  void go() { Target.run(); }\n}\n",
+  "docs/Excluded.java": "Target\n",
+  "README.md": "Target\n",
+};
+const declaration = (file: string, symbol: string, endLine: number) => ({ file, symbol, kind: "class", line: 1, endLine, depth: 1, confidence: 1, fanIn: 0 });
+const callersFact = (symbols: object[]) => ({
+  schema: "0.24.0",
+  status: "partial",
+  inputs: { declaredScope: { languages: ["java", "typescript"], frameworks: [], include: [], exclude: ["docs/**"] } },
+  value: {
+    seeds: [{ file: "src/Target.java", symbol: "Target", line: 1, endLine: 3, basis: "lines" }],
+    symbols,
+    entrypoints: [{ kind: "ui-route", name: "/", handler: { path: "src/Handler.java", symbol: "Handler", line: 1, endLine: 3 }, depth: 0, confidence: 1, seeds: [0], declaredAt: { path: "src/routes.ts", line: 1 } }],
+    modules: { origins: [], modules: [{ file: "src/Whole.java", snapshot: "head", depth: 1, origins: [0] }], cost: { expansionsUsed: 1 } },
+    cost: { expansionsUsed: 1 },
+  },
+  cuts: [
+    { kind: "unresolved-link", at: ["src/Imported.java", "src/Imported.java:9"], reason: "specifier", reach: { kind: "module", importer: "src/Imported.java", specifiers: [{ specifier: "x" }] } },
+    { kind: "unresolved-link", at: ["src/Other.java::Other.go"], reason: "callee-unknown", reach: { kind: "call-at", place: "src/Called.java:2" } },
+    { kind: "unresolved-link", at: ["src/Placed.java", "src/Placed.java:2 Target"], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/Target.java::Target"] } },
+    { kind: "unresolved-link", at: ["src/other.ts"], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } },
+  ],
+});
+const listedSymbols = [
+  declaration("src/Target.java", "Target", 3),
+  declaration("src/Listed.java", "Listed", 3),
+  { ...declaration("src/view.ts", "View", 1), via: { file: "src/Target.java", symbol: "Target", resource: "src/view.html", lines: [1], basis: "call" } },
+];
+
 interface ValueRow { family: string; language: string; collection: string; entries?: number; gained?: number; lost?: number; changed?: number }
 
 describe("corpus gate", () => {
@@ -71,10 +128,11 @@ describe("corpus gate", () => {
   let parallelManifest: string;
   let workspaceManifest: string;
   let store: string;
-  const commits: Record<"base" | "same" | "adds" | "lockfile" | "cuts" | "unknownCut" | "values" | "valuesSame" | "valuesGained" | "valuesChanged" | "valuesUnread" | "importers" | "importerGained" | "importerDropped" | "effectChanged", string> = {
+  const commits: Record<"base" | "same" | "adds" | "lockfile" | "cuts" | "unknownCut" | "values" | "valuesSame" | "valuesGained" | "valuesChanged" | "valuesUnread" | "importers" | "importerGained" | "importerDropped" | "effectChanged" | "occurrences" | "occurrencesSame" | "occurrenceListed" | "occurrencesBounded", string> = {
     base: "", same: "", adds: "", lockfile: "", cuts: "", unknownCut: "", values: "", valuesSame: "", valuesGained: "", valuesChanged: "", valuesUnread: "",
-    importers: "", importerGained: "", importerDropped: "", effectChanged: "",
+    importers: "", importerGained: "", importerDropped: "", effectChanged: "", occurrences: "", occurrencesSame: "", occurrenceListed: "", occurrencesBounded: "",
   };
+  let occurrenceManifest: string;
 
   before(() => {
     root = mkdtempSync(join(tmpdir(), "corpus-gate-test-"));
@@ -122,7 +180,20 @@ describe("corpus gate", () => {
     git(engine, "checkout", "--quiet", "--detach", commits.importers);
     commits.effectChanged = commit(engine, { "main.ts": withValue({ ...importersValue, effects: [{ ...importersValue.effects[0], operation: "load" }] }) }, "effect changed");
     git(engine, "checkout", "--quiet", "--detach", commits.base);
+    commits.occurrences = commit(engine, { "main.ts": callersEngine(callersFact(listedSymbols)) }, "occurrences");
+    commits.occurrencesSame = commit(engine, { "main.ts": `// same occurrences\n${callersEngine(callersFact(listedSymbols))}` }, "same occurrences");
+    git(engine, "checkout", "--quiet", "--detach", commits.occurrences);
+    commits.occurrenceListed = commit(engine, { "main.ts": callersEngine(callersFact([...listedSymbols, declaration("src/Silent.java", "Silent", 3)])) }, "occurrence listed");
+    git(engine, "checkout", "--quiet", "--detach", commits.occurrences);
+    const bounded = callersFact(listedSymbols);
+    commits.occurrencesBounded = commit(engine, { "main.ts": callersEngine({ ...bounded, cuts: [...bounded.cuts, { kind: "depth", at: ["src/Listed.java::Listed"], limit: 1, reason: "depth", reach: { kind: "anything" } }] }) }, "occurrences bounded");
+    git(engine, "checkout", "--quiet", "--detach", commits.base);
     store = join(engine, ".git", "corpus-gate");
+
+    const sources = join(root, "corpus", "src");
+    for (const directory of ["src", "docs"]) mkdirSync(join(sources, directory), { recursive: true });
+    git(sources, "init", "--quiet");
+    const sourcesSha = commit(sources, OCCURRENCE_SOURCES, "sources");
 
     manifest = join(root, "manifest", "corpus.json");
     mkdirSync(join(root, "manifest"));
@@ -143,6 +214,20 @@ describe("corpus gate", () => {
         { id: "first", repos: [{ id: "app", path: "../corpus/app", sha: corpusSha }], queries: [{ id: "list", family: "files", argv: ["list", "{repo:app}"] }] },
         { id: "second", repos: [{ id: "b", path: "../corpus/second", sha: secondSha }], queries: [{ id: "list", family: "files", argv: ["list", "{repo:b}"] }] },
       ],
+    }));
+
+    occurrenceManifest = join(root, "manifest", "occurrences.json");
+    writeFileSync(occurrenceManifest, JSON.stringify({
+      groups: [{
+        id: "occ",
+        repos: [{ id: "src", path: "../corpus/src", sha: sourcesSha }],
+        queries: [
+          { id: "callers", family: "callers", argv: ["callers", "{repo:src}"] },
+          { id: "broken", family: "callers", argv: ["broken", "{repo:src}"] },
+          { id: "unknown", family: "callers", argv: ["unknown", "{repo:src}"] },
+          { id: "list", family: "files", argv: ["list", "{repo:src}"] },
+        ],
+      }],
     }));
 
     workspaceManifest = join(root, "manifest", "workspace.json");
@@ -238,7 +323,7 @@ describe("corpus gate", () => {
     const { report, markdown } = await gate("--base", commits.values, "--candidate", commits.valuesChanged, "--expect", "files:±");
     assert.deepEqual(valueRows(report.values.difference.rows, "gained", "lost", "changed"), [["files", "typescript", "symbols", 4, 0, 2]]);
     assert.deepEqual([report.values.base.entries, report.values.candidate.entries, report.values.difference.totals], [8, 12, { gained: 4, lost: 0, changed: 2 }]);
-    assert.ok(markdown?.includes("entries 8 → 12, gained 4, lost 0, changed 2.\n"));
+    assert.ok(markdown?.includes("entries 8 → 12, gained 4, lost 0, changed 2;"));
   });
 
   it("counts an importer a file gained in the nested collection, the file as changed, and no loss anywhere", async () => {
@@ -268,6 +353,58 @@ describe("corpus gate", () => {
     const { report } = await gate("--base", commits.values, "--candidate", commits.valuesSame);
     assert.equal(report.values.candidate.entries, 8);
     assert.deepEqual(report.values.difference, { rows: [], totals: { gained: 0, lost: 0, changed: 0 } });
+  });
+
+  interface OccurrenceRow { family: string; language: string; base: Record<string, number>; candidate: Record<string, number> }
+  interface Lead { family: string; language: string; answer: string; target: string; file: string; line: number; text: string }
+  const occurrenceGate = (candidate: string, ...args: string[]) => gateWith(occurrenceManifest, "--base", commits.occurrences, "--candidate", candidate, ...args);
+  const classesOf = (report: { occurrences: { rows: OccurrenceRow[] } }, side: "base" | "candidate") => report.occurrences.rows.map((row) => [row.family, row.language, row[side]]);
+  const place = (lead: Lead) => `${lead.file}:${lead.line}`;
+  const leadsFile = (report: { occurrences: { leads: string } }) => readFileSync(report.occurrences.leads, "utf8");
+
+  it("classes an occurrence no listed declaration and no cut accounts for as unaccounted, and lists it among the leads with its place", async () => {
+    const { report, markdown } = await occurrenceGate(commits.occurrencesSame);
+    assert.deepEqual(report.occurrences.candidate.unaccounted.map(place), ["src/Placed.java:4", "src/Silent.java:2"]);
+    assert.deepEqual(report.occurrences.candidate.unaccounted[1], { family: "callers", language: "java", answer: "occ/callers", target: "src/Target.java::Target", file: "src/Silent.java", line: 2, text: "Object held = new Target();", fileListed: false });
+    assert.ok(leadsFile(report).includes("occ/callers\tsrc/Target.java::Target\tsrc/Silent.java:2\tunlisted-file\tObject held = new Target();\n"));
+    assert.ok(markdown?.includes("unaccounted occurrences 2 → 2."));
+  });
+
+  it("classes an occurrence inside a listed declaration, at a place a symbol's via, an entrypoint or a route names, or in a reached module's file as listed; at a cut's place, a call-at place, a module importer or under a runtime reach as cut; outside the declared languages or globs as out of scope", async () => {
+    const { report } = await occurrenceGate(commits.occurrencesSame);
+    assert.deepEqual(classesOf(report, "candidate"), [["callers", "java", { target: 2, listed: 5, cut: 4, "out-of-scope": 2, unaccounted: 2 }]]);
+  });
+
+  it("classes an occurrence in the target's own lines as target", async () => {
+    const { report } = await occurrenceGate(commits.occurrencesSame);
+    assert.equal(report.occurrences.rows[0].base.target, 2);
+  });
+
+  it("reports an occurrence a newly listed dependent accounts for as having left the unaccounted class", async () => {
+    const { report, markdown } = await occurrenceGate(commits.occurrenceListed, "--expect", "callers:±");
+    assert.deepEqual(report.occurrences.difference.rows.map((row: { family: string; language: string; base: number; candidate: number; left: Lead[]; entered: Lead[] }) => [row.family, row.language, row.base, row.candidate, row.left.map(place), row.entered.map(place)]), [["callers", "java", 2, 1, ["src/Silent.java:2"], []]]);
+    assert.deepEqual(classesOf(report, "candidate"), [["callers", "java", { target: 2, listed: 6, cut: 4, "out-of-scope": 2, unaccounted: 1 }]]);
+    assert.ok(markdown?.includes("unaccounted occurrences 2 → 1."));
+  });
+
+  it("classes every line the answer does not list as cut under a cut whose reach is anything in any runtime", async () => {
+    const { report } = await occurrenceGate(commits.occurrencesBounded, "--expect", "callers:±");
+    assert.deepEqual(classesOf(report, "candidate"), [["callers", "java", { target: 2, listed: 5, cut: 8, "out-of-scope": 0, unaccounted: 0 }]]);
+  });
+
+  it("takes no occurrence from a family without declaration targets, from an answer that is not a fact or from an unknown one", async () => {
+    const { code, report } = await occurrenceGate(commits.occurrencesSame);
+    assert.equal(code, EXIT.pass);
+    assert.deepEqual(report.occurrences.rows.map((row: OccurrenceRow) => row.family), ["callers"]);
+    assert.deepEqual(report.occurrences.candidate.answers, 1);
+  });
+
+  it("gives the same occurrence report and leads bytes to the same inputs", async () => {
+    const first = await occurrenceGate(commits.occurrencesSame);
+    const firstLeads = leadsFile(first.report);
+    const second = await occurrenceGate(commits.occurrencesSame);
+    assert.equal(JSON.stringify(second.report.occurrences), JSON.stringify(first.report.occurrences));
+    assert.equal(leadsFile(second.report), firstLeads);
   });
 
   it("faults on a cut reason outside the facts contract before writing a report", async () => {

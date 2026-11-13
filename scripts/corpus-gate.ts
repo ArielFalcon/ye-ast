@@ -3,8 +3,10 @@
  * engine revision, each from its own clean worktree over fresh clones of the corpus, compares every answer, and fails
  * when a difference is not one the change declared with `--expect`. The report carries the cut ledger of each side and
  * their difference (RFC-0031), and the value ledger: the entries the facts hold by collection, with the entries gained,
- * lost and changed; it fails the run only for a reason declared with `--expect-cuts` that did not move as declared. A pass is recorded where the `.githooks` reference hook looks for it. Nothing is written to the corpus
- * repositories.
+ * lost and changed; and the occurrence oracle: the lines that write a target's name, classed by what each answer says
+ * about them, with the unaccounted ones listed as leads. It fails the run only for a reason declared with
+ * `--expect-cuts` that did not move as declared. A pass is recorded where the `.githooks` reference hook looks for it.
+ * Nothing is written to the corpus repositories.
  *
  *   node --import tsx scripts/corpus-gate.ts --corpus <manifest> [--base <rev>] [--candidate <rev>]
  *     [--expect none | --expect <family>:<+|-|±>]... [--expect-cuts <reason>:<+|-|±>]... [--engine <repo>] [--out <dir>]
@@ -19,6 +21,7 @@ import { parseArgs } from "node:util";
 import { z } from "zod";
 import { type Answer, type AnswerComparison, type Expectation, ExpectationError, type Violation, compareAnswers, parseExpectations, violations } from "./corpus-gate-diff.ts";
 import { type CutExpectation, type CutLedger, CutLedgerError, type CutViolation, type LedgerDifference, type LedgerValues, cutLedger, cutViolations, ledgerDifference, parseCutExpectations } from "./corpus-gate-ledger.ts";
+import { type ClassCounts, type Lead, type OccurrenceDifferenceRow, type OccurrenceKey, type OccurrenceLedger, OCCURRENCE_CLASSES, type WrittenAt, type WrittenLine, leadsText, occurrenceDifference, occurrenceLedger } from "./corpus-gate-occurrences.ts";
 import { type ValueDifference, type ValueKey, type ValueLedger, valueDifference, valueLedger } from "./corpus-gate-values.ts";
 
 export const EXIT = { pass: 0, fail: 1, usage: 2, fault: 3 } as const;
@@ -31,7 +34,7 @@ const REPO_PLACEHOLDER = /\{repo:([^}]+)\}/gu;
 const WORKSPACE_PLACEHOLDER = "{workspace}";
 const RUNNER_DIGEST = createHash("sha256").update(readFileSync(import.meta.filename)).digest("hex");
 
-export type GateFaultCode = "invalid-manifest" | "missing-revision" | "dependencies-differ" | "no-dependencies" | "no-cli-script" | "busy" | "git-failed" | CutLedgerError["code"];
+export type GateFaultCode = "invalid-manifest" | "missing-revision" | "dependencies-differ" | "no-dependencies" | "no-cli-script" | "busy" | "git-failed" | "unknown-repository" | CutLedgerError["code"];
 
 class UsageError extends Error {}
 
@@ -409,6 +412,9 @@ function report(context: Context, options: ReturnType<typeof parseOptions>, comm
   const ledgers = { base: sideLedger(baseResult), candidate: sideLedger(candidateResult) };
   const foundCuts = cutViolations(ledgers.base, ledgers.candidate, options.cutExpectations);
   const verdict = found.length === 0 && foundCuts.length === 0 ? "pass" : "fail";
+  const writtenAt = corpusWrittenAt(context);
+  const occurrences = { base: occurrenceLedger(baseResult.answers, writtenAt), candidate: occurrenceLedger(candidateResult.answers, writtenAt) };
+  const out = options.out ?? join(context.store, "reports", `${base.tree}-${candidate.tree}`);
   const differing = comparisons.filter((comparison) => !comparison.identical);
   const sideSummary = (side: Revision, result: SideResult): SideSummary => ({ rev: side.rev, commit: side.commit, tree: side.tree, cached: result.cached, wallMs: result.wallMs, answers: result.directory });
   const body: ReportBody = {
@@ -427,9 +433,16 @@ function report(context: Context, options: ReturnType<typeof parseOptions>, comm
     cutViolations: foundCuts,
     ledger: { ...ledgers, difference: ledgerDifference(ledgers.base, ledgers.candidate) },
     values: { base: valueLedger(baseResult.answers), candidate: valueLedger(candidateResult.answers), difference: valueDifference(baseResult.answers, candidateResult.answers) },
+    occurrences: {
+      rows: occurrenceRows(occurrences.base, occurrences.candidate),
+      base: { answers: occurrences.base.answers, unaccounted: occurrences.base.unaccounted },
+      candidate: { answers: occurrences.candidate.answers, unaccounted: occurrences.candidate.unaccounted },
+      difference: { rows: occurrenceDifference(occurrences.base, occurrences.candidate) },
+      leads: join(out, LEADS_FILE),
+    },
   };
-  const out = options.out ?? join(context.store, "reports", `${base.tree}-${candidate.tree}`);
   mkdirSync(out, { recursive: true });
+  writeFileSync(join(out, LEADS_FILE), leadsText(occurrences.candidate));
   const reportJson = `${JSON.stringify(body, null, 2)}\n`;
   writeFileSync(join(out, "report.json"), reportJson);
   writeFileSync(join(out, "report.md"), readable(body));
@@ -445,6 +458,54 @@ function report(context: Context, options: ReturnType<typeof parseOptions>, comm
   const expectCuts = options.cutExpectations.length === 0 ? "" : ` expect-cuts=${options.cutExpectations.map(cutExpectationText).join(",")}`;
   context.io.out(`Corpus-Gate: ${verdict} base=${base.commit.slice(0, 12)} candidate-tree=${candidate.tree.slice(0, 12)} answers=${comparisons.length} differing=${differing.length} expect=${expect} manifest=${context.manifestDigest.slice(0, 12)}${expectCuts}`);
   return verdict === "pass" ? EXIT.pass : EXIT.fail;
+}
+
+/** Both sides' class counts per family and language; a key one side lacks counts zero there. */
+function occurrenceRows(base: OccurrenceLedger, candidate: OccurrenceLedger): OccurrenceRow[] {
+  const rows = new Map<string, OccurrenceRow>();
+  const empty = () => Object.fromEntries(OCCURRENCE_CLASSES.map((name) => [name, 0])) as ClassCounts;
+  for (const [side, ledger] of [["base", base], ["candidate", candidate]] as const) {
+    for (const { family, language, counts } of ledger.rows) {
+      const key = `${family}\0${language}`;
+      const row = rows.get(key) ?? { family, language, base: empty(), candidate: empty() };
+      rows.set(key, row);
+      row[side] = counts;
+    }
+  }
+  return [...rows.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, row]) => row);
+}
+
+/**
+ * The lines of a corpus repository's commit that write a name as a word, read from the repository the manifest names
+ * for the answer's group, never from a clone's working tree; one read per repository, commit and name.
+ */
+function corpusWrittenAt(context: Context): WrittenAt {
+  const read = new Map<string, readonly WrittenLine[]>();
+  return (answer, repo, commit, name) => {
+    const group = context.manifest.groups.find((candidate) => candidate.id === answer.id.slice(0, answer.id.indexOf("/")));
+    const entry = group?.repos.find((candidate) => candidate.id === repo);
+    if (entry === undefined) throw new GateFault("unknown-repository", `${answer.id}: ${repo}`);
+    const source = resolve(context.manifestDirectory, entry.path);
+    const key = [source, commit, name].join("\0");
+    const known = read.get(key);
+    if (known !== undefined) return known;
+    const lines = gitGrep(source, commit, name);
+    read.set(key, lines);
+    return lines;
+  };
+}
+
+/** `git grep` over a commit's tree: text files only, the name as a whole word, every path from the repository's top. */
+function gitGrep(source: string, commit: string, name: string): WrittenLine[] {
+  const args = ["grep", "-I", "-n", "-w", "-F", "-z", "--full-name", "-e", name, commit, "--", ":(top)"];
+  const result = spawnSync("git", args, { cwd: source, encoding: "utf8", maxBuffer: 1 << 30, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+  if (result.status === 1 && result.stderr === "") return [];
+  if (result.status !== 0) throw new GateFault("git-failed", `git ${args.join(" ")}: ${result.stderr.trim()}`);
+  const prefix = `${commit}:`;
+  return result.stdout.split("\n").filter((record) => record !== "").map((record) => {
+    const [path, line, ...text] = record.split("\0");
+    return { file: (path as string).slice(prefix.length), line: Number(line), text: text.join("\0") };
+  });
 }
 
 /** A side's cut ledger; a cut reason outside the facts contract is a fault of the run, raised before any report is written. */
@@ -491,6 +552,13 @@ interface SideSummary {
   answers: string;
 }
 
+interface OccurrenceRow extends OccurrenceKey {
+  base: ClassCounts;
+  candidate: ClassCounts;
+}
+
+const LEADS_FILE = "occurrence-leads.tsv";
+
 interface ReportBody {
   schema: 1;
   verdict: "pass" | "fail";
@@ -507,6 +575,13 @@ interface ReportBody {
   cutViolations: readonly CutViolation[];
   ledger: { base: CutLedger; candidate: CutLedger; difference: LedgerDifference };
   values: { base: ValueLedger; candidate: ValueLedger; difference: ValueDifference };
+  occurrences: {
+    rows: OccurrenceRow[];
+    base: { answers: number; unaccounted: Lead[] };
+    candidate: { answers: number; unaccounted: Lead[] };
+    difference: { rows: OccurrenceDifferenceRow[] };
+    leads: string;
+  };
 }
 
 function readable(body: ReportBody): string {
@@ -516,7 +591,7 @@ function readable(body: ReportBody): string {
     "",
     `Base ${run(body.base)}, candidate ${run(body.candidate)}. Answers ${body.counts.answers}, identical ${body.counts.identical}, differing ${body.counts.differing}. Expected: ${body.expectations.length === 0 ? "none" : body.expectations.map((expectation) => `${expectation.family}:${expectation.direction}`).join(", ")}. Expected cuts: ${body.cutExpectations.length === 0 ? "none" : body.cutExpectations.map(cutExpectationText).join(", ")}.`,
     "",
-    `Ledgers: cuts ${body.ledger.difference.totals.base} → ${body.ledger.difference.totals.candidate}; entries ${body.values.base.entries} → ${body.values.candidate.entries}, gained ${body.values.difference.totals.gained}, lost ${body.values.difference.totals.lost}, changed ${body.values.difference.totals.changed}.`,
+    `Ledgers: cuts ${body.ledger.difference.totals.base} → ${body.ledger.difference.totals.candidate}; entries ${body.values.base.entries} → ${body.values.candidate.entries}, gained ${body.values.difference.totals.gained}, lost ${body.values.difference.totals.lost}, changed ${body.values.difference.totals.changed}; unaccounted occurrences ${body.occurrences.base.unaccounted.length} → ${body.occurrences.candidate.unaccounted.length}.`,
     "",
     "| Family | Answers | Differing | Added | Removed | Changed |",
     "|---|---|---|---|---|---|",
@@ -526,7 +601,7 @@ function readable(body: ReportBody): string {
     lines.push("", "## Violations", "", ...body.violations.map((violation) => `- ${violation.answer} (${violation.family}): ${violation.rule}`));
     lines.push(...body.cutViolations.map((violation) => `- cuts ${violation.reason} (${violation.direction}): ${violation.rule}, ${violation.base} → ${violation.candidate}`));
   }
-  lines.push(...readableLedger(body.ledger), ...readableValues(body.values));
+  lines.push(...readableLedger(body.ledger), ...readableValues(body.values), ...readableOccurrences(body.occurrences));
   for (const comparison of body.differing) {
     lines.push("", `## ${comparison.id} (${comparison.family})`, "", `exit ${comparison.base.exit} → ${comparison.candidate.exit}, status ${comparison.base.status} → ${comparison.candidate.status}, +${comparison.added} −${comparison.removed} ~${comparison.changed}`);
     lines.push(...comparison.counters.map((counter) => `- ${counter.path}: ${counter.base} → ${counter.candidate}`));
@@ -571,6 +646,26 @@ function readableValues(values: ReportBody["values"]): string[] {
     "An entry is identified by its place (the file, path, symbol or name it states, with its kind, line and the call that reached it), or by its whole content when it states none, and a nested entry together with the entry that holds it; entries sharing an identity are paired in order. Gained and lost are identities one side alone holds, changed one both hold with different content; the three are never netted.", "",
     "| Family | Language | Collection | Gained | Lost | Changed |", "|---|---|---|---|---|---|",
     ...values.difference.rows.map((row) => `${keyCells(row)} ${row.gained} | ${row.lost} | ${row.changed} |`),
+  ];
+}
+
+function readableOccurrences(occurrences: ReportBody["occurrences"]): string[] {
+  const counts = (side: ClassCounts) => OCCURRENCE_CLASSES.map((name) => side[name]).join("/");
+  const place = (lead: Lead) => `- ${lead.answer} ${lead.target}: ${lead.file}:${lead.line} ${lead.text}`;
+  return [
+    "", "## Occurrence oracle", "",
+    `For each answer of \`callers\` and \`impact\`, every line of its snapshot that writes the name of a seed as a word, read from git at the snapshot's commit (${occurrences.base.answers} answers on the base, ${occurrences.candidate.answers} on the candidate). A line is \`target\` inside the seed's own lines, \`listed\` inside a declaration or at a place the answer lists, \`cut\` at a place a cut names or in a file a cut's reach covers, \`out-of-scope\` in a path or language the declared scope leaves out, and \`unaccounted\` otherwise. The oracle resolves nothing: \`unaccounted\` is an upper bound of the silent omissions and each of its lines is a lead to audit. A homonym gives unaccounted lines that are correct; a name in a comment or a string is counted; a dependent that does not write the name is not seen. Other families state no declaration as a target and contribute nothing.`, "",
+    `Counts ${OCCURRENCE_CLASSES.join("/")}, base → candidate. The candidate's unaccounted lines are in ${occurrences.leads}.`, "",
+    "| Family | Language | Base | Candidate |", "|---|---|---|---|",
+    ...occurrences.rows.map((row) => `| ${row.family} | ${row.language} | ${counts(row.base)} | ${counts(row.candidate)} |`),
+    ...occurrences.difference.rows.flatMap((row) => {
+      const moved = row.candidate - row.base;
+      return [
+        "", `### ${row.family} ${row.language}: unaccounted ${row.base} → ${row.candidate} (${moved === 0 ? "unchanged" : moved < 0 ? `down ${-moved}` : `up ${moved}`}), ${row.left.length} left, ${row.entered.length} entered`,
+        ...(row.left.length === 0 ? [] : ["", "Left:", ...row.left.map(place)]),
+        ...(row.entered.length === 0 ? [] : ["", "Entered:", ...row.entered.map(place)]),
+      ];
+    }),
   ];
 }
 
