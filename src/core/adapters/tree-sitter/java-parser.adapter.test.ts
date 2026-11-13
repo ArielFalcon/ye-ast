@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
+import { readdir, readFile } from "node:fs/promises";
 import { Parser, type Tree } from "web-tree-sitter";
 import { createJavaParser, createJavaTreeHolds } from "./java-parser.adapter.ts";
 
@@ -84,5 +85,54 @@ test("a source no open hold kept, the original of a kept copy, one kept by a rel
   afterRelease.value.dispose();
   assert.deepEqual([native.parses, native.alive.size], [4, 1]);
   theirs.release();
+  assert.equal(native.alive.size, 0);
+});
+
+const SYNTAX_ERRORS = new URL("./fixtures/syntax-errors/", import.meta.url);
+/** The fixtures whose syntax errors lie in bodies, by the first line of each unread body; every other fixture is unread. */
+const CONFINED: Readonly<Record<string, readonly number[]>> = {
+  "confined-statements-before-super.java": [5],
+  "confined-statements-before-this.java": [4],
+  "confined-bodies.java": [4, 8, 12, 14, 16],
+};
+
+test("under the declarations reading a source whose syntax errors lie in delimited bodies is read with those bodies unread, and any other syntax error stays a fault", async () => {
+  const parser = await createJavaParser();
+  const fixtures = (await readdir(SYNTAX_ERRORS)).sort();
+  assert.ok(fixtures.some((name) => !(name in CONFINED)));
+
+  const read = Object.fromEntries(await Promise.all(fixtures.map(async (name) => {
+    const parsed = parser.parse({ path: name, content: await readFile(new URL(name, SYNTAX_ERRORS), "utf8") }, "declarations");
+    if (!parsed.ok) return [name, "unread"];
+    const lines = parsed.value.unread?.bodies.map((body) => body.startPosition.row + 1);
+    parsed.value.dispose();
+    return [name, lines];
+  })));
+
+  assert.deepEqual(read, Object.fromEntries(fixtures.map((name) => [name, CONFINED[name] ?? "unread"])));
+  assert.equal(native.alive.size, 0);
+});
+
+test("a source whose syntax errors lie in bodies is a fault at its first error under the default reading, its tree freed, and the hold that kept it answers both readings from one parse", async () => {
+  const content = await readFile(new URL("confined-statements-before-super.java", SYNTAX_ERRORS), "utf8");
+  const parser = await createJavaParser();
+
+  assert.deepEqual(parser.parse({ path: "A.java", content }), { ok: false, fault: { kind: "syntax-error", line: 7 } });
+  assert.equal(native.alive.size, 0);
+  const declared = parser.parse({ path: "A.java", content }, "declarations");
+  assert.ok(declared.ok);
+  assert.equal(declared.value.unread?.line, 7);
+  declared.value.dispose();
+
+  const holds = createJavaTreeHolds();
+  const held = await createJavaParser(holds);
+  const hold = holds.open();
+  const [kept] = hold.keep([{ path: "A.java", content }]);
+  assert.deepEqual(held.parse(kept!), { ok: false, fault: { kind: "syntax-error", line: 7 } });
+  const reread = held.parse(kept!, "declarations");
+  assert.ok(reread.ok);
+  reread.value.dispose();
+  assert.deepEqual([native.parses, native.alive.size], [3, 1]);
+  hold.release();
   assert.equal(native.alive.size, 0);
 });

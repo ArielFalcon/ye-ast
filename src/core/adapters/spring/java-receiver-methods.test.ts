@@ -452,3 +452,35 @@ test("the class body of an enum constant extends its enum, settled by its own fi
   assert.deepEqual(await createJavaNameBindings(createJavaParser, [unit]).declaredSupertypes!(sites), [placed, { kind: "unknown" }]);
   assert.deepEqual(await createJavaNameBindings(createJavaParser, [unit], KOTLIN([unit])).declaredSupertypes!(sites), [placed, { kind: "unknown" }]);
 });
+
+/** `Repo` writes statements before `super(...)`, so its constructor body is unread; that body calls `task.run()`, and declares a local and an anonymous `Task`. */
+const UNREAD_BODY = {
+  task: java("Task.java", ["package app;", "", "public interface Task { void run(); }"]),
+  job: java("Job.java", ["package app;", "", "public class Job implements Task { public void run() {} }"]),
+  base: java("Base.java", ["package app;", "", "public class Base { public Base(int x) {} }"]),
+  repo: java("Repo.java", [
+    "package app;",
+    "",
+    "public abstract class Repo extends Base {",
+    "  protected Repo(Task task) {",
+    "    int y = 1;",
+    "    super(y);",
+    "    task.run();",
+    "    Task other = new Task() { public void run() {} };",
+    "    class Local implements Task { public void run() {} }",
+    "  }",
+    "}",
+  ]),
+};
+
+test("a source whose syntax errors lie in a body has its supertype clauses proven, while a name the body writes, and the types that may implement a method, stay unproven", async () => {
+  const { task, job, base, repo } = UNREAD_BODY;
+  const reading = createJavaNameBindings(createJavaParser, [task, job, base, repo]);
+
+  assert.deepEqual(await reading.declaredSupertypes!([{ file: repo.path, line: 3, name: "Repo" }, { file: repo.path, line: 9, name: "Local" }]), [
+    { kind: "supertypes", supertypes: [{ relation: "extends", written: "Base", kind: "placed", name: "Base", ...place(base, 3) }] },
+    { kind: "unknown" },
+  ]);
+  assert.deepEqual(await reading.receiverMethods([{ file: repo.path, line: 7, column: 5, member: "run" }]), [{ kind: "unknown" }]);
+  assert.deepEqual((await reading.dispatchTargets([{ file: task.path, line: 3, name: "run" }])).map(({ kind }) => kind), ["unknown"]);
+});

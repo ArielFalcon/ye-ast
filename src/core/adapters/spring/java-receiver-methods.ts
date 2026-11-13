@@ -8,7 +8,7 @@ import type { ConstructedClassSite, DeclaredSupertype, DeclaredSupertypes, Imple
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { enclosingType, heldJavaProject, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
+import { declarationsProject, enclosingType, heldJavaProject, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve } from "./java-declared-types.ts";
 import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
@@ -224,37 +224,44 @@ export function createJavaImplicitChains(parser: () => Promise<JavaParser>, sour
  * in its strict reading, from the scope around the type, since a clause is outside the type's body (JLS 6.3, 8.1.4). A
  * name the strict reading leaves unsettled, ambiguous or bound to a local type is `unknown`; a platform type, or a name an
  * import or a package qualifier proves outside the repository, is `outside`. A written name binds at compile time, so
- * only a source the reader does not read leaves it unproven: a dynamic implementation or a call-rewriting annotation
- * changes what runs, never which type a name denotes. The class body of an enum constant extends its enum (JLS 8.9.1),
+ * only a declaration the reader does not read leaves it unproven: a dynamic implementation or a call-rewriting
+ * annotation changes what runs, never which type a name denotes, and a body that does not parse declares only types
+ * local to it, which no clause outside it can name. The class body of an enum constant extends its enum (JLS 8.9.1),
  * which its own file settles.
  */
 export function createJavaDeclaredSupertypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): NonNullable<ImportOrigins["declaredSupertypes"]> {
-  return perPlacedType(parser, sources, paths, hold, build, UNKNOWN_SUPERTYPES, declaredSupertypesOf, readsEverySource, enumConstantSupertypes);
+  return perPlacedType(parser, sources, paths, hold, build, UNKNOWN_SUPERTYPES, declaredSupertypesOf, "declarations", enumConstantSupertypes);
 }
 
 /**
- * One answer per site from the one type the site places, `unknown` where none or several are placed or `proves` proves no
- * binding; `settled` answers first a site its own file settles.
+ * One answer per site from the one type the site places, `unknown` where none or several are placed or the reading proves
+ * no binding: `bindings` holds where `provesBinding` does, over the read sources; `declarations` where every declaration
+ * is read (`readsEveryDeclaration`), over the project that holds the declarations of the sources whose syntax errors lie
+ * in member bodies, since a type such a body declares is local to it and no site places one. `settled` answers first a
+ * site its own file settles.
  */
-function perPlacedType<A>(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold: ParseHold | undefined, build: ProjectBuild, unknown: A, answer: (type: TypeDecl, project: JavaProject) => A, proves: typeof provesBinding = provesBinding, settled?: (site: ConstructedClassSite, project: JavaProject) => A | undefined): (sites: readonly ConstructedClassSite[]) => Promise<readonly A[]> {
+function perPlacedType<A>(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold: ParseHold | undefined, build: ProjectBuild, unknown: A, answer: (type: TypeDecl, project: JavaProject) => A, reading: "bindings" | "declarations" = "bindings", settled?: (site: ConstructedClassSite, project: JavaProject) => A | undefined): (sites: readonly ConstructedClassSite[]) => Promise<readonly A[]> {
   const unreadJvm = paths.some(isUncoveredJvmSource);
-  const analyze = (sites: readonly ConstructedClassSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly A[] => {
-    if (!proves(files, project, unparsed, unreadJvm)) return sites.map((site) => settled?.(site, project) ?? unknown);
+  const analyze = (sites: readonly ConstructedClassSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], declared: readonly JavaFile[], project: JavaProject, declarations: JavaProject): readonly A[] => {
+    const proves = reading === "declarations" ? readsEveryDeclaration(declarations, unparsed, declared, unreadJvm) : provesBinding(files, project, unparsed, unreadJvm);
+    const read = reading === "declarations" ? declarations : project;
+    if (!proves) return sites.map((site) => settled?.(site, read) ?? unknown);
     return sites.map((site) => {
-      const own = settled?.(site, project);
+      const own = settled?.(site, read);
       if (own !== undefined) return own;
-      const placed = project.types.filter((type) => type.file.path === site.file && type.name === site.name && typePlace(type).start <= site.line && site.line <= typePlace(type).nameLine);
-      return placed.length === 1 ? answer(placed[0]!, project) : unknown;
+      const placed = read.types.filter((type) => type.file.path === site.file && type.name === site.name && typePlace(type).start <= site.line && site.line <= typePlace(type).nameLine);
+      return placed.length === 1 ? answer(placed[0]!, read) : unknown;
     });
   };
   return async (sites) => {
     if (sites.length === 0) return [];
     const read = await parser();
     const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources, [], build);
-    if (held !== undefined) return analyze(sites, held.files.map(({ file }) => file), held.unparsed, held.project);
+    if (held !== undefined) return analyze(sites, held.files.map(({ file }) => file), held.unparsed, held.declared, held.project, held.declarations);
     return withJavaSources(read, (parse) => {
-      const { files, unparsed } = parse(sources);
-      return analyze(sites, files, unparsed, createJavaProject(files, build));
+      const parsed = parse(sources);
+      const project = createJavaProject(parsed.files, build);
+      return analyze(sites, parsed.files, parsed.unparsed, parsed.declared, project, declarationsProject(parsed, project, build));
     });
   };
 }
@@ -363,11 +370,20 @@ class DeadlineCut extends Error {
  * call-rewriting annotation anywhere leaves every binding unproven.
  */
 export function provesBinding(files: readonly JavaFile[], project: JavaProject, unparsed: readonly UnparsedSource[], unreadJvm: boolean): boolean {
-  return readsEverySource(files, project, unparsed, unreadJvm) && !files.some((file) => namesAnyDynamicImplementation(file, project)) && !files.some(({ root }) => rewritesCalls(root));
+  return readsEverySource(project, unparsed, unreadJvm) && !files.some((file) => namesAnyDynamicImplementation(file, project)) && !files.some(({ root }) => rewritesCalls(root));
+}
+
+/**
+ * Whether the reader read every declaration: each source it left unparsed has its declarations read (`declared`, its
+ * syntax errors confined to member bodies), no JVM source no extractor reads, no declaration the project could not read.
+ */
+function readsEveryDeclaration(declarations: JavaProject, unparsed: readonly UnparsedSource[], declared: readonly JavaFile[], unreadJvm: boolean): boolean {
+  const read = new Set(declared.map(({ path }) => path));
+  return unparsed.every(({ path }) => read.has(path)) && !unreadJvm && declarations.unreadable.length === 0;
 }
 
 /** Whether the reader read every source: none left unparsed, no JVM source no extractor reads, no declaration the project could not read. */
-function readsEverySource(_files: readonly JavaFile[], project: JavaProject, unparsed: readonly UnparsedSource[], unreadJvm: boolean): boolean {
+function readsEverySource(project: JavaProject, unparsed: readonly UnparsedSource[], unreadJvm: boolean): boolean {
   return unparsed.length === 0 && !unreadJvm && project.unreadable.length === 0;
 }
 

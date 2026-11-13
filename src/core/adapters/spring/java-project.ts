@@ -20,6 +20,8 @@ export interface UnparsedSource {
 export interface ParsedJava {
   files: JavaFile[];
   unparsed: UnparsedSource[];
+  /** The unparsed sources whose declarations are read: each syntax error lies in a member body (`JavaParser.parse`'s `declarations` reading). */
+  declared: JavaFile[];
 }
 
 export type ParseJava = (sources: readonly (SourceFile | LibrarySource)[]) => ParsedJava;
@@ -47,6 +49,9 @@ export interface HeldJavaProject {
   files: readonly HeldJavaSource[];
   project: JavaProject;
   unparsed: readonly UnparsedSource[];
+  /** The unparsed sources whose declarations are read, and the project over them and `files` (`declarationsProject`). */
+  declared: readonly JavaFile[];
+  declarations: JavaProject;
   /** Whether a path is one of the read's own sources: every reader that lists sites, routes or entrypoints filters by it. */
   owns(path: string): boolean;
 }
@@ -83,9 +88,11 @@ async function buildHeldJavaProject(hold: ParseHold, parser: () => Promise<JavaP
   const kept = hold.keep([...sources, ...declared]);
   const read = await parser();
   return withJavaSources(read, (parse) => {
-    const { files, unparsed } = parse(kept);
+    const parsed = parse(kept);
+    const { files, unparsed } = parsed;
     const owned = new Set(sources.map(({ path }) => path));
-    return { files: files.map((file) => ({ file, owned: owned.has(file.path) })), project: createJavaProject(files, build), unparsed, owns: (path: string) => owned.has(path) };
+    const project = createJavaProject(files, build);
+    return { files: files.map((file) => ({ file, owned: owned.has(file.path) })), project, unparsed, declared: parsed.declared, declarations: declarationsProject(parsed, project, build), owns: (path: string) => owned.has(path) };
   });
 }
 
@@ -93,11 +100,14 @@ async function buildHeldJavaProject(hold: ParseHold, parser: () => Promise<JavaP
 export function withJavaSources<T>(parser: JavaParser, use: (parse: ParseJava) => T): T {
   const trees: JavaSyntaxTree[] = [];
   const parse: ParseJava = (sources) => {
-    const parsed: ParsedJava = { files: [], unparsed: [] };
+    const parsed: ParsedJava = { files: [], unparsed: [], declared: [] };
     for (const source of sources) {
       const read = readSource(parser, source, trees);
       if ("file" in read) parsed.files.push(read.file);
-      else parsed.unparsed.push(read.unparsed);
+      else {
+        parsed.unparsed.push(read.unparsed);
+        if (read.declared !== undefined) parsed.declared.push(read.declared);
+      }
     }
     return parsed;
   };
@@ -122,12 +132,21 @@ export function thisType(node: Node, file: JavaFile, project: JavaProject): Type
   return holder === null || holder === undefined ? undefined : project.types.find((type) => type.file === file && type.node.id === holder.id);
 }
 
-function readSource(parser: JavaParser, source: SourceFile | LibrarySource, trees: JavaSyntaxTree[]): { file: JavaFile } | { unparsed: UnparsedSource } {
+/**
+ * The project over the read sources and the declarations of the unparsed sources that `declared` holds: what a proof that
+ * reads only declarations (which type a written name denotes) may read; `project` itself when none is declared.
+ */
+export function declarationsProject(parsed: ParsedJava, project: JavaProject, build: ProjectBuild = {}): JavaProject {
+  return parsed.declared.length === 0 ? project : createJavaProject([...parsed.files, ...parsed.declared], build);
+}
+
+function readSource(parser: JavaParser, source: SourceFile | LibrarySource, trees: JavaSyntaxTree[]): { file: JavaFile } | { unparsed: UnparsedSource; declared?: JavaFile } {
   const path = "repo" in source ? libraryPath(source.repo, source.path) : source.path;
   try {
-    const result = parser.parse(source);
+    const result = parser.parse(source, "declarations");
     if (!result.ok) return { unparsed: { path, line: result.fault.line } };
     trees.push(result.value);
+    if (result.value.unread !== undefined) return { unparsed: { path, line: result.value.unread.line }, declared: describeFile(path, result.value.root) };
     return { file: describeFile(path, result.value.root) };
   } catch {
     return { unparsed: { path, line: 1 } };

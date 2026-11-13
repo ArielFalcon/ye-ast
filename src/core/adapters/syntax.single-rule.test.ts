@@ -77,7 +77,7 @@ const RULES: readonly Rule[] = [
   },
   {
     concept: "parsing Java sources into files of a project",
-    pattern: /(?<!JSON)\.parse\(\s*(?:source|file)\s*\)/,
+    pattern: /(?<!JSON)\.parse\(\s*(?:source|file)\s*(?:,[^)]*)?\)/,
     /* The tree-sitter readers parse one file at a time for a per-file answer and build no project. */
     owners: ["spring/java-project.ts", "tree-sitter/java-member-names.adapter.ts", "tree-sitter/java-records.adapter.ts", "tree-sitter/java-tokens.adapter.ts"],
     pending: [],
