@@ -39,8 +39,13 @@ export interface PropagatedPlace {
 /** The places of a propagated site's origins as a fact carries them: 1-based, deduplicated and sorted; undefined when it has none. */
 export function propagationOf(origins: readonly PlacedOrigin[] | undefined): readonly PropagatedPlace[] | undefined {
   if (origins === undefined || origins.length === 0) return undefined;
-  const places = new Map(origins.map(({ kind, file, line, column }): [string, PropagatedPlace] => [JSON.stringify([kind, file, line, column]), { kind, file, line, column: column + 1 }]));
-  return [...places.values()].sort((a, b) => compareText(a.file, b.file) || a.line - b.line || a.column - b.column || compareText(a.kind, b.kind));
+  return distinctPlaces(origins.map(({ kind, file, line, column }) => ({ kind, file, line, column: column + 1 })));
+}
+
+/** Places once each, sorted by file, line, column and then kind. */
+export function distinctPlaces<P extends { file: string; line: number; column: number; kind?: string }>(places: readonly P[]): P[] {
+  const unique = new Map(places.map((place) => [JSON.stringify([place.kind, place.file, place.line, place.column]), place] as const));
+  return [...unique.values()].sort((a, b) => compareText(a.file, b.file) || a.line - b.line || a.column - b.column || compareText(a.kind ?? "", b.kind ?? ""));
 }
 
 /** The established HTTP method and, when read, its path independently of the destination base. */

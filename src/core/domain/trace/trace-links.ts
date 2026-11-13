@@ -1,6 +1,5 @@
-import { compareText } from "../shared/code-node.ts";
 import type { Link, UnlinkedCallSite } from "../topology/link.ts";
-import type { CallPlace, PropagatedPlace } from "../topology/call-site.ts";
+import { distinctPlaces, type CallPlace, type PropagatedPlace } from "../topology/call-site.ts";
 import type { IssuingPlace, TraceLinked, TraceStep, TraceValue } from "./trace-fact.ts";
 
 /**
@@ -68,7 +67,7 @@ export function traceLinks(value: TraceValue, repo: string, workspace: Required<
     const now = (own !== undefined && executed.has(own)) || issued.some(({ later }) => !later);
     if (!now && !(own !== undefined && deferred.has(own)) && issued.length === 0) return [];
     const answer: TraceLinked<T> = now ? site : { ...site, deferred: true };
-    const places = [...new Map(issued.map(({ place }) => [key(place, "http"), place])).values()].sort((a, b) => compareText(a.file, b.file) || a.line - b.line || a.column - b.column);
+    const places = distinctPlaces(issued.map(({ place }) => place));
     return [places.length === 0 ? answer : { ...answer, issuedAt: places }];
   });
   return { ...value, repositorySnapshots: workspace.repositorySnapshots, links: keep(linkIssues), unlinked: keep(unlinkedIssues) };

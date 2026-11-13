@@ -18,6 +18,7 @@ import { shareExactContext } from "./presentation-sharing.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { ComposeFull, ComposeReceipt, CompositionResult } from "./composition-contract.ts";
 import type { AnchorId, Attestation, ComparisonRef, CompositionIssue, Connection, EntityId, EntityRecord, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, FileId, OriginReference, Part, PartId, PartKind, PartOf, ReadId, ReadOwner, ReadRecord, RelationId, RelationRecord, SnapshotId, SourceDescriptor, SourceId } from "../core/ports/evidence-composition.port.ts";
+import type { IssuingPlace } from "../core/domain/trace/trace-fact.ts";
 import type { CutOwner } from "../core/domain/composition/source-read.ts";
 
 /** The action receipt: verification and complete safe repeat queries; findings and coverage belong to text. */
@@ -56,7 +57,7 @@ function renderFull(result: CompositionResult): string {
 }
 
 /** The leaf calls of the traced repository that issue the request, as `file:line`. */
-function issuedAtText(leaves: readonly { file: string; line: number }[] | undefined): string {
+function issuedAtText(leaves: readonly IssuingPlace[] | undefined): string {
   return leaves === undefined ? "" : ` issued at ${leaves.map(({ file, line }) => `${file}:${line}`).join(", ")}`;
 }
 

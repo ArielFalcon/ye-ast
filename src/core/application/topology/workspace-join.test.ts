@@ -190,3 +190,13 @@ test("a link carries no drift when the literal parses, the variable is untyped o
     ["GET /restaurants/{id}", undefined],
   ]);
 });
+
+test("two propagated sites that make one link carry the bodies of both, once each and in place order", () => {
+  const site = requesting("GET", UNDECIDED_BASE, text("/restaurants/daily-menus"));
+  const later = { kind: "body", file: "src/app/b.ts", line: 4, column: 3 } as const;
+  const earlier = { kind: "body", file: "src/app/a.ts", line: 9, column: 1 } as const;
+  const api = repository("api", [], [serving("GET", "/restaurants/daily-menus", "Restaurants.dailyMenus")]);
+  const { links } = joined([repository("web", [{ ...site, propagatedThrough: [later] }, { ...site, propagatedThrough: [earlier, later] }], []), api]);
+
+  assert.deepEqual(links.map((link) => link.propagatedThrough), [[earlier, later]]);
+});

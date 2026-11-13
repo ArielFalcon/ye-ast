@@ -1,4 +1,4 @@
-import { callPlaceOf, compareCallPlaces, type CallSite, type EventTarget, type PropagatedPlace } from "../../domain/topology/call-site.ts";
+import { callPlaceOf, compareCallPlaces, distinctPlaces, type CallSite, type EventTarget, type PropagatedPlace } from "../../domain/topology/call-site.ts";
 import type { JoinedSite } from "../../domain/topology/link-graph.ts";
 import type { Link, UnlinkedCallSite } from "../../domain/topology/link.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -56,12 +56,6 @@ export function declaredGateways(gateways: readonly Gateway[]): GatewayDeclarati
   return gateways.flatMap(({ prefix, repo, basis }) => (basis === "gateway-prefix" ? [{ prefix, repo }] : []));
 }
 
-/** The places of two sites that make one link, deduplicated and sorted. */
-function mergedPlaces(a: readonly PropagatedPlace[] | undefined, b: readonly PropagatedPlace[] | undefined): readonly PropagatedPlace[] {
-  const places = new Map([...(a ?? []), ...(b ?? [])].map((place) => [JSON.stringify(place), place] as const));
-  return [...places.values()].sort((x, y) => compareText(x.file, y.file) || x.line - y.line || x.column - y.column || compareText(x.kind, y.kind));
-}
-
 /** What a join admitted, once per `Link.id` and sorted by id, and the call sites it reached and could not settle, sorted by place. */
 export function linkMapOf(joined: readonly JoinedSite[]): { links: Link[]; unlinked: UnlinkedCallSite[] } {
   const links = new Map<string, Link>();
@@ -71,7 +65,7 @@ export function linkMapOf(joined: readonly JoinedSite[]): { links: Link[]; unlin
     const through = site.propagatedThrough === undefined ? {} : { propagatedThrough: site.propagatedThrough };
     for (const link of answer.links ?? []) {
       const known = links.get(link.id)?.propagatedThrough;
-      links.set(link.id, site.propagatedThrough === undefined && known === undefined ? link : { ...link, propagatedThrough: mergedPlaces(known, site.propagatedThrough) });
+      links.set(link.id, site.propagatedThrough === undefined && known === undefined ? link : { ...link, propagatedThrough: distinctPlaces([...(known ?? []), ...(site.propagatedThrough ?? [])]) });
     }
     if (answer.ambiguous !== undefined) unlinked.push({ from, transport: site.transport, outcome: "ambiguous", name: answer.ambiguous.key, repos: answer.ambiguous.repos, ...(answer.ambiguous.routes === undefined ? {} : { routes: answer.ambiguous.routes }), ...through });
     else if (answer.undecided !== undefined) unlinked.push({ from, transport: site.transport, outcome: "could-match", name: answer.undecided, ...through });
