@@ -1,52 +1,28 @@
-# JDK signatures
-
-Generate with `node --import tsx scripts/jdk-signatures.ts --jdk <home> --out <table> [--digest <sha256>]`.
-Nothing is redistributed; generated tables are not committed.
-
-The pin is Java SE 23.0.1, release 23. Only java.* modules and release sets containing N are selected.
-Directory entries and .jmod archives are excluded. Every selected declaration must decode.
-
-Accepted whole ct.sym SHA-256 digests:
-
-- Oracle JDK 23.0.1+11-39 (10744455 bytes): e47b50ac58efc23859ade811e266307a3fc9d9b9b65fff01b830b0e9d8aae263
-- OpenJDK 23.0.1+11-39 (10157226 bytes): 4a8cfcd91fd9156268e350f8473168927c4ccca21fd5c87285153f4934f0e1c6
-
-Both contain identical release-23 java.* content: 4848 entries, zero undefined decodes, content hash d55db8f757663be8.
-Accepting both widens the generating host, never the asserted table. Other digests produce no output.
-Release directory names are sets (A=10 through N=23), including shared directories such as LMN.
-Canonical JSON sorts object keys and members, preserves parameter order, and contains no timestamps.
 # JDK archives
 
 `jdk-archive.adapter.ts` reads a JDK's `lib/ct.sym` as data: the central directory on open, one member inflated on demand
 with `node:zlib`. Only `ct.sym` is read: a `.jmod` carries a `JM` header before its ZIP, so it answers `unreadable` and is
-never unwrapped. The reader is confined to the host path the caller names (ADR-0044 decision 10, resolved question 10),
+never unwrapped. The reader is confined to the host path the caller names (ADR-0044 decision 10, ADR-0063),
 and no dependency is added for it.
 
-## Pin and digest
+## The declared JDK (ADR-0063)
 
-- **Nothing is redistributed.** ye-ast ships no JDK-derived bytes (resolved question 9): the only JDK an answer may use
-  is a host JDK the user names with `--jdk`, accepted only at the pinned archive's digest.
-- **The digest is the SHA-256 of the archive's bytes**, hex, over the whole file, comment included.
-- The concrete JDK distribution and version, and the digest recorded for them, are fixed in V1b.1c's commit (decision
-  10's "Precondition of V1b"). The adapter states no version: the pin is data, and a JDK of another digest generates
-  nothing.
-- **Reproduce a digest:** `shasum -a 256 <java-home>/lib/ct.sym`.
+`jdk-library.adapter.ts` implements the `LibrarySignatureSource` port over a JDK home the host declares (`--jdk`):
 
-## The host JDK (`--jdk`)
-
-- `init` and `mcp` accept `--jdk <path>` once: the JDK home the user names (`lib/ct.sym` is read from it). The path is
-  resolved against the working directory and printed into the MCP registration that `init` prints.
-- A home without a readable `lib/ct.sym` is a usage error (exit 2) before anything runs: a registration must not name a
-  JDK that cannot work. A home whose archive is readable but not pinned is accepted and yields no table; that is a
-  policy outcome, not a refusal.
-- `jdkSignaturesOf` (`jdk-signature-source.ts`) generates the table in memory, once per process and path. A path that is
-  unreadable, an archive whose digest is not one of the two pinned digests, or a pinned archive that does not decode
-  yields no table (`undefined`): every obligation that needs the table stays unsettled. Nothing is written to disk.
-- The source names a home only; the digests live in `PINNED_JDK_DIGESTS` (`jdk-signature-generator.ts`), a constant set,
-  so the source carries no per-source digest.
-- A generation fault answers `undefined` too. Its reason is not surfaced yet; the consuming unit may need a typed fault.
-- No query reads the table yet, and `compose.ts` is untouched: the wiring that hands the table to a query belongs to the
-  unit that consumes it.
+- **Nothing is redistributed, generated or pinned.** ye-ast ships no JDK-derived bytes; at run time it reads the user's own
+  `<home>/lib/ct.sym` and `<home>/release` as data, and its tests use hand-written bytes (`jdk-home.testing.ts`). The
+  SHA-256 of `ct.sym` is the identity the answer records, not a gate. Reproduce it with `shasum -a 256 <home>/lib/ct.sym`.
+- **The release is the JDK's own feature release**, from `JAVA_VERSION` of `release` (`1.8.0_392` is 8, `23.0.1` is 23).
+- **The index is lazy.** The name index comes from the central directory alone; a type is decoded when `typeOf` asks for
+  it, and the decoded types are kept per (archive digest, release), never per path.
+- **Both layouts are read.** A second path segment that contains a dot is a module directory (`OP/java.base/java/...`);
+  without one (JDK 11) the segment after the release set is the first package segment.
+- **Release sets are letters.** `8` is 8, `9` is 9, `A` is 10 and so on; a shared directory concatenates them (`OP`).
+- **Only `java.*` types are held.** Anything else answers `undefined`, which a caller treats as unsettled.
+- **Zero or two entries** covering one type at the release mean the type is not held; the first is never taken.
+- **Unusable homes.** A missing, linked or corrupt `ct.sym` or `release`, a `ct.sym` with no release-set entries (a
+  JDK 8 home) and an unparsable `JAVA_VERSION` are `jdk-unreadable`; a `ct.sym` that does not hold `java.lang.Object` at
+  the JDK's release is `release-not-held`.
 
 ## What the reader refuses
 
@@ -54,7 +30,7 @@ and no dependency is added for it.
 cannot be trusted as a whole never answers a partial listing:
 
 - a path that is absent, a link, not a regular file, or unreadable reads nothing (`names` is empty, every `entry` is
-  `unreadable`, and `digest` is empty so it matches no pin);
+  `unreadable`, and `digest` is empty so it names no identity);
 - a truncated or corrupt archive answers `unreadable`, never `absent`. An end record is resolved by the directory it
   states, never by being the last signature whose comment reaches the end of the file: that directory must end exactly
   where the record starts, parse record by record, and the local records and their data descriptors must tile the file

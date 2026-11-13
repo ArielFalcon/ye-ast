@@ -4,7 +4,7 @@ import { inflateRawSync } from "node:zlib";
 
 /**
  * Reads a JDK archive (`ct.sym`, a `jmods` member) as data, confined to the host path the caller names (ADR-0044
- * decision 10, ADR-0007's exact pin). The central directory is read once on open and a member is inflated only when it
+ * decision 10, ADR-0063). The central directory is read once on open and a member is inflated only when it
  * is asked for. Every bound comes from the file itself, never from a header alone, so a truncated, corrupt, ZIP64 or
  * unsupported-method archive is `unreadable`, never a partial listing.
  */
@@ -16,7 +16,7 @@ export interface JdkArchive {
   /** Every entry name under a prefix, sorted, read from the central directory only (no member is inflated). */
   names(prefix: string): readonly string[];
   entry(name: string): ArchiveEntry;
-  /** SHA-256 of the archive's bytes, as the pin states it (hex); empty when the bytes could not be read. */
+  /** SHA-256 of the archive's bytes (hex); empty when the bytes could not be read. */
   readonly digest: string;
 }
 
