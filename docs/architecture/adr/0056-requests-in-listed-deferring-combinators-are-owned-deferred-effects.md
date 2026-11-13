@@ -2,6 +2,7 @@
 
 - Status: Accepted, 2026-11-12, owner
 - Decision source: Owner, 2026-11-12: "Corrígelo todo de forma planificada y con calidad, que se integre bien a las reglas del proyecto y que resuelvan los problemas detectados para mejorar la calidad multi repo", authorizing mechanism M4 of the diagnosis, owned deferred effects through a plugin catalog of combinators.
+- Superseded in part by ADR-0061 (decision 3, last sentence).
 - Supersedes: ADR-0053 decisions 3 and 5 in part, and the RFC-0013 R12 sentence that a site inside a function value is a cut, never its effect, in part.
 - Related: ADR-0013, ADR-0053, ADR-0055, RFC-0007, RFC-0013
 

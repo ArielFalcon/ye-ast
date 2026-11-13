@@ -4,7 +4,7 @@ import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
 import type { PlacedDataEffect } from "../../domain/trace/data-effect-site.ts";
 import type { PlacedCallSite } from "../../domain/topology/call-site.ts";
-import { effectOf, unplacedEffect } from "../../domain/trace/trace-effects.ts";
+import { cutOfPlaced, effectOf, unplacedEffect } from "../../domain/trace/trace-effects.ts";
 import { declarationSpan, executionIn, owningBody, type SourceSpan } from "../../domain/shared/owning-body.ts";
 import type { WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
@@ -82,7 +82,7 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, declar
       const told = placed.column !== undefined && countedAlike(placed.column, lineOf(file, site.line) ?? "");
       if (!told) {
         const around = owningBody(bodies.filter(({ symbol }) => expanded.has(symbol.id)).map((body) => ({ ...body, start: { line: body.start.line, column: 0 }, end: { line: body.end.line + 1, column: 0 } })), { line: site.line, column: 0 });
-        if (around !== undefined) markCut(expanded.get(around.symbol.id)!, unplacedEffect(site), cuts);
+        if (around !== undefined) markCut(expanded.get(around.symbol.id)!, cutOfPlaced(placed, site), cuts);
         continue;
       }
       const at = { line: site.line, column: placed.column! };
@@ -92,7 +92,7 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, declar
       const declared = "declaration" in placed && placed.declaration === true;
       const execution = values === undefined ? "unproven" : executionIn(owner, values, deferredHere, at);
       if (!declared && (execution === "unproven" || !(await callLinesOf(owner.symbol)).has(site.line))) {
-        markCut(step, unplacedEffect(site), cuts);
+        markCut(step, cutOfPlaced(placed, site), cuts);
         continue;
       }
       let deferred = !declared && execution === "deferred";
@@ -113,7 +113,7 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, declar
         producingBodies.add(body.symbol.id);
       }
       if (!proven) {
-        markCut(step, unplacedEffect(site), cuts);
+        markCut(step, cutOfPlaced(placed, site), cuts);
         continue;
       }
       pending.push({ step, owner: owner.symbol.id, at: originKey({ file, ...at }), column: placed.column! + 1, origins, bodies: producingBodies, read: effectOf(site), deferred });

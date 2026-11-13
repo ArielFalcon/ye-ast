@@ -17,10 +17,20 @@ test("a link reached only by a deferred effect is marked, and one an executed ef
   assert.deepEqual(reached?.map((one) => [one.id, one.deferred ?? false]), [["later", true], ["both", false], ["now", false]]);
 });
 
-test("a deferred step contributes nothing, and a link outside every effect place is dropped", () => {
+test("a link outside every effect place is dropped", () => {
   const all = [link("inside", 8, 1), link("beside", 8, 2)];
-  assert.deepEqual(links([step(0, [effect(8, 1)], { deferred: true })], all), []);
   assert.deepEqual(links([step(0, [effect(8, 1, true)])], all)?.map((one) => one.id), ["inside"]);
+});
+
+test("a step that is deferred, or has a deferred ancestor, returns its links marked deferred, unless an executed step also reaches them", () => {
+  const all = [link("own", 8, 1), link("below", 9, 1), link("both", 10, 1), link("plain", 11, 1)];
+  const reached = links([
+    step(0, [effect(11, 1)]),
+    step(1, [effect(8, 1)], { parent: 0, deferred: true }),
+    step(2, [effect(9, 1), effect(10, 1)], { parent: 1, depth: 1 }),
+    step(3, [effect(10, 1)], { parent: 0 }),
+  ], all);
+  assert.deepEqual(reached?.map((one) => [one.id, one.deferred ?? false]), [["own", true], ["below", true], ["both", false], ["plain", false]]);
 });
 
 test("an unresolved request owned as deferred marks the unlinked call site it reaches", () => {

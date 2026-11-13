@@ -152,7 +152,7 @@ export const CUT_REASONS = [
   "live-tree", "inputs-unreadable", "version-mismatch", "outputs-unreadable", "checker-failed", "link-outside",
   "hidden-caller", "dynamic-load", "name-only", "specifier", "removed-declaration", "relation-unread", "use-unproven",
   "receiver-unproven", "callee-unknown", "constructor-unsettled", "contradicted", "unowned", "dispatch", "function-value",
-  "page-unplanned", "handler-unplaced", "effect-unplaced",
+  "page-unplanned", "handler-unplaced", "effect-unplaced", "request-possible",
   "dependency-unresolved", "join-unsettled", "operation-unserved",
   "section-partial", "section-unknown",
 ] as const;

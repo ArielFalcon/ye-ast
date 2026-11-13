@@ -77,6 +77,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0058](adr/0058-the-suffix-rung-never-lets-a-stated-text-fill-a-route-variable.md) | The `suffix` rung never lets a text the call states fill a route variable and never cuts a call that states its origin; the exact and base-path rungs and a declared gateway prefix are unchanged | Accepted |
 | [0059](adr/0059-a-field-written-once-in-the-constructor-from-a-readable-value-is-a-decided-callee.md) | A function-typed field written exactly once, unconditionally in the constructor, from a function or a readable factory's returned function is that function; any other write keeps the undecided dispatch | Accepted |
 | [0060](adr/0060-a-request-to-a-host-evidenced-as-a-repository-is-unmatched.md) | A request to a host evidenced as one repository's (a call under its origin links to it and none to another) that matches no route is `unmatched` instead of `external`; a host with no link, or linked to two repositories, stays external | Accepted |
+| [0061](adr/0061-a-trace-returns-the-links-of-requests-under-deferred-steps.md) | A trace returns the links of requests under deferred steps (a step is deferred when it or an ancestor is), marked deferred; a call that may reach a request is a `request-possible` cut, not an "http effect" | Accepted |
 
 ## Designs (RFC)
 

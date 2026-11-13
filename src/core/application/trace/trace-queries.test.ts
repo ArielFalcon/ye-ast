@@ -1422,6 +1422,21 @@ test("a selected issuing boundary does not hide an unreachable trace origin", as
   assert.deepEqual(effectCuts(missing).map(([, at]) => (at as readonly string[])[0]), [`${A}:9 http effect`]);
 });
 
+test("a call that may reach a request is a request-possible cut with its cause and place, while a stated or direct unknown site keeps the effect cut", async () => {
+  const nodes = [PLACED_API, placedNode("run", "method", 9, 1, 9, 60)];
+  const edges = [{ from: "Api", to: "run", kind: "contains" }];
+  const options = (placed: PlacedCallSite): Options => ({ nodes, edges, sources: [{ path: A, content: `${" ".repeat(80)}\n`.repeat(30) }], unresolved: [{ from: "run", name: "this.post", kind: "calls", file: A, line: 9, column: 13 }], placedSites: [placed] });
+  const unknown = (overrides: Partial<CallSite> = {}): CallSite => site(9, { target: { status: "unknown", reason: "unresolved", evidence: [{ path: A, line: 9, column: 14 }, { path: A, line: 20, column: 5 }] }, diagnostic: { cause: "destination-undecidable" }, ...overrides });
+  const gap = await factOf(options({ site: unknown(), column: 13, origins: [] }));
+  assert.deepEqual(gap.status === "partial" ? gap.cuts?.filter((cut) => cut.reason === "request-possible" || cut.reason === "effect-unplaced").map(({ reason, at, reach }) => [reason, at, reach]) : undefined, [["request-possible", [`${A}:9 call that may reach a request (destination-undecidable)`, `${A}:20`], { kind: "call-at", place: `${A}:9 call that may reach a request (destination-undecidable)` }]]);
+  const stated = await factOf(options({ site: unknown({ stated: { method: "GET" } }), column: 13, origins: [] }));
+  assert.deepEqual(effectCuts(stated).map(([, at]) => (at as readonly string[])[0]), [`${A}:9 http effect`]);
+  const direct = await factOf(options({ site: unknown() }));
+  assert.deepEqual(effectCuts(direct).map(([, at]) => (at as readonly string[])[0]), [`${A}:9 http effect`]);
+  const forwarded = await factOf(options({ site: unknown(), origins: [{ kind: "leaf", file: A, line: 20, column: 5 }] }));
+  assert.deepEqual(effectCuts(forwarded).map(([, at]) => (at as readonly string[])[0]), [`${A}:9 http effect`]);
+});
+
 test("a call site in a function the walk did not expand is neither an effect nor a cut of the body around it, even on a line that body calls on", async () => {
   const nodes = [PLACED_API, placedNode("run", "method", 6, 1, 6, 71), placedNode("dead", "function", 6, 22, 6, 50)];
   const edges = [{ from: "Api", to: "run", kind: "contains" }];

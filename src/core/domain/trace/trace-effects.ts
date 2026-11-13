@@ -1,7 +1,7 @@
-import type { Cut } from "../shared/fact.ts";
+import type { Cut, Evidence } from "../shared/fact.ts";
 import { placeAt } from "../impact/impact-cuts.ts";
-import { unresolvedCallSite, type CallSite, type UnresolvedCallSite } from "../topology/call-site.ts";
-import type { DataEffectSite } from "./data-effect-site.ts";
+import { unresolvedCallSite, type CallSite, type PlacedCallSite, type UnresolvedCallSite } from "../topology/call-site.ts";
+import type { DataEffectSite, PlacedDataEffect } from "./data-effect-site.ts";
 import type { TraceEffect } from "./trace-fact.ts";
 
 /**
@@ -30,4 +30,27 @@ export function unplacedEffect(site: CallSite | DataEffectSite): Cut {
 
 function unplacedAt(place: string): Cut {
   return { kind: "unresolved-link", at: [place], reason: "effect-unplaced", reach: { kind: "call-at", place } };
+}
+
+/**
+ * A placed site that only stands for a call whose callee may reach a request: no propagated proof (`origins` is empty), no
+ * request stated, no library named, and a cause place other than the call itself.
+ */
+export function mayReachRequest(placed: PlacedCallSite | PlacedDataEffect): placed is PlacedCallSite {
+  if (!("origins" in placed) || placed.origins?.length !== 0 || !("transport" in placed.site)) return false;
+  const { site } = placed;
+  const cause = causePlace(site);
+  return site.transport === "http" && site.target.status === "unknown" && site.stated === undefined && site.diagnostic !== undefined && site.target.evidence[0]?.via === undefined && cause !== undefined && !(cause.path === site.file && cause.line === site.line);
+}
+
+function causePlace(site: CallSite): Evidence | undefined {
+  return site.target.status === "unknown" ? site.target.evidence.at(-1) : undefined;
+}
+
+/** The cut for a placed site: the call that may reach a request when that is all it is, otherwise the effect it could not place. */
+export function cutOfPlaced(placed: PlacedCallSite | PlacedDataEffect, site: CallSite | DataEffectSite): Cut {
+  if (!mayReachRequest(placed)) return unplacedEffect(site);
+  const cause = causePlace(placed.site)!;
+  const place = placeAt(site.file, site.line, `call that may reach a request (${placed.site.diagnostic!.cause})`);
+  return { kind: "unresolved-link", at: [place, placeAt(cause.path, cause.line)], reason: "request-possible", reach: { kind: "call-at", place } };
 }
