@@ -95,6 +95,15 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         const invocations = source?.invocations.get(callKey(site.line, site.column, site.member)) ?? [];
         if (source === undefined || invocations.length !== 1) continue;
         const invocation = invocations[0]!;
+        if (invocation.type === "object_creation_expression") {
+          results[index] = (proves ? resolver.creationOf(invocation, source.file) : undefined) ?? UNKNOWN;
+          continue;
+        }
+        const supplied = proves && invocation.type === "method_reference" ? resolver.suppliedReference(invocation, source.file) : undefined;
+        if (supplied !== undefined) {
+          results[index] = supplied;
+          continue;
+        }
         if (invocation.type === "method_reference") {
           const named = proves ? resolver.referenceOf(invocation, source.file) : undefined;
           results[index] = named === undefined ? UNPROVEN : "method" in named ? placedAt(named.method) : { kind: "unproven", candidates: named.candidates.map(placeOf).sort(byPlace) };
@@ -495,8 +504,50 @@ export function createResolver(project: JavaProject, generated = false) {
     return implicitCanonical || (target.constructors.length === 0 && arity === 0) ? undefined : "unproven";
   };
 
+  /**
+   * What a construction of `type` with `arity` arguments runs, when the language supplies its constructor (JLS 8.8.9,
+   * 8.10.4): a record's canonical constructor that no source writes, or the default constructor of a class that writes
+   * none. Such a constructor runs the class's initializers and then its superclass's constructor: `generated` when
+   * neither runs repository code (every field initializer is a literal, no initializer block, and the chain of
+   * superclasses that write no constructor ends outside the repository), the superclass's one written
+   * constructor of no arguments when the chain reaches it, and none otherwise: a constructor the sources write, a
+   * processor annotation that may add one, an abstract class, or an initializer that may run code.
+   */
+  const suppliedConstruction = (type: TypeDecl, arity: number): ReceiverMethod | undefined => {
+    if (type.node.type === "record_declaration") return arity === recordComponents(type.node) && !type.constructors.some((constructor) => constructorArity(constructor) === arity) ? GENERATED : undefined;
+    if (type.node.type !== "class_declaration" || type.isAbstract || arity !== 0) return undefined;
+    for (const current of project.classChain(type)) {
+      if (current.node.type !== "class_declaration" || mayGenerateConstructors(current.node)) return undefined;
+      if (current !== type && current.constructors.length > 0) {
+        const runs = current.constructors.filter((constructor) => constructorArity(constructor) === 0);
+        return runs.length === 1 && !current.constructors.some(hasVarargs) ? placedAt(runs[0]!) : undefined;
+      }
+      if (current.constructors.length > 0 || initializerMayRunCode(current.node)) return undefined;
+    }
+    return GENERATED;
+  };
+
+  /** What `new T(...)` runs where the language supplies `T`'s constructor; none for a class body, a qualified creation or any other type. */
+  const creationOf = (creation: Node, file: JavaFile): ReceiverMethod | undefined => {
+    const written = creation.childForFieldName("type");
+    if (creation.children[0]?.type !== "new" || written === null || creation.namedChildren.some((child) => child?.type === "class_body")) return undefined;
+    const type = repositoryType(written, file, written);
+    return type === undefined ? undefined : suppliedConstruction(type, argumentCount(creation));
+  };
+
+  /** What `T::new` runs where `T` writes no constructor, so the language supplies its only one. */
+  const suppliedReference = (reference: Node, file: JavaFile): ReceiverMethod | undefined => {
+    const object = reference.namedChildren[0];
+    if (!reference.children.some((child) => child?.type === "new") || object === undefined || object === null) return undefined;
+    const type = repositoryType(object, file, object);
+    if (type === undefined || type.constructors.length > 0) return undefined;
+    return suppliedConstruction(type, type.node.type === "record_declaration" ? recordComponents(type.node) : 0);
+  };
+
   return {
     constructorOf,
+    creationOf,
+    suppliedReference,
     referenceOf,
     /** Whether every supertype of the interface outside the sources is a Spring Data repository interface of the closed vocabulary. */
     isDataRepository: (type: TypeDecl): boolean => dataRepositoryHierarchy(type) !== undefined,
@@ -551,20 +602,51 @@ function rewritesCalls(root: Node): boolean {
   return false;
 }
 
-/** Method invocations by their member, and `super(...)`/`this(...)` by their keyword, at the place each starts. */
+/** Method invocations by their member, `super(...)`/`this(...)` by their keyword and `new T(...)` by `T`'s simple name, at the place each starts. */
 function invocationsOf(root: Node): ReadonlyMap<string, readonly Node[]> {
   const found = new Map<string, Node[]>();
   const pending: Node[] = [root];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node.type === "method_invocation" || node.type === "explicit_constructor_invocation" || node.type === "method_reference") {
+    if (node.type === "method_invocation" || node.type === "explicit_constructor_invocation" || node.type === "method_reference" || node.type === "object_creation_expression") {
       const constructor = node.type === "method_reference" && node.children.some((child) => child?.type === "new");
-      const member = node.type === "method_reference" ? (constructor ? node.namedChildren[0]?.text.split(".").at(-1) : node.namedChildren.at(-1)?.text) : node.type === "method_invocation" ? node.childForFieldName("name")?.text : node.childForFieldName("constructor")?.text;
+      const member = node.type === "object_creation_expression" ? simpleTypeName(node.childForFieldName("type")) : node.type === "method_reference" ? (constructor ? node.namedChildren[0]?.text.split(".").at(-1) : node.namedChildren.at(-1)?.text) : node.type === "method_invocation" ? node.childForFieldName("name")?.text : node.childForFieldName("constructor")?.text;
       const key = callKey(node.startPosition.row + 1, node.startPosition.column + 1, member ?? "");
       found.set(key, [...(found.get(key) ?? []), node]);
     }
     for (const child of node.namedChildren) if (child !== null) pending.push(child);
   }
   return found;
+}
+
+/** The simple name a written type ends with, without its qualifier or type arguments. */
+function simpleTypeName(type: Node | null): string | undefined {
+  const named = type?.type === "generic_type" ? type.namedChildren[0] : type;
+  return named?.text.split(".").at(-1);
+}
+
+/** Annotations by which a processor may add constructors to a class the sources write none for. */
+const CONSTRUCTOR_GENERATING_ANNOTATIONS: ReadonlySet<string> = new Set(["NoArgsConstructor", "AllArgsConstructor", "RequiredArgsConstructor", "Data", "Value", "Builder", "SuperBuilder"]);
+
+function mayGenerateConstructors(declaration: Node): boolean {
+  const modifiers = declaration.namedChildren.find((child) => child?.type === "modifiers");
+  return (modifiers?.namedChildren ?? []).some((annotation) => (annotation?.type === "marker_annotation" || annotation?.type === "annotation") && CONSTRUCTOR_GENERATING_ANNOTATIONS.has(annotation.childForFieldName("name")?.text.split(".").at(-1) ?? ""));
+}
+
+/** Whether constructing the class may run code its constructor does not write: an initializer block, or a field initialized by anything but a literal. */
+function initializerMayRunCode(declaration: Node): boolean {
+  return (declaration.childForFieldName("body")?.namedChildren ?? []).some((member) => {
+    if (member?.type === "block" || member?.type === "static_initializer") return true;
+    if (member?.type !== "field_declaration") return false;
+    return member.childrenForFieldName("declarator").some((declarator) => {
+      const value = declarator?.childForFieldName("value");
+      return value !== null && value !== undefined && !isLiteral(value);
+    });
+  });
+}
+
+function isLiteral(value: Node): boolean {
+  if (value.type === "unary_expression" && value.namedChildCount === 1) return isLiteral(value.namedChildren[0]!);
+  return value.type.endsWith("_literal") || value.type === "true" || value.type === "false";
 }
 
 function argumentCount(invocation: Node): number {

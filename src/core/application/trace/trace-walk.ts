@@ -19,7 +19,7 @@ import type { EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
 import type { CallPlace, ReceiverProof } from "../navigation/call-binder.ts";
 import { unsettledBy, type DeclarationUses, type UnresolvedIn } from "../navigation/declaration-uses.ts";
 import { callEdgesOf, valueEdgesOf, type ReconciledCalls } from "../navigation/reconciled-calls.ts";
-import type { CallBinding, CallBindings, DeclaredBinding } from "../navigation/call-binding.ts";
+import { receiverSiteOf, type CallBinding, type CallBindings, type DeclaredBinding } from "../navigation/call-binding.ts";
 import { indexedDeclaration, type ModelDeclaration } from "../navigation/declaration-model.ts";
 
 type TraceNode = GraphSymbol | ModelDeclaration;
@@ -478,9 +478,16 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
       const target = (binding.kind === "declaration" && binding.link !== "bound-receiver") || binding.kind === "receiver" ? binding.target : undefined;
       if (target !== undefined && !(reference.kind === "instantiates" && isClassKind(target.kind))) children.push(childAt(target, reference.line, reference.column, reference.name, binding.kind === "declaration" && binding.link === "own-member" ? "own-member" : "call", true));
     }
-    const referenced = await bindings.boundCalls(references.map((reference) => ({ body: node, reference })), signal);
+    /** A reference only its declared type settles, such as `T::new`, runs nothing in the repository when the reading answers generated code. */
+    const referencedRead = await bindings.bindCalls(references.map((reference) => ({ body: node, reference })), signal);
+    const pendingReferences = referencedRead.flatMap((binding) => (binding.kind === "declared" ? [binding] : []));
+    const answered = pendingReferences.length === 0 ? [] : await origins.receiverMethods(pendingReferences.map(receiverSiteOf), signal);
+    let nextAnswer = 0;
     for (const [index, reference] of references.entries()) {
-      const binding = referenced[index]!;
+      const read = referencedRead[index]!;
+      const answer = read.kind === "declared" ? answered[nextAnswer++] : undefined;
+      if (answer?.kind === "generated") continue;
+      const binding = read.kind === "declared" ? bindings.settleDeclared(read, answer) : read;
       const target = binding.kind === "declaration" || binding.kind === "receiver" ? binding.target : undefined;
       if (target !== undefined) children.push(childAt(target, reference.line, reference.column, reference.name, "reference", true));
       else cuts.push(callCut(placeAt(node.file, reference.line, reference.name), binding.kind === "unbound" || binding.kind === "receiver" ? binding.candidates.map(candidateOf) : []));

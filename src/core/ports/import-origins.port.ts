@@ -201,7 +201,8 @@ export type ReceiverMethod =
    * A member that no source declares and a record or a processor annotation on the receiver's class adds (an accessor, a
    * builder), or a Spring Data repository interface has its proxy supply (a derived or `@Query` method, an inherited
    * operation), so the call is settled and has no declaration to place: it runs generated code that reads or writes the
-   * class's fields (ADR-0067), or a data effect the effect reader places (ADR-0070).
+   * class's fields (ADR-0067), or a data effect the effect reader places (ADR-0070). Also a constructor the language
+   * supplies (a record's canonical one, a class's default one) when the construction runs no code of the repository.
    */
   | { kind: "generated" };
 

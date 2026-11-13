@@ -1037,7 +1037,8 @@ test("a Java method that names a parameter type like an inherited one's, from an
 
   const answer = await javaTrace("homonym-signature", files);
 
-  assert.equal(answer.status, "partial");
+  assert.equal(answer.status, "complete");
+  assert.ok(answer.steps.some(([place]) => place === "a/Base.java:3 save"));
   assert.ok(!answer.steps.some(([place]) => place === "b/Sub.java:3 save"));
 });
 
@@ -1047,7 +1048,7 @@ test("a Java declared field is proven while a var receiver retains a cut without
 
   const result = await javaTrace("declared-field", { "Use.java": use, "Plain.java": plain });
   assert.equal(result.status, "partial");
-  assert.deepEqual(result.cuts, [["unresolved-link", "Use.java:5 Plain", "Plain.java::Plain"], ["unresolved-link", "Use.java:6 save", "Plain.java::Plain.save"]]);
+  assert.deepEqual(result.cuts, [["unresolved-link", "Use.java:6 save", "Plain.java::Plain.save"]]);
   assert.ok(result.steps.some((step) => JSON.stringify(step).includes("Plain.java:2 save")));
 });
 
@@ -1058,7 +1059,7 @@ test("a Java aspect veto retains cuts for declared fields and var receivers", as
   const aspect = ["@org.aspectj.lang.annotation.Aspect", "class Logging {}"];
   const result = await javaTrace("aspect", { "Use.java": use, "Plain.java": plain, "Logging.java": aspect });
   assert.equal(result.status, "partial");
-  assert.deepEqual(result.cuts, [["unresolved-link", "Use.java:5 Plain", "Plain.java::Plain"], ["unresolved-link", "Use.java:6 save", "Plain.java::Plain.save"]]);
+  assert.deepEqual(result.cuts, [["unresolved-link", "Use.java:6 save", "Plain.java::Plain.save"]]);
   assert.ok(result.steps.some((step) => JSON.stringify(step).includes("Plain.java:2 save")));
 });
 

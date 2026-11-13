@@ -74,7 +74,7 @@ test("a written reference is deferred and an unresolved reference remains a cut"
     store, unresolvedIn: () => [],
     origins: { replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }), dispatchTargets: async () => (dispatched++, [{ kind: "unknown" }]) },
     targets: { verdictsOf: async () => [] },
-    bindings: { bindCalls: async () => [], boundCalls: async (calls: readonly unknown[]) => calls.length === 0 ? [] : [{ kind: "declaration", target, link: "declared-receiver" }, { kind: "unbound", form: "bare", candidates: [target], attributed: [target] }], namedDeclarations: () => [] },
+    bindings: { bindCalls: async (calls: readonly unknown[]) => calls.length === 0 ? [] : [{ kind: "declaration", target, link: "declared-receiver" }, { kind: "unbound", form: "bare", candidates: [target], attributed: [target] }], boundCalls: async () => [], namedDeclarations: () => [] },
     uses: { followed: () => [], referencesFrom: () => [] },
     reconciled: { callsOf: async (node: typeof run) => ({ edges: [], references: [], contradicted: [], writtenOnly: [], ambiguous: [], deferredOnly: node.id === run.id ? written : [] }) },
     inScope: () => true, memberDeclarations: async () => new Map(), syntaxOf: async () => ({ callables: [], functionValueCalls: [] }), budget: {},

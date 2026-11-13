@@ -290,7 +290,7 @@ class Worker {
   assert.deepEqual(repeated, local);
 });
 
-test("Java and TypeScript constructions walk a settled constructor and cut an unsettled repository constructor", async () => {
+test("Java and TypeScript constructions walk a settled constructor; a class that writes none is settled in Java, whose default constructor runs nothing here, and cut in TypeScript", async () => {
   commit({
     "src/main/java/shop/Build.java": `package shop;
 import org.springframework.web.client.RestTemplate;
@@ -329,8 +329,7 @@ export class Build {
     assert.equal(loaded.value.steps.flatMap(step => step.effects ?? [])[0]?.column, file.endsWith(".java") ? 16 : 34);
     assert.equal(callSites.find(candidate => candidate.file === file)?.column, file.endsWith(".java") ? 16 : 34);
     const absent = await trace(`${file}:Build.absent`);
-    assert.equal(absent.status, "partial");
-    assert.ok(absent.cuts?.some(cut => cut.kind === "unresolved-link"));
+    assert.deepEqual([absent.status, absent.cuts?.some(cut => cut.kind === "unresolved-link") ?? false], file.endsWith(".java") ? ["complete", false] : ["partial", true]);
     const external = await trace(`${file}:Build.external`);
     assert.equal(external.status, "complete");
     const groups = external.value.steps.flatMap(step => step.external ?? []);
