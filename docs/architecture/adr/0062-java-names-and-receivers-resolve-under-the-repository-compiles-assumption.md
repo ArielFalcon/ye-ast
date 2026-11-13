@@ -35,6 +35,11 @@ than the language requires:
    a parameter) is selected as without the interface. A method that only the interface could declare stays unproven, as
    does a declaration owned by another interface, an absent class, an absent platform type, and any absent interface when
    no generator is declared.
+4. The build signal of decision 3 is part of the identity of the Java project a read holds: every reader of the Java
+   pack's name-binding family (origins, receiver methods, implemented declarations, dispatch targets, declared types,
+   root bindings and root origins) builds or holds the project with the same `ProjectBuild`, so one read parses one
+   project. Readers outside that family (relations, call sites, data effects, routes, imports, payload shapes) build
+   without it until a unit that moves their answers passes the corpus gate.
 
 ## Consequences
 

@@ -38,9 +38,9 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
   const build: ProjectBuild = { generatesInterfaces: sourceGeneratorIn(context) !== undefined };
   return {
     origins: async (sites) => sites.map((site) => unresolved(site)),
-    rootBindings: (sites, signal) => createJavaRootBindings(parser(), sources)(sites, signal),
-    declaredTypes: createJavaDeclaredTypes(parser, sources, paths),
-    dispatchTargets: createJavaDispatchTargets(parser, sources, paths, hold),
+    rootBindings: (sites, signal) => createJavaRootBindings(parser(), sources, build)(sites, signal),
+    declaredTypes: createJavaDeclaredTypes(parser, sources, paths, build),
+    dispatchTargets: createJavaDispatchTargets(parser, sources, paths, hold, build),
     receiverMethods: createJavaReceiverMethods(parser, sources, paths, facts, hold, build),
     implementedDeclarations: createJavaImplementedDeclarations(parser, sources, paths, hold, build),
     replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),
@@ -51,7 +51,7 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
       const java = await parser();
       return withJavaSources(java, (parse) => {
         const files = new Map(parse(sources).files.map((file) => [file.path, file]));
-        const project = createJavaProject([...files.values()]);
+        const project = createJavaProject([...files.values()], build);
         const unreadable = new Set(project.unreadable);
         const variables = declaredVariablesOnce();
         for (const { site, index } of asked) {

@@ -777,3 +777,60 @@ test("the same controller without a declared generator keeps the cut at its firs
   assert.deepEqual(effectsOf(found.value), []);
   assert.equal(found.status, "partial");
 });
+
+const HEXAGONAL: Readonly<Record<string, string>> = {
+  "pom.xml": GENERATOR_POM(true),
+  "src/main/java/shop/domain/Order.java": "package shop.domain;\npublic class Order { public Order() {} }\n",
+  "src/main/java/shop/OrdersApi.java": "package shop;\npublic interface OrdersApi {}\n",
+  "src/main/java/shop/CustomersPort.java": "package shop;\npublic interface CustomersPort {\n  String customer(long id);\n}\n",
+  "src/main/java/shop/CustomersAdapter.java": `package shop;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestTemplate;
+@Component
+public class CustomersAdapter implements CustomersPort {
+  private RestTemplate http;
+  public String customer(long id) { return http.getForObject("/customers/1", String.class); }
+}
+`,
+  "src/main/java/shop/OrdersService.java": `package shop;
+import org.springframework.stereotype.Service;
+@Service
+public class OrdersService {
+  private CustomersPort customers;
+  public String checkout(long id) { return customers.customer(id); }
+}
+`,
+  "src/main/java/shop/OrdersController.java": `package shop;
+import org.springframework.web.bind.annotation.*;
+import shop.api.GeneratedApi;
+@RestController
+public class OrdersController implements GeneratedApi {
+  private OrdersService service;
+  public String get(long id) { return service.checkout(id); }
+}
+`,
+};
+const httpPaths = (value: TraceValue) => value.steps.flatMap((step) => step.effects ?? []).flatMap((effect) => (effect.kind === "http" ? [effect.target.path] : []));
+const HEXAGONAL_ROOT = "src/main/java/shop/OrdersController.java:OrdersController.get";
+
+test("a controller of a generated interface reaches the one adapter of a port and its request", async () => {
+  commit(HEXAGONAL);
+  const found = await trace(HEXAGONAL_ROOT);
+  assert.deepEqual(found.value.steps.map((step) => step.symbol), ["get", "checkout", "customer", "customer"]);
+  assert.deepEqual(httpPaths(found.value), ["/customers/1"]);
+  assert.equal(found.status, "complete");
+});
+
+test("a port with two implementations stays a dispatch cut", async () => {
+  commit({ ...HEXAGONAL, "src/main/java/shop/CustomersStub.java": "package shop;\npublic class CustomersStub implements CustomersPort {\n  public String customer(long id) { return \"\"; }\n}\n" });
+  const found = await trace(HEXAGONAL_ROOT);
+  assert.equal(found.status, "partial");
+  assert.deepEqual(httpPaths(found.value), []);
+});
+
+test("a function value anywhere in the repository keeps the veto of a one-method port (ADR-0044 decision 5)", async () => {
+  commit({ ...HEXAGONAL, "src/main/java/shop/Util.java": "package shop;\nclass Util { Runnable r = () -> {}; }\n" });
+  const found = await trace(HEXAGONAL_ROOT);
+  assert.equal(found.status, "partial");
+  assert.deepEqual(httpPaths(found.value), []);
+});

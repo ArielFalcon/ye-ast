@@ -6,7 +6,7 @@ import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, heldJavaProject, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
-import { createJavaProject, isTypeDeclaration, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, isTypeDeclaration, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: DispatchTargets = { kind: "unknown", reason: "dispatch not proven" };
 const ASPECT = { kind: "unknown", reason: "aspect may replace the body" } as const satisfies DispatchTargets;
@@ -54,16 +54,16 @@ export interface Hierarchy {
  * functional interface; an enum below it; or a class whose chain reaches no single body of the method's signature.
  * The candidates and the closure verdict are read apart (`closureOf`), and the port's answer is derived from them.
  */
-export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold): ImportOrigins["dispatchTargets"] {
+export function createJavaDispatchTargets(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): ImportOrigins["dispatchTargets"] {
   const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
   return async (sites, signal) => {
     if (sites.length === 0) return [];
     const read = await parser();
-    const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources);
+    const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources, [], build);
     if (held !== undefined) return dispatchAnswersOf(sites, held.files.map(({ file }) => file), held.project, held.unparsed, unreadJvm, signal);
     return withJavaSources(read, (parse) => {
       const { files, unparsed } = parse(sources);
-      return dispatchAnswersOf(sites, files, createJavaProject(files), unparsed, unreadJvm, signal);
+      return dispatchAnswersOf(sites, files, createJavaProject(files, build), unparsed, unreadJvm, signal);
     });
   };
 }

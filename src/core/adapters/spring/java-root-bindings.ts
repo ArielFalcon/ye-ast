@@ -4,7 +4,7 @@ import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-ori
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, thisType, withJavaSources } from "./java-project.ts";
-import { createJavaProject, qualifiedTypeName, type JavaFile, type JavaProject } from "./java-symbols.ts";
+import { createJavaProject, qualifiedTypeName, type JavaFile, type JavaProject, type ProjectBuild } from "./java-symbols.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 
 const UNKNOWN: RootBinding = { kind: "unknown" };
@@ -19,14 +19,14 @@ const CHAIN_LINKS: readonly string[] = ["field_access", "method_invocation", "sc
  * too: ambiguous when the sources declare it, unknown otherwise. Every Java source is read when a site asks, and
  * released after.
  */
-export function createJavaRootBindings(parser: Promise<JavaParser>, sources: readonly SourceFile[]): ImportOrigins["rootBindings"] {
+export function createJavaRootBindings(parser: Promise<JavaParser>, sources: readonly SourceFile[], build: ProjectBuild = {}): ImportOrigins["rootBindings"] {
   return async (sites, signal) => {
     const results: RootBinding[] = sites.map(() => UNKNOWN);
     if (sites.length === 0) return results;
     const read = await parser;
     return withJavaSources(read, (parse) => {
       const files = new Map(parse(sources).files.map((file) => [file.path, file]));
-      const project = createJavaProject([...files.values()]);
+      const project = createJavaProject([...files.values()], build);
       for (const [index, site] of sites.entries()) {
         if (signal?.aborted) break;
         const file = files.get(site.file);

@@ -3,7 +3,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredType, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, withJavaSources } from "./java-project.ts";
-import { createJavaProject, isTypeDeclaration, qualifiedTypeName, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, isTypeDeclaration, qualifiedTypeName, type JavaFile, type JavaProject, type ProjectBuild, type TypeDecl } from "./java-symbols.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 
 const UNKNOWN: DeclaredType = { kind: "unknown" };
@@ -38,7 +38,7 @@ export type Resolved = { kind: "repository"; type?: TypeDecl } | { kind: "platfo
  * reference (whose interface they do not state), a JDK API that implements an interface at run time (a dynamic proxy), an
  * aspect, a Java source that does not parse, or a source of a JVM language no extractor reads (ADR-0029 decision 9).
  */
-export function createJavaDeclaredTypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[]): ImportOrigins["declaredTypes"] {
+export function createJavaDeclaredTypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], build: ProjectBuild = {}): ImportOrigins["declaredTypes"] {
   const unreadJvm = paths.some((path) => UNREAD_JVM_SOURCE.test(path));
   return async (sites, signal) => {
     const results: DeclaredType[] = sites.map(() => UNKNOWN);
@@ -47,7 +47,7 @@ export function createJavaDeclaredTypes(parser: () => Promise<JavaParser>, sourc
     return withJavaSources(read, (parse) => {
       const { files: parsed, unparsed } = parse(sources);
       const files = new Map(parsed.map((file) => [file.path, file]));
-      const project = createJavaProject(parsed);
+      const project = createJavaProject(parsed, build);
       if (unparsed.length > 0 || project.unreadable.length > 0) return results;
       const subtyped = subtypedTypes([...files.values()], project);
       if (subtyped === undefined) return results;
