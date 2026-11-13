@@ -1,11 +1,14 @@
 /**
  * The corpus gate (ADR-0039). Runs the queries a corpus manifest declares through the CLI of a base and a candidate
  * engine revision, each from its own clean worktree over fresh clones of the corpus, compares every answer, and fails
- * when a difference is not one the change declared with `--expect`. A pass is recorded where the `.githooks` reference
- * hook looks for it. Nothing is written to the corpus repositories.
+ * when a difference is not one the change declared with `--expect`. The report carries the cut ledger of each side and
+ * their difference (RFC-0031); it fails the run only for a reason declared with `--expect-cuts` that did not move as
+ * declared. A pass is recorded where the `.githooks` reference hook looks for it. Nothing is written to the corpus
+ * repositories.
  *
  *   node --import tsx scripts/corpus-gate.ts --corpus <manifest> [--base <rev>] [--candidate <rev>]
- *     [--expect none | --expect <family>:<+|-|±>]... [--engine <repo>] [--out <dir>] [--concurrency <n>]
+ *     [--expect none | --expect <family>:<+|-|±>]... [--expect-cuts <reason>:<+|-|±>]... [--engine <repo>] [--out <dir>]
+ *     [--concurrency <n>]
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -15,10 +18,11 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { type Answer, type AnswerComparison, type Expectation, ExpectationError, type Violation, compareAnswers, parseExpectations, violations } from "./corpus-gate-diff.ts";
+import { type CutExpectation, type CutLedger, CutLedgerError, type CutViolation, type LedgerDifference, type LedgerValues, cutLedger, cutViolations, ledgerDifference, parseCutExpectations } from "./corpus-gate-ledger.ts";
 
 export const EXIT = { pass: 0, fail: 1, usage: 2, fault: 3 } as const;
 
-const USAGE = "usage: node --import tsx scripts/corpus-gate.ts --corpus <manifest> [--base <rev>] [--candidate <rev>] [--expect none | --expect <family>:<+|-|±>]... [--engine <repo>] [--out <dir>] [--concurrency <n>]";
+const USAGE = "usage: node --import tsx scripts/corpus-gate.ts --corpus <manifest> [--base <rev>] [--candidate <rev>] [--expect none | --expect <family>:<+|-|±>]... [--expect-cuts <reason>:<+|-|±>]... [--engine <repo>] [--out <dir>] [--concurrency <n>]";
 /** Repositories are disjoint across groups; queries within one group share an index and run after its init. */
 const DEFAULT_CONCURRENCY = 3;
 const REPO_PLACEHOLDER = /\{repo:([^}]+)\}/gu;
@@ -26,7 +30,7 @@ const REPO_PLACEHOLDER = /\{repo:([^}]+)\}/gu;
 const WORKSPACE_PLACEHOLDER = "{workspace}";
 const RUNNER_DIGEST = createHash("sha256").update(readFileSync(import.meta.filename)).digest("hex");
 
-export type GateFaultCode = "invalid-manifest" | "missing-revision" | "dependencies-differ" | "no-dependencies" | "no-cli-script" | "busy" | "git-failed";
+export type GateFaultCode = "invalid-manifest" | "missing-revision" | "dependencies-differ" | "no-dependencies" | "no-cli-script" | "busy" | "git-failed" | CutLedgerError["code"];
 
 class UsageError extends Error {}
 
@@ -125,6 +129,7 @@ function parseOptions(args: readonly string[]) {
       base: { type: "string", default: "main" },
       candidate: { type: "string", default: "HEAD" },
       expect: { type: "string", multiple: true, default: ["none"] },
+      "expect-cuts": { type: "string", multiple: true, default: [] },
       engine: { type: "string", default: resolve(import.meta.dirname, "..") },
       out: { type: "string" },
       concurrency: { type: "string" },
@@ -134,7 +139,7 @@ function parseOptions(args: readonly string[]) {
   if (values.corpus === undefined || positionals.length > 0) throw new UsageError(USAGE);
   const concurrency = Number(values.concurrency ?? DEFAULT_CONCURRENCY);
   if (!Number.isInteger(concurrency) || concurrency < 1) throw new UsageError(USAGE);
-  return { ...values, concurrency, corpus: resolve(values.corpus), engine: resolve(values.engine), expectations: parseExpectations(values.expect) };
+  return { ...values, concurrency, corpus: resolve(values.corpus), engine: resolve(values.engine), expectations: parseExpectations(values.expect), cutExpectations: parseCutExpectations(values["expect-cuts"]) };
 }
 
 async function gate(options: ReturnType<typeof parseOptions>, io: Io): Promise<number> {
@@ -400,7 +405,9 @@ function report(context: Context, options: ReturnType<typeof parseOptions>, comm
   const candidateById = new Map(candidateResult.answers.map((answer) => [answer.id, answer]));
   const comparisons = baseResult.answers.map((answer) => compareAnswers(answer, candidateById.get(answer.id) as Answer));
   const found = violations(comparisons, options.expectations);
-  const verdict = found.length === 0 ? "pass" : "fail";
+  const ledgers = { base: sideLedger(baseResult), candidate: sideLedger(candidateResult) };
+  const foundCuts = cutViolations(ledgers.base, ledgers.candidate, options.cutExpectations);
+  const verdict = found.length === 0 && foundCuts.length === 0 ? "pass" : "fail";
   const differing = comparisons.filter((comparison) => !comparison.identical);
   const sideSummary = (side: Revision, result: SideResult): SideSummary => ({ rev: side.rev, commit: side.commit, tree: side.tree, cached: result.cached, wallMs: result.wallMs, answers: result.directory });
   const body: ReportBody = {
@@ -415,12 +422,15 @@ function report(context: Context, options: ReturnType<typeof parseOptions>, comm
     violations: found,
     families: familySummaries(comparisons),
     differing,
+    cutExpectations: options.cutExpectations,
+    cutViolations: foundCuts,
+    ledger: { ...ledgers, difference: ledgerDifference(ledgers.base, ledgers.candidate) },
   };
   const out = options.out ?? join(context.store, "reports", `${base.tree}-${candidate.tree}`);
   mkdirSync(out, { recursive: true });
   const reportJson = `${JSON.stringify(body, null, 2)}\n`;
   writeFileSync(join(out, "report.json"), reportJson);
-  writeFileSync(join(out, "report.md"), readable(body, found));
+  writeFileSync(join(out, "report.md"), readable(body));
   const marker = passMarkerPath(commonDirectory, base.tree, candidate.tree);
   if (verdict === "pass") {
     mkdirSync(dirname(marker), { recursive: true });
@@ -430,8 +440,23 @@ function report(context: Context, options: ReturnType<typeof parseOptions>, comm
   }
   const expect = options.expectations.length === 0 ? "none" : options.expectations.map((expectation) => `${expectation.family}:${expectation.direction}`).join(",");
   context.io.out(`report: ${join(out, "report.md")}`);
-  context.io.out(`Corpus-Gate: ${verdict} base=${base.commit.slice(0, 12)} candidate-tree=${candidate.tree.slice(0, 12)} answers=${comparisons.length} differing=${differing.length} expect=${expect} manifest=${context.manifestDigest.slice(0, 12)}`);
+  const expectCuts = options.cutExpectations.length === 0 ? "" : ` expect-cuts=${options.cutExpectations.map(cutExpectationText).join(",")}`;
+  context.io.out(`Corpus-Gate: ${verdict} base=${base.commit.slice(0, 12)} candidate-tree=${candidate.tree.slice(0, 12)} answers=${comparisons.length} differing=${differing.length} expect=${expect} manifest=${context.manifestDigest.slice(0, 12)}${expectCuts}`);
   return verdict === "pass" ? EXIT.pass : EXIT.fail;
+}
+
+/** A side's cut ledger; a cut reason outside the facts contract is a fault of the run, raised before any report is written. */
+function sideLedger(result: SideResult): CutLedger {
+  try {
+    return cutLedger(result.answers);
+  } catch (error) {
+    if (error instanceof CutLedgerError) throw new GateFault(error.code, `${result.directory}: ${error.detail}`);
+    throw error;
+  }
+}
+
+function cutExpectationText(expectation: CutExpectation): string {
+  return `${expectation.reason}:${expectation.direction}`;
 }
 
 function familySummaries(comparisons: readonly AnswerComparison[]) {
@@ -476,26 +501,55 @@ interface ReportBody {
   violations: readonly Violation[];
   families: ReturnType<typeof familySummaries>;
   differing: readonly AnswerComparison[];
+  cutExpectations: readonly CutExpectation[];
+  cutViolations: readonly CutViolation[];
+  ledger: { base: CutLedger; candidate: CutLedger; difference: LedgerDifference };
 }
 
-function readable(body: ReportBody, found: readonly Violation[]): string {
+function readable(body: ReportBody): string {
   const run = (side: SideSummary) => `${side.commit.slice(0, 12)} (${side.cached ? "reused" : `${Math.round((side.wallMs ?? 0) / 1000)} s`})`;
   const lines = [
     `# Corpus gate: ${body.verdict}`,
     "",
-    `Base ${run(body.base)}, candidate ${run(body.candidate)}. Answers ${body.counts.answers}, identical ${body.counts.identical}, differing ${body.counts.differing}. Expected: ${body.expectations.length === 0 ? "none" : body.expectations.map((expectation) => `${expectation.family}:${expectation.direction}`).join(", ")}.`,
+    `Base ${run(body.base)}, candidate ${run(body.candidate)}. Answers ${body.counts.answers}, identical ${body.counts.identical}, differing ${body.counts.differing}. Expected: ${body.expectations.length === 0 ? "none" : body.expectations.map((expectation) => `${expectation.family}:${expectation.direction}`).join(", ")}. Expected cuts: ${body.cutExpectations.length === 0 ? "none" : body.cutExpectations.map(cutExpectationText).join(", ")}.`,
     "",
     "| Family | Answers | Differing | Added | Removed | Changed |",
     "|---|---|---|---|---|---|",
     ...body.families.map((family) => `| ${family.family} | ${family.answers} | ${family.differing} | ${family.added} | ${family.removed} | ${family.changed} |`),
   ];
-  if (found.length > 0) lines.push("", "## Violations", "", ...found.map((violation) => `- ${violation.answer} (${violation.family}): ${violation.rule}`));
+  if (body.violations.length + body.cutViolations.length > 0) {
+    lines.push("", "## Violations", "", ...body.violations.map((violation) => `- ${violation.answer} (${violation.family}): ${violation.rule}`));
+    lines.push(...body.cutViolations.map((violation) => `- cuts ${violation.reason} (${violation.direction}): ${violation.rule}, ${violation.base} → ${violation.candidate}`));
+  }
+  lines.push(...readableLedger(body.ledger));
   for (const comparison of body.differing) {
     lines.push("", `## ${comparison.id} (${comparison.family})`, "", `exit ${comparison.base.exit} → ${comparison.candidate.exit}, status ${comparison.base.status} → ${comparison.candidate.status}, +${comparison.added} −${comparison.removed} ~${comparison.changed}`);
     lines.push(...comparison.counters.map((counter) => `- ${counter.path}: ${counter.base} → ${counter.candidate}`));
     lines.push(...comparison.examples.map((difference) => `- ${difference.kind} ${difference.path}${"base" in difference ? ` ${JSON.stringify(difference.base)}` : ""}${"candidate" in difference ? ` → ${JSON.stringify(difference.candidate)}` : ""}`));
   }
   return `${lines.join("\n")}\n`;
+}
+
+function readableLedger(ledger: ReportBody["ledger"]): string[] {
+  const statuses = (counts: { complete: number; partial: number; unknown: number } | undefined) => (counts === undefined ? "—" : `${counts.complete}/${counts.partial}/${counts.unknown}`);
+  const values = (row: LedgerValues | null) => (row === null ? "—" : `${row.cuts}${row.per100Steps === undefined ? "" : ` (${row.per100Steps ?? "—"}/100 steps)`}`);
+  const keyCells = (row: { family: string; language: string; kind: string; reason: string; subReason?: string }) => `| ${row.family} | ${row.language} | ${row.kind} | ${row.reason} | ${row.subReason ?? ""} |`;
+  const table = ["| Family | Language | Kind | Reason | Sub-reason | Base | Candidate |", "|---|---|---|---|---|---|---|"];
+  const families = [...new Set([...ledger.base.families, ...ledger.candidate.families].map((summary) => summary.family))].sort();
+  const answersOf = (side: CutLedger, family: string) => side.families.find((summary) => summary.family === family)?.answers;
+  const baseRows = new Map(ledger.base.rows.map((row) => [keyCells(row), row]));
+  const candidateRows = new Map(ledger.candidate.rows.map((row) => [keyCells(row), row]));
+  const allRows = [...new Set([...baseRows.keys(), ...candidateRows.keys()])].sort();
+  return [
+    "", "## Cut ledger", "",
+    "Answers complete/partial/unknown, base → candidate.", "",
+    "| Family | Base | Candidate |", "|---|---|---|",
+    ...families.map((family) => `| ${family} | ${statuses(answersOf(ledger.base, family))} | ${statuses(answersOf(ledger.candidate, family))} |`),
+    "", "### Rows", "", ...table,
+    ...allRows.map((cells) => `${cells} ${values(baseRows.get(cells) ?? null)} | ${values(candidateRows.get(cells) ?? null)} |`),
+    "", `### Difference: cuts ${ledger.difference.totals.base} → ${ledger.difference.totals.candidate}`, "", ...table,
+    ...ledger.difference.rows.map((row) => `${keyCells(row)} ${values(row.base)} | ${values(row.candidate)} |`),
+  ];
 }
 
 function git(cwd: string, args: readonly string[], env: NodeJS.ProcessEnv = { ...process.env, GIT_ALLOW_PROTOCOL: "file", GIT_TERMINAL_PROMPT: "0" }): string {

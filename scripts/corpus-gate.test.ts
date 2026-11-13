@@ -56,7 +56,7 @@ describe("corpus gate", () => {
   let parallelManifest: string;
   let workspaceManifest: string;
   let store: string;
-  const commits: Record<"base" | "same" | "adds" | "lockfile", string> = { base: "", same: "", adds: "", lockfile: "" };
+  const commits: Record<"base" | "same" | "adds" | "lockfile" | "cuts" | "unknownCut", string> = { base: "", same: "", adds: "", lockfile: "", cuts: "", unknownCut: "" };
 
   before(() => {
     root = mkdtempSync(join(tmpdir(), "corpus-gate-test-"));
@@ -80,6 +80,10 @@ describe("corpus gate", () => {
     commits.adds = commit(engine, { "main.ts": engineSource(`"extra"`) }, "adds");
     git(engine, "checkout", "--quiet", "--detach", commits.base);
     commits.lockfile = commit(engine, { "package-lock.json": "{}" }, "lockfile");
+    git(engine, "checkout", "--quiet", "--detach", commits.base);
+    const partialWith = (reason: string) => engineSource("").replace(`status: "complete"`, `status: "partial", cuts: [{ kind: "depth", at: ["src/a.ts"], limit: 1, reason: "${reason}", reach: { kind: "anything" } }]`);
+    commits.cuts = commit(engine, { "main.ts": partialWith("depth") }, "cuts");
+    commits.unknownCut = commit(engine, { "main.ts": partialWith("other") }, "unknown cut");
     git(engine, "checkout", "--quiet", "--detach", commits.base);
     store = join(engine, ".git", "corpus-gate");
 
@@ -158,6 +162,25 @@ describe("corpus gate", () => {
     assert.equal(passed.code, EXIT.pass);
     assert.equal(passed.report.base.cached, true);
     assert.equal(passed.report.families[0].added, 2);
+  });
+
+  it("reports the cut ledger without failing on it, and fails a declared reason that did not move as declared", async () => {
+    const informative = await gate("--base", commits.base, "--candidate", commits.cuts, "--expect", "files:±");
+    assert.equal(informative.code, EXIT.pass);
+    assert.deepEqual(informative.report.ledger.difference.rows.map((row: { family: string; language: string; reason: string; candidate: { cuts: number } }) => [row.family, row.language, row.reason, row.candidate.cuts]), [["files", "typescript", "depth", 2]]);
+    assert.equal((await gate("--base", commits.base, "--candidate", commits.cuts, "--expect", "files:±", "--expect-cuts", "depth:+")).code, EXIT.pass);
+
+    const refuted = await gate("--base", commits.base, "--candidate", commits.cuts, "--expect", "files:±", "--expect-cuts", "depth:-");
+    assert.equal(refuted.code, EXIT.fail);
+    assert.deepEqual(refuted.report.cutViolations.map((violation: { reason: string; rule: string }) => [violation.reason, violation.rule]), [["depth", "cuts-not-as-declared"]]);
+    assert.ok(refuted.out.some((line) => line.startsWith("Corpus-Gate: fail ") && line.endsWith(" expect-cuts=depth:-")));
+    assert.equal(existsSync(passMarkerPath(join(engine, ".git"), tree(commits.base), tree(commits.cuts))), false);
+  });
+
+  it("faults on a cut reason outside the facts contract before writing a report", async () => {
+    const { code, report } = await gate("--base", commits.base, "--candidate", commits.unknownCut, "--expect", "files:±");
+    assert.equal(code, EXIT.fault);
+    assert.equal(report, undefined);
   });
 
   it("refuses a revision whose lockfile is not the installed one, before running anything", async () => {

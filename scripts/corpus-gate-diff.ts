@@ -70,15 +70,20 @@ export function parseExpectations(values: readonly string[]): Expectation[] {
     if (values.length > 1) throw new ExpectationError("none-with-families", values.join(" "));
     return [];
   }
-  const expectations: Expectation[] = [];
+  return parseDirected(values).map(([family, direction]) => ({ family, direction }));
+}
+
+/** Each `<name>:<+|-|±>` value as its name and direction, once per name, sorted by name. */
+export function parseDirected(values: readonly string[]): [string, Direction][] {
+  const parsed: [string, Direction][] = [];
   for (const value of values) {
     const match = /^([A-Za-z0-9][A-Za-z0-9._-]*):([+\-±])$/u.exec(value);
     if (match === null) throw new ExpectationError("invalid-expectation", value);
-    const [, family, direction] = match as unknown as [string, string, Direction];
-    if (expectations.some((expectation) => expectation.family === family)) throw new ExpectationError("duplicate-expectation", family);
-    expectations.push({ family, direction });
+    const [, name, direction] = match as unknown as [string, string, Direction];
+    if (parsed.some(([declared]) => declared === name)) throw new ExpectationError("duplicate-expectation", name);
+    parsed.push([name, direction]);
   }
-  return expectations.sort((a, b) => compareText(a.family, b.family));
+  return parsed.sort(([a], [b]) => compareText(a, b));
 }
 
 /** JSON with object keys sorted, so two equal values serialize alike whatever their key order. */
@@ -135,12 +140,17 @@ export function arrayLengths(value: unknown, path = "", lengths = new Map<string
 
 /** The status of the shallowest object that states one, reached through object keys alone. */
 export function topStatus(value: unknown): string | null {
+  return (topFact(value)?.status as string | undefined) ?? null;
+}
+
+/** The shallowest object that states a status, reached through object keys alone: the fact an answer printed. */
+export function topFact(value: unknown): Record<string, unknown> | null {
   let level: unknown[] = [value];
   while (level.length > 0) {
     const next: unknown[] = [];
     for (const node of level) {
       if (!isObject(node)) continue;
-      if (typeof node.status === "string") return node.status;
+      if (typeof node.status === "string") return node;
       next.push(...Object.values(node));
     }
     level = next;
@@ -212,10 +222,10 @@ function abbreviated(difference: Difference): Difference {
   };
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
+export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function compareText(a: string, b: string): number {
+export function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }

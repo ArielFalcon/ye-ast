@@ -70,6 +70,9 @@ own numbers, and nothing failed when an unexplained difference went unnoticed.
      case.
    - The report and a `Corpus-Gate:` commit trailer record the expectations and the counts.
    - Whether a declared difference is right stays the reviewer's judgement, made over the differences the report lists.
+   - The report also carries the cut ledger of each side and their difference (ADR-0071). It is informative unless the
+     change declares `--expect-cuts <reason>:+|-|±`: then a declared reason whose cuts did not rise, fall or change as
+     declared fails the run. A cut reason outside the facts contract is a fault.
 7. **Scope.** The gate applies to every change of behavior under `src/core/`, meaning any file there but `*.test.ts`
    and `*.testing.ts`. That covers fixes and refactors, which declare `none`. ADR-0013 rule 4 still applies when a
    framework enters, and this rule applies to every change after that.
