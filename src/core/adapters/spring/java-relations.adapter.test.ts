@@ -82,3 +82,60 @@ test("annotations and qualified types use declaration binding while var remains 
   assert.ok(answer.unresolved.some((use) => use.file === "model/package-info.java" && use.name === "PackageMarker"));
   assert.deepEqual(answer.relations.map((finding) => finding.status === "complete" && [finding.value.from.symbol, finding.value.to.symbol, finding.evidence[0]?.line]), [["Port", "Target", 1], ["Use", "Marker", 1], ["Use", "Target", 2], ["Use", "Target", 3]]);
 });
+
+const GENERATOR_POM = { path: "pom.xml", content: "<project><build><plugins><plugin><groupId>org.openapitools</groupId><artifactId>openapi-generator-maven-plugin</artifactId></plugin></plugins></build></project>" };
+const PLAIN_POM = { path: "pom.xml", content: "<project><build><plugins><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId></plugin></plugins></build></project>" };
+
+/** A class under a supertype the snapshot does not hold, naming one imported type, one of its package and one nobody declares. */
+function underAbsentSupertype(supertype: string): { path: string; content: string }[] {
+  return [
+    { path: "app/repo/Customer.java", content: "package app.repo; public class Customer {}" },
+    { path: "app/web/Sibling.java", content: "package app.web; class Sibling {}" },
+    { path: "app/web/Controller.java", content: `package app.web;\nimport app.repo.Customer;\nimport ${supertype};\nclass Controller implements ${supertype.split(".").at(-1)} {\n  Customer customer;\n  Sibling sibling;\n  Unknown unknown;\n}` },
+  ];
+}
+
+const placedIn = (answer: Awaited<ReturnType<ReturnType<typeof createJavaRelations>["extract"]>>) =>
+  answer.relations.map((finding) => finding.status === "complete" && [finding.value.from.symbol, finding.value.to.symbol, finding.evidence[0]?.line]);
+const unplacedIn = (answer: Awaited<ReturnType<ReturnType<typeof createJavaRelations>["extract"]>>) => answer.unresolved.map((use) => [use.name, use.line]);
+
+test("under a supertype a declared source generator explains, a repository type named by import or package is a placed reference and a name nobody declares stays unplaced", async () => {
+  const sources = underAbsentSupertype("app.api.CustomersApi");
+  const holds = createJavaTreeHolds();
+  const hold = holds.open();
+  try {
+    for (const options of [{ context: [GENERATOR_POM] }, { context: [GENERATOR_POM], hold }]) {
+      const answer = await createJavaRelations(() => createJavaParser(holds)).extract(sources, options);
+      assert.deepEqual(answer.cuts, []);
+      assert.deepEqual(placedIn(answer), [["Controller", "Customer", 5], ["Controller", "Sibling", 6]]);
+      assert.deepEqual(unplacedIn(answer), [["CustomersApi", 4], ["Unknown", 7]]);
+    }
+  } finally {
+    hold.release();
+  }
+});
+
+test("under an absent supertype no declared generator explains, every simple type name stays unplaced", async () => {
+  const strict = [["Customer", 5], ["CustomersApi", 4], ["Sibling", 6], ["Unknown", 7]];
+  for (const [supertype, context] of [["app.api.CustomersApi", []], ["com.vendor.CustomersApi", [PLAIN_POM]]] as const) {
+    const answer = await createJavaRelations(createJavaParser).extract(underAbsentSupertype(supertype), { context });
+    assert.deepEqual(placedIn(answer), []);
+    assert.deepEqual(unplacedIn(answer).toSorted(), strict);
+  }
+});
+
+test("with a declared generator, the relation reader reuses the project the name-binding readers hold under that build", async () => {
+  const sources = underAbsentSupertype("app.api.CustomersApi");
+  const holds = createJavaTreeHolds();
+  const hold = holds.open();
+  const parser = await createJavaParser(holds);
+  let parses = 0;
+  const counted = async () => ({ parse: (source: (typeof sources)[number]) => { parses++; return parser.parse(source); } });
+  try {
+    await heldJavaProject(hold, counted, sources, [], { generatesInterfaces: true });
+    await createJavaRelations(counted).extract(sources, { hold, context: [GENERATOR_POM] });
+    assert.equal(parses, sources.length);
+  } finally {
+    hold.release();
+  }
+});

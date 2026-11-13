@@ -85,7 +85,7 @@ export function routedReaders(packs: readonly LanguagePack[]): RoutedReaders {
     },
     relations: {
       async extract(sources, options) {
-        const reads = await Promise.all(packs.filter((pack) => pack.relations !== undefined && !pack.absent?.includes("relations")).map((pack) => pack.relations!.extract(sourcesOf(pack, sources), options)));
+        const reads = await Promise.all(packs.filter((pack) => pack.relations !== undefined && !pack.absent?.includes("relations")).map((pack) => pack.relations!.extract(sourcesOf(pack, sources), pack.contextFiles === undefined ? options : { ...options, context: contextOf(pack, sources) })));
         return { relations: reads.flatMap((read) => read.relations), cuts: reads.flatMap((read) => read.cuts), unresolved: reads.flatMap((read) => read.unresolved) };
       },
     },

@@ -1,7 +1,7 @@
 import { isJvmBuildFile, sourceGeneratorDeclaration } from "../../domain/languages/jvm-build.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import { scopeOf, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { scopeOf, type JavaProject, type ProjectBuild, type TypeDecl } from "./java-symbols.ts";
 import { unknownAt, type MappedRoute } from "./findings.ts";
 import { annotationUses, COMPONENTS, type SpringAnnotations } from "./request-mapping.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -19,6 +19,11 @@ export function sourceGeneratorIn(files: readonly SourceFile[]): Evidence | unde
       return declaration === undefined ? [] : [{ path: file.path, line: declaration.line }];
     });
   return declaring[0];
+}
+
+/** The build of the Java project a read holds: it generates interfaces when a build file of `context` declares a source generator (ADR-0062 decision 4). */
+export function projectBuildIn(context: readonly SourceFile[]): ProjectBuild {
+  return { generatesInterfaces: sourceGeneratorIn(context) !== undefined };
 }
 
 /**

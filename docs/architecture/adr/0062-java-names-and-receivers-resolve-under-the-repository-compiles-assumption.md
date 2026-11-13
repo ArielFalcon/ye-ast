@@ -50,3 +50,6 @@ than the language requires:
 - Overload resolution still reads the stated signatures; only the cut at the hierarchy is removed.
 - The origins reader receives the build files of its pack as context (`contextFiles`), part of the held project's
   identity and of the derived facts' layout; no schema or contract changes.
+- Follow-up 2026-11-13 (decision 4): the relations reader receives the same context and builds or holds its project with
+  the same `ProjectBuild`, so it shares the name-binding family's project; the other readers outside the family still
+  build without it.

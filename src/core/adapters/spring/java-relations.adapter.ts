@@ -10,6 +10,7 @@ import type { LanguageRelationsReader, LanguageRelations } from "../../ports/lan
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { javaTypeReferences } from "../tree-sitter/java-relations.adapter.ts";
+import { projectBuildIn } from "./api-delegates.ts";
 import { enclosingType, heldJavaProject, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { createJavaProject, platformTypeName, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
@@ -19,6 +20,7 @@ export function createJavaRelations(parser: () => Promise<JavaParser>): Language
   return {
     async extract(sources, options = {}) {
       const paths = options.paths ?? sources.map(({ path }) => path);
+      const build = projectBuildIn(options.context ?? []);
       const present = new Set(sources.map(({ path }) => path));
       const missing = paths.filter((path) => isUncoveredJvmSource(path) || (JAVA_PROFILE.reads(path) && !isJvmTestFile(path) && !present.has(path)));
       const derive = (files: readonly JavaFile[], project: JavaProject, unparsed: readonly UnparsedSource[]): LanguageRelations => {
@@ -62,12 +64,12 @@ export function createJavaRelations(parser: () => Promise<JavaParser>): Language
         return { relations: sortFindings(relations), cuts, unresolved };
       };
       if (options.hold !== undefined) {
-        const held = await heldJavaProject(options.hold, parser, sources);
+        const held = await heldJavaProject(options.hold, parser, sources, [], build);
         return derive(held.files.filter(({ owned }) => owned).map(({ file }) => file), held.project, held.unparsed);
       }
       return withJavaSources(await parser(), (parse) => {
         const { files, unparsed } = parse(sources);
-        return derive(files, createJavaProject(files), unparsed);
+        return derive(files, createJavaProject(files, build), unparsed);
       });
     },
   };

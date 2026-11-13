@@ -85,6 +85,21 @@ test("a pack that declares context files receives those no pack owns as context,
   assert.deepEqual(contexts.get("typescript"), []);
 });
 
+test("relations of a pack that declares context files receive those no pack owns as context, and another pack's receive the caller's options untouched", async () => {
+  const asked = new Map<string, Parameters<NonNullable<LanguagePack["relations"]>["extract"]>[1]>();
+  const pack = (profile: LanguageProfile, contextFiles?: (path: string) => boolean): LanguagePack => ({
+    ...recordingPack(profile, []),
+    ...(contextFiles === undefined ? {} : { contextFiles }),
+    relations: { extract: async (_sources, options) => (asked.set(profile.language, options), { relations: [], cuts: [], unresolved: [] }) },
+  });
+  const options = { completeSource: true };
+
+  await routedReaders([pack(TYPESCRIPT_PROFILE), pack(JAVA_PROFILE, (path) => path === MANIFEST || path === JAVA)]).relations.extract(SOURCES, options);
+
+  assert.deepEqual(asked.get("java"), { completeSource: true, context: [{ path: MANIFEST, content: "" }] });
+  assert.equal(asked.get("typescript"), options);
+});
+
 test("a stage a pack declares absent answers each of its sites capability-absent and is never asked, while another pack's stays its own", async () => {
   const typescript: string[] = [];
   const java: string[] = [];
