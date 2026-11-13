@@ -1,6 +1,8 @@
 # RFC-0034: Trace walks every body of a closed set, and a cut names the places of its cause
 
-- Status: Draft, 2026-11-13
+- Status: Accepted, 2026-11-13. Owner, 2026-11-13: "apruebo todas las recomendaciones pendientes. dejalos cerrados"
+  (I approve every pending recommendation; leave them closed); every open question is settled as recommended (see
+  Resolved questions). ADR-0074 records its decisions.
 - Related: ADR-0036, ADR-0041, ADR-0042, ADR-0044 (decisions 1, 3, 4, 5), ADR-0046, ADR-0051, RFC-0002, RFC-0013 (R7),
   RFC-0031, RFC-0032, ADR-0074 (the decision this RFC designs)
 
@@ -95,7 +97,7 @@ declarations. Today it receives a list and a sentence.
 ### What Part B does not do
 
 It never upgrades a status. The engine does not accept an agent's or a host's statement that a cause does not apply.
-A fact conditioned on a declared assumption was considered and is not proposed (open question 3).
+A fact conditioned on a declared assumption was considered and is not proposed (resolved question 3).
 
 ## Slices
 
@@ -107,9 +109,9 @@ A fact conditioned on a declared assumption was considered and is not proposed (
 | 4 | `basis` on candidate lists; rule 1 fixtures | `trace:±`, `callers:±` (detail only) |
 | 5 | `cause` for the dispatch sub-reasons and the receiver hierarchy | detail only |
 
-## Open questions
+## Resolved questions (owner, 2026-11-13: "apruebo todas las recomendaciones pendientes")
 
-| # | Question | Recommendation |
+| # | Question | Decision |
 |---|---|---|
 | 1 | Is "may run, every alternative stated" still `complete`? | Yes. The answer hides nothing and asserts exactly what is proven. A `partial` here would say the engine stopped, which it did not. This changes what trace asserts and needs the owner's acceptance |
 | 2 | Is there a count of alternatives above which the walk does not branch? | No constant. The existing budgets bound the walk and say so. A threshold would decide behavior by size, which the design pillars forbid |

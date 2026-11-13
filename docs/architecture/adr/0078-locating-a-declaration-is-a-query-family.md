@@ -1,9 +1,9 @@
 # ADR-0078: Locating a declaration by name is a query family, and the fixed layer is readable as MCP resources
 
-- Status: Proposed, 2026-11-13, tech lead; waits for the owner
-- Decision source: Owner, 2026-11-13: "estas propuestas de correccion y mejoras deben ser de forma transversal y no
-  parches puntuales. Genera los RFC y ADR correspondientes" (the corrections and improvements must be cross-cutting,
-  not point patches; write their RFCs and ADRs). The owner has not yet accepted the decisions below.
+- Status: Accepted, 2026-11-13, owner
+- Decision source: Owner, 2026-11-13: "apruebo todas las recomendaciones pendientes. dejalos cerrados" (I approve
+  every pending recommendation; leave them closed), after "estas propuestas de correccion y mejoras deben ser de forma
+  transversal y no parches puntuales" (the corrections and improvements must be cross-cutting, not point patches).
 - Related: RFC-0038 (design), ADR-0032, ADR-0051, RFC-0005, RFC-0029
 - Under: ADR-0013 decision 1 (a new family needs an ADR; this is that ADR)
 
@@ -40,7 +40,7 @@ family covered the need and was not tried. The store already answers "every decl
 8. The entrypoints fact, its digest and the workspace overview are MCP resources: read-only projections of facts a
    family already answers, each stating its snapshot.
 9. Decision 8 lands after the baseline of the outcome control (ADR-0071), which measures whether it changes adoption.
-10. No default answer bound is added.
+10. No default answer bound is added, and no prompt is registered.
 
 ## Consequences
 
@@ -50,5 +50,4 @@ family covered the need and was not tried. The store already answers "every decl
 
 ## Not decided here
 
-- Prompts (RFC-0038, open question 3).
 - Grouping test files in `impact` answers.

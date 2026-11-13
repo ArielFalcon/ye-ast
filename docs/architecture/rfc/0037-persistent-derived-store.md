@@ -1,6 +1,8 @@
 # RFC-0037: Derived facts persist by content in ye-ast's own store
 
-- Status: Draft, 2026-11-13
+- Status: Accepted, 2026-11-13. Owner, 2026-11-13: "apruebo todas las recomendaciones pendientes. dejalos cerrados"
+  (I approve every pending recommendation; leave them closed); every open question is settled as recommended (see
+  Resolved questions). ADR-0077 records its decisions.
 - Related: ADR-0010, ADR-0020, ADR-0030, ADR-0035, RFC-0003, RFC-0005, RFC-0012, RFC-0033, RFC-0036, ADR-0077 (the
   decision this RFC designs)
 
@@ -108,9 +110,9 @@ reads the same store. This RFC decides nothing about it.
 | Reading a store a repository ships | Untrusted content would steer the answer |
 | A `warm` command | Any query warms the store; a command adds surface with no new capability |
 
-## Open questions
+## Resolved questions (owner, 2026-11-13: "apruebo todas las recomendaciones pendientes")
 
-| # | Question | Recommendation |
+| # | Question | Decision |
 |---|---|---|
 | 1 | Is the disk tier on by default? | Yes wherever the index cache is on today. It follows the same directory and the same trust rule, and a host that passes no directory in a sandbox gets today's behavior |
 | 2 | Is the store shared between trust modes? | Yes. A key is content and reader version; the mode that read the content does not change what is derived from it |

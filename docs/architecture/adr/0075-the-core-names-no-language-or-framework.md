@@ -1,9 +1,9 @@
 # ADR-0075: The core names no language or framework, and a framework enters only as a plugin
 
-- Status: Proposed, 2026-11-13, tech lead; waits for the owner
-- Decision source: Owner, 2026-11-13: "estas propuestas de correccion y mejoras deben ser de forma transversal y no
-  parches puntuales. Genera los RFC y ADR correspondientes" (the corrections and improvements must be cross-cutting,
-  not point patches; write their RFCs and ADRs). The owner has not yet accepted the decisions below.
+- Status: Accepted, 2026-11-13, owner
+- Decision source: Owner, 2026-11-13: "apruebo todas las recomendaciones pendientes. dejalos cerrados" (I approve
+  every pending recommendation; leave them closed), after "estas propuestas de correccion y mejoras deben ser de forma
+  transversal y no parches puntuales" (the corrections and improvements must be cross-cutting, not point patches).
 - Related: RFC-0035 (design), RFC-0007, ADR-0013, ADR-0045 decision 12
 
 **In short:** language and framework identities are values a pack or a plugin registers, never a closed union or a
@@ -34,9 +34,11 @@ framework; and vocabularies of libraries are tables in adapter code. Adding a fr
 3. Every framework reader is a stage of a `FrameworkPlugin`. The composition root builds no framework adapter
    directly; an architecture rule holds it.
 4. `FrameworkPlugin` gains the optional stages `effects` and `relations`. A plugin declares the relation kinds it
-   emits and the synthesized edges it owns.
+   emits and the synthesized edges it owns. The core keeps `references`; of a plugin's kind it reads one declared
+   property, whether the edge carries dependence for impact.
 5. One adapter folder per technology: the Java language leaves `adapters/spring/`, and the framework files leave
-   `adapters/typescript/`. A framework adapter receives its language's readers by injection.
+   `adapters/typescript/`. A framework adapter receives its language's readers by injection. The move is one change
+   that carries no behavior.
 6. The rule `spring-reads-only-the-java-parser` is deleted when decision 5 lands.
 7. Decisions 1 to 3 land now. Decisions 4 to 6 and vocabularies as plugin data land when a second framework for either
    language is scheduled.

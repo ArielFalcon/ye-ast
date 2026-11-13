@@ -1,6 +1,8 @@
 # RFC-0031: The cut ledger and the outcome control
 
-- Status: Draft, 2026-11-13
+- Status: Accepted, 2026-11-13. Owner, 2026-11-13: "apruebo todas las recomendaciones pendientes. dejalos cerrados"
+  (I approve every pending recommendation; leave them closed); every open question is settled as recommended (see
+  Resolved questions). ADR-0071 records its decisions.
 - Related: ADR-0013, ADR-0039, ADR-0042, RFC-0012, ADR-0071 (the decision this RFC designs), RFC-0032 to RFC-0038
   (the program this RFC steers)
 
@@ -64,7 +66,7 @@ The agent evaluation already grades needs. It lacks the arm that says what the e
 | Reported | the difference B minus A with its interval, per task class and per language |
 | Where | the protocol in `docs/evaluations/`; runs and their artifacts outside the repository |
 
-The control is expensive, so it runs per milestone of the program, not per change (open question 2).
+The control is expensive, so it runs per milestone of the program, not per change (resolved question 2).
 
 ## What each RFC of the program must move
 
@@ -92,9 +94,9 @@ The control is expensive, so it runs per milestone of the program, not per chang
 2. One baseline ledger on the current corpus at `main`. It reorders, if needed, RFC-0032 to RFC-0038.
 3. The protocol of the control arm and one baseline run.
 
-## Open questions
+## Resolved questions (owner, 2026-11-13: "apruebo todas las recomendaciones pendientes")
 
-| # | Question | Recommendation |
+| # | Question | Decision |
 |---|---|---|
 | 1 | Does the gate accept an expectation per reason, such as `--expect-cuts receiver-unproven:-`? | Yes, optional. Without it the ledger is informative. It makes the claim of a change checkable by the same tool that already checks families |
 | 2 | How often does the outcome control run? | Once as a baseline, then after each milestone that changes what an agent sees (RFC-0034, RFC-0036, RFC-0038). Never per change: its cost is hours of agent sessions |

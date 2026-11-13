@@ -87,14 +87,14 @@ marked **Proposed** awaits the owner's acceptance.
 | [0068](adr/0068-lombok-access-levels-superbuilder-and-inherited-members-are-settled.md) | An access level on `@Getter`/`@Setter`, `@SuperBuilder`, `@Builder.Default` and a member inherited from a Lombok superclass of the snapshot are settled `generated` receiver members; a member a class generates for its own field is settled when only outside superclasses leave the hierarchy open | Accepted |
 | [0069](adr/0069-a-request-whose-route-is-stated-after-an-undecided-base-is-a-placed-effect.md) | A call site that states one method and route after a base the snapshot does not decide is a placed `http` effect marked `authority: "undecided"`, not `effect-unplaced`; a wrapper body adds no cut when its callers are placed | Accepted |
 | [0070](adr/0070-a-spring-data-repository-call-is-a-proxy-supplied-member-and-a-vocabulary-name-an-on-demand-import-leaves-unsettled-is-read-from-its-package.md) | A call on a Spring Data repository interface whose outside hierarchy is the closed vocabulary is a settled `generated` member (derived, `@Query` or inherited operation) with its data effect placed; a closed-vocabulary name an on-demand import leaves unsettled is read from its package; `java.lang` names keep their identity; a single declared repository method needs no argument signature | Accepted |
-| [0071](adr/0071-engine-investment-is-steered-by-a-cut-ledger-and-an-outcome-control.md) | Every gate run reports cuts by reason, normalized by expanded steps, and the agent evaluation gains an arm without the MCP; a change that claims fewer unknowns shows the matching number; designed in RFC-0031 | Proposed |
-| [0072](adr/0072-one-owner-classifies-every-file-and-a-veto-is-released-by-reading-declarations.md) | The class of a path has one owner in the domain and a build script is build configuration in any language; a repository-wide veto from a sibling language is narrowed only by a reader of its declarations; designed in RFC-0032 | Proposed |
-| [0073](adr/0073-a-classpath-the-host-declares-is-a-library-signature-source.md) | Jars a host declares are read as data for the members and supertypes of library types, beside the declared JDK; never run, loaded or discovered, and with none declared every answer is unchanged; extends ADR-0063; designed in RFC-0033 | Proposed |
-| [0074](adr/0074-trace-walks-every-body-of-a-closed-set-and-a-cut-names-its-cause.md) | Trace walks each body of a proven closed set as a branch and stays `complete`; a candidate list states its basis and a cut names the places that blocked the proof; amends the last rule of ADR-0044 decision 4; designed in RFC-0034 | Proposed |
-| [0075](adr/0075-the-core-names-no-language-or-framework.md) | Language and framework identities are registered values, every framework reader is a stage of a plugin registered in one place, and each adapter folder holds one technology; a refactor with no change in any answer; designed in RFC-0035 | Proposed |
-| [0076](adr/0076-a-transport-is-a-protocol-plugin-and-a-link-inside-a-repository-is-kept.md) | A transport is a protocol plugin with a registered identity; a link whose ends share a repository is listed, followed and returned; a trace with a workspace continues through a link that names one entrypoint; designed in RFC-0036 | Proposed |
-| [0077](adr/0077-derived-facts-persist-by-content-in-ye-asts-own-store.md) | The derived facts of ADR-0035 gain a disk tier behind the same port, keyed by content and reader version, in a directory a host may name; no fact changes; extends ADR-0035; designed in RFC-0037 | Proposed |
-| [0078](adr/0078-locating-a-declaration-is-a-query-family.md) | A new query family answers the declarations and files a name or a path fragment designates, with a match class and no score; faults carry the same answer; the fixed layer is readable as MCP resources; designed in RFC-0038 | Proposed |
+| [0071](adr/0071-engine-investment-is-steered-by-a-cut-ledger-and-an-outcome-control.md) | Every gate run reports cuts by reason, normalized by expanded steps, and the agent evaluation gains an arm without the MCP; a change that claims fewer unknowns shows the matching number; designed in RFC-0031 | Accepted |
+| [0072](adr/0072-one-owner-classifies-every-file-and-a-veto-is-released-by-reading-declarations.md) | The class of a path has one owner in the domain and a build script is build configuration in any language; a repository-wide veto from a sibling language is narrowed only by a reader of its declarations; designed in RFC-0032 | Accepted |
+| [0073](adr/0073-a-classpath-the-host-declares-is-a-library-signature-source.md) | Jars a host declares are read as data for the members and supertypes of library types, beside the declared JDK; never run, loaded or discovered, and with none declared every answer is unchanged; extends ADR-0063; designed in RFC-0033 | Accepted |
+| [0074](adr/0074-trace-walks-every-body-of-a-closed-set-and-a-cut-names-its-cause.md) | Trace walks each body of a proven closed set as a branch and stays `complete`; a candidate list states its basis and a cut names the places that blocked the proof; amends the last rule of ADR-0044 decision 4; designed in RFC-0034 | Accepted |
+| [0075](adr/0075-the-core-names-no-language-or-framework.md) | Language and framework identities are registered values, every framework reader is a stage of a plugin registered in one place, and each adapter folder holds one technology; a refactor with no change in any answer; designed in RFC-0035 | Accepted |
+| [0076](adr/0076-a-transport-is-a-protocol-plugin-and-a-link-inside-a-repository-is-kept.md) | A transport is a protocol plugin with a registered identity; a link whose ends share a repository is listed, followed and returned; a trace with a workspace continues through a link that names one entrypoint; designed in RFC-0036 | Accepted |
+| [0077](adr/0077-derived-facts-persist-by-content-in-ye-asts-own-store.md) | The derived facts of ADR-0035 gain a disk tier behind the same port, keyed by content and reader version, in a directory a host may name; no fact changes; extends ADR-0035; designed in RFC-0037 | Accepted |
+| [0078](adr/0078-locating-a-declaration-is-a-query-family.md) | A new query family answers the declarations and files a name or a path fragment designates, with a match class and no score; faults carry the same answer; the fixed layer is readable as MCP resources; designed in RFC-0038 | Accepted |
 
 ## Designs (RFC)
 
@@ -127,14 +127,14 @@ marked **Proposed** awaits the owner's acceptance.
 | [0028](rfc/0028-value-flow-through-wrappers.md) | Values flow through the project's own wrappers: per-declaration request summaries, the request owner, holder carriers | Accepted |
 | [0029](rfc/0029-presentation-residuals.md) | An answer never hides or misstates what the engine knows: fault text owner, absent files, answer bound, empty scope, entrypoint places, `importers` lines | Accepted |
 | [0030](rfc/0030-preserve-domain-knowledge-through-projections.md) | Preserve request knowledge, unknown provenance and declaration placement; reuse grouped composition evidence and explicit selection in summaries | Accepted |
-| [0031](rfc/0031-cut-ledger-and-outcome-control.md) | The cut ledger of the corpus gate and the control arm of the agent evaluation; the ledger rows each later RFC must move | Draft |
-| [0032](rfc/0032-file-classification-and-declaration-readers.md) | One classification of a snapshot's paths in the domain; a declaration reader for a language without a pack, so a veto falls only on the types a sibling-language file extends | Draft |
-| [0033](rfc/0033-declared-classpath.md) | A classpath the host declares as the library signature source: input, reading, identity, what it changes and what it must not, starting with a probe | Draft |
-| [0034](rfc/0034-closed-alternatives-and-cut-causes.md) | Branch steps for a proven closed set of bodies; the basis of a candidate list and the places of a cut's cause | Draft |
-| [0035](rfc/0035-closing-the-extension-model.md) | The as-built gaps against RFC-0007 and the refactor that makes a plugin the only thing a new framework adds | Draft |
-| [0036](rfc/0036-protocol-plugins-and-links-inside-a-repository.md) | The protocol plugin kind of RFC-0007, links whose ends share a repository, and a trace that continues through a decided link | Draft |
-| [0037](rfc/0037-persistent-derived-store.md) | A disk tier behind the derived-facts port, a host-named cache directory, and the workspace join reading only changed repositories | Draft |
-| [0038](rfc/0038-locating-declarations-and-fixed-layer-resources.md) | The `locate` family, faults that carry its answer, and the fixed layer as read-only MCP resources | Draft |
+| [0031](rfc/0031-cut-ledger-and-outcome-control.md) | The cut ledger of the corpus gate and the control arm of the agent evaluation; the ledger rows each later RFC must move | Accepted |
+| [0032](rfc/0032-file-classification-and-declaration-readers.md) | One classification of a snapshot's paths in the domain; a declaration reader for a language without a pack, so a veto falls only on the types a sibling-language file extends | Accepted |
+| [0033](rfc/0033-declared-classpath.md) | A classpath the host declares as the library signature source: input, reading, identity, what it changes and what it must not, starting with a probe | Accepted |
+| [0034](rfc/0034-closed-alternatives-and-cut-causes.md) | Branch steps for a proven closed set of bodies; the basis of a candidate list and the places of a cut's cause | Accepted |
+| [0035](rfc/0035-closing-the-extension-model.md) | The as-built gaps against RFC-0007 and the refactor that makes a plugin the only thing a new framework adds | Accepted |
+| [0036](rfc/0036-protocol-plugins-and-links-inside-a-repository.md) | The protocol plugin kind of RFC-0007, links whose ends share a repository, and a trace that continues through a decided link | Accepted |
+| [0037](rfc/0037-persistent-derived-store.md) | A disk tier behind the derived-facts port, a host-named cache directory, and the workspace join reading only changed repositories | Accepted |
+| [0038](rfc/0038-locating-declarations-and-fixed-layer-resources.md) | The `locate` family, faults that carry its answer, and the fixed layer as read-only MCP resources | Accepted |
 
 ## Pending decisions
 
@@ -144,7 +144,6 @@ marked **Proposed** awaits the owner's acceptance.
 | Publication | RFC-0008, Q1-Q2 | Public or private; clearance of extracted qayaba code; npm name and GitHub organization (license decided: Apache-2.0) |
 | Recording the constraints in qayaba's migration | RFC-0009, Q1 | Accepted on 2026-10-30; where to record them, since qayaba's migration branch is active |
 | Daemon good practices | RFC-0005 | Complete and agree before the daemon slice |
-| Engine evolution program | ADR-0071 to ADR-0078, RFC-0031 to RFC-0038 | Accept, amend or reject each Proposed ADR; settle the open questions of each RFC |
 
 ## Domain knowledge preservation follow-up
 
@@ -158,7 +157,8 @@ that acceptance does not claim the original study is closed.
 
 RFC-0031 to RFC-0038 come from the engine audit of 2026-11-13: where the engine answers "cannot tell", why, and what
 keeps a new language, framework or protocol from entering as a plugin. Each RFC names a mechanism, not a repository's
-symptom, and each has one Proposed ADR. None is accepted yet.
+symptom, and each has one ADR. The owner accepted all eight on 2026-11-13, with every open question settled as
+recommended. None is implemented yet.
 
 | Order | RFC | First step | Depends on |
 |---|---|---|---|

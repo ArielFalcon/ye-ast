@@ -1,9 +1,9 @@
 # ADR-0071: Engine investment is steered by a cut ledger and an outcome control
 
-- Status: Proposed, 2026-11-13, tech lead; waits for the owner
-- Decision source: Owner, 2026-11-13: "estas propuestas de correccion y mejoras deben ser de forma transversal y no
-  parches puntuales. Genera los RFC y ADR correspondientes" (the corrections and improvements must be cross-cutting,
-  not point patches; write their RFCs and ADRs). The owner has not yet accepted the decisions below.
+- Status: Accepted, 2026-11-13, owner
+- Decision source: Owner, 2026-11-13: "apruebo todas las recomendaciones pendientes. dejalos cerrados" (I approve
+  every pending recommendation; leave them closed), after "estas propuestas de correccion y mejoras deben ser de forma
+  transversal y no parches puntuales" (the corrections and improvements must be cross-cutting, not point patches).
 - Related: RFC-0031 (design), ADR-0013, ADR-0039, ADR-0042, RFC-0012
 
 **In short:** every gate run reports the cuts by reason, normalized by expanded steps, and the agent evaluation gains
@@ -34,7 +34,10 @@ cannot say what the engine adds to a task.
 4. The agent evaluation runs two arms on the same tasks, model and budget: without and with the MCP. It reports the
    difference per task class and language.
 5. The control arm runs as a baseline and after each milestone that changes what an agent sees, never per change.
-6. ADR-0039 is unchanged. Reports stay outside the repository and name no application here.
+6. ADR-0039 is unchanged. Reports stay outside the repository and name no application here. The baseline ledger is
+   not committed; the commit that lands a change carries the difference of its target rows in its message.
+7. The gate accepts an optional expectation per reason (`--expect-cuts <reason>:+|-|±`). Without it the ledger is
+   informative.
 
 ## Consequences
 
@@ -44,5 +47,4 @@ cannot say what the engine adds to a task.
 
 ## Not decided here
 
-- Whether the gate takes an expectation per reason (RFC-0031, open question 1).
 - Any target value for a ledger row. A target needs a baseline first.

@@ -1,6 +1,8 @@
 # RFC-0036: A transport is a protocol plugin, and a link inside a repository is kept
 
-- Status: Draft, 2026-11-13
+- Status: Accepted, 2026-11-13. Owner, 2026-11-13: "apruebo todas las recomendaciones pendientes. dejalos cerrados"
+  (I approve every pending recommendation; leave them closed); every open question is settled as recommended (see
+  Resolved questions). ADR-0076 records its decisions.
 - Related: RFC-0007 ("Plugin kinds": the protocol kind this RFC builds), RFC-0011, RFC-0013, ADR-0013, ADR-0051,
   ADR-0053, ADR-0054, ADR-0058, ADR-0060, ADR-0061, ADR-0065, RFC-0035, RFC-0037, ADR-0076 (the decision this RFC
   designs)
@@ -117,9 +119,9 @@ the two itself.
 | 3 | Internal links listed and followed | `workspace:+`, and the families the probe names |
 | 4 | Trace through a decided link | `trace:+` with a workspace |
 
-## Open questions
+## Resolved questions (owner, 2026-11-13: "apruebo todas las recomendaciones pendientes")
 
-| # | Question | Recommendation |
+| # | Question | Decision |
 |---|---|---|
 | 1 | Does Part A wait for RFC-0035? | It needs only RFC-0035's registered identities (its step 1). The rest is independent |
 | 2 | Are internal links part of the same list as cross-repository links? | No: a separate section. Readers of today's list keep its meaning, and ADR-0051 is met because nothing is hidden |

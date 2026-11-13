@@ -1,6 +1,8 @@
 # RFC-0033: A classpath the host declares as the library signature source
 
-- Status: Draft, 2026-11-13
+- Status: Accepted, 2026-11-13. Owner, 2026-11-13: "apruebo todas las recomendaciones pendientes. dejalos cerrados"
+  (I approve every pending recommendation; leave them closed); every open question is settled as recommended (see
+  Resolved questions). ADR-0073 records its decisions.
 - Related: ADR-0010, ADR-0013, ADR-0019, ADR-0035, ADR-0037, ADR-0044 (decisions 1, 5, 6, 10), ADR-0062, ADR-0063,
   ADR-0064, ADR-0067, ADR-0068, ADR-0070, RFC-0031, ADR-0073 (the decision this RFC designs)
 
@@ -18,7 +20,7 @@ byte-identical to today's.
 | Other libraries are recognized by a list of package prefixes | `src/core/adapters/spring/java-symbols.ts:177` |
 | A supertype the sources do not declare leaves the members of the hierarchy unsettled | `hierarchyOpen`, `src/core/adapters/spring/java-receiver-methods.ts:242-245` |
 | Two closed vocabularies settle what a signature source would otherwise settle | ADR-0070 (Spring Data repository types), ADR-0067 and ADR-0068 (Lombok) |
-| A probe on 2026-11-11 measured it directly: a repository type whose parent is a library type answers `unproven` for the owner of a call | recorded with the ADR-0044 V0b2 prerequisite; the classpath was proposed then and waits for this decision |
+| A probe on 2026-11-11 measured it directly: a repository type whose parent is a library type answers `unproven` for the owner of a call | recorded with the ADR-0044 V0b2 prerequisite; the classpath was proposed then and waited for this decision |
 | On one corpus backend the domain models extend library base classes, and that open hierarchy is the first cause of its `receiver-unproven` cuts | measured on 2026-11-13 during the trace coverage work |
 
 Each closed vocabulary is correct and bounded to one library. The mechanism they stand in for is general: a library
@@ -28,7 +30,7 @@ type has members and supertypes, and a jar states them.
 
 ### 1. The input
 
-`--classpath [<at>=]<path>`, repeatable, on every command that binds calls (open question 1), and in the MCP
+`--classpath [<at>=]<path>`, repeatable, on every command that binds calls (resolved question 1), and in the MCP
 registration `ye-ast init` prints.
 
 | Rule | Detail |
@@ -50,7 +52,7 @@ ye-ast runs no build tool.
 - The index is lazy: the central directory names the types, and a type is decoded on demand and memoized (ADR-0063
   decision 6).
 - Only public and protected declarations are read, as today. No code attribute is read. Nothing is loaded or run.
-- A jar nested in another jar is not read in the first slice (open question 3).
+- A jar nested in another jar is not read in the first slice (resolved question 3).
 
 ### 3. Identity and verification
 
@@ -117,9 +119,9 @@ no evidence behind it and is not proposed.
 | An indexer that needs a build (SCIP) | Evaluated before and rejected under `untrusted` for the same reason |
 | An ordered classpath | Order exists to break ties between duplicate classes; refusing the tie is simpler and never wrong |
 
-## Open questions
+## Resolved questions (owner, 2026-11-13: "apruebo todas las recomendaciones pendientes")
 
-| # | Question | Recommendation |
+| # | Question | Decision |
 |---|---|---|
 | 1 | Which commands accept `--classpath`? | Every command whose family reads `receiverMethods`: `trace`, `callers`, `impact`, `contract-consequences`, `workspace`, `decisions`, and `mcp`, `init`. ADR-0041 gives one binding chain to every family; a family that ignored the input would bind the same call differently |
 | 2 | Does an unverified jar lower the answer's status? | No. It is recorded as unverified, like a declared JDK. A version mismatch the build files prove (a literal version that differs) is a `build-output` cut and the jar is not used |

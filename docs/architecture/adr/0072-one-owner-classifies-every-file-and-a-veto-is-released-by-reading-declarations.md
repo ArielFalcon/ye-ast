@@ -1,9 +1,9 @@
 # ADR-0072: One owner classifies every file of a snapshot, and a veto is released only by reading declarations
 
-- Status: Proposed, 2026-11-13, tech lead; waits for the owner
-- Decision source: Owner, 2026-11-13: "estas propuestas de correccion y mejoras deben ser de forma transversal y no
-  parches puntuales. Genera los RFC y ADR correspondientes" (the corrections and improvements must be cross-cutting,
-  not point patches; write their RFCs and ADRs). The owner has not yet accepted the decisions below.
+- Status: Accepted, 2026-11-13, owner
+- Decision source: Owner, 2026-11-13: "apruebo todas las recomendaciones pendientes. dejalos cerrados" (I approve
+  every pending recommendation; leave them closed), after "estas propuestas de correccion y mejoras deben ser de forma
+  transversal y no parches puntuales" (the corrections and improvements must be cross-cutting, not point patches).
 - Related: RFC-0032 (design), ADR-0013, ADR-0044 decision 5, ADR-0045 decision 12, ADR-0062
 
 **In short:** the class of a path (source, declared source, uncovered source, build configuration, test, other) has one
@@ -34,13 +34,15 @@ aspects that estimated what a pointcut could select: no measured gain, and a ris
    `uncovered-source`, `build-configuration`, `test` or `other`.
 2. No adapter declares a pattern over the paths of a language it does not read. A fitness test holds it.
 3. A build script, build logic and a version catalog are `build-configuration` whatever language they are written in.
-4. A `DeclarationReader` reads the types, supertypes and member names of a language without a pack, and nothing else.
-   The owner of a covered language of the same type system consumes them.
+4. A `DeclarationReader` reads the types, supertypes and members (name and arity) of a language without a pack, and
+   nothing else. The owner of a covered language of the same type system consumes them. Parameter types enter when the
+   ledger shows overloads left unproven for lack of them.
 5. With declarations read, a proof is refused only where a declared type takes part in it: the same package for a
    name, the hierarchy above for a member, at or below for a closure. A functional interface keeps its veto.
 6. A file a reader cannot read, and a source the grammar cannot parse, keep the repository-wide veto.
 7. A cut caused by an unread or unparsed source names that cause and its files.
-8. A first declaration reader enters under ADR-0013. This ADR chooses no language.
+8. A first declaration reader enters under ADR-0013, for the sibling language the baseline ledger of ADR-0071 shows
+   vetoing the most answers.
 
 ## Consequences
 
@@ -51,5 +53,4 @@ aspects that estimated what a pointcut could select: no measured gain, and a ris
 
 ## Not decided here
 
-- The first sibling language (RFC-0032, open question 1), chosen from the baseline ledger of RFC-0031.
-- Member signatures beyond arity (RFC-0032, open question 2).
+- The name of the first sibling language, until the baseline ledger exists.

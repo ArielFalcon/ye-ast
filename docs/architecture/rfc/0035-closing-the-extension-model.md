@@ -1,6 +1,8 @@
 # RFC-0035: Closing the extension model
 
-- Status: Draft, 2026-11-13
+- Status: Accepted, 2026-11-13. Owner, 2026-11-13: "apruebo todas las recomendaciones pendientes. dejalos cerrados"
+  (I approve every pending recommendation; leave them closed); every open question is settled as recommended (see
+  Resolved questions). ADR-0075 records its decisions.
 - Related: RFC-0001, RFC-0007 (the model this RFC completes), ADR-0013, ADR-0014, ADR-0045 (decision 12), RFC-0036
   (the protocol kind), ADR-0075 (the decision this RFC designs)
 
@@ -99,9 +101,9 @@ Steps 2 to 4 are ordered by what unblocks a second framework; 5 and 6 are indepe
   the ledger row that measures it.
 - It does not make dispatch a core layer (ADR-0044 decision 3 stands).
 
-## Open questions
+## Resolved questions (owner, 2026-11-13: "apruebo todas las recomendaciones pendientes")
 
-| # | Question | Recommendation |
+| # | Question | Decision |
 |---|---|---|
 | 1 | Is this refactor worth its cost before a second framework is asked for? | Steps 1 and 2 yes: they are small and remove the hand-wiring that every multi-repository fix currently has to thread through. Steps 3 to 6 when a second framework for either language is scheduled, so the contract is shaped by a real second case and not guessed |
 | 2 | Are relation kinds fully opaque to the core? | No. The core keeps `references`; a plugin kind declares the one property the core reads, whether the edge carries dependence for impact |

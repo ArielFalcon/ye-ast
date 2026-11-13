@@ -1,9 +1,9 @@
 # ADR-0077: Derived facts persist by content in ye-ast's own store
 
-- Status: Proposed, 2026-11-13, tech lead; waits for the owner
-- Decision source: Owner, 2026-11-13: "estas propuestas de correccion y mejoras deben ser de forma transversal y no
-  parches puntuales. Genera los RFC y ADR correspondientes" (the corrections and improvements must be cross-cutting,
-  not point patches; write their RFCs and ADRs). The owner has not yet accepted the decisions below.
+- Status: Accepted, 2026-11-13, owner
+- Decision source: Owner, 2026-11-13: "apruebo todas las recomendaciones pendientes. dejalos cerrados" (I approve
+  every pending recommendation; leave them closed), after "estas propuestas de correccion y mejoras deben ser de forma
+  transversal y no parches puntuales" (the corrections and improvements must be cross-cutting, not point patches).
 - Related: RFC-0037 (design), ADR-0010, ADR-0020, ADR-0035, RFC-0012
 - Extends: ADR-0035 (the same facts and keys, with a second tier)
 
@@ -32,8 +32,10 @@ and a miss answer the same value.
 3. Only a completed derivation is stored. A fact cut by a wall-clock deadline never is.
 4. An entry that does not verify is a miss and is removed. Writes are atomic.
 5. The store is written only by ye-ast, from content it exported or read through the confined reader. Nothing in a
-   repository seeds it. It is usable in both trust modes.
+   repository seeds it. One store serves both trust modes: a key is content and reader version, whatever mode read
+   the content.
 6. `--cache <dir>` names the directory on every command and in the MCP registration. Without it, today's rule holds.
+   The disk tier is on wherever the index cache is on.
 7. Slots keyed by one file's content are stored first; aggregates are keyed by the fingerprint of their parts.
 8. Per repository and snapshot, the inputs of the workspace join are one stored value.
 9. What is stored, and in which order, follows a stage measurement of cold queries. Retention reuses the index cache's
@@ -48,5 +50,5 @@ and a miss answer the same value.
 
 ## Not decided here
 
-- Storing whole facts (RFC-0037, open question 3).
+- Storing whole facts: not done. Derivations are stored; a fact is rebuilt from them.
 - Anything about the daemon (RFC-0005).

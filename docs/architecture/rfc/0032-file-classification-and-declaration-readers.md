@@ -1,6 +1,8 @@
 # RFC-0032: One owner classifies a snapshot's files, and a veto is released by reading declarations
 
-- Status: Draft, 2026-11-13
+- Status: Accepted, 2026-11-13. Owner, 2026-11-13: "apruebo todas las recomendaciones pendientes. dejalos cerrados"
+  (I approve every pending recommendation; leave them closed); every open question is settled as recommended (see
+  Resolved questions). ADR-0072 records its decisions.
 - Related: ADR-0013, ADR-0044 (decision 5), ADR-0045 (decision 12), ADR-0062, RFC-0007, RFC-0031, ADR-0072 (the
   decision this RFC designs)
 
@@ -158,9 +160,9 @@ fail first, measured applications and the ledger rows it moves. This RFC does no
 | Read the declarations outside the syntax error of an unparsed file | An anonymous class in the unread region can implement any type |
 | A full pack for a sibling language | The largest cost for the rows this RFC targets; it stays available under ADR-0013 |
 
-## Open questions
+## Resolved questions (owner, 2026-11-13: "apruebo todas las recomendaciones pendientes")
 
-| # | Question | Recommendation |
+| # | Question | Decision |
 |---|---|---|
 | 1 | Which sibling language gets the first declaration reader? | Whichever the baseline ledger shows vetoing the most answers. Do not choose before it exists |
 | 2 | Does a declared type's member list need parameter types, or only arity? | Arity first. It settles the cases where no member of that name and arity exists above `T`. Parameter types enter when the ledger shows overloads left unproven for that reason |

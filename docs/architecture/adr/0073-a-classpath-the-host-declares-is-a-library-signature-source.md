@@ -1,10 +1,10 @@
 # ADR-0073: A classpath the host declares is a library signature source
 
-- Status: Proposed, 2026-11-13, tech lead; waits for the owner
-- Decision source: Owner, 2026-11-13: "estas propuestas de correccion y mejoras deben ser de forma transversal y no
-  parches puntuales. Genera los RFC y ADR correspondientes" (the corrections and improvements must be cross-cutting,
-  not point patches; write their RFCs and ADRs). The owner has not yet accepted the decisions below. A classpath input
-  was first proposed on 2026-11-11 and left for the owner's architecture decision.
+- Status: Accepted, 2026-11-13, owner
+- Decision source: Owner, 2026-11-13: "apruebo todas las recomendaciones pendientes. dejalos cerrados" (I approve
+  every pending recommendation; leave them closed), after "estas propuestas de correccion y mejoras deben ser de forma
+  transversal y no parches puntuales" (the corrections and improvements must be cross-cutting, not point patches). A
+  classpath input was first proposed on 2026-11-11 and left for the owner's architecture decision.
 - Related: RFC-0033 (design), ADR-0010, ADR-0037, ADR-0044, ADR-0062, ADR-0063, ADR-0070
 - Extends: ADR-0063 (the JDK stays a source; the classpath joins it)
 
@@ -28,12 +28,17 @@ ADR-0070). A repository type whose supertype is any other library type has an op
 ## Decision
 
 1. `--classpath [<at>=]<path>` declares a jar or a directory of jars for the Java sources under `<at>`. The path is a
-   host input in both trust modes, allowed with `--live`, and never discovered.
+   host input in both trust modes, allowed with `--live`, and never discovered. Every command whose family reads
+   `receiverMethods` accepts it (`trace`, `callers`, `impact`, `contract-consequences`, `workspace`, `decisions`), and
+   so do `mcp` and `init`: one binding chain must not bind the same call differently per family (ADR-0041).
 2. Jars are read as data through the confined archive reader and the class-file decoder of `core/adapters/jdk`,
    generalized. Only public and protected declarations are read. No class is loaded and no code runs.
-3. The classpath has no order. A qualified name two jars define with different bytes is unsettled.
+3. The classpath has no order. A qualified name two jars define with different bytes is unsettled. A jar nested in
+   another jar is not read; a host declares the extracted directory.
 4. Each jar a fact read appears in `inputs.buildOutputs` with the kind `classpath`, its digest and whether the
-   snapshot's build files verify its coordinates. An unusable declaration is a `build-output` cut.
+   snapshot's build files verify its coordinates. An unusable declaration is a `build-output` cut. An unverified jar
+   is used and marked, and lowers no status; a jar whose version a build file contradicts with a literal is a
+   `build-output` cut and is not used.
 5. `LibrarySignatureSource` composes the declared JDK and the declared classpath. A supertype it holds is read, and
    the hierarchy above a repository type is open only where no source, JDK or jar holds a supertype.
 6. A library type never becomes a repository declaration, a step, a seed or a candidate.
@@ -50,7 +55,6 @@ ADR-0070). A repository type whose supertype is any other library type has an op
 
 ## Not decided here
 
-- The commands that accept the flag (RFC-0033, open question 1).
-- Nested jars (RFC-0033, open question 3).
+- Reading nested jars, until a measured case asks for it.
 - Any change for TypeScript: ADR-0037 stands, and the 2026-11-08 evaluation measured no gain from a declared
   `node_modules`.

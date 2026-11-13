@@ -1,11 +1,12 @@
 # ADR-0076: A transport is a protocol plugin, and a link inside a repository is kept
 
-- Status: Proposed, 2026-11-13, tech lead; waits for the owner
-- Decision source: Owner, 2026-11-13: "estas propuestas de correccion y mejoras deben ser de forma transversal y no
-  parches puntuales. Genera los RFC y ADR correspondientes" (the corrections and improvements must be cross-cutting,
-  not point patches; write their RFCs and ADRs). The owner has not yet accepted the decisions below. On 2026-11-13 the
-  owner also stated: "Es de extrema importancia que se resuelvan bien la relaciones entre frontend -backend y backend
-  -backend" (it is of extreme importance that frontend-backend and backend-backend relations are resolved well).
+- Status: Accepted, 2026-11-13, owner
+- Decision source: Owner, 2026-11-13: "apruebo todas las recomendaciones pendientes. dejalos cerrados" (I approve
+  every pending recommendation; leave them closed), after "estas propuestas de correccion y mejoras deben ser de forma
+  transversal y no parches puntuales" (the corrections and improvements must be cross-cutting, not point patches). On
+  2026-11-13 the owner also stated: "Es de extrema importancia que se resuelvan bien la relaciones entre frontend
+  -backend y backend -backend" (it is of extreme importance that frontend-backend and backend-backend relations are
+  resolved well).
 - Related: RFC-0036 (design), RFC-0007, RFC-0011, ADR-0013, ADR-0051, ADR-0060, ADR-0061
 
 **In short:** the way two services talk is a plugin with a registered identity, and the core compares no transport
@@ -39,8 +40,12 @@ repository. A trace returns the links of its requests (ADR-0061) and does not en
 5. Decision 4 is preceded by a probe of what each family answers today for that relation, and covers only the
    families that do not report it.
 6. A trace run with a workspace expands the handler of a link that names exactly one entrypoint, as a step `via:
-   "link"` with its repository, at the revision the workspace pins, under the existing budgets.
-7. A new protocol enters under ADR-0013. This ADR adds none.
+   "link"` with its repository, at the revision the workspace pins, under the existing budgets. It crosses as many
+   links as those budgets allow; a budget that runs out is an explicit cut.
+7. A new protocol enters under ADR-0013. This ADR adds none; the first schema-first protocol is chosen from the
+   baseline ledger and the cross-stack class of the outcome control (ADR-0071).
+8. The protocol plugin needs only the registered identities of ADR-0075 decision 2 and does not wait for the rest of
+   that ADR.
 
 ## Consequences
 
@@ -52,4 +57,3 @@ repository. A trace returns the links of its requests (ADR-0061) and does not en
 
 - Host ownership of a literal origin at the exact rung: measured first (RFC-0036, "Not decided here").
 - `--workspace` on `impact` and `callers`.
-- The first schema-first protocol (RFC-0036, open question 4).

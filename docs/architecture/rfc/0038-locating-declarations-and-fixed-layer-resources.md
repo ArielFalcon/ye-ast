@@ -1,6 +1,8 @@
 # RFC-0038: Locating a declaration by name, and the fixed layer as MCP resources
 
-- Status: Draft, 2026-11-13
+- Status: Accepted, 2026-11-13. Owner, 2026-11-13: "apruebo todas las recomendaciones pendientes. dejalos cerrados"
+  (I approve every pending recommendation; leave them closed); every open question is settled as recommended (see
+  Resolved questions). ADR-0078 records its decisions.
 - Related: ADR-0013 (decision 1: a new family needs an ADR), ADR-0032, ADR-0051, RFC-0005, RFC-0015, RFC-0017, RFC-0029,
   RFC-0030, RFC-0031, ADR-0078 (the decision this RFC designs)
 
@@ -124,9 +126,9 @@ addressable needs where the agent did not try the covering family, before and af
 | 3 | Faults carry the matcher's answer | the fault share of calls in the outcome control |
 | 4 | The resources | the adoption measure of the outcome control |
 
-## Open questions
+## Resolved questions (owner, 2026-11-13: "apruebo todas las recomendaciones pendientes")
 
-| # | Question | Recommendation |
+| # | Question | Decision |
 |---|---|---|
 | 1 | Does `locate` match a substring of a name? | No. Substring matching returns noise that grows with the repository and needs a rank to be usable. A `case` and a `qualified` class cover the measured failures, which were wrong paths, not partial names |
 | 2 | Does `locate` search across the repositories of a workspace? | Yes when a workspace is declared, with the repository on each match. Cross-repository work is where an agent knows a name and not its repository |
