@@ -344,10 +344,11 @@ export function createBaseReadings(deps: BaseReadingDeps): BaseReadings {
         absentCapabilitiesOf: (path) => deps.absentCapabilities?.(path) ?? NO_ABSENT,
         reverseCalls(targets) {
           const reconciled = reconciledCalls(targets, declarationUses());
-          if (targets.bindings === undefined || reconciled === undefined || syntaxOf === undefined) return undefined;
+          const read = origins();
+          if (targets.bindings === undefined || reconciled === undefined || syntaxOf === undefined || read === undefined) return undefined;
           const constructs = async (node: GraphSymbol): Promise<boolean> => (await syntaxOf(node.file)).callables.some((callable) => callable.construction && callable.name === node.name && callable.start <= node.startLine && node.startLine <= callable.nameLine);
           const readable = tree.sources.filter((file) => isReadSource(file.path));
-          return createReverseCalls({ store, navigation: navigation(), reconciled, bindings: targets.bindings, importedDeclarations: targets.importedDeclarations, sources: readable, constructs, ...(retained === undefined ? {} : { retained }) });
+          return createReverseCalls({ store, navigation: navigation(), reconciled, bindings: targets.bindings, origins: read, importedDeclarations: targets.importedDeclarations, sources: readable, constructs, ...(retained === undefined ? {} : { retained }) });
         },
       };
     },

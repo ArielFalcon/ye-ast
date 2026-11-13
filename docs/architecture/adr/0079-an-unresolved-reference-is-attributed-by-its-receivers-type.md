@@ -135,7 +135,8 @@ Data interface into `Api.save`. Both are over-reports (a false dependence), not 
    | Binding | Outcome | Why it cannot hide a dependent |
    |---|---|---|
    | A target that is a reached declaration (`declaration`, or `receiver` with a `target`) | A dependence edge into it, `proven` or `typed` (ADR-0036); the walk continues from the caller | It is the compile-time binding |
-   | A target that is not reached, `generated`, or `outside` (a root outside the repository) | No cut from this reference | Dependence is the compile-time binding (ADR-0036). A reached declaration that overrides an unreached target would have reached it, since impact's dispatch runs up from every reached implementation; a budget that stopped the walk is its own cut |
+   | `generated`, or `outside` (a root outside the repository) | No cut from this reference | Dependence is the compile-time binding (ADR-0036), and neither names a declaration of the repository |
+   | A target that is another declaration | No cut from this reference when every declaration the binding names was reached, or when the reached declaration's language pack proves it neither implements nor overrides that target (`implementedDeclarations` answers `declarations` without it); otherwise today's cut | A reached target holds the caller in its own answer. An unreached one may still dispatch to the reached declaration, and the walk's upward bridge is not a proof of the contrary: the index records no supertype edge for a generic supertype (measured in U1), so only the pack's reading of the hierarchy retires the cut |
    | `receiver`, or a nominal pack's `unproven`, with candidates the receiver's type offers | Attributed among them: one `hidden-caller` cut per reached candidate, none if no candidate is reached | The candidates are the whole hierarchy's declarations of the name at the call's arity, given only when the reading read that whole hierarchy (`import-origins.port.ts:193-198`) |
    | A receiver declared outside the repository (decision 4) | Attributed to the reached declarations that may dispatch from it (decision 5): `hidden-caller` at each, none otherwise | Decision 5 keeps every declaration a value of that type may run |
    | `unbound`, `unknown`, `unproven` without candidates, `capability-absent` | Today's `name-only` cut, unchanged | Nothing changes |
@@ -233,6 +234,14 @@ After U3, about 40 cuts remain: J9 (12, owned by the relations reader), T2 (11, 
 - A Java receiver declared outside the repository becomes an answer of the port. Trace keeps today's reading until a
   record decides otherwise.
 - One port member and one `ReceiverMethod` variant are added. Both are additive, with no schema version change.
+- Follow-up 2026-11-13 (U1): the references were already bound by `into`; U1 makes the cut read those bindings, so it
+  adds no call to the binder. A consumer that must tell `generated` from `unknown` reads `bindCalls`,
+  `receiverMethods` and `settleDeclared`, as trace does, because `boundCalls` folds both. A TypeScript member that is
+  a property (T1) keeps its cut: the TypeScript pack answers `implementedDeclarations` as `unknown`, so nothing proves
+  the reached declaration does not override the bound one. An edge a receiver proof makes retires no cut; only a
+  compile-time `declaration` binding the walk follows does. Found and left for its own record: the index holds no
+  `implements` edge for a Java generic supertype, so `impact` does not bridge from such an implementation up to the
+  interface method.
 - Residual risk, accepted under the repository-compiles promise: a runtime class that routes an outside type's member to
   a repository method of the same name by reflection (an invocation handler calling `getMethod(name)` on a target of
   another type) is outside the promise, as reflection is in ADR-0029.

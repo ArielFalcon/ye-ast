@@ -17,7 +17,7 @@ import { isSeedable, type ComponentRef, type SelectedSeed } from "../../domain/c
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { EDGE_POLICY } from "../../domain/impact/edge-policy.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
-import { attributedCallCuts, contradictedCallCuts, fileCut, isJavaTypeKind, removedDeclarationCuts, unheldCut, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation, type UnresolvedUse } from "../../domain/impact/impact-cuts.ts";
+import { attributedCallCuts, contradictedCallCuts, declarationAnchor, declarationUseKey, fileCut, isJavaTypeKind, removedDeclarationCuts, unheldCut, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation, type UnresolvedUse } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
 import { impactFact, impactWalk, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
@@ -58,11 +58,11 @@ import type { EdgeCorrections, InboundEdges } from "./inbound-edges.ts";
 import { typedReferencesOf, type ReferenceProofs } from "../navigation/reference-origins.ts";
 import { unresolvedReferencesIn } from "../navigation/declaration-uses.ts";
 import { walkImpact, type Walk } from "./walk.ts";
-import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
+import type { ImplementedDeclarations, ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
 import { edgeKey, type EdgeTargets, type FollowedEdge } from "../navigation/edge-targets.ts";
-import type { AttributedCall, ReverseCalls } from "../navigation/reverse-calls.ts";
+import type { AttributedCall, ReverseCalls, SettledReference } from "../navigation/reverse-calls.ts";
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { syntaxRootCuts, distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, settledRangeChanges, targetKey } from "../navigation/root-selection.ts";
@@ -686,7 +686,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
     syntaxCallers.set(call.declaration.id, found);
   }
   const syntaxWalk = { seeds: selection.syntaxSeeds.map(({ symbol }) => symbol), callers: syntaxCallers };
-  const { inbound, walk, attributed, cuts: contradictedCuts } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls, contradictions, syntaxWalk);
+  const { inbound, walk, attributed, references, cuts: contradictedCuts } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls, contradictions, syntaxWalk);
 
   const walked = walk.reached.flatMap(({ symbol }) => indexedDeclaration(symbol) ?? []);
   const reachedIds = new Set(walked.map((symbol) => symbol.id));
@@ -701,7 +701,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
     ...unreadTypeReferenceCuts(seeds, selection.removalHolders, input.reading),
     ...contradictedCuts,
     ...attributedCallCuts(attributed.map(({ node, call: { reference } }) => ({ declaration: node, place: { ...reference, name: compactSpelling(reference.name) } }))),
-    ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(walk.expanded, reachedIds), knownPlaces, input.proofs?.bound, inbound.memberProofs(walk.expanded)),
+    ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(walk.expanded, reachedIds), knownPlaces, input.proofs?.bound, inbound.memberProofs(walk.expanded), new Set(await boundUses(references, walk.expanded, reachedIds, implemented, input.reading.origins(), input.signal))),
     ...unresolvedLinkCuts(input.unresolvedRelations ?? [], walked.filter((symbol) => walk.wholeDeclarations.has(symbol.id) && (EDGE_POLICY.typeReferences.to as readonly string[]).includes(symbol.kind)), []),
     ...removedDeclarationCuts(unresolved, selection.removed, knownPlaces, input.proofs?.bound, input.proofs?.localParameters),
     ...unreadRelationCuts(unread, new Set(walked.map((symbol) => symbol.file)), templateOwners(componentsByResource)),
@@ -744,6 +744,27 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
 }
 
 /**
+ * The uses of reached declarations the base binding settles (ADR-0079 decision 3), by declaration and occurrence. An edge
+ * settles one only while the walk follows it, from a declaration it expanded and a caller it reached. A binding that names
+ * other declarations settles one when each of them was reached, so its own answer holds the caller, or is one the
+ * declaration's language pack proves it does not implement or override, since a supertype's method the walk never reached
+ * may still dispatch to it.
+ */
+async function boundUses(references: readonly SettledReference[], expanded: ReadonlySet<GraphNodeId>, reached: ReadonlySet<GraphNodeId>, implemented: ReadonlyMap<GraphNodeId, ImplementedDeclarations>, origins: ImportOrigins | undefined, signal?: AbortSignal): Promise<string[]> {
+  const open = references.flatMap((reference) => ("away" in reference && reference.away.some(({ id }) => !reached.has(id)) && !implemented.has(reference.node.id) ? [reference.node] : []));
+  const asked = [...new Map(open.map((node) => [node.id, node])).values()];
+  const answers = asked.length === 0 || origins === undefined ? [] : await origins.implementedDeclarations(asked.map((node) => ({ file: node.file, start: node.startLine, name: node.name })), signal);
+  const declared = new Map([...implemented, ...asked.map((node, index): [GraphNodeId, ImplementedDeclarations] => [node.id, answers[index] ?? { kind: "unknown" }])]);
+  const excludes = (node: GraphSymbol, other: GraphSymbol): boolean => {
+    const answer = declared.get(node.id);
+    return answer?.kind === "declarations" && !answer.declarations.some((place) => place.file === other.file && other.startLine <= place.nameLine && place.nameLine <= other.endLine);
+  };
+  return references
+    .filter((reference) => ("via" in reference ? expanded.has(reference.node.id) && reached.has(reference.via.id) : reference.away.every((other) => reached.has(other.id) || excludes(reference.node, other))))
+    .map(({ node, occurrence }) => declarationUseKey(declarationAnchor(node.file, node.name), occurrence));
+}
+
+/**
  * Walks from the seeds with the edges as `EdgeTargets` judges them: the edges each walk read, the edges an import
  * proves reach a symbol it reached, the `typed` edges the checker made of unresolved calls, the member calls through a
  * field's or an `inject()` local's origin the base binds into a symbol it reached (`originCalls`), and the written calls the
@@ -751,8 +772,9 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
  * symbol depends on, the walk runs again, because a bound it frees, or an edge it moves, can read edges no earlier walk
  * read. `attributed` holds the unbound written calls attributed to a symbol it reached.
  */
-async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = [], reverse?: ReverseCalls, originCalls?: OriginCalls, contradictions?: ContradictedCalls, syntax?: { seeds: readonly ModelDeclaration[]; callers: ReadonlyMap<string, readonly import("./inbound-edges.ts").InboundEdge[]> }): Promise<{ inbound: InboundEdges; walk: Walk; attributed: readonly AttributedCall[]; cuts: readonly Cut[] }> {
+async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = [], reverse?: ReverseCalls, originCalls?: OriginCalls, contradictions?: ContradictedCalls, syntax?: { seeds: readonly ModelDeclaration[]; callers: ReadonlyMap<string, readonly import("./inbound-edges.ts").InboundEdge[]> }): Promise<{ inbound: InboundEdges; walk: Walk; attributed: readonly AttributedCall[]; references: readonly SettledReference[]; cuts: readonly Cut[] }> {
   const attributed: AttributedCall[] = [];
+  const references: SettledReference[] = [];
   const contradictedByEdge = new Map<string, ContradictedCall>();
   const contradicted: ContradictedCall[] = [];
   const cutKeys = new Set<string>();
@@ -794,10 +816,10 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
   for (;;) {
     const inbound = build({ dropped, into: new Map([...into].map(([id, edges]) => [id, [...edges.values()]])), settled });
     const walk = walkImpact(seeds, inbound, budget, syntax);
-    if (targets === undefined || signal?.aborted) return { inbound, walk, attributed, cuts: cuts() };
+    if (targets === undefined || signal?.aborted) return { inbound, walk, attributed, references, cuts: cuts() };
     const fresh = inbound.followed().filter(({ edge }) => !checked.has(edgeKey(edge)));
     const reached = [...seeds, ...walk.reached.flatMap(({ symbol }) => indexedDeclaration(symbol) ?? [])].filter((symbol) => !probed.has(symbol.id));
-    if (fresh.length === 0 && reached.length === 0) return { inbound, walk, attributed, cuts: cuts() };
+    if (fresh.length === 0 && reached.length === 0) return { inbound, walk, attributed, references, cuts: cuts() };
     for (const { edge } of fresh) checked.add(edgeKey(edge));
     for (const symbol of reached) probed.add(symbol.id);
     let changed = false;
@@ -843,8 +865,9 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
       const recovered = await reverse.into(reached, signal);
       for (const followed of recovered.edges) if (moveTo(followed.target, followed)) changed = true;
       attributed.push(...recovered.attributed);
+      references.push(...recovered.settled);
     }
-    if (!changed) return { inbound, walk, attributed, cuts: cuts() };
+    if (!changed) return { inbound, walk, attributed, references, cuts: cuts() };
   }
 }
 

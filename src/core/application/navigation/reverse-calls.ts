@@ -6,13 +6,14 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { CallBindings, SettledBinding, UnboundCall } from "./call-binding.ts";
+import type { ImportOrigins } from "../../ports/import-origins.port.ts";
+import { receiverSiteOf, type CallBindings, type SettledBinding, type UnboundCall } from "./call-binding.ts";
 import type { FollowedEdge } from "./edge-targets.ts";
 import type { GraphNavigation } from "./graph-navigation.ts";
 import type { BodyCalls, ReconciledCalls } from "./reconciled-calls.ts";
 import type { ModelDeclaration } from "./declaration-model.ts";
 import { ANYTHING, type Cut } from "../../domain/shared/fact.ts";
-import { placeAt } from "../../domain/impact/impact-cuts.ts";
+import { placeAt, referenceKey } from "../../domain/impact/impact-cuts.ts";
 
 export interface DeclarationCaller {
   from: GraphSymbol;
@@ -29,12 +30,20 @@ export interface AttributedCall {
 }
 
 /**
+ * An index reference `into` looked up for a reached declaration whose binding decides whether it may call it (ADR-0079
+ * decision 3), by the reference's occurrence key. `via`: the caller, when the compile-time binding is an edge into the
+ * declaration. `away`: the declarations the binding names instead, none when it binds outside the repository or to
+ * generated code, or when the declaration is among the candidates a cut attributes it to.
+ */
+export type SettledReference = { node: GraphSymbol; occurrence: string } & ({ via: GraphSymbol } | { away: readonly GraphSymbol[] });
+
+/**
  * The calls into declarations a reverse walk reached that the index does not record (ADR-0041 decision 8): the written
  * calls no record matches, `deferred` ones included, looked up by the name each spells as its callee and bound by the
  * base. A bound call is an edge into the declaration; an unbound one is a cut only when attributed to it.
  */
 export interface ReverseCalls {
-  into(nodes: readonly GraphSymbol[], signal?: AbortSignal): Promise<{ edges: readonly FollowedEdge[]; attributed: readonly AttributedCall[] }>;
+  into(nodes: readonly GraphSymbol[], signal?: AbortSignal): Promise<{ edges: readonly FollowedEdge[]; attributed: readonly AttributedCall[]; settled: readonly SettledReference[] }>;
   intoDeclarations(nodes: readonly ModelDeclaration[], signal?: AbortSignal): Promise<{ callers: readonly DeclarationCaller[]; cuts: readonly Cut[] }>;
 }
 
@@ -43,6 +52,8 @@ export interface ReverseCallsDeps {
   navigation: GraphNavigation;
   reconciled: ReconciledCalls;
   bindings: CallBindings;
+  /** The receiver methods a `declared` binding waits on, read as the base reads them, so a `generated` answer is told apart. */
+  origins: Pick<ImportOrigins, "receiverMethods">;
   importedDeclarations: (file: string) => Promise<ReadonlyMap<string, GraphSymbol>>;
   /** The read's sources a syntax reader parses, with their text. */
   sources: readonly SourceFile[];
@@ -73,19 +84,48 @@ export function unmatchedCalls({ writtenOnly, deferredOnly }: Pick<BodyCalls, "w
   return [...writtenOnly, ...deferredOnly];
 }
 
-export function createReverseCalls({ store, navigation, reconciled, bindings, importedDeclarations, sources, constructs, retained }: ReverseCallsDeps): ReverseCalls {
+/** A settled binding, and whether the receiver reading it waited on answered that generated code supplies the member. */
+interface ReadBinding {
+  binding: SettledBinding;
+  generated: boolean;
+}
+
+/**
+ * What a binding that neither reaches nor is attributed to a declaration names instead: another declaration (not the class
+ * whose constructor the declaration is), nothing when it lies outside the repository or in generated code, or the
+ * candidates it is attributed among; `undefined` when it proves nothing.
+ */
+function boundAway({ binding, generated }: ReadBinding, constructed: GraphSymbol | undefined): readonly GraphSymbol[] | undefined {
+  if (generated || binding.kind === "outside" || (binding.kind === "receiver" && binding.outside === true)) return [];
+  const target = binding.kind === "declaration" || binding.kind === "receiver" ? binding.target : undefined;
+  if (target !== undefined) return target.id === constructed?.id ? undefined : [target];
+  return binding.kind !== "declaration" && binding.attributed.length > 0 ? binding.attributed : undefined;
+}
+
+export function createReverseCalls({ store, navigation, reconciled, bindings, origins, importedDeclarations, sources, constructs, retained }: ReverseCallsDeps): ReverseCalls {
   const contents = new Map<string, string>();
   const byName = new Map<string, UnboundCall[]>();
   const aligned = new Set<string>();
-  const bound = new Map<UnboundCall, { batch: Promise<readonly SettledBinding[]>; index: number }>();
-  const bindingOf = async (call: UnboundCall): Promise<SettledBinding> => {
+  const bound = new Map<UnboundCall, { batch: Promise<readonly ReadBinding[]>; index: number }>();
+  const bindingOf = async (call: UnboundCall): Promise<ReadBinding> => {
     const { batch, index } = bound.get(call)!;
     return (await batch)[index]!;
   };
+  async function bindAll(calls: readonly UnboundCall[], signal?: AbortSignal): Promise<readonly ReadBinding[]> {
+    const read = await bindings.bindCalls(calls, signal);
+    const pending = read.flatMap((binding) => (binding.kind === "declared" ? [binding] : []));
+    const found = pending.length === 0 ? [] : await origins.receiverMethods(pending.map(receiverSiteOf), signal);
+    let next = 0;
+    return read.map((binding) => {
+      if (binding.kind !== "declared") return { binding, generated: false };
+      const answer = found[next++];
+      return { binding: bindings.settleDeclared(binding, answer), generated: answer?.kind === "generated" };
+    });
+  }
   async function bindFresh(calls: readonly UnboundCall[], signal?: AbortSignal): Promise<void> {
     const fresh = [...new Set(calls)].filter((call) => !bound.has(call));
     if (fresh.length === 0) return;
-    const settled = bindings.boundCalls(fresh, signal);
+    const settled = bindAll(fresh, signal);
     for (const [index, call] of fresh.entries()) bound.set(call, { batch: settled, index });
     await settled;
   }
@@ -208,7 +248,7 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, im
       const found: DeclarationCaller[] = [];
       const cuts: Cut[] = [];
       for (const call of calls) {
-        const binding = await bindingOf(call);
+        const { binding } = await bindingOf(call);
         const declaration = binding.kind === "receiver" ? binding.declaration : undefined;
         if (declaration === undefined) {
           if (binding.kind === "unbound" || (binding.kind === "receiver" && !binding.outside)) cuts.push({ kind: "unresolved-link", reason: "receiver-unproven", at: [placeAt(call.reference.file, call.reference.line, call.reference.name), ...nodes.filter(({ name }) => name === lookupName(call.reference.file, call.reference.name)).map((node) => placeAt(node.file, node.startLine, node.path ?? node.name))], reach: ANYTHING });
@@ -229,18 +269,27 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, im
       await bindFresh(candidates.flatMap(({ calls }) => calls), signal);
       const edges: FollowedEdge[] = [];
       const attributed: AttributedCall[] = [];
+      const settled: SettledReference[] = [];
       for (const { node, calls } of candidates) {
+        const constructed = typeConstructed(node);
         for (const call of calls) {
-          const binding = await bindingOf(call);
+          const read = await bindingOf(call);
+          const { binding } = read;
+          const occurrence = referenceKey(call.reference);
           if (reaches(binding, call, node)) {
             const edge: GraphEdge = { source: call.body.id, target: node.id, kind: call.reference.kind, line: call.reference.line, column: call.reference.column, confidence: null, provenance: null, synthesizedBy: null, resolvedFrom: null };
             edges.push({ edge, source: call.body, target: node });
+            if (occurrence !== undefined && binding.kind === "declaration") settled.push({ node, occurrence, via: call.body });
           } else if ((binding.kind === "unbound" || binding.kind === "receiver") && binding.attributed.some((symbol) => symbol.id === node.id)) {
             attributed.push({ node, call });
+            if (occurrence !== undefined) settled.push({ node, occurrence, away: [] });
+          } else if (occurrence !== undefined) {
+            const away = boundAway(read, constructed);
+            if (away !== undefined) settled.push({ node, occurrence, away });
           }
         }
       }
-      return { edges, attributed };
+      return { edges, attributed, settled };
     },
   };
 }

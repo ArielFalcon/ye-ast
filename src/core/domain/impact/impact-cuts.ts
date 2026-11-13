@@ -176,7 +176,8 @@ function namesDeclaration(reference: UnresolvedUse, declaration: WalkedDeclarati
  * declaration cuts the caller's file instead, led by it, so the name it might reach is not left out. A file that loads
  * modules by a name the index cannot resolve may load anything and is a cut of its own, unless every dynamic load the
  * reader found on that file and line has a string-literal specifier, which names its module like a static import; a file
- * the reader did not read keeps the cut.
+ * the reader did not read keeps the cut. A qualified reference with no candidate cuts nothing when the base binds it away
+ * from every walked declaration it might reach (`boundAway`, by `declarationUseKey`; ADR-0079 decision 3).
  */
 export function unresolvedLinkCuts(
   references: readonly UnresolvedUse[],
@@ -186,6 +187,7 @@ export function unresolvedLinkCuts(
   known: ReadonlySet<string> = new Set(),
   bound: ReadonlyMap<string, string> = new Map(),
   members?: MemberReferenceProofs,
+  boundAway: ReadonlySet<string> = new Set(),
 ): Cut[] {
   const unique = uniqueReferenceKeys(references);
   const byName = Map.groupBy(walked, (declaration) => declaration.name);
@@ -218,7 +220,8 @@ export function unresolvedLinkCuts(
       pointingCache.set(pointingKey, pointing);
     }
     pointing = pointing.filter((declaration) => mayReach(reference, declaration.file));
-    const attributing = !isBareName(reference.name) && (reference.candidates?.length ?? 0) === 0 ? [] : pointing.filter((declaration) => namesDeclaration(reference, declaration, bound, proofKey));
+    const unnamed = !isBareName(reference.name) && (reference.candidates?.length ?? 0) === 0;
+    const attributing = unnamed ? [] : pointing.filter((declaration) => namesDeclaration(reference, declaration, bound, proofKey));
     const actual = proofKey === undefined ? undefined : members?.targets.get(proofKey);
     const settledAt = (declaration: WalkedDeclaration): boolean => {
       if (proofKey === undefined) return false;
@@ -230,7 +233,8 @@ export function unresolvedLinkCuts(
       if (settledAt(declaration)) continue;
       hidden.set(key, (hidden.get(key) ?? new Set()).add(place));
     }
-    const decided = pointing.some(settledAt);
+    const boundElsewhere = unnamed && proofKey !== undefined && pointing.every((declaration) => boundAway.has(declarationUseKey(declarationAnchor(declaration.file, declaration.name), proofKey)));
+    const decided = pointing.some(settledAt) || boundElsewhere;
     if (attributing.length === 0 && pointing.length > 0 && !decided) {
       unattributed.set(reference.file, (unattributed.get(reference.file) ?? new Set()).add(named));
       const names = unattributedNames.get(reference.file) ?? new Set();

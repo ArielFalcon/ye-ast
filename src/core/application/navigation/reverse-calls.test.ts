@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import type { CallBindings, SettledBinding, UnboundCall } from "./call-binding.ts";
+import type { BindingCall, CallBinding, CallBindings, SettledBinding, UnboundCall } from "./call-binding.ts";
+import type { ReceiverMethod } from "../../ports/import-origins.port.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "./fake-code-graph.testing.ts";
 import { createGraphNavigation } from "./graph-navigation.ts";
 import type { BodyCalls, OwnedCall, ReconciledCalls } from "./reconciled-calls.ts";
@@ -20,7 +21,7 @@ interface Written {
  * `into(nodes)` over written calls no record matches, each bound by `bind` (by spelling), with `imports` the local names
  * each file's imports bind and `text` each source's content (by default its calls' spellings).
  */
-function setup(nodes: readonly FakeNode[], edges: readonly FakeEdge[], written: readonly Written[], bind: (call: UnboundCall) => SettledBinding, imports: Readonly<Record<string, Readonly<Record<string, string>>>> = {}, text: Readonly<Record<string, string>> = {}, retained?: ReverseCallsDeps["retained"]) {
+function setup(nodes: readonly FakeNode[], edges: readonly FakeEdge[], written: readonly Written[], bind: (call: UnboundCall) => CallBinding, imports: Readonly<Record<string, Readonly<Record<string, string>>>> = {}, text: Readonly<Record<string, string>> = {}, retained?: ReverseCallsDeps["retained"], receiverMethods: readonly ReceiverMethod[] = []) {
   const store = fakeCodeGraph(nodes, edges);
   const navigation = createGraphNavigation(store, () => false);
   const read: string[] = [];
@@ -34,13 +35,17 @@ function setup(nodes: readonly FakeNode[], edges: readonly FakeEdge[], written: 
       return { ...empty, writtenOnly: mine.filter((call) => call.deferred !== true), deferredOnly: mine.filter((call) => call.deferred === true) };
     },
   };
-  const bindings = { boundCalls: async (calls: readonly UnboundCall[]) => calls.map(bind) } as unknown as CallBindings;
+  const bound: string[] = [];
+  const bindings = {
+    bindCalls: async (calls: readonly UnboundCall[]) => calls.map((call) => (bound.push(call.reference.name), bind(call))),
+    settleDeclared: (): SettledBinding => ({ kind: "unbound", form: "member", candidates: [], attributed: [] }),
+  } as unknown as CallBindings;
   const files = [...new Set(nodes.map(({ file }) => file))];
   const sources = files.map((path) => ({ path, content: text[path] ?? written.filter((call) => nodes.find(({ id }) => id === call.body)?.file === path).map(({ name }) => `${name}();`).join("\n") }));
   const importedDeclarations = async (file: string) => new Map(Object.entries(imports[file] ?? {}).map(([local, id]) => [local, store.symbolsByIds([id as GraphNodeId])[0]!]));
-  const reverse = createReverseCalls({ store, navigation, reconciled, bindings, importedDeclarations, sources, constructs: async () => false, ...(retained === undefined ? {} : { retained }) });
+  const reverse = createReverseCalls({ store, navigation, reconciled, bindings, origins: { receiverMethods: async () => receiverMethods }, importedDeclarations, sources, constructs: async () => false, ...(retained === undefined ? {} : { retained }) });
   const symbol = (id: string): GraphSymbol => store.symbolsByIds([id as GraphNodeId])[0]!;
-  return { reverse, symbol, read };
+  return { reverse, symbol, read, bound };
 }
 
 const declaration = (target: GraphSymbol): SettledBinding => ({ kind: "declaration", target, link: "import" });
@@ -158,4 +163,33 @@ test("a retained call whose body the index no longer holds realigns its source i
 
   assert.deepEqual(found.edges.map(({ source, edge }) => `${source.id}@${edge.line}`), ["a2@3"]);
   assert.deepEqual(moved.read.filter((entry) => !entry.startsWith("owned ")), ["a2"]);
+});
+
+test("an index reference is settled for a reached declaration by what its binding names instead, and never when the binding proves nothing", async () => {
+  const nodes = [fakeNode("Api.get", "method", "src/api.ts", 2, 4, "get"), fakeNode("Store.get", "method", "src/store.ts", 2, 4, "get"), fakeNode("C", "class", "src/c.ts", 1, 9, "C"), fakeNode("C.one", "method", "src/c.ts", 2, 3, "constructor"), fakeNode("C.two", "method", "src/c.ts", 4, 5, "constructor"), fakeNode("use", "function", "src/use.ts", 1, 9)];
+  const edges: FakeEdge[] = [{ from: "C", to: "C.one", kind: "contains" }, { from: "C", to: "C.two", kind: "contains" }];
+  const written: Written[] = [{ body: "use", line: 2, name: "Paths.get" }, { body: "use", line: 3, name: "repo.get" }, { body: "use", line: 4, name: "store.get" }, { body: "use", line: 5, name: "row.get" }, { body: "use", line: 6, name: "x.get" }, { body: "use", line: 7, name: "C", kind: "instantiates" }];
+  const { reverse, symbol } = setup(nodes, edges, written, (call): CallBinding => {
+    const byLine: Record<number, CallBinding> = {
+      2: { kind: "outside", form: "chain", origin: { kind: "external", module: "java.nio.file" } },
+      3: { kind: "declared", member: "get", form: "member", call: call as BindingCall },
+      4: declaration(symbol("Store.get")),
+      5: { kind: "unbound", form: "member", candidates: [symbol("Api.get"), symbol("Store.get")], attributed: [] },
+      6: { kind: "receiver", proof: { link: "none" }, candidates: [], attributed: [symbol("Store.get")] },
+      7: declaration(symbol("C")),
+    };
+    return byLine[call.reference.line]!;
+  }, {}, {}, undefined, [{ kind: "generated" }]);
+
+  const { settled } = await reverse.into([symbol("Api.get"), symbol("C.one")]);
+  assert.deepEqual(settled.map((entry) => `${entry.node.id}@${JSON.parse(entry.occurrence)[1]}:${"away" in entry ? entry.away.map(({ id }) => id).join(",") : `via ${entry.via.id}`}`), ["Api.get@2:", "Api.get@3:", "Api.get@4:Store.get", "Api.get@6:Store.get"]);
+});
+
+test("a written call whose name no reached declaration is looked up by is never passed to the binder", async () => {
+  const nodes = [fakeNode("fetch", "function", "src/api.ts", 1, 3), fakeNode("a", "constant", "src/a.ts", 2, 4)];
+  const written: Written[] = [{ body: "a", line: 3, name: "api.fetch" }, { body: "a", line: 4, name: "api.store" }];
+  const { reverse, symbol, bound } = setup(nodes, [], written, () => declaration(symbol("fetch")));
+  await reverse.into([symbol("fetch")]);
+
+  assert.deepEqual(bound, ["api.fetch"]);
 });

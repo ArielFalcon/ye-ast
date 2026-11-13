@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isJavaTypeKind, referenceKey, removedDeclarationCuts, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
+import { declarationUseKey, isJavaTypeKind, referenceKey, removedDeclarationCuts, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
 
 const SAVE: WalkedDeclaration = { file: "src/Repo.java", name: "save", kind: "method", qualifiedName: "Repo::save" };
 
@@ -292,4 +292,15 @@ test("a joined member target excludes only a distinct expanded declaration and e
   const neighbor = { ...reference, column: 10 };
   assert.deepEqual(unresolvedLinkCuts([neighbor], [SAVE], [], new Set(), new Set(), new Map(), members), baseline);
   assert.deepEqual(unresolvedLinkCuts([reference, reference], [SAVE], [], new Set(), new Set(), new Map(), members), baseline);
+});
+
+test("a qualified reference with no candidate cuts nothing only when the base binds it away from every walked declaration of its name, and one with candidates keeps its cut", () => {
+  const other: WalkedDeclaration = { file: "src/Store.java", name: "save", kind: "method", qualifiedName: "Store::save" };
+  const unnamed = use("repo.save", "calls");
+  const named = qualified("repo.save", "calls", ["Elsewhere::save"], "src/Use.java", 5);
+  const awayFrom = (declarations: readonly WalkedDeclaration[]) => new Set([unnamed, named].flatMap((reference) => declarations.map(({ file, name }) => declarationUseKey(`${file}::${name}`, referenceKey(reference)!))));
+  const reasons = (bound: ReadonlySet<string>) => unresolvedLinkCuts([unnamed, named], [SAVE, other], [], new Set(), new Set(), new Map(), undefined, bound).map(({ reason, at }) => `${reason} ${at.join(" ")}`);
+
+  assert.deepEqual(reasons(awayFrom([SAVE, other])), ["name-only src/Use.java src/Use.java:5 repo.save"]);
+  assert.deepEqual(reasons(awayFrom([SAVE])), ["name-only src/Use.java src/Use.java:3 repo.save src/Use.java:5 repo.save"]);
 });
