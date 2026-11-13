@@ -331,7 +331,7 @@ export const partSchema = z.discriminatedUnion("kind", [
     alternatives: z.array(ids.anchor).exactOptional(),
     unresolvedEffects: z.array(unresolvedCallSiteSchema).exactOptional(),
     effects: z.array(z.discriminatedUnion("kind", [
-      z.strictObject({ kind: z.literal("http"), line: count, column: count.exactOptional(), target: httpTarget, deferred: z.literal(true).exactOptional(), place: ids.evidence.exactOptional() }),
+      z.strictObject({ kind: z.literal("http"), line: count, column: count.exactOptional(), target: httpTarget, authority: z.literal("undecided").exactOptional(), deferred: z.literal(true).exactOptional(), place: ids.evidence.exactOptional() }),
       z.strictObject({ kind: z.literal("message"), line: count, column: count.exactOptional(), target: eventTarget, deferred: z.literal(true).exactOptional(), place: ids.evidence.exactOptional() }),
       z.strictObject({ kind: z.literal("data"), line: count, column: count.exactOptional(), operation: z.string(), access: z.enum(["read", "write", "unknown"]), target: z.strictObject({ kind: z.enum(["entity", "table", "collection"]), name: z.string() }).exactOptional(), place: ids.evidence.exactOptional() }),
     ])).exactOptional(),

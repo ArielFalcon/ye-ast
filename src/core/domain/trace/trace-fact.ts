@@ -31,7 +31,7 @@ export type DataEffect = { kind: "data"; line: number; column?: number; operatio
  * optional start column in the step's file. `deferred` marks one a function value makes that a registered combinator takes:
  * it runs later, if at all.
  */
-export type TraceEffect = DataEffect | { kind: "http"; line: number; column?: number; target: HttpTarget; deferred?: true } | { kind: "message"; line: number; column?: number; target: EventTarget; deferred?: true };
+export type TraceEffect = DataEffect | { kind: "http"; line: number; column?: number; target: HttpTarget; authority?: "undecided"; deferred?: true } | { kind: "message"; line: number; column?: number; target: EventTarget; deferred?: true };
 
 /**
  * Calls that leave the repository, once per name. `import` names the package a file imports the callee from, `global` a

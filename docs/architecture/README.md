@@ -84,6 +84,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0065](adr/0065-a-link-marks-the-literal-segment-a-producer-variable-cannot-parse.md) | A link keeps its place and gains a `drift` field when a literal request segment fills a producer path variable whose declared parse-strict type (`UUID`, integers, floats) cannot parse it; any other type or framework states no type and no mark | Accepted |
 | [0066](adr/0066-the-mcp-answers-list-no-duplicate-and-count-template-noise.md) | The answers list no duplicate unresolved entry, count template and receiver cuts by cause, and refuse unusable controls | Accepted |
 | [0067](adr/0067-record-and-lombok-members-and-mybatis-statements-are-settled-from-the-snapshot.md) | A record accessor and a plain-Lombok accessor, builder setter or `build()` is a settled `generated` receiver member (no step, no cut); a MyBatis mapper call is a data effect from its annotation or XML statement, or an `effect-unplaced` cut with its cause | Accepted |
+| [0069](adr/0069-a-request-whose-route-is-stated-after-an-undecided-base-is-a-placed-effect.md) | A call site that states one method and route after a base the snapshot does not decide is a placed `http` effect marked `authority: "undecided"`, not `effect-unplaced`; a wrapper body adds no cut when its callers are placed | Accepted |
 
 ## Designs (RFC)
 

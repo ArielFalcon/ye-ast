@@ -217,6 +217,13 @@ test("a trace summary lists every effect first, in pre-order, each with its targ
   assert.ok(text.includes("effects (2): http POST /orders/checkout base https://api at src/order.ts:15, message nats orders.created at src/tax.ts:7\nbranches are not evaluated"), text);
 });
 
+test("a trace summary marks an effect whose route is stated after an undecided base, so a relative path is never read as a proven destination", () => {
+  const fact = traceFact();
+  const steps = fact.status === "unknown" ? [] : fact.value.steps.map((step) => (step.id === 1 ? { ...step, effects: [{ kind: "http" as const, line: 15, target: { method: "POST" as const, path: "/orders/checkout" }, authority: "undecided" as const }] } : step));
+  const text = renderTrace({ ...fact, value: { ...(fact as { value: TraceValue }).value, steps } } as Fact<TraceValue>);
+  assert.ok(text.includes("effects (1): http POST /orders/checkout base-url undecided at src/order.ts:15"), text);
+});
+
 test("a trace summary with no effect says so, never leaving the line out", () => {
   assert.ok(renderTrace(traceFact()).includes("\neffects (0)\n"), renderTrace(traceFact()));
 });
