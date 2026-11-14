@@ -90,8 +90,8 @@ The list is closed. Every option comes from a fact with evidence; the engine nev
 | `membership`, one per name (`membership:name:<name>`) | an outward name has at least one candidate clone | the clones serving that name, each with its basis (`nameCandidates`) | the strongest basis; two at one basis recommend none |
 | `membership`, one per clone (`membership:clone:<repo>`) | a candidate clone the request passed names nothing | keep it in the workspace, or drop it | none |
 | `repository` | an outward name no clone given serves (`unserved`) | free text: a local path or a URL; "leave it unserved" | none: the engine cannot know where a name lives |
-| `library` | a call-site cut names a library (`via`, `unresolvedCallSite`) | the clones given, each as a candidate to confirm; free text | none: no fact states which clone is the library a FQN names |
-| `gateway` | a prefix appears in call sites, matches no repository by name, and `inferGateways` did not infer it (zero or two or more matches) | the repositories whose routes match a call another repository makes under the prefix once it is stripped (`matchBehindGateway`); "leave it unmatched" | none: zero or two or more matches, by construction |
+| `library` | a call-site cut names a library (`via`, `unresolvedCallSite`) | the clones a dependency of the calling repository names, each as a candidate to confirm with both ends as evidence; free text | none: no fact states which clone is the library a FQN names |
+| `gateway` | a path prefix the join left unserved (no link, no repository id, no event) and at least one other repository's routes take a call under it once it is stripped (`servedBehindGateway`) | the repositories whose routes match a call another repository makes under the prefix once it is stripped; leaving the decision unanswered leaves the prefix unmatched | none: two or more matches, or one the join could not settle, by construction |
 | `revision` | a repository is read at `HEAD` while the trigger's line differs | the branches the remote's listing states; free text | the branch with the trigger's line name; otherwise the remote's default branch; otherwise none |
 | `remote` | a repository is declared without a `remote` | the clone's own remote URLs as evidence; free text | none: a source of truth is a security decision, confirmed never preselected |
 | `trust` | a repository of the workspace has no trust record | `trusted`, `untrusted` | none, by design |
@@ -206,9 +206,11 @@ the host's.
   membership is not asked again. The recommendation is the unique strongest basis among the options still asked; two at
   the strongest basis recommend none, and a chosen option records its `basis`.
 - `repository` is one free-text decision per unserved name, with every place that writes it. A prefix a declared gateway
-  routes was answered by that gateway and is no repository decision; a prefix the engine only inferred (route overlap)
-  still leaves it, because only a declaration states where the name lives. A name written twice with different kinds is
-  one decision with both places. On the probe workspace the 121 names no repository serves are decisions, third-party
+  routes was answered by that gateway and is no repository decision. A name written twice with different kinds is
+  one decision with both places. Every decision reads what the join left unserved (`unserved`), never the call sites
+  again: a name a link serves, an internal one included, or a repository id names, is no gap (amended 2026-11-14, owner:
+  "Acepto" to the transversal fix plan, unit U6). An in-process event destination is no outward name, since its protocol
+  delivers only inside the repository, so it is never unserved (owner decision D4). On the probe workspace the 121 names no repository serves are decisions, third-party
   coordinates included: the set is complete by design, and the harness decides what it renders.
 - `repository` decisions carry `outwardKinds`, the outward kinds their subject is written with, sorted. The fact still
   states every gap; the MCP answer is what turns the set into a form: it groups the gaps by kind (trust, gateway,
@@ -218,14 +220,19 @@ the host's.
 
   Historical presentation: `detail` is now rejected. The current [MCP contract](0005-transports.md#mcp-mvp-in-process-stdio) uses
   `mode: "details"` to explain recorded gaps and `mode: "full"` for exhaustive structured data.
-- `gateway` is one decision per prefix no repository id names and no gateway in force routes. Its options are the
-  repositories whose routes match a call under the prefix once it is stripped, with the matched route as evidence; there
-  is no recommendation, because zero or two or more matches are what leaves the gap. The caller's own repository is
-  never an option, as `inferGateways` excludes it.
+- `gateway` is one decision per unserved path prefix that at least one other repository's routes take once it is
+  stripped, and it replaces the `repository` decision of that prefix. Its options are those repositories, with the
+  matched route as evidence; there is no recommendation, because two or more matches (or one the join could not settle)
+  are what leaves the gap. The caller's own repository is never an option, as `inferGateways` excludes it. An unserved
+  prefix no route takes is the `repository` decision, answerable by free text, so no decision is raised with no way to
+  answer it. "Leave it unmatched" is not an option value: no fact states it and the decision is optional, so leaving it
+  unanswered is that answer (amended 2026-11-14, unit U6).
 - `trust` is one required decision per repository with no record, offering both modes and no recommendation. The answer
   is applied by the existing `init --trust <mode> <repo>`, never by the manifest (open question 11, accepted).
 - Slice 1 (`library`): one decision per distinct library a cut names (`library:<fqn>`), the places of every cut naming it
-  as evidence, every clone given as an option, none recommended, free text allowed. A cut names a library through
+  as evidence, as options the clones a dependency of the calling repository names (the candidate's evidence cites both
+  ends; amended 2026-11-14, unit U6: every clone given was offered with no evidence before), none recommended, free text
+  allowed. A cut names a library through
   `unresolvedPlace`, which already carries both guards (target unknown, `via` present). The kind has no write path that
   closes it yet: the declaration stores no per-library mapping and the options are clones already read, so the next query
   derives it again. It stays as the discovery answer the harness consumes; closing it needs a declaration field the join

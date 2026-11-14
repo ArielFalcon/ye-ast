@@ -11,6 +11,10 @@ function outward(name: string, kind: OutwardName["kind"] = "http-host", evidence
   return { name, kind, evidence: evidence.map((place) => ({ ...place, repo: "webapp" })) };
 }
 
+function unservedAt(name: string, kind: OutwardName["kind"], ...places: { repo: string; path: string; line: number }[]): RepositoryOutwardName {
+  return { name, kind, evidence: places };
+}
+
 function candidate(name: string, repo: string, basis: NameCandidate["basis"] = "exact-name"): NameCandidate {
   return { name, repo, basis, evidence: [{ path: `src/${repo}.ts`, line: 1, repo }] };
 }
@@ -105,17 +109,6 @@ test("a declared gateway answers the prefix's unserved name", () => {
   assert.deepEqual(ids(set), []);
 });
 
-test("an inferred gateway leaves the prefix's repository decision, since only a declared gateway answers it", () => {
-  const set = decisionsOf(
-    input({
-      repositories: [repository("webapp", { callSites: [call("webapp", "/orders-api/orders")] }), repository("orders", { names: [outward("orders")], entrypoints: [route("/orders")] })],
-      unserved: [outward("orders-api", "path-prefix")],
-    }),
-  );
-
-  assert.deepEqual(ids(set), ["repository:orders-api"]);
-});
-
 test("an unserved name is one free-text decision carrying the places that write it", () => {
   const set = decisionsOf(input({ unserved: [outward("geo-api", "http-host", [{ path: "src/geo.ts", line: 4 }])] }));
 
@@ -153,23 +146,31 @@ test("one name written with two kinds is one decision that records both, sorted"
   assert.deepEqual(byId(set).get("repository:geo-api")?.outwardKinds, ["http-host", "path-prefix"]);
 });
 
-test("a cut that names a library is one decision offering every clone, none recommended, with free text", () => {
+test("a cut that names a library offers only a clone the caller's own dependency names, with that evidence, and none recommended", () => {
+  const dependency: OutwardName = { name: "orders-lib", kind: "dependency", evidence: [{ path: "pom.xml", line: 3 }] };
+  const evidence = [{ path: "pom.xml", line: 3, repo: "webapp" }, { path: "pom.xml", line: 1, repo: "orders" }];
   const set = decisionsOf(
     input({
       repositories: [
-        repository("webapp", { names: [outward("orders")], callSites: [cut("webapp", "com.acme.OrdersClient")] }),
-        repository("orders", { names: [outward("orders")] }),
-        repository("billing", { names: [outward("orders")] }),
+        repository("webapp", { names: [dependency], callSites: [cut("webapp", "com.acme.OrdersClient")] }),
+        repository("geo", { callSites: [cut("geo", "com.acme.GeoClient", { path: "geo/src/app.ts", line: 4 })] }),
+        repository("orders"),
+        repository("billing"),
       ],
+      candidates: [{ name: "orders-lib", repo: "orders", basis: "artifact", evidence }],
+      confirmed: ["geo", "orders", "billing"],
     }),
   );
 
-  assert.deepEqual(ids(set), ["library:com.acme.OrdersClient"]);
-  const decision = byId(set).get("library:com.acme.OrdersClient");
-  assert.deepEqual(decision?.evidence, [{ path: "webapp/src/app.ts", line: 7, repo: "webapp" }]);
-  assert.deepEqual(options(decision), ["billing", "orders", "webapp"]);
-  assert.equal(decision?.allowsFreeText, true);
-  assert.equal(decision?.required, false);
+  assert.deepEqual(ids(set), ["library:com.acme.GeoClient", "library:com.acme.OrdersClient"]);
+  const named = byId(set).get("library:com.acme.OrdersClient");
+  assert.deepEqual(named?.evidence, [{ path: "webapp/src/app.ts", line: 7, repo: "webapp" }]);
+  assert.deepEqual(options(named), ["orders(artifact)"]);
+  assert.deepEqual(named?.options[0]?.evidence, [evidence[1], evidence[0]]);
+  assert.equal(named?.allowsFreeText, true);
+  assert.equal(named?.required, false);
+  assert.deepEqual(options(byId(set).get("library:com.acme.GeoClient")), []);
+  assert.equal(byId(set).get("library:com.acme.GeoClient")?.allowsFreeText, true);
 });
 
 test("two cuts that name one library are one decision with both places", () => {
@@ -210,12 +211,13 @@ test("a call site that resolves, or a cut that names no library, is no library d
   assert.deepEqual(ids(set), []);
 });
 
-test("a prefix that names a repository is not a gateway decision", () => {
+test("a prefix the join served raises no gateway decision, however its calls read", () => {
   const set = decisionsOf(
     input({
       repositories: [
-        repository("webapp", { names: [outward("orders")], callSites: [call("webapp", "/orders-api/refunds")] }),
-        repository("orders-api", { names: [outward("orders")], entrypoints: [route("/orders")] }),
+        repository("webapp", { names: [outward("orders")], callSites: [call("webapp", "/api/owners"), call("webapp", "/orders-api/refunds"), call("webapp", "http://localhost:9966/legacy/thing")] }),
+        repository("orders-api", { names: [outward("orders")], entrypoints: [route("/refunds")] }),
+        repository("owners", { names: [outward("orders")], entrypoints: [route("/owners")] }),
       ],
     }),
   );
@@ -223,44 +225,28 @@ test("a prefix that names a repository is not a gateway decision", () => {
   assert.deepEqual(ids(set), []);
 });
 
-test("a prefix inferGateways infers is not a gateway decision", () => {
-  const set = decisionsOf(
-    input({
-      repositories: [
-        repository("webapp", { names: [outward("orders")], callSites: [call("webapp", "/orders-api/orders")] }),
-        repository("orders", { names: [outward("orders")], entrypoints: [route("/orders")] }),
-      ],
-    }),
-  );
-
-  assert.deepEqual(ids(set), []);
-});
-
-test("an absolute URL proposes its path prefix, not its scheme", () => {
-  const set = decisionsOf(input({ repositories: [repository("webapp", { callSites: [call("webapp", "http://localhost:9966/api/owners")] })] }));
-  assert.ok(byId(set).has("gateway:api"));
-  assert.equal(byId(set).has("gateway:http:"), false);
-});
-
-test("a prefix no route serves is a gateway decision with no option, citing the calls under it", () => {
+test("an unserved prefix a repository serves behind it is one gateway decision offering that repository, citing the calls under it, and no repository decision", () => {
+  const places = [{ repo: "webapp", path: "webapp/src/app.ts", line: 7 }];
   const set = decisionsOf(
     input({
       repositories: [
         repository("webapp", { names: [outward("orders")], callSites: [call("webapp", "/legacy/thing", "POST")] }),
-        repository("orders", { names: [outward("orders")], entrypoints: [route("/orders")] }),
+        repository("orders", { names: [outward("orders")], entrypoints: [route("/thing", 31, "POST")] }),
       ],
+      unserved: [unservedAt("legacy", "path-prefix", ...places)],
     }),
   );
 
   const decision = byId(set).get("gateway:legacy");
   assert.deepEqual(ids(set), ["gateway:legacy"]);
-  assert.deepEqual(decision?.options, []);
+  assert.deepEqual(options(decision), ["orders"]);
+  assert.deepEqual(decision?.options[0]?.evidence, [{ path: "src/thing.java", line: 31, repo: "orders" }]);
   assert.equal(decision?.allowsFreeText, false);
   assert.equal(decision?.required, false);
-  assert.deepEqual(decision?.evidence, [{ path: "webapp/src/app.ts", line: 7, repo: "webapp" }]);
+  assert.deepEqual(decision?.evidence, places);
 });
 
-test("a prefix two repositories match offers both and recommends none", () => {
+test("an unserved prefix two repositories match offers both and recommends none", () => {
   const set = decisionsOf(
     input({
       repositories: [
@@ -268,10 +254,43 @@ test("a prefix two repositories match offers both and recommends none", () => {
         repository("shop", { names: [outward("orders")], entrypoints: [route("/orders", 11)] }),
         repository("billing", { names: [outward("orders")], entrypoints: [route("/orders", 22)] }),
       ],
+      unserved: [unservedAt("api", "path-prefix", { repo: "webapp", path: "webapp/src/app.ts", line: 7 })],
     }),
   );
 
   assert.deepEqual(options(byId(set).get("gateway:api")), ["billing", "shop"]);
+});
+
+test("an unserved prefix no other repository serves behind it, the caller's own route included, is one repository decision and no gateway one", () => {
+  const set = decisionsOf(
+    input({
+      repositories: [repository("orders-svc", { callSites: [call("orders-svc", "/orders-api/orders/{id}"), call("orders-svc", "/legacy/thing")], entrypoints: [route("/orders/{id}")] })],
+      unserved: [unservedAt("orders-api", "path-prefix", { repo: "orders-svc", path: "orders-svc/src/app.ts", line: 7 }), unservedAt("legacy", "path-prefix", { repo: "orders-svc", path: "orders-svc/src/app.ts", line: 7 })],
+      confirmed: ["orders-svc"],
+    }),
+  );
+
+  assert.deepEqual(ids(set), ["repository:legacy", "repository:orders-api"]);
+  assert.deepEqual(byId(set).get("repository:orders-api")?.options, []);
+  assert.equal(byId(set).get("repository:orders-api")?.allowsFreeText, true);
+});
+
+test("a name written as a prefix a repository serves and as a host is one gateway decision and one repository decision for the host alone", () => {
+  const set = decisionsOf(
+    input({
+      repositories: [repository("webapp", { callSites: [call("webapp", "/shipping/rates")] }), repository("rates", { entrypoints: [route("/rates")] })],
+      unserved: [
+        unservedAt("shipping", "path-prefix", { repo: "webapp", path: "webapp/src/app.ts", line: 7 }),
+        unservedAt("shipping", "http-host", { repo: "webapp", path: "webapp/src/host.ts", line: 2 }),
+      ],
+      confirmed: ["rates"],
+    }),
+  );
+
+  assert.deepEqual(ids(set), ["gateway:shipping", "repository:shipping"]);
+  assert.deepEqual(byId(set).get("gateway:shipping")?.evidence, [{ repo: "webapp", path: "webapp/src/app.ts", line: 7 }]);
+  assert.deepEqual(byId(set).get("repository:shipping")?.outwardKinds, ["http-host"]);
+  assert.deepEqual(byId(set).get("repository:shipping")?.evidence, [{ repo: "webapp", path: "webapp/src/host.ts", line: 2 }]);
 });
 
 test("a repository without a trust record is a required decision offering both modes, and one with a record is not", () => {
@@ -309,18 +328,6 @@ test("a name equal to a clone id gives two decisions, one per subject space", ()
   const set = decisionsOf(input({ repositories: [repository("webapp"), repository("orders")], candidates: [candidate("orders", "orders-api")] }));
 
   assert.deepEqual(ids(set), ["membership:clone:orders", "membership:name:orders"]);
-});
-
-test("a prefix whose only match is the caller's own route offers no option", () => {
-  const set = decisionsOf(
-    input({
-      repositories: [repository("orders-svc", { callSites: [call("orders-svc", "orders-api/orders/{id}")], entrypoints: [route("/orders/{id}")] })],
-    }),
-  );
-
-  const decision = byId(set).get("gateway:orders-api");
-  assert.ok(decision !== undefined);
-  assert.deepEqual(options(decision), []);
 });
 
 test("a repository the query could not read at the trigger's line is a revision decision recommending the branch it pinned", () => {
@@ -413,7 +420,7 @@ test("decision evidence retains the owners of identical call and route coordinat
   const shared = { path: "src/app.ts", line: 7 };
   const invoke = (repo: string): CallSite => ({ ...call(repo, "/api/orders"), file: shared.path, line: shared.line });
   const handler = { ...route("/orders"), handler: { path: shared.path, line: shared.line, symbol: "App.run" } };
-  const set = decisionsOf(input({ repositories: [repository("webapp", { callSites: [invoke("webapp"), cut("webapp", "Library", shared)] }), repository("other", { callSites: [invoke("other"), cut("other", "Library", shared)] }), repository("server-a", { entrypoints: [handler] }), repository("server-b", { entrypoints: [handler] })] }));
+  const set = decisionsOf(input({ repositories: [repository("webapp", { callSites: [invoke("webapp"), cut("webapp", "Library", shared)] }), repository("other", { callSites: [invoke("other"), cut("other", "Library", shared)] }), repository("server-a", { entrypoints: [handler] }), repository("server-b", { entrypoints: [handler] })], unserved: [unservedAt("api", "path-prefix", { ...shared, repo: "other" }, { ...shared, repo: "webapp" })] }));
   assert.deepEqual(byId(set).get("library:Library")?.evidence, [{ ...shared, repo: "other" }, { ...shared, repo: "webapp" }]);
   const gateway = byId(set).get("gateway:api");
   assert.deepEqual(gateway?.evidence, [{ ...shared, repo: "other" }, { ...shared, repo: "webapp" }]);
@@ -431,7 +438,13 @@ test("a prefix a call states after an undecided base is a gateway decision", () 
     ...cut("webapp"),
     stated: { method: "POST", expressions: [[{ kind: "unknown", cause: "destination-undecidable", evidence: [] }, { kind: "text", text: "/legacy/thing" }]] },
   };
-  const set = decisionsOf(input({ repositories: [repository("webapp", { callSites: [undecided] }), repository("orders", { entrypoints: [route("/orders")] })] }));
+  const set = decisionsOf(
+    input({
+      repositories: [repository("webapp", { callSites: [undecided] }), repository("orders", { entrypoints: [route("/thing", 10, "POST")] })],
+      unserved: [unservedAt("legacy", "path-prefix", { path: "webapp/src/app.ts", line: 7, repo: "webapp" })],
+    }),
+  );
 
+  assert.deepEqual(options(byId(set).get("gateway:legacy")), ["orders"]);
   assert.deepEqual(byId(set).get("gateway:legacy")?.evidence, [{ path: "webapp/src/app.ts", line: 7, repo: "webapp" }]);
 });

@@ -307,7 +307,6 @@ function reconstruct(source: ComposedSource, t: Tables): Fact<unknown> {
           })),
           repositories: context.repositories.map((e) => ({ repo: e.repo, snapshot: t.snapshot(e.snapshot) })),
           source: context.source,
-          unresolved: t.list("/value/unresolved", "unresolved-call-site").map(({ repo, site }) => ({ repo: repo!, ...site })),
         };
       }
     }

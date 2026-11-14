@@ -5,7 +5,7 @@ import { TRUST_MODES, type TrustMode } from "../shared/fact.ts";
 import type { RepositoryEvidence } from "../shared/repository-evidence.ts";
 import type { CallSite } from "../topology/call-site.ts";
 import { callSiteEvidence, statedRequestsOf, unresolvedCallSite } from "../topology/call-site.ts";
-import { inferGateways, prefixOf, servedBehindGateway, type GatewayDeclaration, type RepositoryEntrypoints } from "../topology/link-match.ts";
+import { prefixOf, servedBehindGateway, type GatewayDeclaration } from "../topology/link-match.ts";
 import { sortEvidence, type NameCandidate, type OutwardKind, type OutwardName, type RepositoryOutwardName } from "../topology/outward-name.ts";
 import type { RepositoryResolution } from "../topology/remote-snapshot.ts";
 import { decisionId, type Decision, type DecisionKind, type DecisionOption, type DecisionSet } from "./decision.ts";
@@ -50,9 +50,8 @@ export function decisionsOf(input: DecisionInput): DecisionSet {
   const decisions = [
     ...membershipsByName(input, confirmed),
     ...membershipsByClone(input, confirmed),
-    ...repositoryDecisions(input),
+    ...unservedDecisions(input),
     ...libraryDecisions(input),
-    ...gatewayDecisions(input),
     ...revisionDecisions(input),
     ...remoteDecisions(input),
     ...trustDecisions(input),
@@ -129,29 +128,67 @@ function membershipsByClone(input: DecisionInput, confirmed: ReadonlySet<string>
 }
 
 /**
- * One decision per unserved name: no fact states where a name no clone serves lives, so only free text answers it. A
- * prefix a declared gateway routes was answered by that gateway, so it is no repository decision.
+ * What the join left unserved, read as it decided it: a name no repository serves is a gap, and one a link or a repository
+ * id serves never reaches here. A prefix a declared gateway routes was answered by that gateway. An unserved prefix that
+ * some other repository's routes take once it is stripped is one `gateway` decision; any other unserved name, a prefix no
+ * route takes included, is one `repository` decision, so one gap is never raised twice.
  */
-function repositoryDecisions(input: DecisionInput): Decision[] {
+function unservedDecisions(input: DecisionInput): Decision[] {
   const routed = new Set(input.gateways.map((gateway) => gateway.prefix));
-  return groupsOf(input.unserved, (name) => name.name)
-    .filter(([name, names]) => !(routed.has(name) && names.every((occurrence) => occurrence.kind === "path-prefix")))
-    .map(([name, names]) =>
-      decisionOf({
-        kind: "repository",
-        subject: name,
-        evidence: names.flatMap((held) => held.evidence),
-        outwardKinds: [...new Set(names.map((occurrence) => occurrence.kind))].sort(compareText),
-        options: [],
-        allowsFreeText: true,
-        required: false,
-      }),
-    );
+  const asked = input.unserved.filter((name) => !(name.kind === "path-prefix" && routed.has(name.name)));
+  const gateways: Decision[] = [];
+  const rest: RepositoryOutwardName[] = [];
+  for (const [prefix, names] of groupsOf(asked, (name) => name.name)) {
+    const written = names.filter((name) => name.kind === "path-prefix");
+    const options = gatewayOptions(input, prefix, written);
+    if (options.length === 0) {
+      rest.push(...names);
+      continue;
+    }
+    gateways.push(decisionOf({ kind: "gateway", subject: prefix, evidence: written.flatMap((held) => held.evidence), options, allowsFreeText: false, required: false }));
+    rest.push(...names.filter((name) => name.kind !== "path-prefix"));
+  }
+  return [...gateways, ...repositoryDecisions(rest)];
 }
 
 /**
- * One decision per library a cut names: every clone given is a candidate to confirm, and no fact states which one holds
- * the library a FQN names, so none is recommended.
+ * One decision per unserved name: no fact states where a name no clone serves lives, so only free text answers it.
+ */
+function repositoryDecisions(unserved: readonly RepositoryOutwardName[]): Decision[] {
+  return groupsOf(unserved, (name) => name.name).map(([name, names]) =>
+    decisionOf({
+      kind: "repository",
+      subject: name,
+      evidence: names.flatMap((held) => held.evidence),
+      outwardKinds: [...new Set(names.map((occurrence) => occurrence.kind))].sort(compareText),
+      options: [],
+      allowsFreeText: true,
+      required: false,
+    }),
+  );
+}
+
+/**
+ * The repositories whose routes take a call under an unserved prefix once it is stripped, each with the route as evidence.
+ * Two or more are what leaves the gap and none is recommended; the caller's own repository is never an option, as
+ * `inferGateways` excludes it.
+ */
+function gatewayOptions(input: DecisionInput, prefix: string, written: readonly RepositoryOutwardName[]): DecisionOption[] {
+  const callers = new Set(written.flatMap((name) => name.evidence.map((place) => place.repo)));
+  const calls = input.repositories
+    .filter((repository) => callers.has(repository.repo))
+    .flatMap((repository) => repository.callSites.flatMap((site) => statedRequestsOf(site).filter((target) => prefixOf(target) === prefix).map((target) => ({ site, target }))));
+  return input.repositories.flatMap((repository): DecisionOption[] => {
+    const own = routesOf(repository);
+    const matched = calls.flatMap(({ site, target }) => (site.repo === repository.repo ? [] : servedBehindGateway(target, own).map((route) => ({ path: route.handler.path, line: route.handler.line, repo: repository.repo }))));
+    return matched.length === 0 ? [] : [{ value: repository.repo, evidence: sortEvidence(matched), recommended: false }];
+  });
+}
+
+/**
+ * One decision per library a cut names. A clone is a candidate to confirm only when a caller of the library states a
+ * dependency that clone serves, with the places of both ends as evidence; no fact states which one holds the library a FQN
+ * names, so none is recommended, and without such a clone free text alone answers it.
  */
 function libraryDecisions(input: DecisionInput): Decision[] {
   const cuts = input.repositories.flatMap((repository) =>
@@ -160,45 +197,22 @@ function libraryDecisions(input: DecisionInput): Decision[] {
       return library === undefined ? [] : [{ library, site }];
     }),
   );
-  const options = input.repositories.map(({ repo }): DecisionOption => ({ value: repo, evidence: [], recommended: false }));
   return groupsOf(cuts, (cut) => cut.library).map(([library, naming]) =>
-    decisionOf({ kind: "library", subject: library, evidence: naming.map(({ site }) => ({ ...callSiteEvidence(site), repo: site.repo })), options, allowsFreeText: true, required: false }),
+    decisionOf({ kind: "library", subject: library, evidence: naming.map(({ site }) => ({ ...callSiteEvidence(site), repo: site.repo })), options: dependencyClones(input, new Set(naming.map(({ site }) => site.repo))), allowsFreeText: true, required: false }),
   );
+}
+
+/** The clones a dependency of one of these repositories names, one option per clone and basis, with the evidence of every dependency that names it. */
+function dependencyClones(input: DecisionInput, callers: ReadonlySet<string>): DecisionOption[] {
+  const dependencies = new Map(input.repositories.filter(({ repo }) => callers.has(repo)).map((repository) => [repository.repo, new Set(repository.names.filter((name) => name.kind === "dependency").map((name) => name.name))]));
+  const named = input.candidates.filter((candidate) => [...callers].some((caller) => dependencies.get(caller)?.has(candidate.name) === true && candidate.evidence.some((place) => place.repo === caller)));
+  return groupsOf(named, (candidate) => `${candidate.repo}\0${candidate.basis}`).map(([, group]) => ({ value: group[0]!.repo, basis: group[0]!.basis, evidence: sortEvidence(group.flatMap((candidate) => candidate.evidence)), recommended: false }));
 }
 
 /** The library a cut names, when the target stays undecided through it. */
 function libraryOf(site: CallSite): string | undefined {
   const { via } = unresolvedCallSite(site);
   return via === undefined || via === "" ? undefined : via;
-}
-
-/**
- * One decision per prefix no repository id names and no gateway routes: the repositories whose routes match a call under
- * the prefix once it is stripped. Zero or two or more matches, by construction, so no option is recommended.
- */
-function gatewayDecisions(input: DecisionInput): Decision[] {
-  const routes = input.repositories.map((repository) => ({ repo: repository.repo, routes: routesOf(repository) }));
-  const entrypoints: RepositoryEntrypoints[] = input.repositories.map(({ repo, entrypoints }) => ({ repo, entrypoints }));
-  const served = new Set(inferGateways(input.repositories.flatMap((repository) => repository.callSites), entrypoints, input.gateways).map((gateway) => gateway.prefix));
-  const named = new Set(input.repositories.map((repository) => repository.repo));
-  const calls = input.repositories.flatMap((repository) =>
-    repository.callSites.flatMap((site) =>
-      statedRequestsOf(site).flatMap((target) => {
-        const prefix = prefixOf(target);
-        return prefix === undefined || named.has(prefix) || served.has(prefix) ? [] : [{ prefix, site, target }];
-      }),
-    ),
-  );
-  return groupsOf(calls, (call) => call.prefix).map(([prefix, under]) => {
-    const options = routes.flatMap(({ repo, routes: own }): DecisionOption[] => {
-      const matched = under.flatMap(({ site, target }) => {
-        if (site.repo === repo) return [];
-        return servedBehindGateway(target, own).map((route) => ({ path: route.handler.path, line: route.handler.line, repo }));
-      });
-      return matched.length === 0 ? [] : [{ value: repo, evidence: sortEvidence(matched), recommended: false }];
-    });
-    return decisionOf({ kind: "gateway", subject: prefix, evidence: [...new Set(under.map(({ site }) => site))].map((site) => ({ ...callSiteEvidence(site), repo: site.repo })), options, allowsFreeText: false, required: false });
-  });
 }
 
 /**

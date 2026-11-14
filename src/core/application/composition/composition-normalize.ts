@@ -685,7 +685,6 @@ function decisions(b: Builder, root: ReadContext, fact: Fact<DecisionValue>): re
       allowsFreeText: decision.allowsFreeText, required: decision.required, evidence, options,
     }, root.id, [at]);
   });
-  value.unresolved.forEach(({ repo, ...site }, index) => b.part({ kind: "unresolved-call-site", site, repo }, root.id, [`/value/unresolved/${index}`]));
   return sorted;
 }
 
