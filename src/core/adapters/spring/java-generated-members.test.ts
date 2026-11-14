@@ -134,12 +134,12 @@ test("a @Singular field leaves the builder unsettled", async () => {
   assert.deepEqual(await callOf("Singles.builder().items", "builder"), UNPROVEN);
 });
 
-test("a member Lombok generates for a field of a class of the sources is settled when the hierarchy is open only through superclasses that resolve to a known outside type", async () => {
+test("a member Lombok generates for a field of a class of the sources is settled when the hierarchy is open only through superclasses that resolve to a known outside type, and one it does not generate is the outside superclass's", async () => {
   assert.deepEqual(await callOf("libbed.getTitle", "getTitle"), GENERATED);
   assert.deepEqual(await callOf("libbed.setTitle", "setTitle"), GENERATED);
   assert.deepEqual(await callOf("libbedChild.getTitle", "getTitle"), GENERATED);
   assert.deepEqual(await callOf("Libbuilt.builder().title", "builder"), GENERATED);
-  assert.deepEqual(await callOf("libbed.getParentOnly", "getParentOnly"), UNPROVEN);
+  assert.deepEqual(await callOf("libbed.getParentOnly", "getParentOnly"), { kind: "outside", type: "external.lib.Thing" });
 });
 
 test("an outside supertype that does not resolve to a known type, or an outside interface, keeps the members unsettled", async () => {

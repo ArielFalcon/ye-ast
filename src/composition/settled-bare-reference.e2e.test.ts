@@ -105,6 +105,6 @@ test("callers of a method leave no name-only cut at a homonym's call on an outsi
   assert.deepEqual(await run(["callers", repo, `${JAVA}/Forms.java:bRun`]), { status: "complete", callers: [], cuts: [] });
 });
 
-test("callers of a subclass's method keep the name-only cut of a call without a receiver that may dispatch to it", async () => {
-  assert.deepEqual(await run(["callers", repo, `${JAVA}/Lower.java:run`]), { status: "partial", callers: [], cuts: [`name-only ${JAVA}/Upper.java ${JAVA}/Upper.java:5 run`] });
+test("callers of a subclass's method keep the cut of a call without a receiver that may dispatch to it, as a hidden caller of that method", async () => {
+  assert.deepEqual(await run(["callers", repo, `${JAVA}/Lower.java:run`]), { status: "partial", callers: [], cuts: [`hidden-caller ${JAVA}/Lower.java::run ${JAVA}/Upper.java:5 run`] });
 });

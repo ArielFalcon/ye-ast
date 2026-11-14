@@ -67,11 +67,14 @@ cut for each of the 13,891 pairs would mark most answers of the repository, and 
    - a receiver declared with a repository type whose hierarchy is open only through supertypes outside the repository
      answers `unproven` with candidates: the declarations of the name at the call's argument count in the repository
      types at, above and below that type. The gap leaves the selection among them unproven, and it adds no repository
-     declaration, under the assumption that no type outside the repository is a subtype of a repository type;
+     declaration, under the assumption that no type outside the repository is a subtype of a repository type. A class
+     and an interface answer alike; where no repository type at, above or below the receiver's type declares the name
+     at that argument count and one outside type alone leaves the hierarchy open, the call binds a member of that type
+     and the reading answers an outside receiver of it;
    - a variable whose type only a library signature gives (a lambda parameter, a `var` over a library call) waits for
      library signatures (ADR-0063, ADR-0073).
-3. **The bound.** A dependent leaves an answer only by the fourth row, which is a proof that the call cannot run the
-   target. Every other change adds a cut. The number of edges each added cut marks is reported at the corpus gate of
+3. **The bound.** A dependent leaves an answer only by the second and the fourth rows, each a proof that the call cannot
+   run the target. Every other change adds a cut. The number of edges each added cut marks is reported at the corpus gate of
    the unit that delivers it, and a unit whose marks the recoveries of decision 2 would remove is not integrated before
    them.
 4. **`trace` is unchanged.** It already cuts a call the reading does not prove.

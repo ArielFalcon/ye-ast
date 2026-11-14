@@ -79,11 +79,13 @@ interface ReadFile extends ReceiverSource {
  * do not settle (`searchedType`); when a source holds an annotation by which a processor adds overloads or rewrites calls
  * (`CALL_REWRITING_ANNOTATIONS`); or when the declared hierarchy does not settle the member. Declaration selection and
  * runtime dispatch are separate obligations. An unproven value receiver or declared repository member remains a cut,
- * naming the declarations of the call's arity its type offers where the whole hierarchy was read, and, for a class whose
- * hierarchy only types outside the repository leave open, those with the ones the classes below it may run where every
- * class below it is placed (`runnableAmong`, ADR-0089 decision 2); no name-only index target proves it. Where the strict binding proves and no repository type types the receiver, a receiver the same
- * declarations type with a platform or library type answers `outside` with that type's qualified name (ADR-0079), and a
- * class literal answers the platform's class type. `unknown` is kept for what another reader of the binding chain owns
+ * naming the declarations of the call's arity its type offers where the whole hierarchy was read, and, for a class or an
+ * interface whose hierarchy only types outside the repository leave open, those with the ones the types below it may run
+ * where every type below it is placed (`runnableAmong`, ADR-0089 decision 2); no name-only index target proves it. Where
+ * the strict binding proves and no repository type types the receiver, a receiver the same declarations type with a
+ * platform or library type answers `outside` with that type's qualified name (ADR-0079), and so does a receiver of a
+ * repository type whose call no repository declaration can run, by the one outside type its hierarchy is open through
+ * (`outsideMemberOf`); a class literal answers the platform's class type. `unknown` is kept for what another reader of the binding chain owns
  * (ADR-0087): a receiver that is a name or `this`, a call without a receiver whose search finds no type, a source the
  * reader holds no tree for, and a place no invocation starts at. A call on `super` runs without dispatch (JLS 15.12.4.4)
  * and is read in the direct superclass of the type `this` denotes there, an anonymous class's being the type it creates:
@@ -543,7 +545,7 @@ export function createResolver(project: JavaProject, generated = false) {
 
   let unplacedBelow: { types: ReadonlySet<TypeDecl>; names: ReadonlySet<string> } | undefined;
   /**
-   * What may stand below a repository class without a type the project places: the repository types an anonymous or a
+   * What may stand below a repository type without a type the project places: the repository types an anonymous or a
    * local class extends, and the simple names of the supertypes the strict reading leaves unsettled anywhere, an
    * anonymous or local class's or a placed type's that is no type outside the repository.
    */
@@ -570,23 +572,68 @@ export function createResolver(project: JavaProject, generated = false) {
     return unplacedBelow;
   };
 
+  let referencedNames: ReadonlySet<string> | undefined;
+  /** Whether a method reference of the sources names a method `name`, which a value of a functional interface it is converted to runs under another declaration's name. */
+  const isReferenced = (name: string): boolean => {
+    if (referencedNames === undefined) {
+      const names = new Set<string>();
+      for (const file of new Set(project.types.map((type) => type.file))) {
+        const pending: Node[] = [file.root];
+        for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+          const written = node.type === "method_reference" ? node.namedChildren.at(-1)?.text : undefined;
+          if (written !== undefined) names.add(written);
+          for (const child of node.namedChildren) if (child !== null) pending.push(child);
+        }
+      }
+      referencedNames = names;
+    }
+    return referencedNames.has(name);
+  };
+
   /**
-   * The declarations a call on a value of the repository class `type` may run, from those the selection offers at the
-   * call's arity: those, and the instance methods of the name and arity that the classes below it declare or inherit
-   * from outside `type`'s hierarchy, through their declared hierarchies. None when a class the project does not place may
-   * stand below it or below one of them: an anonymous or a local class, or a supertype the strict reading leaves
-   * unsettled under the name of one of them. Only classes extend a class.
+   * Whether a function value may have the interface as its type: of the instance methods without a body its declared
+   * hierarchy holds, at most one name and arity is left that no declaration with a body of the hierarchy implements. A
+   * supertype outside the repository adds abstract methods, never a body for one a repository type declares, since no
+   * type outside the repository is below a repository type.
+   */
+  const mayBeFunctional = (type: TypeDecl): boolean => {
+    if (type.kind !== "interface") return false;
+    const methods = declaredHierarchy(type).types.flatMap((owner) => owner.methods.filter((method) => !method.modifiers.includes("static") && !method.modifiers.includes("private") && !OBJECT_METHODS.has(method.name)));
+    const key = (method: MethodDecl) => `${method.name}/${method.parameterTypes.length}`;
+    const implemented = new Set(methods.filter((method) => method.hasBody).map(key));
+    return new Set(methods.filter((method) => !method.hasBody && !implemented.has(key(method))).map(key)).size <= 1;
+  };
+
+  /**
+   * The declarations a call on a value of the repository class or interface `type` may run, from those the selection
+   * offers at the call's arity: those, and the instance methods of the name and arity that the types below it declare or
+   * inherit from outside `type`'s hierarchy, through their declared hierarchies. A value of `type` is an instance of a
+   * class the project places below it, of a class outside the repository, whose bodies are not the repository's, or of a
+   * function value whose type is `type` or below it: a lambda's body is no declaration of the name, while a method
+   * reference runs the declaration it names. None when what runs may be a repository declaration that list misses: a
+   * class the project does not place stands below `type` or below a type below it (an anonymous or a local class, or a
+   * supertype the strict reading leaves unsettled under the name of one of them), an enum below it, whose constants may
+   * declare their own bodies, a type below whose hierarchy a supertype that is no type outside the repository leaves
+   * open, a method of the name with varargs among those the types below hold, a member of the name and arity that a
+   * record or a Lombok annotation adds to one of them, or a method reference naming the name where a function value may
+   * have `type` or an interface below it as its type (`mayBeFunctional`).
    */
   const runnableAmong = (type: TypeDecl, offered: readonly MethodDecl[], name: string, arity: number): { candidates: readonly MethodDecl[] } | undefined => {
     const below = project.types.filter((other) => other !== type && declaredHierarchy(other).types.includes(type));
     const unplaced = readUnplacedBelow();
     if ([type, ...below].some((member) => unplaced.types.has(member) || unplaced.names.has(member.name))) return undefined;
+    if (below.some((subtype) => subtype.kind === "other" || !openOnlyOutside(declaredHierarchy(subtype)) || generatedMember(subtype, project, name, arity) !== undefined)) return undefined;
+    if ([type, ...below].some(mayBeFunctional) && isReferenced(name)) return undefined;
     const above = new Set(declaredHierarchy(type).types);
     const runnable = new Set(offered);
     for (const subtype of below) {
       for (const owner of declaredHierarchy(subtype).types) {
         if (above.has(owner)) continue;
-        for (const method of owner.methods) if (method.name === name && method.parameterTypes.length === arity && !method.modifiers.includes("private") && !method.modifiers.includes("static")) runnable.add(method);
+        for (const method of owner.methods) {
+          if (method.name !== name || method.modifiers.includes("private") || method.modifiers.includes("static")) continue;
+          if (hasVarargs(method)) return undefined;
+          if (method.parameterTypes.length === arity) runnable.add(method);
+        }
       }
     }
     return { candidates: [...runnable] };
@@ -700,12 +747,15 @@ export function createResolver(project: JavaProject, generated = false) {
   /**
    * The type outside the repository the receiver of an invocation is declared to hold, by its qualified name, where no
    * repository type is: the type its parameter, local or field states, the one bound of the type variable that types it,
-   * or the declared return type of the repository method a receiver call names. None for a name that denotes a type, an
-   * array, `this` or `super`.
+   * or the declared return type of the repository method a receiver call names. Where a repository type is, the outside
+   * type whose member the call runs (`outsideMemberOf`), unless a type variable types the receiver or the receiver is a
+   * generated builder. None for a name that denotes a type, an array, `this` or `super`.
    */
   const outsideReceiverOf = (invocation: Node, source: ReceiverSource): string | undefined => {
     const object = invocation.childForFieldName("object");
-    if (object === null || object.type === "this" || object.type === "super" || receiverOf(invocation, source) !== undefined) return undefined;
+    if (object === null || object.type === "this" || object.type === "super") return undefined;
+    const held = receiverOf(invocation, source);
+    if (held !== undefined) return held === "unproven" || held.bound || held.typeName || held.builder === true ? undefined : outsideMemberOf(held.type, invocation);
     if (object.type === "method_invocation") {
       const called = methodNamed(object, source);
       if (called === undefined || !("method" in called)) return undefined;
@@ -721,6 +771,33 @@ export function createResolver(project: JavaProject, generated = false) {
     if (variable === undefined) return outsideType(name, source.file);
     const bounds = variable.namedChildren.find((child) => child?.type === "type_bound")?.namedChildren ?? [];
     return bounds.length === 1 ? outsideType(bounds[0]!, source.file) : undefined;
+  };
+
+  /**
+   * The one type outside the repository whose member a call on a value of the repository class or interface `type`
+   * runs where no repository declaration can: its hierarchy is open only through supertypes outside the repository, all
+   * of them that one type, so under the repository-compiles assumption the call binds a member that type holds (ADR-0062);
+   * no repository type at or above `type` declares a method of the name at the call's arity or with varargs, none below it
+   * may run one (`runnableAmong` names none), and no record or Lombok annotation adds the member to `type`. None for one
+   * of `Object`'s methods, where a lombok configuration may rename the members a processor adds, or where the gap's
+   * qualified name is not settled.
+   */
+  const outsideMemberOf = (type: TypeDecl, invocation: Node): string | undefined => {
+    const name = invocation.childForFieldName("name")?.text;
+    if (name === undefined || OBJECT_METHODS.has(name) || !generated) return undefined;
+    const above = declaredHierarchy(type);
+    const gaps = unsettledGaps(above);
+    if (gaps.length === 0) return undefined;
+    const outside = new Set(gaps.map((gap) => {
+      const { scope, found } = resolvedGap(gap);
+      return found?.kind === "library" || found?.kind === "platform" ? found.fqn : onDemandOutside(gap.name, { file: gap.file, type: scope, at: gap.node }, project)?.qualifiedName;
+    }));
+    const [qualified] = outside;
+    if (qualified === undefined || outside.size !== 1) return undefined;
+    const arity = argumentCount(invocation);
+    if (above.types.some((owner) => owner.methods.some((method) => method.name === name && (method.parameterTypes.length === arity || hasVarargs(method))))) return undefined;
+    if (generatedMember(type, project, name, arity) !== undefined || runnableAmong(type, [], name, arity)?.candidates.length !== 0) return undefined;
+    return qualified;
   };
 
   /**
@@ -850,8 +927,10 @@ export function createResolver(project: JavaProject, generated = false) {
    * value of a concrete class of a closed hierarchy, the one member of the arity with a body (`concreteOverrider`). The
    * declarations of that arity it cannot single one out of are its answer when the selection settles none: every
    * repository declaration the call can run, so those of the types below join them when the call dispatches (`virtual`,
-   * and no call through a type name), and there is no answer where a type below is not placed (`runnableAmong`). A member
-   * whose reach is unknown withholds the selection.
+   * and no call through a type name), and there is no answer where a type below is not placed (`runnableAmong`). Under a
+   * hierarchy only types outside the repository leave open, a class or an interface answers those declarations, none of
+   * its own included where only the types below declare the name, and an interface called through its name answers none.
+   * A member whose reach is unknown withholds the selection.
    */
   const memberOf = (type: TypeDecl, name: string, invocation: Node, file: JavaFile, caller: TypeDecl | undefined, typeName = false, virtual = true): { method: MethodDecl } | { candidates: readonly MethodDecl[] } | undefined => {
     if (OBJECT_METHODS.has(name)) return undefined;
@@ -861,9 +940,10 @@ export function createResolver(project: JavaProject, generated = false) {
     if (hierarchyOpen(above, named)) {
       const selected = openMemberOf(type, above, named, invocation, file, caller, typeName);
       if (selected !== undefined && ("method" in selected || typeName)) return selected;
-      if (type.kind !== "class" || !openOnlyOutside(above) || named.some(hasVarargs)) return undefined;
+      if ((typeName && type.kind !== "class") || !openOnlyOutside(above) || named.some(hasVarargs)) return undefined;
       const offered = offeredAmong(type, named, invocation, file, caller);
-      return offered === undefined || offered.length === 0 ? undefined : runnable(offered);
+      const runs = offered === undefined ? undefined : runnable(offered);
+      return runs === undefined || runs.candidates.length === 0 ? undefined : runs;
     }
     if (named.some(hasVarargs)) return undefined;
     const selected = selectAmong(type, named, invocation, file, caller);

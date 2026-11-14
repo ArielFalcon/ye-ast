@@ -311,8 +311,9 @@ export type ReceiverMethod =
    */
   | ({ kind: "supplied" } & MethodPlace)
   /**
-   * A receiver whose declared type is the type outside the repository named by its qualified name `type`; `exact` when the
-   * call runs the member that type holds, never one that overrides it below (a call on `super`).
+   * A receiver whose declared type is the type outside the repository named by its qualified name `type`, or a receiver of
+   * a repository type whose call can bind only a member of `type`, the one outside supertype its hierarchy is open
+   * through; `exact` when the call runs the member that type holds, never one that overrides it below (a call on `super`).
    */
   | { kind: "outside"; type: string; exact?: true };
 

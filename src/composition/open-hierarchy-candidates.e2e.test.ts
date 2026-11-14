@@ -62,6 +62,31 @@ const MAPPED: Readonly<Record<string, string>> = {
   [`${JAVA}/Uses.java`]: ["package com.acme;", "", "public class Uses {", "    private Plain plain;", "", "    public void mapped() {", "        plain.convert(System.getenv(\"x\"));", "    }", "}"].join("\n"),
 };
 
+/**
+ * Receivers of repository interfaces whose hierarchy only `org.lib.Outside` leaves open. `Items` also extends `Custom`,
+ * whose `getById` its call runs, beside the homonym of `Other`. `Courses` declares no `findById`,
+ * so its call runs the outside type's member, never the `findById` of `Port` nor of `Adapter`, which implements it.
+ */
+const sink = (owner: string, header: string) => [header, `        System.out.println("${owner}");`, "        Sink.log();", "        return null;", "    }"];
+const SINK = ["package com.acme;", "", "public class Sink {", "    public static void log() {", "        System.out.println(\"sink\");", "    }", "}"].join("\n");
+const OUTSIDE = (name: string) => ["package com.acme;", "", "import org.lib.Outside;", "", `public interface ${name} extends Outside<String, Long> {`, "}"].join("\n");
+const READS = (field: string, call: string) => ["package com.acme;", "", "public class Reads {", `    private ${field};`, "", "    public Object read(Long id) {", `        return ${call};`, "    }", "}"].join("\n");
+const INTERFACE_OPEN: Readonly<Record<string, string>> = {
+  [`${JAVA}/Sink.java`]: SINK,
+  [`${JAVA}/Custom.java`]: ["package com.acme;", "", "public interface Custom {", ...sink("custom", "    default String getById(Long id, String at) {"), "}"].join("\n"),
+  [`${JAVA}/Items.java`]: ["package com.acme;", "", "import org.lib.Outside;", "", "public interface Items extends Outside<String, Long>, Custom {", "}"].join("\n"),
+  [`${JAVA}/Other.java`]: ["package com.acme;", "", "public class Other {", ...sink("other", "    public String getById(Long id, String at) {"), "}"].join("\n"),
+  [`${JAVA}/Reads.java`]: READS("Items items", "items.getById(id, \"x\")"),
+};
+const PORT = ["package com.acme;", "", "public interface Port {", "    String findById(Long id);", "}"].join("\n");
+const OUTSIDE_MEMBER: Readonly<Record<string, string>> = {
+  [`${JAVA}/Sink.java`]: SINK,
+  [`${JAVA}/Courses.java`]: OUTSIDE("Courses"),
+  [`${JAVA}/Port.java`]: PORT,
+  [`${JAVA}/Adapter.java`]: ["package com.acme;", "", "public class Adapter implements Port {", ...sink("adapter", "    public String findById(Long id) {"), "}"].join("\n"),
+  [`${JAVA}/Reads.java`]: READS("Courses courses", "courses.findById(id)"),
+};
+
 let workspace: string;
 
 function commit(name: string, files: Readonly<Record<string, string>>): string {
@@ -80,6 +105,9 @@ function commit(name: string, files: Readonly<Record<string, string>>): string {
 let closed: string;
 let unplaced: string;
 let mapped: string;
+let interfaceOpen: string;
+let outsideMember: string;
+let outsideMemberAlone: string;
 
 before(() => {
   workspace = mkdtempSync(join(tmpdir(), "ye-ast-open-candidates-"));
@@ -87,6 +115,10 @@ before(() => {
   closed = commit("closed", SOURCES);
   unplaced = commit("unplaced", { ...SOURCES, [`${JAVA}/Wiring.java`]: ANONYMOUS });
   mapped = commit("mapped", MAPPED);
+  interfaceOpen = commit("interface-open", INTERFACE_OPEN);
+  outsideMember = commit("outside-member", OUTSIDE_MEMBER);
+  const { [`${JAVA}/Adapter.java`]: _adapter, ...alone } = OUTSIDE_MEMBER;
+  outsideMemberAlone = commit("outside-member-alone", alone);
 });
 
 after(() => rmSync(workspace, { recursive: true, force: true }));
@@ -148,4 +180,24 @@ test("callers of an implementation that reach the generic interface method leave
   assert.equal(other.status, "complete", JSON.stringify(other.cuts));
   assert.ok(symbols(other).includes("Mapper.java convert") && !symbols(other).includes("Uses.java mapped"), JSON.stringify(other.value.symbols));
   assert.ok(symbols(plain).includes("Uses.java mapped"), JSON.stringify(plain.value.symbols));
+});
+
+/** The cuts whose place is in `Reads.java`, with that place. */
+const readsCuts = (fact: Fact) => (fact.cuts ?? []).filter((cut) => cut.at[0]!.startsWith(`${JAVA}/Reads.java`)).map(({ reason, at }) => `${reason} ${at.join(" ")}`);
+const readsListed = (fact: Fact) => (fact.value.symbols ?? []).filter((symbol) => symbol.file.endsWith("/Reads.java")).map((symbol) => symbol.symbol).sort();
+
+test("callers of a homonym outside the hierarchy of an interface open only through an outside supertype neither cut nor list the call on it", async () => {
+  const fact = await callers(interfaceOpen, "Other.java:getById");
+
+  assert.deepEqual(readsCuts(fact), []);
+  assert.deepEqual(readsListed(fact), []);
+});
+
+test("callers of a declaration that a call running only an outside supertype's member cannot run neither cut nor list the call", async () => {
+  for (const [repo, target] of [[outsideMember, "Adapter.java:findById"], [outsideMember, "Port.java:findById"], [outsideMemberAlone, "Port.java:findById"]] as const) {
+    const fact = await callers(repo, target);
+
+    assert.deepEqual(readsCuts(fact), [], target);
+    assert.deepEqual(readsListed(fact), [], target);
+  }
 });
