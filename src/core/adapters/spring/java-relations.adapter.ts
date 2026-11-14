@@ -9,13 +9,27 @@ import type { Cut, Finding } from "../../domain/shared/fact.ts";
 import type { LanguageRelationsReader, LanguageRelations } from "../../ports/language-pack.port.ts";
 import { declaredVariablesOnce, typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { javaAmbiguousNames, javaSimpleNames, javaTypeReferences } from "../tree-sitter/java-relations.adapter.ts";
+import { javaAmbiguousNames, javaSimpleNames, javaTypeReferences, javaValueFieldReads } from "../tree-sitter/java-relations.adapter.ts";
 import { projectBuildIn } from "./api-delegates.ts";
-import { staticImportsOf, typeOfAmbiguousName, typesOfStaticImport } from "./java-ambiguous-names.ts";
+import { constantOfFieldRead, constantOfSimpleName, constantsOfQualifiedName, repositoryConstantNames, staticImportsOf, typeOfAmbiguousName, typesOfStaticImport, type ConstantRead, type DeclaredConstant } from "./java-ambiguous-names.ts";
 import { enclosingType, heldJavaProject, withJavaSources, type UnparsedSource } from "./java-project.ts";
-import { createJavaProject, platformTypeName, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, isTypeDeclaration, platformTypeName, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
 const ref = (type: TypeDecl): SymbolRef => ({ path: type.file.path, symbol: type.name, line: (type.node.childForFieldName("name") ?? type.node).startPosition.row + 1 });
+const named = (path: string, name: Node): SymbolRef => ({ path, symbol: name.text, line: name.startPosition.row + 1 });
+const constantRef = ({ type, name }: DeclaredConstant): SymbolRef => named(type.file.path, name);
+const METHODS: ReadonlySet<string> = new Set(["method_declaration", "constructor_declaration", "compact_constructor_declaration"]);
+
+/** The declaration whose code writes `node`: the method or constructor around it, the field it initializes, else its type. */
+function writerOf(node: Node, path: string): SymbolRef | undefined {
+  for (let around = node.parent; around !== null; around = around.parent) {
+    const name = METHODS.has(around.type) || isTypeDeclaration(around)
+      ? around.childForFieldName("name")
+      : around.type === "field_declaration" ? (around.childrenForFieldName("declarator").find((declarator) => declarator !== null && declarator.startIndex <= node.startIndex && node.endIndex <= declarator.endIndex) ?? around.childrenForFieldName("declarator")[0])?.childForFieldName("name") : undefined;
+    if (name !== null && name !== undefined) return named(path, name);
+  }
+  return undefined;
+}
 
 export function createJavaRelations(parser: () => Promise<JavaParser>): LanguageRelationsReader {
   return {
@@ -61,6 +75,21 @@ export function createJavaRelations(parser: () => Promise<JavaParser>): Language
             if (external === undefined) unplaced(file, node, [], name);
           } else unplaced(file, node, typesByName.get(name.split(".").at(-1)!), name);
         };
+        const constantNames = repositoryConstantNames(project);
+        const provenReads = new Set<string>();
+        const openReads: { writer: SymbolRef | undefined; read: ConstantRead; path: string }[] = [];
+        const readConstant = (file: JavaFile, read: ConstantRead | undefined) => {
+          if (read === undefined || !constantNames.has(read.name)) return;
+          const writer = writerOf(read.node, file.path);
+          const line = read.node.startPosition.row + 1;
+          if (writer === undefined || incomplete || !read.settled || read.constants.length !== 1) {
+            openReads.push({ writer, read, path: file.path });
+            return;
+          }
+          const to = constantRef(read.constants[0]!);
+          provenReads.add(JSON.stringify([writer, to]));
+          relations.push({ status: "complete", value: { ...relation("references", writer, to), at: { path: file.path, line } }, evidence: [{ path: file.path, line }] });
+        };
         for (const file of files) {
           const localProject = { ...project, types: typesByFile.get(file) ?? [] };
           for (const node of javaTypeReferences(file.root)) {
@@ -79,12 +108,18 @@ export function createJavaRelations(parser: () => Promise<JavaParser>): Language
             const owner = enclosingType(name.node, file, localProject);
             const denoted = owner === undefined ? undefined : typeOfAmbiguousName(name, file, owner, project, locals);
             if (denoted !== undefined) read(file, owner!, name.node, denoted.name, denoted.settled);
+            if (owner !== undefined && name.segments.slice(1).some((segment) => constantNames.has(segment))) for (const constant of constantsOfQualifiedName(name, file, owner, project, locals)) readConstant(file, constant);
           }
+          for (const node of javaValueFieldReads(file.root)) if (constantNames.has(node.childForFieldName("field")?.text ?? "")) readConstant(file, constantOfFieldRead(node, file, project));
           const imports = staticImportsOf(file, typesByFqn);
           const open: { owner: TypeDecl | undefined; node: Node; type: TypeDecl }[] = [];
-          for (const name of imports === undefined ? [] : javaSimpleNames(file.root)) {
+          for (const name of javaSimpleNames(file.root)) {
             if (options.signal?.aborted) return { relations: sortFindings(relations), cuts, unresolved };
+            const constant = constantNames.has(name.node.text);
+            if (imports === undefined && !constant) continue;
             const owner = enclosingType(name.node, file, localProject);
+            if (constant) readConstant(file, constantOfSimpleName(name, imports, file, owner, project, locals));
+            if (imports === undefined) continue;
             const imported = typesOfStaticImport(name, imports!, owner, project, locals);
             for (const type of imported?.types ?? []) {
               if (owner !== undefined && !incomplete && imported!.settled) place(file, owner, name.node, type, type.fqn);
@@ -92,6 +127,10 @@ export function createJavaRelations(parser: () => Promise<JavaParser>): Language
             }
           }
           for (const { owner, node, type } of open) if (owner === undefined || !referenced.has(pairOf(owner, type))) unplaced(file, node, [type], type.fqn);
+        }
+        for (const { writer, read, path } of openReads) {
+          if (writer !== undefined && read.constants.length > 0 && read.constants.every((constant) => provenReads.has(JSON.stringify([writer, constantRef(constant)])))) continue;
+          unresolved.push({ kind: "references", file: path, line: read.node.startPosition.row + 1, column: read.node.startPosition.column, name: read.name, candidates: read.constants.map(({ type, name }) => `${type.fqn}.${name.text}`).toSorted() });
         }
         return { relations: sortFindings(relations), cuts, unresolved };
       };

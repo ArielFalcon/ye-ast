@@ -1,7 +1,7 @@
 import type { DependenceBasis, DependenceDerivation } from "../../domain/impact/impact-fact.ts";
 import { topLevelOf, isSeedable } from "../../domain/change/seeds.ts";
 import { declarationAnchor, declarationUseKey, referenceKey, uniqueReferenceKeys, type MemberReferenceProofs } from "../../domain/impact/impact-cuts.ts";
-import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followedEdge, followsEdge, followsRelation, isIgnoredEdge, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
+import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followedEdge, followsEdge, followsRelation, isIgnoredEdge, referenceRow, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
 import type { MemberSubstitute, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
@@ -202,11 +202,23 @@ export function createInboundEdges(
     return (relationsByTargetFile.get(node.file) ?? [])
       .filter((candidate) => (kinds === undefined || kinds.includes(candidate.kind)) && joinsFact(node, { path: candidate.to.path, line: candidate.to.line, symbol: candidate.to.symbol }))
       .flatMap((candidate) => {
-        const from = declarationAt(candidate.from, candidate.kind === "references" ? EDGE_POLICY.typeReferences.from : undefined);
+        const from = candidate.kind === "references" ? referenceSource(candidate, node.kind) : declarationAt(candidate.from);
         return from === undefined || isTestFile(from.file) || !followsRelation({ kind: candidate.kind, sourceKind: from.kind, targetKind: node.kind })
           ? []
           : [{ from, confidence: EDGE_POLICY.relations.confidence, basis: candidate.kind === "references" ? "reference" as const : "relation" as const, derivation: "proven" as const, lines: candidate.at === undefined ? [] : [candidate.at.line] }];
       });
+  }
+
+  /**
+   * The declaration a reference relation's source names, of the kinds its row admits; for a read of a constant the index
+   * does not place that declaration of, the innermost declaration of those kinds that holds the place of the read.
+   */
+  function referenceSource(candidate: Relation, targetKind: string): GraphSymbol | undefined {
+    const { from: kinds } = referenceRow(targetKind);
+    const named = declarationAt(candidate.from, kinds);
+    const at = candidate.at;
+    if (named !== undefined || at === undefined || kinds !== EDGE_POLICY.constantReferences.from) return named;
+    return symbolsInFile(at.path).filter((symbol) => kinds.includes(symbol.kind) && symbol.startLine <= at.line && at.line <= symbol.endLine).sort((a, b) => b.startLine - a.startLine || a.endLine - b.endLine)[0];
   }
 
   /** The uses of `node` through `this`, by its `this.` name or a bare call proven on `this`, made inside a type that declares it. */

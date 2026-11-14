@@ -707,7 +707,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
     ...contradictedCuts,
     ...attributedCallCuts(attributed.map(({ node, call: { reference } }) => ({ declaration: node, place: { ...reference, name: compactSpelling(reference.name) } }))),
     ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(walk.expanded, reachedIds), knownPlaces, input.proofs?.bound, inbound.memberProofs(walk.expanded), new Set(await boundUses(references, walk.expanded, reachedIds, implemented, input.reading.origins(), input.signal))),
-    ...unresolvedLinkCuts(input.unresolvedRelations ?? [], walked.filter((symbol) => walk.wholeDeclarations.has(symbol.id) && (EDGE_POLICY.typeReferences.to as readonly string[]).includes(symbol.kind)), []),
+    ...unresolvedLinkCuts(input.unresolvedRelations ?? [], walked.filter((symbol) => walk.wholeDeclarations.has(symbol.id) && ([...EDGE_POLICY.typeReferences.to, ...EDGE_POLICY.constantReferences.to] as readonly string[]).includes(symbol.kind)), []),
     ...removedDeclarationCuts(unresolved, selection.removed, knownPlaces, input.proofs?.bound, input.proofs?.localParameters),
     ...unreadRelationCuts(unread, new Set(walked.map((symbol) => symbol.file)), templateOwners(componentsByResource)),
     ...summary.filesNotIndexed.map((file) => fileCut("no-extractor", file, "not-indexed")),

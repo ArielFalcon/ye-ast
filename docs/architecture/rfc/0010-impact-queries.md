@@ -132,6 +132,7 @@ of traversal facts records the policy in its own validity key.
 | an unresolved `this.<member>` or `this.<member>.<rest>` inside the class that declares the member | yes | the class's own code uses the member |
 | `references` into a function, method, value or class | yes | the source uses it |
 | `references` into an interface or type alias (a DTO) | yes | a type change breaks its users; qayaba does not follow these |
+| `references` into a constant, read by a language pack from the sources (`Type.C`, `pkg.Type.C`, a static import, an inherited name, `value.C` on a settled receiver; [ADR-0083](../adr/0083-the-reads-of-a-java-constant-are-read-from-the-sources.md)) | yes, `proven` at confidence 1, from the declaration that holds code and writes the read (a method, a field's initializer, the type for a static initializer), else the innermost one the index places around the read | the index keeps a cross-file read of a Java constant as a reference to its type and loses the member; the type reached through the constant still follows only the row below |
 | `extends`, `implements` into a class or interface | yes | a subtype depends on its supertype |
 | interface method → implementation method of the same name, derived by ye-ast from `implements`/`extends` | yes, both ways | dispatch at run time; codegraph's `interface-impl` bridges are not used, since they stop silently after 40 per class-supertype pair (`bundle:resolution/callback-synthesizer.js:24,1131`) |
 | a reached method → its type, at the same depth | yes; from that type only `extends`/`implements` and `uses-component`/`uses-directive`/`uses-pipe` | routes, components and class-level listeners name the class, not the method; [ADR-0017](../adr/0017-owner-of-a-member-expands-only-whole-type-edges.md) keeps the class and stops it expanding into whoever injects or imports it |
@@ -693,6 +694,13 @@ Unresolved type occurrences use the existing name-based reverse frontier, so an 
 the answer partial. Unread sources and an incomplete source universe retain uncertainty; the absent-stage cut is
 removed only for the registered Java reader. No dispatch selection changes. B4 remains a whole-snapshot slot: a changed
 source invalidates the stage, while a repeated snapshot reuses its retained output.
+
+The same reader relates each read of a constant (the index's kind `constant`, a `static final` field of a class, an enum
+or a record) to the constant, from the declaration that writes the read (ADR-0083). Where the sources do not show which
+field the name denotes (a supertype outside them, a static import that may obscure the type, a receiver whose type is
+inferred or a call's result, a `case` label), it reports an unresolved use of the constant's name, which a reached
+constant pairs with as a `name-only` cut at the place. A type an annotation's argument writes by its simple name
+(`@Mark(Store.CACHE)`) is also a reference of the annotated declaration's type, since the index records nothing there.
 
 
 ### Written declaration references

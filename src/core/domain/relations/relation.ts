@@ -10,7 +10,8 @@ export interface SymbolRef {
 }
 
 /**
- * A source-proven relation between repository declarations: a written type reference, injection or template use.
+ * A source-proven relation between repository declarations: a written type reference, a read of a constant, injection
+ * or template use.
  * The finding's evidence is the first place `from` does so. Each is joined to its
  * graph node by file, a line inside the node's span and simple name (RFC-0010 "Entrypoint join").
  */

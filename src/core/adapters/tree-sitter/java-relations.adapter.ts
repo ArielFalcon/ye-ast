@@ -53,6 +53,18 @@ export function javaAmbiguousNames(root: Node): readonly JavaAmbiguousName[] {
   return found;
 }
 
+/** A field access whose object is not a plain chain of identifiers: `this.f`, `super.f`, `call().f`, `(value).f`. */
+export function javaValueFieldReads(root: Node): readonly Node[] {
+  const found: Node[] = [];
+  const pending = [root];
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    if (node.type === "field_access" && plainSegments(node) === undefined) found.push(node);
+    pending.push(...node.namedChildren.toReversed());
+  }
+  return found;
+}
+
 function plainSegments(node: Node): string[] | undefined {
   if (node.type === "identifier") return [node.text];
   if (node.type !== "field_access") return undefined;

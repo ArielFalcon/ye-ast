@@ -82,7 +82,7 @@ export function javaReceiverBindings(root: Node, { includeUnproven = false, decl
 }
 
 /** The class type a local, a parameter, a loop variable or a one-type catch variable states; none for `var` and varargs. */
-function statedType(declaration: Node): Node | undefined {
+export function statedType(declaration: Node): Node | undefined {
   if (declaration.type === "variable_declarator") return declaration.parent?.type === "local_variable_declaration" ? declaration.parent.childForFieldName("type") ?? undefined : undefined;
   if (declaration.type === "formal_parameter" || declaration.type === "enhanced_for_statement") return declaration.childForFieldName("type") ?? undefined;
   if (declaration.type === "catch_formal_parameter") {

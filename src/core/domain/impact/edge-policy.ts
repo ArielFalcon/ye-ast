@@ -28,6 +28,12 @@ export const EDGE_POLICY = {
   ],
   typeReferences: { from: TYPE_KINDS, to: TYPE_KINDS },
   /**
+   * A read of a constant a language pack proves (ADR-0083): from the declaration whose code writes it, which is where the
+   * relation's source is placed, to the constant. A type reached through the constant still expands only through
+   * `ownerThroughMember`.
+   */
+  constantReferences: { from: [...CODE_KINDS, ...FIELD_KINDS], to: ["constant"] },
+  /**
    * Relations ye-ast reads from Angular sources (RFC-0007 rows A2 and A4): a class injects another, or uses it in its
    * template or as a host directive. The source depends on the target, as with a reference. They are read, not guessed,
    * so each is as certain as a resolved edge.
@@ -96,8 +102,16 @@ export function isFileDependent(kind: string): boolean {
   return kind === EDGE_POLICY.fileKind;
 }
 
+/** The rows a `references` relation into a declaration of `targetKind` follows: into a constant, the constant row; otherwise the type row. */
+export function referenceRow(targetKind: string): { from: readonly string[]; to: readonly string[] } {
+  return (EDGE_POLICY.constantReferences.to as readonly string[]).includes(targetKind) ? EDGE_POLICY.constantReferences : EDGE_POLICY.typeReferences;
+}
+
 export function followsRelation({ kind, sourceKind, targetKind }: PolicyEdge): boolean {
-  if (kind === "references") return (EDGE_POLICY.typeReferences.from as readonly string[]).includes(sourceKind) && (EDGE_POLICY.typeReferences.to as readonly string[]).includes(targetKind);
+  if (kind === "references") {
+    const row = referenceRow(targetKind);
+    return row.from.includes(sourceKind) && row.to.includes(targetKind);
+  }
   const { kinds, from, to } = EDGE_POLICY.relations;
   return (kinds as readonly string[]).includes(kind) && (from as readonly string[]).includes(sourceKind) && (to as readonly string[]).includes(targetKind);
 }

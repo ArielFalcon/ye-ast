@@ -339,6 +339,25 @@ test("a relation joins its classes by file, a line inside the span and the simpl
   assert.deepEqual(s.callers("Target"), ["Good"]);
 });
 
+test("a read of a constant is a caller from the declaration that writes it, else from the innermost declaration that holds the read, never from its type", () => {
+  const read = (from: SymbolRef, line: number) => ({ ...relation("references", from, ref(A, "CACHE", 2)), at: { path: B, line } });
+  const s = setup(
+    [
+      fakeNode("Store", "class", A, 1, 9, "Store"),
+      fakeNode("CACHE", "constant", A, 2, 2, "CACHE"),
+      fakeNode("Reader", "class", B, 1, 30, "Reader"),
+      fakeNode("read", "method", B, 3, 5, "read"),
+      fakeNode("KEY", "constant", B, 7, 7, "KEY"),
+      fakeNode("Inner", "class", B, 10, 20, "Inner"),
+      fakeNode("run", "method", B, 12, 14, "run"),
+    ],
+    [],
+    [read(ref(B, "read", 3), 4), read(ref(B, "KEY", 7), 7), read(ref(B, "Anonymous", 13), 13), read(ref(B, "Reader", 1), 25)],
+  );
+  assert.deepEqual(s.callers("CACHE"), ["Reader", "read", "KEY", "run"]);
+  assert.deepEqual(s.basis("CACHE"), ["reference", "reference", "reference", "reference"]);
+});
+
 test("a method, a test file, or a missing class is no end of a relation", () => {
   const s = setup(
     [

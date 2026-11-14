@@ -28,6 +28,12 @@ B1's `declarations` comes from the existing member-name parse, with exact spans 
 `callables` keeps its dispatch meaning. The shared declaration model joins syntax with index identities and containment
 ([RFC-0027](0027-declaration-model.md), U1); family consumption follows in U2.
 
+B4's relations, which a language pack reads from its sources, go from a type to a type it names, or from the declaration
+whose code reads a constant to that constant ([ADR-0083](../adr/0083-the-reads-of-a-java-constant-are-read-from-the-sources.md)):
+the Java pack reads `Type.C`, `pkg.Type.C`, a name a static import brings in or a subclass inherits, and `value.C` on a
+receiver whose stated type the sources settle, with the scoping it applies to every name in an expression. A read whose
+field the sources do not settle is an unresolved use naming the constant. The shape of a relation is the same for both.
+
 ### HTTP routes declared in a generated interface
 
 When a handler implements an interface generated from the contract, the route annotations live in the generated

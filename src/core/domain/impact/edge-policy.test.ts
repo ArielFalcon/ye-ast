@@ -77,6 +77,14 @@ test("source relations follow only the declaration kinds each rule permits", () 
   assert.equal(relation("references", "class", "function"), false);
 });
 
+test("a reference relation into a constant follows from any declaration that holds code, and into nothing else from a member", () => {
+  const relation = (sourceKind: string, targetKind: string): boolean => followsRelation({ kind: "references", sourceKind, targetKind });
+  for (const sourceKind of ["method", "function", "constant", "field", "class"]) assert.equal(relation(sourceKind, "constant"), true, sourceKind);
+  assert.equal(relation("interface", "constant"), false);
+  assert.equal(relation("method", "variable"), false);
+  assert.equal(relation("method", "enum"), false);
+});
+
 test("only a root a package or the language's libraries bind is outside the repository", () => {
   const evidence = [{ path: "src/a.ts", line: 1 }];
   const root = (value: ImportOrigin) => edgeVerdict({ status: "complete", value, evidence }, undefined, { id: "function", file: "src/b.ts" }).kind === "drop";

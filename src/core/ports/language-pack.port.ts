@@ -36,6 +36,7 @@ export interface LanguagePack {
 }
 
 export interface LanguageRelations {
+  /** From a type to a type it names, or from the declaration whose code reads a constant to that constant (ADR-0083). */
   relations: readonly Finding<Relation>[];
   cuts: readonly Cut[];
   unresolved: readonly UnresolvedUse[];
