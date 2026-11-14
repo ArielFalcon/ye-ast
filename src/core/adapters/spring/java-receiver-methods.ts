@@ -8,7 +8,7 @@ import type { AcceptedCounts, ArgumentCount, ConstructedClassSite, DeclaredSuper
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { declarationsProject, enclosingType, heldJavaProject, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
+import { declarationsProject, enclosingType, heldJavaProject, thisHolder, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve } from "./java-declared-types.ts";
 import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
@@ -82,10 +82,14 @@ interface ReadFile extends ReceiverSource {
  * declarations type with a platform or library type answers `outside` with that type's qualified name (ADR-0079), and a
  * class literal answers the platform's class type. `unknown` is kept for what another reader of the binding chain owns
  * (ADR-0087): a receiver that is a name or `this`, a call without a receiver whose search finds no type, a source the
- * reader holds no tree for, and a place no invocation starts at. Any other receiver the reading settles nothing for (`super`, a
- * parenthesized, cast, conditional or `switch` expression, an array element, a literal, an object creation) is
- * `unproven`, and so is a place several invocations start at whose readings differ; invocations of one place that read
- * alike keep that reading.
+ * reader holds no tree for, and a place no invocation starts at. A call on `super` runs without dispatch (JLS 15.12.4.4)
+ * and is read in the direct superclass of the type `this` denotes there, an anonymous class's being the type it creates:
+ * a repository class names the member the selection of a declared receiver settles, and a type outside the repository
+ * the name resolves, or the root class a class that names none extends, is the outside receiver, both marked `exact`;
+ * `T.super` and `Outer.this` are not read. Any other receiver the reading settles nothing for (`super` whose superclass
+ * or member no selection settles, a parenthesized, cast, conditional or `switch` expression, an array element, a
+ * literal, an object creation) is `unproven`, and so is a place several invocations start at whose readings differ;
+ * invocations of one place that read alike keep that reading.
  */
 export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts, hold?: ParseHold, build: ProjectBuild = {}): ImportOrigins["receiverMethods"] {
   const unreadJvm = paths.some(isUncoveredJvmSource);
@@ -119,6 +123,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
           const chained = resolver.constructorOf(invocation, source.file);
           return chained === undefined ? UNKNOWN : chained === "unproven" || !proves ? UNPROVEN : placedAt(chained);
         }
+        if (invocation.childForFieldName("object")?.type === "super") return proves ? resolver.superMethodOf(invocation, source.file) : UNPROVEN;
         const named = proves ? resolver.methodOf(invocation, source) : undefined;
         if (named !== undefined && "method" in named) return { ...placedAt(named.method), ...(named.bound ? { bound: true as const } : {}) };
         if (named !== undefined && "generated" in named) return GENERATED;
@@ -867,9 +872,43 @@ export function createResolver(project: JavaProject, generated = false) {
     return suppliedConstruction(type, type.node.type === "record_declaration" ? recordComponents(type.node) : 0);
   };
 
+  /**
+   * The direct superclass of the class `this` denotes at `node`: a class the sources declare, the qualified name of a type
+   * outside the repository a written name resolves to, or the root class a class that names none extends (JLS 8.1.4); an
+   * anonymous class extends the class it creates. None for a record, an enum, an enum constant's body, an anonymous class
+   * of an interface, or a superclass the sources do not settle.
+   */
+  const superclassAt = (node: Node, file: JavaFile): { type: TypeDecl } | { outside: string } | undefined => {
+    const holder = thisHolder(node);
+    if (holder?.type !== "class_declaration" && holder?.type !== "object_creation_expression") return undefined;
+    const written = holder.type === "object_creation_expression" ? holder.childForFieldName("type") : holder.childForFieldName("superclass")?.namedChildren[0];
+    if (written === null || written === undefined) return holder.type === "class_declaration" ? { outside: ROOT_CLASS } : undefined;
+    const head = written.type === "generic_type" ? written.namedChildren[0] : written;
+    if (head === null || head === undefined) return undefined;
+    const held = thisType(node, file, project);
+    const found = resolve(head, file, project, enclosingType(held === undefined ? head : (held.node.parent ?? held.node), file, project), head, true);
+    if (found?.kind === "platform" || found?.kind === "library") return { outside: found.fqn };
+    return found?.kind === "repository" && found.type?.kind === "class" && found.type.node.type === "class_declaration" ? { type: found.type } : undefined;
+  };
+
+  /**
+   * What `super.m(...)` runs (JLS 15.12.4.4): the member of the direct superclass the selection of a declared receiver
+   * settles, or the outside receiver of a superclass outside the repository, both `exact`; `unproven` otherwise.
+   */
+  const superMethodOf = (invocation: Node, file: JavaFile): ReceiverMethod => {
+    const name = invocation.childForFieldName("name")?.text;
+    const above = name === undefined ? undefined : superclassAt(invocation, file);
+    if (above === undefined || name === undefined) return UNPROVEN;
+    if ("outside" in above) return { kind: "outside", type: above.outside, exact: true };
+    const offered = memberOf(above.type, name, invocation, file, enclosingType(invocation, file, project));
+    if (offered === undefined) return generated && generatedOf({ type: above.type, typeName: false }, name, argumentCount(invocation)) !== undefined ? GENERATED : UNPROVEN;
+    return "method" in offered ? { ...placedAt(offered.method), exact: true } : { kind: "unproven", candidates: offered.candidates.map(placeOf).sort(byPlace) };
+  };
+
   return {
     constructorOf,
     creationOf,
+    superMethodOf,
     suppliedReference,
     referenceOf,
     /** Whether every supertype of the interface outside the sources is a Spring Data repository interface of the closed vocabulary. */

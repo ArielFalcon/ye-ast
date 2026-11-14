@@ -285,7 +285,8 @@ export type AcceptedCounts = { kind: "counts"; count: number; upward?: true } | 
  * site's file declares it cannot answer (ADR-0045 decision 12).
  */
 export type ReceiverMethod =
-  | { kind: "method"; file: string; start: number; nameLine: number; bound?: true }
+  /** `exact`: the call runs this member itself, never one that overrides it, because it is not virtual (a call on `super`). */
+  | { kind: "method"; file: string; start: number; nameLine: number; bound?: true; exact?: true }
   /**
    * `candidates`: the declarations of the called name that the receiver's type and its hierarchy offer at the call's
    * arity, sorted, present only when the reading read that whole hierarchy. A family attributes the call among them; it
@@ -307,8 +308,11 @@ export type ReceiverMethod =
    * call (`implicitChains`), is the class's.
    */
   | ({ kind: "supplied" } & MethodPlace)
-  /** A receiver whose declared type is the type outside the repository named by its qualified name `type`. */
-  | { kind: "outside"; type: string };
+  /**
+   * A receiver whose declared type is the type outside the repository named by its qualified name `type`; `exact` when the
+   * call runs the member that type holds, never one that overrides it below (a call on `super`).
+   */
+  | { kind: "outside"; type: string; exact?: true };
 
 /** A place a declaration uses a name, where the index places the use: repository-relative and 1-based. */
 export interface UseSite {

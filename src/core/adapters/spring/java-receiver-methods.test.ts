@@ -75,10 +75,19 @@ test("a place several calls of the name start at that read alike keeps their rea
 
 test("a receiver that is an expression other than a name is unproven where the reading settles nothing, a class literal is the platform's class type, and a name another reader owns stays unknown", async () => {
   assert.deepEqual(await methodAt([STORE, JDBC, use("((Store) value).save(\"x\")", [], "Object value")]), { kind: "unproven" });
-  assert.deepEqual(await methodAt([STORE, JDBC, use("super.save(\"x\")", ["  void save(String value) {}"])]), { kind: "unproven" });
   assert.deepEqual(await methodAt([STORE, JDBC, use("Use.class.getName()", ["  String getName() { return null; }"])], "getName"), { kind: "outside", type: "java.lang.Class" });
   const plain = java("Plain.java", ["package app;", "", "class Plain {}"]);
   assert.deepEqual(await methodAt([STORE, JDBC, plain, use("new Plain() { void save(String v) {} void go() { this.save(\"x\"); } }")], "save", undefined, "this.save"), { kind: "unknown" });
+});
+
+test("a call on super is read in the direct superclass and runs without dispatch: a repository class's member, a type outside the repository, the root class; a qualified super is not read", async () => {
+  const base = java("Base.java", ["package app;", "", "class Base {", "  void save(String value) {}", "}"]);
+  const extending = (header: string, call = "super.save(\"x\")") => java("Use.java", ["package app;", "", `class Use ${header} {`, `  void run() { ${call}; }`, "  void save(String value) {}", "}"]);
+
+  assert.deepEqual(await methodAt([base, extending("extends Base")]), { ...method(base, 4), exact: true });
+  assert.deepEqual(await methodAt([base, extending("extends com.lib.Base")]), { kind: "outside", type: "com.lib.Base", exact: true });
+  assert.deepEqual(await methodAt([base, extending("")]), { kind: "outside", type: "java.lang.Object", exact: true });
+  assert.deepEqual(await methodAt([base, extending("extends Base", "Use.super.save(\"x\")")]), { kind: "unproven" });
 });
 
 test("a platform interface that declares no members leaves the receiver's method selectable, while a supertype with members or a homonym from another package still withholds it", async () => {

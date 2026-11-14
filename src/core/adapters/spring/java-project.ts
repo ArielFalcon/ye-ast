@@ -123,13 +123,18 @@ export function enclosingType(node: Node, file: JavaFile, project: JavaProject):
   return project.types.filter((type) => type.file === file && type.node.startIndex <= node.startIndex && node.endIndex <= type.node.endIndex).sort((a, b) => b.node.startIndex - a.node.startIndex)[0];
 }
 
+/** The node whose body holds `node`, through lambdas: the declaration or the creation whose instance `this` and `super` denote there. */
+export function thisHolder(node: Node): Node | undefined {
+  return enclosingBody(node)?.parent ?? undefined;
+}
+
 /**
  * The type whose instance `this` and `super` denote at `node`: the type whose body holds it, through lambdas. Inside an
  * anonymous or a local class, which the project does not hold, no type answers.
  */
 export function thisType(node: Node, file: JavaFile, project: JavaProject): TypeDecl | undefined {
-  const holder = enclosingBody(node)?.parent;
-  return holder === null || holder === undefined ? undefined : project.types.find((type) => type.file === file && type.node.id === holder.id);
+  const holder = thisHolder(node);
+  return holder === undefined ? undefined : project.types.find((type) => type.file === file && type.node.id === holder.id);
 }
 
 /**

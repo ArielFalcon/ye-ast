@@ -269,6 +269,15 @@ test("a Java member call whose receiver the pack reads as a type outside the rep
   assert.deepEqual(unproven.map((settled) => [settled.kind, "dispatch" in settled ? settled.dispatch : undefined]), [["receiver", undefined], ["unbound", undefined]]);
 });
 
+test("a call the index spells as a bare name whose outside receiver runs without dispatch is an exact outside dispatch, and without the mark stays unbound (ADR-0087 decision 5)", async () => {
+  const calls = [{ name: "get", line: 9, kind: "calls" }];
+  const [exact] = await bound(outsideReceiver({ kind: "outside", type: "com.lib.Base", exact: true }), "run", calls);
+  const [virtual] = await bound(outsideReceiver({ kind: "outside", type: "com.lib.Base" }), "run", calls);
+
+  assert.deepEqual(asReceiver(exact!).dispatch, { type: "com.lib.Base", exact: true });
+  assert.equal(virtual!.kind, "unbound");
+});
+
 /**
  * `mayRunUnder` for the declaration `Api.get` over a pack answering `answer`, asked `times` times; how often the pack was
  * asked. With `homonym`, the file also declares another `get` on line 7, for which the pack answers it.

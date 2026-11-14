@@ -59,10 +59,17 @@ export interface DeclaredBinding {
 
 /**
  * A member call whose receiver's declared type is the type outside the repository `type` (ADR-0079 decision 4): it may
- * call each declaration `mayRunUnder` keeps, never the others.
+ * call each declaration `mayRunUnder` keeps, never the others; none when `exact`, a call that is not virtual and runs the
+ * member that type holds (ADR-0087 decision 5).
  */
 export interface OutsideDispatch {
   type: string;
+  exact?: true;
+}
+
+/** The dispatch of an outside receiver answer. */
+export function outsideDispatchOf(answer: Extract<ReceiverMethod, { kind: "outside" }>): OutsideDispatch {
+  return answer.exact === true ? { type: answer.type, exact: true } : { type: answer.type };
 }
 
 /** A binding no read is pending on. */
@@ -264,7 +271,7 @@ export function createCallBindings({ store, navigation, origins, binder, declara
       for (const [k, { index }] of unplaced.entries()) {
         const answer = found[k];
         const binding = bindings[index];
-        if (answer?.kind === "outside" && binding?.kind === "receiver") bindings[index] = { ...binding, outside: true, dispatch: { type: answer.type } };
+        if (answer?.kind === "outside" && binding?.kind === "receiver") bindings[index] = { ...binding, outside: true, dispatch: outsideDispatchOf(answer) };
       }
     }
     if (rooted.length > 0) {
@@ -317,7 +324,7 @@ export function createCallBindings({ store, navigation, origins, binder, declara
 
   /** What the method a `declared` binding's receiver reading names settles it to. */
   function settleDeclared({ member, form, call }: DeclaredBinding, answered: ReceiverMethod | undefined): SettledBinding {
-    if (answered?.kind === "outside" && form === "member") return { kind: "receiver", proof: { link: "none" }, outside: true, dispatch: { type: answered.type }, candidates: namedDeclarations(member, call.reference.file, true), attributed: [] };
+    if (answered?.kind === "outside" && (form === "member" || answered.exact === true)) return { kind: "receiver", proof: { link: "none" }, outside: true, dispatch: outsideDispatchOf(answered), candidates: namedDeclarations(member, call.reference.file, true), attributed: [] };
     const method: ReceiverMethod | undefined = answered?.kind === "generated" || answered?.kind === "supplied" ? { kind: "unproven", candidates: [] } : answered?.kind === "outside" ? { kind: "unproven" } : answered;
     const target = method?.kind === "method" ? placed(method.file, method.start, method.nameLine) : undefined;
     if (target !== undefined) return { kind: "declaration", target, link: form === "chain" ? "chain" : method?.kind === "method" && method.bound === true ? "bound-receiver" : "declared-receiver" };

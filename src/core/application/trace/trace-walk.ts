@@ -16,7 +16,7 @@ import type { DeclaredType, DispatchTargets, ImplementedDeclarations, ImplicitCh
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, placedBetween, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
-import type { EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
+import type { EdgeTarget, EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
 import type { CallPlace, ReceiverProof } from "../navigation/call-binder.ts";
 import { unsettledBy, type DeclarationUses, type UnresolvedIn } from "../navigation/declaration-uses.ts";
 import { callEdgesOf, valueEdgesOf, type ReconciledCalls } from "../navigation/reconciled-calls.ts";
@@ -145,6 +145,8 @@ type Child = ({ symbol: GraphSymbol; declaration?: never } | { declaration: Mode
   deferred?: true;
   /** A class that stands for the constructor the language supplies it, walked as that construction. */
   construction?: true;
+  /** A call that is not virtual runs this declaration itself: no dispatch is read below it (ADR-0087 decision 5). */
+  exact?: true;
 }
 
 interface Body {
@@ -310,6 +312,10 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     const overriders = await implementationsBelow(symbol, owners);
     return overriders.length === 0 ? undefined : { cut: dispatchCut(symbol, overriders, "overridable") };
   };
+  /** An edge the reverse families leave for its outside receiver is read by the receiver reading here, which holds it unproven (ADR-0079). */
+  const heldAtReceiver = (verdict: EdgeTarget): EdgeTarget => (verdict.kind === "drop" && verdict.root.kind === "outside-receiver" ? { kind: "keep" } : verdict);
+  /** The child a call reaches, marked `exact` when the receiver reading states the call is not virtual. */
+  const exactly = (child: Child, receiver: ReceiverMethod | undefined): Child => (receiver?.kind === "method" && receiver.exact === true ? { ...child, exact: true } : child);
   /** Whether the call's own source binds its receiver to a function value, which a library member such as `call` runs. */
   const holdsFunctionValue = async (reference: GraphUnresolvedReference, receiver: string, member: string): Promise<boolean> =>
     (await syntaxIndexOf(reference.file)).functionValueCalls.has(functionValueKey({ line: reference.line, receiver, member }));
@@ -410,7 +416,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     const [indexed, missing, ambiguous, deferredOnly] = [placed(calls.references), placed(calls.writtenOnly), placed(calls.ambiguous), placed(calls.deferredOnly)];
     const contradicted = calls.contradicted.filter(({ record }) => within(record.line));
     const passed = uses.followed(node, values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));
-    const verdicts = await targets.verdictsOf([...called, ...passed], signal);
+    const verdicts = (await targets.verdictsOf([...called, ...passed], signal)).map(heldAtReceiver);
     const valueRoots = new Map(
       [...called, ...passed].flatMap(({ target }, index) => {
         const verdict = verdicts[index]!;
@@ -681,7 +687,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
           reached = constructors[0]!;
         }
         if (receiver !== undefined && receiver.kind !== "unknown" && proven === undefined) cuts.push(callCut(placeAt(node.file, edge.line ?? node.startLine, target.name), sortedUnique([candidateOf(target), ...declarationsNamed(target.name, node.file).map(candidateOf)])));
-        else children.push(value ? childAt(reached, edge.line, edge.column, target.name, "reference", true) : childAt(reached, edge.line, edge.column, target.name, "call"));
+        else children.push(value ? childAt(reached, edge.line, edge.column, target.name, "reference", true) : exactly(childAt(reached, edge.line, edge.column, target.name, "call"), receiver));
       } else if (verdict.root.kind === "local-parameter" || verdict.root.kind === "lexical") {
         cuts.push(callCut(placeAt(node.file, edge.line ?? node.startLine, target.name), sortedUnique(declarationsNamed(target.name, node.file).map(candidateOf))));
       } else {
@@ -699,11 +705,13 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
         continue;
       }
       if (declared !== undefined) {
-        await settleBinding(reference, bindings.settleDeclared(declared, receiver), absent);
+        const settled = bindings.settleDeclared(declared, receiver);
+        if (settled.kind === "declaration" && reference.kind !== "instantiates" && receiver?.kind === "method" && receiver.exact === true) children.push(exactly(childAt(settled.target, reference.line, reference.column, reference.name, "call"), receiver));
+        else await settleBinding(reference, settled, absent);
         continue;
       }
       const method = receiver?.kind === "method" ? placedMethod(receiver, CALLABLE_KINDS) : undefined;
-      if (method !== undefined) children.push(childAt(method, reference.line, reference.column, reference.name, "call"));
+      if (method !== undefined) children.push(exactly(childAt(method, reference.line, reference.column, reference.name, "call"), receiver));
       else await settleByName(reference, name, named, false, absent);
     }
     const sorted = children.sort((a, b) => compareOccurrence(a.place, b.place));
@@ -741,9 +749,28 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
   const stopped = { depth: new Set<string>(), expansions: new Set<string>() };
   const cuts: Cut[] = [];
   const constructions = new Map<WalkedStep, readonly number[]>();
+  /** The steps expanded for a call that is not virtual, by declaration, whose dispatch a later virtual call still owes. */
+  const dispatchOwed = new Map<string, { step: WalkedStep; depth: number }>();
   let expansions = 0;
 
-  async function visit(step: WalkedStep, node: TraceNode, depth: number, construction?: true): Promise<void> {
+  /** The dispatch a declaration first expanded without it owes, read on that expansion once a virtual call reaches it. */
+  async function readOwedDispatch(id: string, symbol: GraphSymbol): Promise<void> {
+    const owed = dispatchOwed.get(id);
+    if (owed === undefined) return;
+    dispatchOwed.delete(id);
+    const dispatch = await unboundDispatch(symbol);
+    if (dispatch?.cut !== undefined) {
+      cuts.push(dispatch.cut);
+      owed.step.unsettled = true;
+    }
+    if (dispatch?.alternatives !== undefined) owed.step.alternatives = dispatch.alternatives.map(declarationOf);
+    if (dispatch?.to === undefined) return;
+    const walked = stepOf(dispatch.to, { via: "dispatch" });
+    owed.step.children.push(walked);
+    await visit(walked, dispatch.to, owed.depth + 1);
+  }
+
+  async function visit(step: WalkedStep, node: TraceNode, depth: number, construction?: true, exact?: true): Promise<void> {
     if (signal?.aborted) return;
     const symbol = indexedDeclaration(node);
     const declaration = symbol ?? node;
@@ -757,7 +784,11 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     const ownsMembers = symbol !== undefined && (depth === 0 || step.via === "template");
     const page = ownsMembers && pages !== undefined && isClassKind(symbol.kind) && (step.via === "template" || pages.roots.has(symbol.id));
     const owesMembers = ownsMembers && isClassKind(symbol.kind) && (first === undefined || !rootExpansions.has(first));
-    if (first !== undefined && !owesMembers) { step.seen = first; return; }
+    if (first !== undefined && !owesMembers) {
+      step.seen = first;
+      if (exact === undefined && symbol !== undefined) await readOwedDispatch(declaration.id, symbol);
+      return;
+    }
     if (budget.depth !== undefined && depth >= budget.depth) { stopped.depth.add(anchorOf(declaration)); return; }
     if (budget.expansions !== undefined && expansions >= budget.expansions) { stopped.expansions.add(anchorOf(declaration)); return; }
     expansions += 1;
@@ -773,7 +804,8 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
         if (depth === 0) body.cuts.push(callCut(placeAt(symbol.file, symbol.startLine, symbol.name), [], "page-unplanned"));
       } else body.children = pageOrder(body.children, plan, body.cuts);
     }
-    const dispatch = symbol === undefined ? undefined : await unboundDispatch(symbol);
+    if (exact !== undefined && symbol !== undefined && first === undefined) dispatchOwed.set(declaration.id, { step, depth });
+    const dispatch = symbol === undefined || exact !== undefined ? undefined : await unboundDispatch(symbol);
     if (dispatch?.cut !== undefined) body.cuts.push(dispatch.cut);
     if (dispatch?.alternatives !== undefined) step.alternatives = dispatch.alternatives.map(declarationOf);
     if (dispatch?.to !== undefined) body.children.push(childAt(dispatch.to, null, null, dispatch.to.name, "dispatch"));
@@ -789,7 +821,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
         ...(child.deferred === undefined ? {} : { deferred: child.deferred }),
       });
       step.children.push(walked);
-      await visit(walked, next, depth + 1, child.construction);
+      await visit(walked, next, depth + 1, child.construction, child.exact);
     }
   }
 

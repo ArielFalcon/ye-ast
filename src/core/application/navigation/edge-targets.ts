@@ -99,7 +99,16 @@ export type EdgeTarget =
   | Exclude<EdgeVerdict<GraphSymbol>, { kind: "keep" | "drop" | "redirect" }>
   | { kind: "keep"; receiver?: string; derivation?: ReceiverSettlement }
   | { kind: "redirect"; to: GraphSymbol; derivation?: "typed"; receiver?: string }
-  | { kind: "drop"; root: ImportOrigin | LexicalRoot };
+  | { kind: "drop"; root: ImportOrigin | LexicalRoot | OutsideReceiver };
+
+/**
+ * A call whose receiver's declared type is the type outside the repository `type`, under which the edge's target cannot
+ * run (ADR-0079 decision 5), or which runs that type's member without dispatch (ADR-0087 decision 5).
+ */
+export interface OutsideReceiver {
+  kind: "outside-receiver";
+  type: string;
+}
 
 /** A root spelled alone that a declaration of its own file's scope binds, and the graph places no declaration of. */
 export interface LexicalRoot {
@@ -186,7 +195,8 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
       for (const [index, followed] of kept.entries()) {
         const receiver = receivers[index];
         const method = declared.get(followed);
-        if (method !== undefined && method.id !== followed.target.id) verdicts.set(edgeKey(followed.edge), { kind: "redirect", to: method });
+        if (method !== undefined && !("id" in method)) verdicts.set(edgeKey(followed.edge), { kind: "drop", root: method });
+        else if (method !== undefined && method.id !== followed.target.id) verdicts.set(edgeKey(followed.edge), { kind: "redirect", to: method });
         else if (receiver === undefined) verdicts.set(edgeKey(followed.edge), KEEP);
         else if (binder === undefined || bindings === undefined) verdicts.set(edgeKey(followed.edge), { kind: "keep", receiver });
         else verdicts.set(edgeKey(followed.edge), await receiverVerdict(followed, receiver, binder, bindings));
@@ -279,17 +289,24 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
     return { kind: "keep", receiver, derivation: binding.target !== undefined || offered ? "proven" : "name-match" };
   }
 
-  /** Per Java call edge, the method the receiver reading names at its place (ADR-0044 decision 1); none where it settles nothing. */
-  async function declaredMethodsOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<ReadonlyMap<FollowedEdge, GraphSymbol>> {
+  /**
+   * Per Java call edge, the method the receiver reading names at its place (ADR-0044 decision 1), or the outside receiver
+   * whose type the edge's target cannot run under or whose member the call runs without dispatch; none where it settles
+   * nothing.
+   */
+  async function declaredMethodsOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<ReadonlyMap<FollowedEdge, GraphSymbol | OutsideReceiver>> {
     const asked = bindings === undefined ? [] : edges.filter(({ edge, source }) => edge.kind === "calls" && hasTyping(source.file, "nominal"));
     if (bindings === undefined || asked.length === 0) return new Map();
     const found = await origins.receiverMethods(asked.map(({ edge, source, target }) => ({ file: source.file, line: edge.line!, column: edge.column! + 1, member: target.name })), signal);
-    return new Map(asked.flatMap((followed, index) => {
+    const methods = new Map<FollowedEdge, GraphSymbol | OutsideReceiver>();
+    for (const [index, followed] of asked.entries()) {
       const { edge, source, target } = followed;
       const call = { body: source, reference: { from: source.id, file: source.file, line: edge.line!, column: edge.column!, name: target.name, kind: edge.kind, candidates: [] } };
       const settled = bindings.settleDeclared({ kind: "declared", member: target.name, form: "member", call }, found[index]);
-      return settled.kind === "declaration" ? [[followed, settled.target] as const] : [];
-    }));
+      if (settled.kind === "declaration") methods.set(followed, settled.target);
+      else if (settled.kind === "receiver" && settled.dispatch !== undefined && (settled.dispatch.exact === true || !(await bindings.mayRunUnder(settled.dispatch, target, signal)))) methods.set(followed, { kind: "outside-receiver", type: settled.dispatch.type });
+    }
+    return methods;
   }
 
   return {

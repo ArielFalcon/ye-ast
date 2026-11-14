@@ -56,7 +56,9 @@ it below.
 4. **A call on `super` is read in the superclass.** `super.m(...)` is selected among the members of the direct
    superclass of the type `this` denotes there, by the selection of a declared receiver, ADR-0086 included. It is the
    outside receiver, marked not virtual, when that superclass is a type outside the repository the name bindings name
-   by its qualified name: no repository declaration is its target, so an index edge at the call is not followed. It is
+   by its qualified name, or the root class of a class that names no superclass (JLS 8.1.4): no repository declaration
+   is its target, so an index edge at the call is not followed. A record, an enum, an enum constant's body and an
+   anonymous class of an interface keep `unproven`. It is
    `unproven` when the superclass is neither, or the selection settles no one member. `T.super.m(...)` and
    `Outer.this.m(...)` keep today's `unproven`.
 5. **The selected member runs without dispatch.** The answer of decision 4 states that the call is not virtual. `trace`

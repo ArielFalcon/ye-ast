@@ -287,7 +287,7 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, or
             attributed.push({ node, call });
             if (occurrence !== undefined) settled.push({ node, occurrence, away: [] });
           } else if (occurrence !== undefined && binding.kind === "receiver" && binding.dispatch !== undefined) {
-            if (!(await bindings.mayRunUnder(binding.dispatch, node, signal))) settled.push({ node, occurrence, away: [] });
+            if (binding.dispatch.exact === true || !(await bindings.mayRunUnder(binding.dispatch, node, signal))) settled.push({ node, occurrence, away: [] });
             else open.push({ call, declaration: node, occurrence });
           } else if (occurrence !== undefined) {
             const away = boundAway(read, constructed);

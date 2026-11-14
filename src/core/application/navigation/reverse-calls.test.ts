@@ -202,6 +202,15 @@ test("a reference on a receiver declared outside the repository is settled away 
   assert.deepEqual(attributed, []);
 });
 
+test("a reference whose outside receiver runs that type's member without dispatch is settled away from every reached declaration, also one that may run under the type (ADR-0087 decision 5)", async () => {
+  const nodes = [fakeNode("MyMap.get", "method", "src/MyMap.java", 2, 4, "get"), fakeNode("use", "method", "src/Use.java", 1, 9)];
+  const dispatch: SettledBinding = { kind: "receiver", proof: { link: "none" }, outside: true, dispatch: { type: "com.lib.Base", exact: true }, candidates: [], attributed: [] };
+  const { reverse, symbol } = setup(nodes, [], [{ body: "use", line: 2, name: "get" }], () => dispatch, {}, {}, undefined, [], new Set(["MyMap.get"]));
+
+  const { settled } = await reverse.into([symbol("MyMap.get")]);
+  assert.deepEqual(settled.map((entry) => `${entry.node.id}:${"away" in entry ? `away ${entry.away.length}` : "via"}`), ["MyMap.get:away 0"]);
+});
+
 test("a reference left open toward a reached declaration is settled away from it when the call writes a count it does not accept; one settled away from it already, or reaching it, is not asked (ADR-0084 decision 2)", async () => {
   const nodes = [fakeNode("Api.get", "method", "src/Api.java", 2, 4, "get"), fakeNode("Store.get", "method", "src/Store.java", 2, 4, "get"), fakeNode("MyMap.get", "method", "src/MyMap.java", 2, 4, "get"), fakeNode("use", "method", "src/Use.java", 1, 9)];
   const written: Written[] = [{ body: "use", line: 2, name: "Paths.get" }, { body: "use", line: 3, name: "store.get" }, { body: "use", line: 4, name: "row.get" }, { body: "use", line: 5, name: "x.get" }, { body: "use", line: 6, name: "map.get" }];
