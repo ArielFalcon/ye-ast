@@ -136,6 +136,7 @@ of traversal facts records the policy in its own validity key.
 | interface method → implementation method of the same name, derived by ye-ast from `implements`/`extends` | yes, both ways | dispatch at run time; codegraph's `interface-impl` bridges are not used, since they stop silently after 40 per class-supertype pair (`bundle:resolution/callback-synthesizer.js:24,1131`) |
 | a reached method → its type, at the same depth | yes; from that type only `extends`/`implements` and `uses-component`/`uses-directive`/`uses-pipe` | routes, components and class-level listeners name the class, not the method; [ADR-0017](../adr/0017-owner-of-a-member-expands-only-whole-type-edges.md) keeps the class and stops it expanding into whoever injects or imports it |
 | `imports` into a file node | no; `imports` into a symbol: yes when the importing file's top-level code uses it | a file node leads nowhere |
+| a TypeScript use, read from the sources, written in a statement outside every declaration of its file (`bootstrap(AppModule)`; [ADR-0082](../adr/0082-a-use-in-a-files-top-level-statements-names-the-file-as-its-dependent.md)) | to the file, `reference`, `proven`, at the lines of the use; an export statement that only re-exposes the name (`export { X }`, `export default X`) is none | the file's top-level code is what writes the use. A file whose places that write the name are all settled has no top-level declaration standing in for its code; one with a place whose binding is unknown keeps the row above. The file leads nowhere: it reaches no entrypoint, counts no fan-in and holds no cut of the declarations it contains |
 | an injectable class with no caller → its importers' top-level code | yes | injection without a static call (qayaba `codegraph-store-reader.mjs:248`) |
 | `injects`, `uses-component`, `uses-directive`, `uses-pipe` between two classes or components, read by ye-ast from the Angular sources ([RFC-0007](0007-extension-model.md) rows A2 and A4) | yes, confidence 1 | the source injects or renders the target; the relation is read from the code, not guessed |
 | `navigates` | no | a router link is navigation, not dependence; a call the index resolved into one (`this.router.navigate(...)`) is read as the unresolved reference it was, so its name can still be a cut |
@@ -291,7 +292,9 @@ altered one and at the merge base for a removed one (the routes its contract joi
 consumers from them (RFC-0011). Schema 0.14.0 adds the field, 0.15.0 `handlers`.
 
 `endLine` is the declaration's last line and is present only when the declaration spans more than one line, the
-convention `Evidence` already follows. `via.lines` are **every** place inside the reached symbol's own file where it
+convention `Evidence` already follows. An entry of `kind` `file` is a file whose top-level statements use the symbol it
+was reached through (ADR-0082): `symbol` is the name the index gives the file's node, `line` and `endLine` the file's span,
+and it is not a declaration a `callers` target can name. `via.lines` are **every** place inside the reached symbol's own file where it
 depends on the symbol that reached it, in line order: a symbol that calls another three times is three places to change.
 `via.basis` says what the dependence is — `call` when a call or an instantiation is among the merged edges, `reference`
 when it only names the symbol, and `contains`, `dispatch`, `relation` or `import` for the structural dependences the walk

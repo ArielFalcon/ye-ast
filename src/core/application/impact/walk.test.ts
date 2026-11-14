@@ -21,6 +21,10 @@ function walk(nodes: FakeNode[], edges: FakeEdge[], seedIds: string[], budget: I
   return walkImpact(ordered, wrap(createInboundEdges(graph, (path) => path.includes("/test/"), [])), budget);
 }
 
+function graphSymbol(nodes: FakeNode[], id: string): GraphSymbol {
+  return fakeCodeGraph(nodes, []).symbolsByIds([id as GraphNodeId])[0]!;
+}
+
 const summary = (result: ReturnType<typeof walk>) => result.reached.map((r) => `${r.symbol.id}@${r.depth}`);
 
 test("callers are reached level by level with the symbol that first reached them", () => {
@@ -121,6 +125,17 @@ test("a type one of its members reached first keeps every row from the level its
   assert.deepEqual(summary(walk([fn("a"), fn("x", 1, "src/A.ts"), ...type], sameLevel, ["a"])), ["a@0", "x@1", "O@1", "m@1", "user@3"]);
   const pending = walk([fn("a"), fn("p", 1, "src/A.ts"), fn("q", 1, "src/Z.ts"), ...type], [...owned, call("p", "a"), call("q", "a"), call("m", "p"), { from: "O", to: "q", kind: "references" }], ["a"]);
   assert.deepEqual(summary(pending), ["a@0", "p@1", "q@1", "O@2", "m@2", "user@3"]);
+});
+
+test("a file a top-level use names is reached and spends no expansion", () => {
+  const nodes = [fn("a"), fakeNode("main.ts", "file", "src/main.ts", 1, 30)];
+  const names = (inbound: InboundEdges): InboundEdges => ({
+    ...inbound,
+    callersOf: (node, contractChanged, throughMember) => (node.id === "a" ? [{ from: graphSymbol(nodes, "main.ts"), confidence: 1, lines: [3], basis: "reference", derivation: "proven" }] : inbound.callersOf(node, contractChanged, throughMember)),
+  });
+  const result = walk(nodes, [], ["a"], {}, names);
+  assert.deepEqual(summary(result), ["a@0", "main.ts@1"]);
+  assert.equal(result.cost.expansionsUsed, 1);
 });
 
 test("a type reached through one of its members does not expand through the importers of its file", () => {

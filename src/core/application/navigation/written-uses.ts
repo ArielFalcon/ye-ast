@@ -1,6 +1,6 @@
 import type { Token, SourceReading } from "../../domain/change/source-tokens.ts";
 import { topLevelOf, isSeedable } from "../../domain/change/seeds.ts";
-import { FOLLOWED_EDGE_KINDS, followsEdge } from "../../domain/impact/edge-policy.ts";
+import { FOLLOWED_EDGE_KINDS, followsEdge, isFileDependent } from "../../domain/impact/edge-policy.ts";
 import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import { DECLARING_KEYWORDS, readsWrittenUses } from "../../domain/impact/written-uses.ts";
 import type { CodeGraphReader, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
@@ -8,7 +8,10 @@ import type { DeclaredMemberNames } from "../../ports/declared-member-names.port
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 
-/** A place a source writes a name bound to `node`, held by `from`, which the edge policy lets depend on `node` through it. */
+/**
+ * A place a source writes a name bound to `node`, held by `from`: the declaration the edge policy lets depend on `node`
+ * through it, or the node of the file for a statement outside every declaration (ADR-0082).
+ */
 export interface HeldUse {
   node: GraphSymbol;
   from: GraphSymbol;
@@ -18,10 +21,10 @@ export interface HeldUse {
 }
 
 /**
- * What the sources write of reached declarations the index records no edge for. `held`: the uses a declaration writes.
- * `read`: by node, the files where every place that writes the name it is bound to is settled: a held use, or a binding of
- * another declaration. A file with a use no declaration the edge policy admits holds (a top-level statement), or a place
- * whose binding is unknown, is not read and keeps the index's importer fallback.
+ * What the sources write of reached declarations the index records no edge for. `held`: the uses a declaration or a
+ * file's top-level statements write. `read`: by node, the files where every place that writes the name it is bound to is
+ * settled: a held use, an export statement, or a binding of another declaration. A file with a use inside a declaration
+ * the edge policy does not admit, or a place whose binding is unknown, is not read and keeps the index's importer fallback.
  */
 export interface WrittenUseReading {
   read: ReadonlyMap<GraphNodeId, ReadonlySet<string>>;
@@ -116,7 +119,7 @@ export function createWrittenUses({ store, sources, tokensOf, syntaxOf, origins,
       if (!locals.has(token.text) || !IDENTIFIER.test(token.text)) continue;
       if (imports.some(({ start, end }) => start <= token.startOffset && token.endOffset <= end)) continue;
       const previous = code[index - 1]?.text;
-      if (previous !== undefined && DECLARING_KEYWORDS.has(previous)) continue;
+      if ((previous !== undefined && DECLARING_KEYWORDS.has(previous)) || reexposes(code, index)) continue;
       const column = token.startOffset - (content.lastIndexOf("\n", token.startOffset - 1) + 1);
       const at = { line: token.start, column };
       if ((own && contains(node, at)) || indexed.has(token.start)) continue;
@@ -132,15 +135,24 @@ export function createWrittenUses({ store, sources, tokensOf, syntaxOf, origins,
     return binding.kind === "import" && binding.origin.kind === "repository";
   }
 
-  /** The declaration that holds a place and may depend on `node` through it: the innermost the policy admits, or the class a decorator there belongs to. */
+  /**
+   * What holds a place and may depend on `node` through it: the innermost declaration the policy admits, the class a
+   * decorator there belongs to, or, where the syntax places it outside every declaration, the file's node.
+   */
   async function holderOf(site: Site): Promise<GraphSymbol | undefined> {
     const at = { line: site.line, column: site.column };
     const admits = (from: GraphSymbol): boolean => from.id !== site.node.id && followsEdge({ kind: "references", sourceKind: from.kind, targetKind: site.node.kind });
     const around = declarationsIn(site.file).filter((symbol) => contains(symbol, at)).sort(bySpan);
     if (around.length > 0 || syntaxOf === undefined) return around.find(admits);
     const written = (await syntaxOf(site.file)).declarations.filter(({ kind, span }) => kind === "class" && before(span.start, { line: site.line, column: site.column + 1 }) && before({ line: site.line, column: site.column + 1 }, span.end));
+    if (written.length === 0) return fileNodeOf(site.file);
     const classes = written.flatMap(({ name, span }) => declarationsIn(site.file).filter((symbol) => symbol.name === name && span.start.line <= symbol.startLine && symbol.endLine <= span.end.line && admits(symbol)));
     return classes.length === 1 ? classes[0] : undefined;
+  }
+
+  function fileNodeOf(file: string): GraphSymbol | undefined {
+    const nodes = store.symbolsInFiles([file]).filter(({ kind }) => isFileDependent(kind));
+    return nodes.length === 1 ? nodes[0] : undefined;
   }
 
   return {
@@ -169,6 +181,23 @@ export function createWrittenUses({ store, sources, tokensOf, syntaxOf, origins,
       return { read, held };
     },
   };
+}
+
+/**
+ * Whether the name at `index` is one an export statement only re-exposes: listed in `export { … }` (the form with `from`
+ * is an import range), or written alone as `export default X`.
+ */
+function reexposes(code: readonly Token[], index: number): boolean {
+  const token = code[index]!;
+  let at = index - 1;
+  while (at >= 0 && (IDENTIFIER.test(code[at]!.text) || code[at]!.text === ",") && code[at]!.text !== "export") at--;
+  if (code[at]?.text === "{") {
+    const opener = code[at - 1]?.text === "type" ? at - 2 : at - 1;
+    return code[opener]?.text === "export";
+  }
+  const next = code[index + 1];
+  const alone = next === undefined || next.text === ";" || (next.start > token.end && (IDENTIFIER.test(next.text) || next.text === "@"));
+  return alone && code[index - 1]?.text === "default" && code[index - 2]?.text === "export";
 }
 
 function before(a: { line: number; column: number }, b: { line: number; column: number }): boolean {

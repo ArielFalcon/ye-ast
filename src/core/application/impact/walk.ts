@@ -1,4 +1,5 @@
 import type { DependenceBasis, DependenceDerivation, ImpactBudget } from "../../domain/impact/impact-fact.ts";
+import { isFileDependent } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor } from "../../domain/impact/impact-cuts.ts";
 import { boundCut, type Cut, type WalkBoundKind } from "../../domain/shared/fact.ts";
 import { comparePosition } from "../../domain/shared/code-node.ts";
@@ -73,7 +74,8 @@ function placeOn(symbol: GraphSymbol | ModelDeclaration, dependence: InboundEdge
 /**
  * Inbound from the seeds, level by level in position order, each symbol expanded once, so the walk ends on any graph.
  * A reached method also reaches its type at its own level, and that type is expanded once more, for the rows a member
- * does not open, at the level its own edge reaches it at. The seeds are distinct symbols.
+ * does not open, at the level its own edge reaches it at. A file a top-level use names is reached and not expanded
+ * (ADR-0082). The seeds are distinct symbols.
  */
 export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges, budget: ImpactBudget = {}, syntax?: { seeds: readonly ModelDeclaration[]; callers: ReadonlyMap<string, readonly InboundEdge[]> }): Walk {
   const recs = new Map<string, Rec>();
@@ -110,6 +112,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
       const rec = queue[index]!;
       if (handled.has(rec)) continue;
       handled.add(rec);
+      if (isFileDependent(rec.symbol.kind)) continue;
       const indexed = indexedDeclaration(rec.symbol);
       const membersOnly = rec.wholeFrom === undefined ? rec.throughMember : depth < rec.wholeFrom;
       rec.callers = indexed === undefined ? syntax?.callers.get(rec.symbol.id) ?? [] : inbound.callersOf(indexed, rec.contractChanged, membersOnly);

@@ -15,7 +15,7 @@ import { triviaLinesOf } from "../../domain/change/token-lines.ts";
 import type { SettledHunkChange } from "../../domain/impact/impact-fact.ts";
 import { isSeedable, type ComponentRef, type SelectedSeed } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
-import { EDGE_POLICY, isJavaTypeKind } from "../../domain/impact/edge-policy.ts";
+import { EDGE_POLICY, isFileDependent, isJavaTypeKind } from "../../domain/impact/edge-policy.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
 import { attributedCallCuts, contradictedCallCuts, declarationAnchor, declarationUseKey, fileCut, removedDeclarationCuts, unheldCut, unplacedSupertypeCuts, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation, type UnresolvedUse } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
@@ -692,7 +692,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const written = targets === undefined || origins === undefined ? undefined : createWrittenUses({ store, sources: headTree.sources, tokensOf: (file) => input.reading.tokensOf(file), syntaxOf: input.reading.syntaxOf, origins, importedDeclarations: targets.importedDeclarations });
   const { inbound, walk, attributed, references, cuts: contradictedCuts } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls, contradictions, syntaxWalk, written);
 
-  const walked = walk.reached.flatMap(({ symbol }) => indexedDeclaration(symbol) ?? []);
+  const walked = walk.reached.flatMap(({ symbol }) => indexedDeclaration(symbol) ?? []).filter(({ kind }) => !isFileDependent(kind));
   const reachedIds = new Set(walked.map((symbol) => symbol.id));
   /** Both proofs of a known target: an admitted joined settlement and an import that names something outside. */
   const knownPlaces = new Set([...(input.proofs?.external ?? []), ...(typedReferences?.settled ?? [])]);
@@ -742,7 +742,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
     })),
     entrypoints: reachedEntrypoints(
       headTree.findings,
-      walk.reached.map(({ symbol, depth, confidence, seeds: reaching }) => ({ file: symbol.file, name: symbol.name, startLine: symbol.startLine, endLine: symbol.endLine, depth, confidence, seeds: reaching })),
+      walk.reached.filter(({ symbol }) => !isFileDependent(symbol.kind)).map(({ symbol, depth, confidence, seeds: reaching }) => ({ file: symbol.file, name: symbol.name, startLine: symbol.startLine, endLine: symbol.endLine, depth, confidence, seeds: reaching })),
     ),
   };
   return { value, cuts };

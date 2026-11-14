@@ -38,6 +38,7 @@ export interface Seed {
 export interface ImpactedSymbol {
   file: string;
   symbol: string;
+  /** `file` for a file whose top-level statements use the symbol it was reached through: `symbol` is the index's name of the file's node, and no `callers` target names it (ADR-0082). */
   kind: string;
   line: number;
   /** The declaration's last line; absent when the declaration spans one line. */

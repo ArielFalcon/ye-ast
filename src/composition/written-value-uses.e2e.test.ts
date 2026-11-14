@@ -8,12 +8,13 @@ import { composeQueries } from "./compose.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 
 /**
- * Uses the index records no edge for: a read of a value through a member (`Code.First`), through `typeof` in a type, or a
- * name written in a constant's initializer. Each is a dependent at the declaration that writes it, never a declaration of
- * the file that does not write it.
+ * Uses the index records no edge for: a read of a value through a member (`Code.First`), through `typeof` in a type, a
+ * name written in a constant's initializer, or in a file's top-level statements. Each is a dependent at the declaration
+ * that writes it, or at the file for a statement outside every declaration, never a declaration of the file that does
+ * not write it.
  */
 const SOURCES: Record<string, string> = {
-  "package.json": JSON.stringify({ name: "fixture", version: "1.0.0" }),
+  "package.json": JSON.stringify({ name: "fixture", version: "1.0.0", dependencies: { "@angular/core": "21.0.0", "@angular/router": "21.0.0" } }),
   "tsconfig.json": JSON.stringify({ compilerOptions: { strict: true, baseUrl: ".", paths: { "@app/*": ["src/app/*"] } } }),
   "src/app/router/server.routes.ts": "export const serverRoutes: string[] = ['a', 'b'];\n",
   "src/app/config.ts": "import { serverRoutes as routes } from './router/server.routes';\n\nexport const config = {\n  providers: [String(routes)],\n};\n",
@@ -33,6 +34,18 @@ const SOURCES: Record<string, string> = {
   "src/app/flag.ts": "export const Flag = true;\n",
   "src/app/shadow.ts": "import { Flag } from './flag';\n\nexport function check(): boolean {\n  const Flag = false;\n  return Flag;\n}\n",
   "src/app/labels.ts": "import { Code } from './codes';\n\nexport function labels(): Record<string, number> {\n  return { Code: 1 };\n}\n",
+  "src/app/module.ts": "export class AppModule {}\n\nexport function noop(): void {}\n\nconsole.log(AppModule.name);\n\nexport default AppModule.name;\n",
+  "src/app/main.ts": "import { AppModule } from './module';\n\nconsole.log(String(AppModule));\n",
+  "src/app/server.ts": "import { AppModule } from './module';\n\nexport function helper(): number {\n  return 1;\n}\n\nconsole.log([AppModule].length);\n",
+  "src/app/made.ts": "import { AppModule } from './module';\n\nfunction make(value: unknown): unknown {\n  return value;\n}\n\nexport default make(AppModule);\n",
+  "src/app/loader.ts": "import './main';\n\nexport function load(): number {\n  return 1;\n}\n",
+  "src/app/theme.ts": "export const Theme = 'dark';\n",
+  "src/app/theme-index.ts": "import { Theme } from './theme';\n\nexport function other(): number {\n  return 1;\n}\n\nexport { Theme };\nexport type { Theme as ThemeName };\nexport default Theme;\n",
+  "src/app/marker.ts": "export const Marker = 1;\n",
+  "src/app/host.component.ts": "import { Component, Inject } from '@angular/core';\nimport { Marker } from './marker';\n\n@Component({ selector: 'app-host', template: '<p>host</p>' })\nexport class HostComponent {\n  constructor(@Inject(TOKEN) other: unknown) {}\n}\n\nconsole.log(String(Marker));\n",
+  "src/app/app.routes.ts": "import { Routes } from '@angular/router';\nimport { Marker } from './marker';\n\nfunction pick(): any {\n  return undefined;\n}\n\nexport const routes: Routes = [{ path: 'page', component: pick() }];\n\nconsole.log(Marker);\n",
+  "src/app/level.ts": "export const Level = 3;\n",
+  "src/app/level-use.ts": "import { Level } from './level';\n\nexport function scale(Level: number): number {\n  return Level * 2;\n}\n",
 };
 const CHANGE = { "src/app/router/server.routes.ts": "export const serverRoutes: string[] = ['a', 'b', 'c'];\n" };
 
@@ -129,4 +142,50 @@ test("an import every use of which a local declaration shadows makes no dependen
 
   assert.equal(status, "complete");
   assert.deepEqual(dependents(value), []);
+});
+
+test("a use in a file's top-level statements, of an imported declaration or of one of the same file, makes the file the dependent at the lines of the use, and no declaration of the file that does not write it", async () => {
+  const { status, value } = await callersOf("src/app/module.ts", "AppModule");
+
+  assert.equal(status, "complete");
+  assert.deepEqual(dependents(value), [
+    { file: "src/app/made.ts", symbol: "made.ts", basis: "reference", lines: [7] },
+    { file: "src/app/main.ts", symbol: "main.ts", basis: "reference", lines: [3] },
+    { file: "src/app/module.ts", symbol: "module.ts", basis: "reference", lines: [5, 7] },
+    { file: "src/app/server.ts", symbol: "server.ts", basis: "reference", lines: [7] },
+  ]);
+  const main = value.symbols.find(({ file, depth }) => file === "src/app/main.ts" && depth > 0);
+  assert.deepEqual(main && { kind: main.kind, line: main.line, endLine: main.endLine, fanIn: main.fanIn, derivation: main.via?.derivation }, { kind: "file", line: 1, endLine: 4, fanIn: 0, derivation: "proven" });
+});
+
+test("a file a top-level use names as a dependent leads nowhere: what imports the file is not its dependent", async () => {
+  const { value } = await callersOf("src/app/module.ts", "AppModule");
+
+  assert.ok(value.symbols.some(({ file }) => file === "src/app/main.ts"), JSON.stringify(value.symbols));
+  assert.deepEqual(value.symbols.filter(({ file }) => file === "src/app/loader.ts"), []);
+});
+
+test("an export statement that only re-exposes an imported name writes no dependence of its file, nor stands a declaration of the file in for it", async () => {
+  const { status, value } = await callersOf("src/app/theme.ts", "Theme");
+
+  assert.equal(status, "complete");
+  assert.deepEqual(dependents(value), []);
+});
+
+test("a file a top-level use names as a dependent reaches no entrypoint of its own and adds no cut its other declarations hold", async () => {
+  const { status, value } = await callersOf("src/app/marker.ts", "Marker");
+
+  assert.equal(status, "complete");
+  assert.deepEqual(dependents(value), [
+    { file: "src/app/app.routes.ts", symbol: "app.routes.ts", basis: "reference", lines: [10] },
+    { file: "src/app/host.component.ts", symbol: "host.component.ts", basis: "reference", lines: [9] },
+  ]);
+  assert.deepEqual(value.entrypoints, []);
+});
+
+test("a file with a place whose binding is unknown keeps its top-level declarations standing in for its code", async () => {
+  const { status, value } = await callersOf("src/app/level.ts", "Level");
+
+  assert.equal(status, "complete");
+  assert.deepEqual(dependents(value), [{ file: "src/app/level-use.ts", symbol: "scale", basis: "import", lines: [] }]);
 });

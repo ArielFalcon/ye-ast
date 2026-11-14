@@ -65,6 +65,11 @@ export const EDGE_POLICY = {
   /** The code a file runs at its top level, as the importer fallback and the top-level use of an import reach it. */
   topLevelCodeKinds: ["function", "class", "component"],
   /**
+   * A file, the dependent a use in its top-level statements names (ADR-0082). It leads nowhere: what loads a file is the
+   * answer of `importers`, so it reaches no entrypoint and holds no cut of the declarations it contains.
+   */
+  fileKind: "file",
+  /**
    * Edges codegraph synthesizes that ye-ast does not follow: template and event wiring, and interface bridges it derives
    * itself. A derived bridge between a method and the same-named method of a type above or below it spends one hop, the
    * same as a call.
@@ -84,6 +89,11 @@ export function followsEdge({ kind, sourceKind, targetKind }: PolicyEdge): boole
   return EDGE_POLICY.rules.some(
     (rule) => (rule.edges as readonly string[]).includes(kind) && (rule.from as readonly string[]).includes(sourceKind) && (rule.to === "any" || (rule.to as readonly string[]).includes(targetKind)),
   );
+}
+
+/** Whether a reached symbol is a file a top-level use names as a dependent, which the walk's answer stops at. */
+export function isFileDependent(kind: string): boolean {
+  return kind === EDGE_POLICY.fileKind;
 }
 
 export function followsRelation({ kind, sourceKind, targetKind }: PolicyEdge): boolean {
