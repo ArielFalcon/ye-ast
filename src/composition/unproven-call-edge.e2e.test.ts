@@ -50,8 +50,9 @@ const SOURCES: Readonly<Record<string, string>> = {
     "public class $ {",
     "    Pick field;",
     "",
-    "    void byParameter(Pick p) {",
+    "    void byParameter(Pick p, Base b) {",
     "        p.take(System.getenv(\"x\"));",
+    "        b.take(1);",
     "    }",
     "",
     "    void byField() {",
@@ -116,7 +117,7 @@ test("a call whose reading offers several candidates is attributed to each other
 
   assert.equal(fact.status, "partial");
   assert.ok(fact.callers.includes("byParameter") && !fact.callers.includes("byField"), JSON.stringify(fact.callers));
-  assert.deepEqual(fact.cuts, [`hidden-caller ${declarationAnchor(`${JAVA}/Base.java`, "take")} | ${placeAt(CALL, 11, "take")}`]);
+  assert.deepEqual(fact.cuts, [`hidden-caller ${declarationAnchor(`${JAVA}/Base.java`, "take")} | ${placeAt(CALL, 12, "take")}`]);
 });
 
 test("a TypeScript call on an untyped value is cut by its own rule, never by a receiver reading", async () => {
