@@ -299,6 +299,16 @@ test("a qualified reference with no candidate cuts nothing only when the base bi
   assert.deepEqual(reasons(awayFrom([SAVE])), ["name-only src/Use.java src/Use.java:3 repo.save src/Use.java:5 repo.save"]);
 });
 
+test("a bare reference cuts nothing toward a walked declaration the base binds it away from, in its own file or another", () => {
+  const own = use("save", "calls", "src/Repo.java", 9);
+  const elsewhere = use("save", "calls", "src/Use.java", 5);
+  const awayFrom = (references: readonly UnresolvedUse[]) => new Set(references.map((reference) => declarationUseKey(`${SAVE.file}::${SAVE.name}`, referenceKey(reference)!)));
+  const reasons = (bound: ReadonlySet<string>) => unresolvedLinkCuts([own, elsewhere], [SAVE], [], new Set(), new Set(), new Map(), undefined, bound).map(({ reason, at }) => `${reason} ${at.join(" ")}`);
+
+  assert.deepEqual(reasons(awayFrom([own, elsewhere])), []);
+  assert.deepEqual(reasons(awayFrom([])), ["hidden-caller src/Repo.java::save src/Repo.java:9", "name-only src/Use.java src/Use.java:5 save"]);
+});
+
 test("the reach of a name-only cut leaves out the declarations the base binds its references away from", () => {
   const other: WalkedDeclaration = { file: "src/Store.java", name: "save", kind: "method", qualifiedName: "Store::save" };
   const unnamed = use("map.save", "calls");

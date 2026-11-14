@@ -183,8 +183,8 @@ function namesDeclaration(reference: UnresolvedUse, declaration: WalkedDeclarati
  * declaration cuts the caller's file instead, led by it, so the name it might reach is not left out. A file that loads
  * modules by a name the index cannot resolve may load anything and is a cut of its own, unless every dynamic load the
  * reader found on that file and line has a string-literal specifier, which names its module like a static import; a file
- * the reader did not read keeps the cut. A qualified reference with no candidate cuts nothing when the base binds it away
- * from every walked declaration it might reach (`boundAway`, by `declarationUseKey`; ADR-0079 decision 3), and its cut
+ * the reader did not read keeps the cut. A bare reference, or a qualified one with no candidate, cuts nothing toward a
+ * walked declaration the base binds it away from (`boundAway`, by `declarationUseKey`; ADR-0079 decision 3, ADR-0088), and its cut
  * reaches only the ones it is not bound away from.
  */
 export function unresolvedLinkCuts(
@@ -237,12 +237,13 @@ export function unresolvedLinkCuts(
       const anchor = declarationAnchor(declaration.file, declaration.name);
       return (settled.size > 0 && settled.has(declarationUseKey(anchor, proofKey))) || (actual !== undefined && actual !== anchor && members?.expanded.has(anchor) === true);
     };
+    const bindable = isBareName(name) || (reference.candidates?.length ?? 0) === 0;
+    const boundAwayFrom = (declaration: WalkedDeclaration): boolean => bindable && proofKey !== undefined && boundAway.has(declarationUseKey(declarationAnchor(declaration.file, declaration.name), proofKey));
     for (const declaration of attributing) {
       const key = declarationAnchor(declaration.file, declaration.name);
-      if (settledAt(declaration)) continue;
+      if (settledAt(declaration) || boundAwayFrom(declaration)) continue;
       hidden.set(key, (hidden.get(key) ?? new Set()).add(place));
     }
-    const boundAwayFrom = (declaration: WalkedDeclaration): boolean => unnamed && proofKey !== undefined && boundAway.has(declarationUseKey(declarationAnchor(declaration.file, declaration.name), proofKey));
     const decided = pointing.some(settledAt) || pointing.every(boundAwayFrom);
     if (attributing.length === 0 && pointing.length > 0 && !decided) {
       unattributed.set(reference.file, (unattributed.get(reference.file) ?? new Set()).add(named));
