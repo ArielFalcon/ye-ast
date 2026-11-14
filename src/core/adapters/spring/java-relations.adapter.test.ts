@@ -238,7 +238,7 @@ test("a static method a repository type declares or inherits is called through i
   assert.deepEqual(importedUnplaced(bounded), ["fx/use/Calls.java:4 fx.store.Sub fx.store.Sub", "fx/use/Calls.java:5 fx.store.Sub fx.store.Sub", "fx/use/Single.java:3 fx.store.Store fx.store.Store"]);
 });
 
-test("a parameter, a local, a lambda or loop variable, an own or inherited field, or an own, inherited or record accessor method hides the member a static import brings", async () => {
+test("a parameter, a local, a lambda, loop or pattern variable in its scope, an own or inherited field, or an own, inherited or record accessor method hides the member a static import brings", async () => {
   const answer = await createJavaRelations(createJavaParser).extract([STORE, PARENT, qualified("fx/use/Shadows.java", [
     "import static fx.store.Store.*;",
     "class Shadows extends Parent {",
@@ -255,7 +255,7 @@ test("a parameter, a local, a lambda or loop variable, an own or inherited field
     "}",
     "class Scoped {",
     "  Object lambda() { java.util.function.Function<String, String> f = CACHE -> CACHE; return f; }",
-    "  Object loop(java.util.List<String> all) { for (String CACHE : all) return CACHE; return null; }",
+    "  Object loop(java.util.List<String> all) { for (String CACHE : all) return CACHE; return null; } Object pattern(Object o) { if (o instanceof String CACHE) return CACHE; return null; }",
     "}",
     "class After { String after() { return CACHE; } }",
   ].join("\n"))]);
@@ -266,7 +266,7 @@ test("a parameter, a local, a lambda or loop variable, an own or inherited field
 test("a statically imported name is a reference when one import alone may bind it or a field it brings is certain, and an unplaced reference to the imported type where the sources cannot show what else binds it, unless its class already references that type", async () => {
   const answer = await createJavaRelations(createJavaParser).extract([STORE, REMOTE,
     qualified("fx/use/Outside.java", "import static fx.store.Store.*;\nclass Outside extends Thread { Object read() { return CACHE; } }"),
-    qualified("fx/use/Pattern.java", "import static fx.store.Store.*;\nclass Pattern { Object read(Object o) { if (o instanceof String CACHE) return CACHE; return null; } }"),
+    qualified("fx/use/Pattern.java", "import static fx.store.Store.*;\nclass Pattern { Object read(Object o) { if (!(o instanceof String CACHE)) { for (;;) { } } return CACHE; } }"),
     qualified("fx/use/Library.java", "import static org.vendor.Lib.CACHE;\nimport static fx.store.Store.*;\nclass Library { Object read() { return CACHE; } }"),
     qualified("fx/use/Overloads.java", "import static org.vendor.Lib.*;\nimport static fx.store.Store.*;\nclass Overloads { Object call() { return helper(); } }"),
     qualified("fx/use/Certain.java", "import static org.vendor.Lib.*;\nimport static fx.store.Store.*;\nclass Certain { Object call() { return helper(); }\n  Object read() { return CACHE; } }"),

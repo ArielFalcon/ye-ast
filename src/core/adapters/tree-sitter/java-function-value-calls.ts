@@ -1,12 +1,9 @@
 import type { Node } from "web-tree-sitter";
 import type { FunctionValueCall } from "../../ports/declared-member-names.port.ts";
+import { TYPE_BODIES, variableInScope } from "./java-declared-variables.ts";
 
 /** Expressions that are a function value. */
 const FUNCTION_VALUES: readonly string[] = ["lambda_expression", "method_reference"];
-/** Bodies whose fields `this` and an unshadowed bare name reach. */
-const TYPE_BODIES: readonly string[] = ["class_body", "interface_body", "enum_body"];
-/** Blocks whose `local_variable_declaration` children declare locals. */
-const BLOCKS: readonly string[] = ["block", "constructor_body", "switch_block_statement_group"];
 
 /**
  * The member calls of a Java tree whose receiver the file binds to a function value (see `FunctionValueCall`): `this.r`
@@ -84,7 +81,7 @@ export function thisField(node: Node): string | undefined {
 }
 
 export function enclosingBody(node: Node): Node | undefined {
-  for (let scope = node.parent; scope !== null; scope = scope.parent) if (TYPE_BODIES.includes(scope.type)) return scope;
+  for (let scope = node.parent; scope !== null; scope = scope.parent) if (TYPE_BODIES.has(scope.type)) return scope;
   return undefined;
 }
 
@@ -103,25 +100,12 @@ export function isRecordComponent(declarator: Node): boolean {
   return declarator.type === "formal_parameter" && declarator.parent?.parent?.type === "record_declaration";
 }
 
-/** The innermost local or parameter that declares the identifier's name, up to its type body. */
+/**
+ * The innermost local, parameter, resource or pattern variable in scope at the identifier that declares its name, up to
+ * its type body (see `variableInScope`). A pattern variable whose flow scope the reading does not decide is answered by
+ * its bare name, which states no type, so the identifier is neither a field nor typed by it.
+ */
 export function localBinding(identifier: Node): Node | undefined {
-  const name = identifier.text;
-  for (let scope = identifier.parent; scope !== null && !TYPE_BODIES.includes(scope.type); scope = scope.parent) {
-    for (const declared of declaredIn(scope)) if (nameOf(declared) === name || (declared.type === "identifier" && declared.text === name)) return declared;
-  }
-  return undefined;
-}
-
-/** The locals, parameters and loop or catch variables a scope node declares. */
-function declaredIn(scope: Node): Node[] {
-  const named = (node: Node | null): Node[] => (node === null ? [] : node.namedChildren.filter((child): child is Node => child !== null));
-  if (BLOCKS.includes(scope.type)) return named(scope).filter((child) => child.type === "local_variable_declaration").flatMap((declaration) => named(declaration).filter((child) => child.type === "variable_declarator"));
-  if (scope.type === "method_declaration" || scope.type === "constructor_declaration") return named(scope.childForFieldName("parameters"));
-  if (scope.type === "lambda_expression") {
-    const parameters = scope.childForFieldName("parameters");
-    return parameters?.type === "identifier" ? [parameters] : named(parameters);
-  }
-  if (scope.type === "for_statement") return named(scope.childForFieldName("init")).filter((child) => child.type === "variable_declarator");
-  if (scope.type === "enhanced_for_statement" || scope.type === "catch_clause") return [scope, ...named(scope).filter((child) => child.type === "catch_formal_parameter")].filter((node) => nameOf(node) !== undefined);
-  return [];
+  const found = variableInScope(identifier.text, identifier, { stopAtType: true });
+  return found === undefined ? undefined : "declaration" in found ? found.declaration : found.unsettled;
 }

@@ -9,7 +9,7 @@ import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-funct
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { declarationsProject, enclosingType, heldJavaProject, thisHolder, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
-import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
+import { javaReceiverBindings, statedType } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve } from "./java-declared-types.ts";
 import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
 import { REPOSITORY_FRAGMENTS, REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
@@ -744,7 +744,7 @@ export function createResolver(project: JavaProject, generated = false) {
       const fieldName = object.type === "field_access" && object.childForFieldName("object")?.type === "this" ? object.childForFieldName("field")?.text : object.type === "identifier" ? object.text : undefined;
       const field = local === undefined && fieldName !== undefined ? fieldsOf(enclosingBody(object) ?? file.root).filter((candidate) => candidate.childForFieldName("name")?.text === fieldName) : [];
       const declaration = local ?? (field.length === 1 ? field[0] : undefined);
-      const annotation = declaration?.type === "variable_declarator" ? declaration.parent?.childForFieldName("type") : declaration?.childForFieldName("type");
+      const annotation = local !== undefined ? statedType(local) : declaration?.type === "variable_declarator" ? declaration.parent?.childForFieldName("type") : declaration?.childForFieldName("type");
       type = annotation == null ? (declaration === undefined ? repositoryType(object, file, object) : undefined) : repositoryType(annotation, file, annotation);
     }
     if (type === undefined) return undefined;

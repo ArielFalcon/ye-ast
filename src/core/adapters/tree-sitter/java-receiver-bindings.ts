@@ -9,16 +9,15 @@ const CLASS_TYPES: ReadonlySet<string> = new Set(["type_identifier", "scoped_typ
 const REFLECTIVE = /Field|VarHandle|Getter|Setter/;
 
 /**
- * The member calls of a Java tree whose receiver one declaration types: a bare `r` bound by `localBinding` (lambda
- * parameters first) to a parameter, a local or a loop or catch variable with a stated class type, or, when no variable of
- * the name is declared in the type body, to a field; `this.r` to a field. A field counts only when the enclosing type
+ * The member calls of a Java tree whose receiver one declaration types: a bare `r` bound by `localBinding` to a
+ * parameter, a local, a loop, catch or resource variable or a pattern variable with a stated class type, or, when no
+ * variable of the name is in scope there (by default, when none of the name is declared anywhere in the type body), to a
+ * field; `this.r` to a field. A field counts only when the enclosing type
  * body declares it once and `private`, and the file names it through no receiver but `this` and reads no field by
  * reflection; a record component is the private field it declares, never in a static context of its record. The binding
  * holds the type where it is written, by its first name (ADR-0029 decision 9).
  * `declaredFields` admits other fields for nominal repository-member selection, never external-leaf proof.
- * `includeUnproven` also retains annotation candidates marked unproven; they prove no receiver value. Both options scope
- * the shadowing variable to the method or constructor that declares it, so a constructor parameter named like its field
- * does not shadow the field in other methods.
+ * `includeUnproven` also retains annotation candidates marked unproven; they prove no receiver value.
  */
 export function javaReceiverBindings(root: Node, { includeUnproven = false, declaredFields = false }: { includeUnproven?: boolean; declaredFields?: boolean } = {}): ReceiverBinding[] {
   const invocations: Node[] = [];
@@ -34,8 +33,8 @@ export function javaReceiverBindings(root: Node, { includeUnproven = false, decl
   };
   visit(root);
   const declaredIn = declaredVariablesOnce();
-  /** Whether a type body declares a variable of the name anywhere but as a field: it may shadow the field where it is used. */
-  const declaresVariable = (body: Node | undefined, name: string, at?: Node): boolean => body !== undefined && declaresLocal(declaredIn(body), name, at);
+  /** Whether a type body declares a variable of the name anywhere but as a field. */
+  const declaresVariable = (body: Node | undefined, name: string): boolean => body !== undefined && declaresLocal(declaredIn(body), name);
 
   const fieldType = (at: Node, name: string): { node: Node; unproven: boolean } | undefined => {
     const body = enclosingBody(at);
@@ -70,13 +69,7 @@ export function javaReceiverBindings(root: Node, { includeUnproven = false, decl
       receiver = object.text;
       const local = localBinding(object);
       if (local !== undefined) type = statedType(local);
-      else {
-        const shadowed = declaresVariable(enclosingBody(object), receiver, declaredFields || includeUnproven ? object : undefined);
-        if (!shadowed || includeUnproven) {
-          type = fieldAt(object, receiver);
-          unproven ||= shadowed;
-        }
-      }
+      else if (declaredFields || includeUnproven || !declaresVariable(enclosingBody(object), receiver)) type = fieldAt(object, receiver);
     }
     const head = type === undefined ? undefined : headOf(type);
     if (receiver === undefined || member === undefined || head === undefined) return [];
@@ -85,10 +78,16 @@ export function javaReceiverBindings(root: Node, { includeUnproven = false, decl
   });
 }
 
-/** The class type a local, a parameter, a loop variable or a one-type catch variable states; none for `var` and varargs. */
+/**
+ * The type a local, a parameter, a loop variable, a resource, a one-type catch variable or a pattern variable writes;
+ * none for a varargs parameter, a multi-catch, a lambda parameter without a type and a pattern variable whose scope is
+ * not settled (a bare name).
+ */
 export function statedType(declaration: Node): Node | undefined {
   if (declaration.type === "variable_declarator") return declaration.parent?.type === "local_variable_declaration" ? declaration.parent.childForFieldName("type") ?? undefined : undefined;
-  if (declaration.type === "formal_parameter" || declaration.type === "enhanced_for_statement") return declaration.childForFieldName("type") ?? undefined;
+  if (declaration.type === "formal_parameter" || declaration.type === "enhanced_for_statement" || declaration.type === "resource") return declaration.childForFieldName("type") ?? undefined;
+  if (declaration.type === "instanceof_expression") return declaration.childForFieldName("right") ?? undefined;
+  if (declaration.type === "type_pattern" || declaration.type === "record_pattern_component") return declaration.namedChildren.find((child) => child !== null && child.type !== "identifier" && child.type !== "modifiers") ?? undefined;
   if (declaration.type === "catch_formal_parameter") {
     const types = declaration.namedChildren.find((child) => child?.type === "catch_type")?.namedChildren ?? [];
     return types.length === 1 ? types[0] ?? undefined : undefined;

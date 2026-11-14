@@ -2,6 +2,7 @@ import { LIBRARY_ROOT } from "../../domain/topology/library-source.ts";
 import type { Node } from "web-tree-sitter";
 import { charLiteralValue, integerLiteralValue, stringLiteralValue, type LiteralValue } from "./java-literals.ts";
 import { localBinding } from "../tree-sitter/java-function-value-calls.ts";
+import { statedType } from "../tree-sitter/java-receiver-bindings.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
 import { REPOSITORY_TYPES } from "./data-vocabulary.ts";
@@ -1019,8 +1020,7 @@ export function readArgumentSignature(invocation: Node, scope: Scope, project: J
     if (node.type !== "identifier") return undefined;
     const binding = localBinding(node);
     if (binding === undefined || binding.startIndex > node.startIndex) return undefined;
-    const declaration = binding.type === "variable_declarator" ? binding.parent : binding;
-    const written = declaration?.childForFieldName("type");
+    const written = statedType(binding);
     if (written === null || written === undefined || written.type === "generic_type" || written.text === "var") return undefined;
     const element = written.type === "array_type" ? written.childForFieldName("element") : written;
     if (element === null || element.type === "generic_type" || typeVariableAround(element) !== undefined) return undefined;

@@ -217,15 +217,15 @@ test("a record component is no receiver in a static context of its record, nor w
   ]) assert.deepEqual((await read(["package app;", body])).receiverBindings, [], body);
 });
 
-test("a call on a var, varargs, untyped lambda, pattern or resource variable, or on a field that is not private, is declared twice, is named through another receiver or reflection, or is shadowed, is held by no annotation", async () => {
+test("a call on a var, varargs, untyped lambda or multi-catch variable, a pattern variable whose scope is not settled, or on a field that is not private, is declared twice, is named through another receiver or reflection, or is shadowed, is held by no annotation", async () => {
   const header = ["package app;", "import java.util.Map;", "import org.springframework.web.client.RestTemplate;"];
   for (const body of [
     ["class A { void run(String... names) { var built = new StringBuilder(); built.append(\"a\"); names.clone(); } }"],
     ["class A { void run() { java.util.List.of(\"a\").forEach(name -> name.trim()); } }"],
     ["class A { RestTemplate shared; void run() { shared.getForObject(\"/y\", String.class); } }"],
     ["class A { private Map<String, String> other; void run() { this.other.get(\"k\"); } static void copy(A from) { from.other.clear(); } }"],
-    ["class A { private Map<String, String> patterned; void run(Object value) { if (value instanceof Map patterned) patterned.size(); } }"],
-    ["class A { private Map<String, String> held; void run() throws Exception { try (java.io.StringReader held = new java.io.StringReader(\"\")) { held.read(); } } }"],
+    ["class A { private Map<String, String> patterned; void run(Object value) { if (!(value instanceof Map patterned)) { for (;;) { } } patterned.size(); } }"],
+    ["class A { private Map<String, String> failed; void run() { try { run(); } catch (IllegalStateException | IllegalArgumentException failed) { failed.getMessage(); } } }"],
     ["class A { private Map<String, String> cache; void run() throws Exception { cache.get(\"k\"); getClass().getDeclaredField(\"x\"); } }"],
     ["class A { private Map<String, String> cache, cache; void run() { cache.get(\"k\"); } }"],
     ["class A { int[] counts; private int size; void run() { counts.clone(); } }"],
