@@ -190,6 +190,33 @@ test("a receiver whose stated type a type variable of its class or of its method
   assert.deepEqual((await read(lines)).receiverBindings, [scoped("r.save", "r", "Repo", "Repo r"), scoped("t.save", "t", "T", "T t")]);
 });
 
+test("a bare record component is the private field its record declares, in an instance method and in the compact constructor", async () => {
+  const lines = ["package app;", "record Order(Delivery delivery, int count) {", "  Order { delivery.check(); }", "  Money total() { return delivery.fee(); }", "}"];
+  const held = (call: string) => ({ ...placeOf(lines, call), receiver: "delivery", holds: { kind: "annotated", type: "Delivery", ...placeOf(lines, "Delivery delivery") } });
+
+  assert.deepEqual((await read(lines)).receiverBindings.map(({ member, ...binding }) => binding), [held("delivery.check"), held("delivery.fee")]);
+});
+
+test("this.<component> in a record is the private field its record declares", async () => {
+  const lines = ["package app;", "record Order(Delivery delivery) {", "  Money total() { return this.delivery.fee(); }", "}"];
+
+  assert.deepEqual((await read(lines)).receiverBindings, [{ ...placeOf(lines, "this.delivery.fee"), receiver: "delivery", member: "fee", holds: { kind: "annotated", type: "Delivery", ...placeOf(lines, "Delivery delivery") } }]);
+});
+
+test("a local of a record component's name types the bare call, and a parameter of the name in another method keeps it from the component", async () => {
+  const local = ["package app;", "record Order(Delivery delivery) {", "  Money total() { Other delivery = null; return delivery.fee(); }", "}"];
+  assert.deepEqual((await read(local)).receiverBindings.map(({ receiver, holds }) => [receiver, holds.kind === "annotated" ? holds.type : holds.kind]), [["delivery", "Other"]]);
+  assert.deepEqual((await read(["package app;", "record Order(Delivery delivery) { Money total() { return delivery.fee(); } Order with(Delivery delivery) { return null; } }"])).receiverBindings, []);
+});
+
+test("a record component is no receiver in a static context of its record, nor when the file names it through another receiver", async () => {
+  for (const body of [
+    "record Order(Delivery delivery) { static Money total() { return delivery.fee(); } }",
+    "record Order(Delivery delivery) { static { delivery.fee(); } }",
+    "record Order(Delivery delivery) { Money total(Order other) { other.delivery.check(); return delivery.fee(); } }",
+  ]) assert.deepEqual((await read(["package app;", body])).receiverBindings, [], body);
+});
+
 test("a call on a var, varargs, untyped lambda, pattern or resource variable, or on a field that is not private, is declared twice, is named through another receiver or reflection, or is shadowed, is held by no annotation", async () => {
   const header = ["package app;", "import java.util.Map;", "import org.springframework.web.client.RestTemplate;"];
   for (const body of [

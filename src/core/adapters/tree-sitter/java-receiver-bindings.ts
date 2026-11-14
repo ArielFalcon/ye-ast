@@ -1,7 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import { declaredVariablesOnce, declaresLocal, typeVariableAround } from "./java-declared-variables.ts";
-import { enclosingBody, fieldsOf, localBinding, thisField } from "./java-function-value-calls.ts";
+import { enclosingBody, fieldsOf, isRecordComponent, localBinding, thisField } from "./java-function-value-calls.ts";
 
 /** Types a declaration may state that name a class or an interface. */
 const CLASS_TYPES: ReadonlySet<string> = new Set(["type_identifier", "scoped_type_identifier", "generic_type"]);
@@ -13,7 +13,8 @@ const REFLECTIVE = /Field|VarHandle|Getter|Setter/;
  * parameters first) to a parameter, a local or a loop or catch variable with a stated class type, or, when no variable of
  * the name is declared in the type body, to a field; `this.r` to a field. A field counts only when the enclosing type
  * body declares it once and `private`, and the file names it through no receiver but `this` and reads no field by
- * reflection. The binding holds the type where it is written, by its first name (ADR-0029 decision 9).
+ * reflection; a record component is the private field it declares, never in a static context of its record. The binding
+ * holds the type where it is written, by its first name (ADR-0029 decision 9).
  * `declaredFields` admits other fields for nominal repository-member selection, never external-leaf proof.
  * `includeUnproven` also retains annotation candidates marked unproven; they prove no receiver value. Both options scope
  * the shadowing variable to the method or constructor that declares it, so a constructor parameter named like its field
@@ -39,9 +40,12 @@ export function javaReceiverBindings(root: Node, { includeUnproven = false, decl
   const fieldType = (at: Node, name: string): { node: Node; unproven: boolean } | undefined => {
     const body = enclosingBody(at);
     const declared = body === undefined ? [] : fieldsOf(body).filter((declarator) => declarator.childForFieldName("name")?.text === name);
-    const field = declared.length === 1 ? declared[0]!.parent : undefined;
-    if (field?.type !== "field_declaration") return undefined;
-    const unproven = reflects || otherReceivers.has(name) || !isPrivate(field);
+    const only = declared.length === 1 ? declared[0]! : undefined;
+    const component = only !== undefined && isRecordComponent(only);
+    if (component && inStaticContext(at, body!)) return undefined;
+    const field = component ? only : only?.parent;
+    if (field == null || (!component && field.type !== "field_declaration")) return undefined;
+    const unproven = reflects || otherReceivers.has(name) || !(component || isPrivate(field));
     if (unproven && !includeUnproven && !declaredFields) return undefined;
     const node = field.childForFieldName("type");
     return node === null ? undefined : { node, unproven: unproven && !declaredFields };
@@ -98,6 +102,15 @@ function headOf(type: Node): Node | undefined {
   let head: Node | null = type;
   while (head !== null && head.type !== "type_identifier") head = head.namedChildren[0] ?? null;
   return head ?? undefined;
+}
+
+/** Whether the use lies in a static method, initializer or field of its type body, where no instance field is in scope (JLS 8.1.3). */
+function inStaticContext(at: Node, body: Node): boolean {
+  for (let scope = at.parent; scope !== null && scope.id !== body.id; scope = scope.parent) {
+    if (scope.type === "static_initializer") return true;
+    if ((scope.type === "method_declaration" || scope.type === "field_declaration") && scope.namedChildren.find((child) => child?.type === "modifiers")?.children.some((modifier) => modifier?.type === "static")) return true;
+  }
+  return false;
 }
 
 function isPrivate(field: Node): boolean {

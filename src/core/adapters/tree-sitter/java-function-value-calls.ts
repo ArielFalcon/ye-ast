@@ -88,10 +88,19 @@ export function enclosingBody(node: Node): Node | undefined {
   return undefined;
 }
 
-/** The field declarators of a type body, an enum's included. */
+/**
+ * The field declarators of a type body, an enum's included, and the components of a record's body, each the formal
+ * parameter that declares its implicit private final field (JLS 8.10.3); a varargs component is not read.
+ */
 export function fieldsOf(body: Node): Node[] {
   const members = body.namedChildren.flatMap((child) => (child?.type === "enum_body_declarations" ? child.namedChildren : [child]));
-  return members.filter((member) => member?.type === "field_declaration" || member?.type === "constant_declaration").flatMap((field) => field!.namedChildren.filter((child): child is Node => child?.type === "variable_declarator"));
+  const components = body.parent?.type === "record_declaration" ? (body.parent.childForFieldName("parameters")?.namedChildren ?? []).filter((child): child is Node => child?.type === "formal_parameter") : [];
+  return [...components, ...members.filter((member) => member?.type === "field_declaration" || member?.type === "constant_declaration").flatMap((field) => field!.namedChildren.filter((child): child is Node => child?.type === "variable_declarator"))];
+}
+
+/** Whether a record component is the formal parameter `fieldsOf` reads for its implicit field. */
+export function isRecordComponent(declarator: Node): boolean {
+  return declarator.type === "formal_parameter" && declarator.parent?.parent?.type === "record_declaration";
 }
 
 /** The innermost local or parameter that declares the identifier's name, up to its type body. */
