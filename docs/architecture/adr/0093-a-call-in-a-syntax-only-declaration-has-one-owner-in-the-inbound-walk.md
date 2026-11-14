@@ -1,6 +1,7 @@
 # ADR-0093: A call written in a syntax-only declaration has one owner in the inbound walk
 
-- Status: Accepted, 2026-11-14, owner; extends [ADR-0049](0049-every-written-callable-is-a-declaration.md)
+- Status: Accepted, 2026-11-14, owner; extends [ADR-0049](0049-every-written-callable-is-a-declaration.md); decisions 3 and 5
+  amended 2026-11-14 after the corpus gate of the first delivery
 - Decision source: the owner, 2026-11-14, accepting the transversal fix plan of evaluation run `20261114T125655Z-c68fc8`
   (unit U3, cause C3) and its decisions D1 to D8: "Acepto".
 - Related: [ADR-0017](0017-owner-of-a-member-expands-only-whole-type-edges.md),
@@ -37,11 +38,17 @@ says which object-literal members a holder names.
 3. A named member reached by the walk, as a seed or as a caller, is reached by the uses of that member, as for any
    syntax-only target, and its holder is entered at the same depth through a member (ADR-0017): the holder follows no row
    that opens the whole of what it declares.
+   A call whose receiver the base binds to another declaration (the `inject` of a type, a declared type) is a use of that
+   declaration and of no member that shares its name, so it is no `receiver-unproven` cut of the member.
 4. A syntax-only declaration no holder names hands its dependence to the innermost declaration whose span contains it, at
    the same depth, with basis `contains`, entered as a declaration whose code changed. The container may itself be a
    syntax-only declaration, which decides again by this decision.
-5. A syntax seed that is no named member and has no declaration around it is a `no-symbols` cut at the seed; the answer is
-   never `complete` and empty for it.
+5. A syntax seed that is no named member and has no declaration around it is read as a named member is: by the uses of
+   its name, which the base binds or cuts as for any member. Nothing places it further, so it stays a seed with the
+   callers that reading proves. It is a `no-symbols` cut at the seed only when no such reading exists (the request has no
+   index to bind against). A callable only a library calls (a plugin object's `setup`, a configuration object's hook) has
+   no repository caller, and that is an answer, not a cut: a reached indexed declaration nothing calls says the same.
+   What the module's importers run when the module is imported is not read here.
 
 ## Consequences
 
