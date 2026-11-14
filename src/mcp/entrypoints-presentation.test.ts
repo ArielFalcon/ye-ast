@@ -85,3 +85,20 @@ test("published entrypoint kind accepts callbacks", () => {
   assert.equal(entrypointKind.safeParse("callback").success, true);
   assert.equal(TOOL_INPUTS.trace.safeParse({ targets: [{ kind: "callback", name: "a.b.C.m" }] }).success, true);
 });
+
+test("an unknown item states what it stands for in every presentation, and an item with a subject is never folded into a run of shared evidence", () => {
+  const subject = { candidate: "listener", symbol: "Queue.take", raisedBy: "io.awspring.cloud.sqs.annotation.SqsListener" };
+  const sharedPlace = { path: "src/Queue.java", line: 3 };
+  const items = [
+    { status: "unknown", reason: "no-extractor", evidence: [{ path: "src/Queue.java", line: 7, endLine: 9 }], subject },
+    { status: "unknown", reason: "no-extractor", evidence: [{ path: "src/Queue.java", line: 12, endLine: 13 }] },
+    { status: "unknown", reason: "no-extractor", evidence: [{ path: "src/Queue.java", line: 20, endLine: 22 }] },
+    { status: "unknown", reason: "no-extractor", evidence: [sharedPlace, { path: "src/Base.java", line: 1 }], subject: { symbol: "Queue", raisedBy: "lib.Base" } },
+    { status: "unknown", reason: "no-extractor", evidence: [sharedPlace, { path: "src/Base.java", line: 2 }] },
+  ];
+  for (const mode of ["summary", "details"] as const) {
+    const text = render(items, mode);
+    assert.match(text, /unknown \(no-extractor\) for listener Queue\.take \(raised by [^)]+\) src\/Queue\.java:7-9/);
+    assert.match(text, /for Queue \(raised by lib\.Base\)/);
+  }
+});

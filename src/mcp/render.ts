@@ -18,7 +18,7 @@ import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
 import type { ChangeFrontier, ClassifiedDifference, ConsequenceFinding, ConsequencesValue, HypothesisAnswer, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
-import { FUNCTION_VALUE_AWAITS_JDK, type Cut, type Evidence, type Fact, type Finding, type SnapshotRef, type WalkBounds } from "../core/domain/shared/fact.ts";
+import { FUNCTION_VALUE_AWAITS_JDK, type Cut, type Evidence, type Fact, type Finding, type SnapshotRef, type UnknownSubject, type WalkBounds } from "../core/domain/shared/fact.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { NameCandidate, OutwardKind, OutwardName, RepositoryOutwardName } from "../core/domain/topology/outward-name.ts";
 import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
@@ -277,7 +277,7 @@ function entrypointLine(entrypoint: Entrypoint, declaredAt?: Evidence): string {
 }
 
 function itemLine(item: Finding<Entrypoint>): string {
-  if (item.status === "unknown") return `  - unknown (${item.reason}) ${item.evidence.map(evidenceText).join(", ")}`.trimEnd();
+  if (item.status === "unknown") return `  - unknown (${item.reason})${subjectText(item.subject)} ${item.evidence.map(evidenceText).join(", ")}`.trimEnd();
   return entrypointLine(item.value, item.value.kind === "ui-route" ? item.evidence[0] : undefined);
 }
 
@@ -295,15 +295,22 @@ function entrypointContext(entrypoint: Entrypoint): string[] {
   return [`    base path defaults: ${JSON.stringify(base.value.default)}${profiles === 0 ? "" : `; ${profiles} profile-specific settings, ${categoryRecovery({ full: "includes them" })}`}`];
 }
 
+/** What an unknown item stands for, as "for <kind> <symbol> (raised by <name>)", leaving out the parts it does not state. */
+function subjectText(subject: UnknownSubject | undefined): string {
+  if (subject === undefined) return "";
+  const stands = [subject.candidate, subject.symbol].filter((part) => part !== undefined).join(" ");
+  return `${stands === "" ? "" : ` for ${stands}`}${subject.raisedBy === undefined ? "" : ` (raised by ${subject.raisedBy})`}`;
+}
+
 function unknownFindingRun(items: readonly Finding<Entrypoint>[], start: number): { end: number; lines: string[] } {
   const first = items[start]!;
-  if (first.status !== "unknown" || first.evidence.length !== 1) return { end: start + 1, lines: [`${itemLine(first)} [findingIndex ${start}]`] };
+  if (first.status !== "unknown" || first.evidence.length !== 1 || first.subject !== undefined) return { end: start + 1, lines: [`${itemLine(first)} [findingIndex ${start}]`] };
   const evidence = first.evidence[0]!;
   const { line: _line, endLine: _endLine, ...sharedEvidence } = evidence;
   let end = start + 1;
   while (end < items.length) {
     const next = items[end]!;
-    if (next.status !== "unknown" || next.reason !== first.reason || next.evidence.length !== 1) break;
+    if (next.status !== "unknown" || next.reason !== first.reason || next.evidence.length !== 1 || next.subject !== undefined) break;
     const { line: _nextLine, endLine: _nextEndLine, ...rest } = next.evidence[0]!;
     if (JSON.stringify(rest) !== JSON.stringify(sharedEvidence)) break;
     end++;
@@ -370,7 +377,7 @@ function entrypointItems(items: readonly Finding<Entrypoint>[], detail: Response
       if (first.status === "unknown") {
         if (first.evidence.length !== 1 && first.evidence.some((place) => sharedEvidence.has(canonicalJson(place)))) {
           const references = first.evidence.map((place) => sharedEvidence.get(canonicalJson(place)) ?? place);
-          lines.push(`  - unknown (${first.reason}) [findingIndex ${index}] evidence: ${JSON.stringify(references)}`);
+          lines.push(`  - unknown (${first.reason})${subjectText(first.subject)} [findingIndex ${index}] evidence: ${JSON.stringify(references)}`);
           index++;
         } else { const run = unknownFindingRun(items, index); lines.push(...run.lines); index = run.end; }
         continue;
@@ -396,7 +403,7 @@ function entrypointItems(items: readonly Finding<Entrypoint>[], detail: Response
     if (first.status === "unknown") {
       if (first.evidence.length !== 1 && first.evidence.some((place) => sharedEvidence.has(canonicalJson(place)))) {
         const references = first.evidence.map((place) => sharedEvidence.get(canonicalJson(place)) ?? place);
-        lines.push(`  - unknown (${first.reason}) [findingIndex ${index}] evidence: ${JSON.stringify(references)}`);
+        lines.push(`  - unknown (${first.reason})${subjectText(first.subject)} [findingIndex ${index}] evidence: ${JSON.stringify(references)}`);
         index++;
       } else { const run = unknownFindingRun(items, index); lines.push(...run.lines); index = run.end; }
       continue;
