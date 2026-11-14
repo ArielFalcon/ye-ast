@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { bindingNames, readsModuleStatements } from "./syntax.ts";
+import { bindingNames, readsModuleStatements, writtenStrings } from "./syntax.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { ModuleDependencies, ModuleDependency, ModuleSource, UntraversedReference } from "../../domain/impact/module-dependency.ts";
@@ -23,13 +23,15 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
       const parse = (file: string): ts.SourceFile => sourceTree(held.get(file)!, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
       const files: ModuleSource[] = [];
       const pending: PendingDependency[] = [];
-      const unread: { file: string; reason: "source-unreadable" | "no-extractor" }[] = [];
+      const unread: { file: string; reason: "source-unreadable" | "no-extractor"; reaches?: readonly string[] }[] = [];
+      const bounded: { entry: number; strings: readonly string[] }[] = [];
       const untraversed: UntraversedReference[] = [];
 
       for (const file of [...held.keys()].sort(compareText)) {
         if (!isTypeScriptFile(file) || (selected !== undefined && !selected.has(file))) continue;
         const tree = parse(file);
         if (!readsModuleStatements(tree)) {
+          bounded.push({ entry: unread.length, strings: writtenStrings(held.get(file)!.content) });
           unread.push({ file, reason: "source-unreadable" });
           continue;
         }
@@ -138,6 +140,11 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
         const exportedAs = defaultOf(target.file);
         return { ...dependency, target, bindings: dependency.bindings.map((binding) => binding.imported === "default" && exportedAs !== undefined ? { ...binding, exportedAs } : binding) };
       }));
+      for (const { entry, strings } of bounded) {
+        const from = unread[entry]!.file;
+        const targets = await Promise.all(strings.map((specifier) => resolve(from, specifier)));
+        unread[entry] = { ...unread[entry]!, reaches: [...new Set(targets.flatMap((target) => (target.kind === "repository" ? [target.file] : [])))].sort(compareText) };
+      }
       const traced = await Promise.all(untraversed.map(async (reference) => reference.specifier === undefined || reference.target !== undefined ? reference : { ...reference, target: await resolve(reference.file, reference.specifier) }));
       const resources = new Set(dependencies.flatMap(({ target }) => target.kind === "repository" && target.file.endsWith(".json") ? [target.file] : []));
       for (const file of [...resources].sort(compareText)) files.push({ file, statements: [held.get(file)!.content], moduleOnly: true, resource: true });

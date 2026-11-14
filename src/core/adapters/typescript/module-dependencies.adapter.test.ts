@@ -125,9 +125,22 @@ test("malformed and unsupported static declarations are explicitly unread", asyn
     { path: "broken.ts", content: "export {" },
     { path: "internal.ts", content: "import Alias = Namespace.Member;" },
   ]);
-  assert.deepEqual(result.unread, [{ file: "broken.ts", reason: "source-unreadable" }, { file: "internal.ts", reason: "no-extractor" }]);
+  assert.deepEqual(result.unread, [{ file: "broken.ts", reason: "source-unreadable", reaches: [] }, { file: "internal.ts", reason: "no-extractor" }]);
   assert.equal(result.files.some(({ file }) => file === "broken.ts"), false);
   assert.equal(result.files.find(({ file }) => file === "internal.ts")?.moduleOnly, false);
+});
+
+test("a source whose module statements are not read reaches the repository files every run between two quotes resolves to, a run with an escape also by its value, whatever a template or a regular expression before it does to tokens", async () => {
+  const broken: SourceFile = { path: "src/broken.ts", content: [
+    "const label = `${\"x\"}`;",
+    "const quote = /'/;",
+    "export * from \"./a\";",
+    "export { b } from \"./\\x62\";",
+    "export * from 'pkg';",
+    "export const load = () => import(\"./c\";",
+  ].join("\n") };
+  const result = await createModuleDependenciesReader().extract([broken, manifest, ...["a", "b", "c", "d"].map((name) => ({ path: `src/${name}.ts`, content: `export const ${name} = 1;` }))]);
+  assert.deepEqual(result.unread, [{ file: "src/broken.ts", reason: "source-unreadable", reaches: ["src/a.ts", "src/b.ts", "src/c.ts"] }]);
 });
 
 test("each module statement lists the names it binds at the position the graph writes them", async () => {

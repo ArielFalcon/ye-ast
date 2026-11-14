@@ -61,6 +61,26 @@ export function readsModuleStatements(tree: ts.SourceFile): boolean {
   });
 }
 
+const LINE_BREAK = /[\n\r\u2028\u2029]/;
+
+/**
+ * Every run of text between two consecutive quote characters that holds no line break, and the value a run holding a
+ * backslash spells: a superset of the strings the source writes whatever its syntax errors, since no token is trusted.
+ */
+export function writtenStrings(text: string): readonly string[] {
+  const quotes = [...text.matchAll(/["'`]/g)].map(({ index }) => index);
+  const runs = new Set<string>();
+  for (let at = 1; at < quotes.length; at++) {
+    const run = text.slice(quotes[at - 1]! + 1, quotes[at]);
+    if (LINE_BREAK.test(run)) continue;
+    runs.add(run);
+    if (!run.includes("\\")) continue;
+    const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, `"${run}"`);
+    if (scanner.scan() === ts.SyntaxKind.StringLiteral && scanner.getTokenEnd() === run.length + 2) runs.add(scanner.getTokenValue());
+  }
+  return [...runs];
+}
+
 export function lineOf(source: ts.SourceFile, node: ts.Node): number {
   return source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
 }

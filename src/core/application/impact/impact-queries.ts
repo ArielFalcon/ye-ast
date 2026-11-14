@@ -154,9 +154,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     return retainedOf(prepared, slot, () => reader.extract(tree.sources, listing === undefined ? undefined : { listing }), signal);
   };
   /** The head's module statements, read once a namespace import may name a reached declaration. */
-  const namespaceModules = (head: Pick<HeadReading, "prepared">, tree: CommitExtraction, signal: AbortSignal | undefined): (() => Promise<readonly ModuleDependency[]>) | undefined => {
+  const namespaceModules = (head: Pick<HeadReading, "prepared">, tree: CommitExtraction, signal: AbortSignal | undefined): (() => Promise<Pick<ModuleDependencies, "dependencies" | "unread">>) | undefined => {
     const reader = deps.moduleDependencies;
-    return reader === undefined ? undefined : async () => (await moduleDependenciesOf(reader, head.prepared, tree, signal)).dependencies;
+    return reader === undefined ? undefined : () => moduleDependenciesOf(reader, head.prepared, tree, signal);
   };
   const headReader = createHeadReader(deps);
   const bindingModules = deps.moduleReader ?? deps.moduleDependencies;
@@ -649,8 +649,8 @@ interface WalkInput {
   reading: BaseReading;
   /** What the type checker binds each call to, consulted first. */
   typed?: ReadonlyMap<string, TypeTarget> | undefined;
-  /** The head's module statements, through which a namespace import reaches a declaration. */
-  modules?: (() => Promise<readonly ModuleDependency[]>) | undefined;
+  /** The head's module statements, through which a namespace import reaches a declaration, and its sources whose statements are not read. */
+  modules?: (() => Promise<Pick<ModuleDependencies, "dependencies" | "unread">>) | undefined;
   signal?: AbortSignal | undefined;
 }
 

@@ -51,7 +51,11 @@ export interface ModuleSource {
 export interface ModuleDependencies {
   files: readonly ModuleSource[];
   dependencies: readonly ModuleDependency[];
-  unread: readonly { file: string; reason: UnknownReason }[];
+  /**
+   * `reaches`: for a source whose module statements are not read, the repository files the strings it writes resolve to,
+   * sorted, a bound of the modules its statements may name (ADR-0085); absent where the reader stated none.
+   */
+  unread: readonly { file: string; reason: UnknownReason; reaches?: readonly string[] }[];
   /** Present when the reader accounted for nested module references; absent for older injected readers. */
   untraversed?: readonly UntraversedReference[];
 }

@@ -1,5 +1,5 @@
 import type { Token, SourceReading } from "../../domain/change/source-tokens.ts";
-import type { ModuleDependency } from "../../domain/impact/module-dependency.ts";
+import type { ModuleDependencies, ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import { topLevelOf, isSeedable } from "../../domain/change/seeds.ts";
 import { FOLLOWED_EDGE_KINDS, followsEdge, isFileDependent } from "../../domain/impact/edge-policy.ts";
 import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
@@ -48,8 +48,11 @@ export interface WrittenUsesDeps {
   origins: Pick<ImportOrigins, "rootBindings">;
   /** Per file, the declaration each local name its imports bind reaches, when the join proves exactly one. */
   importedDeclarations(file: string): Promise<ReadonlyMap<string, GraphSymbol>>;
-  /** The module statements of every source, read when a node is first asked about; without them no namespace use is read. */
-  modules?: (() => Promise<readonly ModuleDependency[]>) | undefined;
+  /**
+   * The module statements of every source and the sources whose statements are not read, read when a node is first asked
+   * about; without them no namespace use is read.
+   */
+  modules?: (() => Promise<Pick<ModuleDependencies, "dependencies" | "unread">>) | undefined;
 }
 
 /** No declaration owns the place: it is bound at the file's level. */
@@ -109,12 +112,13 @@ export function createWrittenUses({ store, sources, tokensOf, syntaxOf, origins,
     return files;
   }
 
-  let statements: Promise<{ reexports: ReadonlyMap<string, readonly ModuleDependency[]>; imports: ReadonlyMap<string, readonly ModuleDependency[]> }> | undefined;
-  const statementsByTarget = (read: () => Promise<readonly ModuleDependency[]>) =>
-    (statements ??= read().then((dependencies) => {
+  let statements: Promise<{ reexports: ReadonlyMap<string, readonly ModuleDependency[]>; imports: ReadonlyMap<string, readonly ModuleDependency[]>; unreadReaching: (module: string) => readonly string[] }> | undefined;
+  const statementsByTarget = (read: NonNullable<WrittenUsesDeps["modules"]>) =>
+    (statements ??= read().then(({ dependencies, unread }) => {
       const into = dependencies.filter((dependency) => dependency.target.kind === "repository");
       const byTarget = (kind: ModuleDependency["kind"]) => Map.groupBy(into.filter((dependency) => dependency.kind === kind), (dependency) => (dependency.target as { file: string }).file);
-      return { reexports: byTarget("reexport"), imports: byTarget("import") };
+      const links = unread.filter(({ file, reason }) => reason === "source-unreadable" && readsWrittenUses(file)).map(({ file, reaches }) => ({ file, reaches: reaches === undefined ? undefined : new Set(reaches) }));
+      return { reexports: byTarget("reexport"), imports: byTarget("import"), unreadReaching: (module: string) => links.filter(({ reaches }) => reaches === undefined || reaches.has(module)).map(({ file }) => file) };
     }));
 
   /**
@@ -122,47 +126,59 @@ export function createWrittenUses({ store, sources, tokensOf, syntaxOf, origins,
    * local may name `node` by. The modules whose namespace may hold it are its file and, by syntax alone, every module that
    * re-exports it from one of them (`export *`, `export { … } from` of a name it has there) or writes an export statement
    * of a name it imports from one; a namespace import of such a module binds one, as does an import of a name such a
-   * module exports a namespace under (`export * as ns from`), whose members are not bounded.
+   * module exports a namespace under (`export * as ns from`), whose members are not bounded. A source whose module
+   * statements are not read joins the chain under any name when a string it writes leads to a module of it (ADR-0085), and
+   * every name a file imports from it, or from a module the chain reaches through it, binds one the join does not settle.
    */
-  async function namespacesOf(node: GraphSymbol): Promise<Map<string, Map<string, Names>>> {
+  async function namespacesOf(node: GraphSymbol): Promise<{ files: Map<string, Map<string, Names>>; throughUnread: Map<string, "namespace" | "name"> }> {
     const files = new Map<string, Map<string, Names>>();
-    if (modules === undefined || !topLevelOf(declarationsIn(node.file).filter(isSeedable)).some(({ id }) => id === node.id)) return files;
-    const { reexports, imports } = await statementsByTarget(modules);
+    const throughUnread = new Map<string, "namespace" | "name">();
+    if (modules === undefined || !topLevelOf(declarationsIn(node.file).filter(isSeedable)).some(({ id }) => id === node.id)) return { files, throughUnread };
+    const { reexports, imports, unreadReaching } = await statementsByTarget(modules);
     const names = new Map<string, Names>([[node.file, await exposedNames(node.file, new Set([node.name]), true)]]);
     const exported = new Map<string, Set<string>>();
+    const unsettledThrough = new Set<string>();
     const pending = [node.file];
-    const grow = (module: string, more: Names): void => {
+    const grow = (module: string, more: Names, unread: boolean): void => {
       const held = names.get(module);
-      if (held === UNBOUNDED || (more !== UNBOUNDED && held !== undefined && [...more].every((name) => held.has(name)))) return;
-      names.set(module, more === UNBOUNDED ? UNBOUNDED : new Set([...(held ?? []), ...more]));
+      const covered = held === UNBOUNDED || (more !== UNBOUNDED && held !== undefined && [...more].every((name) => held.has(name)));
+      if (covered && (!unread || unsettledThrough.has(module))) return;
+      if (unread) unsettledThrough.add(module);
+      if (!covered) names.set(module, more === UNBOUNDED ? UNBOUNDED : new Set([...(held ?? []), ...more]));
       pending.push(module);
     };
     const named = (held: Names, name: string): boolean => held === UNBOUNDED || held.has(name);
     for (let module = pending.pop(); module !== undefined; module = pending.pop()) {
       const held = names.get(module)!;
+      const unread = unsettledThrough.has(module);
+      for (const source of unreadReaching(module)) grow(source, UNBOUNDED, true);
       for (const dependency of reexports.get(module) ?? []) {
         for (const { local, imported } of dependency.bindings) {
           if (imported === "*" && local !== undefined) exported.set(dependency.file, (exported.get(dependency.file) ?? new Set()).add(local));
-          else if (local === undefined) grow(dependency.file, held);
-          else if (named(held, imported)) grow(dependency.file, new Set([local]));
+          else if (local === undefined) grow(dependency.file, held, unread);
+          else if (named(held, imported)) grow(dependency.file, new Set([local]), unread);
         }
       }
       for (const dependency of imports.get(module) ?? []) {
         const locals = new Set(dependency.bindings.flatMap(({ local, imported }) => (imported === "*" || local === undefined || !named(held, imported) ? [] : [local])));
         if (locals.size === 0) continue;
         const exposed = await exposedNames(dependency.file, locals, false);
-        if (exposed === UNBOUNDED || exposed.size > 0) grow(dependency.file, exposed);
+        if (exposed === UNBOUNDED || exposed.size > 0) grow(dependency.file, exposed, unread);
       }
     }
     for (const module of new Set([...names.keys(), ...exported.keys()])) {
       for (const dependency of imports.get(module) ?? []) {
         for (const { local, imported } of dependency.bindings) {
-          const members = local === undefined ? undefined : imported === "*" ? names.get(module) : exported.get(module)?.has(imported) === true ? UNBOUNDED : undefined;
-          if (members !== undefined) files.set(dependency.file, (files.get(dependency.file) ?? new Map()).set(local!, members));
+          if (local === undefined) continue;
+          const members = imported === "*" ? names.get(module)
+            : exported.get(module)?.has(imported) === true || (unsettledThrough.has(module) && named(names.get(module)!, imported)) ? UNBOUNDED : undefined;
+          if (members === undefined) continue;
+          files.set(dependency.file, (files.get(dependency.file) ?? new Map()).set(local, members));
+          if (unsettledThrough.has(module)) throughUnread.set(placeKey(dependency.file, local), imported === "*" ? "namespace" : "name");
         }
       }
     }
-    return files;
+    return { files, throughUnread };
   }
 
   /**
@@ -201,7 +217,8 @@ export function createWrittenUses({ store, sources, tokensOf, syntaxOf, origins,
     }));
   }
 
-  function sitesIn(node: GraphSymbol, file: string, content: string, tokens: readonly Token[], imports: readonly { start: number; end: number }[], locals: ReadonlyMap<string, Names | undefined>, own: boolean, namespace: boolean): Site[] {
+  /** `followed`: the locals whose re-export statements the chain of modules already follows, so they are no place of a read. */
+  function sitesIn(node: GraphSymbol, file: string, content: string, tokens: readonly Token[], imports: readonly { start: number; end: number }[], locals: ReadonlyMap<string, Names | undefined>, own: boolean, namespace: boolean, followed: ReadonlySet<string> = new Set()): Site[] {
     const sites: Site[] = [];
     const indexed = indexedLines(node, file);
     const code = tokens.filter(({ text }) => text !== "\n");
@@ -209,7 +226,7 @@ export function createWrittenUses({ store, sources, tokensOf, syntaxOf, origins,
       if (!locals.has(token.text) || !IDENTIFIER.test(token.text)) continue;
       if (imports.some(({ start, end }) => start <= token.startOffset && token.endOffset <= end)) continue;
       const previous = code[index - 1]?.text;
-      if ((previous !== undefined && DECLARING_KEYWORDS.has(previous)) || (!namespace && reexposes(code, index))) continue;
+      if ((previous !== undefined && DECLARING_KEYWORDS.has(previous)) || ((!namespace || followed.has(token.text)) && reexposes(code, index))) continue;
       const members = locals.get(token.text);
       if (namespace && (namesProperty(code, index) || (members !== undefined && !namesMember(code, index, members)))) continue;
       const column = token.startOffset - (content.lastIndexOf("\n", token.startOffset - 1) + 1);
@@ -263,6 +280,7 @@ export function createWrittenUses({ store, sources, tokensOf, syntaxOf, origins,
     async into(nodes, signal) {
       const read = new Map<GraphNodeId, Set<string>>();
       const sites: Site[] = [];
+      const throughUnread: Site[] = [];
       const unsettled: Omit<HeldUse, "from">[] = [];
       for (const node of new Map(nodes.map((node) => [node.id, node])).values()) {
         if (!readsWrittenUses(node.file)) continue;
@@ -277,32 +295,47 @@ export function createWrittenUses({ store, sources, tokensOf, syntaxOf, origins,
           sites.push(...sitesIn(node, file, source.content, tokens.tokens, tokens.imports, new Map([...locals].map((local) => [local, undefined])), own, false));
           read.set(node.id, (read.get(node.id) ?? new Set()).add(file));
         }
-        for (const [file, locals] of await namespacesOf(node)) {
+        const namespaces = await namespacesOf(node);
+        for (const [file, locals] of namespaces.files) {
           const source = byPath.get(file);
           if (source === undefined) continue;
           const tokens = await reading(source);
-          if (tokens.status === "read") sites.push(...sitesIn(node, file, source.content, tokens.tokens, tokens.imports, locals, false, true));
-          else unsettled.push({ node, file, line: 1, name: [...locals.keys()].sort().join(",") });
+          if (tokens.status === "read") {
+            const followed = new Set([...locals.keys()].filter((local) => namespaces.throughUnread.get(placeKey(file, local)) === "name"));
+            for (const site of sitesIn(node, file, source.content, tokens.tokens, tokens.imports, locals, false, true, followed)) {
+              (namespaces.throughUnread.has(placeKey(file, site.local)) ? throughUnread : sites).push(site);
+            }
+          } else unsettled.push({ node, file, line: 1, name: [...locals.keys()].sort().join(",") });
         }
       }
+      const firstThroughUnread = sites.length;
+      sites.push(...throughUnread);
       const bindings = sites.length === 0 ? [] : await origins.rootBindings(sites.map(({ file, line, column, local, owner }): UseSite => ({ file, line, column: column + 1, spelled: local, owner: owner === undefined ? FILE_LEVEL : { name: owner.name, line: owner.startLine, endLine: owner.endLine } })), signal);
       const held: HeldUse[] = [];
+      const unsettledThroughUnread: Omit<HeldUse, "from">[] = [];
       for (const [index, site] of sites.entries()) {
         const binding = bindings[index];
         if (site.namespace) {
           const verdict = namespaceRead(site, binding);
           const from = verdict === "node" ? await holderOf(site) : undefined;
           if (from !== undefined) held.push({ node: site.node, file: site.file, line: site.line, name: site.local, from });
-          else if (verdict !== "other") unsettled.push({ node: site.node, file: site.file, line: site.line, name: site.local });
+          else if (verdict !== "other") (index < firstThroughUnread ? unsettled : unsettledThroughUnread).push({ node: site.node, file: site.file, line: site.line, name: site.local });
           continue;
         }
         const from = binds(site, binding) ? await holderOf(site) : undefined;
         if (from !== undefined) held.push({ node: site.node, file: site.file, line: site.line, name: site.local, from });
         else if (binding === undefined || binding.kind === "unknown" || binds(site, binding)) read.get(site.node.id)?.delete(site.file);
       }
+      const marked = new Set([...held, ...unsettled].map(({ file, line, name }) => placeKey(file, name, line)));
+      unsettled.push(...unsettledThroughUnread.filter(({ file, line, name }) => !marked.has(placeKey(file, name, line))));
       return { read, held, unsettled };
     },
   };
+}
+
+/** A name a file writes, at one line or, without one, wherever the file writes it. */
+function placeKey(file: string, name: string, line?: number): string {
+  return JSON.stringify([file, name, line]);
 }
 
 /** The names a declaration may have in a module, or `UNBOUNDED` where the statements read do not bound them. */

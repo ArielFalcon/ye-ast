@@ -67,3 +67,6 @@ that reads any unread source would be sound and would mark every answer of a rep
 - Cost: one pass over the text of each unread source and one resolution per distinct string, paid only by sources that
   are not read.
 - A declaration read through an unread source is `partial` with the reader marked, where it was `complete` without it.
+- A specifier that itself holds a quote character is outside the bound: the run that spells it ends at that character.
+- A source the reader reports for a module statement it does not model, not for a syntax error, keeps today's answer;
+  this decision bounds only a source that is not read.
