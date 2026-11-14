@@ -6,6 +6,7 @@ import { SCHEMA, type Cut, type Fact, type FactBase, type WalkBounds } from "../
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
 import { renderImpact, renderImporters, renderWorkspaceImpact } from "./render.ts";
+import { LISTED_ITEMS } from "./render-budget.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 
 const base: FactBase = { schema: SCHEMA, snapshot: { repo: "a", kind: "sha", sha: "abc" }, producer: { name: "test", version: "1" }, inputs: { trust: "untrusted", scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "c", declaredConfig: {}, engines: {} }, evidence: [] };
@@ -141,8 +142,8 @@ test("detailed impact retains the nearest dependency frontier and reached handle
   assert.match(output, /3 other symbols[^\n]*mode: "full"/);
   const summary = renderImpact({ ...fact, value });
   assert.match(summary, /consumer\.ts\n {4}12-18 direct \[function\]/);
-  assert.match(summary, /by depth: 2: 3, 3: 1;/);
-  assert.doesNotMatch(summary, /deeper|handler\b[^\n]*depth 3/i);
+  assert.match(summary, /22 deeper/);
+  assert.doesNotMatch(summary, /by depth/);
 });
 
 test("detailed evidence of a member target shows its nearest dependent, never only its own containment", () => {
@@ -745,4 +746,33 @@ test("a reached UI route names the place its route entry is declared at", () => 
 test("a reached HTTP route names no declaration place", () => {
   const output = renderImpact({ ...fact, value: { ...impact, entrypoints: [{ ...impact.entrypoints[0]!, name: "GET /orders" }] } }, "details");
   assert.doesNotMatch(output, / at src\/routes\.ts/);
+});
+
+const dependent = (index: number, depth: number) => ({ file: `src/dep-${index}.ts`, symbol: `dep${index}`, kind: "function", line: index + 1, depth, confidence: 1, fanIn: 0 });
+
+test("a summary names every dependent up to the listed bound and counts those beyond it", () => {
+  const render = (count: number) => renderImpact({ ...fact, value: { ...impact, entrypoints: [], symbols: Array.from({ length: count }, (_, index) => dependent(index, index === 0 ? 1 : 3)) } as ImpactValue });
+  const within = render(LISTED_ITEMS);
+  assert.ok(within.includes(`dep${LISTED_ITEMS - 1}`));
+  assert.doesNotMatch(within, /by depth/);
+  const beyond = render(LISTED_ITEMS + 1);
+  assert.match(beyond, /by depth: 3: /);
+  assert.ok(!beyond.includes(`dep${LISTED_ITEMS}`));
+});
+
+test("a summary says when no dependent is recorded, with or without containment rows", () => {
+  const contains = { file: "src/owner.ts", symbol: "Owner", kind: "class", line: 1, depth: 0, confidence: 1, fanIn: 0, via: { file: "src/owner.ts", symbol: "Owner.find", lines: [], basis: "contains" as const } };
+  for (const symbols of [[], [contains]]) {
+    const text = renderImpact({ ...fact, value: { ...impact, seeds: [{ file: "src/owner.ts", symbol: "Owner.find", line: 3, basis: "requested" }], entrypoints: [], symbols } as ImpactValue });
+    assert.match(text, /no dependent recorded/, JSON.stringify(symbols));
+  }
+  assert.doesNotMatch(renderImpact({ ...fact, value: { ...impact, entrypoints: [], symbols: [dependent(0, 1)] } as ImpactValue }), /no dependent recorded/);
+});
+
+test("a summary names every seed up to the listed bound and counts the change origins beyond it", () => {
+  const render = (count: number) => renderImpact({ ...fact, value: { ...impact, entrypoints: [], symbols: [], seeds: Array.from({ length: count }, (_, index) => ({ file: `src/seed-${index}.ts`, symbol: `s${index}`, line: 1, basis: "lines" as const })) } as ImpactValue });
+  assert.ok(render(LISTED_ITEMS).includes(`s${LISTED_ITEMS - 1}`));
+  const beyond = render(LISTED_ITEMS + 1);
+  assert.match(beyond, /change origins: /);
+  assert.ok(!beyond.includes("s0"));
 });

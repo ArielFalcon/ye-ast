@@ -1676,7 +1676,7 @@ test("an impact summary counts every cut kind and keeps its bound regardless of 
   assert.match(text, /hub \(1\)/);
   assert.match(text, /no-extractor \(1\)/);
   assert.match(text, /unresolved-link \(1\)/);
-  assert.doesNotMatch(text, /B\.one|src\/x\.ts/);
+  assert.doesNotMatch(text, /src\/x\.ts/);
   await session.close();
 });
 
@@ -1853,16 +1853,16 @@ test("workspace unknown repository reason is visible in summary and full text", 
 });
 
 test("both impact text levels count unselected change origins while full JSON preserves them", async () => {
-  const seeds = Array.from({ length: 12 }, (_, index) => ({ file: `src/feature-${index}.ts`, symbol: `a${index}`, line: index + 1, basis: index % 2 === 0 ? "lines" as const : "top-level" as const }));
+  const seeds = Array.from({ length: LISTED_ITEMS + 1 }, (_, index) => ({ file: `src/feature-${index}.ts`, symbol: `a${index}`, line: index + 1, basis: index % 2 === 0 ? "lines" as const : "top-level" as const }));
   const fact = impactFact({ value: { ...IMPACT, seeds, symbols: [], entrypoints: [], changedEntrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(summary, /^seeds \(12\):\n {2}change origins: 12 declarations across 12 files \(lines 6, top-level 6\); mode: "full" includes every seed$/m);
+  assert.match(summary, new RegExp(`^seeds \\(${LISTED_ITEMS + 1}\\):\\n {2}change origins: ${LISTED_ITEMS + 1} declarations across ${LISTED_ITEMS + 1} files \\(lines ${(LISTED_ITEMS + 1) / 2}, top-level ${(LISTED_ITEMS + 1) / 2}\\); mode: "full" includes every seed$`, "m"));
   assert.doesNotMatch(summary, /src\/feature-/);
   const full = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
   assert.deepEqual(withoutRecovery(resultFields(full)), { ...fact, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
   assert.doesNotMatch(textOf(full), /src\/feature-/);
-  assert.match(textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" })), /change origins: 12 declarations across 12 files/);
+  assert.match(textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" })), new RegExp(`change origins: ${LISTED_ITEMS + 1} declarations across ${LISTED_ITEMS + 1} files`));
   await session.close();
 });
 
@@ -1877,12 +1877,12 @@ test("impact text names each changed contract operation with the side of the exc
 test("a summary lists the seeds a caller asked for and counts the change seeds beside them", async () => {
   const seeds = [
     { file: "src/a.ts", symbol: "asked", line: 1, basis: "requested" as const },
-    ...Array.from({ length: 10 }, (_, index) => ({ file: "src/a.ts", symbol: `a${index}`, line: index + 2, basis: "lines" as const })),
+    ...Array.from({ length: LISTED_ITEMS + 1 }, (_, index) => ({ file: "src/a.ts", symbol: `a${index}`, line: index + 2, basis: "lines" as const })),
   ];
   const fact = impactFact({ value: { ...IMPACT, seeds, symbols: [], entrypoints: [], changedEntrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(summary, /^seeds \(11\):\n {2}src\/a\.ts \(requested\)\n {4}1 asked\n {2}change origins: 10 declarations across 1 file \(lines 10\); mode: "full" includes every seed$/m);
+  assert.match(summary, new RegExp(`^seeds \\(${LISTED_ITEMS + 2}\\):\\n {2}src/a\\.ts \\(requested\\)\\n {4}1 asked\\n {2}change origins: ${LISTED_ITEMS + 1} declarations across 1 file \\(lines ${LISTED_ITEMS + 1}\\); mode: "full" includes every seed$`, "m"));
   await session.close();
 });
 
@@ -1958,6 +1958,8 @@ test("impacted symbols are grouped under their file, a seed at depth 0 is not pr
   await session.close();
 });
 
+const deeperPadding = (): ImpactValue["symbols"] => Array.from({ length: LISTED_ITEMS }, (_, index) => ({ file: `src/pad-${index}.ts`, symbol: `Pad${index}.top`, kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 }));
+
 test("callers summary counts dependency depths and detail identifies the nearest evidence frontier", async () => {
   const deep = impactFact({
     value: {
@@ -1972,6 +1974,7 @@ test("callers summary counts dependency depths and detail identifies the nearest
         { file: "src/f.ts", symbol: "F.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
         { file: "src/g.ts", symbol: "G.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
         { file: "src/h.ts", symbol: "H.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+        ...deeperPadding(),
       ],
       entrypoints: [],
       cost: { expansionsUsed: 1 },
@@ -1980,13 +1983,13 @@ test("callers summary counts dependency depths and detail identifies the nearest
   const { session } = await setup({ callers: async () => ({ ok: true, value: deep }) });
   const result = await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }] });
   const text = textOf(result);
-  assert.match(text, /impacted symbols \(9\):\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)\n {2}by depth: 2: 7, 3: 1;/);
+  assert.match(text, new RegExp(`impacted symbols \\(${9 + LISTED_ITEMS}\\):\\n {2}src/a\\.ts\\n {4}4 A\\.other \\[method\\] \\(depth 1\\)\\n {2}by depth: 2: ${7 + LISTED_ITEMS}, 3: 1;`));
   assert.doesNotMatch(text, /B\.user|C\.top/);
   const { recovery: _recovery, ...receipt } = fieldsOf(resultFields(result));
   assert.deepEqual(receipt, envelopeOf(deep));
   const full = textOf(await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }], mode: "details" }));
   assert.match(full, /4 A\.other/);
-  assert.match(full, /8 other symbols; mode: "full"/);
+  assert.match(full, new RegExp(`${8 + LISTED_ITEMS} other symbols; mode: "full"`));
   assert.doesNotMatch(full, /B\.user|C\.top/);
   await session.close();
 });
@@ -2003,6 +2006,7 @@ test("callers summary retains requested targets while counting deeper consequenc
         { file: "src/f.ts", symbol: "F.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
         { file: "src/g.ts", symbol: "G.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
         { file: "src/h.ts", symbol: "H.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+        ...deeperPadding(),
       ],
       entrypoints: [],
       cost: { expansionsUsed: 1 },
@@ -2010,7 +2014,7 @@ test("callers summary retains requested targets while counting deeper consequenc
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ callers: async () => ({ ok: true, value: deep }) });
   const text = textOf(await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }] }));
-  assert.match(text, /by depth: 2: 7/);
+  assert.match(text, new RegExp(`by depth: 2: ${7 + LISTED_ITEMS}`));
   assert.match(text, /1 A\.seed/);
   await session.close();
 });
@@ -2974,6 +2978,7 @@ test("impact detail retains a selected origin association while both text modes 
     { file: "src/unrelated/unrelated.service.ts", symbol: "Unrelated", line: 3, basis: "top-level" },
     { file: "src/services/checkout.service.ts", symbol: "checkout", line: 12, endLine: 20, basis: "lines" },
     { file: "src/pages/checkout.component.ts", symbol: "Checkout", line: 30, endLine: 45, basis: "resource" },
+    ...Array.from({ length: LISTED_ITEMS }, (_, index) => ({ file: `src/pad/pad-${index}.ts`, symbol: `pad${index}`, line: 1, basis: "top-level" as const })),
   ];
   const fact = impactFact({ value: {
     ...IMPACT,

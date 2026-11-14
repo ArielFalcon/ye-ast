@@ -702,13 +702,15 @@ function areaLines(value: ImpactValue, areas: readonly ChangeArea[], symbols: re
 function impactedSymbols(value: ImpactValue, detail: ResponseMode): string[] {
   const symbols = consequenceSymbols(value);
   const header = `impacted symbols (${symbols.length}):`;
-  if (symbols.length === 0) return [header];
-  const literal = [header, ...groupedLines(symbols), ...substitutionLegend(symbols)];
+  const none = dependentLevel(symbols) === Infinity ? ["  no dependent recorded"] : [];
+  if (symbols.length === 0) return [header, ...none];
+  const literal = [header, ...groupedLines(symbols), ...substitutionLegend(symbols), ...none];
   if (detail === "summary") {
+    if (symbols.length <= LISTED_ITEMS) return literal;
     const direct = symbols.filter((symbol) => symbol.depth === 1);
     const deeper = [...Map.groupBy(symbols.filter((symbol) => symbol.depth !== 1), (symbol) => symbol.depth)].toSorted(([a], [b]) => a - b);
     const counts = deeper.length === 0 ? "" : `by depth: ${deeper.map(([depth, group]) => `${depth}: ${group.length}`).join(", ")}; `;
-    const counted = [header, ...groupedLines(direct), `  ${counts}mode "details" shows investigation evidence; ${categoryRecovery({ full: "includes every symbol" })}`];
+    const counted = [header, ...groupedLines(direct), `  ${counts}mode "details" shows investigation evidence; ${categoryRecovery({ full: "includes every symbol" })}`, ...none];
     return size(counted) <= size(literal) ? counted : literal;
   }
   const shown = investigationSymbols(value);
@@ -896,11 +898,9 @@ function seedSummary(seeds: readonly Seed[]): string[] {
   ];
 }
 
-/** The seeds of a summary, or the full listing when counting them would cost more bytes than naming them. */
+/** The seeds of a summary: every one up to the listed bound, beyond it the requested ones and a count of the others. */
 function groupedSeeds(seeds: readonly Seed[]): string[] {
-  const listing = seedListing(seeds);
-  const summary = seedSummary(seeds);
-  return size(summary) <= size(listing) ? summary : listing;
+  return seeds.filter((seed) => seed.basis !== "requested").length <= LISTED_ITEMS ? seedListing(seeds) : seedSummary(seeds);
 }
 
 function impactCuts(cuts: readonly Cut[], detail: ResponseMode): string[] {
