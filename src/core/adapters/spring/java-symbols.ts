@@ -57,6 +57,8 @@ export interface Gap {
   reason: GapReason;
   file: JavaFile;
   node: Node;
+  /** The annotation or supertype that raised it, when one did. */
+  raisedBy?: string;
 }
 
 export type Evaluation = { value: string } | { gap: GapReason };

@@ -43,5 +43,5 @@ export function delegateMethodsOf(type: TypeDecl, project: JavaProject, annotati
   if (delegate === undefined) return [];
   return type.methods
     .filter((method) => method.overrides || (generator !== undefined && method.modifiers.includes("public")))
-    .map((method) => unknownAt(method, { reason: "no-extractor", file: delegate.file, node: delegate.node }, ...(generator === undefined ? [] : [generator])));
+    .map((method) => unknownAt(method, { reason: "no-extractor", file: delegate.file, node: delegate.node, raisedBy: delegate.name }, ...(generator === undefined ? [] : [generator])));
 }

@@ -305,6 +305,7 @@ test("a path that is not a constant expression is an unknown item at the express
         { path: source.path, line: 5, endLine: 7 },
         { path: source.path, line: 6, endLine: 6 },
       ],
+      subject: { candidate: "http-route", symbol: "Dynamic.x" },
     },
   ]);
 });
@@ -314,7 +315,7 @@ test("an unknown item never repeats a line: a cause that starts on the line of t
 
   const findings = await extractor.extract([source]);
 
-  assert.deepEqual(findings, [{ status: "unknown", reason: "unresolved", evidence: [{ path: source.path, line: 5, endLine: 6 }] }]);
+  assert.deepEqual(findings.map((finding) => finding.evidence), [[{ path: source.path, line: 5, endLine: 6 }]]);
 });
 
 test("a cause that starts on the line of the span before it but runs further is kept", async () => {
@@ -1542,7 +1543,7 @@ class NotAComponent implements OwnersApiDelegate {\n  @Override public void list
     ),
   ]);
 
-  assert.deepEqual(findings, []);
+  assert.deepEqual(unknowns(findings).filter((item) => item.subject?.candidate === "http-route"), []);
 });
 
 function pom(groupId: string, artifactId: string, path = "pom.xml"): SourceFile {
@@ -1567,9 +1568,9 @@ test("a build file that declares a source generator makes every public method of
 
   assert.deepEqual(routes(findings), []);
   assert.deepEqual(findings, [
-    ["no-extractor", 5],
-    ["no-extractor", 6],
-  ].map(([reason, line]) => ({
+    ["no-extractor", 5, "list"],
+    ["no-extractor", 6, "create"],
+  ].map(([reason, line, method]) => ({
     status: "unknown",
     reason,
     evidence: [
@@ -1577,6 +1578,7 @@ test("a build file that declares a source generator makes every public method of
       { path: source.path, line: 4, endLine: 4 },
       { path: "pom.xml", line: 6 },
     ],
+    subject: { candidate: "http-route", symbol: `PetsServiceImpl.${method}`, raisedBy: "PetsApiService" },
   })));
 });
 
@@ -1620,7 +1622,7 @@ class NotAComponent implements OwnersApiService {\n  public void list() {}\n}`,
     ),
   ]);
 
-  assert.deepEqual(findings, []);
+  assert.deepEqual(unknowns(findings).filter((item) => item.subject?.candidate === "http-route"), []);
 });
 
 test("the signal reaches every module: the generated interface arrives in a module through a dependency, which no source shows", async () => {
@@ -1640,6 +1642,7 @@ test("the signal reaches every module: the generated interface arrives in a modu
         { path: consumer.path, line: 4, endLine: 4 },
         { path: "modules/api/pom.xml", line: 6 },
       ],
+      subject: { candidate: "http-route", symbol: "PetsServiceImpl.list", raisedBy: "PetsApiService" },
     },
   ]);
 });
@@ -1671,7 +1674,9 @@ test("a JAX-RS endpoint method that starts on its annotation's line holds that s
 
   const findings = await extractor.extract([source]);
 
-  assert.deepEqual(findings, [{ status: "unknown", reason: "no-extractor", evidence: [{ path: source.path, line: 5, endLine: 7 }] }]);
+  assert.deepEqual(findings, [
+    { status: "unknown", reason: "no-extractor", evidence: [{ path: source.path, line: 5, endLine: 7 }], subject: { candidate: "http-route", symbol: "UserResource.list", raisedBy: "jakarta.ws.rs.GET" } },
+  ]);
 });
 
 test("a class whose annotation comes from a library may be a handler: each mapped method is an unknown item", async () => {
@@ -2766,4 +2771,95 @@ test("a path variable states no type when its type is a repository class named l
   const typed = findings.flatMap((finding) => (finding.status === "complete" && finding.value.kind === "http-route" ? [finding.value.parameterTypes] : []));
 
   assert.deepEqual(typed, [undefined, undefined]);
+});
+
+const SQS = "import io.awspring.cloud.sqs.annotation.SqsListener;";
+test("an unknown listener or job item names the entrypoint kind it may be, the symbol at its place and the annotation that raised it", async () => {
+  const source = app(
+    "Work",
+    `@Component class Work {\n  @SqsListener("jobs") void take(String body) {}\n  @Scheduled(cron = "0 0 * * * *", fixedRate = 5) void tick() {}\n}`,
+    `${COMPONENT} ${SQS} ${SCHEDULING}`,
+  );
+
+  const subjects = unknowns(await extractor.extract([source, MAIN])).map((item) => item.subject);
+
+  assert.deepEqual(subjects, [
+    { candidate: "listener", symbol: "Work.take", raisedBy: "io.awspring.cloud.sqs.annotation.SqsListener" },
+    { candidate: "job", symbol: "Work.tick", raisedBy: "org.springframework.scheduling.annotation.Scheduled" },
+  ]);
+});
+
+test("an unknown item for a NATS subject the sources do not state names the listener and the client call", async () => {
+  const findings = await extractor.extract([
+    nats("Consumers", `@Component class Consumers {\n  private final Connection connection;\n  void plain() { connection.subscribe(Subjects.ORDERS, message -> handle(message)); }\n  void handle(Message message) {}\n}`, "import com.lib.Subjects;"),
+  ]);
+
+  assert.deepEqual(unknowns(findings).map((item) => item.subject), [{ candidate: "listener", symbol: "Consumers.plain", raisedBy: "io.nats.client.Connection.subscribe" }]);
+});
+
+test("a scanned bean that extends a class no source declares is one unknown item at the class, naming the base", async () => {
+  const bean = nats("Created", `@Component class Created extends lib.Base {\n  public String subject() { return "orders.created"; }\n}`);
+
+  const findings = await extractor.extract([bean, MAIN]);
+
+  assert.deepEqual(
+    unknowns(findings).map((item) => [item.reason, item.evidence[0]?.line, item.subject]),
+    [["no-extractor", 4, { symbol: "Created", raisedBy: "lib.Base" }]],
+  );
+});
+
+test("a base class the platform owns, a class that is no bean and a controller leave no unread-base item", async () => {
+  const findings = await extractor.extract([
+    nats("Platform", `@Component class Platform extends org.springframework.web.filter.OncePerRequestFilter {}`),
+    nats("Plain", `class Plain extends lib.Base {}`),
+    app("Web", `@RestController class Web extends lib.Base {}`),
+    MAIN,
+  ]);
+
+  assert.deepEqual(unknowns(findings).filter((item) => item.subject?.candidate === undefined), []);
+});
+
+test("an unread-base item is retired when the base arrives in the libraries or a subscription was found", async () => {
+  const withBase = await extractor.extract([INHERITING, MAIN], [{ repo: "lib", ...MESSENGER_BASE }]);
+  const subscribing = await extractor.extract([nats("Direct", `@Component class Direct extends lib.Base {\n  private final Connection connection;\n  void go() { connection.subscribe("direct.subject", message -> {}); }\n}`), MAIN]);
+
+  assert.deepEqual(unknowns(withBase), []);
+  assert.deepEqual(listeners(subscribing), ["nats direct.subject@Direct.go"]);
+  assert.deepEqual(unknowns(subscribing), []);
+  assert.deepEqual(unknowns(await extractor.extract([INHERITING, MAIN])).map((item) => item.subject?.raisedBy), ["NatsListener"]);
+});
+
+const JOBRUNR = "import org.jobrunr.scheduling.JobScheduler; import org.jobrunr.scheduling.RecurringJobBuilder;";
+
+function recurring(chain: string, members = ""): SourceFile {
+  return app("Sync", `@Component class Sync {\n  private final JobScheduler scheduler;\n${members}\n  void init() {\n    scheduler.createRecurrently(${chain});\n  }\n  public void run() {}\n  public void run(String other) {}\n}`, `${COMPONENT} ${JOBRUNR}`);
+}
+
+test("a JobRunr recurring job whose builder names a method reference and a constant cron is a job entrypoint at that method", async () => {
+  const source = recurring(`RecurringJobBuilder.aRecurringJob().withId("sync").withCron(CRON).withJobLambda(this::run)`, `  private static final String CRON = "0 0 * * * *";`);
+
+  const [job] = await extractor.extract([source, MAIN]);
+
+  assert.ok(job?.status === "complete" && job.value.kind === "job");
+  assert.deepEqual([job.value.name, job.value.trigger, job.value.handler.symbol], ["scheduled cron=0 0 * * * *", { attribute: "cron", value: "0 0 * * * *" }, "Sync.run"]);
+});
+
+test("a JobRunr job whose cron the sources do not give is an unknown item naming the handler and the builder call", async () => {
+  const source = recurring(`RecurringJobBuilder.aRecurringJob().withCron(cron).withJobLambda(this::run)`, `  private final String cron;`);
+
+  const findings = await extractor.extract([source, MAIN]);
+
+  assert.deepEqual(findings.map((finding) => [finding.status, finding.status === "unknown" ? finding.subject : undefined]), [["unknown", { candidate: "job", symbol: "Sync.run", raisedBy: "org.jobrunr.scheduling.RecurringJobBuilder.withJobLambda" }]]);
+});
+
+test("a JobRunr builder whose job is a lambda is an unknown item at the registering method; a builder of another library is no registration", async () => {
+  const lambda = recurring(`RecurringJobBuilder.aRecurringJob().withCron("0 0 * * * *").withJobLambda(() -> run())`);
+  const other = file("src/main/java/app/Other.java", `package app;\nimport lib.RecurringJobBuilder;\n${COMPONENT}\n@Component class Other {\n  void init() { RecurringJobBuilder.aRecurringJob().withJobLambda(this::go); }\n  void go() {}\n}`);
+
+  const [item, ...rest] = await extractor.extract([lambda, MAIN]);
+
+  assert.ok(item?.status === "unknown");
+  assert.deepEqual(item.subject, { candidate: "job", symbol: "Sync.init", raisedBy: "org.jobrunr.scheduling.RecurringJobBuilder.withJobLambda" });
+  assert.deepEqual(rest, []);
+  assert.deepEqual(await extractor.extract([other, MAIN]), []);
 });

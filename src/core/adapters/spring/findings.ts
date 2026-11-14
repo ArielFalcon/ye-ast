@@ -1,7 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import type { Job, Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { Handler, HttpRoute } from "../../domain/entrypoints/http-route.ts";
-import { declarationSpan, distinctEvidence, spanCovers, type Evidence, type Finding, type UnknownReason } from "../../domain/shared/fact.ts";
+import { declarationSpan, distinctEvidence, spanCovers, type Evidence, type Finding, type UnknownReason, type UnknownSubject } from "../../domain/shared/fact.ts";
 import type { Gap, MethodDecl } from "./java-symbols.ts";
 import type { CallSite, PlacedCallSite } from "../../domain/topology/call-site.ts";
 
@@ -16,13 +16,18 @@ export function spanOf(path: string, node: { startPosition: { row: number }; end
 }
 
 /** An unknown item. Its evidence never repeats a line: a span that starts where an earlier one starts and ends no later adds nothing. */
-export function unknown(reason: UnknownReason, evidence: readonly Evidence[]): Finding<never> {
-  return { status: "unknown", reason, evidence: distinctEvidence(evidence) };
+export function unknown(reason: UnknownReason, evidence: readonly Evidence[], subject?: UnknownSubject): Finding<never> {
+  return { status: "unknown", reason, evidence: distinctEvidence(evidence), ...(subject === undefined ? {} : { subject }) };
 }
 
-/** An unknown item at the method and at the constructs that left it undecided. */
+/** An unknown item at a route handler and at the constructs that left it undecided. */
 export function unknownAt(method: MethodDecl, gap: Gap, ...also: Evidence[]): Finding<never> {
-  return unknown(gap.reason, [spanOf(method.owner.file.path, method.node), spanOf(gap.file.path, gap.node), ...also]);
+  return unknown(gap.reason, [spanOf(method.owner.file.path, method.node), spanOf(gap.file.path, gap.node), ...also], subjectOf("http-route", `${method.owner.qualifiedName}.${method.name}`, gap.raisedBy));
+}
+
+/** What an unknown item stands for; an absent part is left out, never written as undefined. */
+export function subjectOf(candidate: UnknownSubject["candidate"], symbol: string | undefined, raisedBy: string | undefined): UnknownSubject {
+  return { ...(candidate === undefined ? {} : { candidate }), ...(symbol === undefined ? {} : { symbol }), ...(raisedBy === undefined ? {} : { raisedBy }) };
 }
 
 /** A target the snapshot does not decide, at the node it is written, naming the library the call goes through when it is one. */

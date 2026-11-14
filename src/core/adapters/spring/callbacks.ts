@@ -2,14 +2,18 @@ import type { Node } from "web-tree-sitter";
 import { callbackName, type FrameworkCallback } from "../../domain/entrypoints/entrypoint.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { Evidence, Finding } from "../../domain/shared/fact.ts";
-import { methodSite, spanOf, unknown } from "./findings.ts";
+import type { Evidence, Finding, UnknownSubject } from "../../domain/shared/fact.ts";
+import { methodSite, spanOf, subjectOf, unknown } from "./findings.ts";
 import { FUNCTION_VALUES, isAnonymous, resolve, supertypesOf } from "./java-declared-types.ts";
 import { enclosingType } from "./java-project.ts";
 import type { Hierarchy } from "./java-dispatch-targets.ts";
 import { isTypeDeclaration, scopeOf, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 import { annotationUses, isScannedBean, type SpringAnnotations, type AnnotationUse } from "./request-mapping.ts";
 import type { InvokedContract, Registration } from "./invoked-contracts.ts";
+
+function contractSubject(row: InvokedContract, symbol: string | undefined): UnknownSubject {
+  return subjectOf("callback", symbol, row.type);
+}
 
 function registered(type: TypeDecl, registration: Registration, annotations: SpringAnnotations): boolean {
   if (registration === "none") return true;
@@ -77,15 +81,15 @@ export function callbacksOf(project: JavaProject, contracts: readonly InvokedCon
         try {
           const at = (node: TypeDecl["node"]) => ({ ...spanOf(type.file.path, node), via: row.type });
           for (const use of annotationUses(type.node, scopeOf(type))) {
-            if (includes(use, new Set())) findings.push(unknown("no-extractor", [at(use.node)]));
+            if (includes(use, new Set())) findings.push(unknown("no-extractor", [at(use.node)], contractSubject(row, type.qualifiedName)));
           }
           for (const method of type.methods) {
             for (const use of annotationUses(method.node, scopeOf(type))) {
               if (!includes(use, new Set())) continue;
               if (annotations.keyOf(use) !== row.type || !method.hasBody || type.kind !== "class" || type.isAbstract) {
-                findings.push(unknown("no-extractor", [at(use.node)]));
+                findings.push(unknown("no-extractor", [at(use.node)], contractSubject(row, `${type.qualifiedName}.${method.name}`)));
               } else if (!registered(type, row.registration, annotations)) {
-                findings.push(unknown("no-extractor", [at(type.node)]));
+                findings.push(unknown("no-extractor", [at(type.node)], contractSubject(row, type.qualifiedName)));
               } else {
                 const value: FrameworkCallback = { kind: "callback", name: callbackName(row.type), contract: { type: row.type }, handler: methodSite(method).handler };
                 const key = JSON.stringify(value);
@@ -102,7 +106,7 @@ export function callbacksOf(project: JavaProject, contracts: readonly InvokedCon
       continue;
     }
     for (const { file, node, fqns } of hierarchy.unplaced) {
-      if (isAnonymous(node) && fqns.includes(row.type)) findings.push(unknown("no-extractor", [{ ...spanOf(file.path, node), via: row.type }]));
+      if (isAnonymous(node) && fqns.includes(row.type)) findings.push(unknown("no-extractor", [{ ...spanOf(file.path, node), via: row.type }], contractSubject(row, enclosingType(node, file, project)?.qualifiedName)));
     }
     for (const type of project.types) {
       for (const method of type.methods) {
@@ -111,26 +115,26 @@ export function callbacksOf(project: JavaProject, contracts: readonly InvokedCon
         if (written === null) continue;
         const resolved = resolve(written, type.file, project, type, written, true);
         if ((resolved?.kind !== "platform" && resolved?.kind !== "library") || resolved.fqn !== row.type) continue;
-        for (const value of returnedValues(method)) findings.push(unknown("no-extractor", [{ ...spanOf(type.file.path, value), via: row.type }]));
+        for (const value of returnedValues(method)) findings.push(unknown("no-extractor", [{ ...spanOf(type.file.path, value), via: row.type }], contractSubject(row, `${type.qualifiedName}.${method.name}`)));
       }
     }
     const simple = row.type.split(".").at(-1);
     for (const [type, names] of hierarchy.unsettledSupertypes) {
       if (!names.includes(simple ?? "")) continue;
       const nodes = supertypesOf(type.node).filter((node) => (node.type === "generic_type" ? node.namedChildren[0]?.text : node.text)?.split(".").at(-1) === simple);
-      findings.push({ status: "unknown", reason: "unresolved", evidence: [{ ...spanOf(type.file.path, type.node), via: row.type }, ...nodes.map((node) => ({ ...spanOf(type.file.path, node), via: row.type }))] });
+      findings.push({ status: "unknown", reason: "unresolved", evidence: [{ ...spanOf(type.file.path, type.node), via: row.type }, ...nodes.map((node) => ({ ...spanOf(type.file.path, node), via: row.type }))], subject: contractSubject(row, type.qualifiedName) });
     }
     for (const type of hierarchy.invokedSupertypes.get(row.type) ?? []) {
       if (type.kind !== "class" || type.isAbstract) continue;
       const at = { ...spanOf(type.file.path, type.node), via: row.type };
       if (!registered(type, row.registration, annotations)) {
-        findings.push(unknown("no-extractor", [at]));
+        findings.push(unknown("no-extractor", [at], contractSubject(row, type.qualifiedName)));
         continue;
       }
       const { methods, outside } = memberOf(type, row.member.name, row.member.arity, hierarchy);
       if (methods.length !== 1 || !methods[0]?.hasBody) {
         const reason = methods.length > 1 || !outside ? "unresolved" : "no-extractor";
-        findings.push({ status: "unknown", reason, evidence: [at, ...methods.map((method) => ({ ...spanOf(method.owner.file.path, method.node), via: row.type }))] });
+        findings.push({ status: "unknown", reason, evidence: [at, ...methods.map((method) => ({ ...spanOf(method.owner.file.path, method.node), via: row.type }))], subject: contractSubject(row, type.qualifiedName) });
         continue;
       }
       const handler = methodSite(methods[0]).handler;

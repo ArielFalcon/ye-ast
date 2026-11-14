@@ -3,7 +3,7 @@ import type { Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../../domain/entrypoints/http-route.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import { CREATE_DISPATCHER, NATS_SUBSCRIBE_TYPES, SUBSCRIBE } from "./event-vocabulary.ts";
-import { spanOf, unknown } from "./findings.ts";
+import { spanOf, subjectOf, unknown } from "./findings.ts";
 import { argumentsOf } from "./java-members.ts";
 import { invocationsOf, receiverOf, symbolOf, type Invocation } from "./java-invocations.ts";
 import { isLibraryPath, type JavaProject, type TypeDecl } from "./java-symbols.ts";
@@ -18,22 +18,24 @@ import type { JavaValueEvaluator } from "./java-value-evaluator.ts";
 export function natsListenersOf(type: TypeDecl, project: JavaProject, text: JavaValueEvaluator): Finding<Listener>[] {
   return project.classChain(type).flatMap(invocationsOf).flatMap((invocation): Finding<Listener>[] => {
     const member = invocation.member;
-    if (member === undefined || !isSubscription(invocation, project, text)) return [];
+    const subscriber = member === undefined ? undefined : subscriberOf(invocation, project, text);
+    if (member === undefined || subscriber === undefined) return [];
     const inherited = isLibraryPath(invocation.type.file.path);
     const span = inherited ? spanOf(type.file.path, type.node) : spanOf(invocation.type.file.path, member);
     const handler: Handler = { path: span.path, symbol: symbolOf({ ...invocation, type }), line: span.line };
     const argument = argumentsOf(invocation.node)[0];
     const destination = argument === undefined ? undefined : text.of(argument, { type: invocation.type, receiver: type, configurationFile: type.file, locals: invocation.locals, env: new Map() });
-    if (destination === undefined) return [unknown("unresolved", [span, ...(argument === undefined || inherited ? [] : [spanOf(invocation.type.file.path, argument)])])];
+    if (destination === undefined) return [unknown("unresolved", [span, ...(argument === undefined || inherited ? [] : [spanOf(invocation.type.file.path, argument)])], subjectOf("listener", handler.symbol, `${subscriber}.${SUBSCRIBE}`))];
     return [{ status: "complete" as const, value: { kind: "listener" as const, name: `nats ${destination}`, protocol: "nats" as const, destination, handler }, evidence: [span] }];
   });
 }
 
-function isSubscription(invocation: Invocation, project: JavaProject, text: JavaValueEvaluator): boolean {
-  if (invocation.node.childForFieldName("name")?.text !== SUBSCRIBE) return false;
+/** The NATS client type a `subscribe` call is made on; none when the call is no subscription. */
+function subscriberOf(invocation: Invocation, project: JavaProject, text: JavaValueEvaluator): string | undefined {
+  if (invocation.node.childForFieldName("name")?.text !== SUBSCRIBE) return undefined;
   const object = invocation.node.childForFieldName("object");
   const subscriber = object === null ? undefined : typeOf(object, invocation, project, text);
-  return subscriber !== undefined && NATS_SUBSCRIBE_TYPES.has(subscriber);
+  return subscriber !== undefined && NATS_SUBSCRIBE_TYPES.has(subscriber) ? subscriber : undefined;
 }
 
 /** The qualified type of a receiver: a field or a local, or the dispatcher a connection creates in place. */

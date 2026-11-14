@@ -260,10 +260,20 @@ export interface UnknownFact extends FactBase {
   reason: UnknownReason;
 }
 
-/** An extractor's item before a use case adds the fact base: `unknown` carries the reason and the evidence of where. */
+/** What an unknown item of the entrypoint readers stands for, so that an agent can tell which entrypoint is undecided. */
+export interface UnknownSubject {
+  /** The kind of entrypoint the construct may be; absent when the construct does not say. */
+  candidate?: "http-route" | "listener" | "job" | "callback";
+  /** The declaration at the place. */
+  symbol?: string;
+  /** The annotation, supertype or library member that raised the item. */
+  raisedBy?: string;
+}
+
+/** An extractor's item before a use case adds the fact base: `unknown` carries the reason, the evidence of where and, for an entrypoint, what it stands for. */
 export type Finding<T> =
   | { status: "complete"; value: T; evidence: readonly Evidence[] }
-  | { status: "unknown"; reason: UnknownReason; evidence: readonly Evidence[] };
+  | { status: "unknown"; reason: UnknownReason; evidence: readonly Evidence[]; subject?: UnknownSubject };
 
 export type Fact<T> = CompleteFact<T> | PartialFact<T> | UnknownFact;
 

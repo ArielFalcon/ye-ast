@@ -50,6 +50,7 @@ interface Other {}
     Other { public Object loadUserByUsername(String s) { return null; } }` }])).findings;
   const missing = findings.find((f) => f.status === "unknown");
   assert.equal(missing?.status === "unknown" && missing.reason, "no-extractor");
+  assert.deepEqual(missing?.status === "unknown" && missing.subject, { candidate: "callback", symbol: "Missing", raisedBy: "org.springframework.security.core.userdetails.UserDetailsService" });
   const callback = findings.find((f) => f.status === "complete" && f.value.kind === "callback");
   assert.deepEqual(callback?.evidence.map((e) => e.line), [6]);
 });

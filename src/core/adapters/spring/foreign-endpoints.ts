@@ -1,8 +1,8 @@
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { TypeDecl } from "./java-symbols.ts";
 import { scopeOf } from "./java-symbols.ts";
-import { spanOf, unknown, unknownAt, type MappedRoute } from "./findings.ts";
-import { annotationUses, FOREIGN_METHOD_ENDPOINTS, FOREIGN_TYPE_ENDPOINTS, type SpringAnnotations } from "./request-mapping.ts";
+import { spanOf, subjectOf, unknown, unknownAt, type MappedRoute } from "./findings.ts";
+import { annotationName, annotationUses, FOREIGN_METHOD_ENDPOINTS, FOREIGN_TYPE_ENDPOINTS, type SpringAnnotations } from "./request-mapping.ts";
 
 /**
  * The endpoints a type declares through another HTTP server's API (JAX-RS, Micronaut, Servlet, Quarkus reactive routes),
@@ -14,9 +14,9 @@ export function foreignEndpointsOf(type: TypeDecl, annotations: SpringAnnotation
     annotationUses(declaration, scopeOf(type)).find((use) => keys.has(annotations.keyOf(use) ?? ""));
   const methods = type.methods.flatMap((method) => {
     const use = markedBy(method.node, FOREIGN_METHOD_ENDPOINTS);
-    return use === undefined ? [] : [unknownAt(method, { reason: "no-extractor", file: type.file, node: use.node })];
+    return use === undefined ? [] : [unknownAt(method, { reason: "no-extractor", file: type.file, node: use.node, raisedBy: annotationName(use, annotations) })];
   });
   if (methods.length > 0) return methods;
   const use = markedBy(type.node, FOREIGN_TYPE_ENDPOINTS);
-  return use === undefined ? [] : [unknown("no-extractor", [spanOf(type.file.path, use.node)])];
+  return use === undefined ? [] : [unknown("no-extractor", [spanOf(type.file.path, use.node)], subjectOf("http-route", type.qualifiedName, annotationName(use, annotations)))];
 }

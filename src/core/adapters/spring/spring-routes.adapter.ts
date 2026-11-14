@@ -12,15 +12,16 @@ import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { withJavaSources, type ParseJava } from "./java-project.ts";
 import { delegateMethodsOf, sourceGeneratorIn } from "./api-delegates.ts";
 import { basePathOf, configurationsOf } from "./application-config.ts";
-import { spanOf, unknown, unknownAt, type MappedEntrypoint, type MappedRoute } from "./findings.ts";
+import { spanOf, subjectOf, unknown, unknownAt, type MappedEntrypoint, type MappedRoute } from "./findings.ts";
 import { foreignEndpointsOf } from "./foreign-endpoints.ts";
 import { callbacksOf } from "./callbacks.ts";
 import { pathVariableTypesOf } from "./route-parameter-types.ts";
 import { variableOfSegment } from "../../domain/entrypoints/route-parameter.ts";
 import { INVOKED_CONTRACTS } from "./invoked-contracts.ts";
 import { readHierarchy } from "./java-dispatch-targets.ts";
-import { listenersOf } from "./listeners.ts";
+import { listenersOf, unreadBaseOf } from "./listeners.ts";
 import { natsListenersOf } from "./nats-listeners.ts";
+import { registeredJobsOf } from "./registered-jobs.ts";
 import { basePathConfigurations, pathPrefixConfigurations } from "./path-prefix.ts";
 import {
   counterpart,
@@ -39,6 +40,7 @@ import {
   type TypeDecl,
 } from "./java-symbols.ts";
 import {
+  annotationName,
   annotationUses,
   createSpringAnnotations,
   pathExpressions,
@@ -137,9 +139,18 @@ export function extractRoutes(parser: JavaParser, files: readonly SourceFile[], 
 function natsListeners(project: JavaProject, text: JavaValueEvaluator, parsed: readonly JavaFile[], libraries: readonly LibrarySource[], files: readonly SourceFile[], parse: ParseJava): Finding<MappedEntrypoint>[] {
   const javaLibraries = libraries.filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path));
   const view = javaLibraries.length === 0 ? { project, text } : withLibraries(parsed, javaLibraries, files, parse);
+  const annotations = createSpringAnnotations(view.project);
   return view.project.types
     .filter((type) => type.kind === "class" && !type.isAbstract && !isLibraryPath(type.file.path))
-    .flatMap((type) => guarded(() => natsListenersOf(type, view.project, view.text), () => unknown("unresolved", [spanOf(type.file.path, type.node)])));
+    .flatMap((type) =>
+      guarded(
+        () => {
+          const subscribed = natsListenersOf(type, view.project, view.text);
+          return subscribed.length > 0 ? subscribed : unreadBaseOf(type, view.project, annotations);
+        },
+        () => unknown("unresolved", [spanOf(type.file.path, type.node)]),
+      ),
+    );
 }
 
 function withLibraries(parsed: readonly JavaFile[], libraries: readonly LibrarySource[], files: readonly SourceFile[], parse: ParseJava): { project: JavaProject; text: JavaValueEvaluator } {
@@ -168,6 +179,7 @@ function findingsOfType(type: TypeDecl, project: JavaProject, annotations: Sprin
   if (controller !== undefined) found.push(...routesOf(controller));
   found.push(...delegateMethodsOf(type, project, annotations, generator));
   found.push(...listenersOf(type, project, annotations, isScannedBean(type, annotations)));
+  found.push(...registeredJobsOf(type, project));
   return found;
 }
 
@@ -223,7 +235,7 @@ function applicationModules(project: JavaProject, annotations: SpringAnnotations
 /** Where a path prefix may be configured, no route is known: which routes it reaches depends on a predicate that is not evaluated. */
 function withPathPrefixes(findings: readonly Finding<MappedEntrypoint>[], configurations: readonly Evidence[]): Finding<MappedEntrypoint>[] {
   if (configurations.length === 0) return [...findings];
-  return findings.map((finding) => (finding.status === "complete" && finding.value.kind === "http-route" ? unknown("no-extractor", [...finding.evidence, ...configurations]) : finding));
+  return findings.map((finding) => (finding.status === "complete" && finding.value.kind === "http-route" ? unknown("no-extractor", [...finding.evidence, ...configurations], subjectOf("http-route", finding.value.handler.symbol, undefined)) : finding));
 }
 
 /**
@@ -252,18 +264,18 @@ function controllerOf(type: TypeDecl, project: JavaProject, annotations: SpringA
   }
   if (stereotype !== "none") {
     const [reason, use] = "ambiguous" in stereotype ? (["unresolved", stereotype.ambiguous] as const) : (["no-extractor", stereotype.unmodelled] as const);
-    return { ...controller, blocking: { reason, file: use.scope.file, node: use.node }, speculative: false };
+    return { ...controller, blocking: { reason, file: use.scope.file, node: use.node, raisedBy: annotationName(use, annotations) }, speculative: false };
   }
   const library = uses.map((own) => annotations.libraryAnnotationIn(own)).find((use) => use !== undefined);
   const blocking =
     ambiguousSupertype ??
-    (library && { reason: "no-extractor" as const, file: library.scope.file, node: library.node }) ??
+    (library && { reason: "no-extractor" as const, file: library.scope.file, node: library.node, raisedBy: annotationName(library, annotations) }) ??
     gapOf(hierarchy.gaps.find((gap) => gap.kind === "missing"), "no-extractor");
   return blocking === undefined ? undefined : { ...controller, blocking, speculative: true };
 }
 
 function gapOf(gap: SupertypeGap | undefined, reason: GapReason): Gap | undefined {
-  return gap && { reason, file: gap.file, node: gap.node };
+  return gap && { reason, file: gap.file, node: gap.node, raisedBy: gap.name };
 }
 
 function firstLookup(lookups: readonly MappingLookup[]): MappingLookup {
@@ -278,8 +290,8 @@ function routesOf(controller: Controller): Finding<MappedRoute>[] {
   const classLibrary = controller.classMapping === undefined ? annotations.libraryAnnotationIn(annotationUses(type.node, scopeOf(type))) : undefined;
   const missing = controller.hierarchy.gaps.filter((gap) => gap.kind === "missing");
   return [
-    ...(classLibrary === undefined ? [] : [unknown("no-extractor", [spanOf(type.file.path, classLibrary.node)])]),
-    ...(contractCoversOverrides(controller, handlers, missing) ? [] : missing.map((gap) => unknown("no-extractor", [spanOf(gap.file.path, gap.node)]))),
+    ...(classLibrary === undefined ? [] : [unknown("no-extractor", [spanOf(type.file.path, classLibrary.node)], subjectOf("http-route", type.qualifiedName, annotationName(classLibrary, annotations)))]),
+    ...(contractCoversOverrides(controller, handlers, missing) ? [] : missing.map((gap) => unknown("no-extractor", [spanOf(gap.file.path, gap.node)], subjectOf("http-route", type.qualifiedName, gap.name)))),
     ...undecided.map((method) => unknownAt(method, { reason: "unresolved", file: method.owner.file, node: method.node })),
     ...served,
   ];
@@ -354,7 +366,7 @@ function contractJoin(controller: Controller, method: MethodDecl): { operation: 
   const candidates = controller.operations.byOperationId.get(method.name);
   if (candidates === undefined) return undefined;
   const span = spanOf(method.owner.file.path, method.node);
-  if (candidates.length > 1) return { ambiguous: unknown("unresolved", [span, ...candidates.map((operation) => ({ path: operation.document, line: operation.line }))]) };
+  if (candidates.length > 1) return { ambiguous: unknown("unresolved", [span, ...candidates.map((operation) => ({ path: operation.document, line: operation.line }))], subjectOf("http-route", `${method.owner.qualifiedName}.${method.name}`, undefined)) };
   const [operation] = candidates;
   if (operation === undefined) return undefined;
   const path = operation.basePath === undefined || operation.basePath === "" ? operation.path : joinPath(operation.basePath, operation.path);
@@ -379,7 +391,7 @@ function contractJoin(controller: Controller, method: MethodDecl): { operation: 
 /** A method with no mapping of its own that may still be one: it carries a library annotation, or overrides a method of a supertype the sources do not give. */
 function unmappedGap(controller: Controller, method: MethodDecl): Gap | undefined {
   const library = controller.annotations.libraryAnnotationIn(annotationUses(method.node, scopeOf(method.owner)));
-  if (library !== undefined) return { reason: "no-extractor", file: library.scope.file, node: library.node };
+  if (library !== undefined) return { reason: "no-extractor", file: library.scope.file, node: library.node, raisedBy: annotationName(library, controller.annotations) };
   if (!method.overrides) return undefined;
   const ambiguous = controller.hierarchy.gaps.find((gap) => gap.kind === "ambiguous");
   const missing = controller.hierarchy.gaps.find((gap) => gap.kind === "missing");
@@ -398,14 +410,16 @@ function mappingOfMethod(method: MethodDecl, project: JavaProject, annotations: 
 
 function routerFunctionsOf(type: TypeDecl): Finding<MappedRoute>[] {
   return type.methods
-    .filter(returnsRouterFunction)
-    .map((method) => unknown("no-extractor", [spanOf(type.file.path, method.node)]));
+    .flatMap((method) => {
+      const routerFunction = routerFunctionOf(method);
+      return routerFunction === undefined ? [] : [unknown("no-extractor", [spanOf(type.file.path, method.node)], subjectOf("http-route", `${type.qualifiedName}.${method.name}`, routerFunction))];
+    });
 }
 
-function returnsRouterFunction(method: MethodDecl): boolean {
+function routerFunctionOf(method: MethodDecl): string | undefined {
   const returnType = method.node.childForFieldName("type");
   const name = (returnType?.type === "generic_type" ? returnType.namedChildren[0] : returnType)?.text;
-  return name !== undefined && externalNames(name, method.owner.file, false).some((candidate) => ROUTER_FUNCTIONS.includes(candidate));
+  return name === undefined ? undefined : externalNames(name, method.owner.file, false).find((candidate) => ROUTER_FUNCTIONS.includes(candidate));
 }
 
 function routesOfHandler(handler: MethodDecl, mapping: Mapping, classMapping: Mapping | undefined, project: JavaProject): Finding<MappedRoute>[] {
@@ -441,7 +455,7 @@ function routesOfHandler(handler: MethodDecl, mapping: Mapping, classMapping: Ma
     }
   }
   const unresolved = [...prefixes.gaps, ...paths.gaps, ...methods.gaps, ...versions.gaps];
-  return [...routes, ...unresolved.map(({ expr, reason }) => unknown(reason, [span, spanOf(expr.scope.file.path, expr.node)]))];
+  return [...routes, ...unresolved.map(({ expr, reason }) => unknown(reason, [span, spanOf(expr.scope.file.path, expr.node)], subjectOf("http-route", `${handler.owner.qualifiedName}.${handler.name}`, undefined)))];
 }
 
 function resolveStrings(exprs: readonly Expr[] | undefined, project: JavaProject): Resolution<string> {

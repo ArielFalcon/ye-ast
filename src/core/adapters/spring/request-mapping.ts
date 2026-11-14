@@ -314,6 +314,11 @@ export function isAnnotation(use: AnnotationUse, names: ReadonlySet<string> | st
   return externalNames(use.name, use.scope.file, false).some((candidate) => wanted.includes(candidate));
 }
 
+/** The name an unknown item reports for an annotation: the library's qualified name when this module knows it, else the name as written. */
+export function annotationName(use: AnnotationUse, annotations: SpringAnnotations): string {
+  return annotations.keyOf(use) ?? use.name;
+}
+
 /**
  * Component scanning reads only the class's own annotations (`@Component` is not `@Inherited`), so a class that
  * inherits its stereotype is a bean only if something the sources may not show registers it.
