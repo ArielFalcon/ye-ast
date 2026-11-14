@@ -128,7 +128,7 @@ test("each gap the workspace read states becomes one decision, in the domain's o
   const value = valueOf(await queries.decisions(REQUEST));
 
   assert.equal(value.source, "request", "the set says where its repositories came from");
-  assert.deepEqual(value.decisions.map((decision) => decision.id), ["gateway:geo-api", "membership:clone:billing", "membership:name:shared-api", "repository:geo.example.com"]);
+  assert.deepEqual(value.decisions.map((decision) => decision.id), ["gateway:geo-api", "membership:clone:billing", "membership:name:shared-api", "repository:geo-api", "repository:geo.example.com"]);
   assert.deepEqual(
     decisionOf(value, "membership:name:shared-api").options.map((option) => `${option.value}${option.recommended ? "*" : ""}${option.basis === undefined ? "" : `(${option.basis})`}`),
     ["orders-core*(artifact)"],
@@ -148,7 +148,7 @@ test("a clone the persisted declaration holds is no membership decision, and a n
 
   const ids = valueOf(await queries.decisions(REQUEST)).decisions.map((decision) => decision.id);
 
-  assert.deepEqual(ids, ["gateway:geo-api", "repository:geo.example.com"]);
+  assert.deepEqual(ids, ["gateway:geo-api", "repository:geo-api", "repository:geo.example.com"]);
 });
 
 test("a declaration that cannot be read fails the set with its fault", async () => {

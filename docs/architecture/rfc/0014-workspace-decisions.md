@@ -221,12 +221,13 @@ the host's.
   Historical presentation: `detail` is now rejected. The current [MCP contract](0005-transports.md#mcp-mvp-in-process-stdio) uses
   `mode: "details"` to explain recorded gaps and `mode: "full"` for exhaustive structured data.
 - `gateway` is one decision per unserved path prefix that at least one other repository's routes take once it is
-  stripped, and it replaces the `repository` decision of that prefix. Its options are those repositories, with the
-  matched route as evidence; there is no recommendation, because two or more matches (or one the join could not settle)
-  are what leaves the gap. The caller's own repository is never an option, as `inferGateways` excludes it. An unserved
-  prefix no route takes is the `repository` decision, answerable by free text, so no decision is raised with no way to
-  answer it. "Leave it unmatched" is not an option value: no fact states it and the decision is optional, so leaving it
-  unanswered is that answer (amended 2026-11-14, unit U6).
+  stripped. Its options are those repositories, with the matched route as evidence; there is no recommendation, because
+  two or more matches (or one the join could not settle) are what leaves the gap. The caller's own repository is never
+  an option, as `inferGateways` excludes it. A gateway answer names a member of the workspace (`unknown-gateway-repository`
+  refuses any other), so the prefix keeps its `repository` decision beside it: free text is the only answer that adds
+  a repository the workspace lacks. An unserved prefix no route takes is only the `repository` decision, so no decision
+  is raised with no way to answer it. "Leave it unmatched" is not an option value: no fact states it and the decision is
+  optional, so leaving it unanswered is that answer (amended 2026-11-14, unit U6).
 - `trust` is one required decision per repository with no record, offering both modes and no recommendation. The answer
   is applied by the existing `init --trust <mode> <repo>`, never by the manifest (open question 11, accepted).
 - Slice 1 (`library`): one decision per distinct library a cut names (`library:<fqn>`), the places of every cut naming it

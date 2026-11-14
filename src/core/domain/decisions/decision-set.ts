@@ -129,26 +129,24 @@ function membershipsByClone(input: DecisionInput, confirmed: ReadonlySet<string>
 
 /**
  * What the join left unserved, read as it decided it: a name no repository serves is a gap, and one a link or a repository
- * id serves never reaches here. A prefix a declared gateway routes was answered by that gateway. An unserved prefix that
- * some other repository's routes take once it is stripped is one `gateway` decision; any other unserved name, a prefix no
- * route takes included, is one `repository` decision, so one gap is never raised twice.
+ * id serves never reaches here. A prefix a declared gateway routes was answered by that gateway. Every other unserved name
+ * is one `repository` decision, the only answer that adds a repository the workspace lacks; an unserved prefix that some
+ * other repository's routes take once it is stripped is also one `gateway` decision, which can only name a member.
  */
 function unservedDecisions(input: DecisionInput): Decision[] {
   const routed = new Set(input.gateways.map((gateway) => gateway.prefix));
   const asked = input.unserved.filter((name) => !(name.kind === "path-prefix" && routed.has(name.name)));
-  const gateways: Decision[] = [];
-  const rest: RepositoryOutwardName[] = [];
-  for (const [prefix, names] of groupsOf(asked, (name) => name.name)) {
-    const written = names.filter((name) => name.kind === "path-prefix");
+  return [...gatewayDecisions(input, asked), ...repositoryDecisions(asked)];
+}
+
+function gatewayDecisions(input: DecisionInput, asked: readonly RepositoryOutwardName[]): Decision[] {
+  return groupsOf(
+    asked.filter((name) => name.kind === "path-prefix"),
+    (name) => name.name,
+  ).flatMap(([prefix, written]) => {
     const options = gatewayOptions(input, prefix, written);
-    if (options.length === 0) {
-      rest.push(...names);
-      continue;
-    }
-    gateways.push(decisionOf({ kind: "gateway", subject: prefix, evidence: written.flatMap((held) => held.evidence), options, allowsFreeText: false, required: false }));
-    rest.push(...names.filter((name) => name.kind !== "path-prefix"));
-  }
-  return [...gateways, ...repositoryDecisions(rest)];
+    return options.length === 0 ? [] : [decisionOf({ kind: "gateway", subject: prefix, evidence: written.flatMap((held) => held.evidence), options, allowsFreeText: false, required: false })];
+  });
 }
 
 /**

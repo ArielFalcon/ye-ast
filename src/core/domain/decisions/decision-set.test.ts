@@ -225,7 +225,7 @@ test("a prefix the join served raises no gateway decision, however its calls rea
   assert.deepEqual(ids(set), []);
 });
 
-test("an unserved prefix a repository serves behind it is one gateway decision offering that repository, citing the calls under it, and no repository decision", () => {
+test("an unserved prefix a repository serves behind it is a gateway decision offering that repository and still a free-text repository decision, since a gateway can only name a repository of the workspace", () => {
   const places = [{ repo: "webapp", path: "webapp/src/app.ts", line: 7 }];
   const set = decisionsOf(
     input({
@@ -238,12 +238,17 @@ test("an unserved prefix a repository serves behind it is one gateway decision o
   );
 
   const decision = byId(set).get("gateway:legacy");
-  assert.deepEqual(ids(set), ["gateway:legacy"]);
+  assert.deepEqual(ids(set), ["gateway:legacy", "repository:legacy"]);
   assert.deepEqual(options(decision), ["orders"]);
   assert.deepEqual(decision?.options[0]?.evidence, [{ path: "src/thing.java", line: 31, repo: "orders" }]);
   assert.equal(decision?.allowsFreeText, false);
   assert.equal(decision?.required, false);
   assert.deepEqual(decision?.evidence, places);
+  const repositoryDecision = byId(set).get("repository:legacy");
+  assert.deepEqual(repositoryDecision?.options, []);
+  assert.equal(repositoryDecision?.allowsFreeText, true);
+  assert.deepEqual(repositoryDecision?.outwardKinds, ["path-prefix"]);
+  assert.deepEqual(repositoryDecision?.evidence, places);
 });
 
 test("an unserved prefix two repositories match offers both and recommends none", () => {
@@ -273,24 +278,6 @@ test("an unserved prefix no other repository serves behind it, the caller's own 
   assert.deepEqual(ids(set), ["repository:legacy", "repository:orders-api"]);
   assert.deepEqual(byId(set).get("repository:orders-api")?.options, []);
   assert.equal(byId(set).get("repository:orders-api")?.allowsFreeText, true);
-});
-
-test("a name written as a prefix a repository serves and as a host is one gateway decision and one repository decision for the host alone", () => {
-  const set = decisionsOf(
-    input({
-      repositories: [repository("webapp", { callSites: [call("webapp", "/shipping/rates")] }), repository("rates", { entrypoints: [route("/rates")] })],
-      unserved: [
-        unservedAt("shipping", "path-prefix", { repo: "webapp", path: "webapp/src/app.ts", line: 7 }),
-        unservedAt("shipping", "http-host", { repo: "webapp", path: "webapp/src/host.ts", line: 2 }),
-      ],
-      confirmed: ["rates"],
-    }),
-  );
-
-  assert.deepEqual(ids(set), ["gateway:shipping", "repository:shipping"]);
-  assert.deepEqual(byId(set).get("gateway:shipping")?.evidence, [{ repo: "webapp", path: "webapp/src/app.ts", line: 7 }]);
-  assert.deepEqual(byId(set).get("repository:shipping")?.outwardKinds, ["http-host"]);
-  assert.deepEqual(byId(set).get("repository:shipping")?.evidence, [{ repo: "webapp", path: "webapp/src/host.ts", line: 2 }]);
 });
 
 test("a repository without a trust record is a required decision offering both modes, and one with a record is not", () => {
