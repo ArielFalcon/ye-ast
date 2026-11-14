@@ -39,6 +39,7 @@ export const cut = z.strictObject({
   at: strings,
   reason: z.enum(CUT_REASONS),
   subReason: z.enum(CUT_SUB_REASONS).exactOptional(),
+  cause: strings.exactOptional(),
   reach: cutReach,
   dependency: dependencyDiagnostic.exactOptional(),
   limit: z.number().exactOptional(),

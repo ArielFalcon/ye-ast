@@ -18,7 +18,7 @@ import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
 import type { ChangeFrontier, ClassifiedDifference, ConsequenceFinding, ConsequencesValue, HypothesisAnswer, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
-import type { Cut, Evidence, Fact, Finding, SnapshotRef, WalkBounds } from "../core/domain/shared/fact.ts";
+import { FUNCTION_VALUE_AWAITS_JDK, type Cut, type Evidence, type Fact, type Finding, type SnapshotRef, type WalkBounds } from "../core/domain/shared/fact.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { NameCandidate, OutwardKind, OutwardName, RepositoryOutwardName } from "../core/domain/topology/outward-name.ts";
 import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
@@ -1278,10 +1278,10 @@ function traceTreeLines(steps: readonly TraceStep[]): string[] {
 }
 
 /** An unresolved call of a trace: why it is cut, the place and spelling leading the cut, then its candidates. */
-function tracePlaceOf(cut: Cut): { why: string; file: string; line: string; spelling: string; candidates: readonly string[] } {
+function tracePlaceOf(cut: Cut): { why: string; file: string; line: string; spelling: string; candidates: readonly string[]; cause: readonly string[] } {
   const [place = "", ...candidates] = cut.at;
   const { file, line, reason } = placeOf(place);
-  return { why: cutReasonText(cut), file, line, spelling: reason, candidates };
+  return { why: cutReasonText(cut), file, line, spelling: reason, candidates, cause: cut.cause ?? [] };
 }
 
 type TracePlace = ReturnType<typeof tracePlaceOf>;
@@ -1293,10 +1293,24 @@ function trailingName(spelling: string): string {
   return /[\w$]+$/.exec(spelling.trimEnd())?.[0] ?? spelling.trim();
 }
 
-/** Each unresolved call with every candidate. */
-function tracePlaceLine(place: TracePlace): string {
-  return `    ${place.why}: ${place.file}:${place.line} ${place.spelling}${place.candidates.length === 0 ? "" : ` (${place.candidates.join(", ")})`}`;
+/** The constructs a cut's cause places stand at, each counted with the files it sits in. */
+function causeCounts(cause: readonly string[]): string {
+  return [...Map.groupBy(cause.map(placeOf), ({ reason }) => reason)]
+    .toSorted(([a], [b]) => compareText(a, b))
+    .map(([construct, places]) => {
+      const files = new Set(places.map(({ file }) => file)).size;
+      return `${places.length} ${construct} in ${files} ${files === 1 ? "file" : "files"}`;
+    })
+    .join(", ");
 }
+
+/** Each unresolved call with every candidate and, where the cut has one, the places of its cause. */
+function tracePlaceLine(place: TracePlace): string {
+  return `    ${place.why}: ${place.file}:${place.line} ${place.spelling}${place.candidates.length === 0 ? "" : ` (${place.candidates.join(", ")})`}${place.cause.length === 0 ? "" : `; cause: ${place.cause.join(", ")}`}`;
+}
+
+/** What declares the library signatures that settle a function value passed to a library call (ADR-0063, ADR-0044 decision 5). */
+const JDK_NEXT_STEP = '  next: declare a JDK (--jdk on ye-ast trace or ye-ast mcp) so the function values of undeclared library calls are read; a one-implementation port is followed once none of them may implement it';
 
 /** A candidate without its file: `src/a.ts::Store.get` reads `Store.get`. */
 function candidatePath(candidate: string): string {
@@ -1313,15 +1327,15 @@ const COUNTED_CAUSES: readonly string[] = ["page-unplanned", "receiver-unproven"
  * calls of a counted cause collapse to one line of calls, files and names when that line is shorter than theirs.
  */
 function traceCallGroupLines(places: readonly TracePlace[]): string[] {
-  const named = [...Map.groupBy(places, (place) => JSON.stringify([place.why, trailingName(place.spelling), place.candidates.toSorted(compareText)]))]
-    .map(([key, inGroup]) => ({ key, why: inGroup[0]!.why, name: trailingName(inGroup[0]!.spelling), candidates: inGroup[0]!.candidates.toSorted(compareText), calls: inGroup.length, files: new Set(inGroup.map(({ file }) => file)).size }))
+  const named = [...Map.groupBy(places, (place) => JSON.stringify([place.why, trailingName(place.spelling), place.candidates.toSorted(compareText), causeCounts(place.cause)]))]
+    .map(([key, inGroup]) => ({ key, why: inGroup[0]!.why, name: trailingName(inGroup[0]!.spelling), candidates: inGroup[0]!.candidates.toSorted(compareText), cause: causeCounts(inGroup[0]!.cause), calls: inGroup.length, files: new Set(inGroup.map(({ file }) => file)).size }))
     .map((group) => {
       const shown = [...new Set(group.candidates.map(candidatePath))].sort(compareText);
       const listed = shown.join(", ");
       const counted = `${group.candidates.length} ${group.candidates.length === 1 ? "candidate" : "candidates"}`;
       const listable = shown.length === group.candidates.length && preferShorterText(listed, counted) === listed;
       const could = group.candidates.length === 0 ? "" : listable ? ` → could be: ${listed}` : ` → ${counted}`;
-      return { ...group, line: `    ${group.why}: ${group.name} ×${group.calls} in ${group.files} ${group.files === 1 ? "file" : "files"}${could}` };
+      return { ...group, line: `    ${group.why}: ${group.name} ×${group.calls} in ${group.files} ${group.files === 1 ? "file" : "files"}${could}${group.cause === "" ? "" : `; cause: ${group.cause}`}` };
     });
   const collapsed = [...Map.groupBy(places.filter(({ why }) => COUNTED_CAUSES.includes(why.split(" ")[0]!)), (place) => place.why)].flatMap(([why, inCause]) => {
     const files = new Set(inCause.map(({ file }) => file)).size;
@@ -1342,7 +1356,8 @@ function traceCutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
   const lines = cutLines(cuts.filter((cut) => cut.kind !== "unresolved-link"), detail);
   if (unresolved.length === 0) return lines.length === 0 ? [] : [CUTS, ...lines];
   const places = detail === "details" ? unresolved.map(tracePlaceLine) : [...traceCallGroupLines(unresolved), TRACE_PLACES_OMITTED];
-  return [CUTS, ...lines, `  unresolved-link (${unresolved.length} ${unresolved.length === 1 ? "call" : "calls"}):`, ...places];
+  const awaitsJdk = cuts.some((cut) => cut.cause?.some((place) => placeOf(place).reason === FUNCTION_VALUE_AWAITS_JDK));
+  return [CUTS, ...lines, `  unresolved-link (${unresolved.length} ${unresolved.length === 1 ? "call" : "calls"}):`, ...places, ...(awaitsJdk ? [JDK_NEXT_STEP] : [])];
 }
 
 export function renderTrace(fact: Fact<TraceValue>, detail: ResponseMode = "summary"): string {

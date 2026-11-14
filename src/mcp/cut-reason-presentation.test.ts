@@ -83,3 +83,23 @@ test("details print the reason, with its sub-reason, on every other cut row; a s
   assert.match(impact, /receiver-unproven/);
   assert.match(impact, /dispatch \(capability-absent\)/);
 });
+
+test("a trace dispatch cut states the places of its cause, and names the --jdk input only when a function value awaits the JDK", () => {
+  const caused = (cause: readonly string[]): Cut => ({ ...call("src/flow.ts:2 send", "dispatch", "dispatch not proven"), cause });
+  const awaiting = caused(["src/Tasks.java:9 function-value-undeclared-jdk", "src/Tasks.java:12 function-value-undeclared-jdk", "src/Jobs.java:4 function-value"]);
+
+  const details = renderTrace(trace([awaiting]), "details").split("\n");
+  assert.ok(details.some((line) => line.includes("src/Tasks.java:9 function-value-undeclared-jdk, src/Tasks.java:12 function-value-undeclared-jdk, src/Jobs.java:4 function-value")), details.join("\n"));
+  assert.equal(details.filter((line) => line.includes("--jdk")).length, 1, details.join("\n"));
+  const summary = renderTrace(trace([awaiting]), "summary").split("\n");
+  assert.ok(summary.some((line) => line.includes("2 function-value-undeclared-jdk in 1 file") && line.includes("1 function-value in 1 file")), summary.join("\n"));
+  assert.ok(!summary.some((line) => line.includes("src/Tasks.java:9")), "a summary counts the places and leaves them to the details");
+  assert.equal(summary.filter((line) => line.includes("--jdk")).length, 1, summary.join("\n"));
+
+  for (const detail of ["summary", "details"] as const) {
+    const settled = renderTrace(trace([caused(["src/Jobs.java:4 function-value", "src/Hooks.java:7 advice"])]), detail);
+    assert.ok(settled.includes("function-value"), settled);
+    assert.ok(!settled.includes("--jdk"), "no JDK settles a function value whose context is not a library call");
+  }
+  assert.ok(!renderTrace(trace([DISPATCH]), "details").includes("cause"), "a cut with no cause prints none");
+});

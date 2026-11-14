@@ -164,6 +164,16 @@ export type CutReason = (typeof CUT_REASONS)[number];
 export const CUT_SUB_REASONS = [...DISPATCH_UNKNOWN_REASONS, "several-bodies", "overridable", "unproven", CAPABILITY_ABSENT] as const;
 export type CutSubReason = (typeof CUT_SUB_REASONS)[number];
 
+/** A function value passed to a library call: the cause a declared JDK may release, since its library signature is unread. */
+export const FUNCTION_VALUE_AWAITS_JDK = "function-value-undeclared-jdk";
+
+/** What stands at a place of `Cut.cause`: the construct whose reading left a dispatch proof open. */
+export const CUT_CAUSES = [
+  "advice", "annotation", "outside-supertype", "dynamic-implementation", "unsettled-supertype", "unplaced-class",
+  "function-value", FUNCTION_VALUE_AWAITS_JDK, "other-type", "no-single-body",
+] as const;
+export type CutCause = (typeof CUT_CAUSES)[number];
+
 export type Runtime = "java" | "typescript";
 
 /** What a cut could hide, from the data its emitter holds (ADR-0042 decision 2); `anything` when it holds no narrower one. */
@@ -200,6 +210,8 @@ export interface Cut {
   limit?: number;
   reason: CutReason;
   subReason?: CutSubReason;
+  /** The sorted places that blocked the proof, each `path:line` and the `CutCause` standing there (ADR-0074 decision 7). */
+  cause?: readonly string[];
   reach: CutReach;
   dependency?: {
     name: string;
@@ -296,7 +308,7 @@ export function sameIdentity(a: FactIdentity, b: FactIdentity): boolean {
 }
 
 /** Where a cut stopped the answer, without why it stopped or what it could hide. */
-function placeKey({ reason: _reason, subReason: _subReason, reach: _reach, ...place }: Cut): string {
+function placeKey({ reason: _reason, subReason: _subReason, cause: _cause, reach: _reach, ...place }: Cut): string {
   return JSON.stringify(place);
 }
 
