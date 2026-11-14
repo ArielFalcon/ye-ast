@@ -1,5 +1,5 @@
 import type { DependenceBasis, DependenceDerivation, ImpactBudget } from "../../domain/impact/impact-fact.ts";
-import { isFileDependent } from "../../domain/impact/edge-policy.ts";
+import { isFileDependent, type OwnerReach } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor } from "../../domain/impact/impact-cuts.ts";
 import { boundCut, type Cut, type WalkBoundKind } from "../../domain/shared/fact.ts";
 import { comparePosition } from "../../domain/shared/code-node.ts";
@@ -54,6 +54,8 @@ interface Rec {
   contractChanged: boolean;
   /** True while only a member it declares has reached it: the type then follows only whole-type rows (ADR-0017). */
   throughMember: boolean;
+  /** True while every member that reached it was reached by dispatch up from an implementation: it then follows no subtype (ADR-0092). */
+  dispatched: boolean;
   /** The level its own edge reached it at, after a member had: from that level on it follows every row. */
   wholeFrom?: number;
   fanIn: number;
@@ -82,17 +84,24 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
   const links: Link[] = [];
   let level: Rec[] = [];
 
-  function enter(symbol: GraphSymbol | ModelDeclaration, depth: number, contractChanged: boolean, into: Rec[], throughMember = false): Rec {
-    const rec: Rec = { symbol, depth, contractChanged, throughMember, fanIn: 0, callers: [] };
+  const spent = new Set<Rec>();
+  let next: Rec[] = [];
+
+  function enter(symbol: GraphSymbol | ModelDeclaration, depth: number, contractChanged: boolean, into: Rec[], throughMember = false, dispatched = false): Rec {
+    const rec: Rec = { symbol, depth, contractChanged, throughMember, dispatched, fanIn: 0, callers: [] };
     recs.set(symbol.id, rec);
     into.push(rec);
     return rec;
   }
 
-  function enterOwners(rec: Rec, into: Rec[]): void {
+  function enterOwners(rec: Rec, into: Rec[], dispatched = false): void {
     const indexed = indexedDeclaration(rec.symbol);
     for (const owner of indexed === undefined ? [] : inbound.ownersOf(indexed)) {
-      const ownerRec = recs.get(owner.id) ?? enter(owner, rec.depth, false, into, true);
+      const ownerRec = recs.get(owner.id) ?? enter(owner, rec.depth, false, into, true, dispatched);
+      if (ownerRec.dispatched && !dispatched) {
+        ownerRec.dispatched = false;
+        if (spent.has(ownerRec)) next.push(ownerRec);
+      }
       links.push({ from: rec, to: ownerRec, confidence: 1, via: { symbol: rec.symbol, lines: [], basis: "contains", derivation: "resolved" } });
     }
   }
@@ -101,10 +110,9 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
   for (const rec of seedRecs) enterOwners(rec, level);
 
   const stopped = { depth: [] as Rec[], hub: [] as Rec[], expansions: [] as Rec[] };
-  const spent = new Set<Rec>();
   const expanded = new Set<GraphNodeId>();
   for (let depth = 0; level.length > 0; depth++) {
-    const next: Rec[] = [];
+    next = [];
     /** The current level, plus every symbol a dispatch bridge puts there: a hop between an interface and its implementation costs no depth. */
     const queue = level.toSorted((a, b) => comparePosition(a.symbol, b.symbol));
     const handled = new Set<Rec>();
@@ -115,7 +123,8 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
       if (isFileDependent(rec.symbol.kind)) continue;
       const indexed = indexedDeclaration(rec.symbol);
       const membersOnly = rec.wholeFrom === undefined ? rec.throughMember : depth < rec.wholeFrom;
-      rec.callers = indexed === undefined ? syntax?.callers.get(rec.symbol.id) ?? [] : inbound.callersOf(indexed, rec.contractChanged, membersOnly);
+      const reach: OwnerReach | undefined = !membersOnly ? undefined : rec.dispatched ? "dispatch" : "member";
+      rec.callers = indexed === undefined ? syntax?.callers.get(rec.symbol.id) ?? [] : inbound.callersOf(indexed, rec.contractChanged, reach);
       rec.fanIn = rec.callers.filter((caller) => caller.hasCall ?? caller.basis === "call").length;
       if (budget.depth !== undefined && depth >= budget.depth) stopped.depth.push(rec);
       else if (budget.hubFanIn !== undefined && rec.fanIn > budget.hubFanIn) stopped.hub.push(rec);
@@ -126,11 +135,12 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
         for (const caller of rec.callers) {
           const free = caller.bridge !== undefined;
           const into = free ? queue : next;
+          const subtype = membersOnly && caller.basis === "reference";
           let target = recs.get(caller.from.id);
           if (target === undefined) {
-            target = enter(caller.from, free ? depth : depth + 1, false, into);
-            enterOwners(target, into);
-          } else if (target.throughMember) {
+            target = enter(caller.from, free ? depth : depth + 1, false, into, subtype);
+            enterOwners(target, into, caller.bridge === "up");
+          } else if (target.throughMember && !subtype) {
             target.throughMember = false;
             target.wholeFrom = depth + 1;
             next.push(target);

@@ -20,6 +20,9 @@ const CLASS_KINDS = ["class", "component"] as const;
 /** Declarations that hold a value, which a call may find any object in. */
 const VALUE_KINDS = ["constant", "variable"] as const;
 
+/** The relations a template that renders a type opens. */
+const TEMPLATE_RELATIONS = ["uses-component", "uses-directive", "uses-pipe"] as const;
+
 export const EDGE_POLICY = {
   rules: [
     { edges: ["calls", "instantiates"], from: [...CODE_KINDS, ...FIELD_KINDS], to: "any" },
@@ -59,7 +62,13 @@ export const EDGE_POLICY = {
    * says nothing more about the member, so neither joins (ADR-0017). A type that is a seed, or that is reached through its
    * own edges, keeps every row above.
    */
-  ownerThroughMember: { edges: ["extends", "implements"], relations: ["uses-component", "uses-directive", "uses-pipe"] },
+  ownerThroughMember: { edges: ["extends", "implements"], relations: TEMPLATE_RELATIONS },
+  /**
+   * What a type entered for a member that dispatch reached from an implementation expands into: the templates that render
+   * it and no subtype, because the other subtypes of the type are siblings of that implementation, which the change does
+   * not reach (ADR-0092). A subtype below a member that changed or was reached through a call keeps `ownerThroughMember`.
+   */
+  ownerThroughDispatch: { edges: [], relations: TEMPLATE_RELATIONS },
   /**
    * A reference of these kinds named `this.<field>.<member>`, made inside a class whose own field has a fixed origin, is
    * settled by that origin: a use of the member when the field holds the member's type, and none when it holds a type
@@ -84,6 +93,14 @@ export const EDGE_POLICY = {
   /** The confidence of a heuristic edge that carries no score. */
   unscoredHeuristicConfidence: 0.3,
 } as const;
+
+/** How a type was reached without its own edge: `member` declares a reached member; `dispatch` declares the contract an implementation's member dispatched up to. */
+export type OwnerReach = "member" | "dispatch";
+
+/** The rows a type reached through a member of `reach` follows. */
+export function ownerRows(reach: OwnerReach): { edges: readonly string[]; relations: readonly string[] } {
+  return reach === "member" ? EDGE_POLICY.ownerThroughMember : EDGE_POLICY.ownerThroughDispatch;
+}
 
 export interface PolicyEdge {
   kind: string;

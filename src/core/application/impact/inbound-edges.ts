@@ -1,7 +1,7 @@
 import type { DependenceBasis, DependenceDerivation } from "../../domain/impact/impact-fact.ts";
 import { topLevelOf, isSeedable } from "../../domain/change/seeds.ts";
 import { declarationAnchor, declarationUseKey, referenceKey, uniqueReferenceKeys, type MemberReferenceProofs } from "../../domain/impact/impact-cuts.ts";
-import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followedEdge, followsEdge, followsRelation, isIgnoredEdge, referenceRow, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
+import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followedEdge, followsEdge, followsRelation, isIgnoredEdge, ownerRows, referenceRow, type OwnerReach, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
 import type { MemberSubstitute, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
@@ -63,10 +63,11 @@ export interface InboundEdges {
    * The symbols that depend on `node`. Dispatch runs up from an implementation to the methods it implements for every
    * node, and down to the methods that implement a method only with `contractChanged`: a changed declaration changes
    * what its implementations must meet, a reached caller does not, and a path that went up never comes back down to a
-   * sibling. `throughMember` marks the type that declares a reached member: it follows only the whole-type rows of
-   * `EDGE_POLICY.ownerThroughMember`, so whoever uses or injects the type does not join through its member.
+   * sibling. `reach` marks the type that declares a reached member: it follows only the whole-type rows of
+   * `EDGE_POLICY.ownerThroughMember`, or of `ownerThroughDispatch` when the member was reached by dispatch up from an
+   * implementation, so whoever uses or injects the type does not join through its member.
    */
-  callersOf(node: GraphSymbol, contractChanged: boolean, throughMember?: boolean): readonly InboundEdge[];
+  callersOf(node: GraphSymbol, contractChanged: boolean, reach?: OwnerReach): readonly InboundEdge[];
   /** The type that declares a method, which a reached method stands for at the same depth; none for any other symbol. */
   ownersOf(node: GraphSymbol): readonly GraphSymbol[];
   /** Candidate-specific settlements, restricted to admitted expansions and reached sources when sets are supplied. */
@@ -359,9 +360,10 @@ export function createInboundEdges(
   }
 
   type Gathered = InboundEdge & { provenance?: GraphEdge["provenance"] };
-  function gather(node: GraphSymbol, contractChanged: boolean, throughMember: boolean): Gathered[] {
+  function gather(node: GraphSymbol, contractChanged: boolean, reach?: OwnerReach): Gathered[] {
+    const rows = reach === undefined ? undefined : ownerRows(reach);
     const followed = followedEdgesInto(node).filter(({ edge, source }) => !isTestFile(source.file) && followsEdge({ kind: edge.kind, sourceKind: source.kind, targetKind: node.kind }));
-    const into = throughMember ? followed.filter(({ edge }) => (EDGE_POLICY.ownerThroughMember.edges as readonly string[]).includes(edge.kind)) : followed;
+    const into = rows === undefined ? followed : followed.filter(({ edge }) => rows.edges.includes(edge.kind));
     const direct: Gathered[] = into.map(({ edge, source, moved }) => ({
       from: source,
       ...(moved === true && corrections.settled?.get(edgeKey(edge)) !== "typed" ? { confidence: edgeConfidence(edge), derivation: "proven" as const } : followedEdge(edge, corrections.settled?.get(edgeKey(edge)))),
@@ -369,20 +371,20 @@ export function createInboundEdges(
       lines: edge.line === null ? [] : [edge.line],
       provenance: edge.provenance,
     }));
-    const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...provenMemberUsesOf(node), ...ownUsesOf(node)];
-    const related = [...bridged, ...relatedTo(node, throughMember ? EDGE_POLICY.ownerThroughMember.relations : undefined)];
-    const found = throughMember ? related : [...related, ...writtenUsesOf(node, related)];
+    const bridged = rows === undefined ? [...direct, ...bridgesOf(node, contractChanged), ...provenMemberUsesOf(node), ...ownUsesOf(node)] : direct;
+    const related = [...bridged, ...relatedTo(node, rows?.relations)];
+    const found = rows === undefined ? [...related, ...writtenUsesOf(node, related)] : related;
     /** Individual target lookups do not prove incoming-reference coverage. */
-    const whole = throughMember ? found : [...found, ...importersOf(node, found.length === 0)];
+    const whole = rows === undefined ? [...found, ...importersOf(node, found.length === 0)] : found;
     return whole.filter(({ from }) => from.id !== node.id);
   }
 
   const callersCache = new Map<string, InboundEdge[]>();
-  function callersOf(node: GraphSymbol, contractChanged: boolean, throughMember = false): InboundEdge[] {
-    const key = `${node.id}:${contractChanged}:${throughMember}`;
+  function callersOf(node: GraphSymbol, contractChanged: boolean, reach?: OwnerReach): InboundEdge[] {
+    const key = `${node.id}:${contractChanged}:${reach ?? "whole"}`;
     let callers = callersCache.get(key);
     if (callers === undefined) {
-      callers = strongestPerSymbol(gather(node, contractChanged, throughMember).map(({ provenance: _, ...edge }) => edge)).sort((a, b) => comparePosition(a.from, b.from));
+      callers = strongestPerSymbol(gather(node, contractChanged, reach).map(({ provenance: _, ...edge }) => edge)).sort((a, b) => comparePosition(a.from, b.from));
       callersCache.set(key, callers);
     }
     return callers;
@@ -390,7 +392,7 @@ export function createInboundEdges(
 
   function occurrencesOf(node: GraphSymbol): InboundOccurrence[] {
     const kept = new Map<string, InboundOccurrence>();
-    for (const edge of gather(node, false, false)) {
+    for (const edge of gather(node, false)) {
       for (const line of edge.lines.length === 0 ? [undefined] : edge.lines) {
         const occurrence: InboundOccurrence = {
           from: edge.from,

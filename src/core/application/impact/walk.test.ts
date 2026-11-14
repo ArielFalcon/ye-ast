@@ -268,6 +268,86 @@ test("a path that went up to a method does not come down to its sibling implemen
   assert.deepEqual(fromDeclaration.reached.map((r) => r.symbol.id).filter((id) => id.endsWith(".save")).toSorted(), ["Db.save", "Mem.save", "Repo.save"]);
 });
 
+const HIERARCHY = [
+  fakeNode("Repo", "interface", "src/Repo.java", 1, 9),
+  fakeNode("Repo.save", "method", "src/Repo.java", 3, 3, "save"),
+  fakeNode("Mem", "class", "src/Mem.java", 1, 9),
+  fakeNode("Mem.save", "method", "src/Mem.java", 3, 3, "save"),
+  fakeNode("Db", "class", "src/Db.java", 1, 9),
+  fakeNode("Db.save", "method", "src/Db.java", 3, 3, "save"),
+  fakeNode("sibling.use", "method", "src/UseDb.java", 3, 3, "use"),
+  fakeNode("caller", "method", "src/Caller.java", 3, 3, "caller"),
+];
+const HIERARCHY_EDGES: FakeEdge[] = [
+  { from: "Mem", to: "Repo", kind: "implements" },
+  { from: "Db", to: "Repo", kind: "implements" },
+  { from: "Repo", to: "Repo.save", kind: "contains" },
+  { from: "Mem", to: "Mem.save", kind: "contains" },
+  { from: "Db", to: "Db.save", kind: "contains" },
+  call("caller", "Repo.save"),
+  { from: "sibling.use", to: "Db", kind: "references", confidence: 0.9 },
+];
+const reachedIds = (result: ReturnType<typeof walk>) => result.reached.map((r) => r.symbol.id).toSorted();
+
+test("the type of a method reached by dispatch up from one implementation is reached, and the other implementors and whoever uses them are not", () => {
+  const result = walk(HIERARCHY, HIERARCHY_EDGES, ["Mem.save"]);
+  assert.deepEqual(reachedIds(result), ["Mem", "Mem.save", "Repo", "Repo.save", "caller"]);
+});
+
+test("a seed that is an interface method still reaches its implementors through its type, not whoever uses them", () => {
+  const result = walk(HIERARCHY, HIERARCHY_EDGES, ["Repo.save"]);
+  assert.deepEqual(reachedIds(result), ["Db", "Db.save", "Mem", "Mem.save", "Repo", "Repo.save", "caller"]);
+});
+
+test("a subtype reached below a type entered through a member opens no row of whoever uses it, but keeps its own subtypes", () => {
+  const nodes = [
+    fn("a"),
+    fakeNode("m", "method", "src/O.ts", 5, 6),
+    fakeNode("O", "class", "src/O.ts", 1, 9),
+    fakeNode("Sub", "class", "src/Sub.ts", 1, 9),
+    fakeNode("SubSub", "class", "src/SubSub.ts", 1, 9),
+    fn("user", 3, "src/U.ts"),
+  ];
+  const edges: FakeEdge[] = [call("m", "a"), { from: "O", to: "m", kind: "contains" }, { from: "Sub", to: "O", kind: "extends" }, { from: "SubSub", to: "Sub", kind: "extends" }, call("user", "Sub")];
+  assert.deepEqual(summary(walk(nodes, edges, ["a"])), ["a@0", "O@1", "m@1", "Sub@2", "SubSub@3"]);
+});
+
+test("a subtype that a member of its own entered stays reached through a member when its parent's subtype row reaches it", () => {
+  const nodes = [
+    fn("a"),
+    fakeNode("m", "method", "src/O.ts", 5, 6),
+    fakeNode("O", "class", "src/O.ts", 1, 9),
+    fakeNode("sm", "method", "src/Sub.ts", 5, 6),
+    fakeNode("Sub", "class", "src/Sub.ts", 1, 9),
+    fn("user", 3, "src/U.ts"),
+  ];
+  const edges: FakeEdge[] = [call("m", "a"), call("sm", "a"), { from: "O", to: "m", kind: "contains" }, { from: "Sub", to: "sm", kind: "contains" }, { from: "Sub", to: "O", kind: "extends" }, call("user", "Sub")];
+  assert.ok(!reachedIds(walk(nodes, edges, ["a"])).includes("user"));
+});
+
+test("a type entered by dispatch regains its subtypes when another of its members is reached by a call, in whichever order", () => {
+  const layouts = [["src/A.java", "src/B.java"], ["src/B.java", "src/A.java"]];
+  for (const [saveFile, runFile] of layouts as [string, string][]) {
+    const nodes = [
+      fakeNode("Base", "class", "src/Base.java", 1, 20),
+      fakeNode("Base.save", "method", saveFile, 3, 3, "save"),
+      fakeNode("Base.run", "method", runFile, 5, 5, "run"),
+      fakeNode("Mem", "class", "src/Mem.java", 1, 9),
+      fakeNode("Mem.save", "method", "src/Mem.java", 3, 3, "save"),
+      fakeNode("Db", "class", "src/Db.java", 1, 9),
+    ];
+    const edges: FakeEdge[] = [
+      { from: "Mem", to: "Base", kind: "extends" },
+      { from: "Db", to: "Base", kind: "extends" },
+      { from: "Base", to: "Base.save", kind: "contains" },
+      { from: "Base", to: "Base.run", kind: "contains" },
+      { from: "Mem", to: "Mem.save", kind: "contains" },
+      call("Base.run", "Base.save"),
+    ];
+    assert.deepEqual(reachedIds(walk(nodes, edges, ["Mem.save"])), ["Base", "Base.run", "Base.save", "Db", "Mem", "Mem.save"], saveFile);
+  }
+});
+
 test("the walk reports the symbols whose callers it followed, not every one it reached", () => {
   const result = walk([fn("a"), fn("b"), fn("c")], [call("b", "a"), call("c", "b")], ["a"]);
   assert.deepEqual(summary(result), ["a@0", "b@1", "c@2"]);

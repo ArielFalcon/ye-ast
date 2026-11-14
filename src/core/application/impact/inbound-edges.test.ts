@@ -16,6 +16,7 @@ interface Setup {
   symbol(id: string): GraphSymbol;
   callers(id: string, contractChanged?: boolean): string[];
   throughMember(id: string): string[];
+  throughDispatch(id: string): string[];
   basis(id: string): string[];
   scored(id: string, contractChanged?: boolean): [string, number, string | undefined][];
 }
@@ -37,7 +38,8 @@ function setup(
     inbound,
     symbol,
     callers: (id, contractChanged = false) => inbound.callersOf(symbol(id), contractChanged).map((edge) => edge.from.id),
-    throughMember: (id) => inbound.callersOf(symbol(id), false, true).map((edge) => edge.from.id),
+    throughMember: (id) => inbound.callersOf(symbol(id), false, "member").map((edge) => edge.from.id),
+    throughDispatch: (id) => inbound.callersOf(symbol(id), false, "dispatch").map((edge) => edge.from.id),
     basis: (id) => inbound.callersOf(symbol(id), false).map((edge) => edge.basis),
     scored: (id, contractChanged = false) => inbound.callersOf(symbol(id), contractChanged).map((edge) => [edge.from.id, edge.confidence, edge.bridge]),
   };
@@ -389,6 +391,7 @@ test("a type reached through one of its members follows a subtype and a template
   const relations = [relation("uses-component", ref(CMP, "Parent", 11), ref(SVC, "Svc", 4)), relation("injects", ref(CMP, "Peer", 31), ref(SVC, "Svc", 4))];
   const s = setup(nodes, [{ from: "Sub", to: "Svc", kind: "extends" }], relations);
   assert.deepEqual(s.throughMember("Svc"), ["Parent", "Sub"]);
+  assert.deepEqual(s.throughDispatch("Svc"), ["Parent"]);
   assert.deepEqual(s.callers("Svc"), ["Parent", "Peer", "Sub"]);
 });
 
