@@ -20,6 +20,10 @@ const SLOT = "java-receiver-methods";
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
 const GENERATED: ReceiverMethod = { kind: "generated" };
+/** A class literal is of the platform's class type (JLS 15.8.2). */
+const CLASS_LITERAL: ReceiverMethod = { kind: "outside", type: "java.lang.Class" };
+/** Receivers that are names, whose binding the name bindings own: a simple or qualified name, or `this`. */
+const NAMES: ReadonlySet<string> = new Set(["identifier", "field_access", "this"]);
 const UNKNOWN_CHAIN: ImplicitChain = { kind: "unknown" };
 const NO_CHAIN: ImplicitChain = { kind: "none" };
 const PROXIED: GeneratedMember = { kind: "proxied" };
@@ -75,8 +79,13 @@ interface ReadFile extends ReceiverSource {
  * runtime dispatch are separate obligations. An unproven value receiver or declared repository member remains a cut,
  * naming the declarations of the call's arity its type offers where the whole hierarchy was read; no name-only index
  * target proves it. Where the strict binding proves and no repository type types the receiver, a receiver the same
- * declarations type with a platform or library type answers `outside` with that type's qualified name (ADR-0079). Non-Java
- * and non-invocation sites remain unknown.
+ * declarations type with a platform or library type answers `outside` with that type's qualified name (ADR-0079), and a
+ * class literal answers the platform's class type. `unknown` is kept for what another reader of the binding chain owns
+ * (ADR-0087): a receiver that is a name or `this`, a call without a receiver whose search finds no type, a source the
+ * reader holds no tree for, and a place no invocation starts at. Any other receiver the reading settles nothing for (`super`, a
+ * parenthesized, cast, conditional or `switch` expression, an array element, a literal, an object creation) is
+ * `unproven`, and so is a place several invocations start at whose readings differ; invocations of one place that read
+ * alike keep that reading.
  */
 export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts, hold?: ParseHold, build: ProjectBuild = {}): ImportOrigins["receiverMethods"] {
   const unreadJvm = paths.some(isUncoveredJvmSource);
@@ -98,39 +107,37 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         return known;
       };
       const resolver = createResolver(project, !paths.some((path) => LOMBOK_CONFIG.test(path)));
-      for (const [index, site] of sites.entries()) {
-        if (signal?.aborted) break;
-        const source = readFile(site.file);
-        const invocations = source?.invocations.get(callKey(site.line, site.column, site.member)) ?? [];
-        if (source === undefined || invocations.length !== 1) continue;
-        const invocation = invocations[0]!;
-        if (invocation.type === "object_creation_expression") {
-          results[index] = (proves ? resolver.creationOf(invocation, source.file) : undefined) ?? UNKNOWN;
-          continue;
-        }
+      const readAt = (invocation: Node, source: ReadFile): ReceiverMethod => {
+        if (invocation.type === "object_creation_expression") return (proves ? resolver.creationOf(invocation, source.file) : undefined) ?? UNKNOWN;
         const supplied = proves && invocation.type === "method_reference" ? resolver.suppliedReference(invocation, source.file) : undefined;
-        if (supplied !== undefined) {
-          results[index] = supplied;
-          continue;
-        }
+        if (supplied !== undefined) return supplied;
         if (invocation.type === "method_reference") {
           const named = proves ? resolver.referenceOf(invocation, source.file) : undefined;
-          results[index] = named === undefined ? UNPROVEN : "method" in named ? placedAt(named.method) : { kind: "unproven", candidates: named.candidates.map(placeOf).sort(byPlace) };
-          continue;
+          return named === undefined ? UNPROVEN : "method" in named ? placedAt(named.method) : { kind: "unproven", candidates: named.candidates.map(placeOf).sort(byPlace) };
         }
         if (invocation.type === "explicit_constructor_invocation") {
           const chained = resolver.constructorOf(invocation, source.file);
-          results[index] = chained === undefined ? UNKNOWN : chained === "unproven" || !proves ? UNPROVEN : placedAt(chained);
-          continue;
+          return chained === undefined ? UNKNOWN : chained === "unproven" || !proves ? UNPROVEN : placedAt(chained);
         }
         const named = proves ? resolver.methodOf(invocation, source) : undefined;
-        if (named !== undefined && "method" in named) results[index] = { ...placedAt(named.method), ...(named.bound ? { bound: true as const } : {}) };
-        else if (named !== undefined && "generated" in named) results[index] = GENERATED;
-        else if (named !== undefined) results[index] = { kind: "unproven", candidates: named.candidates };
-        else if (resolver.hasDeclaredReceiver(invocation, source) || resolver.holdsValue(invocation, source.file)) {
+        if (named !== undefined && "method" in named) return { ...placedAt(named.method), ...(named.bound ? { bound: true as const } : {}) };
+        if (named !== undefined && "generated" in named) return GENERATED;
+        if (named !== undefined) return { kind: "unproven", candidates: named.candidates };
+        if (resolver.hasDeclaredReceiver(invocation, source) || resolver.holdsValue(invocation, source.file)) {
           const outside = proves ? resolver.outsideReceiverOf(invocation, source) : undefined;
-          results[index] = outside === undefined ? UNPROVEN : { kind: "outside", type: outside };
+          return outside === undefined ? UNPROVEN : { kind: "outside", type: outside };
         }
+        const object = invocation.childForFieldName("object");
+        if (object === null || NAMES.has(object.type)) return UNKNOWN;
+        return object.type === "class_literal" && proves ? CLASS_LITERAL : UNPROVEN;
+      };
+      for (const [index, site] of sites.entries()) {
+        if (signal?.aborted) break;
+        const source = readFile(site.file);
+        if (source === undefined) continue;
+        const readings = (source.invocations.get(callKey(site.line, site.column, site.member)) ?? []).map((invocation) => readAt(invocation, source));
+        const [first] = readings;
+        if (first !== undefined) results[index] = readings.every((reading) => sameReading(reading, first)) ? first : UNPROVEN;
       }
       return results;
     };
@@ -1009,6 +1016,10 @@ function byPlace(first: MethodPlace, second: MethodPlace): number {
 
 export function hasVarargs(method: MethodDecl): boolean {
   return (method.node.childForFieldName("parameters")?.namedChildren ?? []).some((parameter) => parameter?.type === "spread_parameter");
+}
+
+function sameReading(first: ReceiverMethod, second: ReceiverMethod): boolean {
+  return JSON.stringify(first) === JSON.stringify(second);
 }
 
 export function callKey(line: number, column: number, member: string): string {

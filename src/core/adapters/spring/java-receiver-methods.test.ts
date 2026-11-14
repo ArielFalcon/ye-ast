@@ -61,12 +61,24 @@ test("a call on what a repository method declares it returns names the returned 
   assert.deepEqual(await methodAt([STORE, JDBC, use("generic().save(\"x\")", members)]), { kind: "unproven" });
 });
 
-test("a link of a chain that writes an argument on a receiver type with a supertype outside the repository, or a place two calls of the name start at, names no method", async () => {
+test("a link of a chain that writes an argument on a receiver type with a supertype outside the repository, or a place two calls of the name start at that read differently, names no method", async () => {
   const listed = java("Listed.java", ["package app;", "", "class Listed extends java.util.ArrayList<String> {", "  app.Store find(int at) { return null; }", "}"]);
   const plain = java("Plain.java", ["package app;", "", "class Plain {", "  Store find() { return null; }", "}"]);
 
   assert.deepEqual(await methodAt([STORE, JDBC, listed, use("listed.find(1).save(\"x\")", [], "Listed listed")]), { kind: "unproven" });
-  assert.deepEqual(await methodAt([STORE, JDBC, plain, use("plain.find().find()", [], "Plain plain")], "find"), { kind: "unknown" });
+  assert.deepEqual(await methodAt([STORE, JDBC, plain, use("plain.find().find()", [], "Plain plain")], "find"), { kind: "unproven" });
+});
+
+test("a place several calls of the name start at that read alike keeps their reading", async () => {
+  assert.deepEqual(await methodAt([STORE, JDBC, use("store.find().find()")], "find"), method(STORE, 5));
+});
+
+test("a receiver that is an expression other than a name is unproven where the reading settles nothing, a class literal is the platform's class type, and a name another reader owns stays unknown", async () => {
+  assert.deepEqual(await methodAt([STORE, JDBC, use("((Store) value).save(\"x\")", [], "Object value")]), { kind: "unproven" });
+  assert.deepEqual(await methodAt([STORE, JDBC, use("super.save(\"x\")", ["  void save(String value) {}"])]), { kind: "unproven" });
+  assert.deepEqual(await methodAt([STORE, JDBC, use("Use.class.getName()", ["  String getName() { return null; }"])], "getName"), { kind: "outside", type: "java.lang.Class" });
+  const plain = java("Plain.java", ["package app;", "", "class Plain {}"]);
+  assert.deepEqual(await methodAt([STORE, JDBC, plain, use("new Plain() { void save(String v) {} void go() { this.save(\"x\"); } }")], "save", undefined, "this.save"), { kind: "unknown" });
 });
 
 test("a platform interface that declares no members leaves the receiver's method selectable, while a supertype with members or a homonym from another package still withholds it", async () => {
@@ -190,7 +202,7 @@ test("an annotation by which a processor adds overloads or rewrites calls proves
   assert.deepEqual(await methodAt([...sources, proxy]), { kind: "unproven" });
 });
 
-test("unread sources withhold declared receiver proof, while a bare call or super without a declared type is unknown", async () => {
+test("unread sources withhold declared receiver proof, a bare call without a declared type and a call on super included", async () => {
   const statics = java("Util.java", ["package app;", "", "class Util {", "  static void save(String value) {}", "}"]);
   const plain = java("Plain.java", ["package app;", "", "class Plain {", "  Store store;", "  void save(String value) {}", "}"]);
   const at = async (sources: readonly SourceFile[], start = "") => methodAt(sources, "save", KOTLIN(sources), start);
@@ -204,7 +216,7 @@ test("unread sources withhold declared receiver proof, while a bare call or supe
   assert.deepEqual(await at([STORE, statics, use("Store Util = store; Util.save(\"x\")")], "Util.save"), { kind: "unproven" });
   assert.deepEqual(await at([plain, use("save(\"x\")", ["  void save(String value) {}"])]), { kind: "unproven" });
   assert.deepEqual(await at([plain, use("this.save(\"x\")", ["  void save(String value) {}"])]), { kind: "unproven" });
-  assert.deepEqual(await at([plain, use("super.save(\"x\")")]), { kind: "unknown" });
+  assert.deepEqual(await at([plain, use("super.save(\"x\")")]), { kind: "unproven" });
 });
 
 /** The constructor a `super(...)` or `this(...)` written on `line` of `source` names, by the column it starts at. */

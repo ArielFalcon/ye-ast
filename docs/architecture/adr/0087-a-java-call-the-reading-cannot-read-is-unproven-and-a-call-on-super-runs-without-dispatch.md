@@ -28,7 +28,6 @@ Reproduced, each with a fixture in which the name's edge and the language's bind
 | `super.m()` inside an anonymous class of an unread type | the same | a step in the enclosing class's `m` |
 | `X.class.getName()` where a repository type declares `getName` | a class literal is no form the reading types | a step in the repository homonym; a false caller |
 | `a.get().get()` | the two calls share one site key (the start of the expression and the name) | one step, in the inner call's method; the second call is neither a step nor a cut |
-| any call in a source that does not parse | the reading holds no tree for the file | the index's edge, for every form above and for the forms earlier decisions closed |
 
 Measured on the largest Java repository of the corpus: 95 calls on `super`, 58 of them steps today. One reads
 `super.update(x)` as the class's own `update`, which makes a cycle that does not exist; thirty name an interface's
@@ -46,18 +45,24 @@ it below.
    receiver that is a name, which the name bindings root at a variable, a repository type or a type outside the
    repository (ADR-0079); a call without a receiver for which the search of the language finds no type (the search of
    an anonymous class); and a language whose pack declares the capability absent.
-2. **A site the reading cannot place is `unproven`.** A call site of a Java source the reading holds no tree for, and
-   a site several calls share whose readings differ, answer `unproven`. Calls that share a site and read alike keep
-   that reading.
+2. **Calls that share a site and read differently are `unproven`.** A site several calls share whose readings differ
+   answers `unproven`; calls that share a site and read alike keep that reading. This amends the second exception of
+   ADR-0041 decision 3: the record of `store.getCurrency().getCurrency()` is still kept by the alignment, and the
+   binding chain then reads it as every other kept record.
 3. **A class literal is a receiver outside the repository.** `X.class` is of the platform's class type (JLS 15.8.2):
-   the answer is the outside receiver of ADR-0079 decision 4 for that type.
+   the answer is the outside receiver of ADR-0079 decision 4 for that type. In the reverse families an index edge
+   whose reading is an outside receiver is judged by ADR-0079 decision 5: where the edge's target cannot run under that
+   type the edge is not followed; where it may, or the answer is unknown, today's treatment of the edge stays.
 4. **A call on `super` is read in the superclass.** `super.m(...)` is selected among the members of the direct
-   superclass of the type `this` denotes there, by the selection of a declared receiver, ADR-0086 included. It is
-   `unproven` when that superclass is not a class the sources declare, or the selection settles no one member.
-   `T.super.m(...)` and `Outer.this.m(...)` keep today's `unproven`.
+   superclass of the type `this` denotes there, by the selection of a declared receiver, ADR-0086 included. It is the
+   outside receiver, marked not virtual, when that superclass is a type outside the repository the name bindings name
+   by its qualified name: no repository declaration is its target, so an index edge at the call is not followed. It is
+   `unproven` when the superclass is neither, or the selection settles no one member. `T.super.m(...)` and
+   `Outer.this.m(...)` keep today's `unproven`.
 5. **The selected member runs without dispatch.** The answer of decision 4 states that the call is not virtual. `trace`
-   places the member as the step and reads no dispatch below it. The reverse families attribute the call to that
-   declaration alone: a declaration that overrides it is not reached through the call.
+   places the member as the step and reads no dispatch below it. The reverse families move the index's edge at the call
+   to the selected declaration. A declaration that overrides it still reaches the call through the dispatch bridge of
+   its contract, as it does for every call of the contract; excluding it there is not decided here.
 6. **No reason and no entry kind is added.** A form that was a wrong step becomes the right step or a
    `receiver-unproven` cut; a false caller leaves, with a `hidden-caller` cut where the binding is not proven.
 7. **The bound.** A call the reading settled before this decision is settled the same way. A call that was a cut is a
@@ -81,5 +86,11 @@ it below.
   reading and the reverse attribution read it.
 - A repository whose calls on `super` named the wrong method loses false cycles in `trace` and false callers in
   `callers` and `impact`.
-- A source that does not parse answers `unproven` for each of its calls, as the other sources of that repository
-  already do while it is unread.
+
+## Not decided here
+
+- **A call in a source no reader parses.** ADR-0041 decision 3 keeps the index's record of such a source as the index
+  has it (its `unread` class), and `trace` answers `complete` through it. The audit behind this record reproduced a
+  wrong callee there (a call inside an anonymous class of an unread type, bound to the enclosing class by name). The
+  recommended change keeps the steps and adds one cut at each reached body of an unread source; it reverses a decision
+  the owner accepted, so it waits for the owner.
