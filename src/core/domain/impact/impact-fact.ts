@@ -5,6 +5,7 @@ import type { SettledReason } from "../change/hunk-settling.ts";
 import type { Evidence, Finding, WalkBounds } from "../shared/fact.ts";
 import type { Asserted } from "../shared/question.ts";
 import type { ChangedContract } from "./changed-contracts.ts";
+import type { ChangedPath } from "./changed-paths.ts";
 import type { ChangedEntrypoint } from "./changed-entrypoints.ts";
 import type { ModuleImpactValue } from "./module-dependency.ts";
 
@@ -81,6 +82,13 @@ export interface ImpactValue {
   seeds: readonly Seed[];
   /** Present only when the seeds come from a change. */
   changedEntrypoints?: readonly ChangedEntrypoint[];
+  /**
+   * Present only when the seeds come from a change: every changed path the answer read, with what the walk did with it,
+   * and the names a removal declared (RFC-0010 "Seeds"). A path absent here was not part of the answer's change.
+   */
+  changedPaths?: readonly ChangedPath[];
+  /** Present when the answer walked for dependents: test files are never dependents (`kindOfChangedFile`), so none is listed; `importers` lists them. */
+  testDependents?: "excluded";
   /** Present only when the change added, removed or altered an operation a contract declares. */
   changedContracts?: readonly ChangedContract[];
   /**

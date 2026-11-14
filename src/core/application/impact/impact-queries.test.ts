@@ -402,7 +402,35 @@ test("a change with no source and no resource builds no index and is a complete 
   const answer = fact(await ask());
   assert.equal(log.indexed, 0);
   assert.equal(answer.status, "complete");
-  assert.deepEqual(answer.status === "complete" && answer.value, { mergeBase: FORK, seeds: [], changedEntrypoints: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } });
+  assert.deepEqual(answer.status === "complete" && answer.value, { mergeBase: FORK, seeds: [], changedPaths: [{ path: "README.md", disposition: "not-read" }, { path: "src/Gone.java", disposition: "not-read", deleted: true }], changedEntrypoints: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } });
+});
+
+test("an impact answer lists every changed path with what the walk did with it, and names what a removal declared", async () => {
+  const changes = [
+    change("src/A.java"),
+    change("src/app/form.test.ts"),
+    change("src/form.js"),
+    change("src/Gone.java", { deleted: true, added: [], removals: [{ after: 0 }], removedNames: ["Gone"] }),
+    change("src/Empty.java", { deleted: true, added: [], removals: [{ after: 0 }] }),
+    change("README.md"),
+  ];
+  const exports = listingOf(["src/A.java", "src/B.java"]);
+  const answer = fact(await setup({ changes: { ok: true, value: changes }, nodes: SOURCE_NODES, edges: SOURCE_EDGES, exports }).ask());
+  const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
+  assert.deepEqual(value.changedPaths, [
+    { path: "README.md", disposition: "not-read" },
+    { path: "src/A.java", disposition: "walked" },
+    { path: "src/Empty.java", disposition: "not-read", deleted: true },
+    { path: "src/Gone.java", disposition: "walked", deleted: true, removed: ["Gone"] },
+    { path: "src/app/form.test.ts", disposition: "test" },
+    { path: "src/form.js", disposition: "outside-scope" },
+  ]);
+  assert.equal(value.testDependents, "excluded");
+});
+
+test("a callers answer that walked states that test files are never dependents", async () => {
+  const answer = callersFact(await setup({ nodes: SOURCE_NODES, edges: SOURCE_EDGES, exports: listingOf(["src/A.java", "src/B.java"]) }).callers({ targets: [{ file: "src/A.java", symbol: "f" }] }));
+  assert.equal(answer.status === "unknown" ? undefined : answer.value.testDependents, "excluded");
 });
 
 test("every temporary directory is removed and the store closed, whether the answer is a fact or a fault", async () => {
@@ -1752,7 +1780,10 @@ test("change query uses declaration evidence only for removed candidates without
   assert.equal(baseline.status === "partial" && baseline.cuts.length, 2);
   assert.notEqual(answer.status, "unknown");
   assert.notEqual(baseline.status, "unknown");
-  if (answer.status !== "unknown" && baseline.status !== "unknown") assert.deepEqual(answer.value, baseline.value);
+  if (answer.status === "unknown" || baseline.status === "unknown") return;
+  assert.deepEqual({ ...answer.value, changedPaths: [] }, { ...baseline.value, changedPaths: [] });
+  assert.deepEqual(baseline.value.changedPaths?.[0]?.removed, ["effect", "save"]);
+  assert.deepEqual(answer.value.changedPaths?.[0]?.removed, ["save"]);
 });
 
 
@@ -2517,6 +2548,7 @@ test("impact answers settled and drops the seeds of a comment-only hunk", async 
   const value = answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value;
 
   assert.deepEqual(value.settled, [{ basis: "hunk", file: COMMENT_FILE, base: { start: 2, end: 2 }, head: { start: 2, end: 2 }, reason: "no-token-change" }]);
+  assert.deepEqual(value.changedPaths, [{ path: COMMENT_FILE, disposition: "settled" }]);
   assert.deepEqual(value.seeds, []);
   assert.equal(answer.status, "complete");
   assert.equal("cuts" in answer, false);

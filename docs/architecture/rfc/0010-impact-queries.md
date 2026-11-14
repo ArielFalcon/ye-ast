@@ -257,6 +257,8 @@ interface ImpactValue {
   seeds: Seed[];
   changedEntrypoints?: ChangedEntrypoint[]; // ofChange only
   changedContracts?: ChangedContract[];     // ofChange only, when not empty
+  changedPaths?: ChangedPath[];             // ofChange only
+  testDependents?: "excluded";              // when the answer walked for dependents
   symbols: ImpactedSymbol[];
   entrypoints: ReachedEntrypoint[];
 }
@@ -282,6 +284,14 @@ interface ReachedEntrypoint {
   depth: number; confidence: number; seeds: number[];
 }
 ```
+
+`changedPaths` is the change the answer read: one row per changed path of the selection, sorted by path, with what the
+answer did with it: `walked` (its declarations, resources or modules started the walk), `settled` (every hunk changed no
+token), `test`, `outside-scope` (code in a language no extractor reads), or `not-read` (documentation, data, or a deleted
+file that declared no name). A deleted path carries `deleted`, and a walked one the names its removed lines declared and
+no added line declares again (`removed`), the names a removal cuts the answer for. A path that is not a row was not part
+of the change the answer read. `testDependents: "excluded"` states the rule every walk applies: a JVM or TypeScript test
+file is never a dependent, so none is listed; `importers` lists the files that name a file, tests included.
 
 `changedContracts` are the operations of the contract documents (RFC-0007 row S5) the change added, removed or altered,
 told apart by document, verb and path. An operation is altered when the data of its request or response differs between

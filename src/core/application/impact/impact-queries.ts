@@ -14,6 +14,7 @@ import type { FileTokens } from "../../domain/change/import-seeds.ts";
 import type { TokenReading } from "../../domain/change/source-tokens.ts";
 import { triviaLinesOf } from "../../domain/change/token-lines.ts";
 import type { SettledHunkChange } from "../../domain/impact/impact-fact.ts";
+import { changedPathsOf, type ChangedPath } from "../../domain/impact/changed-paths.ts";
 import { isSeedable, type ComponentRef, type SelectedSeed } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { EDGE_POLICY, isFileDependent, isJavaTypeKind } from "../../domain/impact/edge-policy.ts";
@@ -451,6 +452,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       moduleRead = moduleImpact(changes, base, current, request.budget);
     }
     if (moduleRead !== undefined && moduleRead.value.origins.length > 0) value.modules = moduleRead.value;
+    const startsWalk = (file: FileChange): boolean => (kindOfChangedFile(file.path) === "source" && (!file.deleted || file.removedNames.length > 0) && !moduleRead?.covered.has(file.path)) || componentsByResource.has(file.path);
+    const inventoryOf = (retained: readonly FileChange[]): ChangedPath[] => changedPathsOf(changes, retained, settled, (file) => startsWalk(file) || moduleRead?.covered.has(file.path) === true);
+    value.changedPaths = inventoryOf(settledChanges);
     const moduleCuts = moduleRead?.cuts ?? [];
     const unaccounted = (cuts: readonly Cut[]): Cut[] => cuts.flatMap((cut) => {
       if (cut.kind !== "no-extractor" || moduleRead === undefined) return [cut];
@@ -458,9 +462,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       return at.length === 0 ? [] : [{ ...cut, at }];
     });
 
-    const needsGraph = changes.some(
-      (file) => (kindOfChangedFile(file.path) === "source" && (!file.deleted || file.removedNames.length > 0) && !moduleRead?.covered.has(file.path)) || componentsByResource.has(file.path),
-    );
+    const needsGraph = changes.some(startsWalk);
     if (!needsGraph) return { ok: true, value: impactFact(head.base(content), value, [...unaccounted(fixed), ...moduleCuts], impactWalk(changes.map(({ path }) => path), value)) };
 
     const index = await head.open();
@@ -496,7 +498,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (typed === "aborted") return ABORTED;
       const read = await impactOf({ store: reading.store, changes: validatedChanges, tokens, requested: [], componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, modules: namespaceModules(head, headTree, signal), signal });
       if (signal?.aborted) return ABORTED;
-      const reached = { ...value, ...read.value };
+      const reached = { ...value, changedPaths: inventoryOf(validatedChanges), ...read.value };
       return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), reached, [...unaccounted([...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts]), ...moduleCuts], impactWalk(changes.map(({ path }) => path), reached)) };
     } finally {
       store.close();
@@ -661,7 +663,7 @@ interface WalkInput {
 }
 
 interface ImpactRead {
-  value: Pick<ImpactValue, "seeds" | "symbols" | "entrypoints" | "cost">;
+  value: Pick<ImpactValue, "seeds" | "symbols" | "entrypoints" | "cost" | "testDependents">;
   cuts: Cut[];
 }
 
@@ -730,8 +732,9 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
     ...selection.withoutSymbols.map((file) => fileCut("no-extractor", file, "no-symbols")),
     ...input.unmodelled.map((file) => fileCut("no-extractor", file, "unmodelled")),
   ];
-  const value = {
+  const value: ImpactRead["value"] = {
     cost: walk.cost,
+    testDependents: "excluded",
     seeds: [...seeds, ...selection.syntaxSeeds].map(({ symbol, basis }): Seed => ({ file: symbol.file, symbol: symbol.name, line: symbol.startLine, ...declarationSpan(symbol.startLine, symbol.endLine), basis })),
     symbols: walk.reached.map(({ symbol, depth, confidence, fanIn, via }): ImpactedSymbol => ({
       file: symbol.file,
