@@ -30,7 +30,7 @@ test("a complete collection with unknown items states how many are undecided, an
   assert.equal(renderEntrypointMap(routes([]), "summary").split("\n")[0], "status: complete");
 
   const site = { reason: "unresolved", evidence: [{ path: "src/a.ts", line: 4 }], path: "src/a.ts", line: 4, symbol: "call", transport: "http" };
-  const workspace = (unresolved: readonly unknown[]) => complete({ workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [], sections: { a: complete({ names: [], unresolved }) }, candidates: [], links: [], unlinked: [], unserved: [] }) as never;
+  const workspace = (unresolved: readonly unknown[]) => complete({ workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [], sections: { a: complete({ names: [], unresolved }) }, candidates: [], links: [], internalLinks: [], unlinked: [], unserved: [] }) as never;
   assert.equal(renderWorkspace(workspace([site]), "summary").split("\n")[0], "status: complete (1 undecided)");
   assert.equal(renderWorkspace(workspace([]), "summary").split("\n")[0], "status: complete");
 

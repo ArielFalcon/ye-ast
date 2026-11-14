@@ -173,7 +173,7 @@ export const linkEndpoints = {
   to: <H extends z.ZodType>(handler: H) => z.strictObject({ repo: z.string(), kind: entrypointKind, name: z.string(), handler }),
 };
 const outwardKind = z.enum(["http-host", "path-prefix", "configuration-url", "destination", "dependency", "remote", "registry"]);
-export const candidateBasis = z.enum(["exact-name", "artifact", "remote", "route-overlap", "event-destination"]);
+export const candidateBasis = z.enum(["exact-name", "artifact", "remote", "route-overlap", "event-destination", "link"]);
 const workspaceSource = z.enum(["request", "persisted", "none"]);
 const gateway = z.strictObject({ prefix: z.string(), repo: z.string(), basis: z.enum(["gateway-prefix", "route-overlap"]) });
 const vector = z.array(snapshotVectorEntry);
@@ -199,7 +199,7 @@ const workspaceContext = z.union([
 ]);
 const decisionOption = z.strictObject({
   value: z.string(),
-  basis: z.enum(["exact-name", "artifact", "remote", "route-overlap", "event-destination", "default-branch", "origin"]).exactOptional(),
+  basis: z.enum(["exact-name", "artifact", "remote", "route-overlap", "event-destination", "link", "default-branch", "origin"]).exactOptional(),
   evidence: evidenceList,
   recommended: z.boolean(),
 });

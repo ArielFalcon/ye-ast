@@ -253,6 +253,7 @@ function workspaceFact(): Fact<WorkspaceValue> {
       repositorySnapshots: [{ repo: "shop", snapshot: { repo: "shop", kind: "sha", sha: "a".repeat(40) } }],
       sections: { shop: section },
       links: [],
+      internalLinks: [],
       unlinked: [],
       candidates: [],
       unserved: names.map((name) => ({ ...name, evidence: name.evidence.map((place) => ({ ...place, repo: "shop" })) })),
@@ -350,7 +351,7 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh,
   const workspace = {
     outwardNames: async (request: WorkspaceRequest) => {
       calls.workspaceReads.push(request);
-      return (answers.outwardNames ?? (async () => ({ ok: true, value: read({ ...base({ snapshot: { ...base().snapshot, repo: request.repo.id! } }), status: "complete", value: { workspace: { repos: [], gateways: [], source: "none" }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], links: [], unlinked: [], repositories: [{ repo: "shop", snapshot: base().snapshot, entrypoints: [], callSites: [] }] } }) })))(request);
+      return (answers.outwardNames ?? (async () => ({ ok: true, value: read({ ...base({ snapshot: { ...base().snapshot, repo: request.repo.id! } }), status: "complete", value: { workspace: { repos: [], gateways: [], source: "none" }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], links: [], internalLinks: [], unlinked: [], repositories: [{ repo: "shop", snapshot: base().snapshot, entrypoints: [], callSites: [] }] } }) })))(request);
     },
   } as unknown as WorkspaceQueries;
   const workspaceImpact: WorkspaceImpactQueries = {
@@ -2614,7 +2615,7 @@ test("the workspace tool answers the outward names without the repositories it r
   assert.equal(JSON.stringify(result).includes(internalPath), false);
   const value = (resultFields(result) as { value: Record<string, unknown> }).value;
   assert.equal("repositories" in value, false);
-  assert.deepEqual(Object.keys(value).sort(), ["candidates", "links", "repositorySnapshots", "sections", "unlinked", "unserved", "workspace"]);
+  assert.deepEqual(Object.keys(value).sort(), ["candidates", "internalLinks", "links", "repositorySnapshots", "sections", "unlinked", "unserved", "workspace"]);
   await session.close();
 });
 
@@ -2927,7 +2928,7 @@ test("workspace impact text presents every repository's consequences before any 
   const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
   for (const detail of ["summary", "details"] as const) {
     const text = textOf(await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE, mode: detail }));
-    const consequences = [...text.matchAll(/^\s*(?:changed entrypoints|reached entrypoints|impacted symbols|call sites that land in what the walk reached|links across repositories) \(/gm)].map((match) => match.index);
+    const consequences = [...text.matchAll(/^\s*(?:changed entrypoints|reached entrypoints|impacted symbols|call sites that land in what the walk reached|links across and inside repositories) \(/gm)].map((match) => match.index);
     const seeds = [...text.matchAll(/^\s*seeds \(/gm)].map((match) => match.index);
     assert.equal(seeds.length, 3);
     assert.ok(Math.max(...consequences) < Math.min(...seeds), text);

@@ -298,7 +298,7 @@ const shapes = {
     readingPlan: z.looseObject({ ranges: z.array(z.looseObject({ file: z.string(), start: z.number(), end: z.number(), steps: z.array(z.number()) })), lines: z.number() }),
   }),
   workspace: z.looseObject({
-    links: z.array(workspaceLink), unlinked: z.array(unlinkedCallSite),
+    links: z.array(workspaceLink), internalLinks: z.array(workspaceLink), unlinked: z.array(unlinkedCallSite),
     workspace: workspaceIdentity,
     repositorySnapshots: snapshots,
     sections: z.record(z.string(), factOf(z.looseObject({

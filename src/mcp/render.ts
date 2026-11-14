@@ -1457,7 +1457,7 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
   if (trigger !== undefined && trigger.status !== "unknown" && trigger.value.impact !== undefined) lines.push(...impactBody(trigger.value.impact, detail, { kind: "section", repo: value.trigger.repo }, context));
   const linkIndexes = new Map(value.links.map(({ link }, index) => [link.id, index + 1]));
   if (value.links.some(({ direction }) => direction === "downstream")) lines.push("Downstream links identify invoked destinations; a destination is not necessarily affected by the change.");
-  lines.push(`links across repositories (${value.links.length}):${value.links.some(({ reach }) => reach.length > 0) ? " reach lists link numbers nearest to the change first" : ""}`, ...value.links.map((link) => impactedLinkLine(link, linkIndexes)));
+  lines.push(`links across and inside repositories (${value.links.length}):${value.links.some(({ reach }) => reach.length > 0) ? " reach lists link numbers nearest to the change first" : ""}`, ...value.links.map((link) => impactedLinkLine(link, linkIndexes)));
   lines.push("per repository:", ...value.workspace.repos.flatMap((repo) => (value.sections[repo] === undefined ? [] : repoImpactLines(repo, value.sections[repo] as Fact<RepoImpact>, detail, value.trigger.repo, context))));
   const unserved = counted("no local repository serves", value.workspace.unserved);
   const unservedSummary = `no local repository serves (${value.workspace.unserved.length}): ${categoryRecovery({ full: "includes all" })} names`;
@@ -1657,7 +1657,7 @@ function unresolvedBlock(value: Omit<WorkspaceValue, "repositories">, detail: Re
 }
 
 export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>, detail: ResponseMode = "summary"): string {
-  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Match value.sections by repository and check each section status, reason and cuts; value.repositorySnapshots identifies each revision. Inspect value.candidates by name and repo for basis and evidence, value.unserved for unmatched names, value.links for the links between repositories and value.unlinked for the call sites without one. " + REQUEST_SITE_GUIDE;
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Match value.sections by repository and check each section status, reason and cuts; value.repositorySnapshots identifies each revision. Inspect value.candidates by name and repo for basis and evidence, value.unserved for unmatched names, value.links for the links between repositories, value.internalLinks for those inside one repository and value.unlinked for the call sites without one. " + REQUEST_SITE_GUIDE;
   const lines = headerLines(fact, fact.status === "unknown" ? {} : {
     undecided: Object.values(fact.value.sections).reduce((total, section) => total + (section.status === "unknown" ? 0 : section.value.unresolved.length), 0),
     unknownSection: unknownSectionIn(fact.value.sections),
@@ -1727,6 +1727,7 @@ export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>
   lines.push(...best);
   if (value.unserved.length > 0) lines.push(DECISIONS_HINT);
   lines.push(...linkMapLines(value.links, value.unlinked, detail));
+  if (value.internalLinks.length > 0) lines.push(...linkMapLines(value.internalLinks, [], detail, "links inside one repository"));
   lines.push(...unresolvedBlock(value, detail));
   lines.push(...cutsBlock(cutsOf(fact), detail));
   for (const [repo, section] of Object.entries(value.sections)) {
