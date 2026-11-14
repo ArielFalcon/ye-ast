@@ -223,6 +223,20 @@ test("explicitly versioned code filenames remain navigable in deep paths", () =>
   }
 });
 
+test("a source file name with digits inside its stem stays whole, and an encoded segment of the same position is still redacted", () => {
+  for (const name of ["ProductFacadeV2Impl.java", "Sha256DigestVerificationServiceImpl.java"]) {
+    const input = JSON.stringify({ file: `sm-shop/src/main/java/com/salesmanager/shop/store/facade/product/${name}` });
+    const result = sanitizeText(input);
+    assert.equal(result.text, input);
+    assert.equal(result.detection.redacted, false);
+    assert.doesNotThrow(() => assertNoSecretLeak(result.text, "issue", "code-path"));
+  }
+  const blob = "aB3xK9mQ2pL5vR8tY1wZ4nJ7hG0sD6fE";
+  const secretPath = sanitizeText(`sm-shop/src/main/java/com/salesmanager/shop/store/facade/product/${blob}.java`);
+  assert.equal(secretPath.detection.redacted, true);
+  assert.equal(secretPath.text.includes(blob), false);
+});
+
 test("a source extension and numeric suffix do not disguise an encoded secret path segment", () => {
   const blob = "AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOpV12";
   const input = `src/main/java/org/acme/${blob}.java`;
@@ -293,4 +307,19 @@ test("a PERFECT 2-char case-alternation blob (the deterministic adversarial shap
   assert.match(out, /\[REDACTED\]/);
   const identifier = "populateCoursesDescriptionMultilingualUseCase";
   assert.equal(sanitizeText(identifier).text, identifier);
+});
+
+test("a dotted dependency coordinate holding a keyword inside a word is kept, and a credential assignment is still redacted", () => {
+  const coordinate = "io.jsonwebtoken:jjwt-api:0.11.5";
+  const kept = sanitizeText(`"${coordinate}"`);
+  assert.equal(kept.text, `"${coordinate}"`);
+  assert.equal(kept.detection.redacted, false);
+  assert.doesNotThrow(() => assertNoSecretLeak(kept.text, "issue", "coordinate"));
+  const secret = "Zq7Kp2Xm9Wr4Tn";
+  for (const assignment of ["token: ", "spring.datasource.password=", "app.clientSecret:", "jwt.authtoken=", "jwt.authtoken: ", "mytoken:"]) {
+    for (const mode of ["issue", "model"] as const) {
+      assert.equal(sanitizeText(`${assignment}${secret} tail`, mode).text.includes(secret), false, `${assignment} (${mode})`);
+    }
+  }
+  assert.equal(sanitizeText(`${coordinate}:token=${secret}`).text.includes(secret), false);
 });

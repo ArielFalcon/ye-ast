@@ -28,6 +28,11 @@ function isModelModeSecretValue(match: string): boolean {
   return isHighEntropyBareToken(value);
 }
 
+/* A keyword inside a lowercase word of a dotted name followed by `:` and a bare value is a dependency coordinate (`io.jsonwebtoken:jjwt-api`), not an assignment. The exemption sits in the pattern, not in a skip, so a keyword later in the same token is still found. A name that starts at the keyword (`db.password=`), a camelCase word (`app.clientSecret:`), any other separator, and a quoted or spaced value keep the rule. */
+const CREDENTIAL_KEYWORD = "(?:api[_-]?key|token|secret|password|passwd|pwd)";
+const DOTTED_COORDINATE = `(?<=\\.[\\w-]*[a-z0-9])(?-i:(?=[a-z]))${CREDENTIAL_KEYWORD}:[^\\s"':=]`;
+const API_KEY_ASSIGNMENT = new RegExp(`(?!${DOTTED_COORDINATE})${CREDENTIAL_KEYWORD}[\\"']?\\s*[:=]\\s*(?:"(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|\\S+)`, "gi");
+
 const NAMED_SECRET_PATTERNS: Array<{ name: string; p: RegExp; skip?: (m: string, offset: number, text: string) => boolean; modelSkip?: (m: string) => boolean }> = [
   { name: "slack-webhook", p: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]+/g },
   { name: "stripe-key", p: /\b(?:sk|pk)_(?:test|live)_[A-Za-z0-9]+\b/g },
@@ -44,7 +49,7 @@ const NAMED_SECRET_PATTERNS: Array<{ name: string; p: RegExp; skip?: (m: string,
   { name: "api-key-query", p: /\b[?&](?:token|key|api_key|api-key|apiKey|secret)=[^&\s]+/gi },
   { name: "generic-credential", p: /(?:credential|auth_token|access_key)[\"']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/gi },
   { name: "env-credential", p: /\b[A-Z][A-Z0-9_]*(?:PASS|PASSWORD|SECRET|TOKEN|KEY|PWD|CRED|CREDENTIAL)[A-Z0-9_]*[\"']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/g },
-  { name: "api-key-assignment", p: /(?:api[_-]?key|token|secret|password|passwd|pwd)[\"']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/gi, modelSkip: (m) => !isModelModeSecretValue(m) },
+  { name: "api-key-assignment", p: API_KEY_ASSIGNMENT, modelSkip: (m) => !isModelModeSecretValue(m) },
   /* base64-encoded secrets (>40 chars), with data-URI filter. skip: a run of pure hex is a git SHA / digest, not a secret. */
   {
     /* Negative lookbehinds exclude lockfile integrity hashes (`sha512-<base64>`): their body is not a secret. skip still drops pure-hex runs (git SHAs). */
@@ -79,15 +84,16 @@ function pathTokenAt(text: string, offset: number, length: number): string {
 
 /** A segment long enough to be an encoded secret and shaped like one: both cases and a digit. */
 function isBase64Segment(segment: string): boolean {
-  return segment.length >= 20 && /[a-z]/.test(segment) && /[A-Z]/.test(segment) && /[0-9]/.test(segment) && !isVersionedSourceFilename(segment);
+  return segment.length >= 20 && /[a-z]/.test(segment) && /[A-Z]/.test(segment) && /[0-9]/.test(segment) && !isSourceFilename(segment);
 }
 
-function isVersionedSourceFilename(segment: string): boolean {
+/* A file name is identifier words plus digits (`ProductFacadeV2Impl`, `OAuth2Client`) and a lowercase extension. A run of digits that ends the stem needs a `V`/`Version` marker, so a numeric tail does not disguise an encoded segment. */
+function isSourceFilename(segment: string): boolean {
   const dot = segment.lastIndexOf(".");
   if (dot === -1 || !/^[a-z]+$/.test(segment.slice(dot + 1))) return false;
   const stem = segment.slice(0, dot);
-  const unversioned = stem.replace(/[Vv](?:ersion)?\d+$/, "");
-  return unversioned !== stem && isIdentifierShape(unversioned);
+  if (/[0-9]$/.test(stem) && !/[Vv](?:ersion)?\d+$/.test(stem)) return false;
+  return isIdentifierShape(stem.replace(/[Vv]?\d+/g, ""));
 }
 
 /** Whether the match is code: a path of at least three segments (absolute or relative), or a camelCase identifier. */
