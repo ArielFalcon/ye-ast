@@ -196,3 +196,90 @@ test("a field a superclass keeps private or to its package does not obscure the 
   assert.deepEqual(referencesIn(answer), ["Hidden->Base:2", "Hidden->Store:2", "Kept->PrivateBase:2", "Kept->Store:2"]);
   assert.deepEqual(answer.unresolved.filter((use) => use.name.includes(".")).map((use) => [use.file, use.line, use.name, use.candidates]).toSorted(), [blocks, imported, local, outside].map(({ path }) => [path, path === imported.path ? 3 : 2, "fx.store.Store", ["fx.store.Store"]]));
 });
+
+const SUB = { path: "fx/store/Sub.java", content: "package fx.store;\npublic class Sub extends Store {\n  public static String own() { return \"\"; }\n  static String hidden() { return \"\"; }\n  public String instance() { return \"\"; }\n}" };
+const CONSTS = { path: "fx/store/Consts.java", content: "package fx.store;\npublic interface Consts { String NAME = \"n\"; int[] SIZES = {}; }" };
+const REMOTE = { path: "fx/store/Remote.java", content: "package fx.store;\npublic class Remote extends Thread { public static final String CACHE = \"r\"; }" };
+/** The unplaced references the static-import reading leaves, apart from the simple type names an on-demand static import already leaves open. */
+const importedUnplaced = (answer: Awaited<ReturnType<ReturnType<typeof createJavaRelations>["extract"]>>) => answer.unresolved.filter((use) => use.name.startsWith("fx.")).map((use) => `${use.file}:${use.line} ${use.name} ${use.candidates?.join(",")}`).toSorted();
+const PARENT = { path: "fx/use/Parent.java", content: "package fx.use;\nclass Parent {\n  protected String CACHE;\n  static String helper() { return \"\"; }\n}" };
+
+test("a simple name a static import binds to a member of a repository type is a reference to the imported type at the line that writes it", async () => {
+  const answer = await createJavaRelations(createJavaParser).extract([STORE, KIND, MARK, SUB, CONSTS, qualified("fx/use/Binds.java", [
+    "import static fx.store.Store.CACHE;",
+    "import static fx.store.Kind.*;",
+    "import static fx.store.Sub.*;",
+    "import static fx.store.Consts.*;",
+    "import fx.store.Mark;",
+    "class Binds {",
+    "  String read() { return CACHE; }",
+    "  String chain() { return CACHE.trim(); }",
+    "  java.util.function.Supplier<String> ref() { return CACHE::trim; }",
+    "  @Mark(CACHE) void marked() {}",
+    "  @Mark(kind = B) void kinded() {}",
+    "  int pick(String s) { switch (s) { case CACHE: return 1; default: return 2; } }",
+    "  String name() { return NAME + valueOf(\"A\"); }",
+    "  String unknown() { return OTHER + call() + hidden() + instance(); }",
+    "  int size() { return SIZES.length; }",
+    "}",
+  ].join("\n")), qualified("fx/use/CaseLabel.java", "import static fx.store.Kind.A;\nclass CaseLabel { int kind(fx.store.Kind k) {\n  switch (k) { case A: return 1; default: return 2; } } }")]);
+  assert.deepEqual(answer.cuts, []);
+  assert.deepEqual(importedUnplaced(answer), []);
+  assert.deepEqual(referencesIn(answer), ["Binds->Consts:14", "Binds->Consts:16", "Binds->Kind:12", "Binds->Kind:14", "Binds->Store:10", "Binds->Store:11", "Binds->Store:13", "Binds->Store:8", "Binds->Store:9", "CaseLabel->Kind:3", "Mark->Kind:2", "Sub->Store:2"]);
+});
+
+test("a static method a repository type declares or inherits is called through its static import when nothing around the call declares the name", async () => {
+  const sources = [STORE, SUB, qualified("fx/use/Calls.java", "import static fx.store.Sub.*;\nclass Calls {\n  String mine() { return own(); }\n  String inherited() { return helper(); }\n}"), qualified("fx/use/Single.java", "import static fx.store.Store.helper;\nclass Single { String call() { return helper(); } }")];
+  const answer = await createJavaRelations(createJavaParser).extract(sources);
+  assert.deepEqual(importedUnplaced(answer), []);
+  assert.deepEqual(referencesIn(answer), ["Calls->Sub:4", "Calls->Sub:5", "Single->Store:3", "Sub->Store:2"]);
+  const bounded = await createJavaRelations(createJavaParser).extract(sources, { completeSource: false });
+  assert.deepEqual(referencesIn(bounded), []);
+  assert.deepEqual(importedUnplaced(bounded), ["fx/use/Calls.java:4 fx.store.Sub fx.store.Sub", "fx/use/Calls.java:5 fx.store.Sub fx.store.Sub", "fx/use/Single.java:3 fx.store.Store fx.store.Store"]);
+});
+
+test("a parameter, a local, a lambda or loop variable, an own or inherited field, or an own, inherited or record accessor method hides the member a static import brings", async () => {
+  const answer = await createJavaRelations(createJavaParser).extract([STORE, PARENT, qualified("fx/use/Shadows.java", [
+    "import static fx.store.Store.*;",
+    "class Shadows extends Parent {",
+    "  String parameter(String CACHE) { return CACHE; }",
+    "  String local() { String CACHE = \"\"; return CACHE; }",
+    "  String inheritedField() { return CACHE; }",
+    "  String inheritedMethod() { return helper(); }",
+    "}",
+    "record Rec(String helper) { String call() { return helper(); } }",
+    "class Own {",
+    "  String CACHE;",
+    "  String helper() { return \"\"; }",
+    "  String field() { return CACHE + helper(); }",
+    "}",
+    "class Scoped {",
+    "  Object lambda() { java.util.function.Function<String, String> f = CACHE -> CACHE; return f; }",
+    "  Object loop(java.util.List<String> all) { for (String CACHE : all) return CACHE; return null; }",
+    "}",
+    "class After { String after() { return CACHE; } }",
+  ].join("\n"))]);
+  assert.deepEqual(importedUnplaced(answer), []);
+  assert.deepEqual(referencesIn(answer), ["After->Store:19"]);
+});
+
+test("a statically imported name is a reference when one import alone may bind it or a field it brings is certain, and an unplaced reference to the imported type where the sources cannot show what else binds it, unless its class already references that type", async () => {
+  const answer = await createJavaRelations(createJavaParser).extract([STORE, REMOTE,
+    qualified("fx/use/Outside.java", "import static fx.store.Store.*;\nclass Outside extends Thread { Object read() { return CACHE; } }"),
+    qualified("fx/use/Pattern.java", "import static fx.store.Store.*;\nclass Pattern { Object read(Object o) { if (o instanceof String CACHE) return CACHE; return null; } }"),
+    qualified("fx/use/Library.java", "import static org.vendor.Lib.CACHE;\nimport static fx.store.Store.*;\nclass Library { Object read() { return CACHE; } }"),
+    qualified("fx/use/Overloads.java", "import static org.vendor.Lib.*;\nimport static fx.store.Store.*;\nclass Overloads { Object call() { return helper(); } }"),
+    qualified("fx/use/Certain.java", "import static org.vendor.Lib.*;\nimport static fx.store.Store.*;\nclass Certain { Object call() { return helper(); }\n  Object read() { return CACHE; } }"),
+    qualified("fx/use/Lone.java", "import static fx.store.Remote.*;\nclass Lone { Object read() { return MAX_PRIORITY; } }"),
+    qualified("fx/use/Inherited.java", "import static fx.store.Remote.*;\nimport static org.vendor.Lib.*;\nclass Inherited { Object read() { return MAX_PRIORITY; } }"),
+    qualified("fx/use/Head.java", "import static fx.store.Remote.*;\nclass Head { Object read() { return out.toString() + System.out; } }"),
+  ]);
+  assert.deepEqual(referencesIn(answer), ["Certain->Store:5", "Lone->Remote:3"]);
+  assert.deepEqual(importedUnplaced(answer), ["fx/use/Head.java:3 fx.store.Remote fx.store.Remote", "fx/use/Inherited.java:4 fx.store.Remote fx.store.Remote", "fx/use/Library.java:4 fx.store.Store fx.store.Store", "fx/use/Outside.java:3 fx.store.Store fx.store.Store", "fx/use/Overloads.java:4 fx.store.Store fx.store.Store", "fx/use/Pattern.java:3 fx.store.Store fx.store.Store"]);
+});
+
+test("static imports of types the repository does not declare add no reference and leave no name unplaced", async () => {
+  const answer = await createJavaRelations(createJavaParser).extract([STORE, qualified("fx/use/Vendor.java", "import static org.vendor.Lib.*;\nimport static org.vendor.Other.CACHE;\nclass Vendor { Object read() { return CACHE + helper() + System.out; } }")]);
+  assert.deepEqual(answer.relations, []);
+  assert.deepEqual(importedUnplaced(answer), []);
+});

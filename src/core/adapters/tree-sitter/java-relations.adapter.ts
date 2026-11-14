@@ -61,3 +61,52 @@ function plainSegments(node: Node): string[] | undefined {
   const head = object === null ? undefined : plainSegments(object);
   return head === undefined || field?.type !== "identifier" ? undefined : [...head, field.text];
 }
+
+/**
+ * A simple name written alone where an expression reads it (JLS 6.5.6.1, 15.12.1): a variable read, the first identifier
+ * of a qualified name or of a method reference's qualifier, which a type or a package may also be (`qualifier`), or the
+ * name of a call without a qualifier. A `case` label's name, which an enum selector resolves against its own type, is
+ * told apart.
+ */
+export interface JavaSimpleName {
+  node: Node;
+  kind: "variable" | "qualifier" | "case" | "method";
+}
+
+/** Parents under which an identifier never reads a variable nor calls a method. */
+const NOT_AN_EXPRESSION: ReadonlySet<string> = new Set(["labeled_statement", "break_statement", "continue_statement", "inferred_parameters", "scoped_identifier", "import_declaration", "package_declaration", "module_declaration", "type_pattern", "record_pattern_component", "receiver_parameter"]);
+
+export function javaSimpleNames(root: Node): readonly JavaSimpleName[] {
+  const found: JavaSimpleName[] = [];
+  const pending = [root];
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    if (node.type === "module_declaration" || node.type === "import_declaration" || node.type === "package_declaration") continue;
+    const kind = node.type === "identifier" ? simpleNameKind(node) : undefined;
+    if (kind !== undefined) found.push({ node, kind });
+    pending.push(...node.namedChildren.toReversed());
+  }
+  return found;
+}
+
+function simpleNameKind(node: Node): JavaSimpleName["kind"] | undefined {
+  const parent = node.parent;
+  if (parent === null || NOT_AN_EXPRESSION.has(parent.type)) return undefined;
+  const is = (field: string) => parent.childForFieldName(field)?.id === node.id;
+  switch (parent.type) {
+    case "method_invocation":
+      return !is("name") ? "qualifier" : parent.childForFieldName("object") === null ? "method" : undefined;
+    case "field_access":
+      return is("field") ? undefined : "qualifier";
+    case "method_reference":
+      return parent.namedChildren[0]?.id === node.id ? "qualifier" : undefined;
+    case "element_value_pair":
+      return is("key") ? undefined : "variable";
+    case "lambda_expression":
+      return is("parameters") ? undefined : "variable";
+    case "switch_label":
+      return "case";
+    default:
+      return is("name") ? undefined : "variable";
+  }
+}
