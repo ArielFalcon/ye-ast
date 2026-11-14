@@ -567,7 +567,9 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   `unlinked`, `unmatched` (no route takes the call and it names no host, or it names a declared service), `ambiguous`
   (several entrypoints at one rung, with the repositories and, for HTTP, the routes) or `could-match` (a run-time value
   could still route it, row 4), and an ambiguous or could-match one is also a cut of its section, as in the impact. `workspace.gateways` is the gateways in force, declared (`gateway-prefix`) and inferred (`route-overlap`).
-  A published destination is an outward name of kind `destination`; the repositories that serve it are those the join
+  A published destination is an outward name of kind `destination` when its protocol delivers outside the repository; an
+  in-process event is not (nothing another repository can serve), though its link inside the repository is kept
+  (amended 2026-11-14, owner decision D4, unit U6). The repositories that serve a destination are those the join
   linked or found ambiguous for it, with basis `event-destination`, never a name compared with an identity. The host and
   the path prefix of an HTTP call the join links are served by the repository the link reaches, so they are never
   unserved, whatever identity they name. Composed

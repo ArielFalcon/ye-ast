@@ -1084,6 +1084,20 @@ test("a published destination is an outward name the repository whose listener t
   assert.deepEqual(value.unserved.map(({ name }) => name), ["audit.logged"]);
 });
 
+test("an in-process event is no outward name, however its listener reads: nothing outside the repository can serve it", async () => {
+  const listener = served({ kind: "listener", name: "event app.OrderPlaced", protocol: "event", destination: "app.OrderPlaced", handler: LISTENER_HANDLER });
+  const repositories: Repositories = { "/work/shop-web": { files: {}, entrypoints: [listener] } };
+  const inProcess = (destination: string, line: number): CallSite => ({ repo: "shop-web", file: "src/main/java/app/shop-web/Publisher.java", line, symbol: `shop-web.publish${line}`, transport: "event", target: { status: "complete", value: { protocol: "event", destination, role: "publish" }, evidence: [] } });
+  const queries = setup(repositories, sitesOf({ "shop-web": [inProcess("app.OrderPlaced", 7), inProcess("app.OrderShipped", 9), publishSite("shop-web", "audit.logged", 11)] }));
+
+  const value = valueOf(await queries.outwardNames({ repo: { path: "/work/shop-web" } }));
+
+  const section = value.sections["shop-web"];
+  assert.deepEqual(section?.status === "unknown" ? [] : section?.value.names.map(({ name, kind }) => `${kind} ${name}`), ["destination audit.logged"]);
+  assert.deepEqual(value.unserved.map(({ name }) => name), ["audit.logged"]);
+  assert.deepEqual(value.internalLinks.map(({ from, to }) => `${from.line} -> ${to.name}`), ["7 -> event app.OrderPlaced"]);
+});
+
 test("the host and prefix of a call the join links are served by the repository it reaches; those of a call that links nowhere stay unserved", async () => {
   const repositories: Repositories = { "/work/shop-web": { files: {} }, "/work/orders": { files: {}, entrypoints: [postRoute("/api/orders")] } };
   const queries = setup(repositories, sitesOf({ "shop-web": [postSite("shop-web", "http://localhost:9966/api/orders"), postSite("shop-web", "http://billing.example/charges", 9)] }));

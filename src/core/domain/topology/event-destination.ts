@@ -26,6 +26,11 @@ const GRAMMARS: Readonly<Record<EventTarget["protocol"], DestinationGrammar>> = 
 
 const TAKEN: Unification = { outcome: "matches", literals: 1, parity: false };
 
+/** Whether a destination written with this protocol can be served by another repository: an in-process one cannot, so it names nothing outside its own. */
+export function reachesOtherRepositories(protocol: EventTarget["protocol"]): boolean {
+  return GRAMMARS[protocol].reach === "other-repositories";
+}
+
 /** Whether a protocol delivers what one repository publishes to the listeners of another, or of the same one. */
 export function delivers(protocol: EventTarget["protocol"], publishing: string, listening: string): boolean {
   return GRAMMARS[protocol].reach === "same-repository" ? publishing === listening : publishing !== listening;

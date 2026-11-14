@@ -10,6 +10,7 @@ import { gatherCandidates, gatherNames, sortEvidence, type NameCandidate, type O
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { JoinedSite } from "../../domain/topology/link-graph.ts";
 import { entrypointsOf, joinWorkspace, linkMapOf } from "./workspace-join.ts";
+import { reachesOtherRepositories } from "../../domain/topology/event-destination.ts";
 import { hostOf, prefixOf } from "../../domain/topology/link-match.ts";
 import type { HeadReaderDeps, HeldLive } from "../snapshot/head-reading.ts";
 import type { WorkspaceReadOperation } from "./workspace-operation.ts";
@@ -273,13 +274,14 @@ function unavailableSection(deps: WorkspaceQueriesDeps, repoId: string, sha: str
 
 /**
  * The names a repository's call sites state about the world outside it: the base URL a call declares, the first path
- * segment it targets, which is the prefix a gateway routes, and the destination a message is published to; a path written
+ * segment it targets, which is the prefix a gateway routes, and the destination a message is published to when its protocol
+ * delivers outside the repository (an in-process event names nothing another repository can serve); a path written
  * after an undecided base counts as the path it states. A parameter or the bare root states nothing.
  */
 function callSiteNames(repo: string, callSites: readonly CallSite[]): OutwardName[] {
   return callSites.flatMap((site): OutwardName[] => {
     const evidence = [callSiteEvidence(site)];
-    if (site.target.status === "complete" && "destination" in site.target.value) return [{ name: site.target.value.destination, kind: "destination", evidence }];
+    if (site.target.status === "complete" && "destination" in site.target.value) return reachesOtherRepositories(site.target.value.protocol) ? [{ name: site.target.value.destination, kind: "destination", evidence }] : [];
     return statedRequestsOf(site).flatMap((request): OutwardName[] => {
       const host = hostOf(request);
       const prefix = prefixOf(request);
