@@ -526,6 +526,7 @@ class CompactView {
         const files = new Set(callers.map(({ path }) => path)).size;
         return `inherited gap ${causePlace.path}:${causePlace.line} ${unresolvedLabel(part.gap)} ${part.gap.transport}${part.gap.via === undefined ? "" : ` via ${part.gap.via}`}: ${callers.length} ${callers.length === 1 ? "call" : "calls"} in ${files} ${files === 1 ? "file" : "files"}${short ? "" : `; callers ${callers.map((caller) => `${caller.path}:${span(caller.line, caller.endLine)} ${caller.symbol}${caller.deferred === true ? " deferred" : ""}${caller.stated === undefined ? "" : ` stated ${caller.stated.method}${caller.stated.path === undefined ? "" : ` ${caller.stated.path}`}`}${caller.through === undefined ? "" : ` through ${caller.through.map((place) => `${place.path}:${place.line}`).join(", ")}`}`).join("; ")}`}${this.details ? `; diagnostic ${JSON.stringify(part.gap.diagnostic)}` : ""}`;
       }
+      case "unrelated-call-sites": return `not in the question (${this.readLabel(part.owner)}): ${[["unmatched", part.unmatched], ["external", part.external], ["unresolved", part.unresolved]].filter(([, count]) => count !== 0).map(([label, count]) => `${count} ${label}`).join(", ")}`;
       case "workspace-link": {
         const link = part.link;
         const reach = part.reach?.map((reference) => (reference.status === "present" ? (reference.part === part.id ? "self" : "present") : `missing ${reference.linkId}`));
@@ -809,6 +810,7 @@ class CompactView {
         else this.countUnjoined(part.supports, "observations");
       }
     }
+    for (const part of this.result.graph.parts) if (part.kind === "unrelated-call-sites") lines.push(`  ${this.describe(part)}`);
     const costs = this.result.graph.parts.filter((part): part is PartOf<"walk-cost"> => part.kind === "walk-cost");
     if (this.details) {
       const grouped = shareExactContext(costs, (part) => ({ walk: part.walk, used: part.expansionsUsed }));

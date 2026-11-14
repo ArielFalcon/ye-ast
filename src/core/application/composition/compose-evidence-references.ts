@@ -90,6 +90,7 @@ export function partReferences(part: Part): Reference[] {
       return [ref("read", "context", part.context), ...many("evidence", "evidence", part.evidence), ...part.options.flatMap((option) => many("evidence", "options.evidence", option.evidence))];
     case "walk-cost":
     case "trace-totals":
+    case "unrelated-call-sites":
     case "impact-context":
       return [ref("read", "owner", part.owner)];
     case "consequence-use":

@@ -261,6 +261,8 @@ export type PartPayload =
   /** `repo` names the repository where the owner is no repository section (a decision set). */
   | { kind: "unresolved-call-site"; site: UnresolvedCallSite; repo?: string }
   | { kind: "inherited-gap"; gap: InheritedGap }
+  /** What a section's question leaves out of its call-site lists: counts, never the sites. */
+  | { kind: "unrelated-call-sites"; owner: ReadId; unmatched: number; external: number; unresolved: number }
   | { kind: "workspace-link"; link: LinkData; direction?: ImpactedLink["direction"]; reach?: readonly LinkReference[]; operations?: ImpactedLink["operations"] }
   | { kind: "unlinked-call-site"; site: UnlinkedCallSiteData }
   | { kind: "workspace-context"; context: WorkspaceContextData }

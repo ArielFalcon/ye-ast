@@ -167,6 +167,11 @@ function inheritedOf(t: Tables, prefix: string): Pick<RepoImpact, "inherited"> {
   return gaps.length === 0 ? {} : { inherited: gaps };
 }
 
+function unrelatedOf(t: Tables, prefix: string): Pick<RepoImpact, "unrelated"> {
+  const part = t.one(`${prefix}/unrelated`, "unrelated-call-sites");
+  return part === undefined ? {} : { unrelated: { unmatched: part.unmatched, external: part.external, unresolved: part.unresolved } };
+}
+
 function rebuildWorkspaceImpact(t: Tables): WorkspaceImpactValue {
   const context = found(t.one("/value/workspace", "workspace-context"), "context").context;
   assert.ok(context.family === "impact" || context.family === "callers");
@@ -181,7 +186,7 @@ function rebuildWorkspaceImpact(t: Tables): WorkspaceImpactValue {
         .sort((x, y) => x.index - y.index)
         .map(({ kind, fact }) => ({ kind, fact }));
       const sites = (field: string) => t.list(`${prefix}/${field}`, "call-site").map((p) => rebuildSite(t, p));
-      return { reads, ...(t.one(`${prefix}/impact/cost`, "walk-cost") === undefined ? {} : { impact: rebuildImpact(t, `${prefix}/impact`) }), callSites: sites("callSites"), unmatched: sites("unmatched"), external: sites("external"), unresolved: t.list(`${prefix}/unresolved`, "unresolved-call-site").map((p) => p.site), ...inheritedOf(t, prefix) };
+      return { reads, ...(t.one(`${prefix}/impact/cost`, "walk-cost") === undefined ? {} : { impact: rebuildImpact(t, `${prefix}/impact`) }), callSites: sites("callSites"), unmatched: sites("unmatched"), external: sites("external"), unresolved: t.list(`${prefix}/unresolved`, "unresolved-call-site").map((p) => p.site), ...inheritedOf(t, prefix), ...unrelatedOf(t, prefix) };
     });
   }
   const links = t.list("/value/links", "workspace-link").map((p) => {

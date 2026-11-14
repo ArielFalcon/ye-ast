@@ -156,7 +156,7 @@ const INHERITED_GAP: InheritedGap = {
   ],
 };
 
-function repoImpact(kind: "trigger" | "upstream", repo: string, snapshot: SnapshotRef, impact: ImpactValue | undefined, sites: Pick<RepoImpact, "callSites" | "unmatched" | "external" | "unresolved"> & Partial<Pick<RepoImpact, "inherited">>): Fact<RepoImpact> {
+function repoImpact(kind: "trigger" | "upstream", repo: string, snapshot: SnapshotRef, impact: ImpactValue | undefined, sites: Pick<RepoImpact, "callSites" | "unmatched" | "external" | "unresolved"> & Partial<Pick<RepoImpact, "inherited" | "unrelated">>): Fact<RepoImpact> {
   const reads: RepoImpact["reads"] = [
     { kind: "discovery", fact: { schema: SCHEMA, snapshot, producer: PRODUCER, inputs: inputsOf(), evidence: [], status: "complete" } },
     { kind, fact: { schema: SCHEMA, snapshot, producer: PRODUCER, inputs: inputsOf({ trust: repo === "shop" ? "trusted" : "untrusted" }), evidence: [{ path: "pom.xml", line: 1 }], status: "partial" } },
@@ -180,6 +180,7 @@ export function workspaceImpactValue(family: "impact" | "callers"): WorkspaceImp
         external: [eventCallSite],
         unresolved: [{ reason: "unresolved", diagnostic: { cause: "destination-undecidable", source: "read" }, evidence: [{ path: "(library)/lib/Client.java", line: 17 }], path: "src/orders.service.ts", line: 52, endLine: 54, symbol: "OrdersService.remote", transport: "http", via: "environment.remote", stated: { method: "GET", path: "/remote" } }],
         inherited: [INHERITED_GAP],
+        unrelated: { unmatched: 2, external: 0, unresolved: 3 },
       }),
       ghost: unknownFactOf("revision-unavailable", { snapshot: shaRef("ghost", SHA_C) }),
     },

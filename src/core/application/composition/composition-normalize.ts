@@ -457,6 +457,7 @@ function repoImpact(b: Builder, section: ReadContext, repo: string, prefix: stri
   sites("external", "external");
   value.unresolved.forEach((site, index) => b.part({ kind: "unresolved-call-site", site }, section.id, [`${prefix}/unresolved/${index}`]));
   value.inherited?.forEach((gap, index) => b.part({ kind: "inherited-gap", gap }, section.id, [`${prefix}/inherited/${index}`]));
+  if (value.unrelated !== undefined) b.part({ kind: "unrelated-call-sites", owner: section.id, ...value.unrelated }, section.id, [`${prefix}/unrelated`]);
 }
 
 function callSite(b: Builder, section: ReadContext, repo: string, pointer: string, site: CallSite, disposition: "matched" | "unmatched" | "external"): void {

@@ -365,6 +365,7 @@ export const partSchema = z.discriminatedUnion("kind", [
     repo: z.string().exactOptional(),
   }),
   part("inherited-gap", { gap: inheritedGapSchema }),
+  part("unrelated-call-sites", { owner: ids.read, unmatched: count, external: count, unresolved: count }),
   part("unlinked-call-site", {
     site: z.strictObject({ from: linkEndpoints.from, transport, outcome: z.enum(["unmatched", "ambiguous", "could-match"]), name: z.string(), repos: strings.exactOptional(), routes: strings.exactOptional(), deferred: z.literal(true).exactOptional(), issuedAt: issuingPlaces.exactOptional(), propagatedThrough: propagatedPlaces.exactOptional() }),
   }),
