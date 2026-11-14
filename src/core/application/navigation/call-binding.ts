@@ -96,9 +96,10 @@ export interface CallBindings {
   /** What a member call of `member` on a value of `type` binds to: one call, one answer, through the language's chain. */
   memberOfReceiver(type: GraphSymbol, member: string, place: CallPlace): Promise<ReceiverMemberAnswer>;
   /**
-   * Whether `declaration` may run when a member of the outside type `dispatch.type` is called (ADR-0079 decision 5): it
-   * may unless its language pack proves it static, or lists no supertype outside the repository at or below its owner
-   * while the type is not the language's root type. Asked once per declaration for the read.
+   * Whether `declaration`, or a homonym of its file that shares its anchor, may run when a member of the outside type
+   * `dispatch.type` is called (ADR-0079 decision 5): one may unless its language pack proves it static, or lists no
+   * supertype outside the repository at or below its owner while the type is not the language's root type. Asked once
+   * per declaration for the read.
    */
   mayRunUnder(dispatch: OutsideDispatch, declaration: GraphSymbol, signal?: AbortSignal): Promise<boolean>;
   /**
@@ -337,21 +338,8 @@ export function createCallBindings({ store, navigation, origins, binder, declara
     return above.length === 1 && !navigation.membersOf(type!).some((member) => member.kind === "method" && member.name === type!.name) ? { kind: "declaration", target: type!, link: "chain" } : undefined;
   }
 
-  const outsideOf = new Map<string, Promise<OutsideSupertypes>>();
-  async function mayRunUnder({ type }: OutsideDispatch, declaration: GraphSymbol, signal?: AbortSignal): Promise<boolean> {
-    let answer = outsideOf.get(declaration.id);
-    if (answer === undefined) {
-      answer = (origins.outsideSupertypes?.([{ file: declaration.file, start: declaration.startLine, name: declaration.name }], signal) ?? Promise.resolve([])).then(([found]) => found ?? { kind: "unknown" });
-      outsideOf.set(declaration.id, answer);
-    }
-    const found = await answer;
-    return found.kind === "unknown" || (found.static !== true && (found.types.length > 0 || type === found.root));
-  }
-
-  const countAt = new Map<string, Promise<ArgumentCount>>();
-  const acceptedBy = new Map<string, Promise<AcceptedCounts>>();
   const homonyms = new Map<string, readonly GraphSymbol[]>();
-  const UNKNOWN_COUNT = { kind: "unknown" } as const;
+  /** A declaration with the declarations of its file that share its name: a cut names them all by one anchor, so a reference leaves it only for all of them. */
   function homonymsOf(declaration: GraphSymbol): readonly GraphSymbol[] {
     let found = homonyms.get(declaration.id);
     if (found === undefined) {
@@ -361,6 +349,24 @@ export function createCallBindings({ store, navigation, origins, binder, declara
     }
     return found;
   }
+
+  const outsideOf = new Map<string, Promise<OutsideSupertypes>>();
+  async function mayRunUnder({ type }: OutsideDispatch, declaration: GraphSymbol, signal?: AbortSignal): Promise<boolean> {
+    const runs = await Promise.all(homonymsOf(declaration).map(async (symbol) => {
+      let answer = outsideOf.get(symbol.id);
+      if (answer === undefined) {
+        answer = (origins.outsideSupertypes?.([{ file: symbol.file, start: symbol.startLine, name: symbol.name }], signal) ?? Promise.resolve([])).then(([found]) => found ?? { kind: "unknown" });
+        outsideOf.set(symbol.id, answer);
+      }
+      const found = await answer;
+      return found.kind === "unknown" || (found.static !== true && (found.types.length > 0 || type === found.root));
+    }));
+    return runs.includes(true);
+  }
+
+  const countAt = new Map<string, Promise<ArgumentCount>>();
+  const acceptedBy = new Map<string, Promise<AcceptedCounts>>();
+  const UNKNOWN_COUNT = { kind: "unknown" } as const;
   /** Asks `read` once for the keys `memo` does not hold yet, in one batch, and keeps each answer by its key. */
   function askFresh<S, A>(memo: Map<string, Promise<A>>, sites: readonly { key: string; site: S }[], read: (sites: readonly S[]) => Promise<readonly A[]>, unknown: A): void {
     const fresh = [...new Map(sites.filter(({ key }) => !memo.has(key)).map((entry) => [entry.key, entry.site])).entries()];

@@ -269,16 +269,19 @@ test("a Java member call whose receiver the pack reads as a type outside the rep
   assert.deepEqual(unproven.map((settled) => [settled.kind, "dispatch" in settled ? settled.dispatch : undefined]), [["receiver", undefined], ["unbound", undefined]]);
 });
 
-/** `mayRunUnder` for the declaration `Api.get` over a pack answering `answer`, asked `times` times; how often the pack was asked. */
-async function mayRun(type: string, answer: OutsideSupertypes | undefined, times = 1): Promise<{ runs: boolean; asked: number }> {
-  const store = fakeCodeGraph([fakeNode("Api.get", "method", `${JAVA}/Api.java`, 3, 3, "get")], []);
+/**
+ * `mayRunUnder` for the declaration `Api.get` over a pack answering `answer`, asked `times` times; how often the pack was
+ * asked. With `homonym`, the file also declares another `get` on line 7, for which the pack answers it.
+ */
+async function mayRun(type: string, answer: OutsideSupertypes | undefined, times = 1, homonym?: OutsideSupertypes): Promise<{ runs: boolean; asked: number }> {
+  const store = fakeCodeGraph([fakeNode("Api.get", "method", `${JAVA}/Api.java`, 3, 3, "get"), ...(homonym === undefined ? [] : [fakeNode("Inner.get", "method", `${JAVA}/Api.java`, 7, 7, "get")])], []);
   const navigation = createGraphNavigation(store, () => false);
   const declarations = createDeclarationModel({ store, declarationsIn: async () => [] });
   let asked = 0;
-  const origins = (answer === undefined ? {} : { outsideSupertypes: async (sites: readonly unknown[]) => { asked += 1; return sites.map(() => answer); } }) as unknown as ImportOrigins;
+  const origins = (answer === undefined ? {} : { outsideSupertypes: async (sites: readonly { start: number }[]) => { asked += 1; return sites.map(({ start }) => (start === 7 ? homonym! : answer)); } }) as unknown as ImportOrigins;
   const binder = createCallBinder({ store, declarations, navigation, syntaxIn: async () => ({ receiverBindings: new Map(), callees: new Map() }), proofs: async () => ({ fields: [], locals: [] }), importedDeclarations: async () => new Map(), callablesIn: async () => [] });
   const bindings = createCallBindings({ store, navigation, origins, binder, declarations, importedDeclarations: async () => new Map() });
-  const [declaration] = store.symbolsInFiles([`${JAVA}/Api.java`]);
+  const declaration = store.symbolsInFiles([`${JAVA}/Api.java`]).find(({ startLine }) => startLine === 3);
   let runs = false;
   for (let index = 0; index < times; index += 1) runs = await bindings.mayRunUnder({ type }, declaration!);
   return { runs, asked };
@@ -294,6 +297,13 @@ test("a declaration may run under an outside type unless its pack proves it stat
   assert.equal((await mayRun(root, { ...types("java.util.HashMap"), static: true })).runs, false);
   assert.equal((await mayRun("java.util.Map", { kind: "unknown" })).runs, true);
   assert.equal((await mayRun("java.util.Map", undefined)).runs, true);
+});
+
+test("a declaration its pack excludes may still run under an outside type while a homonym of its file that shares its anchor may", async () => {
+  const types = (...listed: string[]): OutsideSupertypes => ({ kind: "types", types: listed, root: "java.lang.Object" });
+
+  assert.equal((await mayRun("java.util.Map", types(), 1, types("java.util.HashMap"))).runs, true);
+  assert.equal((await mayRun("java.util.Map", types(), 1, types())).runs, false);
 });
 
 test("the outside supertypes of a declaration are asked once for the read", async () => {

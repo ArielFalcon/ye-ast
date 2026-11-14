@@ -75,6 +75,8 @@ const SOURCES: Readonly<Record<string, string>> = {
   ].join("\n"),
   [`${JAVA}/Entity.java`]: ["package com.acme;", "", "import java.io.Serializable;", "", "public class Entity implements Serializable {", "    public String toString() {", "        return \"e\";", "    }", "}"].join("\n"),
   [`${JAVA}/Ids.java`]: ["package com.acme;", "", "import java.io.Serializable;", "", "public class Ids {", "    public String text(Serializable id) {", "        return id.toString();", "    }", "}"].join("\n"),
+  [`${JAVA}/Outer.java`]: ["package com.acme;", "", "import java.util.HashMap;", "", "public class Outer {", "    public String put(String key, String value) {", "        return key;", "    }", "", "    public static class Inner extends HashMap<String, String> {", "        @Override", "        public String put(String key, String value) {", "            return value;", "        }", "    }", "}"].join("\n"),
+  [`${JAVA}/Puts.java`]: ["package com.acme;", "", "import java.util.Map;", "", "public class Puts {", "    public String byMap(Map<String, String> map, String k) {", "        return map.put(k, k);", "    }", "}"].join("\n"),
   [`${JAVA}/More.java`]: ["package com.acme;", "", "import com.lib.Node;", "", "public class More {", "    public Object byNode(Node node) {", "        return node.get();", "    }", "}"].join("\n"),
 };
 const GET_CALLS = ["Service.java:10", "Service.java:14", "Service.java:18", "Service.java:22", "Service.java:27", "Service.java:31"].map((place) => `${JAVA}/${place}`);
@@ -145,6 +147,12 @@ test("asked with a plain class's homonym, the cuts reach the class below the out
 
   assert.deepEqual(openToward(fact, `${JAVA}/MyMap.java::get`), EVERY_GET);
   assert.deepEqual(openToward(fact, `${JAVA}/Api.java::get`), []);
+});
+
+test("a plain class's method keeps the cut while a homonym of its file, below a type outside the repository, may run", async () => {
+  const fact = await callers("Outer.java:put");
+
+  assert.deepEqual(openToward(fact, `${JAVA}/Outer.java::put`), [`${JAVA}/Puts.java:7`]);
 });
 
 test("an enum owner and a record owner stay attributed without library signatures", async () => {
