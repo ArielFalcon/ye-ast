@@ -116,7 +116,7 @@ the two itself.
 |---|---|---|
 | 1 | The probe of Part B | none |
 | 2 | `ProtocolPlugin`, the two plugins, registered ids; literals removed from the core | none |
-| 3 | Internal links listed and followed | `workspace:+`, and the families the probe names |
+| 3 | Internal links listed and followed (built: `WorkspaceValue.internalLinks`; a name a link reaches names that repository as a candidate with basis `link`) | `workspace:+`, and the families the probe names |
 | 4 | Trace through a decided link | `trace:+` with a workspace |
 
 ## Resolved questions (owner, 2026-11-13: "apruebo todas las recomendaciones pendientes")

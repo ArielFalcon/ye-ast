@@ -290,6 +290,7 @@ function reconstruct(source: ComposedSource, t: Tables): Fact<unknown> {
           candidates: t.list("/value/candidates", "name-candidate").map((c) => ({ name: c.name, repo: c.repo, basis: c.basis, evidence: t.repoEvidence(c.evidence) })),
           unserved: t.list("/value/unserved", "outward-name").map((n) => ({ name: n.name, kind: n.kindName, evidence: t.repoEvidence(n.evidence) })),
           links: t.list("/value/links", "workspace-link").map((p) => rebuildLink(t, p.link)),
+          internalLinks: t.list("/value/internalLinks", "workspace-link").map((p) => rebuildLink(t, p.link)),
           unlinked: t.list("/value/unlinked", "unlinked-call-site").map(({ site: { from, ...site } }) => ({ from: { repo: from.repo, file: t.path(from.file), line: from.line, ...(from.column === undefined ? {} : { column: from.column }), symbol: from.symbol }, ...site })),
         };
       }
@@ -631,7 +632,8 @@ test("workspace names keep stated and unserved dispositions and resolve reposito
   assert.deepEqual(ghost?.evidence.map(snap), [{ kind: "query-context", read: set.sources[0]!.rootRead }], "a repo outside the vector keeps a context-local origin");
   assert.equal(t.evidenceRecord(ghost!.evidence[0]!).repo, "ghost");
   assert.equal(t.list("/value/sections/shop/value/names", "outward-name").length, 0, "an unknown section has no parts");
-  assert.deepEqual(set.parts.filter((p) => p.kind === "workspace-link"), t.list("/value/links", "workspace-link"), "a candidate is not a link");
+  assert.deepEqual(set.parts.filter((p) => p.kind === "workspace-link"), [...t.list("/value/links", "workspace-link"), ...t.list("/value/internalLinks", "workspace-link")], "a candidate is not a link, and a link inside one repository is its own list");
+  assert.equal(t.list("/value/internalLinks", "workspace-link").length, 1);
 });
 
 test("decision preserves all option semantics and context evidence", () => {

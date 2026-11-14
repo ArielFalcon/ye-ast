@@ -272,6 +272,7 @@ export function workspaceValue(): PublicWorkspaceValue {
       { name: "ghost.example", kind: "configuration-url", evidence: [repoEvidence("ghost", "app.yml", 1)] },
     ],
     links: [{ id: "link-ws", from: { repo: "web", file: "src/orders.service.ts", line: 15, symbol: "OrdersService.create" }, to: { repo: "shop", kind: "http-route", name: "POST /orders", handler: handler("src/OrderController.java", "OrderController.create", 12, 15) }, transport: "http", basis: "exact", confidence: 1 }],
+    internalLinks: [{ id: "link-ws-internal", from: { repo: "web", file: "src/orders.service.ts", line: 30, symbol: "OrdersService.refresh" }, to: { repo: "web", kind: "http-route", name: "GET /orders/refresh", handler: handler("src/OrdersController.ts", "OrdersController.refresh", 8, 10) }, transport: "http", basis: "exact", confidence: 1 }],
     unlinked: [
       { from: { repo: "web", file: "src/orders.service.ts", line: 20, symbol: "OrdersService.shared" }, transport: "http", outcome: "ambiguous", name: "shared", repos: ["billing", "shop"] },
       { from: { repo: "web", file: "src/orders.service.ts", line: 24, symbol: "OrdersService.gone" }, transport: "http", outcome: "unmatched", name: "/orders/gone" },

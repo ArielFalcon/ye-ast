@@ -1651,7 +1651,7 @@ test("a workspace trace retains only links at executed effect occurrences and th
   const base = await factOf(EFFECTS_BODY);
   assert.ok(base.status !== "unknown");
   const workspace = { withRead: async (_request: unknown, use: Parameters<NonNullable<TraceQueriesDeps["workspace"]>["withRead"]>[1]) => {
-    const answer = await use({ fact: { ...base, value: { workspace: { repos: ["orders", "shop"], gateways: [], source: "request" }, repositorySnapshots: snapshots, links: [link, { ...link, id: "sibling", from: { ...link.from, column: 2 } }, { ...link, id: "deferred", from: { ...link.from, line: 10 } }], unlinked: [], sections: {}, candidates: [], unserved: [], repositories: [] } } }, {
+    const answer = await use({ fact: { ...base, value: { workspace: { repos: ["orders", "shop"], gateways: [], source: "request" }, repositorySnapshots: snapshots, links: [link, { ...link, id: "sibling", from: { ...link.from, column: 2 } }, { ...link, id: "deferred", from: { ...link.from, line: 10 } }], internalLinks: [], unlinked: [], sections: {}, candidates: [], unserved: [], repositories: [] } } }, {
       selectedSnapshots: [snapshots[0]!.snapshot], plans: [{ kind: "read", at: { repoId: "shop", source: "/work/shop" } }], liveCaptures: new Map(),
     } as never);
     return answer.ok ? { ok: true, value: { value: answer.value } } : answer;
@@ -1664,6 +1664,26 @@ test("a workspace trace retains only links at executed effect occurrences and th
   assert.deepEqual(value.repositorySnapshots, snapshots);
 });
 
+test("a workspace trace keeps the in-process event links of its own repository and leaves a request to its own route out until slice 4", async () => {
+  const snapshots = [{ repo: "shop", snapshot: { repo: "shop", kind: "sha" as const, sha: SHA } }];
+  const inside = { from: { repo: "shop", file: A, line: 8, column: 1, symbol: "Svc.run" }, to: { repo: "shop", kind: "listener" as const, name: "nats orders.created", handler: { path: "Audit.java", symbol: "on", line: 3 } }, basis: "event-destination" as const, confidence: 1 };
+  const event = { ...inside, id: "event", from: { ...inside.from, line: 9 }, transport: "event" as const };
+  const request = { ...inside, id: "request", to: { ...inside.to, kind: "http-route" as const, name: "POST /orders/{}/checkout" }, transport: "http" as const, basis: "exact" as const };
+  const base = await factOf(EFFECTS_BODY);
+  assert.ok(base.status !== "unknown");
+  const workspace = { withRead: async (_request: unknown, use: Parameters<NonNullable<TraceQueriesDeps["workspace"]>["withRead"]>[1]) => {
+    const answer = await use({ fact: { ...base, value: { workspace: { repos: ["shop"], gateways: [], source: "request" }, repositorySnapshots: snapshots, links: [], internalLinks: [event, request], unlinked: [], sections: {}, candidates: [], unserved: [], repositories: [] } } }, {
+      selectedSnapshots: [snapshots[0]!.snapshot], plans: [{ kind: "read", at: { repoId: "shop", source: "/work/shop" } }], liveCaptures: new Map(),
+    } as never);
+    return answer.ok ? { ok: true, value: { value: answer.value } } : answer;
+  } } as NonNullable<TraceQueriesDeps["workspace"]>;
+  const published: CallSite = site(9, { transport: "event", target: { status: "complete", value: { protocol: "nats", destination: "orders.created", role: "publish" }, evidence: [{ path: A, line: 9 }] } });
+  const { queries } = setup({ ...EFFECTS_BODY, workspace, callSites: [site(8), published] });
+  const result = await queries.walk({ repo: "/work/shop", repoId: "shop", revision: SHA, workspace: {}, targets: [{ file: A, symbol: "run" }] });
+  assert.ok(result.ok && result.value.status !== "unknown");
+  assert.deepEqual((result.value.value as TraceValue).links?.map(({ id }) => id), ["event"]);
+});
+
 test("a workspace trace marks a link reached only by a deferred effect, never one at a deferred step", async () => {
   const snapshots = [{ repo: "shop", snapshot: { repo: "shop", kind: "sha" as const, sha: SHA } }, { repo: "orders", snapshot: { repo: "orders", kind: "sha" as const, sha: "b".repeat(40) } }];
   const link = { id: "later", from: { repo: "shop", file: A, line: 6, column: 41, symbol: "Api.run" }, to: { repo: "orders", kind: "http-route" as const, name: "GET /cb", handler: { path: "Orders.java", symbol: "cb", line: 12 } }, transport: "http" as const, basis: "exact" as const, confidence: 1 };
@@ -1672,7 +1692,7 @@ test("a workspace trace marks a link reached only by a deferred effect, never on
   const base = await factOf(body);
   assert.ok(base.status !== "unknown");
   const workspace = { withRead: async (_request: unknown, use: Parameters<NonNullable<TraceQueriesDeps["workspace"]>["withRead"]>[1]) => {
-    const answer = await use({ fact: { ...base, value: { workspace: { repos: ["orders", "shop"], gateways: [], source: "request" }, repositorySnapshots: snapshots, links: [link], unlinked: [], sections: {}, candidates: [], unserved: [], repositories: [] } } }, {
+    const answer = await use({ fact: { ...base, value: { workspace: { repos: ["orders", "shop"], gateways: [], source: "request" }, repositorySnapshots: snapshots, links: [link], internalLinks: [], unlinked: [], sections: {}, candidates: [], unserved: [], repositories: [] } } }, {
       selectedSnapshots: [snapshots[0]!.snapshot], plans: [{ kind: "read", at: { repoId: "shop", source: "/work/shop" } }], liveCaptures: new Map(),
     } as never);
     return answer.ok ? { ok: true, value: { value: answer.value } } : answer;

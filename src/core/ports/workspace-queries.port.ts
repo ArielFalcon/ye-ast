@@ -26,6 +26,8 @@ export interface WorkspaceValue {
   unserved: readonly RepositoryOutwardName[];
   /** Every link the join admitted between the repositories read, once per `Link.id`, sorted by id. */
   links: readonly Link[];
+  /** Every link whose two ends share a repository, kept apart from `links` (ADR-0076 decision 4), once per `Link.id`, sorted by id. */
+  internalLinks: readonly Link[];
   /** The call sites the join reached and did not link, sorted by place; an ambiguous one is also a cut of its section. */
   unlinked: readonly UnlinkedCallSite[];
   /** The repositories read, for the query families that join over them. */

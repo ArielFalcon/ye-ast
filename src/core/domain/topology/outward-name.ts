@@ -27,12 +27,13 @@ export type RepositoryOutwardName = OutwardName<RepositoryEvidence>;
 
 /**
  * One local repository that serves a name, and the basis that says why. `event-destination` is a repository with a
- * listener the join matched to the destination a call site publishes; the other bases compare the name with an identity.
+ * listener the join matched to the destination a call site publishes; `link` is the repository a link of the join lands
+ * in, for the host and the prefix a call site writes; the other bases compare the name with an identity.
  */
 export interface NameCandidate {
   name: string;
   repo: string;
-  basis: "exact-name" | "artifact" | "remote" | "route-overlap" | "event-destination";
+  basis: "exact-name" | "artifact" | "remote" | "route-overlap" | "event-destination" | "link";
   evidence: readonly RepositoryEvidence[];
 }
 

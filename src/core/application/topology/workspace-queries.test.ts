@@ -1088,6 +1088,20 @@ test("the host and prefix of a call the join links are served by the repository 
 
   assert.deepEqual(value.links.map(({ to }) => `${to.repo} ${to.name}`), ["orders POST /api/orders"]);
   assert.deepEqual(value.unserved.map(({ name, kind }) => `${kind} ${name}`), ["path-prefix charges", "http-host http://billing.example"]);
+  assert.deepEqual(value.candidates.map(({ name, repo, basis }) => `${name} ${repo} ${basis}`), ["api orders link", "http://localhost:9966 orders link"]);
+  assert.deepEqual(value.candidates.find(({ name }) => name === "api")?.evidence, [{ path: "src/app/shop-web.api.ts", line: 7, repo: "shop-web" }, { path: ORDERS_HANDLER.path, line: ORDERS_HANDLER.line, repo: "orders" }]);
+});
+
+test("a call to a route of its own repository is an internal link: its host and prefix are served by that repository, never unserved", async () => {
+  const repositories: Repositories = { "/work/orders": { files: {}, entrypoints: [postRoute("/api/orders")] } };
+  const queries = setup(repositories, sitesOf({ orders: [postSite("orders", "http://localhost:9966/api/orders")] }));
+
+  const value = valueOf(await queries.outwardNames({ repo: { path: "/work/orders" } }));
+
+  assert.deepEqual(value.links, []);
+  assert.deepEqual(value.internalLinks.map(({ from, to }) => `${from.repo} -> ${to.repo} ${to.name}`), ["orders -> orders POST /api/orders"]);
+  assert.deepEqual(value.unserved, []);
+  assert.deepEqual(value.candidates.map(({ name, repo, basis }) => `${name} ${repo} ${basis}`), ["api orders link", "http://localhost:9966 orders link"]);
 });
 
 test("a destination is never served by a repository whose name equals it: only a listener the join linked serves it", async () => {

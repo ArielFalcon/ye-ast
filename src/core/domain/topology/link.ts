@@ -68,6 +68,11 @@ export interface ImpactedLink {
   operations?: readonly Omit<ChangedContract, "handlers">[];
 }
 
+/** A link whose two ends share a repository: kept, classified apart from the links across repositories, never drift nor external (ADR-0076 decision 4). */
+export function isInternalLink({ from, to }: Pick<Link, "from" | "to">): boolean {
+  return from.repo === to.repo;
+}
+
 /** What makes two links one, and what a reach names: every end, the transport and the basis, never the confidence. */
 export function linkIdentity(link: Omit<Link, "id">): string {
   const { from, to, transport, basis, profiles, authority } = link;

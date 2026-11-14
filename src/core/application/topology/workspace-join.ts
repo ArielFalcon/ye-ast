@@ -1,8 +1,8 @@
 import { callPlaceOf, compareCallPlaces, distinctPlaces, type CallSite, type EventTarget, type PropagatedPlace } from "../../domain/topology/call-site.ts";
 import type { JoinedSite } from "../../domain/topology/link-graph.ts";
-import type { Link, UnlinkedCallSite } from "../../domain/topology/link.ts";
+import { isInternalLink, type Link, type UnlinkedCallSite } from "../../domain/topology/link.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import { inferGateways, inferHosts, matchEventCallSite, matchHttpCallSite, type Gateway, type GatewayDeclaration, type JoinResult, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
+import { inferGateways, inferHosts, matchEventCallSite, matchHttpCallSite, type Gateway, type GatewayDeclaration, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import type { WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 
 /** Every call site of a workspace joined once against the entrypoints of the other repositories read. */
@@ -20,8 +20,8 @@ export function entrypointsOf(repository: WorkspaceRepository): RepositoryEntryp
 
 /**
  * The one join of a workspace: a published message against the listeners its protocol delivers to, an HTTP call by the
- * ladder of RFC-0011 under the gateways in force, against every repository's routes: one its own repository serves is
- * internal, never a link across repositories nor drift. A call site whose target its snapshot does not decide joins
+ * ladder of RFC-0011 under the gateways in force, against every repository's routes. A link whose ends share a repository
+ * is kept and classified internal by `linkMapOf`, never drift (ADR-0076 decision 4). A call site whose target its snapshot does not decide joins
  * nothing, unless the snapshot states its path and only its base is undecided (ADR-0054); one that settles nothing stays
  * out of the join.
  */
@@ -38,14 +38,10 @@ export function joinWorkspace(repositories: readonly WorkspaceRepository[], entr
         continue;
       }
       const answer = site.transport === "http" ? matchHttpCallSite(site, entrypoints, gateways, hosts) : undefined;
-      if (answer !== undefined) joined.push({ site, joined: acrossRepositories(site, answer) });
+      if (answer !== undefined) joined.push({ site, joined: answer });
     }
   }
   return { gateways, joined };
-}
-
-function acrossRepositories(site: CallSite, joined: JoinResult): JoinResult {
-  return joined.links !== undefined && joined.links.every((link) => link.to.repo === site.repo) ? { internal: true } : joined;
 }
 
 function eventTargetOf(site: CallSite): EventTarget | undefined {
@@ -56,8 +52,11 @@ export function declaredGateways(gateways: readonly Gateway[]): GatewayDeclarati
   return gateways.flatMap(({ prefix, repo, basis }) => (basis === "gateway-prefix" ? [{ prefix, repo }] : []));
 }
 
-/** What a join admitted, once per `Link.id` and sorted by id, and the call sites it reached and could not settle, sorted by place. */
-export function linkMapOf(joined: readonly JoinedSite[]): { links: Link[]; unlinked: UnlinkedCallSite[] } {
+/**
+ * What a join admitted, once per `Link.id` and sorted by id, the links across repositories apart from those inside one,
+ * and the call sites it reached and could not settle, sorted by place.
+ */
+export function linkMapOf(joined: readonly JoinedSite[]): { links: Link[]; internalLinks: Link[]; unlinked: UnlinkedCallSite[] } {
   const links = new Map<string, Link>();
   const unlinked: UnlinkedCallSite[] = [];
   for (const { site, joined: answer } of joined) {
@@ -71,8 +70,10 @@ export function linkMapOf(joined: readonly JoinedSite[]): { links: Link[]; unlin
     else if (answer.undecided !== undefined) unlinked.push({ from, transport: site.transport, outcome: "could-match", name: answer.undecided, ...through });
     else if (answer.unmatched !== undefined) unlinked.push({ from, transport: site.transport, outcome: "unmatched", name: answer.unmatched, ...through });
   }
+  const admitted = [...links.values()].sort((a, b) => compareText(a.id, b.id));
   return {
-    links: [...links.values()].sort((a, b) => compareText(a.id, b.id)),
+    links: admitted.filter((link) => !isInternalLink(link)),
+    internalLinks: admitted.filter(isInternalLink),
     unlinked: unlinked.sort((a, b) => compareCallPlaces(a.from, b.from) || compareText(a.name, b.name)),
   };
 }

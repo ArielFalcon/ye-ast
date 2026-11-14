@@ -204,8 +204,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
         const resolved = await withDependencies(read, pathSelection(scope, matcher.matches), scope.include.length > 0 || scope.exclude.length > 0);
         const repositories = resolved.map((entry) => ({ ...entry.repository, callSites: entry.callSites })).sort((a, b) => compareText(a.repo, b.repo));
         const join = joinWorkspace(repositories, repositories.map(entrypointsOf), membership.gateways);
-        const listened = destinationCandidates(join.joined);
-        const linked = linkedNames(join.joined);
+        const linking = linkCandidates(join.joined);
         const sections: Record<string, Fact<WorkspaceSection>> = Object.create(null);
         const candidates: NameCandidate[] = [];
         const unserved: RepositoryOutwardName[] = [];
@@ -218,8 +217,8 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
           const cuts = [...entry.cuts, ...unsettled.map(unsettledCallSiteCut)];
           sections[entry.repository.repo] = withCuts(section, { names, unresolved }, cuts, EVERYTHING);
           for (const name of names) {
-            const served = [...nameCandidates(name, identities, entry.repository.repo), ...(name.kind === "destination" ? listened.get(`${entry.repository.repo}\0${name.name}`) ?? [] : [])];
-            if (served.length === 0 && !linked.has(nameKey(entry.repository.repo, name))) unserved.push({ ...name, evidence: name.evidence.map((place) => ({ ...place, repo: entry.repository.repo })) });
+            const served = [...nameCandidates(name, identities, entry.repository.repo), ...(linking.get(nameKey(entry.repository.repo, name)) ?? [])];
+            if (served.length === 0) unserved.push({ ...name, evidence: name.evidence.map((place) => ({ ...place, repo: entry.repository.repo })) });
             candidates.push(...served);
           }
         }
@@ -289,31 +288,29 @@ function callSiteNames(repo: string, callSites: readonly CallSite[]): OutwardNam
 }
 
 /**
- * Per publishing repository and destination, the repositories that listen to it as the join decided: the one a link
- * lands in, with the call site and the handler as evidence, or each one an ambiguous destination names, with the call site.
+ * Per calling repository and name, the repositories that serve it as the join decided, in the join's own terms: the one
+ * each link lands in (basis `link` for the host and prefix of a request, `event-destination` for a destination), with
+ * the call site and the handler as evidence, or each one an ambiguous destination names, with the call site. A link whose
+ * ends share a repository names that repository.
  */
-/** The names the calls the join linked carry, by calling repository: the repository each link reaches serves them. */
-function linkedNames(joined: readonly JoinedSite[]): ReadonlySet<string> {
-  return new Set(joined.flatMap(({ site, joined: answer }) => ((answer.links?.length ?? 0) === 0 ? [] : callSiteNames(site.repo, [site]).map((name) => nameKey(site.repo, name)))));
+function linkCandidates(joined: readonly JoinedSite[]): Map<string, NameCandidate[]> {
+  const served = new Map<string, NameCandidate[]>();
+  for (const { site, joined: answer } of joined) {
+    const published = { ...callSiteEvidence(site), repo: site.repo };
+    for (const name of callSiteNames(site.repo, [site])) {
+      const basis = name.kind === "destination" ? "event-destination" as const : "link" as const;
+      const found = answer.links !== undefined
+        ? answer.links.map(({ to }) => ({ name: name.name, repo: to.repo, basis, evidence: sortEvidence([published, { path: to.handler.path, line: to.handler.line, repo: to.repo }]) }))
+        : name.kind === "destination" ? (answer.ambiguous?.repos ?? []).map((repo) => ({ name: name.name, repo, basis, evidence: [published] })) : [];
+      const key = nameKey(site.repo, name);
+      served.set(key, gatherCandidates([...(served.get(key) ?? []), ...found]));
+    }
+  }
+  return served;
 }
 
 function nameKey(repo: string, { kind, name }: Pick<OutwardName, "kind" | "name">): string {
   return `${repo}\0${kind}\0${name}`;
-}
-
-function destinationCandidates(joined: readonly JoinedSite[]): Map<string, NameCandidate[]> {
-  const listened = new Map<string, NameCandidate[]>();
-  for (const { site, joined: answer } of joined) {
-    if (site.target.status !== "complete" || !("destination" in site.target.value)) continue;
-    const name = site.target.value.destination;
-    const published = { ...callSiteEvidence(site), repo: site.repo };
-    const served = answer.links !== undefined
-      ? answer.links.map(({ to }) => ({ name, repo: to.repo, basis: "event-destination" as const, evidence: sortEvidence([published, { path: to.handler.path, line: to.handler.line, repo: to.repo }]) }))
-      : (answer.ambiguous?.repos ?? []).map((repo) => ({ name, repo, basis: "event-destination" as const, evidence: [published] }));
-    const key = `${site.repo}\0${name}`;
-    listened.set(key, gatherCandidates([...(listened.get(key) ?? []), ...served]));
-  }
-  return listened;
 }
 
 /** The composite of the sections, with the whole value beside them: complete only when every section is. */

@@ -55,7 +55,7 @@ function described({ links, unlinked }: ReturnType<typeof linkMapOf>): string[] 
 test("the join links an in-process application event to the listener of its own repository", () => {
   const orders = repository("orders", [publishing("orders", { protocol: "event", destination: "app.OrderPlaced", role: "publish" })], [listening("event", "app.OrderPlaced", "Audit.on")]);
 
-  assert.deepEqual(joined([orders]).links.map(({ from, to }) => `${from.repo} -> ${to.repo} ${to.handler.symbol}`), ["orders -> orders Audit.on"]);
+  assert.deepEqual(joined([orders]).internalLinks.map(({ from, to }) => `${from.repo} -> ${to.repo} ${to.handler.symbol}`), ["orders -> orders Audit.on"]);
 });
 
 test("a published message some listeners consume and another could keeps its links and is one could-match item", () => {
@@ -199,4 +199,15 @@ test("two propagated sites that make one link carry the bodies of both, once eac
   const { links } = joined([repository("web", [{ ...site, propagatedThrough: [later] }, { ...site, propagatedThrough: [earlier, later] }], []), api]);
 
   assert.deepEqual(links.map((link) => link.propagatedThrough), [[earlier, later]]);
+});
+
+test("a call to a route of its own repository is an internal link, listed apart from the links across repositories and never unlinked", () => {
+  const web = repository("web", [calling("/restaurants/daily-menus"), { ...calling("/profiles/me"), line: 9 }], [serving("GET", "/restaurants/daily-menus", "Menus.get")]);
+  const api = repository("api", [], [serving("GET", "/profiles/me", "Profiles.me")]);
+
+  const { links, internalLinks, unlinked } = joined([web, api]);
+
+  assert.deepEqual(internalLinks.map(({ from, to }) => `${from.repo}:${from.line} -> ${to.repo} ${to.name}`), ["web:4 -> web GET /restaurants/daily-menus"]);
+  assert.deepEqual(links.map(({ from, to }) => `${from.repo}:${from.line} -> ${to.repo} ${to.name}`), ["web:9 -> api GET /profiles/me"]);
+  assert.deepEqual(unlinked, []);
 });

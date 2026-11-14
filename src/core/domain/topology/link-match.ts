@@ -52,8 +52,6 @@ export interface JoinResult {
   undecided?: string;
   /** No route takes an HTTP call that names a host, or no listener consumes a message: the call leaves the workspace. */
   external?: true;
-  /** Only the call's own repository serves it: no link across repositories. */
-  internal?: true;
 }
 
 export interface Match {

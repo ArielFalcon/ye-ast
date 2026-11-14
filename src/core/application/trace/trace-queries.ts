@@ -22,6 +22,8 @@ import { readingPlan } from "../../domain/trace/reading-plan.ts";
 import type { TraceStep, TraceValue } from "../../domain/trace/trace-fact.ts";
 import { traceSteps, type WalkedStep } from "../../domain/trace/trace-tree.ts";
 import { traceLinks } from "../../domain/trace/trace-links.ts";
+import type { Link } from "../../domain/topology/link.ts";
+import type { WorkspaceValue } from "../../ports/workspace-queries.port.ts";
 import type { CodeGraphReader, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
@@ -99,7 +101,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           if (!answer.ok) return answer;
           const base = compositeBase({ ...answer.value, ...(read.fact.scopeSelection === undefined ? {} : { scopeSelection: read.fact.scopeSelection }) }, [{ kind: "trace", fact: answer.value }, { kind: "workspace", fact: read.fact }], request.workspace, (value) => deps.digest.of(value));
           if (answer.value.status === "unknown") return { ok: true as const, value: { ...answer.value, ...base } };
-          const value = read.fact.status === "unknown" ? answer.value.value : traceLinks(answer.value.value, request.repoId, read.fact.value);
+          const value = read.fact.status === "unknown" ? answer.value.value : traceLinks(answer.value.value, request.repoId, { ...read.fact.value, links: withInProcessEvents(read.fact.value) });
           const cuts: Cut[] = [...(answer.value.status === "partial" ? answer.value.cuts : []), ...(read.fact.status === "complete" ? [] : [{ kind: "section" as const, at: ["workspace"], reason: read.fact.status === "partial" ? "section-partial" as const : "section-unknown" as const, reach: ANYTHING }])];
           return { ok: true as const, value: withCuts(base, value, cuts, { kind: "everything" }) };
         });
@@ -309,4 +311,9 @@ async function rangeRoots(changes: readonly FileChange[], sources: readonly Sour
 function planned(steps: readonly TraceStep[], ids: ReadonlyMap<WalkedStep, number>, constructions: ReadonlyMap<WalkedStep, readonly number[]>): TraceStep[] {
   const runs = new Map([...constructions].flatMap(([step, lines]) => (ids.has(step) ? [[ids.get(step)!, lines] as const] : [])));
   return steps.flatMap((step) => runs.get(step.id)?.map((line) => ({ ...step, line, endLine: line })) ?? [step]);
+}
+
+/** A trace reads the links across repositories and the in-process events inside one; a request to a route of its own repository joins it with RFC-0036 slice 4. */
+function withInProcessEvents({ links, internalLinks }: Pick<WorkspaceValue, "links" | "internalLinks">): readonly Link[] {
+  return [...links, ...internalLinks.filter((link) => link.transport === "event")].sort((a, b) => compareText(a.id, b.id));
 }

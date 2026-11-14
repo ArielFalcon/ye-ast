@@ -144,6 +144,7 @@ function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), un
       const value: WorkspaceValue = {
         workspace: { repos: all, gateways: effective.value.gateways.map((gateway) => ({ ...gateway, basis: "gateway-prefix" as const })), source: effective.value.source },
         links: [],
+        internalLinks: [],
         unlinked: [],
         repositorySnapshots: read.map(({ repo, snapshot }) => ({ repo, snapshot })),
         sections: Object.fromEntries(all.map((repo) => [repo, missing.has(repo) ? unreachable(repo) : section(repo)])),
@@ -403,13 +404,14 @@ test("a gateway the caller declares links with basis gateway-prefix, whatever th
   assert.deepEqual(value.links.map(({ link }) => link.basis), ["gateway-prefix"]);
 });
 
-test("a call a repository makes to its own route is internal: no link across repositories, and neither drift nor external", async () => {
+test("a call a repository makes to its own route is an internal link the walk follows, and neither drift nor external", async () => {
   const { queries } = setup({ repositories: { orders: { ...ORDERS, callSites: [callSite("orders", "orders")] }, "shop-web": {} } });
 
   const value = valueOf(await queries.callers(ASK));
 
-  assert.deepEqual(value.links, []);
+  assert.deepEqual(value.links.map(({ link, direction }) => `${direction} ${link.from.repo}:${link.from.line} -> ${link.to.repo} ${link.to.name}`), ["upstream orders:7 -> orders POST /orders"]);
   assert.deepEqual([repoImpact(value, "orders").unmatched, repoImpact(value, "orders").external], [[], []]);
+  assert.deepEqual(repoImpact(value, "orders").callSites.map((site) => site.line), [7]);
 });
 
 test("a call to a route the walk did not reach is not impacted, and not drift either", async () => {

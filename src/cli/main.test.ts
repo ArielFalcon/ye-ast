@@ -194,6 +194,7 @@ const WORKSPACE_VALUE: WorkspaceValue = {
   repositorySnapshots: [],
   sections: {},
   links: [],
+  internalLinks: [],
   unlinked: [],
   candidates: [],
   unserved: [],

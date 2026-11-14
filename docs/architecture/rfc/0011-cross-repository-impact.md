@@ -362,7 +362,7 @@ A cold repository costs one index build; the content key removes the repeats.
 | a language with no call-site extractor in a consumer (Kotlin, for example) | that repository's source files | cut `no-extractor` at the files; the repository is never counted as "no consumers" |
 | a call site that names a host no route of the declared repositories takes (unless the origin is evidenced as one repository's: then `unmatched`, ADR-0060), or a message no listener consumes | the call site | item `external` in the section, not a cut: the boundary of the workspace is its declared repositories, and the fact says so in `workspace.repos` |
 | a call site that names no host and that no route of the declared repositories takes | the call site | item `unmatched` in the section, and an `unmatched` entry of `unlinked`, not a cut: it is visible drift, or a service the workspace does not declare |
-| a call site that only its own repository serves | the call site | `internal`: neither a link across repositories nor drift, and not listed |
+| a call site that only its own repository serves | the call site | an `internal` link (RFC-0036 Part B): neither a link across repositories nor drift; `workspace` lists it in `internalLinks`, apart from `links`, and workspace impact follows it |
 | a repository that consumes B but is not declared | nowhere | invisible by construction; the stated scope is the only protection (RFC-0002 rule 4) |
 | a budget stopped a walk (RFC-0010 `budget`) | that section | the section's `depth`, `hub` or `caller-budget` cut |
 
@@ -583,8 +583,8 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   repositories at one rung are a cut, never a pick. A call under a gateway prefix never falls to a lower rung: when it
   matches no route of the repository the prefix routes to, it is `unmatched`. Removing a gateway prefix is evidence only
   when one segment the rest of the call states as text agrees with the route, so a prefix that leaves nothing to compare
-  neither infers a gateway nor links. A call its own repository serves is internal: neither a link across repositories
-  nor drift. A link counts only when it lands in a
+  neither infers a gateway nor links. A call its own repository serves is an internal link: kept and listed apart (`internalLinks`),
+  neither a link across repositories nor drift. A link counts only when it lands in a
   reached route; a call to a route the walk did not reach is neither a link nor drift. `reach` of a one-hop link is its own
   `Link.id`. A repository holding an impacted call site is walked with `impact.callers` over that call site's line, at the
   snapshot read, so the answer also names what depends on the call site there (a frontend's UI routes, for instance). A

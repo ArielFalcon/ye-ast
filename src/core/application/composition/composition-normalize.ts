@@ -645,12 +645,13 @@ function workspace(b: Builder, root: ReadContext, fact: Fact<PublicWorkspaceValu
     const origin: EvidenceOrigin = repos.length === 1 ? b.placeOf(repos[0]!, root.id).origin : { kind: "query-context", read: root.id };
     b.part({ kind: "outward-name", origin, name: name.name, kindName: name.kind, evidence, disposition: "unserved" }, root.id, [at]);
   });
-  linkParts(b, root, value.links, value.unlinked);
+  linkParts(b, root, value.links, value.unlinked, value.internalLinks);
   return sorted;
 }
 
-function linkParts(b: Builder, root: ReadContext, links: readonly Link[], unlinked: readonly UnlinkedCallSite[]): void {
+function linkParts(b: Builder, root: ReadContext, links: readonly Link[], unlinked: readonly UnlinkedCallSite[], internalLinks: readonly Link[] = []): void {
   links.forEach((link, index) => b.part({ kind: "workspace-link", link: linkData(b, root, link, `/value/links/${index}`) }, root.id, [`/value/links/${index}`]));
+  internalLinks.forEach((link, index) => b.part({ kind: "workspace-link", link: linkData(b, root, link, `/value/internalLinks/${index}`) }, root.id, [`/value/internalLinks/${index}`]));
   unlinked.forEach(({ from, ...site }, index) => {
     const at = `/value/unlinked/${index}`;
     b.part({ kind: "unlinked-call-site", site: { ...site, from: { file: b.file(b.placeOf(from.repo, root.id), from.file, root.id, `${at}/from/file`), line: from.line, repo: from.repo, symbol: from.symbol } } }, root.id, [at]);
