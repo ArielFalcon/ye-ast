@@ -61,11 +61,11 @@ test("a call on what a repository method declares it returns names the returned 
   assert.deepEqual(await methodAt([STORE, JDBC, use("generic().save(\"x\")", members)]), { kind: "unproven" });
 });
 
-test("a link of a chain whose receiver type has a supertype outside the repository, or a place two calls of the name start at, names no method", async () => {
-  const listed = java("Listed.java", ["package app;", "", "class Listed extends java.util.ArrayList<String> {", "  app.Store find() { return null; }", "}"]);
+test("a link of a chain that writes an argument on a receiver type with a supertype outside the repository, or a place two calls of the name start at, names no method", async () => {
+  const listed = java("Listed.java", ["package app;", "", "class Listed extends java.util.ArrayList<String> {", "  app.Store find(int at) { return null; }", "}"]);
   const plain = java("Plain.java", ["package app;", "", "class Plain {", "  Store find() { return null; }", "}"]);
 
-  assert.deepEqual(await methodAt([STORE, JDBC, listed, use("listed.find().save(\"x\")", [], "Listed listed")]), { kind: "unproven" });
+  assert.deepEqual(await methodAt([STORE, JDBC, listed, use("listed.find(1).save(\"x\")", [], "Listed listed")]), { kind: "unproven" });
   assert.deepEqual(await methodAt([STORE, JDBC, plain, use("plain.find().find()", [], "Plain plain")], "find"), { kind: "unknown" });
 });
 
@@ -87,7 +87,7 @@ test("an interface a declared generator emits and the sources do not hold leaves
     const line = use.content.split("\n")[3]!;
     return createJavaNameBindings(createJavaParser, [STORE, JDBC, use], undefined, undefined, undefined, generated ? [GENERATOR] : []).receiverMethods([{ file: use.path, line: 4, column: line.indexOf("{ ") + 3, member }]).then(([found]) => found!);
   };
-  const helped = implementing("helper()", "implements Api", ["  private void helper() {}"]);
+  const helped = implementing("helper(1)", "implements Api", ["  private void helper(int at) {}"]);
   const typed = implementing("store.save(\"x\")");
 
   assert.deepEqual(await select(typed, "save"), method(STORE, 4));

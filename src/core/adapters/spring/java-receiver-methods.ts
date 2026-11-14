@@ -582,7 +582,7 @@ export function createResolver(project: JavaProject, generated = false) {
     const caller = enclosingType(invocation, source.file, project);
     const supplied = held.bound || held.typeName ? undefined : repositoryMemberOf(held.type, name, invocation, caller);
     if (supplied !== undefined) return "method" in supplied ? { method: supplied.method, bound: false } : { generated: PROXIED };
-    const offered = memberOf(held.type, name, invocation, source.file, caller);
+    const offered = memberOf(held.type, name, invocation, source.file, caller, held.typeName);
     if (offered === undefined) {
       const made = generated && !held.bound ? generatedOf(held, name, argumentCount(invocation)) : undefined;
       return made === undefined ? undefined : { generated: made };
@@ -685,12 +685,31 @@ export function createResolver(project: JavaProject, generated = false) {
    * declarations of that arity it cannot single one out of are its answer when the selection settles none. A member whose
    * reach is unknown withholds the selection.
    */
-  const memberOf = (type: TypeDecl, name: string, invocation: Node, file: JavaFile, caller: TypeDecl | undefined): { method: MethodDecl } | { candidates: readonly MethodDecl[] } | undefined => {
+  const memberOf = (type: TypeDecl, name: string, invocation: Node, file: JavaFile, caller: TypeDecl | undefined, typeName = false): { method: MethodDecl } | { candidates: readonly MethodDecl[] } | undefined => {
     if (OBJECT_METHODS.has(name)) return undefined;
     const above = declaredHierarchy(type);
     const named = above.types.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
-    if (hierarchyOpen(above, named)) return undefined;
+    if (hierarchyOpen(above, named)) return openMemberOf(type, above, named, invocation, file, caller, typeName);
     if (named.some(hasVarargs)) return undefined;
+    return selectAmong(type, named, invocation, file, caller);
+  };
+
+  /**
+   * What a call on a type whose hierarchy the sources leave open is resolved to, where the language rules out every
+   * member an unread supertype may declare (ADR-0086): a call that writes no argument binds to the nearest declaration
+   * without parameters up the class chain, which overrides that signature anywhere above it and is applicable before
+   * variable arity is considered (JLS 8.4.8, 15.12.2.2); a call through the name of a class whose every unread supertype
+   * is an interface names a static method, which no interface passes down (JLS 8.4.8, 15.12.3). The classes of a declared
+   * hierarchy are its class chain: no interface extends a class.
+   */
+  const openMemberOf = (type: TypeDecl, above: ReturnType<JavaProject["hierarchy"]>, named: readonly MethodDecl[], invocation: Node, file: JavaFile, caller: TypeDecl | undefined, typeName: boolean): { method: MethodDecl } | { candidates: readonly MethodDecl[] } | undefined => {
+    const declared = named.filter((method) => method.owner.kind === "class");
+    if (argumentCount(invocation) === 0) return selectAmong(type, declared, invocation, file, caller);
+    if (!typeName || unsettledGaps(above).some((gap) => !gap.isInterface) || declared.some(hasVarargs)) return undefined;
+    return selectAmong(type, declared, invocation, file, caller);
+  };
+
+  const selectAmong = (type: TypeDecl, named: readonly MethodDecl[], invocation: Node, file: JavaFile, caller: TypeDecl | undefined): { method: MethodDecl } | { candidates: readonly MethodDecl[] } | undefined => {
     const candidates = named.filter((method) => method.parameterTypes.length === argumentCount(invocation));
     if (candidates.some((method) => method.modifiers.includes("private") && (method.owner !== type || method.owner !== caller))) return undefined;
     const reach = candidates.map((method) => reachability(method, file));
