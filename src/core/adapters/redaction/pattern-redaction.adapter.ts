@@ -28,9 +28,9 @@ function isModelModeSecretValue(match: string): boolean {
   return isHighEntropyBareToken(value);
 }
 
-/* A keyword inside a lowercase word of a dotted name followed by `:` and a bare value is a dependency coordinate (`io.jsonwebtoken:jjwt-api`), not an assignment. The exemption sits in the pattern, not in a skip, so a keyword later in the same token is still found. A name that starts at the keyword (`db.password=`), a camelCase word (`app.clientSecret:`), any other separator, and a quoted or spaced value keep the rule. */
+/* A keyword inside a lowercase word of a dotted group followed by `:artifact:version` is a dependency coordinate (`io.jsonwebtoken:jjwt-api:0.11.5`), not an assignment. The exemption sits in the pattern, not in a skip, so a keyword later in the same token is still found. A name that starts at the keyword (`db.password=`), a camelCase word (`app.clientSecret:`), any other separator, a value that is not a lowercase artifact followed by `:` (`app.authtoken:S3cret`), and a quoted or spaced value keep the rule. */
 const CREDENTIAL_KEYWORD = "(?:api[_-]?key|token|secret|password|passwd|pwd)";
-const DOTTED_COORDINATE = `(?<=\\.[\\w-]*[a-z0-9])(?-i:(?=[a-z]))${CREDENTIAL_KEYWORD}:[^\\s"':=]`;
+const DOTTED_COORDINATE = `(?<=\\.[\\w-]*[a-z0-9])(?-i:(?=[a-z]))${CREDENTIAL_KEYWORD}(?-i::[a-z0-9][a-z0-9._-]*:[\\w.-])`;
 const API_KEY_ASSIGNMENT = new RegExp(`(?!${DOTTED_COORDINATE})${CREDENTIAL_KEYWORD}[\\"']?\\s*[:=]\\s*(?:"(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|\\S+)`, "gi");
 
 const NAMED_SECRET_PATTERNS: Array<{ name: string; p: RegExp; skip?: (m: string, offset: number, text: string) => boolean; modelSkip?: (m: string) => boolean }> = [

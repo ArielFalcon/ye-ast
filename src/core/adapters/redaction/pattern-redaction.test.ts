@@ -316,7 +316,7 @@ test("a dotted dependency coordinate holding a keyword inside a word is kept, an
   assert.equal(kept.detection.redacted, false);
   assert.doesNotThrow(() => assertNoSecretLeak(kept.text, "issue", "coordinate"));
   const secret = "Zq7Kp2Xm9Wr4Tn";
-  for (const assignment of ["token: ", "spring.datasource.password=", "app.clientSecret:", "jwt.authtoken=", "jwt.authtoken: ", "mytoken:"]) {
+  for (const assignment of ["token: ", "spring.datasource.password=", "app.clientSecret:", "jwt.authtoken=", "jwt.authtoken: ", "mytoken:", "spring.mail.authtoken:", "x.mytoken:"]) {
     for (const mode of ["issue", "model"] as const) {
       assert.equal(sanitizeText(`${assignment}${secret} tail`, mode).text.includes(secret), false, `${assignment} (${mode})`);
     }
