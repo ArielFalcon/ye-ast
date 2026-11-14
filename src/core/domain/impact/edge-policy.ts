@@ -7,8 +7,8 @@ import { JAVA_PROFILE, profileOf } from "../languages/profiles.ts";
 
 /** Code that runs or holds code that runs: it calls, instantiates and, where it uses a name, references. */
 const CODE_KINDS = ["function", "method", "class", "component", "constant", "variable"] as const;
-/** What can use a declaration without calling it: a route names its page, a type names the types in its shape. */
-const REFERRER_KINDS = [...CODE_KINDS, "interface", "type_alias", "route"] as const;
+/** What can use a declaration without calling it: a type names the types in its shape. */
+const REFERRER_KINDS = [...CODE_KINDS, "interface", "type_alias"] as const;
 /** What a reference can point at and break: code, and the types that shape data (a DTO). */
 const REFERENCED_KINDS = ["function", "method", "constant", "variable", "class", "component", "interface", "type_alias", "enum"] as const;
 /** Class fields: their initializer is code that runs, so it calls and instantiates; what a field references is its type. */

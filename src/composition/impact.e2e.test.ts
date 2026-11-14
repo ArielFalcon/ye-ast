@@ -676,7 +676,7 @@ provideRouter(routes);
 `,
 });
 
-test("a changed service method reaches the component that calls it, the route of the component that renders that one, and no class that only injects the service", async () => {
+test("a changed service method reaches the component that calls it, the routes table that names the component rendering that one, the route it declares, and no class that only injects the service", async () => {
   commit(ANGULAR_APP('"x"'), "base");
   commit({ "src/app/order.service.ts": ANGULAR_APP('"y"')["src/app/order.service.ts"]! });
 
@@ -692,7 +692,8 @@ test("a changed service method reaches the component that calls it, the route of
     ["list.component.ts:ListComponent", 1, 1],
     ["list.component.ts:constructor", 1, 1],
     ["page.component.ts:PageComponent", 2, 1],
-    ["app.routes.ts:/page", 3, 0.9],
+    ["app.routes.ts:routes", 3, 1],
+    ["main.ts:main.ts", 4, 1],
   ]);
   assert.deepEqual(first.fact.value.entrypoints.map((entry) => [entry.kind, entry.name, entry.depth]), [["ui-route", "/page", 2]]);
 });

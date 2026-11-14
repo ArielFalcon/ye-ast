@@ -92,13 +92,26 @@ test("a declaration no contains edge places inside a declaration of its file sta
   const store = fakeCodeGraph(
     [
       fakeNode("Auth", "class", "src/auth.ts", 3, 40, "AuthService"),
-      fakeNode("Auth.route", "route", "src/auth.ts", 10, 10, "GET /login"),
+      fakeNode("Auth.hook", "function", "src/auth.ts", 10, 10, "hook"),
       fakeNode("Auth.login", "method", "src/auth.ts", 10, 20, "login"),
       fakeNode("other", "class", "src/other.ts", 1, 90, "Other"),
     ],
     [{ from: "other", to: "Auth.login", kind: "contains" }],
   );
-  assert.deepEqual((await readOutline(store, ["src/auth.ts"], NO_MODULES)).value.files[0]?.declarations.map((declaration) => declaration.name), ["AuthService", "GET /login", "login"]);
+  assert.deepEqual((await readOutline(store, ["src/auth.ts"], NO_MODULES)).value.files[0]?.declarations.map((declaration) => declaration.name), ["AuthService", "hook", "login"]);
+});
+
+test("an index route node is no declaration of its file: the routes of a file are the entrypoint owner's", async () => {
+  const store = fakeCodeGraph(
+    [
+      fakeNode("Auth", "class", "src/Auth.java", 3, 40, "Auth"),
+      fakeNode("Auth.login", "method", "src/Auth.java", 10, 20, "login"),
+      fakeNode("Auth.route", "route", "src/Auth.java", 10, 10, "POST /login"),
+    ],
+    [{ from: "Auth", to: "Auth.login", kind: "contains" }, { from: "Auth", to: "Auth.route", kind: "contains" }],
+  );
+  const [auth] = (await readOutline(store, ["src/Auth.java"], NO_MODULES)).value.files[0]?.declarations ?? [];
+  assert.deepEqual(auth?.children?.map((child) => child.name), ["login"]);
 });
 
 test("an unresolved syntax container stays visible with its evidence rather than appearing file-level", async () => {

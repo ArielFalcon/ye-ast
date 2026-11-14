@@ -26,8 +26,11 @@ export interface ImportersValue {
   files: readonly ImportedFile[];
 }
 
-/** The nodes a file holds that are not something it declares: the file itself and its import and export statements. */
-export const NOT_DECLARED_KINDS: readonly string[] = ["file", "import", "export"];
+/**
+ * The nodes a file holds that are not something it declares: the file itself, its import and export statements, and the
+ * routes the index derives from a framework's conventions, whose owner is the entrypoints reading (ADR-0014 decision 1).
+ */
+export const NOT_DECLARED_KINDS: readonly string[] = ["file", "import", "export", "route"];
 
 /** The file name without its last extension; a module is named by a path that ends with it. */
 function stemOf(file: string): string {

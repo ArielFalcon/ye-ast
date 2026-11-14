@@ -17,11 +17,15 @@ test("calls and instantiations from code, a class field's initializer included, 
 
 test("a reference into code, a class or a type that shapes data is followed", () => {
   assert.equal(follows("references", "method", "function"), true);
-  assert.equal(follows("references", "route", "component"), true);
   assert.equal(follows("references", "function", "constant"), true);
   assert.equal(follows("references", "function", "interface"), true);
   assert.equal(follows("references", "type_alias", "interface"), true);
   assert.equal(follows("references", "function", "enum"), true);
+});
+
+test("an index route node is no referrer: the page a route names reaches its route through the entrypoints reading", () => {
+  assert.equal(follows("references", "route", "component"), false);
+  assert.equal(follows("references", "route", "function"), false);
 });
 
 test("a reference from a field, a parameter or a file, or into one, is not followed", () => {
