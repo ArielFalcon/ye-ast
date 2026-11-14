@@ -161,7 +161,8 @@ test("workspace queries preserve real evidence across execution orders and coord
   for (const result of [c, i]) {
     assert.ok(result.value.links.some((item: any) => item.link.from.repo === "shop-web" && item.link.to.repo === "shop-service" && item.link.to.name === "GET /orders/{id}"), JSON.stringify(result.value.links));
     assert.equal(result.value.sections["shop-web"].snapshot.sha, member);
-    assert.ok(result.value.sections["shop-web"].value.unmatched.some((x: any) => x.line === 10));
+    assert.equal(result.value.sections["shop-web"].value.unmatched.some((x: any) => x.line === 10), false);
+    assert.ok(result.value.sections["shop-web"].value.unrelated.unmatched >= 1, JSON.stringify(result.value.sections["shop-web"].value.unrelated));
   }
   const foreign = await call("entrypoints", { repo: "foreign", revision: member });
   const foreignHandler = foreign.value.entrypoints.value.find((x: any) => JSON.stringify(x).includes("/foreign")).value.handler;
