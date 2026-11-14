@@ -4,7 +4,7 @@ import type { ChangedEntrypoint } from "../../domain/impact/changed-entrypoints.
 import type { ImpactValue, Seed } from "../../domain/impact/impact-fact.ts";
 import { parseHttpRouteName, type HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { Cut, Fact, FactBase, SnapshotRef } from "../../domain/shared/fact.ts";
-import { ANYTHING, incompleteSectionCuts, provenanceOf } from "../../domain/shared/fact.ts";
+import { ANYTHING, incompleteSectionCuts, provenanceOf, readProvenanceOf, type FactProvenance } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
@@ -127,6 +127,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
     if (!downstream.ok) return downstream;
 
     const sections: Record<string, Fact<RepoImpact>> = Object.create(null);
+    const sectionReads = new Map<string, readonly SectionRead[]>();
     for (const repository of repositories) {
       const part = parts.get(repository.repo);
       const base = workspace.sections[repository.repo];
@@ -134,18 +135,19 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
       part.callSites.push(...(upstream.value.sites.get(repository.repo) ?? []));
       const inventories = scopedInventories(part, base.status === "unknown" ? [] : base.value.unresolved, repository.callSites, downstream.value.egress.get(repository.repo));
       const walkOf = repository.repo === trigger ? impact : upstream.value.impacts.get(repository.repo);
-      const value: RepoImpact = {
-        reads: [
-          { kind: "discovery", fact: provenanceOf(base) },
-          ...(repository.repo === trigger ? [{ kind: "trigger" as const, fact: provenanceOf(walked.value) }] : []),
-          ...(upstream.value.facts.get(repository.repo) ?? []).map((walk) => ({ kind: "upstream" as const, fact: provenanceOf(walk) })),
-          ...(downstream.value.facts.get(repository.repo) ?? []).map((walk) => ({ kind: "downstream" as const, fact: provenanceOf(walk) })),
-        ],
+      const reads: SectionRead[] = [
+        { kind: "discovery", fact: provenanceOf(base) },
+        ...(repository.repo === trigger ? [{ kind: "trigger" as const, fact: provenanceOf(walked.value) }] : []),
+        ...(upstream.value.facts.get(repository.repo) ?? []).map((walk) => ({ kind: "upstream" as const, fact: provenanceOf(walk) })),
+        ...(downstream.value.facts.get(repository.repo) ?? []).map((walk) => ({ kind: "downstream" as const, fact: provenanceOf(walk) })),
+      ];
+      const value: Omit<RepoImpact, "reads"> = {
         ...(walkOf === undefined ? {} : { impact: walkOf }),
         callSites: part.callSites.sort(compareCallSites),
         ...inventories,
       };
-      sections[repository.repo] = sectionOf(base, value, part.undecided, repository.repo === trigger ? unservedOperationCuts(impact?.changedContracts ?? []) : [], deps.digest);
+      sectionReads.set(repository.repo, reads);
+      sections[repository.repo] = sectionOf(base, reads, value, part.undecided, repository.repo === trigger ? unservedOperationCuts(impact?.changedContracts ?? []) : [], deps.digest);
     }
 
     const triggerBase = sections[trigger] ?? fact;
@@ -167,7 +169,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
     };
     const config = walked.value.inputs.declaredConfig;
     const inputs = { repos: workspace.workspace.repos, gateways: declared.toSorted((a, b) => compareText(a.prefix, b.prefix) || compareText(a.repo, b.repo)), source: workspace.workspace.source, budget: request.budget, ...("targets" in request ? { targets: request.targets } : {}), ...("changed" in request ? { changed: request.changed } : {}) };
-    const reads = Object.entries(sections).flatMap(([repo, section]) => section.status === "unknown" ? [{ kind: `discovery:${repo}`, fact: provenanceOf(section) }] : section.value.reads.map(({ kind, fact }) => ({ kind: `${kind}:${repo}`, fact })));
+    const reads = Object.entries(sections).flatMap(([repo, section]) => section.status === "unknown" ? [{ kind: `discovery:${repo}`, fact: provenanceOf(section) }] : (sectionReads.get(repo) ?? []).map(({ kind, fact }) => ({ kind: `${kind}:${repo}`, fact })));
     const base = compositeBase({ ...baseOf(triggerBase), ...(fact.scopeSelection === undefined ? {} : { scopeSelection: fact.scopeSelection }) }, reads, inputs, (text) => deps.digest.of(text), config);
     return { ok: true, value: { fact: composite(base, value), ...(read.value.workspaceReplay === undefined ? {} : { workspaceReplay: read.value.workspaceReplay }), ...(read.value.refresh === undefined ? {} : { refresh: read.value.refresh }), ...(read.value.repositoryRoots === undefined ? {} : { repositoryRoots: read.value.repositoryRoots }) } };
   }
@@ -445,20 +447,22 @@ function baseOf(fact: FactBase): FactBase {
   return { schema, snapshot, producer, inputs, evidence: [] };
 }
 
+type SectionRead = { kind: RepoImpact["reads"][number]["kind"]; fact: FactProvenance };
+
 /**
  * One repository's section: its own fact base, so its snapshot and trust travel with it; the call sites its snapshot
  * could not decide stay cuts, and so do the call sites the join could not settle.
  */
-function sectionOf(section: Fact<{ unresolved: readonly unknown[] }>, value: RepoImpact, undecided: readonly CallSite[], unserved: readonly Cut[], digest: Digest): Fact<RepoImpact> {
+function sectionOf(section: Fact<{ unresolved: readonly unknown[] }>, reads: readonly SectionRead[], value: Omit<RepoImpact, "reads">, undecided: readonly CallSite[], unserved: readonly Cut[], digest: Digest): Fact<RepoImpact> {
   if (section.status === "unknown") return section;
   const cuts: Cut[] = [
-    ...value.reads.flatMap(({ kind, fact }, index): readonly Cut[] => fact.status === "partial" ? fact.cuts : fact.status === "unknown" ? [{ kind: "section", at: [kind, String(index)], reason: "section-unknown", reach: ANYTHING }] : []),
+    ...reads.flatMap(({ kind, fact }, index): readonly Cut[] => fact.status === "partial" ? fact.cuts : fact.status === "unknown" ? [{ kind: "section", at: [kind, String(index)], reason: "section-unknown", reach: ANYTHING }] : []),
     ...undecided.map(unsettledCallSiteCut),
     ...unserved,
   ];
-  const triggerWalk = value.reads.find(({ kind }) => kind === "trigger")?.fact;
-  const base = compositeBase({ ...baseOf(section), evidence: section.evidence }, value.reads, {}, (text) => digest.of(text), triggerWalk?.inputs.declaredConfig ?? section.inputs.declaredConfig);
-  return withCuts(base, value, cuts, EVERYTHING);
+  const triggerWalk = reads.find(({ kind }) => kind === "trigger")?.fact;
+  const base = compositeBase({ ...baseOf(section), evidence: section.evidence }, reads, {}, (text) => digest.of(text), triggerWalk?.inputs.declaredConfig ?? section.inputs.declaredConfig);
+  return withCuts(base, { reads: reads.map(({ kind, fact }) => ({ kind, fact: readProvenanceOf(fact) })), ...value }, cuts, EVERYTHING);
 }
 
 /** Complete only when every section is. */

@@ -12,7 +12,7 @@ import type { ComposeFull, ComposeReceipt, CoverageSummary } from "./composition
 import type { CompositionGraph, EvidenceComposition, RelationValue } from "../core/ports/evidence-composition.port.ts";
 import {
   callLocation, candidateBasis, cut, cutOwner, dependenceBasis, evidenceOrigin, evidenceValue,
-  factInputs, ids, linkBasis, linkEndpoints, moduleVia, partSchema, producer, readOwner, schemaVersion, snapshotRef,
+  factInputs, ids, linkBasis, linkEndpoints, moduleVia, partSchema, producer, publicReadOwner, readOwner, schemaVersion, snapshotRef,
   snapshotVectorEntry, supports, symbolNameRef, unknownReason, type Accepts,
 } from "./composition-schema-parts.ts";
 
@@ -35,14 +35,14 @@ const sourceDescriptor = z.union([
 ]);
 const readAnalysis = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("complete") }),
-  z.strictObject({ status: z.literal("partial"), cuts: z.tuple([cut], cut) }),
+  z.strictObject({ status: z.literal("partial"), cuts: z.tuple([cut], cut).exactOptional() }),
   z.strictObject({ status: z.literal("unknown"), reason: unknownReason }),
 ]);
 const readRecord = z.strictObject({
   id: ids.read, source: ids.source, owner: readOwner, schema: schemaVersion, producer, inputs: factInputs,
   scopeSelection: z.strictObject({ unmatchedIncludes: z.array(z.string()), selectedFiles: count }).exactOptional(),
   snapshot: ids.snapshot, evidence: z.array(ids.evidence), analysis: readAnalysis,
-});
+}).refine((read) => read.analysis.status !== "partial" || read.analysis.cuts !== undefined || read.owner.kind === "read", { error: "a partial read states its cuts unless a section holds them" });
 const fileRecord = z.strictObject({ id: ids.file, repo: z.string(), origin: evidenceOrigin, path: z.string(), supports });
 const anchorRecord = z.strictObject({ id: ids.anchor, file: ids.file, symbol: z.string(), line: int, endLine: int.exactOptional(), supports });
 const evidenceRecord = z.strictObject({ id: ids.evidence, origin: evidenceOrigin, repo: z.string(), value: evidenceValue, supports });
@@ -107,11 +107,11 @@ const issue = z.discriminatedUnion("kind", [
   z.strictObject({ ...issueScope, kind: z.literal("missing-provenance"), repo: z.string(), part: ids.part.exactOptional(), side: z.enum(["base", "head"]).exactOptional() }),
   z.strictObject({ ...issueScope, kind: z.literal("missing-origin-reference"), part: ids.part, table: z.enum(["seeds", "module-origins"]), index: int }),
   z.strictObject({ ...issueScope, kind: z.literal("missing-link-reference"), part: ids.part, linkId: z.string(), position: count }),
-  z.strictObject({ ...issueScope, kind: z.literal("redacted-identity"), owner: cutOwner, pointer: z.string().exactOptional() }),
+  z.strictObject({ ...issueScope, kind: z.literal("redacted-identity"), owner: publicReadOwner, pointer: z.string().exactOptional() }),
 ]);
 const coverage = z.strictObject({
   reads: z.strictObject({ complete: count, partial: count, unknown: count }),
-  unknowns: z.array(z.strictObject({ source: ids.source, owner: cutOwner, reason: unknownReason })),
+  unknowns: z.array(z.strictObject({ source: ids.source, owner: publicReadOwner, reason: unknownReason })),
   limits: z.array(z.strictObject({ source: ids.source, owner: cutOwner, kind: cut.shape.kind, limit: z.number().exactOptional(), cuts: z.int().min(1), places: count })),
   issues: z.array(issue),
 });

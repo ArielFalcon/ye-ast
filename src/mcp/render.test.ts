@@ -28,20 +28,20 @@ test("local and workspace rows expose exact owners and public cut positions", ()
   assert.ok(text.includes('"owner":{"kind":"local"},"handler":{"path":"src/h.ts","symbol":"run","line":7}'));
   assert.ok(text.includes('"owner":{"kind":"local"},"module":{"file":"src/m.ts","snapshot":"base"}'));
   assert.ok(text.includes('"owner":{"kind":"fact"},"cutIndex":0'));
-  const section = { ...base, status: "partial", cuts: [cut], value: { impact, reads: [{ kind: "trigger", fact: { ...base, status: "partial", cuts: [cut] } }], callSites: [], unmatched: [], external: [], unresolved: [] } };
+  const section = { ...base, status: "partial", cuts: [cut], value: { impact, reads: [{ kind: "trigger", fact: { ...base, status: "partial" } }], callSites: [], unmatched: [], external: [], unresolved: [] } };
   const link = { id: "actual-id", from: { repo: "other", file: "f", line: 1, symbol: "s" }, to: { repo: "shop", kind: "job", name: "job", handler: impact.entrypoints[0]!.handler }, basis: "exact", confidence: 1 };
   const workspace = { ...base, status: "partial", cuts: [cut], value: { workspace: { repos: ["shop"], gateways: [], unmatchedGateways: [], unserved: [], source: "request" }, repositorySnapshots: [], trigger: { repo: "shop" }, sections: { shop: section }, links: [{ link, direction: "upstream", reach: [] }] } } as unknown as Fact<WorkspaceImpactValue>;
   const ws = renderWorkspaceImpact(workspace);
   assert.ok(ws.includes('"owner":{"kind":"section","repo":"shop"},"handler"'));
   assert.ok(ws.includes('"owner":{"kind":"section","repo":"shop"},"module"'));
   assert.ok(ws.includes('"owner":{"kind":"section","repo":"shop"},"cutIndex":0'));
-  assert.ok(ws.includes('"owner":{"kind":"read","repo":"shop","index":0},"cutIndex":0'));
+  assert.equal(ws.includes('"kind":"read"'), false);
   assert.ok(ws.includes('[linkId "actual-id"]'));
 });
 
-test("shared cut coordinates retain each repository and indexed-read owner", () => {
+test("shared cut coordinates retain each repository owner, and a read under it adds none", () => {
   const cuts = Array.from({ length: 12 }, (_, index) => ({ kind: "depth", at: [`anchor-${index}`, `place-${index}`], limit: 2 }));
-  const read = { kind: "trigger", fact: { ...base, status: "partial", cuts } };
+  const read = { kind: "trigger", fact: { ...base, status: "partial" } };
   const section = { ...base, status: "partial", cuts, value: { reads: [read, read], callSites: [], unmatched: [], external: [], unresolved: [] } };
   const fact = { ...base, status: "partial", cuts, value: { workspace: { repos: ['a"b'], gateways: [], unmatchedGateways: [], unserved: [], source: "request" }, repositorySnapshots: [], trigger: { repo: 'a"b' }, sections: { ['a"b']: section }, links: [] } } as unknown as Fact<WorkspaceImpactValue>;
   const text = renderWorkspaceImpact(fact, "details", { tool: "impact" });
@@ -49,8 +49,6 @@ test("shared cut coordinates retain each repository and indexed-read owner", () 
   assert.deepEqual(templates.map(template => template.owner), [
     { kind: "fact" },
     { kind: "section", repo: 'a"b' },
-    { kind: "read", repo: 'a"b', index: 0 },
-    { kind: "read", repo: 'a"b', index: 1 },
   ]);
   const groups = text.split(/Cut lookup:.*select example: \{[^\n]+\}/).slice(1);
   for (const group of groups) {

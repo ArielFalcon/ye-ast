@@ -14,7 +14,7 @@ import { executeQuery, type ExecutedSource, type QueryExecutionContext, type Que
 import { familyOf, type ComposeQuery, type SemanticQuery } from "./query-schema.ts";
 import { assertSourceIdentity } from "./evidence-cursor.ts";
 import { COMPOSE_INPUT, COMPOSE_LIMITS, COMPOSE_QUERY } from "./composition-input.ts";
-import type { CutOwner } from "../core/domain/composition/source-read.ts";
+import type { CutOwner, PublicReadOwner } from "../core/domain/composition/source-read.ts";
 import type { ComposeFault, ComposeInput, CompositionCounts, CompositionResult, CoverageSummary, QueryKey, RepeatRequest, SourceDelivery, UnavailableReason, Verification } from "./composition-contract.ts";
 import type { CompositionIdentity, EvidenceComposition, EvidenceSet, MaterializedComposition, Part, ReadOwner, SourceDescriptor, SourceId } from "../core/ports/evidence-composition.port.ts";
 
@@ -305,7 +305,7 @@ function blockersOf(source: ExecutedSource, set: EvidenceSet): UnavailableReason
 
 /** A deadline recorded anywhere in the source: a read's cut or unknown reason, or an unknown finding of a part. */
 function recordsDeadline(set: EvidenceSet): boolean {
-  const reads = set.reads.some(({ analysis }) => analysis.status === "unknown" ? analysis.reason === "deadline" : analysis.status === "partial" && analysis.cuts.some((cut) => cut.kind === "deadline"));
+  const reads = set.reads.some(({ analysis }) => analysis.status === "unknown" ? analysis.reason === "deadline" : analysis.status === "partial" && (analysis.cuts?.some((cut) => cut.kind === "deadline") ?? false));
   return reads || set.parts.some((part) => unknownFindingReason(part) === "deadline");
 }
 
@@ -353,7 +353,7 @@ function assemble(materialized: MaterializedComposition, contributions: Readonly
   };
 }
 
-function publicOwner(owner: ReadOwner): CutOwner {
+function publicOwner(owner: ReadOwner): PublicReadOwner {
   if (owner.kind !== "read") return owner;
   const { readKind: _readKind, ...rest } = owner;
   return rest;
@@ -373,10 +373,11 @@ function coverageOf(graph: CompositionResult["graph"], issues: MaterializedCompo
     reads[read.analysis.status]++;
     const owner = publicOwner(read.owner);
     if (read.analysis.status === "unknown") unknowns.push({ source: read.source, owner, reason: read.analysis.reason });
-    if (read.analysis.status !== "partial") continue;
-    for (const cut of read.analysis.cuts) {
-      const key = canonicalJson([read.source, owner, cut.kind, cut.limit ?? null]);
-      const entry = limits.get(key) ?? { source: read.source, owner, kind: cut.kind, ...(cut.limit === undefined ? {} : { limit: cut.limit }), cuts: 0, places: 0 };
+    if (read.analysis.status !== "partial" || read.owner.kind === "read") continue;
+    const holder: CutOwner = read.owner;
+    for (const cut of read.analysis.cuts ?? []) {
+      const key = canonicalJson([read.source, holder, cut.kind, cut.limit ?? null]);
+      const entry = limits.get(key) ?? { source: read.source, owner: holder, kind: cut.kind, ...(cut.limit === undefined ? {} : { limit: cut.limit }), cuts: 0, places: 0 };
       entry.cuts++;
       entry.places += Math.max(0, cut.at.length - 1);
       limits.set(key, entry);

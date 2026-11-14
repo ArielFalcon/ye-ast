@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { digest } from "./compose-evidence-test-sets.testing.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
-import type { Evidence, Fact, FactProvenance } from "../../domain/shared/fact.ts";
+import type { Evidence, Fact, FactProvenance, ReadProvenance } from "../../domain/shared/fact.ts";
 import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../../domain/entrypoints/http-route.ts";
@@ -76,11 +76,21 @@ class Tables {
     const key = canonicalJson(owner);
     return this.set.reads.find((r) => canonicalJson(r.owner) === key);
   }
+  private base(read: ReadRecord) {
+    return { schema: read.schema, snapshot: this.snapshot(read.snapshot), producer: read.producer, inputs: read.inputs, ...(read.scopeSelection === undefined ? {} : { scopeSelection: read.scopeSelection }), evidence: this.evidence(read.evidence) };
+  }
   provenance(read: ReadRecord): FactProvenance {
-    const base = { schema: read.schema, snapshot: this.snapshot(read.snapshot), producer: read.producer, inputs: read.inputs, ...(read.scopeSelection === undefined ? {} : { scopeSelection: read.scopeSelection }), evidence: this.evidence(read.evidence) };
+    const base = this.base(read);
     if (read.analysis.status === "unknown") return { ...base, status: "unknown", reason: read.analysis.reason };
-    if (read.analysis.status === "partial") return { ...base, status: "partial", cuts: read.analysis.cuts };
+    if (read.analysis.status === "partial") {
+      assert.ok(read.analysis.cuts !== undefined, "a read outside a section states its cuts");
+      return { ...base, status: "partial", cuts: read.analysis.cuts };
+    }
     return { ...base, status: "complete" };
+  }
+  held(read: ReadRecord): ReadProvenance {
+    const base = this.base(read);
+    return read.analysis.status === "unknown" ? { ...base, status: "unknown", reason: read.analysis.reason } : { ...base, status: read.analysis.status };
   }
   fact<T>(read: ReadRecord, value: () => T): Fact<T> {
     const provenance = this.provenance(read);
@@ -162,7 +172,7 @@ function rebuildWorkspaceImpact(t: Tables): WorkspaceImpactValue {
     const prefix = jsonPointer(["value", "sections", repo, "value"]);
     sections[repo] = t.fact(read, () => {
       const reads = t.set.reads
-        .flatMap((r) => (r.owner.kind === "read" && r.owner.repo === repo ? [{ index: r.owner.index, kind: r.owner.readKind, fact: t.provenance(r) }] : []))
+        .flatMap((r) => (r.owner.kind === "read" && r.owner.repo === repo ? [{ index: r.owner.index, kind: r.owner.readKind, fact: t.held(r) }] : []))
         .sort((x, y) => x.index - y.index)
         .map(({ kind, fact }) => ({ kind, fact }));
       const sites = (field: string) => t.list(`${prefix}/${field}`, "call-site").map((p) => rebuildSite(t, p));

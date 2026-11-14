@@ -1,10 +1,13 @@
-import type { DeclaredConfig, DeclaredScope, Fact, FactProvenance, SnapshotRef, UnknownReason } from "../shared/fact.ts";
+import type { DeclaredConfig, DeclaredScope, Fact, ReadProvenance, SnapshotRef, UnknownReason } from "../shared/fact.ts";
 import type { WorkspaceReplayContext } from "../topology/workspace-replay.ts";
 
-export type CutOwner = { kind: "fact" } | { kind: "entrypoints" } | { kind: "section"; repo: string } | { kind: "read"; repo: string; index: number };
+/** Who holds cuts: a read recorded under a section holds none, its section's cuts say them once. */
+export type CutOwner = { kind: "fact" } | { kind: "entrypoints" } | { kind: "section"; repo: string };
+/** Whose read a record or a coverage entry is, as the public surface names it. */
+export type PublicReadOwner = CutOwner | { kind: "read"; repo: string; index: number };
 export type Analysis = { status: "complete" } | { status: "partial" } | { status: "unknown"; reason: UnknownReason };
 
-export function analysis(fact: FactProvenance): Analysis {
+export function analysis(fact: ReadProvenance): Analysis {
   return fact.status === "unknown" ? { status: "unknown", reason: fact.reason } : { status: fact.status };
 }
 

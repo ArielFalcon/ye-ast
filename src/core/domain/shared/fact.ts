@@ -288,6 +288,15 @@ export function provenanceOf<T>(fact: Fact<T>): FactProvenance {
   return { ...base, status: "complete" };
 }
 
+/** A read's envelope as a composite records it: `partial` says the read was cut, and the composite's own cuts hold them. */
+export type ReadProvenance = (FactBase & { status: "complete" | "partial" }) | UnknownFact;
+
+export function readProvenanceOf(provenance: FactProvenance): ReadProvenance {
+  if (provenance.status !== "partial") return provenance;
+  const { cuts: _cuts, ...held } = provenance;
+  return held;
+}
+
 export type Sections = Readonly<Record<string, Fact<unknown>>>;
 
 /** A composite is complete only when every section is; otherwise it carries one `section` cut per incomplete section. */

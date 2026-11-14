@@ -87,8 +87,10 @@ const ownerBase = [
   z.strictObject({ kind: z.literal("section"), repo: z.string() }),
 ] as const;
 export const recordedReadKind = z.enum(["discovery", "trigger", "upstream", "downstream"]);
-/** A coverage or issue owner: never carries the recorded read kind. */
-export const cutOwner = z.discriminatedUnion("kind", [...ownerBase, z.strictObject({ kind: z.literal("read"), repo: z.string(), index: count })]);
+/** Who holds cuts: the fact, its entrypoints or a section; a read under a section holds none. */
+export const cutOwner = z.discriminatedUnion("kind", ownerBase);
+/** A coverage or issue owner of a read: never carries the recorded read kind. */
+export const publicReadOwner = z.discriminatedUnion("kind", [...ownerBase, z.strictObject({ kind: z.literal("read"), repo: z.string(), index: count })]);
 /** A read record's owner: a `read` owner keeps the kind its section recorded. */
 export const readOwner = z.discriminatedUnion("kind", [...ownerBase, z.strictObject({ kind: z.literal("read"), repo: z.string(), index: count, readKind: recordedReadKind })]);
 

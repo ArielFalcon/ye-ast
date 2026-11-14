@@ -31,6 +31,7 @@ test("unions the recorded seed indexes of handler aliases in ascending order", a
 });
 
 const complete = <T>(value: T, repo = "app"): Fact<T> => ({ ...base, snapshot: { repo, kind: "sha", sha: "head" }, status: "complete", value });
+const heldPartial = { ...base, status: "partial" } as const;
 const partial = <T>(value: T, repo = "app"): Fact<T> => ({ ...base, snapshot: { repo, kind: "sha", sha: "head" }, status: "partial", value, cuts: [{ kind: "depth", at: ["anchor", "one", "two"], limit: 3, reason: "depth", reach: { kind: "anything" } }] });
 const unknown = { ...base, status: "unknown", reason: "deadline", evidence: [{ path: "unknown.ts", line: 9 }] } as const;
 const handlerSelect = { kind: "handler-origins", owner: { kind: "local" }, handler } as const;
@@ -110,7 +111,7 @@ test("finding evidence preserves duplicate records and precise UI identity", () 
 });
 
 const link: Link = { id: "link/1", from: { repo: "constructor", file: "a", line: 1, symbol: "a" }, to: { repo: "__proto__", kind: "job", name: "job", handler }, transport: "http", basis: "exact", confidence: 1 };
-const repoValue: RepoImpact = { reads: [{ kind: "discovery", fact: partial(null) }], impact: fact.value, callSites: [], unmatched: [], external: [], unresolved: [] };
+const repoValue: RepoImpact = { reads: [{ kind: "discovery", fact: { ...heldPartial, snapshot: { repo: "app", kind: "sha", sha: "head" } } }], impact: fact.value, callSites: [], unmatched: [], external: [], unresolved: [] };
 const workspace: WorkspaceImpactValue = {
   workspace: { repos: ["constructor", "__proto__"], gateways: [], unmatchedGateways: [], unserved: [], source: "request" },
   repositorySnapshots: [], trigger: { repo: "constructor", mergeBase: "a".repeat(40) },
@@ -129,9 +130,7 @@ test("workspace link reach uses recorded order and actual endpoint provenance", 
   deepStrictEqual(result.source.reads.map((read) => read.owner), [{ kind: "section", repo: "__proto__" }, { kind: "read", repo: "__proto__", index: 0 }, { kind: "section", repo: "constructor" }, { kind: "read", repo: "constructor", index: 0 }]);
   deepStrictEqual(result.source.limits, [
     { owner: { kind: "fact" }, kind: "depth", cuts: 1, places: 2, limit: 3 },
-    { owner: { kind: "read", repo: "__proto__", index: 0 }, kind: "depth", cuts: 1, places: 2, limit: 3 },
     { owner: { kind: "section", repo: "constructor" }, kind: "depth", cuts: 1, places: 2, limit: 3 },
-    { owner: { kind: "read", repo: "constructor", index: 0 }, kind: "depth", cuts: 1, places: 2, limit: 3 },
   ]);
   const absent = { ...workspace, sections: {} };
   const noProvenance = selectEvidence({ kind: "workspace", fact: complete(absent) }, { kind: "workspace-link-evidence", linkId: link.id });
@@ -141,14 +140,13 @@ test("workspace link reach uses recorded order and actual endpoint provenance", 
   deepStrictEqual(selectEvidence({ kind: "workspace", fact: complete(absent) }, { kind: "handler-origins", owner: { kind: "section", repo: "constructor" }, handler }), { ok: false, fault: { code: "selection-not-found" } });
 });
 
-test("cut selection addresses all owners using public indices and preserves separate limits", () => {
+test("cut selection addresses every owner that holds cuts using public indices and preserves separate limits", () => {
   const entrySource = { kind: "entrypoints", fact: partial({ entrypoints: partial([] as readonly never[]) }) } as const;
   const workspaceSource = { kind: "workspace", fact: partial(workspace) } as const;
   const cases = [
     { source: entrySource, owner: { kind: "fact" } },
     { source: entrySource, owner: { kind: "entrypoints" } },
     { source: workspaceSource, owner: { kind: "section", repo: "constructor" } },
-    { source: workspaceSource, owner: { kind: "read", repo: "constructor", index: 0 } },
   ] as const;
   for (const { source, owner } of cases) {
     const result = selected(selectEvidence(source, { kind: "cut-places", owner, cutIndex: 0 }));
@@ -159,7 +157,7 @@ test("cut selection addresses all owners using public indices and preserves sepa
   const noAnchor: Fact<ImpactValue> = { ...base, status: "partial", value: fact.value, cuts: [{ kind: "depth", at: [], reason: "depth", reach: { kind: "anything" } }] };
   const unavailable = selectEvidence({ kind: "local", fact: noAnchor }, { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 });
   strictEqual(unavailable.ok && unavailable.value.availability === "unavailable" && unavailable.value.reason, "unresolved");
-  deepStrictEqual(selectEvidence(workspaceSource, { kind: "cut-places", owner: { kind: "read", repo: "constructor", index: 1 }, cutIndex: 0 }), { ok: false, fault: { code: "selection-not-found" } });
+  deepStrictEqual(selectEvidence(workspaceSource, { kind: "cut-places", owner: { kind: "section", repo: "absent" }, cutIndex: 0 }), { ok: false, fault: { code: "selection-not-found" } });
 });
 
 test("workspace module base belongs to the selected owner, never an unrelated trigger", () => {
@@ -183,16 +181,14 @@ test("HTTP finding identity excludes nested base path while retaining optional c
   deepStrictEqual(result.source.reads[0], { owner: { kind: "entrypoints" }, schema: base.schema, snapshot: base.snapshot, producer: base.producer, inputs: base.inputs, analysis: { status: "complete" } });
 });
 
-test("unknown section and read cuts return their recorded reason and evidence", () => {
+test("an unknown section returns its recorded reason and evidence, and an unknown read is listed beside the cuts its section holds", () => {
   const unknownSection = { ...workspace, sections: { repo: unknown } };
   const sectionResult = selectEvidence({ kind: "workspace", fact: complete(unknownSection) }, { kind: "cut-places", owner: { kind: "section", repo: "repo" }, cutIndex: 0 });
   if (!sectionResult.ok || sectionResult.value.availability !== "unavailable") throw new Error("expected unavailable");
   deepStrictEqual([sectionResult.value.reason, sectionResult.value.evidence], ["deadline", unknown.evidence]);
-  const withUnknownRead = { ...workspace, sections: { repo: complete({ ...repoValue, reads: [{ kind: "upstream" as const, fact: unknown }] }) } };
-  const readResult = selectEvidence({ kind: "workspace", fact: complete(withUnknownRead) }, { kind: "cut-places", owner: { kind: "read", repo: "repo", index: 0 }, cutIndex: 0 });
-  if (!readResult.ok || readResult.value.availability !== "unavailable") throw new Error("expected unavailable");
-  deepStrictEqual([readResult.value.reason, readResult.value.evidence], ["deadline", unknown.evidence]);
-  deepStrictEqual(readResult.value.source.reads[1]?.analysis, { status: "unknown", reason: "deadline" });
+  const withUnknownRead = { ...workspace, sections: { repo: partial({ ...repoValue, reads: [{ kind: "upstream" as const, fact: unknown }] }, "repo") } };
+  const readResult = selected(selectEvidence({ kind: "workspace", fact: complete(withUnknownRead) }, { kind: "cut-places", owner: { kind: "section", repo: "repo" }, cutIndex: 0 }));
+  deepStrictEqual(readResult.source.reads.map(({ owner, analysis }) => [owner, analysis]), [[{ kind: "section", repo: "repo" }, { status: "partial" }], [{ kind: "read", repo: "repo", index: 0 }, { status: "unknown", reason: "deadline" }]]);
 });
 
 test("source limits group only matching owner, kind and limit", () => {

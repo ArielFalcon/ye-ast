@@ -210,7 +210,7 @@ function cutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
 /** One selector template per cut owner; row indices always refer to the original array. */
 function cutContextLine(owner: CutOwner, cutIndex: number, context?: RenderContext): string {
   const example = { kind: "cut-places", owner, cutIndex } as const;
-  const selectable = context === undefined || canSelect(context, example, owner.kind === "section" || owner.kind === "read");
+  const selectable = context === undefined || canSelect(context, example, owner.kind === "section");
   return selectable
     ? sharedLookup("Cut", "cutIndex <n>", "cutIndex", example)
     : `  Recorded cut context: ${JSON.stringify({ kind: "cut-places", owner })}; each row supplies its cutIndex.`;
@@ -226,7 +226,7 @@ function cutCoordinates(cuts: readonly Cut[], owner: CutOwner, detail: ResponseM
   });
   const first = rows[0]!;
   const example = { kind: "cut-places", owner, cutIndex: first.cutIndex } as const;
-  const selectable = context === undefined || canSelect(context, example, owner.kind === "section" || owner.kind === "read");
+  const selectable = context === undefined || canSelect(context, example, owner.kind === "section");
   const literal = rows.map(({ cutIndex, anchor }) => `  ${!selectable ? "recorded coordinates" : "lookup example"}: ${literalSelection({ kind: "cut-places", owner, cutIndex })}${anchor}`);
   const shared = [
     cutContextLine(owner, first.cutIndex, context),
@@ -1496,9 +1496,6 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
     const section = value.sections[repo];
     if (section === undefined || section.status === "unknown") continue;
     if (section.status === "partial") lines.push(`cuts for repository ${repo}:`, ...impactCutBlock(section.cuts, detail, { kind: "section", repo }, context, section.inputs.declaredConfig.walk).slice(1));
-    section.value.reads.forEach(({ fact: read }, index) => {
-      if (read.status === "partial") lines.push(`cuts for repository ${repo} read ${index}:`, ...impactCutBlock(read.cuts, detail, { kind: "read", repo, index }, context, read.inputs.declaredConfig.walk).slice(1));
-    });
   }
   const recorded = value.links.length > 0 || Object.values(value.sections).some((section) => section.status !== "unknown" && section.value.impact !== undefined && impactHasRecords(section.value.impact));
   if (fact.status === "partial" || recorded) lines.push(...textModeGuide([...(crossRepository(value) ? [workspaceOwnerGuide(detail)] : []), ...workspaceBaseModuleGuides(value, detail), workspaceSnapshotGuide(fact, context)]));

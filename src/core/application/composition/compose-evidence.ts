@@ -8,7 +8,7 @@ import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText, joinsFact } from "../../domain/shared/code-node.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { AnchorId, AnchorRecord, Attestation, BindingRecord, BoundAnchor, CallLocation, CompositionIssue, Connection, ConnectionRule, EntityId, EntityRecord, EntryIdentity, EvidenceId, EvidenceSet, FileId, FileRecord, IssueDetail, MaterializedComposition, Part, PartId, PartOf, ReadId, ReadOwner, ReadRecord, RedactionRecord, RelationId, RelationRecord, RelationValue, SnapshotId, SourceId, Support } from "../../ports/evidence-composition.port.ts";
-import type { CutOwner } from "../../domain/composition/source-read.ts";
+import type { PublicReadOwner } from "../../domain/composition/source-read.ts";
 import {
   compareSupport, compositionKey, fileId, sameCanonical, sortById, unionSupports,
 } from "./composition-identity.ts";
@@ -744,6 +744,6 @@ function entryIdentity(entry: Extract<Part, { kind: "entrypoint" }>["entry"], ha
   }
 }
 
-function cutOwner(owner: ReadOwner): CutOwner {
+function cutOwner(owner: ReadOwner): PublicReadOwner {
   return owner.kind === "read" ? { kind: "read", repo: owner.repo, index: owner.index } : owner;
 }

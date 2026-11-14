@@ -2950,7 +2950,7 @@ test("workspace impact text names an unknown contributing read beside independen
     cuts,
     value: {
       reads: [
-        { kind: "discovery", fact: { ...base(), status: "partial", cuts: [cuts[0]!] } },
+        { kind: "discovery", fact: { ...base(), status: "partial" } },
         { kind: "trigger", fact: { ...base(), status: "unknown", reason: "index-unavailable" } },
       ],
       callSites: [], unmatched: [], external: [], unresolved: [],

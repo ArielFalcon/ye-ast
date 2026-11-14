@@ -448,6 +448,21 @@ test("a call a change sends onward that matches no route is unmatched unless it 
   assert.deepEqual(fact?.status === "partial" && fact.cuts, [{ kind: "unresolved-link", at: ["src/app/shop-web.api.ts", "src/app/shop-web.api.ts:12"], reason: "join-unsettled", reach: { kind: "call-site", transport: "http", method: "GET", template: "/user-{}" } }]);
 });
 
+test("a read's cuts are said once, on its section: every distinct cut of its reads in first-seen order, and the reads only say they were cut", async () => {
+  const cutAt = (place: string): Cut => ({ kind: "not-exported", at: [place], reason: "symlink", reach: { kind: "anything" } });
+  const walkCuts: [Cut, ...Cut[]] = [cutAt("src/b.ts"), cutAt("src/c.ts")];
+  const { queries } = setup({
+    repositories: { orders: ORDERS, "shop-web": { callSites: [callSite("shop-web", "orders-api/orders")], cuts: [cutAt("src/a.ts"), cutAt("src/b.ts")] } },
+    walkFact: (repo, answer) => repo === "shop-web" && answer.status === "complete" ? { ...answer, status: "partial", cuts: walkCuts } : answer,
+  });
+
+  const section = valueOf(await queries.callers(ASK)).sections["shop-web"];
+
+  assert.ok(section?.status === "partial");
+  assert.deepEqual(section.cuts, [cutAt("src/a.ts"), cutAt("src/b.ts"), cutAt("src/c.ts")]);
+  assert.deepEqual(section.value.reads.map(({ kind, fact }) => [kind, fact.status, "cuts" in fact]), [["discovery", "partial", false], ["upstream", "partial", false]]);
+});
+
 test("a section lists the drift and undecided call sites its walks send onward and counts the rest, with every link and reached call site unchanged", async () => {
   const stated = { ...undecidedCallSite("shop-web", 21), diagnostic: { cause: "destination-undecidable" as const, source: "read" as const }, stated: { method: "GET" as const, path: "/orders" } };
   const linked = [callSite("shop-web", "orders-api/orders")];

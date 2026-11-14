@@ -13,7 +13,7 @@ import type { ComposeQuery } from "../mcp/query-schema.ts";
 import { composeFull, composeReceipt } from "../mcp/render-composition.ts";
 import type { CompositionResult, CoverageSummary } from "../mcp/composition-contract.ts";
 import type { PartKind, ReadOwner } from "../core/ports/evidence-composition.port.ts";
-import type { CutOwner } from "../core/domain/composition/source-read.ts";
+import type { CutOwner, PublicReadOwner } from "../core/domain/composition/source-read.ts";
 import { CUT_SUB_REASONS } from "../core/domain/shared/fact.ts";
 
 const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
@@ -24,7 +24,7 @@ const ALL = [
   sourceFixture("callers-workspace"), sourceFixture("trace"), consequencesSource(),
 ];
 
-const ownerOf = (owner: ReadOwner): CutOwner => (owner.kind === "read" ? { kind: "read", repo: owner.repo, index: owner.index } : owner);
+const ownerOf = (owner: ReadOwner): PublicReadOwner => (owner.kind === "read" ? { kind: "read", repo: owner.repo, index: owner.index } : owner);
 
 /** A coordinator-shaped result over actual normalized and materialized fixtures; requests follow input order. */
 function resultOf(sources: readonly FixtureSource[]): CompositionResult {
@@ -38,9 +38,11 @@ function resultOf(sources: readonly FixtureSource[]): CompositionResult {
       unknown: graph.reads.filter((read) => read.analysis.status === "unknown").length,
     },
     unknowns: graph.reads.flatMap((read) => (read.analysis.status === "unknown" ? [{ source: read.source, owner: ownerOf(read.owner), reason: read.analysis.reason }] : [])),
-    limits: graph.reads.flatMap((read) => (read.analysis.status === "partial"
-      ? [...Map.groupBy(read.analysis.cuts, (cut) => cut.kind)].map(([kind, cuts]) => ({ source: read.source, owner: ownerOf(read.owner), kind, cuts: cuts.length, places: cuts.reduce((total, cut) => total + cut.at.length, 0) }))
-      : [])),
+    limits: graph.reads.flatMap((read) => {
+      if (read.analysis.status !== "partial" || read.owner.kind === "read") return [];
+      const owner: CutOwner = read.owner;
+      return [...Map.groupBy(read.analysis.cuts ?? [], (cut) => cut.kind)].map(([kind, cuts]) => ({ source: read.source, owner, kind, cuts: cuts.length, places: cuts.reduce((total, cut) => total + cut.at.length, 0) }));
+    }),
     issues,
   };
   return {
@@ -193,9 +195,9 @@ test("call-site diagnostic causes are closed in both composition schema forms", 
 
 test("dependency selection reasons remain closed in runtime and advertised composition schemas", () => {
   const invalid = json(full);
-  const read = invalid.graph.reads.find(read => read.analysis.status === "partial" && read.analysis.cuts.some(cut => cut.dependency !== undefined));
+  const read = invalid.graph.reads.find(read => read.analysis.status === "partial" && read.analysis.cuts?.some(cut => cut.dependency !== undefined));
   assert.ok(read?.analysis.status === "partial");
-  const cut = read.analysis.cuts.find(cut => cut.dependency !== undefined);
+  const cut = read.analysis.cuts?.find(cut => cut.dependency !== undefined);
   assert.ok(cut?.dependency);
   Object.assign(cut.dependency, { reason: "guess" });
   assert.equal(runtime(invalid), false);
@@ -222,8 +224,8 @@ test("compose accepts structured data effects with and without an entity and rej
 test("a cut's sub-reason passes both strict composition schemas only from the closed set, and a cut without a reason is rejected", () => {
   for (const subReason of CUT_SUB_REASONS) {
     const value = json(full);
-    const read = value.graph.reads.find((read) => read.analysis.status === "partial");
-    assert.ok(read?.analysis.status === "partial");
+    const read = value.graph.reads.find((read) => read.analysis.status === "partial" && read.analysis.cuts !== undefined);
+    assert.ok(read?.analysis.status === "partial" && read.analysis.cuts !== undefined);
     Object.assign(read.analysis.cuts[0]!, { reason: "dispatch", subReason });
     assert.equal(runtime(value), true);
     assert.equal(ajv(value).valid, true);
@@ -232,8 +234,8 @@ test("a cut's sub-reason passes both strict composition schemas only from the cl
     assert.equal(ajv(value).valid, false);
   }
   const reasonless = json(full);
-  const read = reasonless.graph.reads.find((read) => read.analysis.status === "partial");
-  assert.ok(read?.analysis.status === "partial");
+  const read = reasonless.graph.reads.find((read) => read.analysis.status === "partial" && read.analysis.cuts !== undefined);
+  assert.ok(read?.analysis.status === "partial" && read.analysis.cuts !== undefined);
   delete (read.analysis.cuts[0] as { reason?: unknown }).reason;
   assert.equal(runtime(reasonless), false);
   assert.equal(ajv(reasonless).valid, false);

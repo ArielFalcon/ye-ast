@@ -7,7 +7,7 @@
  */
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { Cut, Evidence, Fact, FactProvenance, Finding, SnapshotRef } from "../../domain/shared/fact.ts";
+import type { Cut, Evidence, Fact, FactProvenance, Finding, ReadProvenance, SnapshotRef } from "../../domain/shared/fact.ts";
 import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import type { ImpactValue } from "../../domain/impact/impact-fact.ts";
@@ -87,9 +87,9 @@ function contextOf(source: ComposedSource): SourceContext {
   }
 }
 
-function readAnalysisOf(fact: FactProvenance): ReadAnalysis {
+function readAnalysisOf(fact: FactProvenance | ReadProvenance): ReadAnalysis {
   if (fact.status === "unknown") return { status: "unknown", reason: fact.reason };
-  if (fact.status === "partial") return { status: "partial", cuts: fact.cuts };
+  if (fact.status === "partial") return "cuts" in fact ? { status: "partial", cuts: fact.cuts } : { status: "partial" };
   return { status: "complete" };
 }
 
@@ -150,7 +150,7 @@ class Builder {
    * A read of the given owner at `pointer`, with its snapshot and its own evidence in order. A read whose evidence names
    * its repositories (`located`) resolves each through the vector it declares, which is set before the evidence is.
    */
-  read(owner: ReadOwner, pointer: string, fact: FactProvenance, located?: { field: string; entries: readonly { repo: string; snapshot: SnapshotRef }[] }): ReadContext {
+  read(owner: ReadOwner, pointer: string, fact: FactProvenance | ReadProvenance, located?: { field: string; entries: readonly { repo: string; snapshot: SnapshotRef }[] }): ReadContext {
     const id = readId(this.digest, this.source, owner);
     const snapshot = this.snapshot(fact.snapshot, id, `${pointer}/snapshot`);
     const here: Place = { origin: { kind: "snapshot", snapshot }, repo: fact.snapshot.repo };

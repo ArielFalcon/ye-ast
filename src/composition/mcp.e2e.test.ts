@@ -176,7 +176,7 @@ test("callers with a workspace joins the call site of another repository to the 
       arguments: { targets: [{ file: "src/main/java/shop/OrderController.java", symbol: "OrderController.one" }], workspace: { repos: [{ path: frontend }] }, mode: "full" },
     });
 
-  const first = (await ask()).result as { isError?: boolean; structuredContent: { mode: string; status: string; snapshot: unknown; recovery: unknown; value: { links: { link: { basis: string; from: { repo: string; line: number }; to: { repo: string; name: string } } }[]; sections: Record<string, { value: { impact?: { symbols: { symbol: string }[] }; unmatched: { line: number }[] } }> } }; content: { text: string }[] };
+  const first = (await ask()).result as { isError?: boolean; structuredContent: { mode: string; status: string; snapshot: unknown; recovery: unknown; value: { links: { link: { basis: string; from: { repo: string; line: number }; to: { repo: string; name: string } } }[]; sections: Record<string, { value: { impact?: { symbols: { symbol: string }[] }; unmatched: { line: number }[]; unrelated?: { unmatched: number } } }> } }; content: { text: string }[] };
   const second = (await ask()).result as typeof first;
 
   assert.equal(first.isError, undefined);
@@ -184,7 +184,8 @@ test("callers with a workspace joins the call site of another repository to the 
     resultFields(first).value.links.map(({ link }: any) => `${link.from.repo}:${link.from.line} -> ${link.to.repo} ${link.to.name} (${link.basis})`),
     ["shop-web:7 -> shop-service GET /orders/{id} (route-overlap)"],
   );
-  assert.deepEqual(resultFields(first).value.sections["shop-web"]?.value.unmatched.map((site: any) => site.line), [10]);
+  assert.deepEqual(resultFields(first).value.sections["shop-web"]?.value.unmatched, []);
+  assert.equal(resultFields(first).value.sections["shop-web"]?.value.unrelated?.unmatched, 1);
   assert.ok((resultFields(first).value.sections["shop-web"]?.value.impact?.symbols ?? []).some((symbol: any) => symbol.symbol.endsWith("open")));
   assert.deepEqual(first, second);
   assert.match(first.content[0]?.text ?? "", /value\.sections/);

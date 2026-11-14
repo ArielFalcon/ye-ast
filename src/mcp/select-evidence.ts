@@ -3,12 +3,12 @@ import type { Handler } from "../core/domain/entrypoints/http-route.ts";
 import type { ImpactValue, Seed } from "../core/domain/impact/impact-fact.ts";
 import type { ModuleOrigin, ReachedModule } from "../core/domain/impact/module-dependency.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
-import type { Cut, Evidence, Fact, FactInputs, FactProvenance, ScopeSelection, Producer, SchemaVersion, SnapshotRef, UnknownReason } from "../core/domain/shared/fact.ts";
+import type { Cut, Evidence, Fact, FactInputs, FactProvenance, ReadProvenance, ScopeSelection, Producer, SchemaVersion, SnapshotRef, UnknownReason } from "../core/domain/shared/fact.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import type { ImpactedLink, Link } from "../core/domain/topology/link.ts";
 import { isFullObjectId } from "../core/domain/shared/revision.ts";
 import type { WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
-import { analysis, type Analysis, type CutOwner } from "../core/domain/composition/source-read.ts";
+import { analysis, type Analysis, type CutOwner, type PublicReadOwner } from "../core/domain/composition/source-read.ts";
 
 export type ImpactOwner = { kind: "local" } | { kind: "section"; repo: string };
 export type EvidenceSelection =
@@ -18,7 +18,7 @@ export type EvidenceSelection =
   | { kind: "cut-places"; owner: CutOwner; cutIndex: number }
   | { kind: "workspace-link-evidence"; linkId: string };
 export type EvidenceSource = { kind: "entrypoints"; fact: Fact<EntrypointMap> } | { kind: "local"; fact: Fact<ImpactValue> } | { kind: "workspace"; fact: Fact<WorkspaceImpactValue> };
-export type SourceRead = { owner: CutOwner; schema: SchemaVersion; snapshot: SnapshotRef; producer: Producer; inputs: FactInputs; scopeSelection?: ScopeSelection; analysis: Analysis };
+export type SourceRead = { owner: PublicReadOwner; schema: SchemaVersion; snapshot: SnapshotRef; producer: Producer; inputs: FactInputs; scopeSelection?: ScopeSelection; analysis: Analysis };
 export type SourceSummary = Omit<SourceRead, "owner"> & { reads: readonly SourceRead[]; limits: readonly { owner: CutOwner; kind: Cut["kind"]; cuts: number; places: number; limit?: number }[] };
 export type EntrypointEvidenceIdentity = Pick<Extract<Entrypoint, { kind: "http-route" }>, "kind" | "name" | "method" | "path" | "version" | "handler"> | Pick<Extract<Entrypoint, { kind: "ui-route" }>, "kind" | "name" | "path" | "outlet" | "component"> | Pick<Extract<Entrypoint, { kind: "listener" }>, "kind" | "name" | "protocol" | "destination" | "handler"> | Pick<Extract<Entrypoint, { kind: "job" }>, "kind" | "name" | "trigger" | "handler"> | Pick<Extract<Entrypoint, { kind: "callback" }>, "kind" | "name" | "contract" | "handler">;
 export type HandlerOriginsContext = { owner: ImpactOwner; snapshot: SnapshotRef; handler: Handler; matchedEntrypointCount: number; interpretation: "recorded-origin-union" };
@@ -47,8 +47,11 @@ function own<T>(record: Readonly<Record<string, T>>, key: string): T | undefined
 function summary(source: EvidenceSource): SourceSummary {
   const reads: SourceRead[] = [];
   const limits: { owner: CutOwner; kind: Cut["kind"]; cuts: number; places: number; limit?: number }[] = [];
+  function record(fact: ReadProvenance, owner: PublicReadOwner): void {
+    reads.push({ owner, schema: fact.schema, snapshot: fact.snapshot, producer: fact.producer, inputs: fact.inputs, ...(fact.scopeSelection === undefined ? {} : { scopeSelection: fact.scopeSelection }), analysis: analysis(fact) });
+  }
   function add(fact: FactProvenance, owner: CutOwner, includeRead: boolean): void {
-    if (includeRead) reads.push({ owner, schema: fact.schema, snapshot: fact.snapshot, producer: fact.producer, inputs: fact.inputs, ...(fact.scopeSelection === undefined ? {} : { scopeSelection: fact.scopeSelection }), analysis: analysis(fact) });
+    if (includeRead) record(fact, owner);
     if (fact.status !== "partial") return;
     for (const cut of fact.cuts) {
       const existing = limits.find((item) => JSON.stringify(item.owner) === JSON.stringify(owner) && item.kind === cut.kind && item.limit === cut.limit);
@@ -64,7 +67,7 @@ function summary(source: EvidenceSource): SourceSummary {
       const section = own(source.fact.value.sections, repo);
       if (!section) continue;
       add(section, { kind: "section", repo }, true);
-      if (section.status !== "unknown") section.value.reads.forEach((read, index) => add(read.fact, { kind: "read", repo, index }, true));
+      if (section.status !== "unknown") section.value.reads.forEach((read, index) => record(read.fact, { kind: "read", repo, index }));
     }
   }
   return { schema: root.schema, snapshot: root.snapshot, producer: root.producer, inputs: root.inputs, ...(root.scopeSelection === undefined ? {} : { scopeSelection: root.scopeSelection }), analysis: analysis(root), reads, limits };
@@ -140,11 +143,11 @@ export function selectEvidence(source: EvidenceSource, selection: EvidenceSelect
     let owner: FactProvenance | undefined;
     if (selection.owner.kind === "fact") owner = source.fact;
     else if (selection.owner.kind === "entrypoints" && source.kind === "entrypoints") owner = source.fact.value.entrypoints;
-    else if ((selection.owner.kind === "section" || selection.owner.kind === "read") && source.kind === "workspace") {
+    else if (selection.owner.kind === "section" && source.kind === "workspace") {
       const section = own(source.fact.value.sections, selection.owner.repo);
       if (!section) return missing();
       if (section.status === "unknown") return unavailable(section);
-      owner = selection.owner.kind === "section" ? section : validIndex(selection.owner.index) ? section.value.reads[selection.owner.index]?.fact : undefined;
+      owner = section;
     }
     if (!owner) return missing();
     if (owner.status === "unknown") return unavailable(owner);

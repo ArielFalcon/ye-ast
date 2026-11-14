@@ -17,11 +17,11 @@ import { renderEntrypointMap, renderImpact, renderOutline } from "../mcp/render.
 import { blockBytes } from "../mcp/presentation-sharing.ts";
 import type { ComposeFull, CompositionResult, CoverageSummary, RepeatRequest } from "../mcp/composition-contract.ts";
 import type { ReadOwner } from "../core/ports/evidence-composition.port.ts";
-import type { CutOwner } from "../core/domain/composition/source-read.ts";
+import type { CutOwner, PublicReadOwner } from "../core/domain/composition/source-read.ts";
 
 const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
 const COMPOSE_OUTPUT = composeOutput(createEvidenceComposition(digest));
-const ownerOf = (owner: ReadOwner): CutOwner => (owner.kind === "read" ? { kind: "read", repo: owner.repo, index: owner.index } : owner);
+const ownerOf = (owner: ReadOwner): PublicReadOwner => (owner.kind === "read" ? { kind: "read", repo: owner.repo, index: owner.index } : owner);
 
 /** A coordinator-shaped result over actual normalized and materialized fixtures; requests follow input order. */
 function resultOf(sources: readonly FixtureSource[], requests?: readonly RepeatRequest[]): CompositionResult {
@@ -35,9 +35,11 @@ function resultOf(sources: readonly FixtureSource[], requests?: readonly RepeatR
       unknown: graph.reads.filter((read) => read.analysis.status === "unknown").length,
     },
     unknowns: graph.reads.flatMap((read) => (read.analysis.status === "unknown" ? [{ source: read.source, owner: ownerOf(read.owner), reason: read.analysis.reason }] : [])),
-    limits: graph.reads.flatMap((read) => (read.analysis.status === "partial"
-      ? [...Map.groupBy(read.analysis.cuts, (cut) => cut.kind)].map(([kind, cuts]) => ({ source: read.source, owner: ownerOf(read.owner), kind, cuts: cuts.length, places: cuts.reduce((total, cut) => total + cut.at.length, 0) }))
-      : [])),
+    limits: graph.reads.flatMap((read) => {
+      if (read.analysis.status !== "partial" || read.owner.kind === "read") return [];
+      const owner: CutOwner = read.owner;
+      return [...Map.groupBy(read.analysis.cuts ?? [], (cut) => cut.kind)].map(([kind, cuts]) => ({ source: read.source, owner, kind, cuts: cuts.length, places: cuts.reduce((total, cut) => total + cut.at.length, 0) }));
+    }),
     issues,
   };
   return {
@@ -248,7 +250,7 @@ for (const id of ["handler-outline", "change-duplicate-dependence", "seven-famil
     for (const record of graph.evidence) assert.ok(text.includes(`${record.value.line}`) && text.includes(record.value.path), "every evidence coordinate");
     for (const anchor of graph.anchors) assert.ok(text.includes(anchor.symbol) && text.includes(`${anchor.line}`), `anchor ${anchor.symbol}`);
     for (const read of graph.reads) {
-      if (read.analysis.status === "partial") for (const cut of read.analysis.cuts) for (const place of cut.at) assert.ok(text.includes(place), `cut place ${place}`);
+      if (read.analysis.status === "partial") for (const cut of read.analysis.cuts ?? []) for (const place of cut.at) assert.ok(text.includes(place), `cut place ${place}`);
       if (read.analysis.status === "unknown") assert.ok(text.includes(`unknown (${read.analysis.reason})`));
     }
     for (const issue of result.coverage.issues) assert.ok(text.includes(issue.kind), issue.kind);

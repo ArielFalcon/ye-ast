@@ -163,8 +163,8 @@ test("input guide publishes declared cross-field constraints on a plain root and
 
 const INPUT_CONSTRAINTS: Record<string, string> = {
   ye_ast_entrypoints: "647121c8746689c115833d07093b35e3ee032ce95596f365484863efdfc18bc8",
-  ye_ast_impact: "c1341f610113d96ee9178899266e0a4d7c08f775008b66a93d3e914f3c179cef",
-  ye_ast_callers: "cc59bfb6e7d7192dc6f402b7b58ac5284addca3be01cb104ae9af036f81a6a16",
+  ye_ast_impact: "7601ad96e1faaa380f4044a109084617aa065febcda66d05dd5e82da812a4c8f",
+  ye_ast_callers: "1d7c1cfc647c78345184762e1b21c0c89030fa033bdacb8da39916ab4d9f9105",
   ye_ast_importers: "741b3552da816fb505b0233d6dc90540a1718fd4d970edd245d7b14524914305",
   ye_ast_outline: "600966e8b24d42a72ff5fe5046cc5901c7d59f170c7fc5c4d07135100753660e",
   ye_ast_trace: "257aaa769d7f5f00ea6cdb85a7b061ded977729f53ca6eea07eb6040c3c7ad8e",

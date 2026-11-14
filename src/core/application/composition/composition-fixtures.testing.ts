@@ -150,9 +150,9 @@ const eventCallSite: CallSite = { repo: "web", file: "src/orders.service.ts", li
 function repoImpact(kind: "trigger" | "upstream", repo: string, snapshot: SnapshotRef, impact: ImpactValue | undefined, sites: Pick<RepoImpact, "callSites" | "unmatched" | "external" | "unresolved">): Fact<RepoImpact> {
   const reads: RepoImpact["reads"] = [
     { kind: "discovery", fact: { schema: SCHEMA, snapshot, producer: PRODUCER, inputs: inputsOf(), evidence: [], status: "complete" } },
-    { kind, fact: { schema: SCHEMA, snapshot, producer: PRODUCER, inputs: inputsOf({ trust: repo === "shop" ? "trusted" : "untrusted" }), evidence: [{ path: "pom.xml", line: 1 }], status: "partial", cuts: [{ kind: "depth", at: ["src/Root.java"], limit: 2, reason: "depth", reach: { kind: "anything" } }] } },
+    { kind, fact: { schema: SCHEMA, snapshot, producer: PRODUCER, inputs: inputsOf({ trust: repo === "shop" ? "trusted" : "untrusted" }), evidence: [{ path: "pom.xml", line: 1 }], status: "partial" } },
   ];
-  return factOf<RepoImpact>({ reads, ...(impact === undefined ? {} : { impact }), ...sites }, { snapshot });
+  return factOf<RepoImpact>({ reads, ...(impact === undefined ? {} : { impact }), ...sites }, { snapshot, cuts: [{ kind: "depth", at: ["src/Root.java"], limit: 2, reason: "depth", reach: { kind: "anything" } }] });
 }
 
 export function workspaceImpactValue(family: "impact" | "callers"): WorkspaceImpactValue {

@@ -149,9 +149,8 @@ const factOf = (value: z.ZodType) => z.discriminatedUnion("status", [
     .refine((fact) => !("value" in fact))
     .meta({ not: { required: ["value"] } }),
 ]);
-const provenance = z.discriminatedUnion("status", [
-  z.looseObject({ ...baseFact, status: z.literal("complete") }),
-  z.looseObject({ ...baseFact, status: z.literal("partial"), cuts: z.array(cut).min(1) }),
+const readProvenance = z.discriminatedUnion("status", [
+  z.looseObject({ ...baseFact, status: z.enum(["complete", "partial"]) }),
   z.looseObject({ ...baseFact, status: z.literal("unknown"), reason: z.string() }),
 ]);
 const strings = z.array(z.string());
@@ -215,7 +214,7 @@ const workspaceImpact = z.looseObject({
   repositorySnapshots: snapshots,
   trigger: z.looseObject({ repo: z.string() }),
   sections: z.record(z.string(), factOf(z.looseObject({
-    reads: z.array(z.looseObject({ kind: z.string(), fact: provenance })),
+    reads: z.array(z.looseObject({ kind: z.string(), fact: readProvenance })),
     impact: impact.optional(),
     callSites: z.array(callSite),
     unmatched: z.array(callSite),

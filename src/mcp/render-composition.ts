@@ -19,7 +19,7 @@ import { compareText } from "../core/domain/shared/code-node.ts";
 import type { ComposeFull, ComposeReceipt, CompositionResult } from "./composition-contract.ts";
 import type { AnchorId, Attestation, ComparisonRef, CompositionIssue, Connection, EntityId, EntityRecord, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, FileId, OriginReference, Part, PartId, PartKind, PartOf, ReadId, ReadOwner, ReadRecord, RelationId, RelationRecord, SnapshotId, SourceDescriptor, SourceId } from "../core/ports/evidence-composition.port.ts";
 import type { IssuingPlace } from "../core/domain/trace/trace-fact.ts";
-import type { CutOwner } from "../core/domain/composition/source-read.ts";
+import type { PublicReadOwner } from "../core/domain/composition/source-read.ts";
 
 /** The action receipt: verification and complete safe repeat queries; findings and coverage belong to text. */
 export function composeReceipt(result: CompositionResult, mode: "summary" | "details"): ComposeReceipt {
@@ -834,7 +834,7 @@ class CompactView {
       const group = incomplete.rows.filter((row) => row.contextIndex === index).map((row) => row.value);
       const members = this.readGroup(group);
       const located = this.details || group.some((read) => SUMMARY_LOCATED_CUTS.has(this.sources.get(read.source)?.family));
-      lines.push(analysis.status === "unknown" ? `  ${members}: unknown (${analysis.reason})` : `  ${members}: partial; ${analysis.status === "partial" ? this.cuts(analysis.cuts, located) : ""}`);
+      lines.push(analysis.status === "unknown" ? `  ${members}: unknown (${analysis.reason})` : `  ${members}: partial; ${analysis.status === "partial" ? analysis.cuts === undefined ? "its section states the cuts" : this.cuts(analysis.cuts, located) : ""}`);
     });
     const evidence = shareExactContext(reads.filter((read) => read.evidence.length > 0 && (this.details || read.analysis.status !== "complete")), (read) => read.evidence);
     evidence.contexts.forEach((ids, index) => lines.push(`  read ${this.evidenceList(ids)}: ${this.readGroup(evidence.rows.filter((row) => row.contextIndex === index).map((row) => row.value))}`));
@@ -912,7 +912,7 @@ function section(title: string, lines: readonly string[]): string[] {
   return lines.length === 0 ? [] : [`${title}:`, ...lines];
 }
 
-function ownerText(owner: ReadOwner | CutOwner): string {
+function ownerText(owner: ReadOwner | PublicReadOwner): string {
   switch (owner.kind) {
     case "fact": return "";
     case "entrypoints": return "/entrypoints";

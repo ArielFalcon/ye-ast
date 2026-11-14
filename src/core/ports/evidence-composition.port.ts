@@ -25,7 +25,7 @@ import type { Cut, Evidence, FactInputs, Producer, SchemaVersion, ScopeSelection
 import type { FactRead, WorkspaceValue } from "./workspace-queries.port.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "./workspace-impact-queries.port.ts";
 import type { DecisionValue } from "./decision-queries.port.ts";
-import type { Analysis, CutOwner } from "../domain/composition/source-read.ts";
+import type { Analysis, PublicReadOwner } from "../domain/composition/source-read.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { EntrypointMap } from "../domain/map/entrypoint-map.ts";
 
@@ -109,12 +109,12 @@ export type SourceDescriptor = SourceRecord & { requestIndex: number };
 /** The kind of a workspace impact read as `RepoImpact.reads[].kind` records it. */
 export type RecordedReadKind = RepoImpact["reads"][number]["kind"];
 /** A read's owner; a `read` owner also carries the kind the section recorded for it. */
-export type ReadOwner = Exclude<CutOwner, { kind: "read" }> | (Extract<CutOwner, { kind: "read" }> & { readKind: RecordedReadKind });
+export type ReadOwner = Exclude<PublicReadOwner, { kind: "read" }> | (Extract<PublicReadOwner, { kind: "read" }> & { readKind: RecordedReadKind });
 
-/** Distinct from `Analysis` of select-evidence.ts: partial keeps its cuts, unknown its reason and never a value. */
+/** Distinct from `Analysis` of select-evidence.ts: partial keeps its cuts, unknown its reason and never a value. A read recorded under a section has no cuts of its own: the section's hold them. */
 export type ReadAnalysis =
   | { status: "complete" }
-  | { status: "partial"; cuts: readonly [Cut, ...Cut[]] }
+  | { status: "partial"; cuts?: readonly [Cut, ...Cut[]] }
   | { status: "unknown"; reason: UnknownReason };
 
 export type ReadRecord = {
@@ -374,7 +374,7 @@ export type IssueDetail =
   | { kind: "missing-provenance"; repo: string; part?: PartId; side?: "base" | "head" }
   | { kind: "missing-origin-reference"; part: PartId; table: "seeds" | "module-origins"; index: number }
   | { kind: "missing-link-reference"; part: PartId; linkId: string; position: number }
-  | { kind: "redacted-identity"; owner: CutOwner; pointer?: string };
+  | { kind: "redacted-identity"; owner: PublicReadOwner; pointer?: string };
 export type CompositionIssue = { sources: readonly SourceId[]; reads: readonly ReadId[] } & IssueDetail;
 
 /** The tables shared by the materialized and the wire graph; `issues` travel once, in `coverage.issues`. */

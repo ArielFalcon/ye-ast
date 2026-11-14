@@ -4,7 +4,7 @@
  */
 import type { ResponseMode } from "./presentation.ts";
 import type { Cut, UnknownReason } from "../core/domain/shared/fact.ts";
-import type { CutOwner } from "../core/domain/composition/source-read.ts";
+import type { CutOwner, PublicReadOwner } from "../core/domain/composition/source-read.ts";
 import type { LiveStaleNotice, WorkspaceLiveNotice } from "../core/ports/live-queries.port.ts";
 import type { FactRead, WorkspaceRefresh } from "../core/ports/workspace-queries.port.ts";
 import type { CompositionGraph, CompositionIdentity, CompositionIssue, QueryFamily, SourceId } from "../core/ports/evidence-composition.port.ts";
@@ -28,7 +28,7 @@ export type RepeatRequest =
 
 export type CoverageSummary = {
   reads: { complete: number; partial: number; unknown: number };
-  unknowns: readonly { source: SourceId; owner: CutOwner; reason: UnknownReason }[];
+  unknowns: readonly { source: SourceId; owner: PublicReadOwner; reason: UnknownReason }[];
   limits: readonly { source: SourceId; owner: CutOwner; kind: Cut["kind"]; limit?: number; cuts: number; places: number }[];
   issues: readonly CompositionIssue[];
 };

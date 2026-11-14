@@ -17,7 +17,8 @@ const fact = z.strictObject({kind: z.literal('fact')});
 const entrypoints = z.strictObject({kind: z.literal('entrypoints')});
 const read = z.strictObject({kind: z.literal('read'), repo: text, index});
 const impactOwner = z.union([local, section]);
-const cutOwner = z.union([fact, entrypoints, section, read]);
+const cutOwner = z.union([fact, entrypoints, section]);
+const readOwner = z.union([fact, entrypoints, section, read]);
 const subjectHandler = z.strictObject({path: text, symbol: text, line: positive});
 const handlerSelection = z.strictObject({kind: z.literal('handler-origins'), owner: impactOwner, handler: subjectHandler});
 const moduleSelection = z.strictObject({kind: z.literal('module-origins'), owner: impactOwner, module: z.strictObject({file: text, snapshot: z.enum(['base','head'])})});
@@ -27,7 +28,7 @@ const linkSelection = z.strictObject({kind: z.literal('workspace-link-evidence')
 const selection = z.discriminatedUnion('kind', [handlerSelection, moduleSelection, findingSelection, cutSelection, linkSelection]);
 const pageRequest = z.strictObject({limit: positive.describe('Positive safe count of primary records; no default.'), cursor: z.string().optional().describe('Returned nextCursor, same selection/limit; rechecks identity.')});
 
-type OwnerKind = 'local' | 'section' | 'fact' | 'entrypoints' | 'read';
+type OwnerKind = 'local' | 'section' | 'fact' | 'entrypoints';
 type SelectionKind = z.infer<typeof selection>['kind'];
 type Branch = Partial<Record<SelectionKind, readonly OwnerKind[]>>;
 
@@ -40,16 +41,16 @@ const ELIGIBILITY: Record<Tool, {local: Branch; workspace?: Branch}> = {
   entrypoints: {local: {'entrypoint-evidence': [], 'cut-places': ['fact', 'entrypoints']}},
   callers: {
     local: {'handler-origins': ['local'], 'cut-places': ['fact']},
-    workspace: {'handler-origins': ['section'], 'cut-places': ['fact', 'section', 'read'], 'workspace-link-evidence': []},
+    workspace: {'handler-origins': ['section'], 'cut-places': ['fact', 'section'], 'workspace-link-evidence': []},
   },
   impact: {
     local: {'handler-origins': ['local'], 'module-origins': ['local'], 'cut-places': ['fact']},
-    workspace: {'handler-origins': ['section'], 'module-origins': ['section'], 'cut-places': ['fact', 'section', 'read'], 'workspace-link-evidence': []},
+    workspace: {'handler-origins': ['section'], 'module-origins': ['section'], 'cut-places': ['fact', 'section'], 'workspace-link-evidence': []},
   },
 };
 const KIND_ORDER: readonly SelectionKind[] = ['entrypoint-evidence', 'handler-origins', 'module-origins', 'cut-places', 'workspace-link-evidence'];
-const OWNERS: Record<OwnerKind, z.ZodType> = {local, section, fact, entrypoints, read};
-const OWNER_SHAPE: Record<OwnerKind, string> = {local: '{"kind":"local"}', section: '{"kind":"section","repo"}', fact: '{"kind":"fact"}', entrypoints: '{"kind":"entrypoints"}', read: '{"kind":"read","repo","index"}'};
+const OWNERS: Record<OwnerKind, z.ZodType> = {local, section, fact, entrypoints};
+const OWNER_SHAPE: Record<OwnerKind, string> = {local: '{"kind":"local"}', section: '{"kind":"section","repo"}', fact: '{"kind":"fact"}', entrypoints: '{"kind":"entrypoints"}'};
 const SUBJECT_SHAPE: Record<SelectionKind, string> = {
   'entrypoint-evidence': '"findingIndex"',
   'handler-origins': '"handler":{"path","symbol","line"}',
@@ -165,7 +166,7 @@ export function selectedOutputFor(tool: Tool, deps: SelectedOutputDeps) {
   const {schema, snapshot, producer, inputs, evidence} = deps.baseFact;
   const analysis = z.discriminatedUnion('status', [z.strictObject({status:z.literal('complete')}), z.strictObject({status:z.literal('partial')}), z.strictObject({status:z.literal('unknown'), reason})]);
   const sourceFields = {schema, snapshot, producer, inputs, scopeSelection: z.strictObject({ unmatchedIncludes: z.array(z.string()), selectedFiles: z.int().min(0) }).optional(), analysis};
-  const source = z.strictObject({...sourceFields, reads:z.array(z.strictObject({owner:cutOwner,...sourceFields})), limits:z.array(z.strictObject({owner:cutOwner,kind:cutKind,cuts:index,places:index,limit:z.number().optional()}))});
+  const source = z.strictObject({...sourceFields, reads:z.array(z.strictObject({owner:readOwner,...sourceFields})), limits:z.array(z.strictObject({owner:cutOwner,kind:cutKind,cuts:index,places:index,limit:z.number().optional()}))});
   const handler = z.strictObject({path:z.string(),symbol:z.string(),line:z.number(),endLine:z.number().optional()});
   const identity = z.discriminatedUnion('kind', [
     z.strictObject({kind:z.literal('http-route'),name:z.string(),method:z.enum(['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS','TRACE','ANY']),path:z.string(),version:z.string().optional(),handler}),
