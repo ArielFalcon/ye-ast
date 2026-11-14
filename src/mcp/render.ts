@@ -24,7 +24,7 @@ import type { NameCandidate, OutwardKind, OutwardName, RepositoryOutwardName } f
 import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
 import type { WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
-import { compareUnresolvedCallSites, type CallSite, type UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
+import { compareUnresolvedCallSites, statedRequestsOf, type CallSite, type UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
 import type { ImpactedLink, Link, UnlinkedCallSite } from "../core/domain/topology/link.ts";
 import type { RepositoryResolution } from "../core/domain/topology/remote-snapshot.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
@@ -1420,7 +1420,8 @@ function linkMapLines(links: readonly TraceLinked<Link>[], unlinked: readonly Tr
 
 function callSiteLine(site: CallSite): string {
   const { target } = site;
-  const named = target.status !== "complete" ? "unknown" : "path" in target.value ? `${target.value.method} ${target.value.path}` : `${target.value.protocol} ${target.value.destination}`;
+  const requests = statedRequestsOf(site).map(({ method, path }) => `${method} ${path}`);
+  const named = requests.length > 0 ? requests.join(", ") : target.status === "complete" && "destination" in target.value ? `${target.value.protocol} ${target.value.destination}` : "unknown";
   return `      - ${placeText(site.file, site.line)} ${site.symbol} -> ${named}`;
 }
 

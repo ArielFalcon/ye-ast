@@ -422,3 +422,15 @@ test("a trace whose requested ranges held no token says so in one line", () => {
   const text = renderTrace({ ...fact, value } as unknown as Fact<TraceValue>);
   assert.ok(text.includes("1 requested ranges hold no token"), text);
 });
+
+test("a call site the join linked through a path stated after an undecided base prints that request, not unknown", () => {
+  const stated = { repo: "web", file: "src/api.ts", line: 4, symbol: "Api.load", transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [] }, stated: { method: "POST", expressions: [[{ kind: "unknown", cause: "destination-undecidable", evidence: [] }, { kind: "text", text: "/api/orders" }]] } };
+  const bare = { ...stated, line: 9, stated: undefined };
+  const section = { ...base, status: "complete", value: { reads: [], callSites: [stated, bare], unmatched: [], external: [], unresolved: [] } };
+  const fact = { ...base, status: "complete", value: { workspace: { repos: ["web"], gateways: [], unmatchedGateways: [], unserved: [], source: "request" }, repositorySnapshots: [], trigger: { repo: "web" }, sections: { web: section }, links: [] } } as unknown as Fact<WorkspaceImpactValue>;
+
+  const lines = renderWorkspaceImpact(fact).split("\n");
+
+  assert.ok(lines.some((line) => line.includes("src/api.ts:4") && line.includes("POST /api/orders") && !line.includes("-> unknown")));
+  assert.ok(lines.some((line) => line.includes("src/api.ts:9") && line.endsWith("-> unknown")));
+});
