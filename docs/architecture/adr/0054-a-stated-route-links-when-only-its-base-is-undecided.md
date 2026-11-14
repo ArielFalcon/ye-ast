@@ -7,6 +7,7 @@
   cannot resolve the base URL", which kept such a call site a cut unless a gateway prefix was declared.
 - Superseded in part by: ADR-0057, decision 1 only (each URL expression that states its route).
 - Related: ADR-0042, ADR-0051, ADR-0052, ADR-0053, RFC-0011
+- Amended by: this decision 6, note of 2026-11-14 (unit U5 of the transversal fix plan)
 - Superseded in part by: [ADR-0069](0069-a-request-whose-route-is-stated-after-an-undecided-base-is-a-placed-effect.md), decision 4 for the trace only
 
 ## Context
@@ -36,6 +37,12 @@ handler serves it. An undecided authority leaves the first unknown, not the seco
 5. Gateway inference reads the first segment such a route states, as it reads a complete target's.
 6. A route found nowhere settles nothing: the call site stays an unresolved cut, never `unmatched` drift, since it may
    leave the workspace.
+
+   Amendment note (2026-11-14, owner: "Acepto" to the transversal fix plan, unit U5): under a gateway in force, a path
+   stated after an undecided base that no route of the repository the gateway routes to takes is `unmatched`, as the
+   decided path under that prefix already is (RFC-0011: "a call under it that matches nothing is the service's drift").
+   The gateway names the service, so the call cannot have left the workspace. Without a gateway in force, this decision
+   stands. When another alternative of the same call site links, ties or could match, the call site is not `unmatched`.
 7. A trace with a workspace returns such a link where the trace placed the request exactly in an executed body
    (ADR-0053 decision 5): the unresolved request keeps the column it was placed at, so an undecided destination does not
    hide the link the workspace admits.
