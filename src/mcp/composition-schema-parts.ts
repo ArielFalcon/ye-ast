@@ -360,10 +360,7 @@ export const partSchema = z.discriminatedUnion("kind", [
     }),
     disposition: z.enum(["matched", "unmatched", "external"]),
   }),
-  part("unresolved-call-site", {
-    site: unresolvedCallSiteSchema,
-    repo: z.string().exactOptional(),
-  }),
+  part("unresolved-call-site", { site: unresolvedCallSiteSchema }),
   part("inherited-gap", { gap: inheritedGapSchema }),
   part("unrelated-call-sites", { owner: ids.read, unmatched: count, external: count, unresolved: count }),
   part("unlinked-call-site", {

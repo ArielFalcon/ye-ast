@@ -259,7 +259,7 @@ export type PartPayload =
   | { kind: "name-candidate"; context: ReadId; name: string; repo: string; basis: NameCandidate["basis"]; evidence: readonly EvidenceId[] }
   | { kind: "call-site"; site: CallSiteData; disposition: "matched" | "unmatched" | "external" }
   /** `repo` names the repository where the owner is no repository section (a decision set). */
-  | { kind: "unresolved-call-site"; site: UnresolvedCallSite; repo?: string }
+  | { kind: "unresolved-call-site"; site: UnresolvedCallSite }
   | { kind: "inherited-gap"; gap: InheritedGap }
   /** What a section's question leaves out of its call-site lists: counts, never the sites. */
   | { kind: "unrelated-call-sites"; owner: ReadId; unmatched: number; external: number; unresolved: number }
