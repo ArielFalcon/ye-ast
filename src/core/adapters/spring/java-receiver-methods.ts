@@ -39,7 +39,8 @@ const NOT_ARGUMENTS: ReadonlySet<string> = new Set(["line_comment", "block_comme
 const CALL_REWRITING_ANNOTATIONS: ReadonlySet<string> = new Set(["Delegate", "ExtensionMethod"]);
 const PRIMITIVES: ReadonlySet<string> = new Set(["boolean", "byte", "char", "short", "int", "long", "float", "double"]);
 /** Platform classes a signature names that declare no type parameter, so a value of one is never raw. */
-const PLAIN_PLATFORM_TYPES: ReadonlySet<string> = new Set(["java.lang.Object", "java.lang.String"]);
+const ROOT_CLASS = "java.lang.Object";
+const PLAIN_PLATFORM_TYPES: ReadonlySet<string> = new Set([ROOT_CLASS, "java.lang.String"]);
 
 /** One Java source as the resolver reads it: its description, and its receiver bindings by the call's place, member and receiver. */
 export interface ReceiverSource {
@@ -67,8 +68,9 @@ interface ReadFile extends ReceiverSource {
  * types equal the arguments' settled signature binds it, since an exact match is the most specific applicable method
  * (JLS 15.12.2.5), and otherwise every member of the call's arity must state the same signature, with no varargs and no
  * inaccessible private declaration, a `protected` member of another package withholds the selection (JLS 6.6), and a
- * static call names no instance method — or the name is one of `Object`'s methods; when the call sits in an
- * anonymous or a local class; when a source holds an annotation by which a processor adds overloads or rewrites calls
+ * static call names no instance method — or the name is one of `Object`'s methods; when a call without a receiver or
+ * on `this` sits in an anonymous or a local class that declares the name or has a supertype whose members the sources
+ * do not settle (`searchedType`); when a source holds an annotation by which a processor adds overloads or rewrites calls
  * (`CALL_REWRITING_ANNOTATIONS`); or when the declared hierarchy does not settle the member. Declaration selection and
  * runtime dispatch are separate obligations. An unproven value receiver or declared repository member remains a cut,
  * naming the declarations of the call's arity its type offers where the whole hierarchy was read; no name-only index
@@ -505,15 +507,68 @@ export function createResolver(project: JavaProject, generated = false) {
   };
 
   /**
+   * The type a call written without a receiver (`outward`), or on `this`, searches for its name (JLS 15.12.1): the type of
+   * the project whose body holds it, through lambdas. An anonymous or a local class on the way, which the project does not
+   * hold, is searched by its own declarations and the members of its supertypes: none of the name sends a call without a
+   * receiver to the class around it, and the one supertype that has the name is the type searched. None when such a class
+   * declares the one method of the name its members hold, which the project does not place; `unproven` when it declares
+   * the name beside others, inherits it from several supertypes, or has a supertype whose members the sources do not
+   * settle. The members an enum constant's body inherits are its enum's.
+   */
+  const searchedType = (invocation: Node, file: JavaFile, outward: boolean): TypeDecl | "unproven" | undefined => {
+    const name = invocation.childForFieldName("name")?.text;
+    for (let body = enclosingBody(invocation); body !== undefined; body = enclosingBody(body)) {
+      const holder = body.parent;
+      if (holder === null) return undefined;
+      const held = project.types.find((type) => type.file === file && type.node.id === holder.id);
+      if (held !== undefined) return held;
+      if (holder.type === "enum_constant") return thisType(holder, file, project) ?? "unproven";
+      const supertypes = name === undefined ? undefined : unheldSupertypes(holder, file);
+      if (name === undefined || supertypes === undefined) return "unproven";
+      const offering = supertypes.filter((type) => declaredHierarchy(type).types.some((ancestor) => ancestor.methods.some((method) => method.name === name)) || generatedMember(type, project, name, argumentCount(invocation)) !== undefined);
+      const own = declaredMethods(body, name);
+      if (own > 0) return own === 1 && offering.length === 0 ? undefined : "unproven";
+      if (offering.length === 1 && supertypes.length === 1) return offering[0];
+      if (offering.length > 0 || !outward) return "unproven";
+    }
+    return undefined;
+  };
+
+  /**
+   * The repository types an anonymous or a local class names as its supertypes, a platform interface that declares no
+   * members and the root class, whose methods no selection settles (`OBJECT_METHODS`), left out; none when one is not
+   * such a type or its hierarchy leaves its members unsettled.
+   */
+  const unheldSupertypes = (holder: Node, file: JavaFile): readonly TypeDecl[] | undefined => {
+    const written = holder.type === "object_creation_expression" ? [holder.childForFieldName("type")] : holder.type === "class_declaration" ? [holder.childForFieldName("superclass")?.namedChildren[0], ...(holder.childForFieldName("interfaces")?.namedChildren[0]?.namedChildren ?? [])] : undefined;
+    if (written === undefined) return undefined;
+    const types: TypeDecl[] = [];
+    for (const clause of written) {
+      if (clause === null || clause === undefined) continue;
+      const head = clause.type === "generic_type" ? clause.namedChildren[0] : clause;
+      if (head === null || head === undefined) return undefined;
+      const found = resolve(head, file, project, enclosingType(head, file, project), head);
+      if (found?.kind === "platform" && (MEMBERLESS_PLATFORM_INTERFACES.has(found.fqn) || found.fqn === ROOT_CLASS)) continue;
+      const type = found?.kind === "repository" && (found.type?.kind === "class" || found.type?.kind === "interface") ? found.type : undefined;
+      if (type === undefined || hierarchyOpen(declaredHierarchy(type), [])) return undefined;
+      types.push(type);
+    }
+    return types;
+  };
+
+  /**
    * The repository type the receiver of an invocation is declared to hold; none when nothing proves one. `bound` when a
    * type variable types the receiver, or a receiver up its chain: the type is the variable's one bound (JLS 4.4).
    * `typeName` when the receiver is a name that denotes the type itself, so the call must name a static method. `builder`
    * when the receiver is the generated builder of the type.
    */
-  const receiverOf = (invocation: Node, source: ReceiverSource): { type: TypeDecl; bound: boolean; typeName: boolean; builder?: true } | undefined => {
+  const receiverOf = (invocation: Node, source: ReceiverSource): { type: TypeDecl; bound: boolean; typeName: boolean; builder?: true } | "unproven" | undefined => {
     const object = invocation.childForFieldName("object");
     const declared = (type: TypeDecl | undefined, bound = false, typeName = false) => (type === undefined ? undefined : { type, bound, typeName });
-    if (object === null || object.type === "this") return declared(thisType(invocation, source.file, project));
+    if (object === null || object.type === "this") {
+      const searched = searchedType(invocation, source.file, object === null);
+      return searched === "unproven" ? searched : declared(searched);
+    }
     if (object.type === "method_invocation") {
       const called = methodNamed(object, source);
       if (called !== undefined && "generated" in called) return generatedResult(called.generated);
@@ -574,7 +629,7 @@ export function createResolver(project: JavaProject, generated = false) {
   const methodNamed = (invocation: Node, source: ReceiverSource): { method: MethodDecl; bound: boolean } | { candidates: readonly MethodPlace[] } | { generated: GeneratedMember } | undefined => {
     const held = receiverOf(invocation, source);
     const name = invocation.childForFieldName("name")?.text;
-    if (held === undefined || name === undefined) return undefined;
+    if (held === undefined || held === "unproven" || name === undefined) return undefined;
     if (held.builder === true) {
       const made = generated ? builderMember(held.type, project, name, argumentCount(invocation)) : undefined;
       return made === undefined ? undefined : { generated: made };
@@ -841,6 +896,11 @@ function namesAnyDynamicImplementation(file: JavaFile, project: JavaProject): bo
     for (const child of node.namedChildren) if (child !== null) pending.push(child);
   }
   return false;
+}
+
+/** How many methods of the name a type body declares. */
+function declaredMethods(body: Node, name: string): number {
+  return body.namedChildren.filter((member) => member?.type === "method_declaration" && member.childForFieldName("name")?.text === name).length;
 }
 
 /** Whether a lexical type or its hierarchy declares, or may supply, a field of the name. */
