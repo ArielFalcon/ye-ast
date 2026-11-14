@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderContractConsequences, renderEntrypointMap, renderImpact, renderTrace, renderWorkspaceImpact, ROOT_PATH_TEXT } from "./render.ts";
+import { BASE_UNDECIDED, renderContractConsequences, renderEntrypointMap, renderImpact, renderTrace, renderWorkspaceImpact, ROOT_PATH_TEXT } from "./render.ts";
 import type { Fact } from "../core/domain/shared/fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
@@ -429,6 +429,6 @@ test("a call site the join linked through a path stated after an undecided base 
 
   const lines = renderWorkspaceImpact(fact).split("\n");
 
-  assert.ok(lines.some((line) => line.includes("src/api.ts:4") && line.includes("POST /api/orders") && !line.includes("-> unknown")));
+  assert.ok(lines.some((line) => line.includes("src/api.ts:4") && line.includes("POST /api/orders") && line.includes(BASE_UNDECIDED) && !line.includes("-> unknown")));
   assert.ok(lines.some((line) => line.includes("src/api.ts:9") && line.endsWith("-> unknown")));
 });

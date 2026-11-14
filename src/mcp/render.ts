@@ -25,7 +25,7 @@ import type { NameCandidate, OutwardKind, OutwardName, RepositoryOutwardName } f
 import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
 import type { WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
-import { compareUnresolvedCallSites, inheritedCallerCount, statedRequestsOf, type CallSite, type InheritedCaller, type InheritedGap, type UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
+import { compareUnresolvedCallSites, httpTargetOf, inheritedCallerCount, statedRequestsOf, type CallSite, type InheritedCaller, type InheritedGap, type UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
 import type { ImpactedLink, Link, UnlinkedCallSite } from "../core/domain/topology/link.ts";
 import type { RepositoryResolution } from "../core/domain/topology/remote-snapshot.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
@@ -1401,11 +1401,14 @@ function traceSettledLine(value: TraceValue): string[] {
   return value.settled === undefined ? [] : [`${value.settled.length} requested ranges hold no token`];
 }
 
+/** What a line says of a request whose path the snapshot states after a base URL it does not decide (ADR-0054). */
+export const BASE_UNDECIDED = "base URL undecided";
+
 /** One link as every answer lists it: its number, both ends, the basis and what the answer adds about how it was reached. */
 function linkLine(link: TraceLinked<Link>, number: number | undefined, reached = ""): string {
   const confidence = link.confidence < 1 ? `, confidence ${link.confidence}` : "";
   const profiles = link.profiles === undefined ? "" : `, under ${link.profiles.join(", ")}`;
-  const authority = link.authority === undefined ? "" : ", base URL undecided";
+  const authority = link.authority === undefined ? "" : `, ${BASE_UNDECIDED}`;
   const drift = driftText(link.drift);
   return `  - ${number}. ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} -> ${handlerText(link.to.handler)} (${link.basis}${confidence}${profiles}${authority}${drift === "" ? "" : `, ${drift}`}${link.deferred === true ? ", runs later, if at all" : ""}${issuedText(link.issuedAt)}${reached})`;
 }
@@ -1440,7 +1443,7 @@ function callSiteLine(site: CallSite): string {
   const { target } = site;
   const requests = statedRequestsOf(site).map(({ method, path }) => `${method} ${path}`);
   const named = requests.length > 0 ? requests.join(", ") : target.status === "complete" && "destination" in target.value ? `${target.value.protocol} ${target.value.destination}` : "unknown";
-  return `      - ${placeText(site.file, site.line)} ${site.symbol} -> ${named}`;
+  return `      - ${placeText(site.file, site.line)} ${site.symbol} -> ${named}${requests.length > 0 && httpTargetOf(site) === undefined ? ` (${BASE_UNDECIDED})` : ""}`;
 }
 
 function callSiteBlock(label: string, sites: readonly CallSite[]): string[] {
