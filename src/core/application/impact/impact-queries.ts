@@ -27,7 +27,7 @@ import { isExtractorConfiguration } from "../../domain/languages/configuration.t
 import { isAngularTemplate, isJsonModuleResource, isTypeCheckerInput, isTypeScriptFile, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
 import { moduleImpact, moduleResources } from "../../domain/impact/module-impact.ts";
-import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
+import type { ModuleDependencies, ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { cutsCompleteness } from "../../domain/languages/uncovered.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
@@ -153,6 +153,11 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const slot = canonicalJson(alsoListed === undefined || alsoListed.length === 0 ? { output: "module-dependencies" } : { output: "module-dependencies", alsoListed });
     return retainedOf(prepared, slot, () => reader.extract(tree.sources, listing === undefined ? undefined : { listing }), signal);
   };
+  /** The head's module statements, read once a namespace import may name a reached declaration. */
+  const namespaceModules = (head: Pick<HeadReading, "prepared">, tree: CommitExtraction, signal: AbortSignal | undefined): (() => Promise<readonly ModuleDependency[]>) | undefined => {
+    const reader = deps.moduleDependencies;
+    return reader === undefined ? undefined : async () => (await moduleDependenciesOf(reader, head.prepared, tree, signal)).dependencies;
+  };
   const headReader = createHeadReader(deps);
   const bindingModules = deps.moduleReader ?? deps.moduleDependencies;
   const moduleSource = deps.moduleDependencies === undefined ? isInMapScope : isWritten;
@@ -223,7 +228,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const typed = await reading.typed();
           if (typed === "aborted") return ABORTED;
-          const read = await impactOf({ store: reading.store, changes: ranges.changes, requested, componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
+          const read = await impactOf({ store: reading.store, changes: ranges.changes, requested, componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, modules: namespaceModules(head, headTree, signal), signal });
           if (signal?.aborted) return ABORTED;
           const settled = settledRangeChanges(ranges.settled);
           const value = settled.length === 0 ? read.value : { ...read.value, settled };
@@ -487,7 +492,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (signal?.aborted) return ABORTED;
       const typed = await reading.typed();
       if (typed === "aborted") return ABORTED;
-      const read = await impactOf({ store: reading.store, changes: validatedChanges, requested: [], componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, signal });
+      const read = await impactOf({ store: reading.store, changes: validatedChanges, requested: [], componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, modules: namespaceModules(head, headTree, signal), signal });
       if (signal?.aborted) return ABORTED;
       const reached = { ...value, ...read.value };
       return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), reached, [...unaccounted([...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts]), ...moduleCuts], impactWalk(changes.map(({ path }) => path), reached)) };
@@ -644,6 +649,8 @@ interface WalkInput {
   reading: BaseReading;
   /** What the type checker binds each call to, consulted first. */
   typed?: ReadonlyMap<string, TypeTarget> | undefined;
+  /** The head's module statements, through which a namespace import reaches a declaration. */
+  modules?: (() => Promise<readonly ModuleDependency[]>) | undefined;
   signal?: AbortSignal | undefined;
 }
 
@@ -689,8 +696,8 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   }
   const syntaxWalk = { seeds: selection.syntaxSeeds.map(({ symbol }) => symbol), callers: syntaxCallers };
   const origins = input.reading.origins();
-  const written = targets === undefined || origins === undefined ? undefined : createWrittenUses({ store, sources: headTree.sources, tokensOf: (file) => input.reading.tokensOf(file), syntaxOf: input.reading.syntaxOf, origins, importedDeclarations: targets.importedDeclarations });
-  const { inbound, walk, attributed, references, cuts: contradictedCuts } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls, contradictions, syntaxWalk, written);
+  const written = targets === undefined || origins === undefined ? undefined : createWrittenUses({ store, sources: headTree.sources, tokensOf: (file) => input.reading.tokensOf(file), syntaxOf: input.reading.syntaxOf, origins, importedDeclarations: targets.importedDeclarations, modules: input.modules });
+  const { inbound, walk, attributed, unsettled, references, cuts: contradictedCuts } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls, contradictions, syntaxWalk, written);
 
   const walked = walk.reached.flatMap(({ symbol }) => indexedDeclaration(symbol) ?? []).filter(({ kind }) => !isFileDependent(kind));
   const reachedIds = new Set(walked.map((symbol) => symbol.id));
@@ -705,7 +712,10 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
     ...unreadTypeReferenceCuts(seeds, selection.removalHolders, input.reading),
     ...unplacedSupertypeCuts(input.reading.unplacedSupertypes([...seeds.map(({ symbol }) => symbol), ...walked])),
     ...contradictedCuts,
-    ...attributedCallCuts(attributed.map(({ node, call: { reference } }) => ({ declaration: node, place: { ...reference, name: compactSpelling(reference.name) } }))),
+    ...attributedCallCuts([
+      ...attributed.map(({ node, call: { reference } }) => ({ declaration: node, place: { ...reference, name: compactSpelling(reference.name) } })),
+      ...unsettled.map(({ node, file, line, name }) => ({ declaration: node, place: { file, line, name } })),
+    ]),
     ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(walk.expanded, reachedIds), knownPlaces, input.proofs?.bound, inbound.memberProofs(walk.expanded), new Set(await boundUses(references, walk.expanded, reachedIds, implemented, input.reading.origins(), input.signal))),
     ...unresolvedLinkCuts(input.unresolvedRelations ?? [], walked.filter((symbol) => walk.wholeDeclarations.has(symbol.id) && ([...EDGE_POLICY.typeReferences.to, ...EDGE_POLICY.constantReferences.to] as readonly string[]).includes(symbol.kind)), []),
     ...removedDeclarationCuts(unresolved, selection.removed, knownPlaces, input.proofs?.bound, input.proofs?.localParameters),
@@ -777,8 +787,9 @@ async function boundUses(references: readonly SettledReference[], expanded: Read
  * symbol depends on, the walk runs again, because a bound it frees, or an edge it moves, can read edges no earlier walk
  * read. `attributed` holds the unbound written calls attributed to a symbol it reached.
  */
-async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = [], reverse?: ReverseCalls, originCalls?: OriginCalls, contradictions?: ContradictedCalls, syntax?: { seeds: readonly ModelDeclaration[]; callers: ReadonlyMap<string, readonly import("./inbound-edges.ts").InboundEdge[]> }, written?: WrittenUses): Promise<{ inbound: InboundEdges; walk: Walk; attributed: readonly AttributedCall[]; references: readonly SettledReference[]; cuts: readonly Cut[] }> {
+async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = [], reverse?: ReverseCalls, originCalls?: OriginCalls, contradictions?: ContradictedCalls, syntax?: { seeds: readonly ModelDeclaration[]; callers: ReadonlyMap<string, readonly import("./inbound-edges.ts").InboundEdge[]> }, written?: WrittenUses): Promise<{ inbound: InboundEdges; walk: Walk; attributed: readonly AttributedCall[]; unsettled: readonly Omit<HeldUse, "from">[]; references: readonly SettledReference[]; cuts: readonly Cut[] }> {
   const attributed: AttributedCall[] = [];
+  const unsettled: Omit<HeldUse, "from">[] = [];
   const writtenRead = new Map<GraphNodeId, ReadonlySet<string>>();
   const writtenHeld = new Map<GraphNodeId, HeldUse[]>();
   const references: SettledReference[] = [];
@@ -823,10 +834,10 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
   for (;;) {
     const inbound = build({ dropped, into: new Map([...into].map(([id, edges]) => [id, [...edges.values()]])), settled, written: { read: writtenRead, held: writtenHeld } });
     const walk = walkImpact(seeds, inbound, budget, syntax);
-    if (targets === undefined || signal?.aborted) return { inbound, walk, attributed, references, cuts: cuts() };
+    if (targets === undefined || signal?.aborted) return { inbound, walk, attributed, unsettled, references, cuts: cuts() };
     const fresh = inbound.followed().filter(({ edge }) => !checked.has(edgeKey(edge)));
     const reached = [...seeds, ...walk.reached.flatMap(({ symbol }) => indexedDeclaration(symbol) ?? [])].filter((symbol) => !probed.has(symbol.id));
-    if (fresh.length === 0 && reached.length === 0) return { inbound, walk, attributed, references, cuts: cuts() };
+    if (fresh.length === 0 && reached.length === 0) return { inbound, walk, attributed, unsettled, references, cuts: cuts() };
     for (const { edge } of fresh) checked.add(edgeKey(edge));
     for (const symbol of reached) probed.add(symbol.id);
     let changed = false;
@@ -878,9 +889,10 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
       const uses = await written.into(reached, signal);
       for (const [id, files] of uses.read) writtenRead.set(id, files);
       for (const use of uses.held) writtenHeld.set(use.node.id, [...(writtenHeld.get(use.node.id) ?? []), use]);
+      unsettled.push(...uses.unsettled);
       if (uses.read.size > 0) changed = true;
     }
-    if (!changed) return { inbound, walk, attributed, references, cuts: cuts() };
+    if (!changed) return { inbound, walk, attributed, unsettled, references, cuts: cuts() };
   }
 }
 

@@ -403,11 +403,16 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
     return undefined;
   }
 
-  async function importBinding(file: string, specifier: string, root: string, member: string | undefined): Promise<RootBinding> {
+  async function importBinding(file: string, specifier: string, root: string, member: string | undefined, meaning: "value" | "type" = "value"): Promise<RootBinding> {
     const resolved = await modules.resolve(file, specifier);
-    /** A member of a namespace import is the declaration the module exports under its name, followed through re-exports. */
+    /**
+     * A member of a namespace import is the declaration the module exports under its name, followed through re-exports;
+     * written as a type, a type the module exports answers where no value does.
+     */
     if ("file" in resolved && moduleShapeOf(file)?.imports.get(root)?.imported === "*") {
-      const declaration = member === undefined ? undefined : await exportedDeclaration(resolved.file, member);
+      const value = member === undefined ? undefined : await exportedDeclaration(resolved.file, member);
+      const type = value === undefined && member !== undefined && meaning === "type" ? await exportedType(resolved.file, member) : undefined;
+      const declaration = value ?? (type === "ambiguous" ? undefined : type);
       if (declaration === "ambiguous") return { kind: "ambiguous", root };
       return declaration === undefined ? UNKNOWN_BINDING : { kind: "located", root, file: declaration.file, path: declaration.name };
     }
@@ -429,8 +434,9 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
     if (isTypeName(root)) {
       const scope = typeScopeOf(root);
       if (scope !== undefined) return declaredBinding(source, root, scope, owner);
-      return specifier === undefined ? unbound(name) : importBinding(file, specifier, name, member);
+      return specifier === undefined ? unbound(name) : importBinding(file, specifier, name, member, "type");
     }
+    if (specifier !== undefined && isQualifiedQueryRoot(root) && !shape.declared.has(name)) return importBinding(file, specifier, name, member);
     const binding = bound!.bindingOf(bound!.identifierAt(root.getStart(source), name)!);
     if (binding.kind === "dynamic") return UNKNOWN_BINDING;
     if (binding.kind === "none") return unbound(name);
@@ -625,6 +631,13 @@ function isTypeName(name: ts.Identifier): boolean {
   let whole: ts.Node = name;
   while (ts.isQualifiedName(whole.parent) && whole.parent.left === whole) whole = whole.parent;
   return ts.isPartOfTypeNode(whole) || ts.isTypeParameterDeclaration(whole.parent);
+}
+
+/** Whether a name is the first of a qualified name a type query reads (`typeof a.b`), which the binder leaves unbound. */
+function isQualifiedQueryRoot(name: ts.Identifier): boolean {
+  let whole: ts.Node = name;
+  while (ts.isQualifiedName(whole.parent) && whole.parent.left === whole) whole = whole.parent;
+  return whole !== name && ts.isTypeQueryNode(whole.parent) && whole.parent.exprName === whole;
 }
 
 function isImportDeclaration(declaration: ts.Declaration): boolean {

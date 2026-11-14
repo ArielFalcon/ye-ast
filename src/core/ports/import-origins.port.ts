@@ -63,8 +63,10 @@ export interface ImportOrigins {
    * One entry per site, in the order received: what binds, at the site's own place, the name the expression written
    * there is rooted at (`ts` for `ts.Expression` placed at either name, `f` for `f(x).g`, `Set` for `new Set(a).add(k)`).
    * A value name is bound by the file's own scoping (ADR-0029); a type name by the type scopes around it, then the file's
-   * imports and top-level declarations; `super` by the root of its class's `extends` expression. `unknown` when the place
-   * spells another name, the name is dynamic, or nothing proves a binding.
+   * imports and top-level declarations; `super` by the root of its class's `extends` expression. The first name of a
+   * qualified name a type query reads (`typeof a.b`) is bound to its import only where the file declares that name nowhere
+   * else, and a namespace member written as a type names the type its module exports where no value goes by that name.
+   * `unknown` when the place spells another name, the name is dynamic, or nothing proves a binding.
    */
   rootBindings(sites: readonly UseSite[], signal?: AbortSignal): Promise<readonly RootBinding[]>;
   /**

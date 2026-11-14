@@ -703,6 +703,30 @@ test("super is rooted at its class's extends expression, bound as that name is",
   assert.deepEqual(binding, { kind: "ambient", root: "Error" });
 });
 
+const KINDS: SourceFile = { path: "src/kinds.ts", content: "export const Limit = 3;\nexport type List<T> = T[];\nexport interface Shape { side: number }\nexport enum Color { Red = 'R' }\n" };
+const KIT: SourceFile = { path: "src/kit.ts", content: "export * from './kinds';\n" };
+
+/** The binding of the namespace local `k` at its `nth` place of `line` in a file of the given lines. */
+async function namespaceBindings(lines: readonly string[], places: readonly [line: number, nth: number][]) {
+  const file: SourceFile = { path: "src/use.ts", content: lines.join("\n") };
+  const column = (line: number, nth: number) => [...lines[line - 1]!.matchAll(/\bk\./g)][nth]!.index + 1;
+  return createImportOrigins([CONFIG, KINDS, KIT, file]).rootBindings(places.map(([line, nth]) => ({ file: file.path, line, column: column(line, nth), spelled: "k", owner: { name: "", line: 0, endLine: 0 } })));
+}
+
+test("a namespace member written in a type position, with type arguments or inside another type, binds the declaration the module exports under that name, followed through re-exports", async () => {
+  const bindings = await namespaceBindings(["import * as k from './kit';", "export function area(shape: k.Shape, list: k.List<string>): Array<k.Shape | k.Missing> { return []; }"], [[2, 0], [2, 1], [2, 2], [2, 3]]);
+
+  const at = (path: string) => ({ kind: "located", root: "k", file: KINDS.path, path });
+  assert.deepEqual(bindings, [at("Shape"), at("List"), at("Shape"), { kind: "unknown" }]);
+});
+
+test("the root of a type query of a namespace member binds the value the module exports under that name, unless a declaration of the file may shadow the import", async () => {
+  const [limit, color] = await namespaceBindings(["import * as k from './kit';", "export type Both = [typeof k.Limit, typeof k.Color.Red];"], [[2, 0], [2, 1]]);
+  const [shadowed] = await namespaceBindings(["import * as k from './kit';", "export function f(k: { Limit: number }): void { const n: typeof k.Limit = 1; }"], [[2, 0]]);
+
+  assert.deepEqual([limit, color, shadowed], [{ kind: "located", root: "k", file: KINDS.path, path: "Limit" }, { kind: "located", root: "k", file: KINDS.path, path: "Color" }, { kind: "unknown" }]);
+});
+
 /**
  * The type a `value` parameter is annotated with on the last line, after the given lines, among the given extra sources,
  * placed where the receiver reader places it: past `readonly`.
