@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { callPlaceEvidence, compareCallSites, gatherUnresolvedCallSites, statedRequestsOf, unresolvedCallSite, unsettledCallSiteCut, type CallSite } from "./call-site.ts";
+import { callPlaceEvidence, compareCallSites, gatherUnresolvedCallSites, groupInheritedGaps, statedRequestsOf, unresolvedCallSite, unsettledCallSiteCut, type CallSite, type UnresolvedCallSite } from "./call-site.ts";
 
 function site(overrides: Partial<CallSite> = {}): CallSite {
   return { repo: "shop", file: "src/app/order.api.ts", line: 4, symbol: "OrderApi.create", transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [{ path: "src/app/order.api.ts", line: 4 }] }, ...overrides };
@@ -101,4 +101,35 @@ test("the requests a call site states are its decided target, or each distinct p
   assert.deepEqual(statedRequestsOf(site({ stated: { method: "GET" } })), []);
   assert.deepEqual(statedRequestsOf(site()), []);
   assert.deepEqual(statedRequestsOf({ ...after("/geo/a"), transport: "event" }), []);
+});
+
+test("gaps that inherit one cause are one group naming the cause once and listing each caller; a gap with its own place stays alone", () => {
+  const cause = { path: "src/app/offline.service.ts", line: 86 };
+  const inheriting = (line: number, overrides: Partial<UnresolvedCallSite> = {}): UnresolvedCallSite => ({
+    ...unresolvedCallSite(site({ line, symbol: `OrderApi.call${line}`, diagnostic: { cause: "source-not-read" }, target: { status: "unknown", reason: "unresolved", evidence: [{ path: "src/app/order.api.ts", line }, cause] } })),
+    ...overrides,
+  });
+  const own = unresolvedCallSite(site({ line: 30, diagnostic: { cause: "source-not-read" }, target: { status: "unknown", reason: "unresolved", evidence: [{ path: "src/app/order.api.ts", line: 30 }] } }));
+  const hops = [{ path: "src/app/order.api.ts", line: 50 }, { path: "src/app/auth.service.ts", line: 105 }, cause];
+  const input = [inheriting(60, { stated: { method: "GET", path: "/orders" } }), inheriting(10), inheriting(50, { evidence: hops }), own, inheriting(40, { diagnostic: { cause: "dispatch-disagreement" } }), inheriting(20, { column: 4, deferred: true })];
+
+  const { own: kept, inherited } = groupInheritedGaps(input);
+
+  assert.deepEqual(kept, [own]);
+  assert.deepEqual(inherited.map(({ causePlace, diagnostic, callers }) => [causePlace, diagnostic?.cause, callers.map(({ line }) => line)]), [[cause, "dispatch-disagreement", [40]], [cause, "source-not-read", [10, 20, 50, 60]]]);
+  const [, group] = inherited;
+  assert.deepEqual(group?.callers, [
+    { path: "src/app/order.api.ts", line: 10, symbol: "OrderApi.call10" },
+    { path: "src/app/order.api.ts", line: 20, column: 4, symbol: "OrderApi.call20", deferred: true },
+    { path: "src/app/order.api.ts", line: 50, symbol: "OrderApi.call50", through: [{ path: "src/app/auth.service.ts", line: 105 }] },
+    { path: "src/app/order.api.ts", line: 60, symbol: "OrderApi.call60", stated: { method: "GET", path: "/orders" } },
+  ]);
+  assert.equal(kept.length + inherited.reduce((total, { callers }) => total + callers.length, 0), input.length);
+});
+
+test("a gap that names no cause place other than its call, or no diagnostic, is never grouped", () => {
+  const wrapper = unresolvedCallSite(site({ target: { status: "unknown", reason: "unresolved", evidence: [{ path: "src/app/order.api.ts", line: 4 }, { path: "src/app/rest-client.ts", line: 53 }] } }));
+  const decided = unresolvedCallSite(site({ diagnostic: { cause: "recursive" } }));
+
+  assert.deepEqual(groupInheritedGaps([wrapper, decided]), { own: [wrapper, decided], inherited: [] });
 });

@@ -1361,3 +1361,19 @@ test("a call site read twice through different transport primitives is one unres
   assert.equal(section.value.unresolved.length, 1);
   assert.deepEqual(section.value.unresolved[0]!.evidence, [{ path: place.file, line: 48 }, { path: "src/app/rest-client.ts", line: 53 }, { path: "src/app/rest-client.ts", line: 56 }]);
 });
+
+test("the calls that inherit one gap from a cause are one group of the section, and its own gaps stay in unresolved", async () => {
+  const file = "src/app/auth.service.ts";
+  const cause = { path: "src/app/offline.service.ts", line: 86 };
+  const unknownAt = (line: number, evidence: readonly { path: string; line: number }[]): CallSite => ({
+    repo: "shop-web", file, line, symbol: `AuthService.call${line}`, transport: "http", diagnostic: { cause: "source-not-read" },
+    target: { status: "unknown", reason: "unresolved", evidence: [{ path: file, line }, ...evidence] },
+  });
+  const queries = setup({ "/work/shop-web": { files: {} } }, { of: async (_files, repo) => (repo === "shop-web" ? [unknownAt(10, [cause]), unknownAt(20, [cause]), unknownAt(30, [])] : []) });
+
+  const section = valueOf(await queries.outwardNames({ repo: { path: "/work/shop-web" } })).sections["shop-web"];
+
+  assert.ok(section?.status === "complete");
+  assert.deepEqual(section.value.unresolved.map(({ line }) => line), [30]);
+  assert.deepEqual(section.value.inherited?.map(({ causePlace, reason, transport, callers }) => [causePlace, reason, transport, callers.map(({ line }) => line)]), [[cause, "unresolved", "http", [10, 20]]]);
+});

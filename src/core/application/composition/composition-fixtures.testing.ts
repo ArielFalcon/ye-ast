@@ -11,7 +11,7 @@ import type { ImpactValue } from "../../domain/impact/impact-fact.ts";
 import type { ImportersValue } from "../../domain/impact/importers-fact.ts";
 import type { OutlineListing, OutlineValue } from "../../domain/outline/outline-fact.ts";
 import type { TraceValue } from "../../domain/trace/trace-fact.ts";
-import type { CallSite } from "../../domain/topology/call-site.ts";
+import type { CallSite, InheritedGap } from "../../domain/topology/call-site.ts";
 import type { WorkspaceImpactValue, RepoImpact } from "../../ports/workspace-impact-queries.port.ts";
 import type { DecisionValue } from "../../ports/decision-queries.port.ts";
 import type { ComposedSource, PublicRead, PublicWorkspaceValue } from "../../ports/evidence-composition.port.ts";
@@ -147,7 +147,16 @@ const callSite: CallSite = {
 const bareCallSite: CallSite = { repo: "web", file: "src/orders.service.ts", line: 30, symbol: "OrdersService.save", transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [] } };
 const eventCallSite: CallSite = { repo: "web", file: "src/orders.service.ts", line: 44, symbol: "OrdersService.emit", ancestors: [], transport: "event", target: { status: "complete", value: { protocol: "kafka", destination: "billing", role: "publish" }, evidence: [] } };
 
-function repoImpact(kind: "trigger" | "upstream", repo: string, snapshot: SnapshotRef, impact: ImpactValue | undefined, sites: Pick<RepoImpact, "callSites" | "unmatched" | "external" | "unresolved">): Fact<RepoImpact> {
+/** Two calls that inherit one gap from the same cause: one states its request, one reaches the cause through another place. */
+const INHERITED_GAP: InheritedGap = {
+  causePlace: { path: "src/orders.client.ts", line: 9 }, reason: "unresolved", transport: "http", diagnostic: { cause: "source-not-read" }, via: "environment.remote",
+  callers: [
+    { path: "src/orders.service.ts", line: 20, symbol: "OrdersService.list" },
+    { path: "src/orders.service.ts", line: 30, endLine: 33, column: 4, symbol: "OrdersService.save", stated: { method: "POST", path: "/orders" }, deferred: true, through: [{ path: "src/orders.http.ts", line: 5 }] },
+  ],
+};
+
+function repoImpact(kind: "trigger" | "upstream", repo: string, snapshot: SnapshotRef, impact: ImpactValue | undefined, sites: Pick<RepoImpact, "callSites" | "unmatched" | "external" | "unresolved"> & Partial<Pick<RepoImpact, "inherited">>): Fact<RepoImpact> {
   const reads: RepoImpact["reads"] = [
     { kind: "discovery", fact: { schema: SCHEMA, snapshot, producer: PRODUCER, inputs: inputsOf(), evidence: [], status: "complete" } },
     { kind, fact: { schema: SCHEMA, snapshot, producer: PRODUCER, inputs: inputsOf({ trust: repo === "shop" ? "trusted" : "untrusted" }), evidence: [{ path: "pom.xml", line: 1 }], status: "partial" } },
@@ -170,6 +179,7 @@ export function workspaceImpactValue(family: "impact" | "callers"): WorkspaceImp
         unmatched: [bareCallSite],
         external: [eventCallSite],
         unresolved: [{ reason: "unresolved", diagnostic: { cause: "destination-undecidable", source: "read" }, evidence: [{ path: "(library)/lib/Client.java", line: 17 }], path: "src/orders.service.ts", line: 52, endLine: 54, symbol: "OrdersService.remote", transport: "http", via: "environment.remote", stated: { method: "GET", path: "/remote" } }],
+        inherited: [INHERITED_GAP],
       }),
       ghost: unknownFactOf("revision-unavailable", { snapshot: shaRef("ghost", SHA_C) }),
     },
@@ -258,6 +268,7 @@ export function workspaceValue(): PublicWorkspaceValue {
             { name: "billing.example", kind: "http-host", evidence: [{ path: "src/env.ts", line: 2 }, { path: "src/env.ts", line: 2 }] },
           ],
           unresolved: [{ reason: "unresolved", diagnostic: { cause: "destination-undecidable", source: "read" }, evidence: [{ path: "(library)/lib/Client.java", line: 17 }], path: "src/dyn.ts", line: 4, symbol: "Dyn.call", transport: "http", via: "httpClient", stated: { method: "POST", path: "/x" } }, { reason: "source-unreadable", evidence: [{ path: "src/dyn.ts", line: 9 }], path: "src/dyn.ts", line: 9, endLine: 11, symbol: "Dyn.emit", transport: "event" }],
+          inherited: [INHERITED_GAP],
         },
         { snapshot: liveRef("web", "state-1"), cuts: [{ kind: "unresolved-link", at: ["src/dyn.ts"], reason: "dependency-unresolved", reach: { kind: "anything" }, dependency: { name: "com.acme:clients", reason: "ambiguous", candidates: ["one", "two"] } }] },
       ),

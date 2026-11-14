@@ -456,6 +456,7 @@ function repoImpact(b: Builder, section: ReadContext, repo: string, prefix: stri
   sites("unmatched", "unmatched");
   sites("external", "external");
   value.unresolved.forEach((site, index) => b.part({ kind: "unresolved-call-site", site }, section.id, [`${prefix}/unresolved/${index}`]));
+  value.inherited?.forEach((gap, index) => b.part({ kind: "inherited-gap", gap }, section.id, [`${prefix}/inherited/${index}`]));
 }
 
 function callSite(b: Builder, section: ReadContext, repo: string, pointer: string, site: CallSite, disposition: "matched" | "unmatched" | "external"): void {
@@ -632,6 +633,7 @@ function workspace(b: Builder, root: ReadContext, fact: Fact<PublicWorkspaceValu
       b.part({ kind: "outward-name", origin: read.here.origin, name: name.name, kindName: name.kind, evidence, disposition: "stated" }, read.id, [at]);
     });
     section.value.unresolved.forEach((site, index) => b.part({ kind: "unresolved-call-site", site }, read.id, [`${pointer}/value/unresolved/${index}`]));
+    section.value.inherited?.forEach((gap, index) => b.part({ kind: "inherited-gap", gap }, read.id, [`${pointer}/value/inherited/${index}`]));
   }
   value.candidates.forEach((candidate, index) => {
     const at = `/value/candidates/${index}`;

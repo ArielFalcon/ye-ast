@@ -73,11 +73,11 @@ test("full and receipt of every family and workspace branch pass the runtime sch
   for (const source of ALL) assert.equal(runtime(composeFull(resultOf([source]))), true, source.family);
 });
 
-test("full keeps every table and all 31 part kinds; graph.sources appears once with request indices", () => {
+test("full keeps every table and all 32 part kinds; graph.sources appears once with request indices", () => {
   const kinds: readonly PartKind[] = [
     "entrypoint", "unknown-finding", "seed", "symbol-reach", "entrypoint-reach", "entrypoint-change", "contract-change", "module-origin", "module-reach",
     "file-dependency", "file-query", "outline-declaration", "outline-file", "unheld-file", "outward-name", "name-candidate", "call-site",
-    "unresolved-call-site", "unlinked-call-site", "workspace-link", "workspace-context", "decision", "impact-context", "walk-cost",
+    "unresolved-call-site", "inherited-gap", "unlinked-call-site", "workspace-link", "workspace-context", "decision", "impact-context", "walk-cost",
     "trace-step", "trace-root", "reading-range", "trace-totals", "consequence-use", "consequence-producer", "derived-contract-change",
   ];
   const parsed = COMPOSE_OUTPUT.parse(full);

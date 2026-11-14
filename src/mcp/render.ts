@@ -25,7 +25,7 @@ import type { NameCandidate, OutwardKind, OutwardName, RepositoryOutwardName } f
 import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
 import type { WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
-import { compareUnresolvedCallSites, statedRequestsOf, type CallSite, type UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
+import { compareUnresolvedCallSites, inheritedCallerCount, statedRequestsOf, type CallSite, type InheritedCaller, type InheritedGap, type UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
 import type { ImpactedLink, Link, UnlinkedCallSite } from "../core/domain/topology/link.ts";
 import type { RepositoryResolution } from "../core/domain/topology/remote-snapshot.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
@@ -1462,6 +1462,7 @@ function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Respon
     ...callSiteBlock("external", value.external),
     ...(value.unrelated === undefined ? [] : [`    not in this question: ${unrelatedText(value.unrelated)}; ye_ast_workspace lists them`]),
     ...(value.unresolved.length === 0 ? [] : [`    unresolved call sites (${value.unresolved.length}):`, ...unresolvedListing(value.unresolved, detail).map((line) => `  ${line}`)]),
+    ...inheritedBlock(value.inherited ?? [], detail, "    "),
   ];
 }
 
@@ -1658,28 +1659,73 @@ function unresolvedLine(site: UnresolvedCallSite, detail: ResponseMode): string 
   return `      ${spanText(site.line, site.endLine)} ${site.symbol} (${site.transport}${through}${site.deferred === true ? ", deferred" : ""})${stated}${evidence}`;
 }
 
+function inheritedCallerLine({ path, line, endLine, symbol, stated, deferred, through }: InheritedCaller, transport: InheritedGap["transport"], detail: ResponseMode): string {
+  const request = stated === undefined ? "" : ` ${statedRequestText({ stated, transport, symbol })}`;
+  const via = detail === "details" && through !== undefined ? ` <- ${through.map(evidenceText).join(", ")}` : "";
+  return `${placeText(path, line, endLine)} ${symbol}${deferred === true ? " (deferred)" : ""}${request}${via}`;
+}
+
+/** The undecided call sites of a section: its own gaps, and every caller of a gap it inherits. */
+function undecidedCount({ unresolved, inherited }: { unresolved: readonly UnresolvedCallSite[]; inherited?: readonly InheritedGap[] }): number {
+  return unresolved.length + inheritedCallerCount(inherited ?? []);
+}
+
+/**
+ * The gaps a repository's calls inherit, one entry per cause: the cause once, how many calls and files inherit it, and
+ * the calls themselves in details (a summary lists those that state a request).
+ */
+function inheritedBlock(gaps: readonly InheritedGap[], detail: ResponseMode, indent: string): string[] {
+  if (gaps.length === 0) return [];
+  const calls = inheritedCallerCount(gaps);
+  return [`${indent}inherited gaps (${calls} ${calls === 1 ? "call" : "calls"} from ${gaps.length} ${gaps.length === 1 ? "cause" : "causes"}):`, ...inheritedCauses(gaps, detail, `${indent}  `)];
+}
+
+function inheritedCauses(gaps: readonly InheritedGap[], detail: ResponseMode, indent: string): string[] {
+  const unlisted = detail !== "details" && gaps.some(({ callers }) => callers.some(({ stated }) => stated === undefined));
+  return [
+    ...gaps.flatMap((gap) => {
+      const files = new Set(gap.callers.map(({ path }) => path)).size;
+      const through = gap.via === undefined ? "" : `, through ${gap.via}`;
+      const listed = detail === "details" ? gap.callers : gap.callers.filter(({ stated }) => stated !== undefined);
+      return [
+        `${indent}${evidenceText(gap.causePlace)} ${unresolvedLabel(gap)} (${gap.transport}${through}): ${gap.callers.length} ${gap.callers.length === 1 ? "call" : "calls"} in ${files} ${files === 1 ? "file" : "files"}`,
+        ...listed.map((caller) => `${indent}  ${inheritedCallerLine(caller, gap.transport, detail)}`),
+      ];
+    }),
+    ...(unlisted ? [`${indent}calls not listed; ${categoryRecovery({ details: "lists every call", full: "retains all recorded calls" })}`] : []),
+  ];
+}
+
 /** The call sites no repository given decides, so the caller settles each one by reading its declaration, never the file. */
 function unresolvedBlock(value: Omit<WorkspaceValue, "repositories">, detail: ResponseMode): string[] {
+  const inherited = value.workspace.repos.flatMap((repo) => {
+    const section = value.sections[repo];
+    return section === undefined || section.status === "unknown" || section.value.inherited === undefined ? [] : [[repo, section.value.inherited] as const];
+  });
+  const inheritedLines = inherited.length === 0 ? [] : [
+    `inherited gaps (${inherited.reduce((count, [, gaps]) => count + inheritedCallerCount(gaps), 0)} calls from ${inherited.reduce((count, [, gaps]) => count + gaps.length, 0)} causes):`,
+    ...inherited.flatMap(([repo, gaps]) => [`  ${repo}:`, ...inheritedCauses(gaps, detail, "    ")]),
+  ];
   const sections = value.workspace.repos.flatMap((repo) => {
     const section = value.sections[repo];
     return section === undefined || section.status === "unknown" || section.value.unresolved.length === 0 ? [] : [[repo, section.value.unresolved] as const];
   });
-  if (sections.length === 0) return [];
+  if (sections.length === 0) return inheritedLines;
   const total = sections.reduce((count, [, sites]) => count + sites.length, 0);
   const literal = [
     `unresolved call sites (${total}):`,
     ...sections.flatMap(([repo, sites]) => [`  ${repo}:`, ...unresolvedListing(sites, detail)]),
   ];
-  if (detail !== "summary") return literal;
+  if (detail !== "summary") return [...literal, ...inheritedLines];
   const anchors = new Set([...value.links.map((link) => link.from), ...value.unlinked.map(({ from }) => from)].map(({ repo, file }) => JSON.stringify([repo, file])));
   const grouped = unresolvedByCause(sections, total, anchors);
-  return size(grouped) < size(literal) ? grouped : literal;
+  return [...(size(grouped) < size(literal) ? grouped : literal), ...inheritedLines];
 }
 
 export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>, detail: ResponseMode = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Match value.sections by repository and check each section status, reason and cuts; value.repositorySnapshots identifies each revision. Inspect value.candidates by name and repo for basis and evidence, value.unserved for unmatched names, value.links for the links between repositories, value.internalLinks for those inside one repository and value.unlinked for the call sites without one. " + REQUEST_SITE_GUIDE;
   const lines = headerLines(fact, fact.status === "unknown" ? {} : {
-    undecided: Object.values(fact.value.sections).reduce((total, section) => total + (section.status === "unknown" ? 0 : section.value.unresolved.length), 0),
+    undecided: Object.values(fact.value.sections).reduce((total, section) => total + (section.status === "unknown" ? 0 : undecidedCount(section.value)), 0),
     unknownSection: unknownSectionIn(fact.value.sections),
   });
   if (fact.status === "unknown") return lines.join("\n");

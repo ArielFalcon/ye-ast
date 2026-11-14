@@ -15,7 +15,7 @@ export type ResponseMode = z.infer<typeof responseModeSchema>;
 export type RenderContext = { tool: QueryFamily; recovery?: Recovery; answerBytes?: number };
 export type ResponseRenderer<T> = (fact: Fact<T>, mode: ResponseMode, context?: RenderContext) => string;
 
-export function unresolvedLabel(site: UnresolvedCallSite): string {
+export function unresolvedLabel(site: Pick<UnresolvedCallSite, "reason" | "diagnostic">): string {
   const labels = { "source-not-read": "missing", "request-not-found": "read", "dispatch-disagreement": "conflict", recursive: "cycle", "destination-undecidable": "target" } as const;
   return site.reason === "source-unreadable" ? "parse" : site.diagnostic === undefined ? "unknown" : labels[site.diagnostic.cause];
 }

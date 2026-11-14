@@ -162,6 +162,11 @@ function rebuildSite(t: Tables, part: PartOf<"call-site">): CallSite {
   return { ...rest, file: t.path(location.file), line: location.line, ...(location.column === undefined ? {} : { column: location.column }), ...(location.endLine === undefined ? {} : { endLine: location.endLine }), target: t.finding(target) };
 }
 
+function inheritedOf(t: Tables, prefix: string): Pick<RepoImpact, "inherited"> {
+  const gaps = t.list(`${prefix}/inherited`, "inherited-gap").map((part) => part.gap);
+  return gaps.length === 0 ? {} : { inherited: gaps };
+}
+
 function rebuildWorkspaceImpact(t: Tables): WorkspaceImpactValue {
   const context = found(t.one("/value/workspace", "workspace-context"), "context").context;
   assert.ok(context.family === "impact" || context.family === "callers");
@@ -176,7 +181,7 @@ function rebuildWorkspaceImpact(t: Tables): WorkspaceImpactValue {
         .sort((x, y) => x.index - y.index)
         .map(({ kind, fact }) => ({ kind, fact }));
       const sites = (field: string) => t.list(`${prefix}/${field}`, "call-site").map((p) => rebuildSite(t, p));
-      return { reads, ...(t.one(`${prefix}/impact/cost`, "walk-cost") === undefined ? {} : { impact: rebuildImpact(t, `${prefix}/impact`) }), callSites: sites("callSites"), unmatched: sites("unmatched"), external: sites("external"), unresolved: t.list(`${prefix}/unresolved`, "unresolved-call-site").map((p) => p.site) };
+      return { reads, ...(t.one(`${prefix}/impact/cost`, "walk-cost") === undefined ? {} : { impact: rebuildImpact(t, `${prefix}/impact`) }), callSites: sites("callSites"), unmatched: sites("unmatched"), external: sites("external"), unresolved: t.list(`${prefix}/unresolved`, "unresolved-call-site").map((p) => p.site), ...inheritedOf(t, prefix) };
     });
   }
   const links = t.list("/value/links", "workspace-link").map((p) => {
@@ -291,6 +296,7 @@ function reconstruct(source: ComposedSource, t: Tables): Fact<unknown> {
           sections[read.owner.repo] = t.fact(read, () => ({
             names: t.list(`${prefix}/names`, "outward-name").map((n) => ({ name: n.name, kind: n.kindName, evidence: t.evidence(n.evidence) })),
             unresolved: t.list(`${prefix}/unresolved`, "unresolved-call-site").map((u) => u.site),
+            ...inheritedOf(t, prefix),
           }));
         }
         return {

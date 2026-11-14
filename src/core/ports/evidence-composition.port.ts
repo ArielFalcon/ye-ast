@@ -13,7 +13,7 @@ import type { ModuleOrigin, ReachedModule } from "../domain/impact/module-depend
 import type { ImportedFile, ImportersValue } from "../domain/impact/importers-fact.ts";
 import type { OutlineDeclaration, OutlineImport, OutlineValue } from "../domain/outline/outline-fact.ts";
 import type { ExternalCalls, IssuingPlace, TraceEffect, TraceStep, TraceValue } from "../domain/trace/trace-fact.ts";
-import type { CallSite, EventTarget, HttpTarget, UnresolvedCallSite } from "../domain/topology/call-site.ts";
+import type { CallSite, EventTarget, HttpTarget, InheritedGap, UnresolvedCallSite } from "../domain/topology/call-site.ts";
 import type { ImpactedLink, Link, LinkBasis, UnlinkedCallSite } from "../domain/topology/link.ts";
 import type { NameCandidate, OutwardKind } from "../domain/topology/outward-name.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../domain/decisions/decision.ts";
@@ -260,6 +260,7 @@ export type PartPayload =
   | { kind: "call-site"; site: CallSiteData; disposition: "matched" | "unmatched" | "external" }
   /** `repo` names the repository where the owner is no repository section (a decision set). */
   | { kind: "unresolved-call-site"; site: UnresolvedCallSite; repo?: string }
+  | { kind: "inherited-gap"; gap: InheritedGap }
   | { kind: "workspace-link"; link: LinkData; direction?: ImpactedLink["direction"]; reach?: readonly LinkReference[]; operations?: ImpactedLink["operations"] }
   | { kind: "unlinked-call-site"; site: UnlinkedCallSiteData }
   | { kind: "workspace-context"; context: WorkspaceContextData }

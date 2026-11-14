@@ -72,6 +72,7 @@ export function partReferences(part: Part): Reference[] {
     case "call-site":
       return [ref("file", "site.location.file", part.site.location.file), ...many("evidence", "site.target.evidence", part.site.target.evidence), ...(part.site.location.place === undefined ? [] : [ref("evidence", "site.location.place", part.site.location.place)])];
     case "unresolved-call-site":
+    case "inherited-gap":
       return [];
     case "unlinked-call-site":
       return [ref("file", "site.from.file", part.site.from.file)];

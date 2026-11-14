@@ -168,6 +168,14 @@ export const unresolvedCallSiteSchema = z.strictObject({
   via: z.string().exactOptional(), stated: stated.exactOptional(), deferred: z.literal(true).exactOptional(),
 });
 
+export const inheritedGapSchema = z.strictObject({
+  causePlace: evidenceValue, reason: unknownReason, transport, diagnostic: callSiteDiagnostic, via: z.string().exactOptional(),
+  callers: z.array(z.strictObject({
+    path: z.string(), line: int, column: int.exactOptional(), endLine: int.exactOptional(), symbol: z.string(),
+    stated: stated.exactOptional(), deferred: z.literal(true).exactOptional(), through: z.array(evidenceValue).exactOptional(),
+  })),
+});
+
 export const linkDrift = z.array(z.strictObject({ segment: z.string(), parameter: z.string(), type: z.enum(PARSE_STRICT_TYPES) }));
 export const linkBasis = z.enum(["exact", "base-path", "suffix", "event-destination", "gateway-prefix", "route-overlap"]);
 export const linkEndpoints = {
@@ -356,6 +364,7 @@ export const partSchema = z.discriminatedUnion("kind", [
     site: unresolvedCallSiteSchema,
     repo: z.string().exactOptional(),
   }),
+  part("inherited-gap", { gap: inheritedGapSchema }),
   part("unlinked-call-site", {
     site: z.strictObject({ from: linkEndpoints.from, transport, outcome: z.enum(["unmatched", "ambiguous", "could-match"]), name: z.string(), repos: strings.exactOptional(), routes: strings.exactOptional(), deferred: z.literal(true).exactOptional(), issuedAt: issuingPlaces.exactOptional(), propagatedThrough: propagatedPlaces.exactOptional() }),
   }),

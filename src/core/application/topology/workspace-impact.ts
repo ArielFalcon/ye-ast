@@ -8,7 +8,7 @@ import { ANYTHING, incompleteSectionCuts, provenanceOf, readProvenanceOf, type F
 import type { Result } from "../../domain/shared/result.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
-import { compareCallSites, statedRequestsOf, unsettledCallSiteCut, type CallSite, type UnresolvedCallSite } from "../../domain/topology/call-site.ts";
+import { compareCallSites, inheritedCallerCount, statedRequestsOf, unsettledCallSiteCut, type CallSite, type InheritedGap, type UnresolvedCallSite } from "../../domain/topology/call-site.ts";
 import {
   admitDownstream,
   admitUpstream,
@@ -133,7 +133,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
       const base = workspace.sections[repository.repo];
       if (part === undefined || base === undefined) continue;
       part.callSites.push(...(upstream.value.sites.get(repository.repo) ?? []));
-      const inventories = scopedInventories(part, base.status === "unknown" ? [] : base.value.unresolved, repository.callSites, downstream.value.egress.get(repository.repo));
+      const inventories = scopedInventories(part, base.status === "unknown" ? { unresolved: [], inherited: [] } : { unresolved: base.value.unresolved, inherited: base.value.inherited ?? [] }, repository.callSites, downstream.value.egress.get(repository.repo));
       const walkOf = repository.repo === trigger ? impact : upstream.value.impacts.get(repository.repo);
       const reads: SectionRead[] = [
         { kind: "discovery", fact: provenanceOf(base) },
@@ -413,14 +413,19 @@ function drift(part: Section, site: CallSite, joined: JoinResult): void {
  * is a change's own reach and nothing for a callers question. The rest is counted, never listed: the workspace read
  * lists every call site of a repository.
  */
-function scopedInventories(part: Section, unresolved: readonly UnresolvedCallSite[], sites: readonly CallSite[], sent: ReadonlyMap<string, Reach> | undefined): Pick<RepoImpact, "unmatched" | "external" | "unresolved" | "unrelated"> {
+function scopedInventories(part: Section, gaps: { unresolved: readonly UnresolvedCallSite[]; inherited: readonly InheritedGap[] }, sites: readonly CallSite[], sent: ReadonlyMap<string, Reach> | undefined): Pick<RepoImpact, "unmatched" | "external" | "unresolved" | "inherited" | "unrelated"> {
   const sentOnward = (site: CallSite): boolean => sent?.has(callSiteKey(site)) === true;
   const places = new Set(sites.filter(sentOnward).map((site) => placeKey(site.file, site.line, site.symbol)));
+  const sentPlace = (site: { path: string; line: number; symbol: string }): boolean => places.has(placeKey(site.path, site.line, site.symbol));
   const unmatched = part.unmatched.filter(sentOnward).sort(compareCallSites);
   const external = part.external.filter(sentOnward).sort(compareCallSites);
-  const kept = unresolved.filter((site) => places.has(placeKey(site.path, site.line, site.symbol)));
-  const unrelated = { unmatched: part.unmatched.length - unmatched.length, external: part.external.length - external.length, unresolved: unresolved.length - kept.length };
-  return { unmatched, external, unresolved: kept, ...(unrelated.unmatched + unrelated.external + unrelated.unresolved === 0 ? {} : { unrelated }) };
+  const kept = gaps.unresolved.filter(sentPlace);
+  const inherited = gaps.inherited.flatMap((gap): InheritedGap[] => {
+    const callers = gap.callers.filter(sentPlace);
+    return callers.length === 0 ? [] : [{ ...gap, callers }];
+  });
+  const unrelated = { unmatched: part.unmatched.length - unmatched.length, external: part.external.length - external.length, unresolved: gaps.unresolved.length - kept.length + inheritedCallerCount(gaps.inherited) - inheritedCallerCount(inherited) };
+  return { unmatched, external, unresolved: kept, ...(inherited.length === 0 ? {} : { inherited }), ...(unrelated.unmatched + unrelated.external + unrelated.unresolved === 0 ? {} : { unrelated }) };
 }
 
 function placeKey(file: string, line: number, symbol: string): string {

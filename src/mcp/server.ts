@@ -1,6 +1,6 @@
 import { boundedProjection, boundedText, type BoundedText } from "./render-budget.ts";
 import { dependencyDiagnostic } from "./dependency-schema.ts";
-import { callSiteDiagnostic, unresolvedCallSiteSchema } from "./composition-schema-parts.ts";
+import { callSiteDiagnostic, inheritedGapSchema, unresolvedCallSiteSchema } from "./composition-schema-parts.ts";
 import { compactInput } from "./compact-schema.ts";
 import { selectedOutputFor } from "./evidence-schema.ts";
 import { selectEvidence, type EvidenceSelection, type EvidenceSource, type EvidenceSelectionResult } from "./select-evidence.ts";
@@ -220,6 +220,7 @@ const workspaceImpact = z.looseObject({
     unmatched: z.array(callSite),
     external: z.array(callSite),
     unresolved: z.array(unresolvedCallSite),
+    inherited: z.array(inheritedGapSchema).optional(),
     unrelated: z.looseObject({ unmatched: z.number(), external: z.number(), unresolved: z.number() }).optional(),
   }))),
   links: z.array(z.looseObject({
@@ -304,6 +305,7 @@ const shapes = {
     sections: z.record(z.string(), factOf(z.looseObject({
       names: z.array(outwardName),
       unresolved: z.array(unresolvedCallSite),
+    inherited: z.array(inheritedGapSchema).optional(),
     }))),
     candidates: z.array(candidate),
     unserved: z.array(repoOutwardName),

@@ -153,6 +153,28 @@ test("unresolved diagnostics stay compact in summaries and retain causal evidenc
   assert.doesNotMatch(summary, /images\.example/);
 });
 
+test("inherited gaps print their cause once with their callers, and count as undecided exactly as the flat rows did", () => {
+  const cause = { path: "src/app/offline.service.ts", line: 86 };
+  const own = { path: "src/app/auth.service.ts", line: 30, symbol: "AuthService.own", transport: "http", reason: "unresolved", evidence: [{ path: "src/app/auth.service.ts", line: 30 }], diagnostic: { cause: "source-not-read" } };
+  const callers = [{ path: "src/app/auth.service.ts", line: 10, symbol: "AuthService.a" }, { path: "src/app/auth.service.ts", line: 20, symbol: "AuthService.b", through: [{ path: "src/app/token.service.ts", line: 5 }] }, { path: "src/app/user.service.ts", line: 7, symbol: "UserService.c", stated: { method: "GET", path: "/users" } }];
+  const flat = callers.map(({ through, ...caller }) => ({ ...caller, transport: "http", reason: "unresolved", evidence: [{ path: caller.path, line: caller.line }, ...(through ?? []), cause], diagnostic: { cause: "source-not-read" } }));
+  const render = (value: object, mode: "summary" | "details") => renderWorkspace({ ...base, status: "complete", value: { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "complete", value } }, candidates: [], links: [], internalLinks: [], unlinked: [], unserved: [] } } as never, mode);
+  const grouped = { names: [], unresolved: [own], inherited: [{ causePlace: cause, reason: "unresolved", transport: "http", diagnostic: { cause: "source-not-read" }, callers }] };
+  const status = (text: string) => text.split("\n").find((line) => line.startsWith("status:"));
+
+  assert.equal(status(render(grouped, "summary")), "status: complete (4 undecided)");
+  assert.equal(status(render(grouped, "summary")), status(render({ names: [], unresolved: [own, ...flat] }, "summary")));
+  const summary = render(grouped, "summary");
+  assert.equal(summary.split("src/app/offline.service.ts:86").length - 1, 1);
+  assert.match(summary, /3 calls in 2 files/);
+  assert.match(summary, /UserService\.c GET \/users/);
+  assert.doesNotMatch(summary, /AuthService\.a/);
+  const details = render(grouped, "details");
+  assert.equal(details.split("src/app/offline.service.ts:86").length - 1, 1);
+  assert.match(details, /AuthService\.b <- src\/app\/token\.service\.ts:5/);
+  assert.match(details, /AuthService\.a/);
+});
+
 test("dependency ambiguity remains visible with its candidates in both workspace text modes", () => {
   const cut = { kind: "unresolved-link", reason: "unresolved", at: ["pom.xml", "pom.xml:4"], dependency: { name: "com.acme:clients", reason: "ambiguous", candidates: ["one", "two"] } };
   const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "partial", cuts: [cut], value: { names: [], unresolved: [] } } }, candidates: [], links: [], internalLinks: [], unlinked: [], unserved: [] };

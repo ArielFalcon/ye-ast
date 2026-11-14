@@ -1,6 +1,6 @@
 import type { ImpactBudget } from "../domain/impact/impact-fact.ts";
 import type { ImpactValue } from "../domain/impact/impact-fact.ts";
-import type { CallSite, UnresolvedCallSite } from "../domain/topology/call-site.ts";
+import type { CallSite, InheritedGap, UnresolvedCallSite } from "../domain/topology/call-site.ts";
 import type { ImpactedLink } from "../domain/topology/link.ts";
 import type { Fact, ReadProvenance, SnapshotRef } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
@@ -23,7 +23,9 @@ export interface RepoImpact {
   external: readonly CallSite[];
   /** The call sites the answer's walks send onward whose target this repository's snapshot does not decide, as its discovery read them. */
   unresolved: readonly UnresolvedCallSite[];
-  /** Present when the question leaves out call sites of the three lists above: how many of each this repository has; `ye_ast_workspace` lists them. */
+  /** The callers the answer's walks send onward whose undecided target is inherited from a cause elsewhere, one entry per cause; absent when none. */
+  inherited?: readonly InheritedGap[];
+  /** Present when the question leaves out call sites of the lists above: how many of each this repository has, a caller of an inherited gap counting once under `unresolved`; `ye_ast_workspace` lists them. */
   unrelated?: { unmatched: number; external: number; unresolved: number };
 }
 

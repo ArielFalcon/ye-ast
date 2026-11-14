@@ -74,7 +74,7 @@ function verificationLine(result: CompositionResult): string {
 
 const PART_ORDER: readonly PartKind[] = [
   "entrypoint", "unknown-finding", "entrypoint-change", "contract-change", "seed", "symbol-reach", "entrypoint-reach", "module-origin", "module-reach",
-  "file-dependency", "call-site", "unresolved-call-site", "unlinked-call-site", "workspace-link", "outward-name", "name-candidate", "unheld-file",
+  "file-dependency", "call-site", "unresolved-call-site", "inherited-gap", "unlinked-call-site", "workspace-link", "outward-name", "name-candidate", "unheld-file",
   "outline-declaration", "outline-file", "file-query", "trace-root", "trace-step", "reading-range",
   "consequence-use", "consequence-producer", "derived-contract-change",
 ];
@@ -521,6 +521,11 @@ class CompactView {
         return `${part.disposition} call site ${site.repo} ${this.file(site.location.file)}:${span(site.location.line, site.location.endLine)} ${site.symbol} ${site.transport}${short ? "" : `; target ${target}${site.stated === undefined ? "" : `; stated ${site.stated.method}${site.stated.path === undefined ? "" : ` ${site.stated.path}`}`}`}`;
       }
       case "unresolved-call-site": return `unresolved call site ${part.repo === undefined ? "" : `${part.repo} `}${part.site.path}:${span(part.site.line, part.site.endLine)} ${part.site.symbol} ${part.site.transport}${part.site.via === undefined ? "" : ` via ${part.site.via}`}${part.site.deferred === true ? " deferred" : ""}${part.site.stated === undefined ? "" : ` stated ${part.site.stated.method}${part.site.stated.path === undefined ? "" : ` ${part.site.stated.path}`}`}${this.details ? `; diagnostic ${JSON.stringify({ reason: part.site.reason, ...part.site.diagnostic, evidence: part.site.evidence })}` : ` ${unresolvedLabel(part.site)}`}`;
+      case "inherited-gap": {
+        const { causePlace, callers } = part.gap;
+        const files = new Set(callers.map(({ path }) => path)).size;
+        return `inherited gap ${causePlace.path}:${causePlace.line} ${unresolvedLabel(part.gap)} ${part.gap.transport}${part.gap.via === undefined ? "" : ` via ${part.gap.via}`}: ${callers.length} ${callers.length === 1 ? "call" : "calls"} in ${files} ${files === 1 ? "file" : "files"}${short ? "" : `; callers ${callers.map((caller) => `${caller.path}:${span(caller.line, caller.endLine)} ${caller.symbol}${caller.deferred === true ? " deferred" : ""}${caller.stated === undefined ? "" : ` stated ${caller.stated.method}${caller.stated.path === undefined ? "" : ` ${caller.stated.path}`}`}${caller.through === undefined ? "" : ` through ${caller.through.map((place) => `${place.path}:${place.line}`).join(", ")}`}`).join("; ")}`}${this.details ? `; diagnostic ${JSON.stringify(part.gap.diagnostic)}` : ""}`;
+      }
       case "workspace-link": {
         const link = part.link;
         const reach = part.reach?.map((reference) => (reference.status === "present" ? (reference.part === part.id ? "self" : "present") : `missing ${reference.linkId}`));

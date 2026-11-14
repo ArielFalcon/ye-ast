@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { Entrypoint, Listener } from "../../domain/entrypoints/entrypoint.ts";
-import { unresolvedCallSite, type CallSite, type EventTarget } from "../../domain/topology/call-site.ts";
+import { groupInheritedGaps, unresolvedCallSite, type CallSite, type EventTarget } from "../../domain/topology/call-site.ts";
 import type { ImpactValue, Seed } from "../../domain/impact/impact-fact.ts";
 import { sameIdentity, type CompleteFact, type Cut, type Fact, type SnapshotRef } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
@@ -127,8 +127,8 @@ function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), un
   }));
   const section = (repo: string): Fact<WorkspaceSection> => {
     const held = repositories[repo];
-    const unresolved = (held?.callSites ?? []).flatMap((site) => (site.target.status === "unknown" ? [unresolvedCallSite(site)] : []));
-    const complete = fact(repo, held?.trust ?? "untrusted", { names: [], unresolved }, held?.sha ?? SHA) as CompleteFact<WorkspaceSection>;
+    const { own: unresolved, inherited } = groupInheritedGaps((held?.callSites ?? []).flatMap((site) => (site.target.status === "unknown" ? [unresolvedCallSite(site)] : [])));
+    const complete = fact(repo, held?.trust ?? "untrusted", { names: [], unresolved, ...(inherited.length === 0 ? {} : { inherited }) }, held?.sha ?? SHA) as CompleteFact<WorkspaceSection>;
     const [first, ...rest] = held?.cuts ?? [];
     return first === undefined ? complete : { ...complete, status: "partial", cuts: [first, ...rest] };
   };
@@ -512,6 +512,23 @@ test("a change's section carries the unresolved call sites it sends onward, with
   assert.deepEqual(repoImpact(value, "shop-web").unrelated, { unmatched: 0, external: 0, unresolved: 1 });
   assert.deepEqual([repoImpact(value, "billing").unresolved, repoImpact(value, "billing").unrelated], [[], { unmatched: 0, external: 0, unresolved: 1 }]);
   assert.deepEqual(value.links, []);
+});
+
+test("a change's section lists the inherited gaps it sends onward as one group per cause and counts the callers it leaves out", async () => {
+  const cause = { path: "src/app/offline.service.ts", line: 86 };
+  const inheriting = (repo: string, line: number): CallSite => ({ ...undecidedCallSite(repo, line), diagnostic: { cause: "source-not-read" as const }, target: { status: "unknown", reason: "unresolved", evidence: [{ path: `src/app/${repo}.api.ts`, line }, cause] } });
+  const { queries } = setup({
+    repositories: { orders: ORDERS, "shop-web": { callSites: [inheriting("shop-web", 21), inheriting("shop-web", 22), inheriting("shop-web", 30), undecidedCallSite("shop-web", 40)] }, billing: { callSites: [inheriting("billing", 9)] } },
+    trigger: changing("shop-web", 21, 22),
+  });
+
+  const value = valueOf(await queries.ofChange({ repo: { path: "/work/shop-web" }, repos: [{ path: "/work/orders" }, { path: "/work/billing" }], base: "main" }));
+
+  const section = repoImpact(value, "shop-web");
+  assert.deepEqual(section.inherited?.map(({ causePlace, callers }) => [causePlace, callers.map(({ line }) => line)]), [[cause, [21, 22]]]);
+  assert.deepEqual(section.unresolved, []);
+  assert.deepEqual(section.unrelated, { unmatched: 0, external: 0, unresolved: 2 });
+  assert.deepEqual([repoImpact(value, "billing").inherited, repoImpact(value, "billing").unrelated], [undefined, { unmatched: 0, external: 0, unresolved: 1 }]);
 });
 
 test("a call two repositories serve equally is no link: it is a cut naming its place", async () => {

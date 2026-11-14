@@ -170,6 +170,71 @@ export interface UnresolvedCallSite {
   deferred?: true;
 }
 
+/** One caller of an inherited gap: where its call is written, what it states, and the places between it and the cause. */
+export type InheritedCaller = Pick<UnresolvedCallSite, "path" | "line" | "column" | "endLine" | "symbol" | "stated" | "deferred"> & { through?: readonly Evidence[] };
+
+/**
+ * The calls that inherit one gap from the same cause (ADR-0055 decision 4): the cause is stated once and each caller
+ * lists its own place.
+ */
+export interface InheritedGap {
+  /** The nearest declaration below the callees that holds the cause as its own gap. */
+  causePlace: Evidence;
+  reason: UnknownReason;
+  transport: CallSite["transport"];
+  diagnostic: CallSiteDiagnostic;
+  /** The library the callers' calls go through, when the snapshot names one. */
+  via?: string;
+  callers: readonly InheritedCaller[];
+}
+
+/**
+ * The unresolved call sites split into the ones whose uncertainty is written at their own place and the ones that
+ * inherit it from a cause elsewhere (a diagnostic, and a last evidence place other than the call), grouped by cause:
+ * reason, transport, library, diagnostic and cause place. Each input lands in exactly one of the two results.
+ */
+export function groupInheritedGaps(sites: readonly UnresolvedCallSite[]): { own: UnresolvedCallSite[]; inherited: InheritedGap[] } {
+  const own: UnresolvedCallSite[] = [];
+  const groups = new Map<string, InheritedGap & { callers: InheritedCaller[] }>();
+  for (const site of sites) {
+    const causePlace = site.evidence.at(-1);
+    if (site.diagnostic === undefined || causePlace === undefined || (causePlace.path === site.path && causePlace.line === site.line)) {
+      own.push(site);
+      continue;
+    }
+    const key = canonicalJson([site.reason, site.transport, site.via ?? null, site.diagnostic, causePlace]);
+    const group = groups.get(key) ?? { causePlace, reason: site.reason, transport: site.transport, diagnostic: site.diagnostic, ...(site.via === undefined ? {} : { via: site.via }), callers: [] };
+    group.callers.push(inheritedCaller(site));
+    groups.set(key, group);
+  }
+  return { own, inherited: [...groups.values()].map((gap) => ({ ...gap, callers: gap.callers.toSorted(compareInheritedCallers) })).sort(compareInheritedGaps) };
+}
+
+/** The call sites the gaps stand for: one per caller. */
+export function inheritedCallerCount(gaps: readonly InheritedGap[]): number {
+  return gaps.reduce((total, { callers }) => total + callers.length, 0);
+}
+
+function inheritedCaller({ path, line, column, endLine, symbol, stated, deferred, evidence }: UnresolvedCallSite): InheritedCaller {
+  const through = evidence.slice(0, -1).filter((place) => place.path !== path || place.line !== line);
+  return {
+    path, line, symbol,
+    ...(column === undefined ? {} : { column }),
+    ...(endLine === undefined ? {} : { endLine }),
+    ...(stated === undefined ? {} : { stated }),
+    ...(deferred === undefined ? {} : { deferred }),
+    ...(through.length === 0 ? {} : { through }),
+  };
+}
+
+function compareInheritedCallers(a: InheritedCaller, b: InheritedCaller): number {
+  return compareText(a.path, b.path) || a.line - b.line || compareText(a.symbol, b.symbol) || (a.column ?? 0) - (b.column ?? 0);
+}
+
+function compareInheritedGaps(a: InheritedGap, b: InheritedGap): number {
+  return compareText(a.causePlace.path, b.causePlace.path) || a.causePlace.line - b.causePlace.line || compareText(a.reason, b.reason) || compareText(a.transport, b.transport) || compareText(a.via ?? "", b.via ?? "") || compareText(canonicalJson(a.diagnostic), canonicalJson(b.diagnostic));
+}
+
 /** Where a call site is written in the workspace: the place a link starts from. */
 export type CallPlace = Pick<CallSite, "repo" | "file" | "line" | "column" | "symbol">;
 

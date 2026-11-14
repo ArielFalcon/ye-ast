@@ -1,6 +1,6 @@
 import type { ScopeFault } from "./scope-fault.port.ts";
 import type { Entrypoint } from "../domain/entrypoints/entrypoint.ts";
-import type { CallSite, UnresolvedCallSite } from "../domain/topology/call-site.ts";
+import type { CallSite, InheritedGap, UnresolvedCallSite } from "../domain/topology/call-site.ts";
 import type { WorkspaceRepositoryDeclaration } from "../domain/topology/workspace-manifest.ts";
 import type { Evidence, SnapshotRef, Finding, TrustMode } from "../domain/shared/fact.ts";
 import type { ScopeRequest } from "../domain/shared/scope.ts";
@@ -41,8 +41,10 @@ export interface WorkspaceReposRequest {
 /** The outward names one repository states, with the places that state them. */
 export interface WorkspaceSection {
   names: readonly { name: string; kind: OutwardKind; evidence: readonly Evidence[] }[];
-  /** The call sites whose target the snapshot does not decide, each with what is known about it. */
+  /** The call sites whose target the snapshot does not decide at their own place, each with what is known about it. */
   unresolved: readonly UnresolvedCallSite[];
+  /** The call sites that inherit an undecided target from a cause elsewhere, one entry per cause; absent when none. */
+  inherited?: readonly InheritedGap[];
 }
 
 /** One repository read for a workspace answer: its snapshot, the entrypoints of that snapshot and its call sites. */
