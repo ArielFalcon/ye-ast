@@ -69,6 +69,8 @@ export interface ConsumerSession {
   cutsAfterWalk(): readonly Cut[];
   /** The repositories that serve the operation asked about, with the handler that does. */
   serving: readonly { repo: string; handler: Handler }[];
+  /** When nothing serves the operation: the names of the routes of the workspace with its verb whose path ends with the one asked, or the one asked ends with; how a contract spelled differently is served. */
+  similar: readonly string[];
   /** The HTTP call sites whose destination remains uncertain, with any independently established reach and causal evidence. */
   unresolvedCalls: readonly { repo: string; file: string; line: number; symbol: string; reach?: CallSiteReach; evidence?: readonly Evidence[] }[];
   /** The HTTP call sites that reach a route of the operation in more than one repository, which the join does not pick between. */

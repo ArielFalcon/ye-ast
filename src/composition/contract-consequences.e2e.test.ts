@@ -266,6 +266,20 @@ test("an operation no repository of the workspace serves is an unknown answer in
   assert.deepEqual(result.value.value.answers.map((answer) => answer.status), ["unknown"]);
 });
 
+test("an unserved operation names the served routes of the same verb whose path ends with the asked one, and no others", async () => {
+  workspace();
+  const detailOf = async (path: string) => {
+    const result = await ask("nullable", ["web"], path);
+    assert.ok(result.ok && result.value.status !== "unknown");
+    const [answer] = result.value.value.answers;
+    assert.ok(answer?.status === "unknown");
+    return answer.detail;
+  };
+
+  assert.match(await detailOf("/orders/{id}"), /GET \/api\/orders\/\{id\}/);
+  assert.doesNotMatch(await detailOf("/api/customers/{id}"), /\/api\/orders/);
+});
+
 test("a value kept in a service field is not followed into a template: a class that is not a component has none", async () => {
   const keeping = SERVICE.replace("  find(", "  last?: Order;\n\n  load(id: number): void {\n    this.http.get<Order>(`/api/orders/${id}`).subscribe((order) => {\n      this.last = order;\n    });\n  }\n\n  find(");
   commit("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER });

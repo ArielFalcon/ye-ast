@@ -128,7 +128,7 @@ interface CallSelection {
 
 /** An operation no repository serves has no contract to change, so the hypothesis is unknown rather than a fault. */
 function selectCalls(session: ConsumerSession, operation: string): Result<CallSelection, string> {
-  if (session.serving.length === 0) return { ok: false, fault: `no repository of the workspace serves ${operation}` };
+  if (session.serving.length === 0) return { ok: false, fault: `no repository of the workspace serves ${operation}${session.similar.length === 0 ? "" : `; served routes it could mean: ${session.similar.join(", ")}`}` };
   const findings: CallSelection["findings"] = [];
   const qualified: Link[] = [];
   const sites: RepositoryEvidence[] = [];
