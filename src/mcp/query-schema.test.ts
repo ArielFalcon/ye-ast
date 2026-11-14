@@ -2,7 +2,7 @@ import { COMPOSE_INPUT } from "./composition-input.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
-import { SEMANTIC_INPUTS, TOOL_INPUTS } from "./query-schema.ts";
+import { SEMANTIC_INPUTS, TOOL_INPUTS, target } from "./query-schema.ts";
 import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
 
 const SHA = "a".repeat(40);
@@ -163,4 +163,12 @@ test("trace and composed trace accept workspace sources and reject local live of
   assert.ok(TOOL_INPUTS.trace.safeParse(args).success);
   assert.ok(COMPOSE_INPUT.safeParse({ queries: [{ name: "ye_ast_trace", arguments: args }] }).success);
   assert.equal(SEMANTIC_INPUTS.trace.safeParse({ targets: args.targets, live: true, offline: true }).success, false);
+});
+
+test("a target that is not an object is refused with the keys each accepted shape takes", async () => {
+  const outcome = await TOOL_INPUTS.callers["~standard"].validate({ targets: ["src/a.ts:run"] });
+  const issues = "issues" in outcome && outcome.issues !== undefined ? outcome.issues : [];
+  const [issue] = issues.filter((candidate) => candidate.path?.join(".") === "targets.0");
+  assert.ok(issue !== undefined);
+  for (const option of target.options) for (const key of Object.keys(option.shape)) assert.ok(issue.message.includes(key), key);
 });

@@ -125,7 +125,12 @@ export const scope = z
 
 const file = z.string().min(1).describe("Repo-relative file path.");
 
-export const target = z.union([
+/** The SDK reports a refused union by its message alone, so the message names the keys of every shape the union accepts. */
+function shapesError(subject: string, options: readonly z.ZodObject[]): string {
+  return `${subject} is an object of one of these shapes: ${options.map((option) => `{ ${Object.keys(option.shape).join(", ")} }`).join(" or ")}`;
+}
+
+const targetShapes = [
   z
     .strictObject({
       file,
@@ -139,12 +144,14 @@ export const target = z.union([
     .strictObject({ file, start: count, end: count })
     .refine(({ start, end }) => end >= start, { message: "end must not precede start", path: ["end"] })
     .describe("File line range, 1-based inclusive; end >= start."),
-]);
+] as const;
+export const target = z.union(targetShapes, { error: shapesError("a target", targetShapes) });
 
-const focusSelector = z.union([
+const focusShapes = [
   z.strictObject({ file, symbol: z.string().min(1).describe("Dotted path as ye_ast_outline nests it, e.g. Class.member; matches every declaration whose path ends with it at whole names. A bare name matches at any depth.") }).describe("Focus by name."),
   z.strictObject({ file, line: count.describe("1-based line; selects the innermost declaration holding it.") }).describe("Focus by line."),
-]);
+] as const;
+const focusSelector = z.union(focusShapes, { error: shapesError("a focus", focusShapes) });
 
 // Scope permits line terminators inside a segment; inspect every character and require the absolute end of input.
 const recipeGlob = z.string().refine(isValidGlob).meta({ pattern: "^(?![\\s\\S]*(?:^|/)\\.{0,2}(?:/|(?![\\s\\S])))[^\\\\]+(?![\\s\\S])" });
