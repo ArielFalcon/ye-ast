@@ -89,7 +89,7 @@ export interface UnresolvedReference {
  * carried with that specifier, and `namesNoFile` says whether no path of the snapshot could be its target; an operand the
  * metadata reading marks `unreadable`, or a file that does not parse, carries no specifier.
  */
-export type UnresolvedModuleImport = UnresolvedReference & ({ specifier: string; namesNoFile: boolean } | { specifier?: undefined });
+export type UnresolvedModuleImport = UnresolvedReference & ({ specifier: string; namesNoFile: boolean; stem?: string } | { specifier?: undefined });
 
 export interface LoadedRouteTables {
   /**
@@ -123,14 +123,14 @@ type OperandTarget =
   | { kind: "module"; file: string; name: string }
   | { kind: "array"; file: string; name: string }
   | { kind: "skip" }
-  | { kind: "unresolved"; line: number; specifier: string; namesNoFile: boolean }
+  | { kind: "unresolved"; line: number; specifier: string; namesNoFile: boolean; stem?: string }
   | { kind: "unreadable"; line: number };
 
 /** What a module-graph reference names: a declaration of a file, an external package, a specifier the resolver answers without a file, a file that does not parse, or nothing to follow. */
 type NamedReference =
   | { kind: "declared"; file: string; name: string }
   | { kind: "external" }
-  | { kind: "unresolved"; specifier: string; namesNoFile: boolean }
+  | { kind: "unresolved"; specifier: string; namesNoFile: boolean; stem?: string }
   | { kind: "unreadable" }
   | undefined;
 
@@ -278,7 +278,7 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
     if (binding === undefined || binding.typeOnly === true) return undefined;
     const resolution = await resolver.resolve(file, binding.module);
     if ("external" in resolution) return { kind: "external" };
-    if (!("file" in resolution)) return { kind: "unresolved", specifier: binding.module, namesNoFile: resolution.namesNoFile === true };
+    if (!("file" in resolution)) return { kind: "unresolved", specifier: binding.module, namesNoFile: resolution.namesNoFile === true, ...(resolution.stem === undefined ? {} : { stem: resolution.stem }) };
     const name = reference.member ?? (binding.imported === "*" ? undefined : binding.imported);
     if (name === undefined) return undefined;
     if ((await parse(resolution.file)) === undefined) return { kind: "unreadable" };
@@ -293,7 +293,7 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
     if (router.isRouterModule({ ...(binding !== undefined ? { binding } : {}), members: reference.member === undefined ? [] : [reference.member] })) return { kind: "skip" };
     const named = await moduleNameOf(file, raw, reference);
     if (named === undefined || named.kind === "external") return { kind: "skip" };
-    if (named.kind === "unresolved") return { kind: "unresolved", line: operand.line, specifier: named.specifier, namesNoFile: named.namesNoFile };
+    if (named.kind === "unresolved") return { kind: "unresolved", line: operand.line, specifier: named.specifier, namesNoFile: named.namesNoFile, ...(named.stem === undefined ? {} : { stem: named.stem }) };
     if (named.kind === "unreadable") return { kind: "unreadable", line: operand.line };
     const held = await readOf(named.file);
     if (held === undefined) return { kind: "unreadable", line: operand.line };
@@ -323,7 +323,7 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
     const visitedArrays = new Set<string>();
     let readable = true;
     let conditional = false;
-    const unclear = (path: string, line: number, specifier?: { specifier: string; namesNoFile: boolean }): void => {
+    const unclear = (path: string, line: number, specifier?: { specifier: string; namesNoFile: boolean; stem?: string }): void => {
       readable = false;
       unresolvedModuleImports.set(`${path}:${line}`, specifier === undefined ? { path, line, endLine: line } : { path, line, endLine: line, ...specifier });
     };
@@ -334,7 +334,7 @@ export async function loadRouteTables(inputs: RouteTableInputs): Promise<LoadedR
         return;
       }
       if (target.kind === "unresolved") {
-        unclear(at, target.line, { specifier: target.specifier, namesNoFile: target.namesNoFile });
+        unclear(at, target.line, { specifier: target.specifier, namesNoFile: target.namesNoFile, ...(target.stem === undefined ? {} : { stem: target.stem }) });
         return;
       }
       if (target.kind === "array") await expand(target.file, target.name);

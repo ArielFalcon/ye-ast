@@ -46,6 +46,22 @@ test("a specifier is out of what depends on the asked files only when its import
   assert.equal(inQuestion(module({ specifier: "@/x", namesNoFile: true }, { specifier: "@/y" }), DEPENDENTS), true);
 });
 
+test("a relative specifier is out of what depends on the asked files only when every file it could name lies outside them, and one without a stem stays in question (ADR-0042 decision 4)", () => {
+  const module = (...specifiers: { specifier: string; stem?: string; namesNoFile?: true }[]): Cut => at("unresolved-link", "specifier", { kind: "module", importer: "src/spec/b.spec.ts", specifiers }, "src/spec/b.spec.ts", "src/spec/b.spec.ts:1 x");
+  const asking = (...files: string[]): Asserted => ({ kind: "dependents", files });
+  const missing = { specifier: "./missing", stem: "src/spec/missing" };
+  assert.equal(inQuestion(module(missing), asking("src/a.ts")), false);
+  assert.equal(inQuestion(module(missing), asking("src/spec/missing.ts")), true);
+  assert.equal(inQuestion(module(missing), asking("src/spec/missing/index.ts")), true);
+  assert.equal(inQuestion(module(missing), asking("src/spec/missing.component.ts")), true);
+  assert.equal(inQuestion(module(missing), asking("src/spec/missingly.ts")), false);
+  assert.equal(inQuestion(module({ specifier: "./missing" }), asking("src/a.ts")), true);
+  assert.equal(inQuestion(module(missing, { specifier: "@/x" }), asking("src/a.ts")), true);
+  assert.equal(inQuestion(module(missing, { specifier: "@/y", namesNoFile: true }), asking("src/a.ts")), false);
+  assert.equal(inQuestion(module(missing), { kind: "walk", files: ["src/a.ts", "src/spec/missing.ts"] }), true);
+  assert.equal(inQuestion(module(missing), { kind: "walk", files: ["src/a.ts"] }), false);
+});
+
 test("a Java type target's unread-relation cut stays in question for a walk of its runtime, and leaves a TypeScript-only walk (RFC-0027 U0)", () => {
   const typeCut = at("unresolved-link", "relation-unread", { kind: "callers-of", declarations: ["src/app/Target.java::Target"] }, "src/app/Target.java::Target");
   assert.equal(inQuestion(typeCut, { kind: "walk", files: ["src/app/Target.java"] }), true);

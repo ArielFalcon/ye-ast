@@ -1,6 +1,7 @@
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import type { RouteGuard, UiRoute } from "../../domain/entrypoints/ui-route.ts";
+import { cutsPerFileAndReason } from "../../domain/impact/impact-cuts.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { Cut, Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
 import type { EntrypointExtraction, EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -68,16 +69,16 @@ async function extractProject(sources: readonly string[], packages: ManifestPack
   const noRoot: UnknownReason | undefined = loaded.declared ? undefined : "unresolved";
   for (const table of loaded.unreached) unreachedRoutesOf(table.entries, unresolvedReferences, walk.findings, noRoot);
   for (const path of unparsed) walk.findings.push(unknown("source-unreadable", { path, line: 1 }));
-  const importCuts = loaded.unresolvedModuleImports.map((reference) => (reference.specifier === undefined ? frontierOf(reference) : importFrontierOf(reference.path, reference.line, reference.specifier, reference.namesNoFile)));
-  return { findings: walk.findings, readingCuts: [...loaded.unresolvedReferences.map(frontierOf), ...importCuts] };
+  const importCuts = loaded.unresolvedModuleImports.map((reference) => (reference.specifier === undefined ? frontierOf(reference) : importFrontierOf(reference.path, reference.line, reference.specifier, reference.namesNoFile, reference.stem)));
+  return { findings: walk.findings, readingCuts: cutsPerFileAndReason([...loaded.unresolvedReferences.map(frontierOf), ...importCuts]) };
 }
 
 function frontierOf(reference: UnresolvedReference): Cut {
   return { kind: "unresolved-link", at: [reference.path, `${reference.path}:${reference.line}`], reason: "dynamic-load", reach: { kind: "anything", runtime: "typescript" } };
 }
 
-function importFrontierOf(path: string, line: number, specifier: string, namesNoFile: boolean): Cut {
-  return { kind: "unresolved-link", at: [path, `${path}:${line}`], reason: "specifier", reach: { kind: "module", importer: path, specifiers: [{ specifier, ...(namesNoFile ? { namesNoFile: true as const } : {}) }] } };
+function importFrontierOf(path: string, line: number, specifier: string, namesNoFile: boolean, stem: string | undefined): Cut {
+  return { kind: "unresolved-link", at: [path, `${path}:${line}`], reason: "specifier", reach: { kind: "module", importer: path, specifiers: [{ specifier, ...(namesNoFile ? { namesNoFile: true as const } : {}), ...(stem === undefined ? {} : { stem }) }] } };
 }
 
 /**

@@ -1,7 +1,7 @@
 import { posix } from "node:path";
 import { isBuiltin } from "node:module";
 import ts from "typescript";
-import { isPackageManifest, isTypeScriptFile } from "../../domain/languages/typescript.ts";
+import { couldBeNamedBy, isPackageManifest, isTypeScriptFile, moduleStem } from "../../domain/languages/typescript.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -11,9 +11,10 @@ export type SourceReader = (file: string) => Promise<string | undefined>;
 /**
  * `namesNoFile` when no file of the snapshot's listing could be the target under any resolution TypeScript or a build
  * might apply: no listed path is a candidate the resolution considered, nor that candidate with any extension or under
- * it as a directory.
+ * it as a directory. `stem` when a relative specifier was read by its text alone (a readable, complete configuration
+ * without `rootDirs`): every file it could name is the stem with an extension or under it as a directory.
  */
-export type ModuleResolution = { file: string } | { external: true } | { unresolved: string; namesNoFile?: true };
+export type ModuleResolution = { file: string } | { external: true } | { unresolved: string; namesNoFile?: true; stem?: string };
 
 export interface ModuleResolver {
   resolve(from: string, specifier: string): Promise<ModuleResolution>;
@@ -21,14 +22,12 @@ export interface ModuleResolver {
 
 const EXTENSIONS = ["cts", "mts", "ts"] as const;
 const CONFIG_NAMES = ["tsconfig.json", "jsconfig.json"] as const;
-/** A module extension a candidate may carry, so its stem stands for every file of that name. */
-const MODULE_EXTENSION = /(\.d)?\.[cm]?[jt]sx?$|\.json$/;
 
 /** Whether no listed path is any of these candidates, with any extension, under it as a directory, or above it as an entry the listing does not open. */
 function namesNoFile(listing: ReadonlySet<string> | undefined, candidates: readonly string[]): boolean {
   if (listing === undefined) return false;
-  const stems = [...new Set(candidates.flatMap((candidate) => [candidate, candidate.replace(MODULE_EXTENSION, "")]))];
-  for (const path of listing) if (stems.some((stem) => path === stem || path.startsWith(`${stem}.`) || path.startsWith(`${stem}/`) || stem.startsWith(`${path}/`))) return false;
+  const stems = [...new Set(candidates.flatMap((candidate) => [candidate, moduleStem(candidate)]))];
+  for (const path of listing) if (stems.some((stem) => couldBeNamedBy(stem, path))) return false;
   return true;
 }
 
@@ -114,15 +113,20 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
     if (base.startsWith("..")) return { unresolved: `${specifier} leaves the repository`, namesNoFile: true };
     const found = await configOf(posix.dirname(from));
     const config = found === "unreadable" ? undefined : found;
+    const lexical = found !== "unreadable" && config?.complete !== false && config?.options.rootDirs === undefined && base !== ".";
+    const stem = lexical ? { stem: moduleStem(base) } : {};
     const unresolved = (): ModuleResolution => {
-      const proven = found !== "unreadable" && config?.complete !== false && config?.options.rootDirs === undefined && namesNoFile(listing, [base]);
-      return proven ? { unresolved: `${specifier} names no file`, namesNoFile: true } : { unresolved: `${specifier} names no file` };
+      const proven = lexical && namesNoFile(listing, [base]);
+      return { unresolved: `${specifier} names no file`, ...(proven ? { namesNoFile: true as const } : {}), ...stem };
     };
     if (explicitJson(specifier)) {
       return await present(base) ? { file: base } : unresolved();
     }
     const { resolved } = await compiled(from, specifier, config?.options ?? {});
-    if (resolved !== undefined) return typeScriptTarget(specifier, resolved);
+    if (resolved !== undefined) {
+      const target = typeScriptTarget(specifier, resolved);
+      return "unresolved" in target ? { ...target, ...stem } : target;
+    }
     const tried = [base, ...EXTENSIONS.map((ext) => `${base}.${ext}`), ...EXTENSIONS.map((ext) => `${base}/index.${ext}`)];
     for (const file of tried) if (isTypeScriptFile(file) && (await present(file))) return { file };
     return unresolved();
@@ -270,7 +274,7 @@ export function rememberedModuleResolver(sources: readonly SourceFile[], facts: 
           paths: sources.map(({ path }) => path).toSorted(compareText),
           json: sources.filter(({ path }) => path.endsWith(".json")).map(({ path, content }) => [path, content]).toSorted(([a], [b]) => compareText(a!, b!)),
         });
-        held = facts.ofInputs("ts-module-resolution", { layout, from, specifier }, () => resolver.resolve(from, specifier));
+        held = facts.ofInputs("ts-module-resolution", { layout, from, specifier, reading: "stem" }, () => resolver.resolve(from, specifier));
         asked.set(key, held);
       }
       return held;

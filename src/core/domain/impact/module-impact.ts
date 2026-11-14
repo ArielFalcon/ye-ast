@@ -3,6 +3,7 @@ import { fileReach } from "../languages/call-targets.ts";
 import { isJsonModuleResource, isTypeScriptSource } from "../languages/typescript.ts";
 import { compareText } from "../shared/code-node.ts";
 import { ANYTHING, type Cut, type WalkBoundKind } from "../shared/fact.ts";
+import { cutsPerFileAndReason } from "./impact-cuts.ts";
 import type { ImpactBudget } from "./impact-fact.ts";
 import type { ModuleDependencies, ModuleDependency, ModuleImpactValue, ModuleOrigin, ReachedModule } from "./module-dependency.ts";
 
@@ -45,7 +46,7 @@ export function moduleImpact(changes: readonly FileChange[], base: ModuleDepende
     for (const dependency of snapshot.dependencies) {
       if (!isTypeScriptSource(dependency.file)) continue;
       if (dependency.target.kind === "unresolved") {
-        cuts.push({ kind: "unresolved-link", at: [`module:${name}:${dependency.file}`, `${dependency.file}:${dependency.line} ${dependency.specifier}`], reason: "specifier", reach: { kind: "module", importer: dependency.file, specifiers: [{ specifier: dependency.specifier, ...(dependency.namesNoFile === true ? { namesNoFile: true } : {}) }] } });
+        cuts.push({ kind: "unresolved-link", at: [`module:${name}:${dependency.file}`, `${dependency.file}:${dependency.line} ${dependency.specifier}`], reason: "specifier", reach: { kind: "module", importer: dependency.file, specifiers: [{ specifier: dependency.specifier, ...(dependency.namesNoFile === true ? { namesNoFile: true } : {}), ...(dependency.stem === undefined ? {} : { stem: dependency.stem }) }] } });
       } else if (dependency.target.kind === "repository") {
         const entries = adjacency.get(dependency.target.file) ?? [];
         entries.push(dependency);
@@ -118,5 +119,5 @@ export function moduleImpact(changes: readonly FileChange[], base: ModuleDepende
     const after = headFiles.get(origin.file);
     if (!baseUnread.has(origin.file) && !headUnread.has(origin.file) && (before === undefined || before.moduleOnly) && (after === undefined || after.moduleOnly) && (origin.change === "added" || before !== undefined) && (origin.change === "deleted" || after !== undefined)) covered.add(origin.file);
   }
-  return { value: { origins, modules, cost: { expansionsUsed } }, cuts, covered };
+  return { value: { origins, modules, cost: { expansionsUsed } }, cuts: cutsPerFileAndReason(cuts), covered };
 }

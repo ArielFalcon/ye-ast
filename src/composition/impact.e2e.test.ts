@@ -222,7 +222,7 @@ test("a literal dynamic module consumer is reached conditionally without declara
   assert.deepEqual(answer.fact.value.modules?.modules.filter((module) => module.file === "src/consumer.ts").map((module) => [module.snapshot, module.via?.form]), [["base", "dynamic-import"], ["head", "dynamic-import"]]);
 });
 
-test("module coverage keeps computed same-line references and reports unresolved literals once per snapshot", async () => {
+test("module coverage keeps computed same-line references as one cut per file for both snapshots, and drops an unresolved literal that cannot name a walked module", async () => {
   commit({
     "src/service.ts": "export class Service {}\n",
     "src/index.ts": "export { Service } from './service';\n",
@@ -232,8 +232,8 @@ test("module coverage keeps computed same-line references and reports unresolved
   const answer = await impact("--base", "HEAD~1", "--changed", "src/index.ts");
   assert.equal(answer.fact.status, "partial", answer.stdout);
   const moduleCuts = answer.fact.cuts?.filter((cut) => cut.at[0]?.startsWith("module:")) ?? [];
-  assert.equal(moduleCuts.filter((cut) => cut.at.some((place) => place.includes("./service.cjs"))).length, 2);
-  assert.equal(moduleCuts.filter((cut) => cut.at.some((place) => place.includes("outside module traversal"))).length, 2);
+  assert.deepEqual(moduleCuts.map((cut) => [cut.reason, cut.at.slice(0, 2)]), [["dynamic-load", ["module:base:src/consumer.ts", "module:head:src/consumer.ts"]]]);
+  assert.ok(moduleCuts[0]!.at.some((place) => place.includes("(offset 19)")));
 });
 
 test("JSON changes reach resource consumers, builtin Node imports stay external and resource bytes invalidate facts", async () => {

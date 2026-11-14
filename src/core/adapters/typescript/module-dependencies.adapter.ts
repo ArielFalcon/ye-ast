@@ -111,15 +111,15 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
         if (unsupported) unread.push({ file, reason: "no-extractor" });
       }
 
-      const resolutions = new Map<string, Promise<{ target: ModuleTarget; namesNoFile?: true }>>();
-      const resolved = (from: string, specifier: string): Promise<{ target: ModuleTarget; namesNoFile?: true }> => {
+      const resolutions = new Map<string, Promise<{ target: ModuleTarget; namesNoFile?: true; stem?: string }>>();
+      const resolved = (from: string, specifier: string): Promise<{ target: ModuleTarget; namesNoFile?: true; stem?: string }> => {
         const key = JSON.stringify([from, specifier]);
         let resolution = resolutions.get(key);
         if (resolution === undefined) {
           resolution = resolver.resolve(from, specifier).then((result) => {
             if ("file" in result) return { target: { kind: "repository", file: result.file } };
             if ("external" in result) return { target: { kind: "external", module: packageOf(specifier) ?? specifier } };
-            return { target: { kind: "unresolved", reason: result.unresolved }, ...(result.namesNoFile === undefined ? {} : { namesNoFile: result.namesNoFile }) };
+            return { target: { kind: "unresolved", reason: result.unresolved }, ...(result.namesNoFile === undefined ? {} : { namesNoFile: result.namesNoFile }), ...(result.stem === undefined ? {} : { stem: result.stem }) };
           });
           resolutions.set(key, resolution);
         }
@@ -134,8 +134,8 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
         return defaults.get(file);
       };
       const dependencies = await Promise.all(pending.map(async (dependency): Promise<ModuleDependency> => {
-        const { target, namesNoFile } = await resolved(dependency.file, dependency.specifier);
-        if (namesNoFile !== undefined) return { ...dependency, target, namesNoFile };
+        const { target, namesNoFile, stem } = await resolved(dependency.file, dependency.specifier);
+        if (namesNoFile !== undefined || stem !== undefined) return { ...dependency, target, ...(namesNoFile === undefined ? {} : { namesNoFile }), ...(stem === undefined ? {} : { stem }) };
         if (target.kind !== "repository" || !dependency.bindings.some(({ imported }) => imported === "default")) return { ...dependency, target };
         const exportedAs = defaultOf(target.file);
         return { ...dependency, target, bindings: dependency.bindings.map((binding) => binding.imported === "default" && exportedAs !== undefined ? { ...binding, exportedAs } : binding) };

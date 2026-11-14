@@ -151,13 +151,22 @@ function placeCuts(places: readonly { file: string; line: number; reason: string
     .map(([file, here]) => unresolvedLinkAt(file, new Set(here.map((place) => placeAt(place.file, place.line, place.reason))), reason, reach(file, here)));
 }
 
-/** The module specifiers no resolver rule placed, one cut per importing file; a specifier names no file only when every statement of it in the file does. */
-export function unresolvedSpecifierCuts(specifiers: readonly { file: string; line: number; specifier: string; namesNoFile?: true }[]): Cut[] {
-  const named = new Set(specifiers.filter((edge) => edge.namesNoFile !== true).map(({ file, specifier }) => `${file}\0${specifier}`));
+/**
+ * The module specifiers no resolver rule placed, one cut per importing file; a specifier names no file only when every
+ * statement of it in the file does, and keeps its stem only when every statement read the same one.
+ */
+export function unresolvedSpecifierCuts(specifiers: readonly { file: string; line: number; specifier: string; namesNoFile?: true; stem?: string }[]): Cut[] {
+  const key = (file: string, specifier: string): string => `${file}\0${specifier}`;
+  const named = new Set(specifiers.filter((edge) => edge.namesNoFile !== true).map(({ file, specifier }) => key(file, specifier)));
+  const stems = Map.groupBy(specifiers, ({ file, specifier }) => key(file, specifier));
+  const stemOf = (importer: string, specifier: string): { stem?: string } => {
+    const [first, ...rest] = (stems.get(key(importer, specifier)) ?? []).map(({ stem }) => stem);
+    return first !== undefined && rest.every((stem) => stem === first) ? { stem: first } : {};
+  };
   return placeCuts(specifiers.map(({ file, line, specifier }) => ({ file, line, reason: specifier })), "specifier", (importer, here) => ({
     kind: "module",
     importer,
-    specifiers: [...new Set(here.map(({ reason }) => reason))].sort().map((specifier) => (named.has(`${importer}\0${specifier}`) ? { specifier } : { specifier, namesNoFile: true })),
+    specifiers: [...new Set(here.map(({ reason }) => reason))].sort().map((specifier) => ({ specifier, ...(named.has(key(importer, specifier)) ? {} : { namesNoFile: true as const }), ...stemOf(importer, specifier) })),
   }));
 }
 
@@ -338,4 +347,41 @@ export function unreadRelationCuts(unread: readonly UnreadRelation[], walkedFile
   return [...Map.groupBy(reached, ({ path }) => path)]
     .toSorted(([a], [b]) => compareText(a, b))
     .map(([path, places]) => unresolvedLinkAt(path, places.map(({ line, reason }) => placeAt(path, line, reason)), "relation-unread", fileReach(path)));
+}
+
+const SNAPSHOT_ANCHOR = /^module:(?:base|head):/;
+
+/**
+ * One cut per file and reason: the same gap read at base and at head, or at several places of one file, is one cut with
+ * its anchors and places merged, none twice. A cut is anchored at its first `at` entry, a file or `module:<snapshot>:<file>`.
+ */
+export function cutsPerFileAndReason(cuts: readonly Cut[]): Cut[] {
+  const merged = new Map<string, Cut>();
+  for (const cut of cuts) {
+    const key = [cut.kind, cut.reason, cut.limit ?? "", cut.at[0]!.replace(SNAPSHOT_ANCHOR, "")].join("\0");
+    const held = merged.get(key);
+    if (held === undefined) merged.set(key, cut);
+    else {
+      const at = [...new Set([...held.at, ...cut.at])];
+      merged.set(key, { ...held, at: [...at.filter((place) => SNAPSHOT_ANCHOR.test(place)), ...at.filter((place) => !SNAPSHOT_ANCHOR.test(place))], reach: mergedReach(held.reach, cut.reach) });
+    }
+  }
+  return [...merged.values()];
+}
+
+/** Two statements of one specifier name no file only when each does, and keep a stem only when both read it the same. */
+function mergedReach(left: CutReach, right: CutReach): CutReach {
+  if (left.kind !== "module" || right.kind !== "module") return left;
+  const bySpecifier = new Map<string, Extract<CutReach, { kind: "module" }>["specifiers"][number]>();
+  for (const entry of [...left.specifiers, ...right.specifiers]) {
+    const held = bySpecifier.get(entry.specifier);
+    if (held === undefined) bySpecifier.set(entry.specifier, entry);
+    else bySpecifier.set(entry.specifier, {
+      specifier: entry.specifier,
+      ...(held.package === undefined ? {} : { package: held.package }),
+      ...(held.namesNoFile === true && entry.namesNoFile === true ? { namesNoFile: true as const } : {}),
+      ...(held.stem !== undefined && held.stem === entry.stem ? { stem: held.stem } : {}),
+    });
+  }
+  return { ...left, specifiers: [...bySpecifier.values()].sort((a, b) => compareText(a.specifier, b.specifier)) };
 }

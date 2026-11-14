@@ -36,6 +36,8 @@ export interface ModuleDependency {
   target: ModuleTarget;
   /** Set on an unresolved target when no path of the snapshot could be its target. */
   namesNoFile?: true;
+  /** Set on an unresolved relative target the resolver read by its text alone: every file it could name has this stem (`couldBeNamedBy`). */
+  stem?: string;
   /** What the statement binds, in source order; empty for a side-effect import or a runtime reference. */
   bindings: readonly ModuleBinding[];
 }

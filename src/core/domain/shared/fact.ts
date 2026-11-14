@@ -185,9 +185,10 @@ export type CutReach =
   | { kind: "call-at"; place: string }
   /**
    * Edges from an importing file through these specifiers; `package` when the resolver classified one, absent when it did
-   * not; `namesNoFile` when no path of the snapshot could be its target.
+   * not; `namesNoFile` when no path of the snapshot could be its target; `stem` when the resolver read a relative specifier
+   * by its text alone, so every file it could name is the stem with an extension or under it as a directory.
    */
-  | { kind: "module"; importer: string; specifiers: readonly { specifier: string; package?: boolean; namesNoFile?: true }[] }
+  | { kind: "module"; importer: string; specifiers: readonly { specifier: string; package?: boolean; namesNoFile?: true; stem?: string }[] }
   | CallSiteReach;
 
 /** What a call site could reach, as the topology extractor read it. */

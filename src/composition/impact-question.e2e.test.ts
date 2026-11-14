@@ -66,7 +66,8 @@ test("impact drops a specifier no path of the snapshot could be the target of, s
   const fact = await ask("impact", "--base", "HEAD~1");
 
   assert.equal(fact.status, "partial");
-  assert.deepEqual(specifiers(fact), ["module:base:src/auth.ts", "module:head:src/auth.ts"]);
+  assert.deepEqual(specifiers(fact), ["module:base:src/auth.ts"]);
+  assert.deepEqual(fact.cuts?.find(({ reason }) => reason === "specifier")?.at.slice(0, 2), ["module:base:src/auth.ts", "module:head:src/auth.ts"]);
 });
 
 test("callers of a Java method are not cut by a computed dynamic import in TypeScript, which cannot load it", async () => {

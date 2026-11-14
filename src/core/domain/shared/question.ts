@@ -1,4 +1,5 @@
 import { sharesRuntime } from "../languages/call-targets.ts";
+import { couldBeNamedBy } from "../languages/typescript.ts";
 import { factOfCuts, type CallSiteReach, type CompleteFact, type Cut, type FactBase, type PartialFact } from "./fact.ts";
 
 /** What an answer asserts, built by its family from the request (ADR-0042 decision 3). */
@@ -29,7 +30,8 @@ function fileOf(entry: string): string {
 /**
  * Whether a cut's reach can hide something of what the answer asserts (ADR-0042 decision 4). It is out of question only
  * by positive proof: a bound, a section, a reach of anything without a runtime, or a datum the reach does not state keeps
- * it in question, and a call site leaves only an operation it cannot reach.
+ * it in question, and a call site leaves only an operation it cannot reach. A module specifier leaves when no path of the
+ * snapshot could be its target, or when its text alone, as the resolver read it, cannot name any asked file.
  */
 export function inQuestion(cut: Cut, asserted: Asserted): boolean {
   if (asserted.kind === "everything" || BOUNDS.has(cut.kind)) return true;
@@ -39,7 +41,7 @@ export function inQuestion(cut: Cut, asserted: Asserted): boolean {
   const places = reach.kind === "module" ? [reach.importer] : cut.at.map(fileOf);
   if (asserted.kind === "local") return places.some((place) => asserted.files.includes(place));
   if (!places.some((place) => asserted.files.some((file) => sharesRuntime(place, file)))) return false;
-  return reach.kind !== "module" || !reach.specifiers.every((specifier) => specifier.namesNoFile === true);
+  return reach.kind !== "module" || !reach.specifiers.every((specifier) => specifier.namesNoFile === true || (specifier.stem !== undefined && !asserted.files.some((file) => couldBeNamedBy(specifier.stem!, file))));
 }
 
 /** The fact of an answer: complete when no cut in its question is left, otherwise partial with those cuts alone (ADR-0042 decision 5). */

@@ -64,6 +64,27 @@ test("an unresolved specifier names no file only when no listed file could be it
   assert.equal("namesNoFile" in (await createModuleResolver(async (file) => files[file], NO_PACKAGES).resolve("src/app.ts", "./missing")), false);
 });
 
+test("a relative specifier no file answers carries the stem its text alone gives, unless a configuration could map it elsewhere", async () => {
+  const files: Record<string, string> = {
+    "src/foo.component.spec.ts": "",
+    "roots/tsconfig.json": JSON.stringify({ compilerOptions: { rootDirs: ["src", "generated"] } }),
+    "broken/tsconfig.json": JSON.stringify({ extends: "./missing.json" }),
+  };
+  const resolver = createModuleResolver(async (file) => files[file], NO_PACKAGES, { listing: Object.keys(files) });
+  const stem = async (from: string, specifier: string) => {
+    const resolution = await resolver.resolve(from, specifier);
+    return "unresolved" in resolution ? resolution.stem : "resolved";
+  };
+
+  assert.equal(await stem("src/app.spec.ts", "./foo.component"), "src/foo.component");
+  assert.equal(await stem("src/app.spec.ts", "./foo.component.js"), "src/foo.component");
+  assert.equal(await stem("src/app.spec.ts", "../lib"), "lib");
+  assert.equal(await stem("roots/src/app.ts", "./missing"), undefined);
+  assert.equal(await stem("broken/src/app.ts", "./missing"), undefined);
+  assert.equal(await stem("app.ts", "."), undefined);
+  assert.equal(await stem("src/app.spec.ts", "@app/foo"), undefined);
+});
+
 test("a specifier resolves through the paths of the nearest configuration, however long its extends chain is", async () => {
   const hops = 9;
   const chain = Object.fromEntries(Array.from({ length: hops }, (_, hop) => [`tsconfig.${hop}.json`, `{ "extends": "./tsconfig.${hop + 1}.json" }`]));

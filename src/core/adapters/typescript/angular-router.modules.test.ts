@@ -172,7 +172,18 @@ test("an @NgModule import that names no file is one cut with the module reach", 
   });
 
   assert.deepEqual(extracted.readingCuts, [
-    { kind: "unresolved-link", at: ["src/app/app.module.ts", "src/app/app.module.ts:3"], reason: "specifier", reach: { kind: "module", importer: "src/app/app.module.ts", specifiers: [{ specifier: "./missing.module", namesNoFile: true }] } },
+    { kind: "unresolved-link", at: ["src/app/app.module.ts", "src/app/app.module.ts:3"], reason: "specifier", reach: { kind: "module", importer: "src/app/app.module.ts", specifiers: [{ specifier: "./missing.module", namesNoFile: true, stem: "src/app/missing.module" }] } },
+  ]);
+});
+
+test("two @NgModule imports of one file that name no file are one cut with both specifiers", async () => {
+  const extracted = await extraction({
+    "src/main.ts": "import { AppModule } from './app/app.module';\nplatformBrowserDynamic().bootstrapModule(AppModule);\n",
+    "src/app/app.module.ts": `${NG_MODULE}import { OneModule } from './one.module';\nimport { TwoModule } from './two.module';\n@NgModule({ imports: [\nOneModule,\nTwoModule] })\nexport class AppModule {}\n`,
+  });
+
+  assert.deepEqual(extracted.readingCuts.map(({ at, reach }) => [at, reach.kind === "module" ? reach.specifiers.map(({ specifier }) => specifier) : []]), [
+    [["src/app/app.module.ts", "src/app/app.module.ts:5", "src/app/app.module.ts:6"], ["./one.module", "./two.module"]],
   ]);
 });
 

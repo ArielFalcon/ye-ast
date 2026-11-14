@@ -34,8 +34,33 @@ test("conditional module evidence survives traversal and exact unsupported refer
   const head = { ...base, files: [source("root.ts", ["new"]), source("consumer.ts")] };
   const read = moduleImpact([change("root.ts")], base, head);
   assert.equal(read.value.modules.find(({ file }) => file === "consumer.ts")?.via?.form, "dynamic-import");
-  assert.equal(read.cuts.length, 2);
+  assert.equal(read.cuts.length, 1);
   assert.ok(read.cuts.every((cut) => cut.at.some((place) => place.includes("offset 90"))));
+});
+
+test("a file's module walk gaps are one cut per reason, with the places of base and head merged and none listed twice", () => {
+  const loaded = (file: string, line: number, offset: number) => ({ file, line, offset, form: "require" as const });
+  const specifier = (file: string, name: string, extra: Partial<ModuleDependency> = {}) => edge(file, "", { specifier: name, target: { kind: "unresolved", reason: "x" }, ...extra });
+  const base = { ...snapshot([source("root.ts", ["old"]), source("load.ts")], [specifier("load.ts", "./a", { namesNoFile: true }), specifier("load.ts", "./b")]), untraversed: [loaded("load.ts", 3, 30), loaded("load.ts", 5, 50), loaded("other.ts", 1, 10)] };
+  const head = { ...snapshot([source("root.ts", ["new"]), source("load.ts")], [specifier("load.ts", "./a", { line: 9, namesNoFile: true }), specifier("load.ts", "./c")]), untraversed: [loaded("load.ts", 3, 30), loaded("load.ts", 6, 60), loaded("other.ts", 1, 10)] };
+
+  const { cuts } = moduleImpact([change("root.ts")], base, head);
+
+  const loads = cuts.filter((cut) => cut.reason === "dynamic-load");
+  assert.deepEqual(loads.map((cut) => cut.at), [
+    ["module:base:load.ts", "module:head:load.ts", "load.ts:3 require outside module traversal (offset 30)", "load.ts:5 require outside module traversal (offset 50)", "load.ts:6 require outside module traversal (offset 60)"],
+    ["module:base:other.ts", "module:head:other.ts", "other.ts:1 require outside module traversal (offset 10)"],
+  ]);
+  const specifiers = cuts.filter((cut) => cut.reason === "specifier");
+  assert.equal(specifiers.length, 1);
+  assert.deepEqual(specifiers[0]!.reach, { kind: "module", importer: "load.ts", specifiers: [{ specifier: "./a", namesNoFile: true }, { specifier: "./b" }, { specifier: "./c" }] });
+});
+
+test("a bound reached in base and in head at one file is one cut", () => {
+  const files = [source("root.ts", ["old"]), source("a.ts")];
+  const edges = [edge("a.ts", "root.ts")];
+  const result = moduleImpact([change("root.ts")], snapshot(files, edges), snapshot([source("root.ts", ["new"]), files[1]!], edges), { depth: 0 });
+  assert.deepEqual(result.cuts.filter((cut) => cut.kind === "depth").map((cut) => cut.at), [["module:base:root.ts", "module:head:root.ts"]]);
 });
 
 test("an unread selected JSON resource cannot look like a complete empty change", () => {

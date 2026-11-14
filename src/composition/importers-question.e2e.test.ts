@@ -116,6 +116,17 @@ test("a path mapping TypeScript cannot follow may still name a file a build repl
   assert.deepEqual(reasons(fact), ["src/app/auth.service.ts specifier"]);
 });
 
+test("a relative specifier whose text cannot name the asked file leaves its importers complete even when a sibling file shares its stem", async () => {
+  commit({
+    "src/pages/tax.service.ts": "export const tax = 1;\n",
+    "src/pages/box/box.component.spec.ts": `import { Box } from "./box.component";\nexport const spec = Box;\n`,
+  });
+
+  const fact = await importers("src/pages/tax.service.ts");
+
+  assert.equal(fact.status, "complete", JSON.stringify(fact.cuts));
+});
+
 test("a configuration whose extends chain is not read proves no specifier names no file, for its paths or its rootDirs", async () => {
   commit({
     "tsconfig.json": JSON.stringify({ extends: "./config/base.json" }),

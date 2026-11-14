@@ -28,6 +28,19 @@ export function isTypeScriptFile(path: string): boolean {
   return SOURCE.test(path) && !DECLARATION.test(path) && !INSTALLED_PACKAGES.test(path);
 }
 
+/** A module extension a specifier or a candidate path may carry, so its stem stands for every file of that name. */
+const MODULE_EXTENSION = /(\.d)?\.[cm]?[jt]sx?$|\.json$/;
+
+/** The path a relative specifier names, without a module extension: every file it could resolve to has this stem. */
+export function moduleStem(path: string): string {
+  return path.replace(MODULE_EXTENSION, "");
+}
+
+/** Whether `path` is a file a specifier of this stem could name: the stem with any extension, an entry under it as a directory, or an entry above it the listing does not open. */
+export function couldBeNamedBy(stem: string, path: string): boolean {
+  return path === stem || path.startsWith(`${stem}.`) || path.startsWith(`${stem}/`) || stem.startsWith(`${path}/`);
+}
+
 const MANIFEST = /(^|\/)package\.json$/;
 
 /** A `package.json` at any depth outside `node_modules`: its dependencies name the framework of the project it sits in. */
