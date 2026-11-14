@@ -63,6 +63,7 @@ ${hooks}`;
 
   assert.deepEqual(await staged(source(""), "send"), [["Sender.send(String)", true]], "no advice, so the owner proves the body");
   assert.deepEqual(await staged(source('@Aspect class Hooks { @Around("execution(* app.Sender.send(..))") Object a() { return null; } }'), "send"), [["Sender.send(String)", false]], "the advice may replace the body");
+  assert.deepEqual(await staged(source('@Aspect class Hooks { @AfterReturning("changes()") void a() {} }'), "send"), [["Sender.send(String)", true]], "an after advice leaves the body, even through a pointcut the subset cannot read");
 });
 
 test("independent dispatch edges retain linear leaf evaluations", async () => {

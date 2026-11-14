@@ -17,8 +17,8 @@ const UNKNOWN_OUTSIDE: OutsideSupertypes = { kind: "unknown" };
 /** The class every Java class extends when it writes no superclass (JLS 8.1.4). */
 const ROOT_TYPE = "java.lang.Object";
 const ASPECT = { kind: "unknown", reason: "aspect may replace the body" } as const satisfies DispatchTargets;
-/** The advice annotations of an aspect: each runs code around, before or after the join points its pointcut selects. */
-const ADVICE: ReadonlySet<string> = new Set(["Around", "Before", "After", "AfterReturning", "AfterThrowing"]);
+/** The one advice kind that receives the join point and decides whether the body runs; the other kinds run beside it (ADR-0091). */
+const BODY_REPLACING_ADVICE = "Around";
 /** Aspect members that make a type implement more than its declarations state. */
 const INTRODUCTIONS: ReadonlySet<string> = new Set(["DeclareParents", "DeclareMixin"]);
 const PARAMETERS: ReadonlySet<string> = new Set(["formal_parameter", "spread_parameter"]);
@@ -54,8 +54,9 @@ export interface Hierarchy {
  * `ImportOrigins.dispatchTargets` for Java sources: the body each concrete class below the method's owner runs, its own
  * declaration or the nearest one up its class chain, found through the project's one resolver in its strict reading.
  * Unknown when a value the sources do not place may implement the owner: a source that does not parse, a JVM language
- * no extractor reads, an aspect or a JDK API that implements an interface at run time anywhere; an annotation on the
- * owner or the method other than the language's own (a generator or a proxy may implement it); an owner whose
+ * no extractor reads, an aspect whose `@Around` advice may select a body, or a JDK API that implements an interface at
+ * run time anywhere; an annotation on the owner or the method other than the language's own (a generator or a proxy may
+ * implement it); an owner whose
  * hierarchy reaches a type outside the repository; a supertype the strict reading leaves unsettled under the name of
  * the owner or a type below it; an anonymous or local class below it; a lambda or method reference while the owner is a
  * functional interface, unless every function value's context proves a type that is neither a functional interface of
@@ -520,8 +521,8 @@ function spansLine(declaration: Node, line: number): boolean {
 }
 
 /**
- * What may run code behind any type: an aspect whose advice the closed pointcut subset does not bound, then a JDK API that
- * implements an interface at run time; otherwise the bounded advice of every aspect.
+ * What may run code behind any type: an aspect whose `@Around` advice or introduction the closed pointcut subset does not
+ * bound, then a JDK API that implements an interface at run time; otherwise the bounded `@Around` advice of every aspect.
  */
 function globalVeto(files: readonly JavaFile[], project: JavaProject): { reason: NonNullable<Extract<DispatchTargets, { kind: "unknown" }>["reason"]> } | { advice: readonly JoinPoints[] } {
   let dynamic = false;
@@ -568,9 +569,10 @@ function advised(method: MethodDecl, hierarchy: Hierarchy, advice: readonly Join
 }
 
 /**
- * The join points of each advice of the aspect an `@Aspect` annotation marks, read from string pointcuts of a closed
- * subset: `within` of a type name pattern or of `@Annotation *`, `@within`, `@annotation` and `execution` with a type
- * name pattern, combined with `&&` and `||`. `undefined` when an advice or an introduction escapes that subset.
+ * The join points of each `@Around` advice of the aspect an `@Aspect` annotation marks, the only advice that can replace
+ * a body, read from string pointcuts of a closed subset: `within` of a type name pattern or of `@Annotation *`,
+ * `@within`, `@annotation` and `execution` with a type name pattern, combined with `&&` and `||`. `undefined` when an
+ * `@Around` advice or an introduction escapes that subset.
  */
 function adviceOf(annotation: Node): JoinPoints[] | undefined {
   const declaration = annotation.parent?.parent;
@@ -581,7 +583,7 @@ function adviceOf(annotation: Node): JoinPoints[] | undefined {
     for (const annotated of annotationsOf(member)) {
       const name = simpleName(annotated.childForFieldName("name") ?? annotated);
       if (INTRODUCTIONS.has(name)) return undefined;
-      if (!ADVICE.has(name)) continue;
+      if (name !== BODY_REPLACING_ADVICE) continue;
       const pointcut = pointcutText(annotated);
       const joinPoints = pointcut === undefined ? undefined : parsePointcut(pointcut);
       if (joinPoints === undefined) return undefined;

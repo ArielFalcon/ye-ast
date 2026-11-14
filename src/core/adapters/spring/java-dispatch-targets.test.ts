@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createJavaParser, createJavaTreeHolds } from "../tree-sitter/java-parser.adapter.ts";
@@ -299,4 +300,32 @@ test("an aspect vetoes dispatch only where a pointcut of the closed subset may m
   const introduced = java("Hooks.java", ["package app;", "@Aspect class Hooks {", "  @DeclareParents(value = \"other.*\", defaultImpl = Object.class) static Port mixin;", "}"]);
   const concatenated = java("Hooks.java", ["package app;", "@Aspect class Hooks {", "  @Around(\"within(other.*)\" + \"\") Object a() { return null; }", "}"]);
   for (const aspect of [introduced, concatenated]) assert.deepEqual(await targetsOf([SENDER, aspect]), VETO, aspect.content);
+});
+
+const ASPECTS = new URL("./fixtures/aspects/", import.meta.url);
+
+function aspectSources(replace: (content: string) => string = (content) => content): SourceFile[] {
+  return readdirSync(ASPECTS).map((name) => ({ path: `src/main/java/app/${name}`, content: replace(readFileSync(new URL(name, ASPECTS), "utf8")) }));
+}
+
+async function createTargets(sources: readonly SourceFile[]): Promise<DispatchTargets> {
+  const service = sources.find(({ path }) => path.endsWith("/ProductService.java"))!;
+  const [targets] = await createJavaNameBindings(createJavaParser, sources).dispatchTargets([{ file: service.path, line: 4, name: "create" }]);
+  return targets!;
+}
+
+test("an advice that cannot replace the body vetoes nothing, whether its pointcut is readable, named or outside the subset; an around advice keeps its veto", async () => {
+  const impl = aspectSources().find(({ path }) => path.endsWith("/ProductServiceImpl.java"))!;
+  const RUNS: DispatchTargets = { kind: "bodies", bodies: [{ file: impl.path, start: 4, nameLine: 4 }] };
+  const VETO: DispatchTargets = { kind: "unknown", reason: "aspect may replace the body" };
+  const advised = (kind: string, pointcut: string) => aspectSources((content) => content.replace('@AfterReturning("changes()")', `@${kind}(${JSON.stringify(pointcut)})`));
+
+  for (const kind of ["Before", "After", "AfterReturning", "AfterThrowing"]) {
+    for (const pointcut of ["changes()", "bean(productService)", "execution(* app.ProductServiceImpl.create(..))"]) {
+      assert.deepEqual(await createTargets(advised(kind, pointcut)), RUNS, `${kind} ${pointcut}`);
+    }
+  }
+  assert.deepEqual(await createTargets(advised("Around", "changes()")), VETO, "an unreadable around pointcut vetoes the repository");
+  assert.deepEqual(await createTargets(advised("Around", "execution(* app.ProductServiceImpl.create(..))")), VETO, "a readable around pointcut that selects the body vetoes it");
+  assert.deepEqual(await createTargets(aspectSources((content) => content.replace("  void audit() {}", "  void audit() {}\n  @Around(\"execution(* other..*.*(..))\") Object wrap() { return null; }"))), RUNS, "an around advice that selects other types leaves the body");
 });
