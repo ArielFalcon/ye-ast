@@ -51,6 +51,17 @@ const SOURCES: Readonly<Record<string, string>> = {
 /** A class of the repository the project does not place, below `Problem`, whose override a call on `Problem` may run. */
 const ANONYMOUS = ["package com.acme;", "", "public class Wiring {", "    public Problem wired() {", "        return new Problem() {", ...callee("wired", "setCode").map((line) => `    ${line}`), "        };", "    }", "}"].join("\n");
 
+/**
+ * A generic interface `Mapper` implemented by `Plain` and `Other` with concrete type arguments; a call on a field typed
+ * `Plain` whose argument's type the reading does not settle binds to `Plain`'s method, which implements the interface's.
+ */
+const MAPPED: Readonly<Record<string, string>> = {
+  [`${JAVA}/Mapper.java`]: ["package com.acme;", "", "public interface Mapper<S, T> {", "    T convert(S source);", "}"].join("\n"),
+  [`${JAVA}/Plain.java`]: ["package com.acme;", "", "public class Plain implements Mapper<String, String> {", "    public String convert(String source) {", "        System.out.println(\"plain\");", "        return source;", "    }", "}"].join("\n"),
+  [`${JAVA}/Other.java`]: ["package com.acme;", "", "public class Other implements Mapper<Integer, String> {", "    public String convert(Integer source) {", "        System.out.println(\"other\");", "        return \"\";", "    }", "}"].join("\n"),
+  [`${JAVA}/Uses.java`]: ["package com.acme;", "", "public class Uses {", "    private Plain plain;", "", "    public void mapped() {", "        plain.convert(System.getenv(\"x\"));", "    }", "}"].join("\n"),
+};
+
 let workspace: string;
 
 function commit(name: string, files: Readonly<Record<string, string>>): string {
@@ -68,12 +79,14 @@ function commit(name: string, files: Readonly<Record<string, string>>): string {
 
 let closed: string;
 let unplaced: string;
+let mapped: string;
 
 before(() => {
   workspace = mkdtempSync(join(tmpdir(), "ye-ast-open-candidates-"));
   mkdirSync(join(workspace, "scratch"));
   closed = commit("closed", SOURCES);
   unplaced = commit("unplaced", { ...SOURCES, [`${JAVA}/Wiring.java`]: ANONYMOUS });
+  mapped = commit("mapped", MAPPED);
 });
 
 after(() => rmSync(workspace, { recursive: true, force: true }));
@@ -125,4 +138,14 @@ test("a call without arguments the class chain selects under the open hierarchy 
 
   assert.equal(fact.status, "complete", JSON.stringify(fact.cuts));
   assert.deepEqual(fact.value.steps!.filter((step) => step.depth > 0).map((step) => `${step.file}:${step.line} ${step.symbol}`), [`${JAVA}/Problem.java:8 describe`]);
+});
+
+test("callers of an implementation that reach the generic interface method leave a call on another concrete implementing class to that class's method, without a hidden caller", async () => {
+  const other = await callers(mapped, "Other.java:convert");
+  const plain = await callers(mapped, "Plain.java:convert");
+  const symbols = (fact: Fact) => (fact.value.symbols ?? []).map(({ file, symbol }) => `${file.split("/").at(-1)} ${symbol}`);
+
+  assert.equal(other.status, "complete", JSON.stringify(other.cuts));
+  assert.ok(symbols(other).includes("Mapper.java convert") && !symbols(other).includes("Uses.java mapped"), JSON.stringify(other.value.symbols));
+  assert.ok(symbols(plain).includes("Uses.java mapped"), JSON.stringify(plain.value.symbols));
 });

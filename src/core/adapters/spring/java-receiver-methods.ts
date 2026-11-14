@@ -846,7 +846,8 @@ export function createResolver(project: JavaProject, generated = false) {
    * What a call of `name` with `invocation`'s arguments on a value of `type` is resolved to, among the members the call's
    * file reaches: the member whose stated parameter types equal the arguments' settled signature (JLS 15.12.2.5), else
    * the reachable members of the name, declared and inherited, must be one signature at the call's arity, so overload
-   * resolution has one candidate; the type's own, else the nearest up its class chain, else the only one. The
+   * resolution has one candidate; the type's own, else the nearest up its class chain, else the only one; else, on a
+   * value of a concrete class of a closed hierarchy, the one member of the arity with a body (`concreteOverrider`). The
    * declarations of that arity it cannot single one out of are its answer when the selection settles none: every
    * repository declaration the call can run, so those of the types below join them when the call dispatches (`virtual`,
    * and no call through a type name), and there is no answer where a type below is not placed (`runnableAmong`). A member
@@ -866,7 +867,28 @@ export function createResolver(project: JavaProject, generated = false) {
     }
     if (named.some(hasVarargs)) return undefined;
     const selected = selectAmong(type, named, invocation, file, caller);
-    return selected === undefined || "method" in selected ? selected : runnable(selected.candidates);
+    if (selected === undefined || "method" in selected) return selected;
+    const overrider = typeName ? undefined : concreteOverrider(type, above, named, invocation, file, caller);
+    return overrider === undefined ? runnable(selected.candidates) : { method: overrider };
+  };
+
+  /**
+   * The one member of the name and arity a call on a value of the concrete class `type` binds to in a closed hierarchy:
+   * the only method of the name and arity there with a body, declared by a class of `type`'s class chain, where every
+   * other one is abstract. A class that is not abstract has no abstract member (JLS 8.1.1.1), so each abstract method of
+   * the name and arity is overridden from `type` by a method of its name and arity that `type` declares or inherits from
+   * its class chain (JLS 8.4.8, 8.4.8.1, 9.4.1), and in a closed hierarchy that is the concrete one; the class type then
+   * has one member of the name and arity, and the call binds to it (JLS 15.12.2). None for an abstract class, a supertype
+   * the sources leave unsettled, a `default` or `static` interface method, a `native` method, a second method with a body,
+   * or a private or static one.
+   */
+  const concreteOverrider = (type: TypeDecl, above: ReturnType<JavaProject["hierarchy"]>, named: readonly MethodDecl[], invocation: Node, file: JavaFile, caller: TypeDecl | undefined): MethodDecl | undefined => {
+    if (type.kind !== "class" || type.isAbstract || unsettledGaps(above).length > 0) return undefined;
+    const isAbstract = (method: MethodDecl) => !method.hasBody && (method.owner.kind === "interface" || method.modifiers.includes("abstract"));
+    const concrete = named.filter((method) => method.parameterTypes.length === argumentCount(invocation) && !isAbstract(method));
+    const [only] = concrete;
+    if (only === undefined || concrete.length > 1 || !only.hasBody || only.modifiers.includes("static") || only.modifiers.includes("private") || !project.classChain(type).includes(only.owner)) return undefined;
+    return offeredAmong(type, named, invocation, file, caller)?.includes(only) === true ? only : undefined;
   };
 
   /**

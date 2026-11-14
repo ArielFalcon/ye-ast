@@ -43,6 +43,13 @@ than the language requires:
    root bindings and root origins) builds or holds the project with the same `ProjectBuild`, so one read parses one
    project. Readers outside that family (relations, call sites, data effects, routes, imports, payload shapes) build
    without it until a unit that moves their answers passes the corpus gate.
+5. On a value of a concrete class whose hierarchy is closed, a call whose members of its name and arity do not share one
+   stated signature binds to the only one of them with a body that the class chain declares, when every other one is
+   abstract. A concrete class has no abstract member (JLS 8.1.1.1), so that method overrides each of them (JLS 8.4.8.1)
+   and is the class type's only member of that name and arity (JLS 15.12.2). An abstract class, a supertype the sources
+   leave unsettled, a `default`, `static`, `native` or private method of the name and arity, or a second one with a body
+   withholds it. Measured on four answers of the largest Java repository of the corpus: `hidden-caller` cuts 27 to 13,
+   no dependent lost, and the dependents gained each read through a call the rule proves.
 
 ## Consequences
 

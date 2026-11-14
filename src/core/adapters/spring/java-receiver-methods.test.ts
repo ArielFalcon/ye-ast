@@ -673,3 +673,19 @@ test("an open hierarchy names no declarations where one may stand outside the re
   assert.deepEqual(await methodAt([named, use("named.setCode(\"x\")", [], "Named named")], "setCode"), { kind: "unproven" });
   assert.deepEqual(await methodAt([problem, first, second, below, call], "setCode"), { kind: "unproven", candidates: [place(problem, 4)] });
 });
+
+test("a call on a concrete class of a closed hierarchy names the one concrete method of the name and arity its class chain declares where every other one is abstract, and the declarations of the arity otherwise", async () => {
+  const mapper = java("Mapper.java", ["package app;", "", "interface Mapper<S, T> {", "  T convert(S source);", "}"]);
+  const shaped = java("Shaped.java", ["package app;", "", "interface Shaped {", "  default Integer convert(Object source) { return 0; }", "}"]);
+  const plain = (head: string, members: readonly string[] = []) => java("Plain.java", ["package app;", "", `${head} {`, "  public Integer convert(String source) { return 1; }", ...members, "}"]);
+  const call = use("this.mapper.convert(System.getenv(\"x\"))", ["  private Plain mapper;"], "");
+  const concrete = plain("class Plain implements Mapper<String, Integer>");
+  const twice = plain("class Plain implements Mapper<String, Integer>", ["  public Integer convert(Integer source) { return 2; }"]);
+  const defaulted = plain("class Plain implements Mapper<String, Integer>, Shaped");
+  const abstracted = plain("abstract class Plain implements Mapper<String, Integer>");
+
+  assert.deepEqual(await methodAt([mapper, concrete, call], "convert"), method(concrete, 4));
+  assert.deepEqual(await methodAt([mapper, abstracted, call], "convert"), { kind: "unproven", candidates: [place(mapper, 4), place(abstracted, 4)] });
+  assert.deepEqual(await methodAt([mapper, shaped, defaulted, call], "convert"), { kind: "unproven", candidates: [place(mapper, 4), place(defaulted, 4), place(shaped, 4)] });
+  assert.deepEqual(await methodAt([mapper, twice, call], "convert"), { kind: "unproven", candidates: [place(mapper, 4), place(twice, 4), place(twice, 5)] });
+});
