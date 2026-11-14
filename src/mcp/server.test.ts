@@ -8,6 +8,7 @@ import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import { SCHEMA, type Cut, type Fact, type FactBase, type PartialFact, type Finding } from "../core/domain/shared/fact.ts";
 import type { Result } from "../core/domain/shared/result.ts";
+import { LISTED_ITEMS } from "./render-budget.ts";
 import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries, OfChangeFault, UnknownSymbolFault } from "../core/ports/impact-queries.port.ts";
 import type { OutlineFault, OutlineQueries, OutlineRequest } from "../core/ports/outline-queries.port.ts";
@@ -1558,14 +1559,14 @@ test("importers detail lists each related file once and preserves pending matche
 });
 
 test("importers summary counts every category without double-counting distinct files", async () => {
-  const paths = Array.from({ length: 18 }, (_, i) => `src/app/core/auth/consumers/consumer-${String(i).padStart(2, "0")}.ts`);
+  const paths = Array.from({ length: LISTED_ITEMS + 1 }, (_, i) => `src/app/core/auth/consumers/consumer-${String(i).padStart(2, "0")}.ts`);
   const value: ImportersValue = { files: [{ file: "src/auth.service.ts", importers: paths, users: paths, unresolvedNamers: paths.slice(1) }] };
   const { session } = await setup({ importers: async () => ({ ok: true, value: { ...base(), status: "complete", value } }) });
   const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/auth.service.ts"] }));
-  assert.match(text, /related files \(18 distinct\)/);
-  assert.match(text, /importers \(18\)/);
-  assert.match(text, /users \(18; 0 additional\)/);
-  assert.match(text, /unresolved name matches \(17\)/);
+  assert.match(text, new RegExp(`related files \\(${LISTED_ITEMS + 1} distinct\\)`));
+  assert.match(text, new RegExp(`importers \\(${LISTED_ITEMS + 1}\\)`));
+  assert.match(text, new RegExp(`users \\(${LISTED_ITEMS + 1}; 0 additional\\)`));
+  assert.match(text, new RegExp(`unresolved name matches \\(${LISTED_ITEMS}\\)`));
   for (const path of paths) assert.equal(text.includes(path), false, path);
   assert.match(text, /mode: "details"/);
   assert.match(text, /mode: "full"/);

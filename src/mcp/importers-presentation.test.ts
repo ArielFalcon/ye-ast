@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { SCHEMA, type Fact, type FactBase } from "../core/domain/shared/fact.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import { renderImporters } from "./render.ts";
+import { LISTED_ITEMS } from "./render-budget.ts";
 
 const base: FactBase = { schema: SCHEMA, snapshot: { repo: "a", kind: "sha", sha: "abc" }, producer: { name: "test", version: "1" }, inputs: { trust: "untrusted", scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "c", declaredConfig: {}, engines: {} }, evidence: [] };
 
@@ -54,13 +55,23 @@ test("empty results remain explicit in every mode", () => {
   }
 });
 
+test("summary names every related file up to the listed bound and counts them beyond it", () => {
+  const render = (count: number) => renderImporters({ ...base, status: "complete", value: { files: [{ file: "target", importers: Array.from({ length: count }, (_, i) => `long/path/consumer-${i}.ts`), users: [], unresolvedNamers: [] }] } }, "summary");
+  const within = render(LISTED_ITEMS);
+  assert.doesNotMatch(within, /File paths omitted/);
+  assert.ok(within.includes(`long/path/consumer-${LISTED_ITEMS - 1}.ts`));
+  const beyond = render(LISTED_ITEMS + 1);
+  assert.match(beyond, /File paths omitted/);
+  assert.ok(!beyond.includes("long/path/consumer-0.ts"));
+});
+
 test("summary counts full memberships and shares recovery for multiple targets", () => {
-  const paths = Array.from({ length: 20 }, (_, i) => `long/path/consumer-${i}.ts`);
+  const paths = Array.from({ length: LISTED_ITEMS + 1 }, (_, i) => `long/path/consumer-${i}.ts`);
   const value: ImportersValue = { files: ["one", "two"].map(file => ({ file, importers: paths, reexporters: paths.slice(0, 2), users: paths, unresolvedNamers: paths.slice(0, 3) })) };
   const text = renderImporters({ ...base, status: "complete", value }, "summary");
   assert.equal((text.match(/File paths omitted/g) ?? []).length, 1);
   assert.equal((text.match(/reexporters \(2\)/g) ?? []).length, 2);
-  assert.equal((text.match(/users \(20; 0 additional\)/g) ?? []).length, 2);
+  assert.equal((text.match(new RegExp(`users \\(${LISTED_ITEMS + 1}; 0 additional\\)`, "g")) ?? []).length, 2);
   assert.equal((text.match(/unresolved name matches \(3\)/g) ?? []).length, 2);
 });
 

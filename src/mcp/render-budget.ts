@@ -1,6 +1,13 @@
 import type { Fact } from "../core/domain/shared/fact.ts";
 import type { RenderContext, ResponseMode, ResponseRenderer } from "./presentation.ts";
 
+/**
+ * The most items of one kind a summary names one by one before it counts them and points to the mode that lists them. A
+ * presentation bound of the driving adapter, never read by the core: it exceeds the largest importer answer of the
+ * evaluation corpus (21 related files), so those answers are read in one call.
+ */
+export const LISTED_ITEMS = 25;
+
 export interface AnswerBound { readonly bytes: number }
 export type BoundedText =
   | { kind: "text"; text: string }

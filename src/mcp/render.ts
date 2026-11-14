@@ -34,6 +34,7 @@ import { FIXED_LAYER_DIRECTORY } from "../core/ports/fixed-layer-store.port.ts";
 import { WORKSPACE_MANIFEST_FILE } from "../core/ports/workspace-defaults.port.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import { blockBytes as size, preferShorterText, shareExactContext } from "./presentation-sharing.ts";
+import { LISTED_ITEMS } from "./render-budget.ts";
 
 const NONE = "  (none)";
 const DECISIONS_HINT = "ye_ast_decisions lists the declarations that would resolve these gaps, with evidence-backed options.";
@@ -1145,7 +1146,7 @@ function importerFiles(entry: ImportedFile, detail: ResponseMode): { lines: stri
     `    unresolved name matches (${entry.unresolvedNamers.length})`,
   ];
   const notes = entry.unresolvedNamers.length === 0 ? [] : ["    Unresolved name matches do not establish additional dependencies."];
-  const omitted = detail === "summary" && memberships.size > 0 && size([...counts, importerPathRecovery()]) <= size(["    Indices are zero-based positions in each original category; additional users have no module category.", ...listing]);
+  const omitted = detail === "summary" && memberships.size > LISTED_ITEMS;
   return { lines: [heading, ...(omitted ? counts : listing), ...notes], omitted, listed: !omitted && memberships.size > 0 };
 }
 
