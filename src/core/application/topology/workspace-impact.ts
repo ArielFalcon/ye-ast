@@ -8,10 +8,11 @@ import { ANYTHING, incompleteSectionCuts, provenanceOf } from "../../domain/shar
 import type { Result } from "../../domain/shared/result.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
-import { compareCallSites, statedRequestsOf, unsettledCallSiteCut, type CallSite } from "../../domain/topology/call-site.ts";
+import { compareCallSites, statedRequestsOf, unsettledCallSiteCut, type CallSite, type UnresolvedCallSite } from "../../domain/topology/call-site.ts";
 import {
   admitDownstream,
   admitUpstream,
+  callSiteKey,
   changeEgress,
   downstreamGraph,
   egressReach,
@@ -131,6 +132,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
       const base = workspace.sections[repository.repo];
       if (part === undefined || base === undefined) continue;
       part.callSites.push(...(upstream.value.sites.get(repository.repo) ?? []));
+      const inventories = scopedInventories(part, base.status === "unknown" ? [] : base.value.unresolved, repository.callSites, downstream.value.egress.get(repository.repo));
       const walkOf = repository.repo === trigger ? impact : upstream.value.impacts.get(repository.repo);
       const value: RepoImpact = {
         reads: [
@@ -141,9 +143,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
         ],
         ...(walkOf === undefined ? {} : { impact: walkOf }),
         callSites: part.callSites.sort(compareCallSites),
-        unmatched: part.unmatched.sort(compareCallSites),
-        external: part.external.sort(compareCallSites),
-        unresolved: base.status === "unknown" ? [] : base.value.unresolved,
+        ...inventories,
       };
       sections[repository.repo] = sectionOf(base, value, part.undecided, repository.repo === trigger ? unservedOperationCuts(impact?.changedContracts ?? []) : [], deps.digest);
     }
@@ -213,7 +213,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
    * all its call sites, which keeps the call sites whose walk reaches the handler the link fed; those are the links out
    * of it, until no link is left to admit.
    */
-  async function downstreamFixpoint(request: WorkspaceImpactBase, joined: readonly JoinedSite[], repositories: readonly WorkspaceRepository[], sources: ReadLocations, trigger: string, seeds: readonly Seed[]): Promise<Result<{ graph: DownstreamGraph; facts: Map<string, Fact<ImpactValue>[]> }, ImpactFault>> {
+  async function downstreamFixpoint(request: WorkspaceImpactBase, joined: readonly JoinedSite[], repositories: readonly WorkspaceRepository[], sources: ReadLocations, trigger: string, seeds: readonly Seed[]): Promise<Result<{ graph: DownstreamGraph; facts: Map<string, Fact<ImpactValue>[]>; egress: ReadonlyMap<string, ReadonlyMap<string, Reach>> }, ImpactFault>> {
     let graph = downstreamGraph();
     const facts = new Map<string, Fact<ImpactValue>[]>();
     const egress = new Map<string, Map<string, Reach>>();
@@ -222,7 +222,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
     const egressed = new Map<string, number>();
     for (;;) {
       const next = admitDownstream(graph, joined, egress);
-      if (next.links.size === graph.links.size) return { ok: true, value: { graph, facts } };
+      if (next.links.size === graph.links.size) return { ok: true, value: { graph, facts, egress } };
       graph = next;
       for (const repository of repositories) {
         const fed = graph.fed.get(repository.repo);
@@ -404,6 +404,25 @@ function drift(part: Section, site: CallSite, joined: JoinResult): void {
   if (joined.ambiguous !== undefined || joined.undecided !== undefined) part.undecided.push(site);
   else if (joined.unmatched !== undefined) part.unmatched.push(site);
   else if (joined.external === true) part.external.push(site);
+}
+
+/**
+ * What a repository's drift and undecided call sites the answer's question keeps: the ones its walks send onward, which
+ * is a change's own reach and nothing for a callers question. The rest is counted, never listed: the workspace read
+ * lists every call site of a repository.
+ */
+function scopedInventories(part: Section, unresolved: readonly UnresolvedCallSite[], sites: readonly CallSite[], sent: ReadonlyMap<string, Reach> | undefined): Pick<RepoImpact, "unmatched" | "external" | "unresolved" | "unrelated"> {
+  const sentOnward = (site: CallSite): boolean => sent?.has(callSiteKey(site)) === true;
+  const places = new Set(sites.filter(sentOnward).map((site) => placeKey(site.file, site.line, site.symbol)));
+  const unmatched = part.unmatched.filter(sentOnward).sort(compareCallSites);
+  const external = part.external.filter(sentOnward).sort(compareCallSites);
+  const kept = unresolved.filter((site) => places.has(placeKey(site.path, site.line, site.symbol)));
+  const unrelated = { unmatched: part.unmatched.length - unmatched.length, external: part.external.length - external.length, unresolved: unresolved.length - kept.length };
+  return { unmatched, external, unresolved: kept, ...(unrelated.unmatched + unrelated.external + unrelated.unresolved === 0 ? {} : { unrelated }) };
+}
+
+function placeKey(file: string, line: number, symbol: string): string {
+  return `${file}\0${line}\0${symbol}`;
 }
 
 /** A route the change removed no longer exists at head, so it is rebuilt from the name the change reports. */

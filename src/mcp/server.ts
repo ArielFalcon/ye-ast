@@ -221,6 +221,7 @@ const workspaceImpact = z.looseObject({
     unmatched: z.array(callSite),
     external: z.array(callSite),
     unresolved: z.array(unresolvedCallSite),
+    unrelated: z.looseObject({ unmatched: z.number(), external: z.number(), unresolved: z.number() }).optional(),
   }))),
   links: z.array(z.looseObject({
     link: z.looseObject({

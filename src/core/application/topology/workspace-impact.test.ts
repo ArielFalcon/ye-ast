@@ -195,6 +195,11 @@ function repoImpact(value: WorkspaceImpactValue, repo: string): RepoImpact & { s
   return { ...section.value, status: section.status };
 }
 
+/** A change of the trigger repository that rewrites the declarations holding the call sites at the lines given. */
+function changing(repo: string, ...lines: number[]): ImpactValue {
+  return impactOf([], { seeds: lines.map((line) => ({ file: `src/app/${repo}.api.ts`, symbol: `${repo}.call${line}`, line, endLine: line, basis: "lines" as const })) });
+}
+
 const pathOf = (site: CallSite): string => (site.target.status === "complete" && "path" in site.target.value ? site.target.value.path : "?");
 const ORDERS = { entrypoints: [route("POST", "/orders"), route("GET", "/refunds", "Orders.refunds", 30)] };
 
@@ -428,18 +433,37 @@ test("a call to a route the walk did not reach is not impacted, and not drift ei
   assert.deepEqual(section.unmatched, []);
 });
 
-test("a call that matches no route is unmatched unless it names a host, which makes it external; one that could match is a cut, neither", async () => {
+test("a call a change sends onward that matches no route is unmatched unless it names a host, which makes it external; one that could match is a cut, neither", async () => {
   const { queries } = setup({
     repositories: { orders: { entrypoints: [...ORDERS.entrypoints, route("GET", "/user-admin", "Orders.admin", 40)] }, "shop-web": { callSites: [callSite("shop-web", "orders-api/orders"), callSite("shop-web", "orders-api/missing", "POST", 8), callSite("shop-web", "geo-api/provinces", "GET", 9), callSite("shop-web", "https://geo.example/provinces", "GET", 11), callSite("shop-web", "/user-{}", "GET", 12)] } },
+    trigger: changing("shop-web", 7, 8, 9, 11, 12),
   });
 
-  const value = valueOf(await queries.callers(ASK));
+  const value = valueOf(await queries.ofChange({ repo: { path: "/work/shop-web" }, repos: [{ path: "/work/orders" }], base: "main" }));
   const section = repoImpact(value, "shop-web");
   const fact = value.sections["shop-web"];
 
   assert.deepEqual(section.unmatched.map(pathOf), ["orders-api/missing", "geo-api/provinces"]);
   assert.deepEqual(section.external.map(pathOf), ["https://geo.example/provinces"]);
   assert.deepEqual(fact?.status === "partial" && fact.cuts, [{ kind: "unresolved-link", at: ["src/app/shop-web.api.ts", "src/app/shop-web.api.ts:12"], reason: "join-unsettled", reach: { kind: "call-site", transport: "http", method: "GET", template: "/user-{}" } }]);
+});
+
+test("a section lists the drift and undecided call sites its walks send onward and counts the rest, with every link and reached call site unchanged", async () => {
+  const stated = { ...undecidedCallSite("shop-web", 21), diagnostic: { cause: "destination-undecidable" as const, source: "read" as const }, stated: { method: "GET" as const, path: "/orders" } };
+  const linked = [callSite("shop-web", "orders-api/orders")];
+  const unrelated = [callSite("shop-web", "orders-api/missing", "POST", 8), callSite("shop-web", "https://geo.example/provinces", "GET", 11), stated];
+  const asked = async (callSites: readonly CallSite[]) => valueOf(await setup({ repositories: { orders: ORDERS, "shop-web": { callSites } } }).queries.callers(ASK));
+
+  const without = await asked(linked);
+  const value = await asked([...linked, ...unrelated]);
+  const section = repoImpact(value, "shop-web");
+
+  assert.deepEqual(value.links, without.links);
+  assert.deepEqual(section.callSites, repoImpact(without, "shop-web").callSites);
+  assert.deepEqual(section.impact, repoImpact(without, "shop-web").impact);
+  assert.deepEqual([section.unmatched, section.external, section.unresolved], [[], [], []]);
+  assert.deepEqual(section.unrelated, { unmatched: 1, external: 1, unresolved: 1 });
+  assert.equal(repoImpact(without, "shop-web").unrelated, undefined);
 });
 
 test("a call site whose target is undecided joins nothing and stays a cut naming its place", async () => {
@@ -460,16 +484,18 @@ test("a call site whose target is undecided joins nothing and stays a cut naming
   assert.deepEqual(result.value.fact.cuts, [{ kind: "section", at: ["shop-web"], reason: "section-partial", reach: { kind: "anything" } }]);
 });
 
-test("each section carries the unresolved call sites its own repository's discovery read, with the request they state", async () => {
+test("a change's section carries the unresolved call sites it sends onward, with the request they state, and counts those of another repository", async () => {
   const stated = { ...undecidedCallSite("shop-web", 21), diagnostic: { cause: "destination-undecidable" as const, source: "read" as const }, stated: { method: "GET" as const, path: "/orders" } };
   const { queries } = setup({
-    repositories: { orders: ORDERS, "shop-web": { callSites: [stated] }, billing: { callSites: [undecidedCallSite("billing", 9)] } },
+    repositories: { orders: ORDERS, "shop-web": { callSites: [stated, undecidedCallSite("shop-web", 30)] }, billing: { callSites: [undecidedCallSite("billing", 9)] } },
+    trigger: changing("shop-web", 21),
   });
 
-  const value = valueOf(await queries.callers({ ...ASK, repos: [{ path: "/work/shop-web" }, { path: "/work/billing" }] }));
+  const value = valueOf(await queries.ofChange({ repo: { path: "/work/shop-web" }, repos: [{ path: "/work/orders" }, { path: "/work/billing" }], base: "main" }));
 
   assert.deepEqual(repoImpact(value, "shop-web").unresolved, [{ path: "src/app/shop-web.api.ts", line: 21, symbol: "shop-web.call21", transport: "http", reason: "unresolved", evidence: [{ path: "src/app/shop-web.api.ts", line: 21 }], diagnostic: { cause: "destination-undecidable", source: "read" }, stated: { method: "GET", path: "/orders" } }]);
-  assert.deepEqual(repoImpact(value, "billing").unresolved, [{ path: "src/app/billing.api.ts", line: 9, symbol: "billing.call9", transport: "http", reason: "unresolved", evidence: [{ path: "src/app/billing.api.ts", line: 9 }] }]);
+  assert.deepEqual(repoImpact(value, "shop-web").unrelated, { unmatched: 0, external: 0, unresolved: 1 });
+  assert.deepEqual([repoImpact(value, "billing").unresolved, repoImpact(value, "billing").unrelated], [[], { unmatched: 0, external: 0, unresolved: 1 }]);
   assert.deepEqual(value.links, []);
 });
 
@@ -552,9 +578,9 @@ test("a declared gateway that no call site names, or that routes to a repository
 });
 
 test("a declared gateway whose prefix only calls with an undecided base write is not reported as matching nothing, and a path they state under it that no route takes is unmatched", async () => {
-  const { queries } = setup({ repositories: { orders: ORDERS, "shop-web": { callSites: [afterUndecidedBase("shop-web", "/edge/orders", 4), afterUndecidedBase("shop-web", "/edge/refunds", 9)] } } });
+  const { queries } = setup({ repositories: { orders: ORDERS, "shop-web": { callSites: [afterUndecidedBase("shop-web", "/edge/orders", 4), afterUndecidedBase("shop-web", "/edge/refunds", 9)] } }, trigger: changing("shop-web", 4, 9) });
 
-  const value = valueOf(await queries.callers({ ...ASK, gateways: [{ prefix: "edge", repo: "orders" }, { prefix: "legacy", repo: "orders" }] }));
+  const value = valueOf(await queries.ofChange({ repo: { path: "/work/shop-web" }, repos: [{ path: "/work/orders" }], base: "main", gateways: [{ prefix: "edge", repo: "orders" }, { prefix: "legacy", repo: "orders" }] }));
 
   assert.deepEqual(value.workspace.unmatchedGateways, [{ prefix: "legacy", repo: "orders" }]);
   assert.deepEqual(repoImpact(value, "shop-web").unmatched.map((site) => site.line), [9]);
@@ -575,9 +601,10 @@ test("a published destination a reached listener consumes is an upstream link, a
 });
 
 test("an event no listener consumes is external, never the drift of a service", async () => {
-  const { queries } = setup({ repositories: { orders: { entrypoints: [listener("orders.created")] }, "shop-web": { callSites: [eventSite("shop-web", "orders.missing")] } }, trigger: impactOf(EVENT_REACHED) });
+  const sent = eventSite("shop-web", "orders.missing");
+  const { queries } = setup({ repositories: { orders: { entrypoints: [listener("orders.created")] }, "shop-web": { callSites: [sent] } }, trigger: impactOf([], { seeds: [{ file: sent.file, symbol: sent.symbol, line: sent.line, endLine: sent.line, basis: "lines" }] }) });
 
-  const section = repoImpact(valueOf(await queries.callers(ASK)), "shop-web");
+  const section = repoImpact(valueOf(await queries.ofChange({ repo: { path: "/work/shop-web" }, repos: [{ path: "/work/orders" }], base: "main" })), "shop-web");
 
   assert.deepEqual(section.external.map((site) => site.line), [7]);
   assert.deepEqual(section.unmatched, []);

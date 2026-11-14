@@ -17,12 +17,14 @@ export interface RepoImpact {
   impact?: ImpactValue;
   /** The call sites of this repository that reach an entrypoint the answer's walks reached. */
   callSites: readonly CallSite[];
-  /** The call sites no entrypoint of the repositories read takes and that name no host: a declared service's drift, or a call to a service the workspace does not declare. */
+  /** The call sites the answer's walks send onward that no entrypoint of the repositories read takes and that name no host: a declared service's drift, or a call to a service the workspace does not declare. */
   unmatched: readonly CallSite[];
-  /** The call sites that leave the workspace: an HTTP call that names a host no route takes, a message no listener consumes. */
+  /** The call sites the answer's walks send onward that leave the workspace: an HTTP call that names a host no route takes, a message no listener consumes. */
   external: readonly CallSite[];
-  /** The call sites whose target this repository's snapshot does not decide, as its discovery read them. */
+  /** The call sites the answer's walks send onward whose target this repository's snapshot does not decide, as its discovery read them. */
   unresolved: readonly UnresolvedCallSite[];
+  /** Present when the question leaves out call sites of the three lists above: how many of each this repository has; `ye_ast_workspace` lists them. */
+  unrelated?: { unmatched: number; external: number; unresolved: number };
 }
 
 export interface WorkspaceImpactValue {
