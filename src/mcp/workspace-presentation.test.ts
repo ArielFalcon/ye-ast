@@ -267,3 +267,32 @@ test("the grouped summary does not depend on the order the sites arrive in", () 
   assert.match(forward, /not listed/);
   assert.equal(render([...sites].reverse()), forward);
 });
+
+const CALLS_FILE = "src/app/orders-client.service.ts";
+const HANDLER_PLACE = { path: "src/main/java/app/OrdersController.java", line: 40, repo: "orders" };
+const callPlace = (line: number) => ({ path: CALLS_FILE, line, repo: "shop-web" });
+const candidateOf = (name: string, lines: readonly number[], extra: readonly object[] = []) => ({ name, repo: "orders", basis: "link", evidence: [...lines.map(callPlace), HANDLER_PLACE, ...extra] });
+const candidateLineOf = (text: string, name: string) => text.split("\n").find((line) => line.startsWith(`  - ${name} -> orders`)) ?? "";
+
+test("a candidate served through links the answer lists points to them instead of repeating their places", () => {
+  const value = { ...mapValue([linkOf(7), linkOf(9)]), candidates: [candidateOf("api", [7, 9]), candidateOf("http://localhost:9966", [7, 9]), candidateOf("stray", [7], [{ path: "src/elsewhere.ts", line: 3, repo: "shop-web" }])] };
+  for (const detail of ["summary", "details"] as const) {
+    const text = renderWorkspace({ ...base, status: "complete", value } as never, detail);
+    for (const name of ["api", "http://localhost:9966"]) {
+      const line = candidateLineOf(text, name);
+      assert.ok(line.includes(name), `${detail} ${name}`);
+      assert.ok(!line.includes(CALLS_FILE) && !line.includes(HANDLER_PLACE.path), `${detail} ${name}: ${line}`);
+    }
+    assert.equal(text.split(`${CALLS_FILE}:7`).length - 1, 2, "the call is said once in the link line and once in the stray candidate");
+    assert.ok(candidateLineOf(text, "stray").includes("src/elsewhere.ts:3"), "a place no listed link ends at keeps every place of its candidate");
+  }
+});
+
+test("a candidate whose links the summary only counts carries their count, and details names them", () => {
+  const lines = Array.from({ length: LISTED_ITEMS + 1 }, (_, index) => index + 1);
+  const value = { ...mapValue(lines.map((line) => linkOf(line))), candidates: [candidateOf("api", lines)] };
+  const summary = candidateLineOf(renderWorkspace({ ...base, status: "complete", value } as never, "summary"), "api");
+  assert.ok(summary.includes(String(LISTED_ITEMS + 1)) && !summary.includes(CALLS_FILE), summary);
+  const details = candidateLineOf(renderWorkspace({ ...base, status: "complete", value } as never, "details"), "api");
+  assert.ok(details.includes(`1-${LISTED_ITEMS + 1}`) && !details.includes(CALLS_FILE), details);
+});

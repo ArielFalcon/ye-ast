@@ -1423,6 +1423,9 @@ function impactedLinkLine({ link, direction, reach, operations }: ImpactedLink, 
   return `${linkLine(link, indexes.get(link.id), `, ${direction}${chain}`)}${(operations ?? []).map((operation) => `; calls the operation ${changedContractText(operation)}`).join("")} [linkId ${JSON.stringify(link.id)}]`;
 }
 
+/** Whether an answer prints each link of a list, numbered, rather than counting them: the rule a candidate pointing into the list shares. */
+const linksListed = (links: readonly Link[], detail: ResponseMode): boolean => detail === "details" || links.length <= LISTED_ITEMS;
+
 /**
  * The links of a workspace map: each one in details, and in summary up to the listed bound, beyond which the count per
  * caller, callee and transport (RFC-0017); the call sites the join reached without a link are always listed.
@@ -1432,7 +1435,7 @@ function linkMapLines(links: readonly TraceLinked<Link>[], unlinked: readonly Tr
   const pairs = new Map<string, number>();
   for (const { from, to, transport } of links) pairs.set(`${from.repo} -> ${to.repo} ${transport}`, (pairs.get(`${from.repo} -> ${to.repo} ${transport}`) ?? 0) + 1);
   const counted = [...[...pairs].map(([pair, count]) => `  - ${pair}: ${count}`), `  ${categoryRecovery({ details: "lists each link" })}`];
-  const listed = detail === "details" || links.length <= LISTED_ITEMS ? literal : counted;
+  const listed = linksListed(links, detail) ? literal : counted;
   return [
     `${label} (${links.length}):`, ...listed,
     ...(unlinked.length === 0 ? [] : [`call sites the join reached without a link (${unlinked.length}):`, ...unlinked.map(({ from, transport, outcome, name, repos, routes, deferred, issuedAt }) => `  - ${from.repo}:${placeText(from.file, from.line)} ${from.symbol} ${transport} ${name}: ${outcome}${repos === undefined ? "" : ` (${repos.join(", ")})`}${routes === undefined ? "" : ` routes ${routes.join(", ")}`}${deferred === true ? " (runs later, if at all)" : ""}${issuedText(issuedAt)}`)]),
@@ -1532,8 +1535,49 @@ export function renderRefresh(refresh: WorkspaceRefresh): string[] {
   return [...refresh.freshness.map(remoteLine), ...refresh.resolution.map(pinnedLine)];
 }
 
-function candidateLine(candidate: NameCandidate): string {
-  return `  - ${candidate.name} -> ${candidate.repo} (${candidate.basis}${candidate.evidence.length === 0 ? "" : `; ${candidate.evidence.map(repositoryEvidenceText).join(", ")}`})`;
+/** The links of the two lists a workspace answer prints, and whether each list prints its links one by one. */
+interface PrintedLinks {
+  across: { links: readonly Link[]; listed: boolean };
+  inside: { links: readonly Link[]; listed: boolean };
+}
+
+const linkPlaceKey = (repo: string, path: string, line: number): string => JSON.stringify([repo, path, line]);
+
+/**
+ * The links a `link` candidate is served through, as positions in each list: those into its repository whose two ends
+ * are places of its evidence. `undefined` unless every place of the evidence is an end of one of them, so a place no link
+ * accounts for is never dropped.
+ */
+function servingLinks(candidate: NameCandidate, { across, inside }: PrintedLinks): { across: number[]; inside: number[] } | undefined {
+  if (candidate.basis !== "link" || candidate.evidence.length === 0) return undefined;
+  const places = new Set(candidate.evidence.map(({ repo, path, line }) => linkPlaceKey(repo, path, line)));
+  const served = (links: readonly Link[]) => links.flatMap((link, index) => link.to.repo === candidate.repo && places.has(linkPlaceKey(link.from.repo, link.from.file, link.from.line)) && places.has(linkPlaceKey(link.to.repo, link.to.handler.path, link.to.handler.line)) ? [index] : []);
+  const through = { across: served(across.links), inside: served(inside.links) };
+  const ends = new Set([...through.across.map((index) => across.links[index]!), ...through.inside.map((index) => inside.links[index]!)].flatMap(({ from, to }) => [linkPlaceKey(from.repo, from.file, from.line), linkPlaceKey(to.repo, to.handler.path, to.handler.line)]));
+  return [...places].every((place) => ends.has(place)) ? through : undefined;
+}
+
+/** Positions as the link lines number them: one-based, runs of consecutive numbers as `first-last`. */
+function numberRuns(positions: readonly number[]): string {
+  const runs: string[] = [];
+  for (let start = 0; start < positions.length;) {
+    let end = start;
+    while (end + 1 < positions.length && positions[end + 1] === positions[end]! + 1) end++;
+    runs.push(end === start ? `${positions[start]! + 1}` : `${positions[start]! + 1}-${positions[end]! + 1}`);
+    start = end + 1;
+  }
+  return runs.join(", ");
+}
+
+/** A candidate says which printed links serve it, or how many when the list is counted, instead of repeating their places. */
+function candidateLine(candidate: NameCandidate, printed: PrintedLinks): string {
+  const through = servingLinks(candidate, printed);
+  const said = through === undefined ? undefined : [
+    ...(through.across.length === 0 ? [] : [printed.across.listed ? `links ${numberRuns(through.across)}` : plural(through.across.length, "link")]),
+    ...(through.inside.length === 0 ? [] : [printed.inside.listed ? `inside links ${numberRuns(through.inside)}` : `${plural(through.inside.length, "link")} inside one repository`]),
+  ].join("; ");
+  const places = candidate.evidence.length === 0 ? "" : `; ${candidate.evidence.map(repositoryEvidenceText).join(", ")}`;
+  return `  - ${candidate.name} -> ${candidate.repo} (${candidate.basis}${said === undefined ? places : `; ${said}`})`;
 }
 
 /** The order the text lists outward kinds in: what the repository calls first, what it consumes last. */
@@ -1746,7 +1790,8 @@ export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>
     if (section?.status === "unknown") lines.push(`  ${repo}: unknown (${section.reason})`);
   }
   const heading = `outward names (${sections.reduce((total, [, names]) => total + names.length, 0)}):`;
-  const candidates = [`served by a local repository (${value.candidates.length}):`, ...value.candidates.map(candidateLine)];
+  const printed: PrintedLinks = { across: { links: value.links, listed: linksListed(value.links, detail) }, inside: { links: value.internalLinks, listed: linksListed(value.internalLinks, detail) } };
+  const candidates = [`served by a local repository (${value.candidates.length}):`, ...value.candidates.map((candidate) => candidateLine(candidate, printed))];
   const literalNames = [heading, ...sections.flatMap(([repo, names]) => [`  ${repo}:`, ...namesBlock(names, served, detail)])];
   const literalUnserved = unservedBlock(value.unserved, detail);
   const repos = value.workspace.repos;
