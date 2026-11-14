@@ -187,13 +187,17 @@ export function createWrittenUses({ store, sources, tokensOf, syntaxOf, origins,
     return exposed;
   }
 
-  /** The lines of `file` where the index already records a dependence of a declaration on `node`: a use it placed itself. */
+  /**
+   * The lines of `file` where the index already records a dependence on `node` from a declaration that may hold a use of
+   * it: a use it placed itself. One it records only at a declaration that may not (a property, for its type) leaves the
+   * place to the declaration around it that may: the type that declares the property.
+   */
   function indexedLines(node: GraphSymbol, file: string): ReadonlySet<number> {
     const edges = store.incomingEdges([node.id], FOLLOWED_EDGE_KINDS).filter((edge) => edge.line !== null);
     const sources = new Map(store.symbolsByIds([...new Set(edges.map((edge) => edge.source))]).map((symbol) => [symbol.id, symbol]));
     return new Set(edges.flatMap((edge) => {
       const source = sources.get(edge.source);
-      return source !== undefined && source.file === file && source.kind !== "file" ? [edge.line!] : [];
+      return source !== undefined && source.file === file && admitted(source, node) ? [edge.line!] : [];
     }));
   }
 
@@ -241,7 +245,7 @@ export function createWrittenUses({ store, sources, tokensOf, syntaxOf, origins,
    */
   async function holderOf(site: Site): Promise<GraphSymbol | undefined> {
     const at = { line: site.line, column: site.column };
-    const admits = (from: GraphSymbol): boolean => from.id !== site.node.id && followsEdge({ kind: "references", sourceKind: from.kind, targetKind: site.node.kind });
+    const admits = (from: GraphSymbol): boolean => admitted(from, site.node);
     const around = declarationsIn(site.file).filter((symbol) => contains(symbol, at)).sort(bySpan);
     if (around.length > 0 || syntaxOf === undefined) return around.find(admits);
     const written = (await syntaxOf(site.file)).declarations.filter(({ kind, span }) => kind === "class" && before(span.start, { line: site.line, column: site.column + 1 }) && before({ line: site.line, column: site.column + 1 }, span.end));
@@ -337,6 +341,11 @@ function reexposes(code: readonly Token[], index: number): boolean {
   const next = code[index + 1];
   const alone = next === undefined || next.text === ";" || (next.start > token.end && (IDENTIFIER.test(next.text) || next.text === "@"));
   return alone && code[index - 1]?.text === "default" && code[index - 2]?.text === "export";
+}
+
+/** Whether `from` may hold a place that writes `node`: a declaration other than `node` the edge policy lets reference it. */
+function admitted(from: GraphSymbol, node: GraphSymbol): boolean {
+  return from.id !== node.id && followsEdge({ kind: "references", sourceKind: from.kind, targetKind: node.kind });
 }
 
 function before(a: { line: number; column: number }, b: { line: number; column: number }): boolean {
