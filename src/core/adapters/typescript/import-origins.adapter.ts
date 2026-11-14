@@ -18,6 +18,7 @@ import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 import { recoveredModuleShape, type ModuleShape } from "./module-shape.ts";
 import { hasModifier, isStatic, readsModuleStatements, unwrapped } from "./syntax.ts";
 import { createExportLookup } from "./declaration-lookup.ts";
+import { createThisReceiverReading } from "./this-receiver-methods.ts";
 
 /** The names the pinned `typescript` declares, held once for the process rather than rebuilt per query. */
 const LIB_GLOBALS = new Set(TYPESCRIPT_LIB_GLOBALS);
@@ -189,6 +190,19 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
     return { status: "unknown", reason: "unresolved", evidence };
   };
 
+  const thisReceivers = createThisReceiverReading({
+    treeOf: (file) => indexOf(file)?.index.source,
+    nodesAt: (file, site) => {
+      const parsed = indexOf(file);
+      return parsed === undefined ? [] : nodesAt(parsed.index, parsed.text, site);
+    },
+    heritage: () => {
+      const boundOf = bindsOncePerFile();
+      return (file, expression) => heritageOf(file, expression, boundOf, 0);
+    },
+    heritageFiles: () => [...texts].flatMap(([path, text]) => (isTypeScriptSource(path) && HERITAGE.test(text) ? [path] : [])),
+  });
+
   return { replacedRoots: async () => replacedRoots(), origins: async (sites, signal) => {
     const results: (Finding<ImportOrigin> & { occurrence?: true })[] = sites.map((site) => ({ status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] }));
     const grouped = Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file);
@@ -238,8 +252,9 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
   },
   /** TypeScript types structurally: any object with the members of a type may stand where it is declared, so no hierarchy names every body a call runs. */
   dispatchTargets: async (sites) => sites.map(() => ({ kind: "unknown" })),
-  /** For the same reason a declared type does not name the class whose method a call runs. */
-  receiverMethods: async (sites) => sites.map(() => ({ kind: "unknown" })),
+  /** A declared type does not name the class whose method a call runs; a call on `this` or `super` is read through its class's chain. */
+  receiverMethods: thisReceivers.receiverMethods,
+  outsideSupertypes: thisReceivers.outsideSupertypes,
   implementedDeclarations: async (sites) => sites.map(() => ({ kind: "unknown" })),
   declaredSupertypes: async (sites, signal) => {
     const boundOf = bindsOncePerFile();
@@ -526,7 +541,7 @@ function typeKey(type: Exclude<ExternalType, { kind: "unknown" }>): string {
 }
 
 /** The nodes that start at a site's 1-based place; none when the place lies outside its line. */
-function nodesAt({ source, starting }: FileIndex, text: string, site: UseSite): readonly ts.Node[] {
+function nodesAt({ source, starting }: FileIndex, text: string, site: Pick<UseSite, "line" | "column">): readonly ts.Node[] {
   const starts = source.getLineStarts();
   if (!Number.isInteger(site.line) || !Number.isInteger(site.column) || site.line < 1 || site.column < 1 || site.line > starts.length) return [];
   const point = starts[site.line - 1]! + site.column - 1;

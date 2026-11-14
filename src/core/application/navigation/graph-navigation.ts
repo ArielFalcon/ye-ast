@@ -41,6 +41,15 @@ export function placedBetween(store: CodeGraphReader, file: string, start: numbe
   return found.length === 1 ? found[0] : undefined;
 }
 
+/**
+ * The declaration of `name` a member reading places at the lines of one declaration, where those lines alone may hold
+ * several: the one of `kinds` and that name the index starts there, else `own` when it is one of several.
+ */
+export function placedMember(store: CodeGraphReader, place: { file: string; start: number; nameLine: number }, name: string, kinds: readonly string[], own: GraphSymbol): GraphSymbol | undefined {
+  const found = store.symbolsInFiles([place.file]).filter((symbol) => symbol.name === name && kinds.includes(symbol.kind) && place.start <= symbol.startLine && symbol.startLine <= place.nameLine);
+  return found.length === 1 ? found[0] : found.find((symbol) => symbol.id === own.id);
+}
+
 /** Whether `inner` is declared within the lines of `outer`, in the same file. */
 export function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
   return inner.file === outer.file && outer.startLine <= inner.startLine && inner.endLine <= outer.endLine;

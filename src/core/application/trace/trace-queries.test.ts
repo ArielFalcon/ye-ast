@@ -341,14 +341,14 @@ test("a method a type variable's bound names proves no step, for a resolved call
   assert.deepEqual(cutsOf(bound), cutsOf(unproven));
 });
 
-test("a body reads its receivers' declared types once, for its resolved calls and its unsettled member calls together", async () => {
+test("a body reads its receivers' declared types once, for its resolved calls and its unsettled member calls together, after the edge reading's own read of the resolved ones", async () => {
   const reads: (readonly string[])[] = [];
   const nodes = [SVC, RUN, fakeNode("Repo.save", "method", B, 3, 5, "save"), fakeNode("Repo.find", "method", B, 11, 13, "find")];
   const unresolved: FakeUnresolved[] = [{ from: "run", name: "this.repo.find", kind: "calls", file: A, line: 10, column: 4 }];
 
   await factOf({ nodes, edges: [...CONTAINS, call("run", "Repo.save", 9, 4)], unresolved, onReceivers: (members) => reads.push(members) });
 
-  assert.deepEqual(reads, [["save", "find"]]);
+  assert.deepEqual(reads, [["save"], ["save", "find"]]);
 });
 
 test("a call the index resolved on a receiver whose method nothing proves is a cut, and one the receivers say nothing about stays a step", async () => {

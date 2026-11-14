@@ -11,7 +11,7 @@ import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts"
 import type { ModuleDependencies, ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { TypeTarget } from "../../ports/type-bindings.port.ts";
-import { createGraphNavigation, isInside, placedBetween } from "./graph-navigation.ts";
+import { createGraphNavigation, isInside, placedBetween, placedMember } from "./graph-navigation.ts";
 import { declarationAt, importBindings } from "./import-bindings.ts";
 import { provenKey, typedDeclaration } from "./proven-calls.ts";
 import { CALLABLE_KINDS, createCallBindings, type CallBindings, type OutsideDispatch } from "./call-binding.ts";
@@ -159,6 +159,8 @@ export interface LexicalRoot {
 const KEEP: EdgeTarget = { kind: "keep" };
 const TYPED: EdgeTarget = { kind: "keep", derivation: "typed" };
 const IMPORT = "imports";
+/** The declarations a structural language's member reading may name: a method, or a field or property holding a function. */
+export const MEMBER_KINDS: readonly string[] = [...CALLABLE_KINDS, ...FIELD_KINDS];
 /** The types whose members a value receiver may stand for. */
 const TYPE_KINDS: readonly string[] = EDGE_POLICY.ownerKinds;
 
@@ -331,13 +333,15 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
   }
 
   /**
-   * Per Java call edge, the method the receiver reading names at its place (ADR-0044 decision 1), the outside receiver
-   * whose type the edge's target cannot run under or whose member the call runs without dispatch, or what an `unproven`
-   * reading or an outside receiver the target may run under leaves open (`UnprovenCall`); none where it settles nothing
-   * or proves nothing anywhere in the repository.
+   * Per call edge of any language, the method the receiver reading names at its place (ADR-0044 decision 1, ADR-0090), the
+   * outside receiver whose type the edge's target cannot run under or whose member the call runs without dispatch, or
+   * what an `unproven` reading or an outside receiver the target may run under leaves open (`UnprovenCall`); none where it
+   * settles nothing (`unknown`) or proves nothing anywhere in the repository. A structural language's method is the one
+   * method, field or property of the target's name the graph holds at its lines; `unproven` where it holds none or
+   * several, none of which is the edge's own target.
    */
   async function declaredMethodsOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<ReadonlyMap<FollowedEdge, GraphSymbol | OutsideReceiver | UnprovenCall>> {
-    const asked = bindings === undefined ? [] : edges.filter(({ edge, source }) => edge.kind === "calls" && hasTyping(source.file, "nominal"));
+    const asked = bindings === undefined ? [] : edges.filter(({ edge }) => edge.kind === "calls");
     if (bindings === undefined || asked.length === 0) return new Map();
     const found = await origins.receiverMethods(asked.map(({ edge, source, target }) => ({ file: source.file, line: edge.line!, column: edge.column! + 1, member: target.name })), signal);
     const methods = new Map<FollowedEdge, GraphSymbol | OutsideReceiver | UnprovenCall>();
@@ -346,7 +350,11 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
       const answer = found[index];
       const call = { body: source, reference: { from: source.id, file: source.file, line: edge.line!, column: edge.column!, name: target.name, kind: edge.kind, candidates: [] } };
       const settled = bindings.settleDeclared({ kind: "declared", member: target.name, form: "member", call }, answer);
-      if (settled.kind === "declaration") methods.set(followed, settled.target);
+      if (answer?.kind === "method" && !hasTyping(source.file, "nominal")) {
+        const member = placedMember(store, answer, target.name, MEMBER_KINDS, target);
+        if (member === undefined) methods.set(followed, { kind: "unproven" });
+        else if (member.id !== target.id) methods.set(followed, member);
+      } else if (settled.kind === "declaration") methods.set(followed, settled.target);
       else if (settled.kind === "receiver" && settled.dispatch !== undefined) {
         const runs = settled.dispatch.exact !== true && (await bindings.mayRunUnder(settled.dispatch, target, signal));
         methods.set(followed, runs ? { kind: "unproven", dispatch: settled.dispatch } : { kind: "outside-receiver", type: settled.dispatch.type });

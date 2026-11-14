@@ -361,6 +361,7 @@ class Store {
   assert.deepEqual([...run.value.steps, ...saved.value.steps].flatMap((step) => step.effects ?? []).filter((effect) => effect.kind === "data").map(({ operation, access, target }) => [operation, access, target]), [
     ["find", "read", { kind: "entity", name: "shop.Order" }],
     ["save", "write", { kind: "entity", name: "shop.Order" }],
+    ["save", "write", { kind: "entity", name: "shop.Order" }],
   ]);
   const dead = await trace("src/main/java/shop/Store.java:Store.dead");
   assert.deepEqual(effectsOf(dead.value), []);

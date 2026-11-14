@@ -14,9 +14,9 @@ import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, Receiver
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { DeclaredType, DispatchTargets, ImplementedDeclarations, ImplicitChain, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
-import { createGraphNavigation, placedBetween, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
+import { createGraphNavigation, placedBetween, placedMember, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
-import type { EdgeTarget, EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
+import { MEMBER_KINDS, type EdgeTarget, type EdgeTargets, type FollowedEdge } from "../navigation/edge-targets.ts";
 import type { CallPlace, ReceiverProof } from "../navigation/call-binder.ts";
 import { unsettledBy, type DeclarationUses, type UnresolvedIn } from "../navigation/declaration-uses.ts";
 import { callEdgesOf, valueEdgesOf, type ReconciledCalls } from "../navigation/reconciled-calls.ts";
@@ -671,7 +671,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
       const value = index >= called.length;
       if (verdict.kind === "keep" || verdict.kind === "redirect") {
         const receiver = value ? undefined : receivers.get(followed);
-        const proven = receiver?.kind === "method" ? placedMethod(receiver, CALLABLE_KINDS) : undefined;
+        const proven = receiver?.kind === "method" ? (placedMethod(receiver, CALLABLE_KINDS) ?? placedMember(store, receiver, target.name, MEMBER_KINDS, target)) : undefined;
         if (receiver?.kind === "generated") continue;
         if (receiver?.kind === "supplied") {
           if (edge.kind === "instantiates") await suppliedAt(receiver, { from: node.id, file: node.file, line: edge.line!, column: edge.column!, kind: edge.kind, name: target.name, candidates: [] }, "call");

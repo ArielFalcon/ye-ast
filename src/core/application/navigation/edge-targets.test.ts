@@ -151,3 +151,28 @@ test("an outside receiver the target may run under names only the reached method
   assert.deepEqual(await unprovenOf({ ...HOMONYMS, receivers: { go: { kind: "method", file: D, start: 4, nameLine: 4 } } }, ["A.go", "E.go"]), { follows: true, into: [] });
   assert.deepEqual(await unprovenOf({ ...HOMONYMS, receivers: { go: { kind: "unproven", repositoryWide: true } } }, ["A.go", "E.go"]), { follows: true, into: [] });
 });
+
+const STORE = "src/store.ts";
+const OTHER_STORE = "src/other-store.ts";
+const SUB = "src/sub.ts";
+const STRUCTURAL: World = {
+  nodes: [{ id: "Store", kind: "class", file: STORE, start: 1, end: 6 }, { id: "Store.save", kind: "method", name: "save", file: STORE, start: 2, end: 4 }, { id: "Store.saveField", kind: "property", name: "save", file: STORE, start: 5, end: 5 }, { id: "Other.save2", kind: "method", name: "save", file: OTHER_STORE, start: 2, end: 2 }, { id: "Store.reset", kind: "method", name: "reset", file: STORE, start: 7, end: 7 }, { id: "Other", kind: "class", file: OTHER_STORE, start: 1, end: 6 }, { id: "Other.save", kind: "method", name: "save", file: OTHER_STORE, start: 2, end: 4 }, { id: "run", kind: "method", file: SUB, start: 4, end: 6 }],
+  edges: [{ from: "Store", to: "Store.save", kind: "contains" }, { from: "Store", to: "Store.saveField", kind: "contains" }, { from: "Other", to: "Other.save", kind: "contains" }, { from: "run", to: "Other.save", kind: "calls", line: 5, column: 4 }],
+};
+
+test("a call edge of a structural language is moved by a method reading, not followed under an outside receiver its target cannot run under, kept by an unproven one, and untouched by an unknown one (ADR-0090)", async () => {
+  const reading = (go: ReceiverMethod): World => ({ ...STRUCTURAL, receivers: { save: go } });
+
+  assert.deepEqual(await verdictOf(reading({ kind: "method", file: STORE, start: 2, nameLine: 2 }), "run"), ["redirect", "Store.save"]);
+  assert.deepEqual(await unprovenOf({ ...reading({ kind: "outside", type: "kit#Base" }), outside: { [OTHER_STORE]: { kind: "types", types: [] } } }, ["Store.save"]), { follows: false, into: [] });
+  assert.deepEqual(await unprovenOf(reading({ kind: "unproven" }), ["Store.save"]), { follows: true, into: [["Store.save", "name-only", true]] });
+  assert.deepEqual(await verdictOf(reading({ kind: "unknown", reason: "capability-absent" }), "run"), ["keep", undefined]);
+});
+
+test("a structural language's method reading names the one member of the target's name the graph holds at its lines, keeps an edge whose target is there, and is unproven where none is", async () => {
+  const reading = (file: string, start: number): World => ({ ...STRUCTURAL, receivers: { save: { kind: "method", file, start, nameLine: start } } });
+
+  assert.deepEqual(await verdictOf(reading(STORE, 5), "run"), ["redirect", "Store.saveField"]);
+  assert.deepEqual(await unprovenOf(reading(OTHER_STORE, 2), ["Store.save"]), { follows: true, into: [] });
+  assert.deepEqual(await unprovenOf(reading(STORE, 7), ["Store.save"]), { follows: true, into: [["Store.save", "name-only", true]] });
+});
