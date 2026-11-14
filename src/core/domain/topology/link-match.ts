@@ -3,7 +3,7 @@ import type { HttpMethod, HttpRoute } from "../entrypoints/http-route.ts";
 import { requestMethodOf } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
 import type { CallSiteReach } from "../shared/fact.ts";
-import { callPlaceOf, httpTargetOf, undecidedAuthorityTargetsOf, type CallSite, type EventTarget, type HttpTarget } from "./call-site.ts";
+import { callPlaceOf, httpTargetOf, statedRequestsOf, undecidedAuthorityTargetsOf, type CallSite, type EventTarget, type HttpTarget } from "./call-site.ts";
 import { consumption, delivers } from "./event-destination.ts";
 import { parsesAs, variableOfSegment } from "../entrypoints/route-parameter.ts";
 import { linkIdentity, type Link, type LinkBasis, type LinkDrift } from "./link.ts";
@@ -312,15 +312,15 @@ export function matchCallSite(site: CallSite, target: HttpTarget, repositories: 
  * The link a call site makes when the snapshot states its path but not the base URL it is sent to (ADR-0054): under a
  * gateway prefix in force, a route of the repository the prefix routes to once the prefix is removed; otherwise the one
  * route of the workspace the path equals or ends with. Either way the link has the `suffix` basis and its confidence,
- * since the base may name a host outside the workspace. Two repositories are ambiguous; nothing found settles nothing,
- * and the call site stays unresolved.
+ * since the base may name a host outside the workspace. Two repositories are ambiguous. Nothing found under a gateway
+ * in force is unmatched, as for a decided path; without one it settles nothing, and the call site stays unresolved.
  */
 export function matchUndecidedAuthority(site: CallSite, target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): JoinResult {
   const prefix = prefixOf(target);
   const gateway = gateways.find((candidate) => candidate.prefix === prefix);
   const served = gateway === undefined ? repositories : repositories.filter((repository) => repository.repo === gateway.repo);
   const landed = atRung(gateway === undefined ? undecidedAuthorityRung : behindGatewayRung, callTemplate(target), target.method, served);
-  if (landed === undefined) return {};
+  if (landed === undefined) return gateway === undefined ? {} : { unmatched: target.path };
   if (landed === "could") return { undecided: target.path };
   if ("ambiguous" in landed) return { ambiguous: { key: prefix ?? target.path, repos: landed.ambiguous, routes: landed.routes } };
   return { links: [linkTo(site, landed.repo, { ...landed.match, basis: "suffix", confidence: SUFFIX_CONFIDENCE }, target, "undecided")] };
@@ -329,8 +329,8 @@ export function matchUndecidedAuthority(site: CallSite, target: HttpTarget, repo
 /**
  * What the join makes of an HTTP call site: its decided target by the ladder, or each path it states after an undecided
  * base by ADR-0054, one answer per alternative (ADR-0057): the links of all alternatives, once per link, the ambiguity
- * of those that tie, and the first path some route could take; nothing for a call site with neither, or one that
- * settles nothing.
+ * of those that tie, and the first path some route could take; unmatched when none of them lands and a gateway in force
+ * routes the prefix of the first; nothing for a call site with none of these.
  */
 export function matchHttpCallSite(site: CallSite, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[], hosts: readonly HostAttribution[] = []): JoinResult | undefined {
   const target = httpTargetOf(site);
@@ -339,10 +339,12 @@ export function matchHttpCallSite(site: CallSite, repositories: readonly Reposit
   const links = [...new Map(answers.flatMap((answer) => answer.links ?? []).map((link) => [link.id, link])).values()];
   const ties = answers.flatMap((answer) => answer.ambiguous ?? []);
   const undecided = answers.find((answer) => answer.undecided !== undefined)?.undecided;
+  const unmatched = answers.find((answer) => answer.unmatched !== undefined)?.unmatched;
   const joined: JoinResult = {
     ...(links.length === 0 ? {} : { links }),
     ...(ties.length === 0 ? {} : { ambiguous: mergedAmbiguity(ties) }),
     ...(undecided === undefined ? {} : { undecided }),
+    ...(unmatched === undefined || links.length + ties.length > 0 || undecided !== undefined ? {} : { unmatched }),
   };
   return Object.keys(joined).length === 0 ? undefined : joined;
 }
@@ -436,8 +438,7 @@ export function inferHosts(calls: readonly CallSite[], repositories: readonly Re
 export function inferGateways(calls: readonly CallSite[], repositories: readonly RepositoryEntrypoints[], declared: readonly GatewayDeclaration[]): Gateway[] {
   const byPrefix = new Map<string, { target: HttpTarget; from: string }[]>();
   for (const call of calls) {
-    const decided = httpTargetOf(call);
-    for (const target of decided === undefined ? undecidedAuthorityTargetsOf(call) : [decided]) {
+    for (const target of statedRequestsOf(call)) {
       const prefix = prefixOf(target);
       if (prefix !== undefined) byPrefix.set(prefix, [...(byPrefix.get(prefix) ?? []), { target, from: call.repo }]);
     }

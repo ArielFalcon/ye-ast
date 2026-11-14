@@ -84,6 +84,15 @@ export function undecidedAuthorityTargetsOf(site: CallSite): readonly HttpTarget
   return [...paths].sort(compareText).map((path) => ({ method, path }));
 }
 
+/**
+ * The requests an HTTP call site states: its decided target, or each path it writes after an undecided base. Every
+ * reader that asks which request a call site makes asks here.
+ */
+export function statedRequestsOf(site: CallSite): readonly HttpTarget[] {
+  const decided = httpTargetOf(site);
+  return decided === undefined ? undecidedAuthorityTargetsOf(site) : [decided];
+}
+
 /** A message the code publishes. */
 export interface EventTarget {
   protocol: "kafka" | "rabbit" | "jms" | "event" | "nats";

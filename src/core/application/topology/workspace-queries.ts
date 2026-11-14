@@ -13,7 +13,7 @@ import { entrypointsOf, joinWorkspace, linkMapOf } from "./workspace-join.ts";
 import { hostOf, prefixOf } from "../../domain/topology/link-match.ts";
 import type { HeadReaderDeps, HeldLive } from "../snapshot/head-reading.ts";
 import type { WorkspaceReadOperation } from "./workspace-operation.ts";
-import { callSiteEvidence, gatherUnresolvedCallSites, unresolvedCallSite, unsettledCallSiteCut, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
+import { callSiteEvidence, gatherUnresolvedCallSites, statedRequestsOf, unresolvedCallSite, unsettledCallSiteCut, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
 import { nameCandidates, dependencyClosures, repositoryNameOf, type RepositoryIdentity } from "../../domain/topology/repository-identity.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
@@ -273,17 +273,18 @@ function unavailableSection(deps: WorkspaceQueriesDeps, repoId: string, sha: str
 
 /**
  * The names a repository's call sites state about the world outside it: the base URL a call declares, the first path
- * segment it targets, which is the prefix a gateway routes, and the destination a message is published to. A parameter
- * or the bare root states nothing.
+ * segment it targets, which is the prefix a gateway routes, and the destination a message is published to; a path written
+ * after an undecided base counts as the path it states. A parameter or the bare root states nothing.
  */
 function callSiteNames(repo: string, callSites: readonly CallSite[]): OutwardName[] {
   return callSites.flatMap((site): OutwardName[] => {
-    if (site.target.status !== "complete") return [];
-    if ("destination" in site.target.value) return [{ name: site.target.value.destination, kind: "destination", evidence: [callSiteEvidence(site)] }];
-    const host = hostOf(site.target.value);
     const evidence = [callSiteEvidence(site)];
-    const prefix = prefixOf(site.target.value);
-    return [...(host === undefined ? [] : [{ name: host, kind: "http-host" as const, evidence }]), ...(prefix === undefined ? [] : [{ name: prefix, kind: "path-prefix" as const, evidence }])];
+    if (site.target.status === "complete" && "destination" in site.target.value) return [{ name: site.target.value.destination, kind: "destination", evidence }];
+    return statedRequestsOf(site).flatMap((request): OutwardName[] => {
+      const host = hostOf(request);
+      const prefix = prefixOf(request);
+      return [...(host === undefined ? [] : [{ name: host, kind: "http-host" as const, evidence }]), ...(prefix === undefined ? [] : [{ name: prefix, kind: "path-prefix" as const, evidence }])];
+    });
   });
 }
 

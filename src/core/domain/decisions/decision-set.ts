@@ -4,7 +4,7 @@ import { compareText } from "../shared/code-node.ts";
 import { TRUST_MODES, type TrustMode } from "../shared/fact.ts";
 import type { RepositoryEvidence } from "../shared/repository-evidence.ts";
 import type { CallSite } from "../topology/call-site.ts";
-import { callSiteEvidence, httpTargetOf, undecidedAuthorityTargetsOf, unresolvedCallSite } from "../topology/call-site.ts";
+import { callSiteEvidence, statedRequestsOf, unresolvedCallSite } from "../topology/call-site.ts";
 import { inferGateways, prefixOf, servedBehindGateway, type GatewayDeclaration, type RepositoryEntrypoints } from "../topology/link-match.ts";
 import { sortEvidence, type NameCandidate, type OutwardKind, type OutwardName, type RepositoryOutwardName } from "../topology/outward-name.ts";
 import type { RepositoryResolution } from "../topology/remote-snapshot.ts";
@@ -182,13 +182,12 @@ function gatewayDecisions(input: DecisionInput): Decision[] {
   const served = new Set(inferGateways(input.repositories.flatMap((repository) => repository.callSites), entrypoints, input.gateways).map((gateway) => gateway.prefix));
   const named = new Set(input.repositories.map((repository) => repository.repo));
   const calls = input.repositories.flatMap((repository) =>
-    repository.callSites.flatMap((site) => {
-      const decided = httpTargetOf(site);
-      return (decided === undefined ? undecidedAuthorityTargetsOf(site) : [decided]).flatMap((target) => {
+    repository.callSites.flatMap((site) =>
+      statedRequestsOf(site).flatMap((target) => {
         const prefix = prefixOf(target);
         return prefix === undefined || named.has(prefix) || served.has(prefix) ? [] : [{ prefix, site, target }];
-      });
-    }),
+      }),
+    ),
   );
   return groupsOf(calls, (call) => call.prefix).map(([prefix, under]) => {
     const options = routes.flatMap(({ repo, routes: own }): DecisionOption[] => {

@@ -8,7 +8,7 @@ import { ANYTHING, incompleteSectionCuts, provenanceOf } from "../../domain/shar
 import type { Result } from "../../domain/shared/result.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
-import { compareCallSites, unsettledCallSiteCut, type CallSite } from "../../domain/topology/call-site.ts";
+import { compareCallSites, statedRequestsOf, unsettledCallSiteCut, type CallSite } from "../../domain/topology/call-site.ts";
 import {
   admitDownstream,
   admitUpstream,
@@ -417,7 +417,7 @@ function routesOfRemoved(changes: readonly ChangedEntrypoint[]): HttpRoute[] {
 
 function unmatchedGateways(declared: readonly GatewayDeclaration[], repositories: readonly { repo: string; callSites: readonly CallSite[] }[]): GatewayDeclaration[] {
   const read = new Set(repositories.map(({ repo }) => repo));
-  const named = new Set(repositories.flatMap(({ callSites }) => callSites.flatMap((site) => (site.target.status === "complete" && "path" in site.target.value ? [prefixOf(site.target.value)] : []))));
+  const named = new Set(repositories.flatMap(({ callSites }) => callSites.flatMap((site) => statedRequestsOf(site).map(prefixOf))));
   return declared.filter((gateway) => !read.has(gateway.repo) || !named.has(gateway.prefix)).sort((a, b) => compareText(a.prefix, b.prefix) || compareText(a.repo, b.repo));
 }
 

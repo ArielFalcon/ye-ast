@@ -34,6 +34,10 @@ function callSite(repo: string, path: string, method: "GET" | "POST" | "DELETE" 
   return { repo, file: `src/app/${repo}.api.ts`, line, symbol: `${repo}.call${line}`, transport: "http", target: { status: "complete", value: { method, path }, evidence: [] } };
 }
 
+function afterUndecidedBase(repo: string, path: string, line = 7): CallSite {
+  return { ...undecidedCallSite(repo, line), stated: { method: "POST", expressions: [[{ kind: "unknown", cause: "destination-undecidable", evidence: [] }, { kind: "text", text: path }]] } };
+}
+
 function undecidedCallSite(repo: string, line: number): CallSite {
   return { repo, file: `src/app/${repo}.api.ts`, line, symbol: `${repo}.call${line}`, transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [{ path: `src/app/${repo}.api.ts`, line }] } };
 }
@@ -545,6 +549,15 @@ test("a declared gateway that no call site names, or that routes to a repository
   const value = valueOf(await queries.callers({ ...ASK, gateways: [{ prefix: "edge", repo: "orders" }, { prefix: "legacy", repo: "orders" }, { prefix: "pay", repo: "billing" }] }));
 
   assert.deepEqual(value.workspace.unmatchedGateways, [{ prefix: "legacy", repo: "orders" }, { prefix: "pay", repo: "billing" }]);
+});
+
+test("a declared gateway whose prefix only calls with an undecided base write is not reported as matching nothing, and a path they state under it that no route takes is unmatched", async () => {
+  const { queries } = setup({ repositories: { orders: ORDERS, "shop-web": { callSites: [afterUndecidedBase("shop-web", "/edge/orders", 4), afterUndecidedBase("shop-web", "/edge/refunds", 9)] } } });
+
+  const value = valueOf(await queries.callers({ ...ASK, gateways: [{ prefix: "edge", repo: "orders" }, { prefix: "legacy", repo: "orders" }] }));
+
+  assert.deepEqual(value.workspace.unmatchedGateways, [{ prefix: "legacy", repo: "orders" }]);
+  assert.deepEqual(repoImpact(value, "shop-web").unmatched.map((site) => site.line), [9]);
 });
 
 const EVENT_REACHED: ImpactValue["entrypoints"] = [{ kind: "listener", name: "kafka orders.created", handler: CONSUMER, depth: 0, confidence: 1, seeds: [] }];

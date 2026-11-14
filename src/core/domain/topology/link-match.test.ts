@@ -565,3 +565,21 @@ test("a call that states its origin states its whole path, so the suffix rung ne
   const gated = site("http://localhost:9966/orders-api/orders");
   assert.equal(joined(matchCallSite(gated, targetOf(gated), repositories([route("GET", "/orders")]), [{ prefix: "orders-api", repo: "orders", basis: "gateway-prefix" }])), "gateway-prefix 1 -> orders GET /orders");
 });
+
+test("a path stated after an undecided base that lands on no route of the gateway's repository is unmatched; without a gateway it settles nothing", () => {
+  const call = stating([["text", "/edge/refunds"]]);
+  const served = [...repositories([route("GET", "/orders")], "orders"), ...repositories([route("GET", "/invoices")], "billing")];
+  const gateway = [{ prefix: "edge", repo: "orders", basis: "gateway-prefix" as const }];
+
+  assert.deepEqual(matchHttpCallSite(call, served, gateway), { unmatched: "/edge/refunds" });
+  assert.equal(matchHttpCallSite(call, served, []), undefined);
+  assert.equal(joined(matchHttpCallSite(stating([["text", "/edge/orders"]]), served, gateway) ?? {}), "suffix 0.5 -> orders GET /orders");
+});
+
+test("alternatives stated after an undecided base are unmatched under a gateway only when none of them links or could", () => {
+  const served = repositories([route("GET", "/orders")], "orders");
+  const gateway = [{ prefix: "edge", repo: "orders", basis: "gateway-prefix" as const }];
+
+  assert.deepEqual(matchHttpCallSite(stating([["text", "/edge/nothing"]], [["text", "/edge/none-either"]]), served, gateway), { unmatched: "/edge/none-either" });
+  assert.equal(matchHttpCallSite(stating([["text", "/edge/nothing"]], [["text", "/edge/orders"]]), served, gateway)?.unmatched, undefined);
+});

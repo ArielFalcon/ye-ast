@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { callPlaceEvidence, compareCallSites, gatherUnresolvedCallSites, unresolvedCallSite, unsettledCallSiteCut, type CallSite } from "./call-site.ts";
+import { callPlaceEvidence, compareCallSites, gatherUnresolvedCallSites, statedRequestsOf, unresolvedCallSite, unsettledCallSiteCut, type CallSite } from "./call-site.ts";
 
 function site(overrides: Partial<CallSite> = {}): CallSite {
   return { repo: "shop", file: "src/app/order.api.ts", line: 4, symbol: "OrderApi.create", transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [{ path: "src/app/order.api.ts", line: 4 }] }, ...overrides };
@@ -89,4 +89,16 @@ test("unresolved call sites that differ in anything but evidence stay separate e
 
   assert.equal(gatherUnresolvedCallSites([base, ...kept]).length, kept.length + 1);
   assert.deepEqual(gatherUnresolvedCallSites([base, { ...base, evidence: [{ path: "src/app/other.ts", line: 9 }] }]).map(({ evidence }) => evidence), [[{ path: "src/app/order.api.ts", line: 4 }, { path: "src/app/other.ts", line: 9 }]]);
+});
+
+test("the requests a call site states are its decided target, or each distinct path written after an undecided base, and nothing otherwise", () => {
+  const decided = site({ target: { status: "complete", value: { method: "POST", path: "/orders" }, evidence: [] }, stated: { method: "GET", expressions: [[{ kind: "unknown", cause: "destination-undecidable", evidence: [] }, { kind: "text", text: "/ignored" }]] } });
+  assert.deepEqual(statedRequestsOf(decided), [{ method: "POST", path: "/orders" }]);
+
+  const after = (...texts: string[]): CallSite => site({ stated: { method: "GET", expressions: texts.map((text) => [{ kind: "unknown", cause: "destination-undecidable", evidence: [] }, { kind: "text", text }]) } });
+  assert.deepEqual(statedRequestsOf(after("/geo/b", "/geo/a", "/geo/a")), [{ method: "GET", path: "/geo/a" }, { method: "GET", path: "/geo/b" }]);
+
+  assert.deepEqual(statedRequestsOf(site({ stated: { method: "GET" } })), []);
+  assert.deepEqual(statedRequestsOf(site()), []);
+  assert.deepEqual(statedRequestsOf({ ...after("/geo/a"), transport: "event" }), []);
 });

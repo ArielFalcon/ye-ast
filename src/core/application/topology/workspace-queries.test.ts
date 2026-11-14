@@ -988,6 +988,10 @@ function postSite(repo: string, path: string, line = 7): CallSite {
   return { repo, file: `src/app/${repo}.api.ts`, line, symbol: `${repo}.call${line}`, transport: "http", target: { status: "complete", value: { method: "POST", path }, evidence: [] } };
 }
 
+function afterUndecidedBase(repo: string, path: string, line = 7): CallSite {
+  return { repo, file: `src/app/${repo}.api.ts`, line, symbol: `${repo}.call${line}`, transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [] }, stated: { method: "POST", expressions: [[{ kind: "unknown", cause: "destination-undecidable", evidence: [] }, { kind: "text", text: path }]] } };
+}
+
 function publishSite(repo: string, destination: string, line = 7): CallSite {
   return { repo, file: `src/main/java/app/${repo}/Publisher.java`, line, symbol: `${repo}.publish${line}`, transport: "event", target: { status: "complete", value: { protocol: "nats", destination, role: "publish" }, evidence: [] } };
 }
@@ -1090,6 +1094,19 @@ test("the host and prefix of a call the join links are served by the repository 
   assert.deepEqual(value.unserved.map(({ name, kind }) => `${kind} ${name}`), ["path-prefix charges", "http-host http://billing.example"]);
   assert.deepEqual(value.candidates.map(({ name, repo, basis }) => `${name} ${repo} ${basis}`), ["api orders link", "http://localhost:9966 orders link"]);
   assert.deepEqual(value.candidates.find(({ name }) => name === "api")?.evidence, [{ path: "src/app/shop-web.api.ts", line: 7, repo: "shop-web" }, { path: ORDERS_HANDLER.path, line: ORDERS_HANDLER.line, repo: "orders" }]);
+});
+
+test("a path a call states after an undecided base is an outward name: served by the repository its link lands in, unserved and unmatched under a gateway in force that no route takes", async () => {
+  const repositories: Repositories = { "/work/shop-web": { files: {} }, "/work/orders": { files: {}, entrypoints: [postRoute("/orders")] } };
+  const queries = setup(repositories, sitesOf({ "shop-web": [afterUndecidedBase("shop-web", "/geo/provinces", 3), afterUndecidedBase("shop-web", "/api/orders", 5), afterUndecidedBase("shop-web", "/api/refunds", 8)] }));
+
+  const value = valueOf(await queries.outwardNames({ ...LINKED, gateways: [{ prefix: "api", repo: "orders" }] }));
+
+  const section = value.sections["shop-web"];
+  assert.deepEqual(section?.status === "unknown" ? [] : section?.value.names.map((name) => `${name.kind} ${name.name}`), ["path-prefix api", "path-prefix geo"]);
+  assert.deepEqual(value.links.map(({ from, to }) => `${from.line} -> ${to.name}`), ["5 -> POST /orders"]);
+  assert.deepEqual(value.unserved.map(({ name }) => name), ["geo"]);
+  assert.deepEqual(value.unlinked.map(({ from, outcome, name }) => `${from.line} ${outcome} ${name}`), ["8 unmatched /api/refunds"]);
 });
 
 test("a call to a route of its own repository is an internal link: its host and prefix are served by that repository, never unserved", async () => {
