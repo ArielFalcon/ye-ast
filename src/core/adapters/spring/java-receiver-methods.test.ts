@@ -97,8 +97,10 @@ test("a platform interface that declares no members leaves the receiver's method
 
   assert.deepEqual(await select(imported), method(imported, 4));
   assert.deepEqual(await select(entity("implements Cloneable")), method(imported, 3));
-  assert.deepEqual(await select(entity("implements Comparable<Entity>")), { kind: "unproven" });
-  assert.deepEqual(await select(entity("implements Serializable", ["import com.vendor.Serializable;"])), { kind: "unproven" });
+  const comparable = entity("implements Comparable<Entity>");
+  assert.deepEqual(await select(comparable), { kind: "unproven", candidates: [place(comparable, 3)] });
+  const vendor = entity("implements Serializable", ["import com.vendor.Serializable;"]);
+  assert.deepEqual(await select(vendor), { kind: "unproven", candidates: [place(vendor, 4)] });
 });
 
 test("an interface a declared generator emits and the sources do not hold leaves the implementing class's own, private and typed receivers selectable, and nothing it could declare", async () => {
@@ -114,12 +116,12 @@ test("an interface a declared generator emits and the sources do not hold leaves
   assert.deepEqual(await select(typed, "save"), method(STORE, 4));
   assert.deepEqual(await select(helped, "helper"), method(helped, 5));
   assert.deepEqual(await select(typed, "save", false), { kind: "unproven" });
-  assert.deepEqual(await select(helped, "helper", false), { kind: "unproven" });
+  assert.deepEqual(await select(helped, "helper", false), { kind: "unproven", candidates: [place(helped, 5)] });
   assert.notEqual((await select(implementing("getRequest()"), "getRequest")).kind, "method");
   const alsoStore = implementing("save(\"x\")", "implements Api, Store", ["  public void save(String value) {}"]);
-  assert.deepEqual(await select(alsoStore, "save"), { kind: "unproven" });
+  assert.deepEqual(await select(alsoStore, "save"), { kind: "unproven", candidates: [place(STORE, 4), place(alsoStore, 5)] });
   assert.deepEqual(await select({ ...typed, content: typed.content.replace("implements Api", "extends Api") }, "save"), { kind: "unproven" });
-  assert.deepEqual(await select({ ...helped, content: helped.content.replace("implements Api", "extends Api") }, "helper"), { kind: "unproven" });
+  assert.deepEqual(await select({ ...helped, content: helped.content.replace("implements Api", "extends Api") }, "helper"), { kind: "unproven", candidates: [place(helped, 5)] });
   assert.deepEqual(await select({ ...typed, content: typed.content.replace("implements Api", "implements org.springframework.context.ApplicationListener<Object>") }, "save"), { kind: "unproven" });
 });
 
@@ -194,7 +196,7 @@ test("an unread supertype withholds declaration selection; runtime replacements 
   const call = use("plain.save(\"x\")", [], "Plain plain");
 
   assert.deepEqual(await methodAt([plain, elsewhere, call]), method(plain, 4));
-  assert.deepEqual(await methodAt([framework, call]), { kind: "unproven" });
+  assert.deepEqual(await methodAt([framework, call]), { kind: "unproven", candidates: [place(framework, 4)] });
   assert.deepEqual(await methodAt([plain, anonymous, call]), method(plain, 4));
   assert.deepEqual(await methodAt([plain, aspect, call]), method(plain, 4));
 });
@@ -455,7 +457,7 @@ test("a repository member is generated only for an interface receiver the declar
   const sources = orders([REPOSITORY_IMPORT], header, members);
   const unproven = { kind: "unproven" };
   const klass = [sources[0]!, java("Orders.java", ["package app;", REPOSITORY_IMPORT, "abstract class Orders implements JpaRepository<Order, Long> {", "  abstract Order findByCode(String code);", "}"])];
-  assert.deepEqual(await repositoryCall("orders.findByCode(text)", klass, "findByCode"), unproven);
+  assert.deepEqual(await repositoryCall("orders.findByCode(text)", klass, "findByCode"), { kind: "unproven", candidates: [place(klass[1]!, 4)] });
   assert.deepEqual(await methodAt([...sources, use("repository.findByCode(text)", [], "R repository, String text")].map((source) => source.path.endsWith("/Use.java") ? { ...source, content: source.content.replace("void run(", "<R extends Orders> void run(") } : source), "findByCode"), unproven);
   assert.deepEqual(await repositoryCall("Orders.findByCode(text)", sources, "findByCode"), unproven);
 });
@@ -635,4 +637,39 @@ test("an unplaced method, a receiver parameter and a call-rewriting annotation a
   assert.deepEqual(await acceptedAt([receiver], receiver, 4, "get"), unknown);
   assert.deepEqual(await acceptedAt([API, REWRITING], API, 4, "get"), unknown);
   assert.deepEqual(await acceptedAt([API], API, 4, "get", undefined, [generator]), { kind: "counts", count: 1 });
+});
+
+test("a class whose hierarchy only types outside the repository leave open names, for a call with arguments, the declarations of its arity at, above and below it", async () => {
+  const problem = java("Problem.java", ["package app;", "", "class Problem extends Exception {", "  void setCode(String code) {}", "  void setCode(String code, int at) {}", "}"]);
+  const detailed = java("Detailed.java", ["package app;", "", "class Detailed extends Problem {", "  void setCode(String code) {}", "  private void setCode(Object code) {}", "}"]);
+  const unrelated = java("Unrelated.java", ["package app;", "", "class Unrelated {", "  void setCode(String code) {}", "}"]);
+  const call = use("problem.setCode(\"x\")", [], "Problem problem");
+
+  assert.deepEqual(await methodAt([problem, detailed, unrelated, call], "setCode"), { kind: "unproven", candidates: [place(detailed, 4), place(problem, 4)] });
+});
+
+test("a closed hierarchy whose selection settles none names the declarations of the call's arity at, above and below the receiver's type, and none where a class below is not placed", async () => {
+  const base = java("Base.java", ["package app;", "", "class Base {", "  void take(Integer code) {}", "  void take(String code) {}", "}"]);
+  const sub = java("Sub.java", ["package app;", "", "class Sub extends Base {", "  void take(String code) {}", "}"]);
+  const anonymous = java("Wiring.java", ["package app;", "", "class Wiring {", "  Base make() { return new Base() { void take(String code) {} }; }", "}"]);
+  const call = use("base.take(System.getenv(\"x\"))", [], "Base base");
+
+  assert.deepEqual(await methodAt([base, sub, call], "take"), { kind: "unproven", candidates: [place(base, 4), place(base, 5), place(sub, 4)] });
+  assert.deepEqual(await methodAt([base, sub, anonymous, call], "take"), { kind: "unproven" });
+});
+
+test("an open hierarchy names no declarations where one may stand outside the read hierarchy: an unplaced class below, an unsettled supertype, an interface receiver", async () => {
+  const problem = java("Problem.java", ["package app;", "", "class Problem extends Exception {", "  void setCode(String code) {}", "}"]);
+  const call = use("problem.setCode(\"x\")", [], "Problem problem");
+  const anonymous = java("Wiring.java", ["package app;", "", "class Wiring {", "  Problem make() { return new Problem() { void setCode(String code) {} }; }", "}"]);
+  const first = javaIn("a", "Base.java", ["package a;", "", "public class Base {}"]);
+  const second = javaIn("b", "Base.java", ["package b;", "", "public class Base {}"]);
+  const ambiguous = java("Problem.java", ["package app;", "", "import a.*;", "import b.*;", "", "class Problem extends Base {", "  void setCode(String code) {}", "}"]);
+  const below = java("Odd.java", ["package app;", "", "import a.*;", "import b.*;", "", "class Odd extends Base {}", "class Problems extends java.util.ArrayList<Problem> {}"]);
+  const named = java("Named.java", ["package app;", "", "interface Named extends Comparable<Named> {", "  void setCode(String code);", "}"]);
+
+  assert.deepEqual(await methodAt([problem, anonymous, call], "setCode"), { kind: "unproven" });
+  assert.deepEqual(await methodAt([ambiguous, first, second, call], "setCode"), { kind: "unproven" });
+  assert.deepEqual(await methodAt([named, use("named.setCode(\"x\")", [], "Named named")], "setCode"), { kind: "unproven" });
+  assert.deepEqual(await methodAt([problem, first, second, below, call], "setCode"), { kind: "unproven", candidates: [place(problem, 4)] });
 });

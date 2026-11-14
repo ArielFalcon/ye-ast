@@ -10,10 +10,10 @@ import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { declarationsProject, enclosingType, heldJavaProject, thisHolder, thisType, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { javaReceiverBindings, statedType } from "../tree-sitter/java-receiver-bindings.ts";
-import { annotationAt, namesDynamicImplementation, resolve } from "./java-declared-types.ts";
+import { annotationAt, isAnonymous, namesDynamicImplementation, resolve, supertypesOf } from "./java-declared-types.ts";
 import { builderMember, generatedMember, type GeneratedMember } from "./java-generated-members.ts";
 import { REPOSITORY_FRAGMENTS, REPOSITORY_MEMBER_NAMES, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
-import { createJavaProject, MEMBERLESS_PLATFORM_INTERFACES, namedChildren, readArgumentSignature, readSignature, sameSignature, scopeOf, supertypeClauses, typeNodeName, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Scope, type Signature, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, isTypeDeclaration, MEMBERLESS_PLATFORM_INTERFACES, namedChildren, readArgumentSignature, readSignature, sameSignature, scopeOf, supertypeClauses, typeNodeName, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type Scope, type Signature, type TypeDecl } from "./java-symbols.ts";
 import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
 
 const SLOT = "java-receiver-methods";
@@ -77,8 +77,9 @@ interface ReadFile extends ReceiverSource {
  * do not settle (`searchedType`); when a source holds an annotation by which a processor adds overloads or rewrites calls
  * (`CALL_REWRITING_ANNOTATIONS`); or when the declared hierarchy does not settle the member. Declaration selection and
  * runtime dispatch are separate obligations. An unproven value receiver or declared repository member remains a cut,
- * naming the declarations of the call's arity its type offers where the whole hierarchy was read; no name-only index
- * target proves it. Where the strict binding proves and no repository type types the receiver, a receiver the same
+ * naming the declarations of the call's arity its type offers where the whole hierarchy was read, and, for a class whose
+ * hierarchy only types outside the repository leave open, those with the ones the classes below it may run where every
+ * class below it is placed (`runnableAmong`, ADR-0089 decision 2); no name-only index target proves it. Where the strict binding proves and no repository type types the receiver, a receiver the same
  * declarations type with a platform or library type answers `outside` with that type's qualified name (ADR-0079), and a
  * class literal answers the platform's class type. `unknown` is kept for what another reader of the binding chain owns
  * (ADR-0087): a receiver that is a name or `this`, a call without a receiver whose search finds no type, a source the
@@ -486,13 +487,31 @@ export function createResolver(project: JavaProject, generated = false) {
     const unsettled = unsettledGaps(above);
     return unsettled.some((gap) => !(gap.kind === "missing" && gap.isInterface && project.isGeneratedInterface(gap.name, gap.file))) || (unsettled.length > 0 && declared.some((method) => method.owner.kind !== "class"));
   };
+  const resolvedGap = (gap: ReturnType<JavaProject["hierarchy"]>["gaps"][number]) => {
+    const owner = enclosingType(gap.node, gap.file, project);
+    const scope = owner === undefined ? undefined : enclosingType(owner.node.parent ?? owner.node, gap.file, project);
+    return { scope, found: resolve(gap.node, gap.file, project, scope, gap.node, true) };
+  };
   /** Whether a supertype gap is a superclass the sources do not declare whose name resolves to one known outside type, by import or qualified name. */
   const isOutsideSuperclass = (gap: ReturnType<JavaProject["hierarchy"]>["gaps"][number]): boolean => {
     if (gap.isInterface || gap.kind !== "missing") return false;
-    const owner = enclosingType(gap.node, gap.file, project);
-    const found = resolve(gap.node, gap.file, project, owner === undefined ? undefined : enclosingType(owner.node.parent ?? owner.node, gap.file, project), gap.node, true);
+    const { found } = resolvedGap(gap);
     return found?.kind === "library" || found?.kind === "platform";
   };
+  /**
+   * Whether a supertype gap is a type the sources do not declare that its clause proves outside the repository, as
+   * `declaredSupertypes` reads the clause: by import or qualified name, or through `java.lang` and the on-demand imports.
+   */
+  const isOutsideSupertype = (gap: ReturnType<JavaProject["hierarchy"]>["gaps"][number]): boolean => {
+    const { scope, found } = resolvedGap(gap);
+    if (found !== undefined) return found.kind === "library" || found.kind === "platform";
+    return onDemandOutside(gap.name, { file: gap.file, type: scope, at: gap.node }, project) !== undefined;
+  };
+  /**
+   * Whether every supertype the sources leave unsettled is a type outside the repository, which adds no repository
+   * declaration to the hierarchy: no type outside the repository is a subtype of a repository type (ADR-0089 decision 2).
+   */
+  const openOnlyOutside = (above: ReturnType<JavaProject["hierarchy"]>): boolean => unsettledGaps(above).every(isOutsideSupertype);
   /**
    * Whether the hierarchy is open only through superclasses outside the sources that resolve to a known type. A member a
    * class of the sources generates for its own field is declared in that class, so such a supertype can add only an
@@ -516,6 +535,57 @@ export function createResolver(project: JavaProject, generated = false) {
   const signatureOf = (method: MethodDecl) => {
     if (!signatures.has(method)) signatures.set(method, readSignature(method, project));
     return signatures.get(method);
+  };
+
+  let unplacedBelow: { types: ReadonlySet<TypeDecl>; names: ReadonlySet<string> } | undefined;
+  /**
+   * What may stand below a repository class without a type the project places: the repository types an anonymous or a
+   * local class extends, and the simple names of the supertypes the strict reading leaves unsettled anywhere, an
+   * anonymous or local class's or a placed type's that is no type outside the repository.
+   */
+  const readUnplacedBelow = () => {
+    if (unplacedBelow !== undefined) return unplacedBelow;
+    const placed = new Set(project.types.map((type) => type.node.id));
+    const types = new Set<TypeDecl>();
+    const names = new Set<string>();
+    for (const type of project.types) for (const gap of unsettledGaps(declaredHierarchy(type))) if (!isOutsideSupertype(gap)) names.add(gap.name.split(".").at(-1)!);
+    for (const file of new Set(project.types.map((type) => type.file))) {
+      const pending: Node[] = [file.root];
+      for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+        if ((isTypeDeclaration(node) || isAnonymous(node)) && !placed.has(node.id)) {
+          for (const supertype of supertypesOf(node)) {
+            const found = resolve(supertype, file, project, enclosingType(node.parent ?? node, file, project), supertype, true);
+            if (found?.kind === "repository" && found.type !== undefined) types.add(found.type);
+            else if (found?.kind !== "platform" && found?.kind !== "library") names.add(typeNodeName(supertype).split(".").at(-1)!);
+          }
+        }
+        for (const child of node.namedChildren) if (child !== null) pending.push(child);
+      }
+    }
+    unplacedBelow = { types, names };
+    return unplacedBelow;
+  };
+
+  /**
+   * The declarations a call on a value of the repository class `type` may run, from those the selection offers at the
+   * call's arity: those, and the instance methods of the name and arity that the classes below it declare or inherit
+   * from outside `type`'s hierarchy, through their declared hierarchies. None when a class the project does not place may
+   * stand below it or below one of them: an anonymous or a local class, or a supertype the strict reading leaves
+   * unsettled under the name of one of them. Only classes extend a class.
+   */
+  const runnableAmong = (type: TypeDecl, offered: readonly MethodDecl[], name: string, arity: number): { candidates: readonly MethodDecl[] } | undefined => {
+    const below = project.types.filter((other) => other !== type && declaredHierarchy(other).types.includes(type));
+    const unplaced = readUnplacedBelow();
+    if ([type, ...below].some((member) => unplaced.types.has(member) || unplaced.names.has(member.name))) return undefined;
+    const above = new Set(declaredHierarchy(type).types);
+    const runnable = new Set(offered);
+    for (const subtype of below) {
+      for (const owner of declaredHierarchy(subtype).types) {
+        if (above.has(owner)) continue;
+        for (const method of owner.methods) if (method.name === name && method.parameterTypes.length === arity && !method.modifiers.includes("private") && !method.modifiers.includes("static")) runnable.add(method);
+      }
+    }
+    return { candidates: [...runnable] };
   };
 
   /**
@@ -773,16 +843,26 @@ export function createResolver(project: JavaProject, generated = false) {
    * file reaches: the member whose stated parameter types equal the arguments' settled signature (JLS 15.12.2.5), else
    * the reachable members of the name, declared and inherited, must be one signature at the call's arity, so overload
    * resolution has one candidate; the type's own, else the nearest up its class chain, else the only one. The
-   * declarations of that arity it cannot single one out of are its answer when the selection settles none. A member whose
-   * reach is unknown withholds the selection.
+   * declarations of that arity it cannot single one out of are its answer when the selection settles none: every
+   * repository declaration the call can run, so those of the types below join them when the call dispatches (`virtual`,
+   * and no call through a type name), and there is no answer where a type below is not placed (`runnableAmong`). A member
+   * whose reach is unknown withholds the selection.
    */
-  const memberOf = (type: TypeDecl, name: string, invocation: Node, file: JavaFile, caller: TypeDecl | undefined, typeName = false): { method: MethodDecl } | { candidates: readonly MethodDecl[] } | undefined => {
+  const memberOf = (type: TypeDecl, name: string, invocation: Node, file: JavaFile, caller: TypeDecl | undefined, typeName = false, virtual = true): { method: MethodDecl } | { candidates: readonly MethodDecl[] } | undefined => {
     if (OBJECT_METHODS.has(name)) return undefined;
     const above = declaredHierarchy(type);
     const named = above.types.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
-    if (hierarchyOpen(above, named)) return openMemberOf(type, above, named, invocation, file, caller, typeName);
+    const runnable = (offered: readonly MethodDecl[]) => (virtual && !typeName ? runnableAmong(type, offered, name, argumentCount(invocation)) : { candidates: offered });
+    if (hierarchyOpen(above, named)) {
+      const selected = openMemberOf(type, above, named, invocation, file, caller, typeName);
+      if (selected !== undefined && ("method" in selected || typeName)) return selected;
+      if (type.kind !== "class" || !openOnlyOutside(above) || named.some(hasVarargs)) return undefined;
+      const offered = offeredAmong(type, named, invocation, file, caller);
+      return offered === undefined || offered.length === 0 ? undefined : runnable(offered);
+    }
     if (named.some(hasVarargs)) return undefined;
-    return selectAmong(type, named, invocation, file, caller);
+    const selected = selectAmong(type, named, invocation, file, caller);
+    return selected === undefined || "method" in selected ? selected : runnable(selected.candidates);
   };
 
   /**
@@ -800,12 +880,17 @@ export function createResolver(project: JavaProject, generated = false) {
     return selectAmong(type, declared, invocation, file, caller);
   };
 
-  const selectAmong = (type: TypeDecl, named: readonly MethodDecl[], invocation: Node, file: JavaFile, caller: TypeDecl | undefined): { method: MethodDecl } | { candidates: readonly MethodDecl[] } | undefined => {
+  /** The declarations of the call's arity the call's file reaches; none when one is a private member of another class or its reach is unknown. */
+  const offeredAmong = (type: TypeDecl, named: readonly MethodDecl[], invocation: Node, file: JavaFile, caller: TypeDecl | undefined): readonly MethodDecl[] | undefined => {
     const candidates = named.filter((method) => method.parameterTypes.length === argumentCount(invocation));
     if (candidates.some((method) => method.modifiers.includes("private") && (method.owner !== type || method.owner !== caller))) return undefined;
     const reach = candidates.map((method) => reachability(method, file));
     if (reach.includes("unknown")) return undefined;
-    const reachable = candidates.filter((_, index) => reach[index] === "reachable");
+    return candidates.filter((_, index) => reach[index] === "reachable");
+  };
+
+  const selectAmong = (type: TypeDecl, named: readonly MethodDecl[], invocation: Node, file: JavaFile, caller: TypeDecl | undefined): { method: MethodDecl } | { candidates: readonly MethodDecl[] } | undefined => {
+    const reachable = offeredAmong(type, named, invocation, file, caller) ?? [];
     const [first] = reachable;
     if (first === undefined) return undefined;
     const exact = caller === undefined ? undefined : exactCandidate(reachable, invocation, caller);
@@ -924,7 +1009,7 @@ export function createResolver(project: JavaProject, generated = false) {
     const above = name === undefined ? undefined : superclassAt(invocation, file);
     if (above === undefined || name === undefined) return UNPROVEN;
     if ("outside" in above) return { kind: "outside", type: above.outside, exact: true };
-    const offered = memberOf(above.type, name, invocation, file, enclosingType(invocation, file, project));
+    const offered = memberOf(above.type, name, invocation, file, enclosingType(invocation, file, project), false, false);
     if (offered === undefined) return generated && generatedOf({ type: above.type, typeName: false }, name, argumentCount(invocation)) !== undefined ? GENERATED : UNPROVEN;
     return "method" in offered ? { ...placedAt(offered.method), exact: true } : { kind: "unproven", candidates: offered.candidates.map(placeOf).sort(byPlace) };
   };
