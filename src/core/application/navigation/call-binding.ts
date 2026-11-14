@@ -5,7 +5,7 @@ import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import { calleeOf, compactSpelling, ownMemberOf, receiverOf } from "../../domain/shared/call-place.ts";
 import type { CodeGraphReader, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import type { ImportOrigins, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
+import type { ImportOrigins, OutsideSupertypes, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
 import type { CallBinder, CallPlace, ReceiverProof } from "./call-binder.ts";
 import { ownMembersOf, placedBetween, type GraphNavigation } from "./graph-navigation.ts";
 import { indexedDeclaration, type DeclarationModel, type ModelDeclaration } from "./declaration-model.ts";
@@ -40,7 +40,7 @@ type Outside = Extract<ImportOrigin, { kind: "external" | "ambient" }>;
  */
 export type CallBinding =
   | { kind: "declaration"; target: GraphSymbol; link: "own-member" | "chain" | "import" | "file" | "declared-receiver" | "bound-receiver" | "overload" }
-  | { kind: "receiver"; proof: ReceiverProof; target?: GraphSymbol; declaration?: ModelDeclaration; outside?: true; candidates: readonly GraphSymbol[]; attributed: readonly GraphSymbol[] }
+  | { kind: "receiver"; proof: ReceiverProof; target?: GraphSymbol; declaration?: ModelDeclaration; outside?: true; dispatch?: OutsideDispatch; candidates: readonly GraphSymbol[]; attributed: readonly GraphSymbol[] }
   | { kind: "outside"; form: "bare" | "chain"; origin: Outside }
   | { kind: "unbound"; form: "own" | "computed" | "bare" | "member" | "chain"; candidates: readonly GraphSymbol[]; attributed: readonly GraphSymbol[] }
   | DeclaredBinding;
@@ -55,6 +55,14 @@ export interface DeclaredBinding {
   member: string;
   form: "bare" | "member" | "chain";
   call: BindingCall;
+}
+
+/**
+ * A member call whose receiver's declared type is the type outside the repository `type` (ADR-0079 decision 4): it may
+ * call each declaration `mayRunUnder` keeps, never the others.
+ */
+export interface OutsideDispatch {
+  type: string;
 }
 
 /** A binding no read is pending on. */
@@ -87,6 +95,12 @@ export interface CallBindings {
   ofReceiver(proof: ReceiverProof, member: string, candidates: readonly GraphSymbol[], place: CallPlace): Promise<Extract<CallBinding, { kind: "receiver" }>>;
   /** What a member call of `member` on a value of `type` binds to: one call, one answer, through the language's chain. */
   memberOfReceiver(type: GraphSymbol, member: string, place: CallPlace): Promise<ReceiverMemberAnswer>;
+  /**
+   * Whether `declaration` may run when a member of the outside type `dispatch.type` is called (ADR-0079 decision 5): it
+   * may unless its language pack proves it static, or lists no supertype outside the repository at or below its owner
+   * while the type is not the language's root type. Asked once per declaration for the read.
+   */
+  mayRunUnder(dispatch: OutsideDispatch, declaration: GraphSymbol, signal?: AbortSignal): Promise<boolean>;
 }
 
 export interface CallBindingsDeps {
@@ -197,6 +211,7 @@ export function createCallBindings({ store, navigation, origins, binder, declara
     const bare: { index: number; name: string }[] = [];
     const typed: { index: number; member: string; site: BindingCall }[] = [];
     const rooted: { index: number; member: string }[] = [];
+    const unplaced: { index: number; member: string }[] = [];
     for (const [index, call] of calls.entries()) {
       const { body, reference } = call;
       if (reference.kind === "references" && hasTyping(reference.file, "nominal")) {
@@ -227,10 +242,22 @@ export function createCallBindings({ store, navigation, origins, binder, declara
         else {
           const candidates = namedDeclarations(callee.name, reference.file, true);
           const proof = await binder.receiverOf({ body, line: reference.line, column: reference.column + 1, member: callee.name, receiver: receiverOf(compactSpelling(reference.name)) ?? "", spelling: reference.name });
-          if (proof.link !== "none") bindings[index] = await proven(proof, callee.name, candidates, { file: reference.file, line: reference.line, column: reference.column + 1 });
+          if (proof.link !== "none") {
+            const binding = await proven(proof, callee.name, candidates, { file: reference.file, line: reference.line, column: reference.column + 1 });
+            bindings[index] = binding;
+            if (hasTyping(reference.file, "nominal") && binding.outside !== true && binding.target === undefined && binding.declaration === undefined && binding.attributed.length === 0) unplaced.push({ index, member: callee.name });
+          }
           else if (PLAIN_CHAIN.test(compactSpelling(reference.name)) && !reference.name.startsWith("this.")) rooted.push({ index, member: callee.name });
           else typed.push({ index, member: callee.name, site: call });
         }
+      }
+    }
+    if (unplaced.length > 0) {
+      const found = await origins.receiverMethods(unplaced.map(({ index, member }) => receiverSiteOf({ kind: "declared", member, form: "member", call: calls[index]! })), signal);
+      for (const [k, { index }] of unplaced.entries()) {
+        const answer = found[k];
+        const binding = bindings[index];
+        if (answer?.kind === "outside" && binding?.kind === "receiver") bindings[index] = { ...binding, outside: true, dispatch: { type: answer.type } };
       }
     }
     if (rooted.length > 0) {
@@ -283,7 +310,8 @@ export function createCallBindings({ store, navigation, origins, binder, declara
 
   /** What the method a `declared` binding's receiver reading names settles it to. */
   function settleDeclared({ member, form, call }: DeclaredBinding, answered: ReceiverMethod | undefined): SettledBinding {
-    const method: ReceiverMethod | undefined = answered?.kind === "generated" || answered?.kind === "supplied" ? { kind: "unproven", candidates: [] } : answered;
+    if (answered?.kind === "outside" && form === "member") return { kind: "receiver", proof: { link: "none" }, outside: true, dispatch: { type: answered.type }, candidates: namedDeclarations(member, call.reference.file, true), attributed: [] };
+    const method: ReceiverMethod | undefined = answered?.kind === "generated" || answered?.kind === "supplied" ? { kind: "unproven", candidates: [] } : answered?.kind === "outside" ? { kind: "unproven" } : answered;
     const target = method?.kind === "method" ? placed(method.file, method.start, method.nameLine) : undefined;
     if (target !== undefined) return { kind: "declaration", target, link: form === "chain" ? "chain" : method?.kind === "method" && method.bound === true ? "bound-receiver" : "declared-receiver" };
     if (form === "chain") {
@@ -303,12 +331,24 @@ export function createCallBindings({ store, navigation, origins, binder, declara
     return above.length === 1 && !navigation.membersOf(type!).some((member) => member.kind === "method" && member.name === type!.name) ? { kind: "declaration", target: type!, link: "chain" } : undefined;
   }
 
+  const outsideOf = new Map<string, Promise<OutsideSupertypes>>();
+  async function mayRunUnder({ type }: OutsideDispatch, declaration: GraphSymbol, signal?: AbortSignal): Promise<boolean> {
+    let answer = outsideOf.get(declaration.id);
+    if (answer === undefined) {
+      answer = (origins.outsideSupertypes?.([{ file: declaration.file, start: declaration.startLine, name: declaration.name }], signal) ?? Promise.resolve([])).then(([found]) => found ?? { kind: "unknown" });
+      outsideOf.set(declaration.id, answer);
+    }
+    const found = await answer;
+    return found.kind === "unknown" || (found.static !== true && (found.types.length > 0 || type === found.root));
+  }
+
   return {
     bindCalls,
     settleDeclared,
     namedDeclarations,
     ofReceiver: proven,
     memberOfReceiver,
+    mayRunUnder,
     async boundCalls(calls, signal) {
       const bound = await bindCalls(calls, signal);
       const pending = bound.flatMap((binding) => (binding.kind === "declared" ? [binding] : []));

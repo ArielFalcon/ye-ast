@@ -102,7 +102,9 @@ export interface ImportOrigins {
    * Runtime body selection remains the separate `dispatchTargets` obligation. A Java `super(...)` or `this(...)`, asked
    * with `super` or `this` as its member, names the one constructor of the superclass or of the class with the call's
    * arity (a compact canonical constructor takes the record's components); `unproven` when several or none have that
-   * arity, `unknown` when the superclass is outside the repository or the constructor is implicit.
+   * arity, `unknown` when the superclass is outside the repository or the constructor is implicit. `outside` where the
+   * reader would answer `unproven` and the receiver's parameter, local, field, type-variable bound or the declared return
+   * type of the repository method a receiver call names is proven to be a type outside the repository (ADR-0079).
    */
   receiverMethods(sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ReceiverMethod[]>;
   /**
@@ -111,6 +113,14 @@ export interface ImportOrigins {
    * names none. `unknown` when a signature the sources do not settle could be the same, or the method cannot be placed.
    */
   implementedDeclarations(sites: readonly ImplementingSite[], signal?: AbortSignal): Promise<readonly ImplementedDeclarations[]>;
+  /**
+   * One entry per site, in the order received: the qualified names of the supertypes outside the repository of every
+   * type at or below the owner of the method at the site, a type the language makes every class extend left out, sorted
+   * (ADR-0079 decision 6). `unknown` when the owner cannot be placed, a supertype at or below it is unsettled, or a value
+   * the sources do not place may be of a type below it. Absent where the language pack implements none, which reads as
+   * `capability-absent` for every site.
+   */
+  outsideSupertypes?(sites: readonly ImplementingSite[], signal?: AbortSignal): Promise<readonly OutsideSupertypes[]>;
   /**
    * One entry per site, in the order received: what the chaining call a construction of the class at the site makes
    * without writing it (a Java constructor that writes no `super(...)` or `this(...)`, or the one the language supplies)
@@ -239,6 +249,13 @@ export interface ImplementingSite {
 export type ImplementedDeclarations = { kind: "declarations"; declarations: readonly MethodPlace[] } | { kind: "unknown" };
 
 /**
+ * The supertypes outside the repository a method's owner and the types below it have. `root`: the type the language
+ * makes every class extend, never listed; `static`: the method takes no receiver, so no instance call dispatches to it.
+ * `capability-absent`: the language pack of the site's file declares it cannot answer (ADR-0045 decision 12).
+ */
+export type OutsideSupertypes = { kind: "types"; types: readonly string[]; root?: string; static?: true } | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT };
+
+/**
  * The method declaration a call names, by its file and the 1-based lines from its first token to its name; `unproven`
  * when its value or declared repository receiver has no settled member, so no index edge proves a step; `unknown`
  * when this reader establishes no receiver obligation. `bound`: a type variable types a receiver of the chain, so the
@@ -267,7 +284,9 @@ export type ReceiverMethod =
    * class: no declaration of the constructor exists, and what it runs, the class's initializers and its implicit chaining
    * call (`implicitChains`), is the class's.
    */
-  | ({ kind: "supplied" } & MethodPlace);
+  | ({ kind: "supplied" } & MethodPlace)
+  /** A receiver whose declared type is the type outside the repository named by its qualified name `type`. */
+  | { kind: "outside"; type: string };
 
 /** A place a declaration uses a name, where the index places the use: repository-relative and 1-based. */
 export interface UseSite {

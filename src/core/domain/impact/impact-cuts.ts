@@ -184,7 +184,8 @@ function namesDeclaration(reference: UnresolvedUse, declaration: WalkedDeclarati
  * modules by a name the index cannot resolve may load anything and is a cut of its own, unless every dynamic load the
  * reader found on that file and line has a string-literal specifier, which names its module like a static import; a file
  * the reader did not read keeps the cut. A qualified reference with no candidate cuts nothing when the base binds it away
- * from every walked declaration it might reach (`boundAway`, by `declarationUseKey`; ADR-0079 decision 3).
+ * from every walked declaration it might reach (`boundAway`, by `declarationUseKey`; ADR-0079 decision 3), and its cut
+ * reaches only the ones it is not bound away from.
  */
 export function unresolvedLinkCuts(
   references: readonly UnresolvedUse[],
@@ -241,12 +242,12 @@ export function unresolvedLinkCuts(
       if (settledAt(declaration)) continue;
       hidden.set(key, (hidden.get(key) ?? new Set()).add(place));
     }
-    const boundElsewhere = unnamed && proofKey !== undefined && pointing.every((declaration) => boundAway.has(declarationUseKey(declarationAnchor(declaration.file, declaration.name), proofKey)));
-    const decided = pointing.some(settledAt) || boundElsewhere;
+    const boundAwayFrom = (declaration: WalkedDeclaration): boolean => unnamed && proofKey !== undefined && boundAway.has(declarationUseKey(declarationAnchor(declaration.file, declaration.name), proofKey));
+    const decided = pointing.some(settledAt) || pointing.every(boundAwayFrom);
     if (attributing.length === 0 && pointing.length > 0 && !decided) {
       unattributed.set(reference.file, (unattributed.get(reference.file) ?? new Set()).add(named));
       const names = unattributedNames.get(reference.file) ?? new Set();
-      for (const declaration of pointing) names.add(declarationAnchor(declaration.file, declaration.name));
+      for (const declaration of pointing) if (!boundAwayFrom(declaration)) names.add(declarationAnchor(declaration.file, declaration.name));
       unattributedNames.set(reference.file, names);
     }
   }

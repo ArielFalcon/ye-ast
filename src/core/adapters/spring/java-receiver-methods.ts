@@ -71,7 +71,9 @@ interface ReadFile extends ReceiverSource {
  * (`CALL_REWRITING_ANNOTATIONS`); or when the declared hierarchy does not settle the member. Declaration selection and
  * runtime dispatch are separate obligations. An unproven value receiver or declared repository member remains a cut,
  * naming the declarations of the call's arity its type offers where the whole hierarchy was read; no name-only index
- * target proves it. Non-Java and non-invocation sites remain unknown.
+ * target proves it. Where the strict binding proves and no repository type types the receiver, a receiver the same
+ * declarations type with a platform or library type answers `outside` with that type's qualified name (ADR-0079). Non-Java
+ * and non-invocation sites remain unknown.
  */
 export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], facts?: DerivedFacts, hold?: ParseHold, build: ProjectBuild = {}): ImportOrigins["receiverMethods"] {
   const unreadJvm = paths.some(isUncoveredJvmSource);
@@ -122,7 +124,10 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         if (named !== undefined && "method" in named) results[index] = { ...placedAt(named.method), ...(named.bound ? { bound: true as const } : {}) };
         else if (named !== undefined && "generated" in named) results[index] = GENERATED;
         else if (named !== undefined) results[index] = { kind: "unproven", candidates: named.candidates };
-        else if (resolver.hasDeclaredReceiver(invocation, source) || resolver.holdsValue(invocation, source.file)) results[index] = UNPROVEN;
+        else if (resolver.hasDeclaredReceiver(invocation, source) || resolver.holdsValue(invocation, source.file)) {
+          const outside = proves ? resolver.outsideReceiverOf(invocation, source) : undefined;
+          results[index] = outside === undefined ? UNPROVEN : { kind: "outside", type: outside };
+        }
       }
       return results;
     };
@@ -340,7 +345,7 @@ function implicitChainOf(type: TypeDecl, project: JavaProject): ImplicitChain {
 }
 
 /** The methods of a project by file, first line and name, each place with every declaration it names. */
-function methodsByPlace(project: JavaProject): ReadonlyMap<string, readonly MethodDecl[]> {
+export function methodsByPlace(project: JavaProject): ReadonlyMap<string, readonly MethodDecl[]> {
   const methods = new Map<string, MethodDecl[]>();
   for (const type of project.types) {
     for (const method of type.methods) {
@@ -461,6 +466,41 @@ export function createResolver(project: JavaProject, generated = false) {
     if (variable === undefined) return declared(repositoryType(name, source.file, name));
     const bounds = variable.namedChildren.find((child) => child?.type === "type_bound")?.namedChildren ?? [];
     return bounds.length === 1 ? declared(repositoryType(bounds[0]!, source.file, bounds[0]!), true) : undefined;
+  };
+
+  /**
+   * The type outside the repository the receiver of an invocation is declared to hold, by its qualified name, where no
+   * repository type is: the type its parameter, local or field states, the one bound of the type variable that types it,
+   * or the declared return type of the repository method a receiver call names. None for a name that denotes a type, an
+   * array, `this` or `super`.
+   */
+  const outsideReceiverOf = (invocation: Node, source: ReceiverSource): string | undefined => {
+    const object = invocation.childForFieldName("object");
+    if (object === null || object.type === "this" || object.type === "super" || receiverOf(invocation, source) !== undefined) return undefined;
+    if (object.type === "method_invocation") {
+      const called = methodNamed(object, source);
+      if (called === undefined || !("method" in called)) return undefined;
+      const type = called.method.node.childForFieldName("type");
+      return type === null ? undefined : outsideType(type, called.method.owner.file);
+    }
+    const binding = source.bindings.get(callKey(invocation.startPosition.row + 1, invocation.startPosition.column + 1, invocation.childForFieldName("name")?.text ?? ""));
+    const receiver = object.type === "identifier" ? object.text : object.type === "field_access" ? object.childForFieldName("field")?.text : undefined;
+    if (binding === undefined || binding.receiver !== receiver || binding.holds.kind !== "annotated") return undefined;
+    const name = annotationAt(source.file.root, binding.holds.line, binding.holds.column, binding.holds.type);
+    if (name === undefined) return undefined;
+    const variable = typeVariableAround(name);
+    if (variable === undefined) return outsideType(name, source.file);
+    const bounds = variable.namedChildren.find((child) => child?.type === "type_bound")?.namedChildren ?? [];
+    return bounds.length === 1 ? outsideType(bounds[0]!, source.file) : undefined;
+  };
+
+  /**
+   * The qualified name of the platform or library type a written type names; none for an array, a primitive, a repository
+   * type, or a platform interface `outsideSupertypes` leaves out of its list, below which no class would be seen.
+   */
+  const outsideType = (name: Node, file: JavaFile): string | undefined => {
+    const resolved = resolve(name, file, project, enclosingType(name, file, project), name, true);
+    return (resolved?.kind === "platform" || resolved?.kind === "library") && !MEMBERLESS_PLATFORM_INTERFACES.has(resolved.fqn) ? resolved.fqn : undefined;
   };
 
   /**
@@ -690,6 +730,7 @@ export function createResolver(project: JavaProject, generated = false) {
     /** Whether every supertype of the interface outside the sources is a Spring Data repository interface of the closed vocabulary. */
     isDataRepository: (type: TypeDecl): boolean => dataRepositoryHierarchy(type) !== undefined,
     hasDeclaredReceiver: (invocation: Node, source: ReceiverSource): boolean => receiverOf(invocation, source) !== undefined,
+    outsideReceiverOf,
     /** The method the call names through its declared receiver and one settled signature; dispatch decides its body separately. */
     methodOf: methodNamed,
     /**

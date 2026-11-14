@@ -275,8 +275,10 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     const placed = targets.bodies.map((body) => placedMethod(body));
     return placed.every((symbol) => symbol !== undefined) ? placed : undefined;
   };
+  /** A receiver declared outside the repository settles no step trace reads: it holds it unproven (ADR-0079 decision 4). */
+  const unprovenOutside = (method: ReceiverMethod): ReceiverMethod => (method.kind === "outside" ? { kind: "unproven" } : method);
   /** A method a type variable's bound names proves the dependence, never what runs: trace holds it unproven (RFC-0013 R5). */
-  const executed = (method: ReceiverMethod): ReceiverMethod => (method.kind === "method" && method.bound === true ? { kind: "unproven" } : method);
+  const executed = (method: ReceiverMethod): ReceiverMethod => (method.kind === "method" && method.bound === true ? { kind: "unproven" } : unprovenOutside(method));
   /**
    * The one declaration of `kinds` the index places between a declaration's first token and its name. The index holds a
    * record's methods as functions of no container, so a proof of the method a call names accepts either kind.
@@ -601,7 +603,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     /** A reference only its declared type settles, such as `T::new`, runs nothing in the repository when the reading answers generated code. */
     const referencedRead = await bindings.bindCalls(references.map((reference) => ({ body: node, reference })), signal);
     const pendingReferences = referencedRead.flatMap((binding) => (binding.kind === "declared" ? [binding] : []));
-    const answered = pendingReferences.length === 0 ? [] : await origins.receiverMethods(pendingReferences.map(receiverSiteOf), signal);
+    const answered = pendingReferences.length === 0 ? [] : (await origins.receiverMethods(pendingReferences.map(receiverSiteOf), signal)).map(unprovenOutside);
     let nextAnswer = 0;
     for (const [index, reference] of references.entries()) {
       const read = referencedRead[index]!;

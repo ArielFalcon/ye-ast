@@ -33,7 +33,8 @@ export interface AttributedCall {
  * An index reference `into` looked up for a reached declaration whose binding decides whether it may call it (ADR-0079
  * decision 3), by the reference's occurrence key. `via`: the caller, when the compile-time binding is an edge into the
  * declaration. `away`: the declarations the binding names instead, none when it binds outside the repository or to
- * generated code, or when the declaration is among the candidates a cut attributes it to.
+ * generated code, when the declaration is among the candidates a cut attributes it to, or when the receiver's declared
+ * type lies outside the repository and the declaration cannot run under it (decisions 4 and 5).
  */
 export type SettledReference = { node: GraphSymbol; occurrence: string } & ({ via: GraphSymbol } | { away: readonly GraphSymbol[] });
 
@@ -251,7 +252,7 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, or
         const { binding } = await bindingOf(call);
         const declaration = binding.kind === "receiver" ? binding.declaration : undefined;
         if (declaration === undefined) {
-          if (binding.kind === "unbound" || (binding.kind === "receiver" && !binding.outside)) cuts.push({ kind: "unresolved-link", reason: "receiver-unproven", at: [placeAt(call.reference.file, call.reference.line, call.reference.name), ...nodes.filter(({ name }) => name === lookupName(call.reference.file, call.reference.name)).map((node) => placeAt(node.file, node.startLine, node.path ?? node.name))], reach: ANYTHING });
+          if (binding.kind === "unbound" || (binding.kind === "receiver" && (!binding.outside || binding.dispatch !== undefined))) cuts.push({ kind: "unresolved-link", reason: "receiver-unproven", at: [placeAt(call.reference.file, call.reference.line, call.reference.name), ...nodes.filter(({ name }) => name === lookupName(call.reference.file, call.reference.name)).map((node) => placeAt(node.file, node.startLine, node.path ?? node.name))], reach: ANYTHING });
           continue;
         }
         const target = nodes.find(({ id }) => id === declaration.id);
@@ -283,6 +284,8 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, or
           } else if ((binding.kind === "unbound" || binding.kind === "receiver") && binding.attributed.some((symbol) => symbol.id === node.id)) {
             attributed.push({ node, call });
             if (occurrence !== undefined) settled.push({ node, occurrence, away: [] });
+          } else if (occurrence !== undefined && binding.kind === "receiver" && binding.dispatch !== undefined) {
+            if (!(await bindings.mayRunUnder(binding.dispatch, node, signal))) settled.push({ node, occurrence, away: [] });
           } else if (occurrence !== undefined) {
             const away = boundAway(read, constructed);
             if (away !== undefined) settled.push({ node, occurrence, away });

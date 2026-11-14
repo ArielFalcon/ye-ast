@@ -299,6 +299,17 @@ test("a qualified reference with no candidate cuts nothing only when the base bi
   assert.deepEqual(reasons(awayFrom([SAVE])), ["name-only src/Use.java src/Use.java:3 repo.save src/Use.java:5 repo.save"]);
 });
 
+test("the reach of a name-only cut leaves out the declarations the base binds its references away from", () => {
+  const other: WalkedDeclaration = { file: "src/Store.java", name: "save", kind: "method", qualifiedName: "Store::save" };
+  const unnamed = use("map.save", "calls");
+  const awayFrom = (declarations: readonly WalkedDeclaration[]) => new Set(declarations.map(({ file, name }) => declarationUseKey(`${file}::${name}`, referenceKey(unnamed)!)));
+  const reached = (bound: ReadonlySet<string>) => unresolvedLinkCuts([unnamed], [SAVE, other], [], new Set(), new Set(), new Map(), undefined, bound).map(({ reason, reach }) => [reason, reach]);
+  const anchor = `${SAVE.file}::${SAVE.name}`;
+
+  assert.deepEqual(reached(awayFrom([other])), [["name-only", { kind: "callers-of", declarations: [anchor] }]]);
+  assert.deepEqual(reached(awayFrom([])), [["name-only", { kind: "callers-of", declarations: [anchor, "src/Store.java::save"].sort() }]]);
+});
+
 test("a supertype reference names a declaration by the name it writes without type arguments, a reference of another kind by its whole name", () => {
   const walked: WalkedDeclaration[] = [{ file: "src/shop/Repo.java", name: "Repo", qualifiedName: "shop.Repo", kind: "interface" }];
   const generic = use("Repo<Map<String, Long>>", "implements", "src/shop/Kept.java", 3);

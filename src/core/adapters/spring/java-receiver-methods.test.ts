@@ -4,7 +4,7 @@ import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { ReceiverMethod } from "../../ports/import-origins.port.ts";
+import type { OutsideSupertypes, ReceiverMethod } from "../../ports/import-origins.port.ts";
 
 function javaIn(directory: string, path: string, lines: readonly string[]): SourceFile {
   return { path: `src/main/java/${directory}/${path}`, content: `${lines.join("\n")}\n` };
@@ -125,7 +125,7 @@ test("members whose parameter types settle to different types are distinct overl
   assert.deepEqual(await methodAt([value, homonym, base, override, call]), method(override, 6));
 });
 
-test("a call on a receiver a type variable types names, as a dependence only, the method of the variable's one bound the repository declares; no bound, an intersection or a bound outside the repository names none", async () => {
+test("a call on a receiver a type variable types names, as a dependence only, the method of the variable's one bound the repository declares; no bound or an intersection names none, and a bound outside the repository is that outside type", async () => {
   const named = java("Named.java", ["package app;", "", "public interface Named {", "  String name();", "}"]);
   const typed = (parameters: string, call = "item.save(\"x\")") => java("Use.java", ["package app;", "", `class Use${parameters} {`, `  void run(T item) { ${call}; }`, "}"]);
   const generic = java("Use.java", ["package app;", "", "class Use {", "  <T extends Store> void run(T item) { item.save(\"x\"); }", "}"]);
@@ -134,7 +134,28 @@ test("a call on a receiver a type variable types names, as a dependence only, th
   assert.deepEqual(await methodAt([STORE, JDBC, generic]), { ...method(STORE, 4), bound: true });
   assert.deepEqual(await methodAt([STORE, JDBC, named, typed("<T extends Store & Named>")]), { kind: "unproven" });
   assert.deepEqual(await methodAt([STORE, JDBC, typed("<T>")]), { kind: "unproven" });
-  assert.deepEqual(await methodAt([STORE, JDBC, typed("<T extends Runnable>", "item.run()")], "run"), { kind: "unproven" });
+  assert.deepEqual(await methodAt([STORE, JDBC, typed("<T extends Runnable>", "item.run()")], "run"), { kind: "outside", type: "java.lang.Runnable" });
+});
+
+test("a call on a parameter, a stated local, a field or a repository method's declared return of a type outside the repository is that type, by its qualified name (ADR-0079 decision 4)", async () => {
+  const lib = java("Lib.java", ["package app;", "", "class Lib {", "  java.util.Map<String, String> values() { return null; }", "}"]);
+  const outside = (type: string) => ({ kind: "outside", type });
+
+  assert.deepEqual(await methodAt([use("map.get(\"k\")", [], "java.util.Map<String, String> map")], "get"), outside("java.util.Map"));
+  assert.deepEqual(await methodAt([use("node.get()", [], "com.lib.Node node")], "get"), outside("com.lib.Node"));
+  assert.deepEqual(await methodAt([use("java.util.Optional<String> local = null; local.get()", [], "")], "get", undefined, "local.get"), outside("java.util.Optional"));
+  assert.deepEqual(await methodAt([use("this.cache.get(\"k\")", ["  private java.util.Map<String, String> cache;"], "")], "get"), outside("java.util.Map"));
+  assert.deepEqual(await methodAt([lib, use("lib.values().get(\"k\")", [], "Lib lib")], "get"), outside("java.util.Map"));
+});
+
+test("a static call on a type name outside the repository, an array receiver and a read that proves no binding are no outside receiver", async () => {
+  assert.deepEqual(await methodAt([use("java.nio.file.Paths.get(\"a\")", [], "")], "get"), { kind: "unproven" });
+  assert.deepEqual(await methodAt([use("lib.names().clone()", [], "Lib lib"), java("Lib.java", ["package app;", "", "class Lib {", "  String[] names() { return null; }", "}"])], "clone"), { kind: "unproven" });
+  assert.deepEqual(await methodAt([use("map.get(\"k\")", [], "java.util.Map<String, String> map")], "get", KOTLIN([use("x", [], "")])), { kind: "unproven" });
+});
+
+test("a receiver declared as a platform interface that declares no member is no outside receiver: the supertypes leave it out, so a class implementing it may run", async () => {
+  assert.deepEqual(await methodAt([use("id.toString()", [], "java.io.Serializable id")], "toString"), { kind: "unproven" });
 });
 
 test("an enum names no method, since a constant may declare its own body", async () => {
@@ -483,4 +504,63 @@ test("a source whose syntax errors lie in a body has its supertype clauses prove
   ]);
   assert.deepEqual(await reading.receiverMethods([{ file: repo.path, line: 7, column: 5, member: "run" }]), [{ kind: "unknown" }]);
   assert.deepEqual((await reading.dispatchTargets([{ file: task.path, line: 3, name: "run" }])).map(({ kind }) => kind), ["unknown"]);
+});
+
+/** What the pack answers for the method `name` that starts on `line` of `source`. */
+async function outsideOf(sources: readonly SourceFile[], source: SourceFile, line: number, name = "get", paths?: readonly string[], context: readonly SourceFile[] = []): Promise<OutsideSupertypes> {
+  const [answer] = await createJavaNameBindings(createJavaParser, sources, paths, undefined, undefined, context).outsideSupertypes!([{ file: source.path, start: line, name }]);
+  return answer!;
+}
+
+const API = java("Api.java", ["package app;", "", "public class Api {", "  public String get(String key) { return key; }", "  public static String make(String key) { return key; }", "}"]);
+const types = (...listed: string[]): OutsideSupertypes => ({ kind: "types", types: listed, root: "java.lang.Object" });
+
+test("the outside supertypes of a method's owner and every type below it are listed by qualified name, a memberless platform interface left out, and a static method takes no receiver (ADR-0079 decision 6)", async () => {
+  const map = java("MyMap.java", ["package app;", "", "import java.util.HashMap;", "", "public class MyMap extends HashMap<String, String> {", "  public String get(Object key) { return \"\"; }", "}"]);
+  const sub = java("Sub.java", ["package app;", "", "public class Sub extends Api implements java.util.function.Supplier<String>, java.io.Serializable {", "  public String get() { return \"\"; }", "}"]);
+  const plain = java("Plain.java", ["package app;", "", "public class Plain implements java.io.Serializable {", "  public String get(String key) { return key; }", "}"]);
+
+  assert.deepEqual(await outsideOf([map], map, 6), types("java.util.HashMap"));
+  assert.deepEqual(await outsideOf([API], API, 4), types());
+  assert.deepEqual(await outsideOf([API, sub], API, 4), types("java.util.function.Supplier"));
+  assert.deepEqual(await outsideOf([plain], plain, 4), types());
+  assert.deepEqual(await outsideOf([API], API, 5, "make"), { ...types(), static: true });
+});
+
+test("an enum and a record list the superclass the language gives them", async () => {
+  const kind = java("Kind.java", ["package app;", "", "public enum Kind {", "  A;", "  public String get(String key) { return key; }", "}"]);
+  const rec = java("Rec.java", ["package app;", "", "public record Rec(String value) {", "  public String get(String key) { return value; }", "}"]);
+
+  assert.deepEqual(await outsideOf([kind], kind, 5), types("java.lang.Enum"));
+  assert.deepEqual(await outsideOf([rec], rec, 4), types("java.lang.Record"));
+});
+
+test("an annotation on the owner or on the method and an aspect's advice leave the outside supertypes read: a proxy or a generated subclass adds none the type's own methods run under", async () => {
+  const annotated = java("Api.java", ["package app;", "", "@Component", "public class Api {", "  @Transactional", "  public String get(String key) { return key; }", "}"]);
+  const advising = java("Hooks.java", ["package app;", "", "@Aspect", "class Hooks {", "  @Around(\"bean(sender)\") Object run() { return null; }", "}"]);
+
+  assert.deepEqual(await outsideOf([annotated], annotated, 5), types());
+  assert.deepEqual(await outsideOf([API, advising], API, 4), types());
+});
+
+test("an anonymous class below the owner, an unsettled supertype, a supertype outside under the name of a type of the closure, a function value that may implement it, an aspect that introduces a supertype, a declared source generator, an unread JVM source or an unplaced method leave the outside supertypes unknown", async () => {
+  const anonymous = java("Use.java", ["package app;", "", "class Use {", "  Api api = new Api() {};", "}"]);
+  const unsettled = java("Sub.java", ["package app;", "", "import com.other.*;", "", "public class Sub extends Api implements Missing {", "}"]);
+  const generator = { path: "pom.xml", content: "<project><build><plugins><plugin><groupId>org.openapitools</groupId><artifactId>openapi-generator-maven-plugin</artifactId></plugin></plugins></build></project>\n" };
+  const unknown: OutsideSupertypes = { kind: "unknown" };
+
+  const homonym = java("Other.java", ["package app;", "", "class Other extends org.lib.Api {}"]);
+  const introducing = java("Hooks.java", ["package app;", "", "@Aspect", "class Hooks {", "  @DeclareParents(value = \"app.*\") static java.util.function.Supplier<String> mixin;", "}"]);
+  const functional = java("Fn.java", ["package app;", "", "public interface Fn {", "  String get(String key);", "}"]);
+  const lambda = java("Use.java", ["package app;", "", "class Use {", "  Fn fn = key -> key;", "}"]);
+
+  assert.deepEqual(await outsideOf([API, anonymous], API, 4), unknown);
+  assert.deepEqual(await outsideOf([API, homonym], API, 4), unknown);
+  assert.deepEqual(await outsideOf([API, introducing], API, 4), unknown);
+  assert.deepEqual(await outsideOf([functional], functional, 4), types());
+  assert.deepEqual(await outsideOf([functional, lambda], functional, 4), unknown);
+  assert.deepEqual(await outsideOf([API, unsettled], API, 4), unknown);
+  assert.deepEqual(await outsideOf([API], API, 4, "get", undefined, [generator]), unknown);
+  assert.deepEqual(await outsideOf([API], API, 4, "get", KOTLIN([API])), unknown);
+  assert.deepEqual(await outsideOf([API], API, 3), unknown);
 });

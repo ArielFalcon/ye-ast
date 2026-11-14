@@ -1,17 +1,21 @@
 import type { Node } from "web-tree-sitter";
 import { isUncoveredJvmSource } from "../../domain/languages/path-class.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { DispatchSite, DispatchTargets, ImportOrigins } from "../../ports/import-origins.port.ts";
+import type { DispatchSite, DispatchTargets, ImplementingSite, ImportOrigins, OutsideSupertypes } from "../../ports/import-origins.port.ts";
 import type { DispatchUnknownReason } from "../../domain/shared/fact.ts";
 import type { LibraryReading } from "../../ports/library-signatures.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, heldJavaProject, withJavaSources, type UnparsedSource } from "./java-project.ts";
+import { methodsByPlace, provesBinding } from "./java-receiver-methods.ts";
 import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf } from "./java-declared-types.ts";
 import { targetsOfFunctionValue, type FunctionTargets, type FunctionValue } from "./java-function-values.ts";
-import { createJavaProject, isTypeDeclaration, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, isTypeDeclaration, MEMBERLESS_PLATFORM_INTERFACES, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: DispatchTargets = { kind: "unknown", reason: "dispatch not proven" };
+const UNKNOWN_OUTSIDE: OutsideSupertypes = { kind: "unknown" };
+/** The class every Java class extends when it writes no superclass (JLS 8.1.4). */
+const ROOT_TYPE = "java.lang.Object";
 const ASPECT = { kind: "unknown", reason: "aspect may replace the body" } as const satisfies DispatchTargets;
 /** The advice annotations of an aspect: each runs code around, before or after the join points its pointcut selects. */
 const ADVICE: ReadonlySet<string> = new Set(["Around", "Before", "After", "AfterReturning", "AfterThrowing"]);
@@ -173,6 +177,86 @@ function vetoOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl): Disp
   if (functionValueMayImplement([owner, ...below].filter((type) => type.kind === "interface" && isFunctional(type, hierarchy)), hierarchy)) return "dispatch not proven";
   if ([...below].some((type) => type.kind === "other")) return "dispatch not proven";
   return undefined;
+}
+
+/**
+ * `ImportOrigins.outsideSupertypes` for Java sources: a static method takes no receiver; otherwise the supertypes outside
+ * the repository of its owner and every type below it, read from the dispatch reading's hierarchy.
+ * `unknown` where the strict binding proves nothing (`provesBinding`, which a JDK API that implements an interface at run
+ * time fails), a build file declares a source generator, an aspect introduces a supertype (`INTRODUCTIONS`), or the
+ * method is not placed. An annotation and an aspect's advice leave the answer as read: a proxy or a generated subclass
+ * of a type adds no supertype the type's own methods run under (ADR-0079 decision 5).
+ */
+export function createJavaOutsideSupertypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): NonNullable<ImportOrigins["outsideSupertypes"]> {
+  const unreadJvm = paths.some(isUncoveredJvmSource);
+  /** Per project, its hierarchy and its methods by place, read once for every site asked of it; `unknown` where the reading proves nothing. */
+  const readings = new WeakMap<JavaProject, { hierarchy: Hierarchy; methods: ReadonlyMap<string, readonly MethodDecl[]> } | "unknown">();
+  const readingOf = (files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject) => {
+    let reading = readings.get(project);
+    if (reading === undefined) {
+      const proves = build.generatesInterfaces !== true && provesBinding(files, project, unparsed, unreadJvm) && !introducesSupertypes(files);
+      reading = proves ? { hierarchy: readHierarchy(files, project), methods: methodsByPlace(project) } : "unknown";
+      readings.set(project, reading);
+    }
+    return reading;
+  };
+  const analyze = (sites: readonly ImplementingSite[], files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly OutsideSupertypes[] => {
+    const reading = readingOf(files, unparsed, project);
+    if (reading === "unknown") return sites.map(() => UNKNOWN_OUTSIDE);
+    return sites.map((site) => {
+      const named = reading.methods.get(`${site.file}:${site.start}:${site.name}`) ?? [];
+      const method = named.length === 1 ? named[0] : undefined;
+      if (method === undefined) return UNKNOWN_OUTSIDE;
+      if (method.modifiers.includes("static")) return { kind: "types", types: [], root: ROOT_TYPE, static: true };
+      const types = outsideSupertypesOf(method, reading.hierarchy);
+      return types === undefined ? UNKNOWN_OUTSIDE : { kind: "types", types, root: ROOT_TYPE };
+    });
+  };
+  return async (sites) => {
+    if (sites.length === 0) return [];
+    const read = await parser();
+    const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(read), sources, [], build);
+    if (held !== undefined) return analyze(sites, held.files.map(({ file }) => file), held.unparsed, held.project);
+    return withJavaSources(read, (parse) => {
+      const { files, unparsed } = parse(sources);
+      return analyze(sites, files, unparsed, createJavaProject(files, build));
+    });
+  };
+}
+
+/** Whether an annotation of the sources makes a type implement more than its declarations state (`INTRODUCTIONS`). */
+function introducesSupertypes(files: readonly JavaFile[]): boolean {
+  for (const file of files) {
+    const pending: Node[] = [file.root];
+    for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+      if ((node.type === "marker_annotation" || node.type === "annotation") && INTRODUCTIONS.has(simpleName(node.childForFieldName("name") ?? node))) return true;
+      for (const child of node.namedChildren) if (child !== null) pending.push(child);
+    }
+  }
+  return false;
+}
+
+/** The superclass the language gives an enum or a record, which no clause writes (JLS 8.9, 8.10). */
+const IMPLICIT_SUPERCLASSES: ReadonlyMap<string, string> = new Map([["enum_declaration", "java.lang.Enum"], ["record_declaration", "java.lang.Record"]]);
+
+/**
+ * The qualified names of the supertypes outside the repository of `owner` and every type below it, sorted, the platform
+ * interfaces that declare no member left out and an enum's or a record's implicit superclass included (ADR-0079 decision
+ * 6). `undefined` when a type of that closure may not be read in full: a supertype the strict reading leaves unsettled
+ * at or above a type of the closure or under the name of one, an anonymous or local class below the owner, or a function
+ * value that may implement a functional interface of the closure.
+ */
+export function outsideSupertypesOf(method: MethodDecl, hierarchy: Hierarchy): readonly string[] | undefined {
+  const owner = method.owner;
+  const closure = new Set([owner, ...belowOf(owner, hierarchy)]);
+  const names = new Set([...closure].map((type) => type.name));
+  if ([...hierarchy.unsettled].some((name) => names.has(name))) return undefined;
+  if ([...closure].some((type) => ancestorsOf(type, hierarchy).some((ancestor) => hierarchy.unsettledSupertypes.has(ancestor)))) return undefined;
+  if (hierarchy.unplaced.some(({ types, names: unsettled }) => types.some((type) => closure.has(type)) || unsettled.some((name) => names.has(name)))) return undefined;
+  if (functionValueMayImplement([...closure].filter((type) => type.kind === "interface" && isFunctional(type, hierarchy)), hierarchy)) return undefined;
+  const outside = new Set([...closure].flatMap((type) => IMPLICIT_SUPERCLASSES.get(type.node.type) ?? []));
+  for (const [fqn, holders] of hierarchy.invokedSupertypes) if (!MEMBERLESS_PLATFORM_INTERFACES.has(fqn) && holders.some((holder) => closure.has(holder))) outside.add(fqn);
+  return [...outside].sort();
 }
 
 /** The bodies a call of `method` runs on a value of `owner`, the method's own owner unless a declared type below it states the value. */

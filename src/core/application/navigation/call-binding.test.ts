@@ -4,7 +4,7 @@ import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts"
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { GraphNodeId, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { DeclaredCallable } from "../../ports/declared-member-names.port.ts";
-import type { ImportOrigins, ReceiverMethod, RootBinding } from "../../ports/import-origins.port.ts";
+import type { ImportOrigins, OutsideSupertypes, ReceiverMethod, RootBinding } from "../../ports/import-origins.port.ts";
 import { createCallBinder, type ReceiverSyntax } from "./call-binder.ts";
 import { createCallBindings, type SettledBinding } from "./call-binding.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "./fake-code-graph.testing.ts";
@@ -242,4 +242,60 @@ test("a Java written reference uses declared receiver selection and attributes e
   assert.deepEqual(summary(ambiguous!), ["unbound", "bare", ["load1", "load2"], ["load1", "load2"]]);
   const [resolved] = await bound({ ...world, receivers: { load: { kind: "method", file: port, start: 3, nameLine: 3 } } }, "run", [{ kind: "references", name: "load", line: 3 }]);
   assert.deepEqual(summary(resolved!), ["declaration", "declared-receiver", "load1"]);
+});
+
+/** A Java holder whose `run` calls `map.get(k)` at line 7, `map` annotated with a type no repository declaration binds, and `holder.values().get(k)` at line 8. */
+function outsideReceiver(receiver: ReceiverMethod): World {
+  return {
+    nodes: [fakeNode("Api", "class", `${JAVA}/Api.java`, 1, 8), fakeNode("Api.get", "method", `${JAVA}/Api.java`, 3, 3, "get"), fakeNode("Holder", "class", `${JAVA}/Use.java`, 1, 10), fakeNode("run", "method", `${JAVA}/Use.java`, 5, 9)],
+    edges: [{ from: "Api", to: "Api.get", kind: "contains" }, { from: "Holder", to: "run", kind: "contains" }],
+    receivers: { get: receiver },
+    syntax: {
+      receiverBindings: new Map([["7:5:get", { line: 7, column: 5, receiver: "map", member: "get", holds: { kind: "annotated", type: "Map", line: 6, column: 17 } }]]),
+      callees: new Map([["7:5", ["map.get"]], ["8:5", ["holder.values().get"]]]),
+    },
+  };
+}
+
+test("a Java member call whose receiver the pack reads as a type outside the repository is an outside dispatch, never attributed to the homonyms of its name (ADR-0079 decision 4)", async () => {
+  const calls = [{ name: "map.get", line: 7, kind: "calls" }, { name: "holder.values().get", line: 8, kind: "calls" }];
+  const dispatched = await bound(outsideReceiver({ kind: "outside", type: "java.util.Map" }), "run", calls);
+  const unproven = await bound(outsideReceiver({ kind: "unproven" }), "run", calls);
+
+  for (const settled of dispatched) {
+    const binding = asReceiver(settled);
+    assert.deepEqual([binding.kind, binding.outside, binding.dispatch, binding.target, binding.attributed], ["receiver", true, { type: "java.util.Map" }, undefined, []]);
+  }
+  assert.deepEqual(unproven.map((settled) => [settled.kind, "dispatch" in settled ? settled.dispatch : undefined]), [["receiver", undefined], ["unbound", undefined]]);
+});
+
+/** `mayRunUnder` for the declaration `Api.get` over a pack answering `answer`, asked `times` times; how often the pack was asked. */
+async function mayRun(type: string, answer: OutsideSupertypes | undefined, times = 1): Promise<{ runs: boolean; asked: number }> {
+  const store = fakeCodeGraph([fakeNode("Api.get", "method", `${JAVA}/Api.java`, 3, 3, "get")], []);
+  const navigation = createGraphNavigation(store, () => false);
+  const declarations = createDeclarationModel({ store, declarationsIn: async () => [] });
+  let asked = 0;
+  const origins = (answer === undefined ? {} : { outsideSupertypes: async (sites: readonly unknown[]) => { asked += 1; return sites.map(() => answer); } }) as unknown as ImportOrigins;
+  const binder = createCallBinder({ store, declarations, navigation, syntaxIn: async () => ({ receiverBindings: new Map(), callees: new Map() }), proofs: async () => ({ fields: [], locals: [] }), importedDeclarations: async () => new Map(), callablesIn: async () => [] });
+  const bindings = createCallBindings({ store, navigation, origins, binder, declarations, importedDeclarations: async () => new Map() });
+  const [declaration] = store.symbolsInFiles([`${JAVA}/Api.java`]);
+  let runs = false;
+  for (let index = 0; index < times; index += 1) runs = await bindings.mayRunUnder({ type }, declaration!);
+  return { runs, asked };
+}
+
+test("a declaration may run under an outside type unless its pack proves it static, or lists no outside supertype while the type is not the root type (ADR-0079 decision 5)", async () => {
+  const root = "java.lang.Object";
+  const types = (...listed: string[]): Extract<OutsideSupertypes, { kind: "types" }> => ({ kind: "types", types: listed, root });
+
+  assert.equal((await mayRun("java.util.Map", types())).runs, false);
+  assert.equal((await mayRun(root, types())).runs, true);
+  assert.equal((await mayRun("java.util.Map", types("java.util.HashMap"))).runs, true);
+  assert.equal((await mayRun(root, { ...types("java.util.HashMap"), static: true })).runs, false);
+  assert.equal((await mayRun("java.util.Map", { kind: "unknown" })).runs, true);
+  assert.equal((await mayRun("java.util.Map", undefined)).runs, true);
+});
+
+test("the outside supertypes of a declaration are asked once for the read", async () => {
+  assert.equal((await mayRun("java.util.Map", { kind: "types", types: [] }, 3)).asked, 1);
 });

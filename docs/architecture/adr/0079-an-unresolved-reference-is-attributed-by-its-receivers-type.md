@@ -138,7 +138,7 @@ Data interface into `Api.save`. Both are over-reports (a false dependence), not 
    | `generated`, or `outside` (a root outside the repository) | No cut from this reference | Dependence is the compile-time binding (ADR-0036), and neither names a declaration of the repository |
    | A target that is another declaration | No cut from this reference when every declaration the binding names was reached, or when the reached declaration's language pack proves it neither implements nor overrides that target (`implementedDeclarations` answers `declarations` without it); otherwise today's cut | A reached target holds the caller in its own answer. An unreached one may still dispatch to the reached declaration, and the walk's upward bridge is not a proof of the contrary: the index records no supertype edge for a generic supertype (measured in U1), so only the pack's reading of the hierarchy retires the cut |
    | `receiver`, or a nominal pack's `unproven`, with candidates the receiver's type offers | Attributed among them: one `hidden-caller` cut per reached candidate, none if no candidate is reached | The candidates are the whole hierarchy's declarations of the name at the call's arity, given only when the reading read that whole hierarchy (`import-origins.port.ts:193-198`) |
-   | A receiver declared outside the repository (decision 4) | Attributed to the reached declarations that may dispatch from it (decision 5): `hidden-caller` at each, none otherwise | Decision 5 keeps every declaration a value of that type may run |
+   | A receiver declared outside the repository (decision 4) | Today's `name-only` cut, its reach narrowed to the reached declarations that may dispatch from it (decision 5); no cut when none may | Decision 5 keeps every declaration a value of that type may run, and the cut keeps today's shape (resolved question 1) |
    | `unbound`, `unknown`, `unproven` without candidates, `capability-absent` | Today's `name-only` cut, unchanged | Nothing changes |
 
    An unbound reference is never attributed to the homonyms of its name. That is what produced the 1,068 cuts of open
@@ -149,9 +149,11 @@ Data interface into `Api.save`. Both are over-reports (a false dependence), not 
    local, a field and a type-variable bound declared with such a type, and the declared return type of the repository
    method a receiver call names (`f().m()`, RFC-0013 R5). The pack answers it only where it answers today, under
    `provesBinding` (`java-receiver-methods.ts:236-238`). A static call on a type name outside the repository is not this
-   variant: the chain's root link already binds it `outside`. The base maps the variant to a `receiver` binding with
-   `outside: true` and the attributed set of decision 5. Trace reads the variant as it reads today's `unproven` answer,
-   so trace's answers do not change.
+   variant: the chain's root link already binds it `outside`. Nor is a receiver declared as a platform interface that
+   decision 6 leaves out of its list (`java.io.Serializable id; id.toString()`): a class implementing it would not be
+   seen below it, so the pack answers as today and the reference keeps its cut. The base maps the variant to a
+   `receiver` binding with `outside: true` and the attributed set of decision 5. Trace reads the variant as it reads
+   today's `unproven` answer, so trace's answers do not change.
 5. **Who may run under an outside type.** A reached method `D`, declared in type `O`, may run when a member `m` of an
    outside type `T` is called, unless one of these proofs excludes it:
    - `D` is static: an instance call never dispatches to a static method;
@@ -163,16 +165,25 @@ Data interface into `Api.save`. Both are over-reports (a false dependence), not 
 
    `D` stays attributed when the answer is `unknown`. That covers a supertype the strict reading leaves unsettled at or
    below `O`, a set of types below `O` that the dispatch reading cannot close (a declared source generator, a dynamic
-   implementation, an anonymous or local class extending a type at or below `O`, an unread JVM source: the conditions
-   `dispatchTargets` already reads), an owner the reader cannot place, and a language that types structurally (decision
-   7). An enum or a record has an implicit outside supertype (`java.lang.Enum`, `java.lang.Record`), so it is listed and
+   implementation, an anonymous or local class extending a type at or below `O`, a function value that may implement
+   a functional interface at or below `O`, an unread JVM source), an aspect member that introduces a supertype
+   (`@DeclareParents`, `@DeclareMixin`), an owner the reader cannot place, and a language that types structurally
+   (decision 7). An annotation on `O` or on `D` and the advice of an aspect do not make the answer `unknown`, although
+   `dispatchTargets` reads both as code that may replace a body: under the assumption that a proxy or a generated
+   subclass of a repository type adds no supertype the type's own methods run under (as ADR-0064 assumes for names), a
+   value of `T` is no such class unless `O`'s declared hierarchy says so. Measured on the largest Java repository of
+   the corpus: with both conditions read as `unknown` no place of 1,017 left its cut; without them 332 did, each a
+   call on a JDK collection. An enum or a record has an implicit outside supertype (`java.lang.Enum`, `java.lang.Record`), so it is listed and
    keeps `D` attributed without signatures. Every rule excludes `D` only by a proof that no runtime class running `D`
    can be a `T`, so none produces a false `complete`. The fixture's `MyMap.get` keeps its cut by the second rule:
    `java.util.HashMap` is listed.
 6. **The port gains one member, read by the hierarchy's owner.** `outsideSupertypes(sites: readonly ImplementingSite[])`
-   answers `{ kind: "types"; types: readonly string[] } | { kind: "unknown"; reason?: capability-absent }`, read by the
-   Java pack from the same resolver and the same subtype closure that `receiverMethods` and `dispatchTargets` read, with
-   `MEMBERLESS_PLATFORM_INTERFACES` left out as `createResolver` leaves them out today. It is asked lazily, once per
+   answers `{ kind: "types"; types: readonly string[]; root?: string; static?: true } | { kind: "unknown"; reason?:
+   capability-absent }`, read by the Java pack from the same resolver and the same subtype closure that
+   `receiverMethods` and `dispatchTargets` read, with `MEMBERLESS_PLATFORM_INTERFACES` left out as `createResolver`
+   leaves them out today. `root` names the language's root type and `static` says the method takes no receiver: the
+   two facts decision 5 reads that the base cannot state itself (ADR-0075 decision 1). The member is optional on the
+   port, and the router of language packs answers `capability-absent` for a pack without it. It is asked lazily, once per
    reached method that an outside-typed reference names, and memoized for the read. `implementedDeclarations` keeps its
    meaning: its `unknown` stays "any contract may apply".
 7. **TypeScript adds no rule.** A structural language cannot prove that a class is not assignable to a type from its
@@ -210,7 +221,7 @@ assuming the walked owners' hierarchies are closed and `provesBinding` holds on 
 | Unit | Behavior | Files | RED fixture | Ledger estimate | Must-not controls |
 |---|---|---|---|---|---|
 | U1 | Pointed index references are bound by the base chain inside the reverse fixpoint (decisions 1-3, 7, 9); `impactOf` reads the proofs it already receives | `navigation/reverse-calls.ts`, `impact/impact-queries.ts` (`walkInside`), `domain/impact/impact-cuts.ts` (a settled set beside `settledAt`), their tests | Java `Paths.get` and `repository.save` on a Spring Data interface with two `save` homonyms; TypeScript `this.status.isOnline()` on a property member and `this.source.load()` on a private `new DataSource()` field: no `name-only` | `name-only:-` 49 (Java 7: J3, J6; TypeScript 42: T1, T3, T4; T3's 24 assume the relations reader proves the corpus fields, a hypothesis) | `row.get` with two `get` homonyms keeps its cut; a reference proven to bind to the reached declaration becomes an edge, never a retired cut; no cut's reach grows; trace answers byte-identical |
-| U2 | `ReceiverMethod.outside`, `ImportOrigins.outsideSupertypes` and the dispatch-attributed set (decisions 4-6) | `ports/import-origins.port.ts`, `adapters/spring/java-receiver-methods.ts`, `adapters/spring/java-name-bindings.adapter.ts`, `adapters/typescript/import-origins.adapter.ts` (`capability-absent`), `navigation/call-binding.ts`, trace's mapping of the variant to today's `unproven`, their tests | The Java fixture's `map.get`, `opt.get`, `holder.values().get`, `node.get` against `Api.get`: `complete` | `name-only:-` 168 (J1, J2, J4); `hidden-caller:+` only for owners with an outside supertype (none expected on the corpus) | `MyMap.get` keeps a cut for `map.get`; an enum owner and a record owner stay attributed without signatures; `T = Object` attributes every owner; a declared generator keeps `D` attributed; trace's corpus answers byte-identical |
+| U2 | `ReceiverMethod.outside`, `ImportOrigins.outsideSupertypes` and the dispatch-attributed set (decisions 4-6) | `ports/import-origins.port.ts`, `adapters/spring/java-receiver-methods.ts`, `adapters/spring/java-name-bindings.adapter.ts`, `adapters/typescript/import-origins.adapter.ts` (`capability-absent`), `adapters/spring/java-dispatch-targets.ts` (the reader, beside the hierarchy it reads), `application/snapshot/language-packs.ts` (the router), `navigation/call-binding.ts`, `navigation/reverse-calls.ts`, `domain/impact/impact-cuts.ts`, trace's mapping of the variant to today's `unproven`, their tests | The Java fixture's `map.get`, `opt.get`, `holder.values().get`, `node.get` against `Api.get`: `complete` | `name-only:-` 168 (J1, J2, J4), fewer where a reached homonym stays attributed: the cut then keeps its place and narrows its reach | `MyMap.get` keeps a cut for `map.get`; a class implementing `java.io.Serializable` keeps the cut of a call on a receiver declared as that interface; an enum owner and a record owner stay attributed without signatures; `T = Object` attributes every owner; a declared generator keeps `D` attributed; trace's corpus answers byte-identical |
 | U3 | Library signatures in the reverse families (decision 8): supertype closures, finality, return types through library calls; `--jdk` on `callers` and `impact` | `adapters/spring/java-receiver-methods.ts`, the `outsideSupertypes` reader, `cli` and `mcp` option tables, ADR-0063 decision 7 text, help and AGENTS.md command lines | `names.stream().findFirst().get()` with a declared JDK: no cut; `opt.get()` against `MyMap.get` with a JDK: no cut | 0 on today's manifest, which declares no `--jdk` for these families; up to 22 (J5) once it does | Without a declaration every answer is byte-identical; `map.get` against `MyMap.get` keeps its cut with the JDK |
 
 After U3, about 40 cuts remain: J9 (12, owned by the relations reader), T2 (11, the type checker's), lambda parameters
@@ -225,7 +236,7 @@ After U3, about 40 cuts remain: J9 (12, owned by the relations reader), T2 (11, 
 | Read ADR-0029 decision 9's external-leaf proof (`declaredTypes`) for Java | Rejected as the owner of this question: its snapshot-wide guard (any lambda, method reference or anonymous class) answers what runs, which trace needs, so it would settle nothing on a repository with lambdas (hypothesis: every corpus backend). The reverse question is asked per reached declaration |
 | A list of final or never-implemented JDK types | Rejected: a second vocabulary for what the declared JDK states (ADR-0063) |
 | A rule per framework or per repository | Rejected: the classes above are language shapes, and ADR-0071's decision source asks for cross-cutting fixes |
-| Keep `name-only` for attributed outside dispatch | Rejected for `hidden-caller` (open question 1): the cut then names the declaration a value may run, as an attributed candidate does |
+| A `hidden-caller` cut at each declaration an outside dispatch may run | Rejected at implementation (resolved question 1): it repeats every place once per declaration, 1,017 places as 8,558 entries on a corpus repository |
 
 ## Consequences
 
@@ -250,8 +261,11 @@ After U3, about 40 cuts remain: J9 (12, owned by the relations reader), T2 (11, 
 
 Each was open in the proposal; its recommended answer is adopted (decision source above).
 
-1. **Reason of an attributed outside dispatch.** Resolved: `hidden-caller`, as for any attributed candidate; the
-   reach is the declaration itself, a subset of today's reach.
+1. **Reason of an attributed outside dispatch.** Resolved first as `hidden-caller`, and revised at implementation
+   (2026-11-14) to today's `name-only` cut with its reach narrowed. A `hidden-caller` cut is one per declaration and
+   repeats every place: measured on the largest Java repository of the corpus, 1,017 marked places became 8,558
+   entries across 74 cuts, with no place released. The `name-only` cut of a file lists each place once and reaches
+   only the declarations a reference of the file is not bound away from.
 2. **Trace reading `outside` as an external leaf.** Resolved: a separate record after U2's corpus result, since a
    trace leaf states what runs and needs the dispatch closure of every implementation of `T`, not only the reached ones.
 3. **Static field paths (J8) and lambda parameters (J7).** Resolved: J8 joins U2 only if the receiver bindings
