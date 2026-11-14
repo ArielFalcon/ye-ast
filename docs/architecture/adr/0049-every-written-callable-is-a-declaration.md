@@ -1,6 +1,6 @@
 # ADR-0049: Every callable the source writes is a declaration
 
-- Status: Accepted, 2026-11-09, owner
+- Status: Accepted, 2026-11-09, owner; extended by [ADR-0093](0093-a-call-in-a-syntax-only-declaration-has-one-owner-in-the-inbound-walk.md), 2026-11-14
 - Decision source: Owner, 2026-11-09: "Resuelve todas las preguntas abiertas como recomiendes" (settle every open question as recommended), after "aplica el orden que recomiendas" and "los ADR recogen decisiones mas acotadas referentes a un RFC".
 - Related: [RFC-0027](../rfc/0027-declaration-model.md) designs this decision; ADR-0041, ADR-0042, ADR-0044, ADR-0045
 
