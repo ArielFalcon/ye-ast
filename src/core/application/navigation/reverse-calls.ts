@@ -253,7 +253,7 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, or
         const { binding } = await bindingOf(call);
         const declaration = binding.kind === "receiver" ? binding.declaration : undefined;
         if (declaration === undefined) {
-          if (binding.kind === "unbound" || (binding.kind === "receiver" && (!binding.outside || binding.dispatch !== undefined))) cuts.push({ kind: "unresolved-link", reason: "receiver-unproven", at: [placeAt(call.reference.file, call.reference.line, call.reference.name), ...nodes.filter(({ name }) => name === lookupName(call.reference.file, call.reference.name)).map((node) => placeAt(node.file, node.startLine, node.path ?? node.name))], reach: ANYTHING });
+          if (binding.kind === "unbound" || (binding.kind === "receiver" && binding.target === undefined && (!binding.outside || binding.dispatch !== undefined))) cuts.push({ kind: "unresolved-link", reason: "receiver-unproven", at: [placeAt(call.reference.file, call.reference.line, call.reference.name), ...nodes.filter(({ name }) => name === lookupName(call.reference.file, call.reference.name)).map((node) => placeAt(node.file, node.startLine, node.path ?? node.name))], reach: ANYTHING });
           continue;
         }
         const target = nodes.find(({ id }) => id === declaration.id);

@@ -690,10 +690,9 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const owners = reconciled === undefined ? NO_SYNTAX_OWNERS : createSyntaxOwners(input.reading.declarations, reconciled.ownedIn);
   const syntaxSeeds = selection.syntaxSeeds.map(({ symbol }) => symbol);
   await owners.load(syntaxSeeds.map(({ file }) => file));
-  const named = syntaxSeeds.filter(isNamedMember);
-  const syntax: SyntaxReading = { seeds: syntaxSeeds, callers: new Map(), owners, cuts: [], looked: new Set(named.map(({ id }) => id)) };
-  if (reverse !== undefined) await readCallersOf(syntax, reverse, named, input.signal);
-  const unplacedSeeds = reverse === undefined ? selection.syntaxSeeds : selection.syntaxSeeds.filter(({ symbol }) => !isNamedMember(symbol) && owners.ownerOf(symbol) === undefined);
+  const read = syntaxSeeds.filter((seed) => isNamedMember(seed) || owners.ownerOf(seed) === undefined);
+  const syntax: SyntaxReading = { seeds: syntaxSeeds, callers: new Map(), owners, cuts: [], looked: new Set(read.map(({ id }) => id)) };
+  if (reverse !== undefined) await readCallersOf(syntax, reverse, read, input.signal);
   const origins = input.reading.origins();
   const written = targets === undefined || origins === undefined ? undefined : createWrittenUses({ store, sources: headTree.sources, tokensOf: (file) => input.reading.tokensOf(file), syntaxOf: input.reading.syntaxOf, origins, importedDeclarations: targets.importedDeclarations, modules: input.modules });
   const { inbound, walk, attributed, unsettled, references, unproven, cuts: contradictedCuts } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls, contradictions, syntax, written);
@@ -706,7 +705,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
 
   const cuts: Cut[] = [
     ...syntax.cuts,
-    ...syntaxRootCuts(unplacedSeeds),
+    ...(reverse === undefined ? syntaxRootCuts(selection.syntaxSeeds) : []),
     ...walk.cuts,
     ...input.relationCuts ?? [],
     ...unreadTypeReferenceCuts(seeds, selection.removalHolders, input.reading),
