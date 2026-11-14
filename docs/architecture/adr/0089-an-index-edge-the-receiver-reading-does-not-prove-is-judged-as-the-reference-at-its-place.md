@@ -56,8 +56,8 @@ cut for each of the 13,891 pairs would mark most answers of the repository, and 
    | A method | Kept, or moved to that method | None (unchanged) |
    | An outside receiver that is exact, or under which the target cannot run | Not followed | None (unchanged, ADR-0087) |
    | `unproven` with candidates, the target among them | Kept | `hidden-caller` at the call toward each other reached candidate, unless the answer already lists the caller as its dependent |
-   | `unproven` with candidates, the target not among them | Not followed: the candidates are every repository declaration the call can run | `hidden-caller` at the call toward each reached candidate (ADR-0079 decision 3) |
-   | `unproven` without candidates, or an outside receiver under which the target may run | Kept | `name-only` at the call toward each other reached declaration of the name, of a kind the call can reach, that accepts its argument count (ADR-0084) and, for an outside receiver, may run under it (ADR-0079 decision 5) |
+   | `unproven` with candidates, the target not among them | Not followed: the candidates are every repository declaration the call can run. Kept when a candidate is a declaration of the target's own file and name, which an answer names as it names the target | `hidden-caller` at the call toward each reached candidate (ADR-0079 decision 3), unless the edge is kept and the answer already lists the caller |
+   | `unproven` without candidates, or an outside receiver under which the target may run | Kept | `name-only` at the call toward each other reached declaration of the name, of a kind the call can reach, that accepts its argument count (ADR-0084) and, for an outside receiver, may run under it (ADR-0079 decision 5), unless the answer already lists the caller |
    | A generated or supplied member, `unknown`, a capability the pack declares absent | Kept | None (unchanged) |
 
 2. **Recovery comes before marks.** The rows that add cuts are delivered after the readings below, so a cut marks only
@@ -79,7 +79,8 @@ cut for each of the 13,891 pairs would mark most answers of the repository, and 
 ## Not decided here
 
 - A reading that proves nothing because a source of the repository is not parsed, where every call of the repository
-  would be marked: the edges keep today's verdict until that state is measured.
+  would be marked: the pack marks such an answer as one that says nothing of the call in particular, and its edges
+  keep today's verdict until that state is measured.
 - A structural language: its edges are judged by another rule (`name-match`), and whether the same hole exists there is
   not measured.
 - An edge kept toward a homonym when the reading answers a generated member: it lists a caller that does not call the

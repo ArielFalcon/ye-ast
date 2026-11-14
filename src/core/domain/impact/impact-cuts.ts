@@ -110,6 +110,17 @@ export function attributedCallCuts(calls: readonly { declaration: { file: string
 }
 
 /**
+ * The calls whose reading proves no step that may run a reached declaration by name alone (ADR-0089 decision 1): one cut
+ * per calling file, led by it, at every such call, reaching the callers of those declarations, as a reference no
+ * candidate attributes is cut.
+ */
+export function nameOnlyCallCuts(calls: readonly { declaration: { file: string; name: string }; place: { file: string; line: number; name: string } }[]): Cut[] {
+  return [...Map.groupBy(calls, ({ place }) => place.file)]
+    .toSorted(([a], [b]) => compareText(a, b))
+    .map(([file, here]) => unresolvedLinkAt(file, new Set(here.map(({ place }) => placeAt(place.file, place.line, place.name))), "name-only", callersOf(here.map(({ declaration }) => declarationAnchor(declaration.file, declaration.name)))));
+}
+
+/**
  * One cut per place a call record is contradicted (ADR-0041 U6): the index placed a call where its source writes none, so
  * the record proves no dependence there. The cut names the targets the index held.
  */

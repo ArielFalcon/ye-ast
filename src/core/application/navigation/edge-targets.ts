@@ -1,5 +1,6 @@
 import { CALL_EDGE_KINDS, FIELD_KINDS, EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, holdsValue, type EdgeVerdict, type ReceiverSettlement, type RootOrigin } from "../../domain/impact/edge-policy.ts";
 import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
+import { mayRunDeclarationOf } from "../../domain/languages/call-targets.ts";
 import { hasTyping } from "../../domain/languages/profiles.ts";
 import { compactSpelling } from "../../domain/shared/call-place.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
@@ -10,10 +11,10 @@ import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts"
 import type { ModuleDependencies, ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { TypeTarget } from "../../ports/type-bindings.port.ts";
-import { createGraphNavigation, isInside } from "./graph-navigation.ts";
+import { createGraphNavigation, isInside, placedBetween } from "./graph-navigation.ts";
 import { declarationAt, importBindings } from "./import-bindings.ts";
 import { provenKey, typedDeclaration } from "./proven-calls.ts";
-import { createCallBindings, type CallBindings } from "./call-binding.ts";
+import { CALLABLE_KINDS, createCallBindings, type CallBindings, type OutsideDispatch } from "./call-binding.ts";
 import { bindingKey, createCallBinder, receiverBindingsByPlace, type CallBinder, type ReceiverProofs, type ReceiverSyntax } from "./call-binder.ts";
 import type { DeclarationModel } from "./declaration-model.ts";
 
@@ -39,6 +40,16 @@ export interface EdgeTargets {
    * homonym declaration where it is in scope. Every candidate of every node is judged in one `verdictsOf`.
    */
   redirectedInto(nodes: readonly GraphSymbol[], signal?: AbortSignal): Promise<readonly FollowedEdge[]>;
+  /**
+   * The kept call edges into homonyms of `nodes` whose receiver reading proves no step (`UnprovenCall`) and that may run
+   * one of `nodes` instead (ADR-0089 decision 1), node by node in the order given: a node among the reading's candidates
+   * is `hidden-caller`, and, where the reading offers none, a node the call can run by its kind, its language, the
+   * argument count it accepts (ADR-0084) and, under an outside receiver, its dispatch (ADR-0079 decision 5) is
+   * `name-only`, save from a call that spells its callee alone and whose target is in its own file. A kept edge names no
+   * node of its target's file and name, which a cut names by the target's own anchor.
+   * `kept` tells whether the edge's own target is among the candidates.
+   */
+  unprovenInto(nodes: readonly GraphSymbol[], signal?: AbortSignal): Promise<readonly UnprovenCallInto[]>;
   /** Per local name `file`'s imports bind, the declaration the join proves it reaches, when it proves exactly one. */
   importedDeclarations(file: string): Promise<ReadonlyMap<string, GraphSymbol>>;
   /** The binder of member calls' receivers this read's proofs settle; absent without syntax or proofs. */
@@ -97,7 +108,7 @@ export function edgeKey({ source, target, kind, line, column }: GraphEdge): stri
  */
 export type EdgeTarget =
   | Exclude<EdgeVerdict<GraphSymbol>, { kind: "keep" | "drop" | "redirect" }>
-  | { kind: "keep"; receiver?: string; derivation?: ReceiverSettlement }
+  | { kind: "keep"; receiver?: string; derivation?: ReceiverSettlement; unproven?: UnprovenCall }
   | { kind: "redirect"; to: GraphSymbol; derivation?: "typed"; receiver?: string }
   | { kind: "drop"; root: ImportOrigin | LexicalRoot | OutsideReceiver };
 
@@ -108,6 +119,35 @@ export type EdgeTarget =
 export interface OutsideReceiver {
   kind: "outside-receiver";
   type: string;
+}
+
+/**
+ * A kept call edge of a nominal language whose receiver reading proves no step (ADR-0089): the repository declarations
+ * the call can run when the reading offers them (`candidates`), or the outside receiver under which the edge's target
+ * may run (`dispatch`); neither when the reading settles nothing. A family that follows edges as dependences does not
+ * follow one whose target is not among the candidates.
+ */
+export interface UnprovenCall {
+  kind: "unproven";
+  candidates?: readonly GraphSymbol[];
+  dispatch?: OutsideDispatch;
+}
+
+/** A kept call edge whose reading proves no step and may run `node` instead of its target. */
+export interface UnprovenCallInto {
+  node: GraphSymbol;
+  followed: FollowedEdge;
+  reason: "hidden-caller" | "name-only";
+  kept: boolean;
+}
+
+/**
+ * Whether a family that follows edges as dependences follows a kept edge: not when the reading's candidates exclude its
+ * target and every declaration of the target's own file and name, which an answer names as it names the target.
+ */
+export function followsUnproven(verdict: Extract<EdgeTarget, { kind: "keep" }>, target: GraphSymbol): boolean {
+  const candidates = verdict.unproven?.candidates;
+  return candidates === undefined || candidates.some((candidate) => candidate.id === target.id || (candidate.file === target.file && candidate.name === target.name));
 }
 
 /** A root spelled alone that a declaration of its own file's scope binds, and the graph places no declaration of. */
@@ -142,6 +182,7 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
   /** Per file, the declaration each local name its imports bind reaches, when the join proves exactly one. */
   const bound = new Map<string, ReadonlyMap<string, GraphSymbol>>();
   let extracted: ReadonlyMap<string, readonly ModuleDependency[]> | undefined;
+  const candidatesRead = new Map<GraphNodeId, Promise<readonly FollowedEdge[]>>();
 
   async function bindingsOf(file: string): Promise<ReadonlyMap<string, GraphSymbol>> {
     let held = bound.get(file);
@@ -195,7 +236,7 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
       for (const [index, followed] of kept.entries()) {
         const receiver = receivers[index];
         const method = declared.get(followed);
-        if (method !== undefined && !("id" in method)) verdicts.set(edgeKey(followed.edge), { kind: "drop", root: method });
+        if (method !== undefined && !("id" in method)) verdicts.set(edgeKey(followed.edge), method.kind === "unproven" ? { kind: "keep", unproven: method } : { kind: "drop", root: method });
         else if (method !== undefined && method.id !== followed.target.id) verdicts.set(edgeKey(followed.edge), { kind: "redirect", to: method });
         else if (receiver === undefined) verdicts.set(edgeKey(followed.edge), KEEP);
         else if (binder === undefined || bindings === undefined) verdicts.set(edgeKey(followed.edge), { kind: "keep", receiver });
@@ -290,21 +331,28 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
   }
 
   /**
-   * Per Java call edge, the method the receiver reading names at its place (ADR-0044 decision 1), or the outside receiver
-   * whose type the edge's target cannot run under or whose member the call runs without dispatch; none where it settles
-   * nothing.
+   * Per Java call edge, the method the receiver reading names at its place (ADR-0044 decision 1), the outside receiver
+   * whose type the edge's target cannot run under or whose member the call runs without dispatch, or what an `unproven`
+   * reading or an outside receiver the target may run under leaves open (`UnprovenCall`); none where it settles nothing
+   * or proves nothing anywhere in the repository.
    */
-  async function declaredMethodsOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<ReadonlyMap<FollowedEdge, GraphSymbol | OutsideReceiver>> {
+  async function declaredMethodsOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<ReadonlyMap<FollowedEdge, GraphSymbol | OutsideReceiver | UnprovenCall>> {
     const asked = bindings === undefined ? [] : edges.filter(({ edge, source }) => edge.kind === "calls" && hasTyping(source.file, "nominal"));
     if (bindings === undefined || asked.length === 0) return new Map();
     const found = await origins.receiverMethods(asked.map(({ edge, source, target }) => ({ file: source.file, line: edge.line!, column: edge.column! + 1, member: target.name })), signal);
-    const methods = new Map<FollowedEdge, GraphSymbol | OutsideReceiver>();
+    const methods = new Map<FollowedEdge, GraphSymbol | OutsideReceiver | UnprovenCall>();
     for (const [index, followed] of asked.entries()) {
       const { edge, source, target } = followed;
+      const answer = found[index];
       const call = { body: source, reference: { from: source.id, file: source.file, line: edge.line!, column: edge.column!, name: target.name, kind: edge.kind, candidates: [] } };
-      const settled = bindings.settleDeclared({ kind: "declared", member: target.name, form: "member", call }, found[index]);
+      const settled = bindings.settleDeclared({ kind: "declared", member: target.name, form: "member", call }, answer);
       if (settled.kind === "declaration") methods.set(followed, settled.target);
-      else if (settled.kind === "receiver" && settled.dispatch !== undefined && (settled.dispatch.exact === true || !(await bindings.mayRunUnder(settled.dispatch, target, signal)))) methods.set(followed, { kind: "outside-receiver", type: settled.dispatch.type });
+      else if (settled.kind === "receiver" && settled.dispatch !== undefined) {
+        const runs = settled.dispatch.exact !== true && (await bindings.mayRunUnder(settled.dispatch, target, signal));
+        methods.set(followed, runs ? { kind: "unproven", dispatch: settled.dispatch } : { kind: "outside-receiver", type: settled.dispatch.type });
+      } else if (answer?.kind === "unproven" && answer.repositoryWide !== true) {
+        methods.set(followed, answer.candidates === undefined ? { kind: "unproven" } : { kind: "unproven", candidates: answer.candidates.flatMap(({ file, start, nameLine }) => placedBetween(store, file, start, nameLine, CALLABLE_KINDS) ?? []) });
+      }
     }
     return methods;
   }
@@ -328,10 +376,55 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
       }
       return moved;
     },
+    async unprovenInto(nodes, signal) {
+      const candidatesOf: { node: GraphSymbol; found: readonly FollowedEdge[] }[] = [];
+      for (const node of nodes) candidatesOf.push({ node, found: (await candidatesInto(node)).filter(({ edge, target }) => CALL_EDGE_KINDS.includes(edge.kind) && target.name === node.name) });
+      const judged = await verdictsOf(candidatesOf.flatMap(({ found }) => found), signal);
+      const open: { node: GraphSymbol; followed: FollowedEdge; unproven: UnprovenCall }[] = [];
+      let index = 0;
+      for (const { node, found } of candidatesOf) {
+        for (const followed of found) {
+          const verdict = judged[index++]!;
+          if (verdict.kind === "keep" && verdict.unproven !== undefined) open.push({ node, followed, unproven: verdict.unproven });
+        }
+      }
+      const into: UnprovenCallInto[] = [];
+      const byName = open.filter(({ unproven }) => unproven.candidates === undefined);
+      const uncounted = bindings === undefined ? byName.map(() => false) : await bindings.takesNoCount(byName.map(({ node, followed: { edge, source, target } }) => ({ call: { body: source, reference: { from: source.id, file: source.file, line: edge.line!, column: edge.column!, name: target.name, kind: edge.kind, candidates: [] } }, declaration: node })), signal);
+      const countedOut = new Set(byName.filter((_, at) => uncounted[at] === true));
+      for (const entry of open) {
+        const { node, followed, unproven } = entry;
+        const kept = followsUnproven({ kind: "keep", unproven }, followed.target);
+        if (unproven.candidates !== undefined) {
+          if (unproven.candidates.some((candidate) => candidate.id === node.id)) into.push({ node, followed, reason: "hidden-caller", kept });
+          continue;
+        }
+        if (countedOut.has(entry)) continue;
+        if (!CALLABLE_KINDS.includes(node.kind) || !mayRunDeclarationOf(followed.source.file, node.file) || (await namesItsOwnFile(followed))) continue;
+        if (unproven.dispatch !== undefined && (bindings === undefined || !(await bindings.mayRunUnder(unproven.dispatch, node, signal)))) continue;
+        into.push({ node, followed, reason: "name-only", kept: true });
+      }
+      return into;
+    },
   };
+
+  /** Whether a call spells its callee alone and the edge's target is a declaration of its own file, which that name names (RFC-0016 S12). */
+  async function namesItsOwnFile({ edge, source, target }: FollowedEdge): Promise<boolean> {
+    if (syntaxOf === undefined || target.file !== source.file) return false;
+    return (await syntaxIn(syntaxOf, source.file)).callees.get(`${edge.line}:${edge.column! + 1}`)?.includes(target.name) === true;
+  }
 
   /** The edges the graph matched elsewhere that may name `node`: through an import of it, or to a homonym declaration. */
   async function candidatesInto(node: GraphSymbol): Promise<readonly FollowedEdge[]> {
+    let held = candidatesRead.get(node.id);
+    if (held === undefined) {
+      held = readCandidatesInto(node);
+      candidatesRead.set(node.id, held);
+    }
+    return held;
+  }
+
+  async function readCandidatesInto(node: GraphSymbol): Promise<readonly FollowedEdge[]> {
     const candidates = new Map<string, FollowedEdge>();
     const collect = (edges: readonly GraphEdge[], named: (target: GraphSymbol) => boolean): void => {
       const placed = edges.filter((edge) => edge.target !== node.id && edge.line !== null && edge.column !== null);

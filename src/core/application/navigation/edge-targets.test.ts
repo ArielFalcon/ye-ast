@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { GraphNodeId } from "../../ports/code-graph.port.ts";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
-import type { ImportOrigins, ReceiverMethod } from "../../ports/import-origins.port.ts";
+import type { ImportOrigins, OutsideSupertypes, ReceiverMethod } from "../../ports/import-origins.port.ts";
 import { createDeclarationModel } from "./declaration-model.ts";
-import { createEdgeTargets, NOTHING_DECLARED, type FollowedEdge } from "./edge-targets.ts";
+import { createEdgeTargets, followsUnproven, NOTHING_DECLARED, type FollowedEdge } from "./edge-targets.ts";
 import { fakeCodeGraph, type FakeEdge, type FakeNode } from "./fake-code-graph.testing.ts";
 
 interface World {
@@ -17,21 +17,36 @@ interface World {
   memberUses?: readonly MemberUseOrigin[];
 }
 
-/** The verdict `EdgeTargets` gives the one call edge out of `from`, as the reverse families read it. */
-async function verdictOf(world: World, from: string) {
+/** What the language pack answers of argument counts and outside supertypes; nothing by default. */
+interface Signatures {
+  /** The count every call writes, and the count each declaration accepts by its file. */
+  counts?: { written: number; accepted: Readonly<Record<string, number>> };
+  /** The outside supertypes of each declaration, by its file. */
+  outside?: Readonly<Record<string, OutsideSupertypes>>;
+}
+
+function edgeTargetsOf(world: World & Signatures) {
   const store = fakeCodeGraph(world.nodes, world.edges);
+  const { counts, outside } = world;
   const origins = {
     rootOrigins: async (sites) => sites.map(() => ({ status: "unknown", reason: "unresolved", evidence: [] })),
     rootBindings: async (sites) => sites.map(() => ({ kind: "unknown" })),
     receiverMethods: async (sites) => sites.map((site) => world.receivers?.[site.member] ?? { kind: "unknown" }),
-  } as Pick<ImportOrigins, "rootOrigins" | "rootBindings" | "receiverMethods"> as ImportOrigins;
-  const targets = createEdgeTargets({
+    ...(counts === undefined ? {} : { argumentCounts: async (sites) => sites.map(() => ({ kind: "count", count: counts.written })), acceptedCounts: async (sites) => sites.map(({ file }) => ({ kind: "counts", count: counts.accepted[file]! })) }),
+    ...(outside === undefined ? {} : { outsideSupertypes: async (sites) => sites.map(({ file }) => outside[file] ?? { kind: "unknown" }) }),
+  } as Pick<ImportOrigins, "rootOrigins" | "rootBindings" | "receiverMethods" | "argumentCounts" | "acceptedCounts" | "outsideSupertypes"> as ImportOrigins;
+  return { store, targets: createEdgeTargets({
     origins,
     store,
     declarations: createDeclarationModel({ store, declarationsIn: async () => [] }),
     syntaxOf: async () => ({ ...NOTHING_DECLARED, receiverBindings: world.receiverBindings ?? [], calls: (world.receiverBindings ?? []).map(({ line, column, receiver, member }) => ({ kind: "calls" as const, line, column, name: `${receiver}.${member}`, owners: [] })) }),
     proofs: async () => ({ fields: [], locals: [], memberUses: world.memberUses ?? [] }),
-  });
+  }) };
+}
+
+/** The verdict `EdgeTargets` gives the one call edge out of `from`, as the reverse families read it. */
+async function verdictOf(world: World, from: string) {
+  const { store, targets } = edgeTargetsOf(world);
   const [source] = store.symbolsByIds([from as GraphNodeId]);
   const [edge] = store.outgoingEdges([source!.id], ["calls"]);
   const followed: FollowedEdge = { edge: edge!, source: source!, target: store.symbolsByIds([edge!.target])[0]! };
@@ -88,4 +103,51 @@ test("a call edge on a value of a class that declares several methods of its nam
 
   assert.deepEqual(await verdictOf(world("Over"), "run"), ["keep", "name-match"]);
   assert.deepEqual(await verdictOf(world("Empty"), "run"), ["keep", "name-match"]);
+});
+
+const E = "src/main/java/p/E.java";
+const HOMONYMS: World = {
+  nodes: [...JAVA.nodes, { id: "E", kind: "class", file: E, start: 3, end: 7 }, { id: "E.go", kind: "method", name: "go", file: E, start: 4, end: 6 }, { id: "E.gone", kind: "field", name: "go", file: E, start: 7, end: 7 }, { id: "D.go1", kind: "method", name: "go", file: D, start: 5, end: 5 }],
+  edges: [...JAVA.edges, { from: "E", to: "E.go", kind: "contains" }],
+};
+const placeOf = (file: string) => ({ file, start: 4, nameLine: 4 });
+
+/** Whether the reverse families follow the edge out of `run`, and what the kept edges whose reading proves no step may run among `nodes`. */
+async function unprovenOf(world: World & Signatures, nodes: readonly string[]) {
+  const { store, targets } = edgeTargetsOf(world);
+  const [source] = store.symbolsByIds(["run" as GraphNodeId]);
+  const [edge] = store.outgoingEdges([source!.id], ["calls"]);
+  const target = store.symbolsByIds([edge!.target])[0]!;
+  const [verdict] = await targets.verdictsOf([{ edge: edge!, source: source!, target }]);
+  const into = await targets.unprovenInto(store.symbolsByIds(nodes as GraphNodeId[]));
+  return { follows: verdict!.kind === "keep" && followsUnproven(verdict!, target), into: into.map(({ node, reason, kept }) => [node.id, reason, kept]) };
+}
+
+test("an unproven reading with candidates keeps its edge only when they hold its target, and attributes the call to every other reached candidate (ADR-0089)", async () => {
+  const offering = (...files: string[]): World => ({ ...HOMONYMS, receivers: { go: { kind: "unproven", candidates: files.map(placeOf) } } });
+
+  assert.deepEqual(await unprovenOf(offering(A, D), ["A.go", "D.go", "E.go"]), { follows: true, into: [["A.go", "hidden-caller", true]] });
+  assert.deepEqual(await unprovenOf(offering(A), ["A.go", "D.go", "E.go"]), { follows: false, into: [["A.go", "hidden-caller", false]] });
+});
+
+test("an unproven reading that offers a declaration of the target's own file and name keeps its edge, and one that offers none does not", async () => {
+  const offering = (candidates: readonly { file: string; start: number; nameLine: number }[]): World => ({ ...HOMONYMS, receivers: { go: { kind: "unproven", candidates } } });
+
+  assert.deepEqual(await unprovenOf(offering([placeOf(A), { file: D, start: 5, nameLine: 5 }]), ["A.go", "D.go1"]), { follows: true, into: [["A.go", "hidden-caller", true], ["D.go1", "hidden-caller", true]] });
+  assert.deepEqual(await unprovenOf(offering([]), ["A.go", "D.go1"]), { follows: false, into: [] });
+});
+
+test("an unproven reading without candidates names each other reached method of the name that accepts the call's argument count, by name only", async () => {
+  const uncounted: World = { ...HOMONYMS, receivers: { go: { kind: "unproven" } } };
+
+  assert.deepEqual(await unprovenOf({ ...uncounted, counts: { written: 0, accepted: { [A]: 0, [D]: 0, [E]: 2 } } }, ["A.go", "D.go", "D.go1", "E.go"]), { follows: true, into: [["A.go", "name-only", true], ["D.go1", "name-only", true]] });
+  assert.deepEqual(await unprovenOf(uncounted, ["A.go", "D.go1", "E.go", "E.gone"]), { follows: true, into: [["A.go", "name-only", true], ["D.go1", "name-only", true], ["E.go", "name-only", true]] });
+});
+
+test("an outside receiver the target may run under names only the reached methods that may run under it, and a method reading or a reading that proves nothing in the repository names none", async () => {
+  const outside: World & Signatures = { ...HOMONYMS, receivers: { go: { kind: "outside", type: "x.Lib" } }, outside: { [D]: { kind: "types", types: ["x.Lib"] }, [A]: { kind: "types", types: [] }, [E]: { kind: "types", types: ["x.Lib"] } } };
+
+  assert.deepEqual(await unprovenOf(outside, ["A.go", "E.go"]), { follows: true, into: [["E.go", "name-only", true]] });
+  assert.deepEqual(await unprovenOf({ ...HOMONYMS, receivers: { go: { kind: "method", file: D, start: 4, nameLine: 4 } } }, ["A.go", "E.go"]), { follows: true, into: [] });
+  assert.deepEqual(await unprovenOf({ ...HOMONYMS, receivers: { go: { kind: "unproven", repositoryWide: true } } }, ["A.go", "E.go"]), { follows: true, into: [] });
 });

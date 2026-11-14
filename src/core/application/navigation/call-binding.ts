@@ -129,7 +129,8 @@ export interface CallBindingsDeps {
 }
 
 const TYPE_ONLY_KINDS: readonly string[] = ["interface", "type_alias"];
-const CALLABLE_KINDS: readonly string[] = ["method", "function"];
+/** The kinds of declaration a call runs. */
+export const CALLABLE_KINDS: readonly string[] = ["method", "function"];
 const PLAIN_CHAIN = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)+$/;
 
 const isOutside = (origin: ImportOrigin | undefined): origin is Outside => origin?.kind === "external" || origin?.kind === "ambient";
@@ -332,7 +333,7 @@ export function createCallBindings({ store, navigation, origins, binder, declara
       const constructors = chainedConstructors(call.body, member);
       return method?.kind === "unproven" ? { kind: "unbound", form, candidates: constructors, attributed: constructors } : implicitConstructor(call.body, member) ?? { kind: "unbound", form, candidates: [], attributed: [] };
     }
-    const offered = call.reference.kind === "references" && method?.kind === "unproven" && method.candidates !== undefined ? method.candidates.flatMap(({ file, start, nameLine }) => placed(file, start, nameLine) ?? []) : undefined;
+    const offered = method?.kind === "unproven" && method.candidates !== undefined ? method.candidates.flatMap(({ file, start, nameLine }) => placed(file, start, nameLine) ?? []) : undefined;
     const candidates = offered ?? namedDeclarations(member, call.reference.file, form === "member");
     return { kind: "unbound", form, candidates, attributed: offered ?? (form === "bare" ? candidates.filter((candidate) => candidate.file === call.reference.file) : []) };
   }

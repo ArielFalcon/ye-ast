@@ -251,13 +251,13 @@ async function callers(target: string): Promise<{ status: string; callers: reado
   return { status: fact.status, callers: symbols.filter(({ kind, via }) => kind === "method" && via?.basis === "call").map(({ symbol }) => symbol).sort(), cuts: (fact.cuts ?? []).map(({ reason, at }) => `${reason} ${at[0]}`) };
 }
 
-test("a switch pattern variable hides the field of its name: its call is a caller of the type it writes, never of the field's", async () => {
+test("a switch pattern variable hides the field of its name: its call is a caller of the type it writes, never of the field's, and the calls no reading proves cut both by name", async () => {
   const store = await callers("Store.java:save");
   const other = await callers("Other.java:save");
 
-  assert.equal(store.status, "complete", JSON.stringify(store.cuts));
+  assert.deepEqual({ status: store.status, cuts: store.cuts }, { status: "partial", cuts: [`name-only ${JAVA}/Use.java`] });
   for (const method of ["switchRule", "switchGroup", "switchGuard", "switchRecord"]) assert.ok(store.callers.includes(method), `${method} in ${JSON.stringify(store.callers)}`);
-  assert.deepEqual(other, { status: "complete", callers: ["afterInstanceof", "afterSwitch", "plainField"], cuts: [] });
+  assert.deepEqual(other, { status: "partial", callers: ["afterInstanceof", "afterSwitch", "plainField"], cuts: [`name-only ${JAVA}/Use.java`] });
 });
 
 test("a call on a variable a pattern, a resource, an enhanced for, a typed lambda parameter or a one-type catch declares steps into the method of the type it writes", async () => {

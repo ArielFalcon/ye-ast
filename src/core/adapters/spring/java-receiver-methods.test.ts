@@ -174,7 +174,7 @@ test("a call on a parameter, a stated local, a field or a repository method's de
 test("a static call on a type name outside the repository, an array receiver and a read that proves no binding are no outside receiver", async () => {
   assert.deepEqual(await methodAt([use("java.nio.file.Paths.get(\"a\")", [], "")], "get"), { kind: "unproven" });
   assert.deepEqual(await methodAt([use("lib.names().clone()", [], "Lib lib"), java("Lib.java", ["package app;", "", "class Lib {", "  String[] names() { return null; }", "}"])], "clone"), { kind: "unproven" });
-  assert.deepEqual(await methodAt([use("map.get(\"k\")", [], "java.util.Map<String, String> map")], "get", KOTLIN([use("x", [], "")])), { kind: "unproven" });
+  assert.deepEqual(await methodAt([use("map.get(\"k\")", [], "java.util.Map<String, String> map")], "get", KOTLIN([use("x", [], "")])), { kind: "unproven", repositoryWide: true });
 });
 
 test("a receiver declared as a platform interface that declares no member is no outside receiver: the supertypes leave it out, so a class implementing it may run", async () => {
@@ -207,10 +207,10 @@ test("an annotation by which a processor adds overloads or rewrites calls proves
   const proxy = java("Proxies.java", ["package app;", "", "import java.lang.reflect.Proxy;", "", "class Proxies {", "  Object make() { return Proxy.newProxyInstance(null, null, null); }", "}"]);
   const sources = [STORE, JDBC, use("store.save(\"x\")")];
 
-  assert.deepEqual(await methodAt([...sources, delegating]), { kind: "unproven" });
-  assert.deepEqual(await methodAt([...sources, broken]), { kind: "unproven" });
-  assert.deepEqual(await methodAt(sources, "save", KOTLIN(sources)), { kind: "unproven" });
-  assert.deepEqual(await methodAt([...sources, proxy]), { kind: "unproven" });
+  assert.deepEqual(await methodAt([...sources, delegating]), { kind: "unproven", repositoryWide: true });
+  assert.deepEqual(await methodAt([...sources, broken]), { kind: "unproven", repositoryWide: true });
+  assert.deepEqual(await methodAt(sources, "save", KOTLIN(sources)), { kind: "unproven", repositoryWide: true });
+  assert.deepEqual(await methodAt([...sources, proxy]), { kind: "unproven", repositoryWide: true });
 });
 
 test("unread sources withhold declared receiver proof, a bare call without a declared type and a call on super included", async () => {
@@ -218,16 +218,16 @@ test("unread sources withhold declared receiver proof, a bare call without a dec
   const plain = java("Plain.java", ["package app;", "", "class Plain {", "  Store store;", "  void save(String value) {}", "}"]);
   const at = async (sources: readonly SourceFile[], start = "") => methodAt(sources, "save", KOTLIN(sources), start);
 
-  assert.deepEqual(await at([STORE, use("var local = store; local.save(\"x\")")], "local.save"), { kind: "unproven" });
-  assert.deepEqual(await at([STORE, plain, use("plain.store.save(\"x\")", [], "Plain plain")]), { kind: "unproven" });
-  assert.deepEqual(await at([STORE, use("java.util.List.of(store).get(0).save(\"x\")")]), { kind: "unproven" });
-  assert.deepEqual(await at([STORE, use("missing.save(\"x\")")]), { kind: "unproven" });
-  assert.deepEqual(await at([STORE, statics, use("Util.save(\"x\")")]), { kind: "unproven" });
-  assert.deepEqual(await at([STORE, statics, use("Util.save(\"x\")", ["  Store Util;"])]), { kind: "unproven" });
-  assert.deepEqual(await at([STORE, statics, use("Store Util = store; Util.save(\"x\")")], "Util.save"), { kind: "unproven" });
-  assert.deepEqual(await at([plain, use("save(\"x\")", ["  void save(String value) {}"])]), { kind: "unproven" });
-  assert.deepEqual(await at([plain, use("this.save(\"x\")", ["  void save(String value) {}"])]), { kind: "unproven" });
-  assert.deepEqual(await at([plain, use("super.save(\"x\")")]), { kind: "unproven" });
+  assert.deepEqual(await at([STORE, use("var local = store; local.save(\"x\")")], "local.save"), { kind: "unproven", repositoryWide: true });
+  assert.deepEqual(await at([STORE, plain, use("plain.store.save(\"x\")", [], "Plain plain")]), { kind: "unproven", repositoryWide: true });
+  assert.deepEqual(await at([STORE, use("java.util.List.of(store).get(0).save(\"x\")")]), { kind: "unproven", repositoryWide: true });
+  assert.deepEqual(await at([STORE, use("missing.save(\"x\")")]), { kind: "unproven", repositoryWide: true });
+  assert.deepEqual(await at([STORE, statics, use("Util.save(\"x\")")]), { kind: "unproven", repositoryWide: true });
+  assert.deepEqual(await at([STORE, statics, use("Util.save(\"x\")", ["  Store Util;"])]), { kind: "unproven", repositoryWide: true });
+  assert.deepEqual(await at([STORE, statics, use("Store Util = store; Util.save(\"x\")")], "Util.save"), { kind: "unproven", repositoryWide: true });
+  assert.deepEqual(await at([plain, use("save(\"x\")", ["  void save(String value) {}"])]), { kind: "unproven", repositoryWide: true });
+  assert.deepEqual(await at([plain, use("this.save(\"x\")", ["  void save(String value) {}"])]), { kind: "unproven", repositoryWide: true });
+  assert.deepEqual(await at([plain, use("super.save(\"x\")")]), { kind: "unproven", repositoryWide: true });
 });
 
 /** The constructor a `super(...)` or `this(...)` written on `line` of `source` names, by the column it starts at. */

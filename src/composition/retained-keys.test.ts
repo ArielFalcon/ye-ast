@@ -71,5 +71,5 @@ test("a new non-Java source no reader parses withdraws the method a Java call na
   assert.deepEqual(await createJavaNameBindings(createJavaParser, sources, paths, facts).receiverMethods([site]), [{ kind: "method", file: store.path, start: 4, nameLine: 4 }]);
   const after = await createJavaNameBindings(createJavaParser, sources, withKotlin, facts).receiverMethods([site]);
   assert.deepEqual(after, await createJavaNameBindings(createJavaParser, sources, withKotlin).receiverMethods([site]));
-  assert.deepEqual(after, [{ kind: "unproven" }]);
+  assert.deepEqual(after, [{ kind: "unproven", repositoryWide: true }]);
 });

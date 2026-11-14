@@ -19,6 +19,8 @@ import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
 const SLOT = "java-receiver-methods";
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
+/** What every call reads where the strict binding proves nothing over the sources (`provesBinding`). */
+const UNPROVEN_EVERYWHERE: ReceiverMethod = { kind: "unproven", repositoryWide: true };
 const GENERATED: ReceiverMethod = { kind: "generated" };
 /** A class literal is of the platform's class type (JLS 15.8.2). */
 const CLASS_LITERAL: ReceiverMethod = { kind: "outside", type: "java.lang.Class" };
@@ -143,7 +145,9 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         if (source === undefined) continue;
         const readings = (source.invocations.get(callKey(site.line, site.column, site.member)) ?? []).map((invocation) => readAt(invocation, source));
         const [first] = readings;
-        if (first !== undefined) results[index] = readings.every((reading) => sameReading(reading, first)) ? first : UNPROVEN;
+        if (first === undefined) continue;
+        const reading = readings.every((each) => sameReading(each, first)) ? first : UNPROVEN;
+        results[index] = !proves && reading.kind === "unproven" ? UNPROVEN_EVERYWHERE : reading;
       }
       return results;
     };

@@ -288,11 +288,13 @@ export type ReceiverMethod =
   /** `exact`: the call runs this member itself, never one that overrides it, because it is not virtual (a call on `super`). */
   | { kind: "method"; file: string; start: number; nameLine: number; bound?: true; exact?: true }
   /**
-   * `candidates`: the declarations of the called name that the receiver's type and its hierarchy offer at the call's
-   * arity, sorted, present only when the reading read that whole hierarchy. A family attributes the call among them; it
-   * never widens them.
+   * `candidates`: the repository declarations the call can run, the declarations of the called name that the receiver's
+   * type and its hierarchy offer at the call's arity, sorted, present only when the reading read that whole hierarchy. A
+   * family attributes the call among them; it never widens them. `repositoryWide`: the reading proves no call of the
+   * repository (a source it does not read, a dynamic implementation, a call-rewriting annotation), so this answer says
+   * nothing of this call in particular.
    */
-  | { kind: "unproven"; candidates?: readonly MethodPlace[] }
+  | { kind: "unproven"; candidates?: readonly MethodPlace[]; repositoryWide?: true }
   | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT }
   /**
    * A member that no source declares and a record or a processor annotation on the receiver's class adds (an accessor, a
