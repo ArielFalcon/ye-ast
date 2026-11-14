@@ -2,12 +2,15 @@ import { HTTP_METHODS, type HttpMethod } from "../entrypoints/http-route.ts";
 import { canonicalJson } from "../shared/canonical-json.ts";
 import type { Result } from "../shared/result.ts";
 import { ELEMENT, formatAccessPath, parseAccessPath, type AccessPath } from "./access-path.ts";
-import { formatChange, parseChange, type Change, type ChangeInput, type ChangeRefusal } from "./change.ts";
-import { parseRequestChange, writtenRequestChange, type RequestChange } from "./request-change.ts";
+import { formatChange, parseChange, RESPONSE_ENTRY_FORMS, type Change, type ChangeInput, type ChangeRefusal } from "./change.ts";
+import { parseRequestChange, REQUEST_ENTRY_FORMS, writtenRequestChange, type RequestChange } from "./request-change.ts";
 
 
 /** What an operation exchanges that the hypothesis changes: the response its handler returns, or the request body its handler reads. */
 export const TARGETS = ["response", "request"] as const;
+
+/** The change entries each target takes. */
+export const SUPPORTED_ENTRIES = { response: RESPONSE_ENTRY_FORMS, request: REQUEST_ENTRY_FORMS } as const;
 
 /** The hypothesis as a caller writes it, before it is checked. */
 export interface HypothesisInput {

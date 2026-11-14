@@ -1,3 +1,4 @@
+import { SUPPORTED_ENTRIES } from "../core/domain/contracts/hypothesis.ts";
 import { namesRepository } from "../core/domain/topology/repository-identity.ts";
 import { entrypointCandidateText, unknownEntryText, unknownTargetKey } from "../core/domain/shared/unknown-target.ts";
 import type { QueryFamily } from "../core/ports/evidence-composition.port.ts";
@@ -223,8 +224,18 @@ function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-faul
       return "Pass your client limit as answerBytes, at least 1, or omit it to leave the text unbounded; mode summary is the smallest presentation.";
     case "ambiguous-selection":
       return "Add the owner or coordinates that tell the matching records apart, as a details or full answer of this query prints them.";
-    case "invalid-hypothesis":
-      return `Correct hypotheses[${fault.index}] and resend them all: nothing is answered while one is refused. method is an HTTP verb, path starts with /, target is response or request, property is an access path such as pets[].name, and change is an entry the target supports.`;
+    case "invalid-hypothesis": {
+      const resend = `Correct hypotheses[${fault.index}] and resend them all: nothing is answered while one is refused.`;
+      switch (fault.refusal.kind) {
+        case "element-is-not-a-property":
+          return `${resend} property names a property, never an element: write the array's own path (pets) or a property of its elements (pets[].name).`;
+        case "unsupported-change":
+        case "contradictory-change":
+          return `${resend} change takes, for target response: ${SUPPORTED_ENTRIES.response.join(", ")}; for target request: ${SUPPORTED_ENTRIES.request.join(", ")}. An object entry has that one key; a list holds entries that do not contradict each other.`;
+        default:
+          return `${resend} method is an HTTP verb, path starts with /, target is response or request, property is an access path such as pets[].name, and change is an entry the target supports.`;
+      }
+    }
     case "contradictory-revisions":
       return "A change is answered at its head commit, never on the working tree: name the commit with head, and omit live and any other revision for the bound repository.";
     case "composition-request-too-large":

@@ -23,6 +23,7 @@ import type { WorkspaceCallersRequest, WorkspaceImpactQueries, WorkspaceImpactVa
 import type { RepoImpact } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { ConsequencesValue } from "../core/domain/contracts/consequence-fact.ts";
+import { SUPPORTED_ENTRIES, type HypothesisRefusal } from "../core/domain/contracts/hypothesis.ts";
 import type { ChangeRequest, ConsequencesFault, ContractConsequencesQueries, HypothesesRequest } from "../core/ports/contract-consequences-queries.port.ts";
 import type { OutwardName } from "../core/domain/topology/outward-name.ts";
 import { inRepository } from "../core/domain/topology/repository-identity.ts";
@@ -4518,6 +4519,21 @@ test("contract consequences publishes its faults by kind with the index of the r
       const properties = Object.keys((tool!.inputSchema as { properties: object }).properties);
       assert.ok(["select", "page", "expect"].every((control) => !properties.includes(control)));
       assert.ok(["hypotheses", "base", "head", "revision", "live", "workspace", "scope", "mode", "repo"].every((field) => properties.includes(field)));
+    } finally { await session.close(); }
+  }
+});
+
+test("a refused hypothesis names the change entries each target takes, and an element path names the path to write instead", async () => {
+  const refusals: [HypothesisRefusal, (step: string) => void][] = [
+    [{ kind: "unsupported-change", detail: "renamed" }, (step) => { for (const entry of [...SUPPORTED_ENTRIES.response, ...SUPPORTED_ENTRIES.request]) assert.ok(step.includes(entry), entry); }],
+    [{ kind: "element-is-not-a-property", detail: "labels[]" }, (step) => { assert.ok(step.includes("[]")); assert.ok(!step.includes(SUPPORTED_ENTRIES.response[0]!)); }],
+  ];
+  for (const [refusal, check] of refusals) {
+    const { session } = await setup({ consequences: async () => ({ ok: false, fault: { kind: "invalid-hypothesis", detail: "hypotheses[0] refused", index: 0, refusal } }) });
+    try {
+      const result = await session.callTool("ye_ast_contract_consequences", { hypotheses: [HYPOTHESIS] }) as ToolResult;
+      assert.equal(result.isError, true);
+      check(stepOf(result));
     } finally { await session.close(); }
   }
 });

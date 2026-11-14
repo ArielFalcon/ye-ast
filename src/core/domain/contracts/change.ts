@@ -16,6 +16,9 @@ const CHANGE_KINDS = [...NAMED_KINDS, "renamed", "type", "values", "wrapped", "m
 
 type ChangeKind = (typeof CHANGE_KINDS)[number];
 
+/** Each entry a response hypothesis takes, as a caller writes it: a name, or an object with that key. */
+export const RESPONSE_ENTRY_FORMS: readonly string[] = CHANGE_KINDS.map((kind) => (NAMED_KINDS.some((named) => named === kind) ? kind : `{${kind}}`));
+
 /** The kinds a `type` change can state: every class but the absences. */
 export const TYPE_KINDS: readonly ValueClass[] = ["boolean", "number", "string", "array", "object"];
 

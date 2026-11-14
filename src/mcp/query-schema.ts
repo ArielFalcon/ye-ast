@@ -7,6 +7,7 @@ import { isWorkspaceReplayContext } from "../core/domain/topology/workspace-repl
 import { FULL_OBJECT_ID_PATTERN, isFullObjectId } from "../core/domain/shared/revision.ts";
 import type { WalkBoundsField } from "../core/domain/shared/fact.ts";
 import { isValidGlob } from "../core/domain/shared/scope.ts";
+import { SUPPORTED_ENTRIES } from "../core/domain/contracts/hypothesis.ts";
 import { ENTRYPOINT_KINDS, mixesTargetKinds, type TRACE_BOUND_FIELDS, type TraceTarget } from "../core/ports/trace-queries.port.ts";
 
 /**
@@ -231,7 +232,7 @@ const hypothesis = z.strictObject({
   path: z.string().describe("Operation path starting with /, as the served route spells it (context prefix included), e.g. /api/owners/{id}."),
   target: z.string().describe("response: what the handler returns; request: what the handler reads from the body."),
   property: z.string().describe("Access path of the changed property from the body root; [] marks array elements, e.g. pets[].name."),
-  change: z.union([changeEntry, z.array(changeEntry).min(1)]).describe("One change entry or a non-empty list on the same property: a name (nullable, optional, removed; required, non-nullable for a request) or an object ({renamed}, {type}, {values}, {wrapped}, {meaning})."),
+  change: z.union([changeEntry, z.array(changeEntry).min(1)]).describe(`One entry or a non-empty list on the same property. Target response: ${SUPPORTED_ENTRIES.response.join(", ")}; target request: ${SUPPORTED_ENTRIES.request.join(", ")}. An object entry has that one key.`),
 });
 const consequencesFields = {
   repo,

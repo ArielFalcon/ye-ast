@@ -18,6 +18,9 @@ export interface RequestChange {
 
 const ORDER = ["required", "non-nullable", "type", "values"] as const;
 
+/** Each entry a request hypothesis takes, as a caller writes it: a name, or an object with that key. */
+export const REQUEST_ENTRY_FORMS: readonly string[] = ORDER.map((kind) => (kind === "type" || kind === "values" ? `{${kind}}` : kind));
+
 const kindOf = (entry: RequestEntry): (typeof ORDER)[number] => (typeof entry === "string" ? entry : "type" in entry ? "type" : "values");
 
 /** What a request hypothesis states is the server's rejection; the response kinds state what a reader may now receive and are refused. */
