@@ -1424,15 +1424,15 @@ function impactedLinkLine({ link, direction, reach, operations }: ImpactedLink, 
 }
 
 /**
- * The links of a workspace map: each one in details; in summary the count per caller, callee and transport when that is
- * no longer than the list (RFC-0017), with the call sites the join reached without a link always listed.
+ * The links of a workspace map: each one in details, and in summary up to the listed bound, beyond which the count per
+ * caller, callee and transport (RFC-0017); the call sites the join reached without a link are always listed.
  */
 function linkMapLines(links: readonly TraceLinked<Link>[], unlinked: readonly TraceLinked<UnlinkedCallSite>[], detail: ResponseMode, label = "links between the repositories read"): string[] {
   const literal = links.map((link, index) => linkLine(link, index + 1));
   const pairs = new Map<string, number>();
   for (const { from, to, transport } of links) pairs.set(`${from.repo} -> ${to.repo} ${transport}`, (pairs.get(`${from.repo} -> ${to.repo} ${transport}`) ?? 0) + 1);
   const counted = [...[...pairs].map(([pair, count]) => `  - ${pair}: ${count}`), `  ${categoryRecovery({ details: "lists each link" })}`];
-  const listed = detail === "details" || links.length === 0 || size(literal) < size(counted) ? literal : counted;
+  const listed = detail === "details" || links.length <= LISTED_ITEMS ? literal : counted;
   return [
     `${label} (${links.length}):`, ...listed,
     ...(unlinked.length === 0 ? [] : [`call sites the join reached without a link (${unlinked.length}):`, ...unlinked.map(({ from, transport, outcome, name, repos, routes, deferred, issuedAt }) => `  - ${from.repo}:${placeText(from.file, from.line)} ${from.symbol} ${transport} ${name}: ${outcome}${repos === undefined ? "" : ` (${repos.join(", ")})`}${routes === undefined ? "" : ` routes ${routes.join(", ")}`}${deferred === true ? " (runs later, if at all)" : ""}${issuedText(issuedAt)}`)]),

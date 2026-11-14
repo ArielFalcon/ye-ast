@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderWorkspace } from "./render.ts";
+import { LISTED_ITEMS } from "./render-budget.ts";
 
 const base = { schema: "0.12.0", snapshot: { repo: "a", kind: "sha", sha: "a".repeat(40) }, producer: { name: "ye-ast", version: "1" }, inputs: { trust: "untrusted", scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "k", declaredConfig: {}, engines: {} }, evidence: [] };
 
@@ -86,19 +87,22 @@ function mapValue(links: readonly ReturnType<typeof linkOf>[], unlinked: readonl
   return { workspace: { repos: ["shop-web"], gateways: [], source: "request" }, repositorySnapshots: [{ repo: "shop-web", snapshot: base.snapshot }], sections: {}, candidates: [], unserved: [], links, internalLinks, unlinked };
 }
 
-test("a workspace summary counts its links per caller, callee and transport when that is shorter, and details lists each one in the impact's link line", () => {
-  const value = mapValue([linkOf(7), linkOf(9), linkOf(11), linkOf(13, "billing", "event")]);
+test("a workspace summary names each link up to the listed bound and counts them per caller, callee and transport beyond it; details lists each one", () => {
+  const within = renderWorkspace({ ...base, status: "complete", value: mapValue(Array.from({ length: LISTED_ITEMS }, (_, index) => linkOf(index + 1))) } as never, "summary");
+  assert.ok(within.includes(`OrdersClient.call${LISTED_ITEMS}`));
+  assert.doesNotMatch(within, /shop-web -> orders http: /);
 
+  const value = mapValue([...Array.from({ length: LISTED_ITEMS }, (_, index) => linkOf(index + 1)), linkOf(LISTED_ITEMS + 1, "billing", "event")]);
   const summary = renderWorkspace({ ...base, status: "complete", value } as never, "summary");
   const details = renderWorkspace({ ...base, status: "complete", value } as never, "details");
 
-  assert.match(summary, /links between the repositories read \(4\):\n  - shop-web -> orders http: 3\n  - shop-web -> billing event: 1\n  mode "details" lists each link/);
-  assert.doesNotMatch(summary, /OrdersClient\.call7/);
-  assert.match(details, /\n  - 1\. shop-web:src\/app\/orders-client\.service\.ts:7 OrdersClient\.call7 -> orders POST \/orders\/\{\}\/confirmations -> src\/main\/java\/app\/OrdersController\.java:40 OrdersController\.confirm \(exact\)\n/);
-  assert.equal(details.split("\n").filter((line) => line.includes("OrdersClient.call")).length, 4);
+  assert.match(summary, new RegExp(`links between the repositories read \\(${LISTED_ITEMS + 1}\\):\\n  - shop-web -> orders http: ${LISTED_ITEMS}\\n  - shop-web -> billing event: 1\\n  mode "details" lists each link`));
+  assert.doesNotMatch(summary, /OrdersClient\.call7\b/);
+  assert.match(details, /\n  - 7\. shop-web:src\/app\/orders-client\.service\.ts:7 OrdersClient\.call7 -> orders POST \/orders\/\{\}\/confirmations -> src\/main\/java\/app\/OrdersController\.java:40 OrdersController\.confirm \(exact\)\n/);
+  assert.equal(details.split("\n").filter((line) => line.includes("OrdersClient.call")).length, LISTED_ITEMS + 1);
 });
 
-test("a workspace summary keeps the link list when it is shorter than the counts, and lists the call sites the join reached without a link", () => {
+test("a workspace summary keeps the link list within the bound, and lists the call sites the join reached without a link", () => {
   const short = { ...linkOf(7), from: { repo: "a", file: "x.ts", line: 7, symbol: "f" }, to: { repo: "b", kind: "http-route", name: "GET /", handler: { path: "y.java", symbol: "g", line: 1 } } };
   const value = mapValue([short], [{ from: { repo: "a", file: "x.ts", line: 9, symbol: "h" }, transport: "http", outcome: "ambiguous", name: "shared", repos: ["b", "c"], routes: ["GET /shared"] }]);
 
