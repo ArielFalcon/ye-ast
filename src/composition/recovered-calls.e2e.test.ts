@@ -77,19 +77,19 @@ async function callersOf(target: { file: string; symbol: string } | { file: stri
 const dependents = (fact: Fact<ImpactValue>): string[] => (fact.status === "unknown" ? [] : fact.value.symbols.filter(({ depth, via }) => depth > 0 && via?.basis === "call").map(({ file, symbol, line, via }) => `${file}:${symbol}@${line}${via?.lines === undefined ? "" : ` L${via.lines.join(",")}`} ${via?.derivation ?? ""}`).sort());
 const linkCuts = (fact: Fact<{}>): Cut[] => (fact.status === "partial" ? fact.cuts.filter(({ kind }) => kind === "unresolved-link") : []);
 
-test("callers of a method lists the top-level constant whose initializer calls it inside a function value the index records nothing of, proven at the call's line (fixture 8)", async () => {
+test("callers of a method lists the store member whose function value calls it where the index records nothing, proven at the call's line (fixture 8, ADR-0093)", async () => {
   const fact = await callersOf({ file: "src/api.ts", symbol: "Api.getArticle" });
 
-  assert.deepEqual(dependents(fact), ["src/store.ts:Store@11 L22 proven"]);
+  assert.deepEqual(dependents(fact), ["src/store.ts:load@19 L22 proven"]);
 });
 
-test("callers of a function and of a class list the constant whose initializer calls them through import aliases (fixture 9)", async () => {
-  assert.deepEqual(dependents(await callersOf({ file: "src/api.ts", symbol: "fetchArticle" })), ["src/aliased.ts:Made@12 L22 proven"]);
-  assert.deepEqual(dependents(await callersOf({ file: "src/box.ts", symbol: "Box" })), ["src/aliased.ts:Made@12 L22 proven"]);
+test("callers of a function and of a class list the store member that calls them through import aliases (fixture 9, ADR-0093)", async () => {
+  assert.deepEqual(dependents(await callersOf({ file: "src/api.ts", symbol: "fetchArticle" })), ["src/aliased.ts:make@20 L22 proven"]);
+  assert.deepEqual(dependents(await callersOf({ file: "src/box.ts", symbol: "Box" })), ["src/aliased.ts:make@20 L22 proven"]);
 });
 
-test("callers of a default-exported function list the constant whose initializer calls it under the name its default import gives it", async () => {
-  assert.deepEqual(dependents(await callersOf({ file: "src/fmt.ts", symbol: "original" })), ["src/defaulted.ts:Formatted@12 L22 proven"]);
+test("callers of a default-exported function list the store member that calls it under the name its default import gives it", async () => {
+  assert.deepEqual(dependents(await callersOf({ file: "src/fmt.ts", symbol: "original" })), ["src/defaulted.ts:make@20 L22 proven"]);
 });
 
 test("callers of a constructor lists the subclass constructor that chains to it by super(...) and the constructor that chains to that one by this(...), and of a record's constructor the one that chains by this(...) (fixture 7)", async () => {
@@ -104,11 +104,11 @@ test("super(...) the signature reading does not settle at its arity is a cut at 
   assert.deepEqual(linkCuts(fact), [{ kind: "unresolved-link", at: ["src/main/java/q/A.java::A", "src/main/java/q/B.java:5 super"], reason: "hidden-caller", reach: { kind: "callers-of", declarations: ["src/main/java/q/A.java::A"] } }]);
 });
 
-test("impact of a changed method reaches the constant whose initializer calls it where the index records nothing", async () => {
+test("impact of a changed method reaches the store member that calls it where the index records nothing", async () => {
   const result = await composeQueries({ scratchRoot }).impact.ofChange({ repo, repoId: "recovered-calls", base: "HEAD~1", head: "HEAD" });
   assert.ok(result.ok && result.value.status !== "unknown", JSON.stringify(result));
 
-  assert.ok(dependents(result.value).includes("src/store.ts:Store@11 L22 proven"), JSON.stringify(dependents(result.value)));
+  assert.ok(dependents(result.value).includes("src/store.ts:load@19 L22 proven"), JSON.stringify(dependents(result.value)));
 });
 
 async function traceOf(file: string, symbol: string): Promise<Fact<TraceValue>> {

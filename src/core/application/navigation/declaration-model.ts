@@ -41,6 +41,11 @@ export function indexedDeclaration(declaration: GraphSymbol | ModelDeclaration):
   return "qualifiedName" in declaration ? declaration : undefined;
 }
 
+/** A syntax-only declaration a holder names: a member of a literal a variable or field holds, or one a framework binding places under its holder. */
+export function isNamedMember(declaration: ModelDeclaration): boolean {
+  return declaration.symbol === undefined && declaration.path !== undefined && (declaration.binding !== undefined || declaration.bindingEvidence !== undefined);
+}
+
 export class AmbiguousDeclaration extends Error {
   readonly kind = "ambiguous-declaration";
   constructor(readonly file: string, readonly path: string, readonly declarations: readonly ModelDeclaration[]) {

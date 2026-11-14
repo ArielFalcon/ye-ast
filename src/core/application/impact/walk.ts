@@ -5,8 +5,9 @@ import { boundCut, type Cut, type WalkBoundKind } from "../../domain/shared/fact
 import { comparePosition } from "../../domain/shared/code-node.ts";
 import type { MemberSubstitute } from "../../domain/relations/member-use.ts";
 import type { GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
-import { indexedDeclaration, type ModelDeclaration } from "../navigation/declaration-model.ts";
+import { indexedDeclaration, isNamedMember, type ModelDeclaration } from "../navigation/declaration-model.ts";
 import type { InboundEdge, InboundEdges } from "./inbound-edges.ts";
+import type { SyntaxOwners } from "./syntax-owners.ts";
 
 /** The dependence that reached a symbol: the symbol it came through, and where this one depends on it. */
 export interface Via {
@@ -47,6 +48,16 @@ export interface Walk {
   cost: { expansionsUsed: number };
 }
 
+/** What depends on a reached symbol: an indexed declaration, or a member that a syntax-only declaration is (ADR-0093). */
+type Dependent = Omit<InboundEdge, "from"> & { from: GraphSymbol | ModelDeclaration };
+
+/** The syntax-only declarations a walk starts from or reaches, the callers of those a holder names, and who owns what they write. */
+export interface SyntaxWalk {
+  seeds: readonly ModelDeclaration[];
+  callers: ReadonlyMap<string, readonly InboundEdge[]>;
+  owners: SyntaxOwners;
+}
+
 interface Rec {
   symbol: GraphSymbol | ModelDeclaration;
   depth: number;
@@ -59,7 +70,7 @@ interface Rec {
   /** The level its own edge reached it at, after a member had: from that level on it follows every row. */
   wholeFrom?: number;
   fanIn: number;
-  callers: readonly InboundEdge[];
+  callers: readonly Dependent[];
 }
 
 interface Link {
@@ -69,7 +80,7 @@ interface Link {
   via: Via;
 }
 
-function placeOn(symbol: GraphSymbol | ModelDeclaration, dependence: InboundEdge): Via {
+function placeOn(symbol: GraphSymbol | ModelDeclaration, dependence: Dependent): Via {
   return { symbol, lines: dependence.lines, ...(dependence.resource === undefined ? {} : { resource: dependence.resource }), basis: dependence.basis, derivation: dependence.derivation, ...(dependence.substitutes === undefined ? {} : { substitutes: dependence.substitutes }) };
 }
 
@@ -79,7 +90,7 @@ function placeOn(symbol: GraphSymbol | ModelDeclaration, dependence: InboundEdge
  * does not open, at the level its own edge reaches it at. A file a top-level use names is reached and not expanded
  * (ADR-0082). The seeds are distinct symbols.
  */
-export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges, budget: ImpactBudget = {}, syntax?: { seeds: readonly ModelDeclaration[]; callers: ReadonlyMap<string, readonly InboundEdge[]> }): Walk {
+export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges, budget: ImpactBudget = {}, syntax?: SyntaxWalk): Walk {
   const recs = new Map<string, Rec>();
   const links: Link[] = [];
   let level: Rec[] = [];
@@ -94,16 +105,42 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
     return rec;
   }
 
-  function enterOwners(rec: Rec, into: Rec[], dispatched = false): void {
+  /** The declarations a reached symbol stands for at its own level: the type that declares a method, the holder of a named member, the declaration around any other syntax-only one. */
+  function ownersOf(rec: Rec): readonly (GraphSymbol | ModelDeclaration)[] {
     const indexed = indexedDeclaration(rec.symbol);
-    for (const owner of indexed === undefined ? [] : inbound.ownersOf(indexed)) {
-      const ownerRec = recs.get(owner.id) ?? enter(owner, rec.depth, false, into, true, dispatched);
+    if (indexed !== undefined) return inbound.ownersOf(indexed);
+    const owner = syntax?.owners.ownerOf(rec.symbol as ModelDeclaration);
+    return owner === undefined ? [] : [owner];
+  }
+
+  function enterOwners(rec: Rec, into: Rec[], dispatched = false): void {
+    const handed = indexedDeclaration(rec.symbol) === undefined && !isNamedMember(rec.symbol as ModelDeclaration);
+    for (const owner of ownersOf(rec)) {
+      const known = recs.get(owner.id);
+      const ownerRec = known ?? enter(owner, rec.depth, handed && rec.contractChanged, into, !handed, dispatched);
       if (ownerRec.dispatched && !dispatched) {
         ownerRec.dispatched = false;
         if (spent.has(ownerRec)) next.push(ownerRec);
       }
+      if (known !== undefined && handed && known.throughMember) {
+        ownerRec.throughMember = false;
+        ownerRec.wholeFrom = rec.depth;
+        if (spent.has(ownerRec)) next.push(ownerRec);
+      }
+      if (known === undefined && (handed || indexedDeclaration(owner) === undefined)) enterOwners(ownerRec, into, dispatched);
       links.push({ from: rec, to: ownerRec, confidence: 1, via: { symbol: rec.symbol, lines: [], basis: "contains", derivation: "resolved" } });
     }
+  }
+
+  /** A dependence whose lines a named member writes is the member's, the rest stays with the indexed declaration. */
+  function placed(callers: readonly InboundEdge[]): readonly Dependent[] {
+    if (syntax === undefined) return callers;
+    return callers.flatMap((caller): Dependent[] => {
+      const owned = caller.resource === undefined ? caller.lines.map((line) => syntax.owners.memberAt(caller.from, line)) : [];
+      if (owned.every((member) => member === undefined)) return [caller];
+      const byOwner = Map.groupBy(caller.lines.map((line, index) => ({ line, member: owned[index] })), ({ member }) => member?.id ?? "");
+      return [...byOwner.values()].map((group) => ({ ...caller, from: group[0]!.member ?? caller.from, lines: group.map(({ line }) => line) }));
+    });
   }
 
   const seedRecs = [...seeds, ...syntax?.seeds ?? []].map((seed) => enter(seed, 0, true, level));
@@ -124,7 +161,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
       const indexed = indexedDeclaration(rec.symbol);
       const membersOnly = rec.wholeFrom === undefined ? rec.throughMember : depth < rec.wholeFrom;
       const reach: OwnerReach | undefined = !membersOnly ? undefined : rec.dispatched ? "dispatch" : "member";
-      rec.callers = indexed === undefined ? syntax?.callers.get(rec.symbol.id) ?? [] : inbound.callersOf(indexed, rec.contractChanged, reach);
+      rec.callers = placed(indexed === undefined ? syntax?.callers.get(rec.symbol.id) ?? [] : inbound.callersOf(indexed, rec.contractChanged, reach));
       rec.fanIn = rec.callers.filter((caller) => caller.hasCall ?? caller.basis === "call").length;
       if (budget.depth !== undefined && depth >= budget.depth) stopped.depth.push(rec);
       else if (budget.hubFanIn !== undefined && rec.fanIn > budget.hubFanIn) stopped.hub.push(rec);

@@ -5,6 +5,8 @@ import { createInboundEdges, type InboundEdges } from "./inbound-edges.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "../navigation/fake-code-graph.testing.ts";
 import type { ImpactBudget } from "../../domain/impact/impact-fact.ts";
 import { walkImpact } from "./walk.ts";
+import type { ModelDeclaration } from "../navigation/declaration-model.ts";
+import type { SyntaxOwners } from "./syntax-owners.ts";
 
 function fn(id: string, line = 1, file = `src/${id}.ts`): FakeNode {
   return fakeNode(id, "function", file, line, line);
@@ -401,4 +403,58 @@ test("via follows the path that determines confidence", () => {
 
   const stopped = walk(nodes, edges, ["seed"], { expansions: 1 });
   assert.equal(stopped.reached.find((rec) => rec.symbol.id === "target")?.via?.symbol.id, "seed");
+});
+
+function member(name: string, line: number, endLine = line, overrides: Partial<ModelDeclaration> = {}): ModelDeclaration {
+  return { id: `syntax:src/S.ts:${line}:2`, file: "src/S.ts", name, kind: "method", startLine: line, endLine, startColumn: 2, endColumn: 4, ...overrides };
+}
+
+const NAMED = { path: "S.m", binding: { line: 1, column: 0 } } as const;
+
+function walkSyntax(nodes: FakeNode[], edges: FakeEdge[], seedIds: string[], syntax: { seeds: ModelDeclaration[]; callers?: Map<string, import("./inbound-edges.ts").InboundEdge[]>; owners: Partial<SyntaxOwners> }) {
+  const graph = fakeCodeGraph(nodes, edges);
+  const seeds = graph.symbolsByIds(seedIds.map((id) => id as GraphNodeId));
+  const owners: SyntaxOwners = { load: async () => false, memberAt: () => undefined, ownerOf: () => undefined, ...syntax.owners };
+  return walkImpact(seedIds.map((id) => seeds.find((seed) => seed.id === id) as GraphSymbol), createInboundEdges(graph, () => false, []), {}, { seeds: syntax.seeds, callers: syntax.callers ?? new Map(), owners });
+}
+
+test("a syntax-only seed no holder names hands its dependence to the declaration that contains it, as a declaration whose code changed", () => {
+  const nodes = [fakeNode("C", "function", "src/S.ts", 1, 9), fn("user", 3, "src/U.ts")];
+  const container = graphSymbol(nodes, "C");
+  const seed = member("stream", 4);
+  const result = walkSyntax(nodes, [call("user", "C")], [], { seeds: [seed], owners: { ownerOf: (declaration) => (declaration.id === seed.id ? container : undefined) } });
+  assert.deepEqual(summary(result), ["C@0", `${seed.id}@0`, "user@1"]);
+  assert.equal(result.reached.find((r) => r.symbol.id === "C")!.via?.basis, "contains");
+  assert.ok(result.wholeDeclarations.has("C" as GraphNodeId));
+});
+
+test("a call written in a member a holder names depends on the member and its users, not on the holder's users", () => {
+  const nodes = [fn("target", 1, "src/T.ts"), fakeNode("Store", "constant", "src/S.ts", 1, 20), fn("storeUser", 3, "src/V.ts"), fn("memberUser", 3, "src/U.ts")];
+  const store = graphSymbol(nodes, "Store");
+  const named = member("load", 6, 9, NAMED);
+  const callers = new Map([[named.id, [{ from: graphSymbol(nodes, "memberUser"), confidence: 1, lines: [3], basis: "call" as const, derivation: "proven" as const, hasCall: true }]]]);
+  const edges: FakeEdge[] = [{ from: "Store", to: "target", kind: "calls", line: 7, confidence: 1 }, call("storeUser", "Store")];
+  const result = walkSyntax(nodes, edges, ["target"], { seeds: [], callers, owners: { memberAt: (from, line) => (from.id === "Store" && line === 7 ? named : undefined), ownerOf: (declaration) => (declaration.id === named.id ? store : undefined) } });
+  assert.deepEqual(summary(result), ["target@0", "Store@1", `${named.id}@1`, "memberUser@2"]);
+  assert.equal(result.wholeDeclarations.has("Store" as GraphNodeId), false);
+});
+
+test("a dependence whose lines fall in a named member and outside it is one dependence per owner", () => {
+  const nodes = [fn("target", 1, "src/T.ts"), fakeNode("Store", "constant", "src/S.ts", 1, 20), fn("storeUser", 3, "src/V.ts")];
+  const store = graphSymbol(nodes, "Store");
+  const named = member("load", 6, 9, NAMED);
+  const edges: FakeEdge[] = [{ from: "Store", to: "target", kind: "calls", line: 7, confidence: 1 }, { from: "Store", to: "target", kind: "calls", line: 12, confidence: 1 }, call("storeUser", "Store")];
+  const result = walkSyntax(nodes, edges, ["target"], { seeds: [], owners: { memberAt: (from, line) => (from.id === "Store" && line === 7 ? named : undefined), ownerOf: (declaration) => (declaration.id === named.id ? store : undefined) } });
+  assert.deepEqual(summary(result), ["target@0", "Store@1", `${named.id}@1`, "storeUser@2"]);
+  assert.deepEqual(result.reached.find((r) => r.symbol.id === named.id)!.via?.lines, [7]);
+  assert.deepEqual(result.reached.find((r) => r.symbol.id === "Store")!.via?.lines, [12]);
+});
+
+test("a declaration a syntax-only seed hands its dependence to follows every row even when a member entered it first", () => {
+  const nodes = [fakeNode("m", "method", "src/S.ts", 2, 3), fakeNode("O", "class", "src/S.ts", 1, 9), fn("user", 3, "src/U.ts")];
+  const container = graphSymbol(nodes, "O");
+  const seed = member("stream", 5);
+  const result = walkSyntax(nodes, [{ from: "O", to: "m", kind: "contains" }, call("user", "O")], ["m"], { seeds: [seed], owners: { ownerOf: (declaration) => (declaration.id === seed.id ? container : undefined) } });
+  assert.ok(result.reached.some((r) => r.symbol.id === "user"));
+  assert.ok(result.wholeDeclarations.has("O" as GraphNodeId));
 });
