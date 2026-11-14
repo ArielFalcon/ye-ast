@@ -8,6 +8,7 @@ import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
 import type { ChangedContract } from "../core/domain/impact/changed-contracts.ts";
 import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoints.ts";
+import type { ChangedPath } from "../core/domain/impact/changed-paths.ts";
 import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../core/domain/impact/impact-fact.ts";
 import type { ModuleImpactValue } from "../core/domain/impact/module-dependency.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
@@ -719,6 +720,20 @@ function impactedSymbols(value: ImpactValue, detail: ResponseMode): string[] {
   return omitted > 0 && size(evidence) <= size(literal) ? evidence : literal;
 }
 
+/**
+ * The change the answer read: a count per disposition, then a row for each path the walk did not simply start from (a
+ * test, a path outside the declared scope, a settled or deleted one, a removal that declared a name); details lists all.
+ */
+function changedPathLines(paths: readonly ChangedPath[], detail: ResponseMode): string[] {
+  const counts = [...Map.groupBy(paths, ({ disposition }) => disposition)].map(([disposition, group]) => `${group.length} ${disposition}`);
+  const shown = detail === "details" ? paths : paths.filter(({ disposition, deleted, removed }) => (disposition !== "walked" && disposition !== "not-read") || deleted === true || removed !== undefined);
+  return [
+    `changed paths (${paths.length}): ${counts.join(", ")}`,
+    ...shown.map(({ path, disposition, deleted, removed }) => `  ${path} ${disposition}${deleted === true ? ", deleted" : ""}${removed === undefined ? "" : `; removed ${removed.join(", ")}`}`),
+    ...(shown.length < paths.length ? [`  ${paths.length - shown.length} more; mode "details" lists every path`] : []),
+  ];
+}
+
 /** What an impact answer says about its walk, without its header or its cuts. */
 function impactBody(value: ImpactValue, detail: ResponseMode, owner: ImpactOwner, context?: RenderContext, narrowable = true): string[] {
   const selectable = (selection: EvidenceSelection) => context === undefined || canSelect(context, selection, owner.kind === "section");
@@ -729,6 +744,8 @@ function impactBody(value: ImpactValue, detail: ResponseMode, owner: ImpactOwner
     ...(value.mergeBase === undefined ? [] : [`merge base: ${value.mergeBase}`]),
     ...(value.changedEntrypoints === undefined ? [] : [`changed entrypoints (${value.changedEntrypoints.length}):`, ...value.changedEntrypoints.map(changedLine)]),
     ...(value.changedContracts === undefined ? [] : [`changed contracts (${value.changedContracts.length}):`, ...value.changedContracts.map(changedContractLine)]),
+    ...(narrowable && value.changedPaths !== undefined ? changedPathLines(value.changedPaths, detail) : []),
+    ...(narrowable && value.testDependents !== undefined ? ["test dependents: excluded; JVM and TypeScript test files are never listed as dependents (ye_ast_importers lists them)"] : []),
     `reached entrypoints (${value.entrypoints.length}):`,
     ...(detail === "details" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) ? [value.entrypoints.length === 1
       ? `  ${categoryRecovery({ full: "has all origins." })}`

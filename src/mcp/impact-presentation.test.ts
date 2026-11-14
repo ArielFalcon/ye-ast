@@ -706,6 +706,31 @@ test("a settled change is one summary line and one detail line per hunk", () => 
   assert.match(detail, /src\/C\.java base 9-9 \(no-token-change\)/);
 });
 
+test("changed paths are counted in the summary with a row for each one the walk did not simply start from, and details lists all", () => {
+  const value: ImpactValue = {
+    seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 }, testDependents: "excluded",
+    changedPaths: [
+      { path: "docs/guide.md", disposition: "not-read" },
+      { path: "src/A.java", disposition: "walked" },
+      { path: "src/Gone.java", disposition: "walked", deleted: true, removed: ["Gone"] },
+      { path: "src/form.js", disposition: "outside-scope" },
+      { path: "src/form.test.ts", disposition: "test" },
+    ],
+  };
+  const summary = renderImpact({ ...base, status: "complete", value });
+  assert.match(summary, /changed paths \(5\): 1 not-read, 2 walked, 1 outside-scope, 1 test/);
+  assert.match(summary, /^ {2}src\/Gone\.java walked, deleted; removed Gone$/m);
+  assert.match(summary, /^ {2}src\/form\.js outside-scope$/m);
+  assert.match(summary, /^ {2}src\/form\.test\.ts test$/m);
+  assert.doesNotMatch(summary, /src\/A\.java|docs\/guide\.md/);
+  assert.match(summary, /^test dependents: excluded/m);
+  const detail = renderImpact({ ...base, status: "complete", value }, "details");
+  assert.match(detail, /^ {2}src\/A\.java walked$/m);
+  assert.match(detail, /^ {2}docs\/guide\.md not-read$/m);
+  const { changedPaths: _paths, testDependents: _rule, ...bare } = value;
+  assert.doesNotMatch(renderImpact({ ...base, status: "complete", value: bare }), /changed paths|test dependents/);
+});
+
 test("a callers answer with a settled range says how many ranges held no token", () => {
   const value: ImpactValue = { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 }, settled: [{ basis: "range", file: "src/A.java", start: 2, end: 2, reason: "no-token", candidates: ["A"] }] };
   assert.match(renderImpact({ ...base, status: "complete", value }), /1 requested ranges hold no token/);
