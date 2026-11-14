@@ -5,7 +5,9 @@ import { createJavaParser, createJavaTreeHolds } from "../tree-sitter/java-parse
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchTargets } from "../../ports/import-origins.port.ts";
+import { FUNCTION_VALUE_AWAITS_JDK } from "../../domain/shared/fact.ts";
 import { closureOf, hierarchyOf } from "./java-dispatch-targets.ts";
+import { withoutCause } from "./java-dispatch.testing.ts";
 import { withJavaSources } from "./java-project.ts";
 import { createJavaProject } from "./java-symbols.ts";
 
@@ -17,9 +19,19 @@ function java(path: string, lines: readonly string[]): SourceFile {
 const PORT = java("Port.java", ["package app;", "", "public interface Port {", "  void send(String message);", "  void close();", "}"]);
 const SENDER = java("Sender.java", ["package app;", "", "public class Sender implements Port {", "  public void send(String message) {}", "  public void close() {}", "}"]);
 
-async function targetsOf(sources: readonly SourceFile[], port: SourceFile = PORT, line = 4): Promise<DispatchTargets> {
+async function answerOf(sources: readonly SourceFile[], port: SourceFile = PORT, line = 4): Promise<DispatchTargets> {
   const [targets] = await createJavaNameBindings(createJavaParser, [port, ...sources]).dispatchTargets([{ file: port.path, line, name: "send" }]);
   return targets!;
+}
+
+async function targetsOf(sources: readonly SourceFile[], port: SourceFile = PORT, line = 4): Promise<DispatchTargets> {
+  return withoutCause(await answerOf(sources, port, line));
+}
+
+/** The places a refused answer names as its cause, `path:line` and the construct standing there. */
+async function causeOf(sources: readonly SourceFile[], port: SourceFile = PORT, line = 4): Promise<readonly string[] | undefined> {
+  const answer = await answerOf(sources, port, line);
+  return answer.kind === "unknown" ? answer.cause : undefined;
 }
 
 const body = (source: SourceFile, line: number) => ({ file: source.path, start: line, nameLine: line });
@@ -120,7 +132,7 @@ test("an inherited method of one name and arity spelled with other parameter typ
   const plain = java("Port.java", ["package app;", "public interface Port {", " void close();", " void send(String message);", " void send(Integer message);", "}"]);
   const lambda = java("Refs.java", ["package app; class Refs { Object task = java.util.stream.Stream.of(1).map(x -> x); }"]);
   const sender = java("Sender.java", ["package app;", "public class Sender implements Port {", " public void close() {}", " public void send(String message) {}", " public void send(Integer message) {}", "}"]);
-  const closeOf = async (owner: SourceFile) => (await createJavaNameBindings(createJavaParser, [owner, base, lambda, sender]).dispatchTargets([{ file: owner.path, line: 3, name: "close" }]))[0];
+  const closeOf = async (owner: SourceFile) => withoutCause((await createJavaNameBindings(createJavaParser, [owner, base, lambda, sender]).dispatchTargets([{ file: owner.path, line: 3, name: "close" }]))[0]!);
 
   assert.deepEqual(await closeOf(port), { kind: "unknown", reason: "dispatch not proven" });
   assert.deepEqual(await closeOf(plain), { kind: "bodies", bodies: [{ file: sender.path, start: 3, nameLine: 3 }] });
@@ -210,7 +222,7 @@ test("an annotation type in the sources is read like any type declaration: a cla
 
   assert.deepEqual(await targetsOf([SENDER, marker, tagged]), { kind: "bodies", bodies: [body(SENDER, 4)] });
   const [element] = await createJavaNameBindings(createJavaParser, [PORT, SENDER, marker, tagged]).dispatchTargets([{ file: marker.path, line: 4, name: "value" }]);
-  assert.deepEqual(element, { kind: "unknown", reason: "dispatch not proven" });
+  assert.deepEqual(withoutCause(element!), { kind: "unknown", reason: "dispatch not proven" });
 });
 
 /** Reads `owner.method` over `sources` with the syntax trees alive for `use`. */
@@ -294,7 +306,7 @@ test("an aspect vetoes dispatch only where a pointcut of the closed subset may m
   const inherits = java("Leaf.java", ["package app;", "", "public class Leaf extends Base implements Port {", "  public void close() {}", "}"]);
   assert.deepEqual(await targetsOf([base, inherits, advising("@within(Repository)")]), VETO, "the body a class inherits is declared by an annotated class above it");
   const based = { ...SENDER, content: SENDER.content.replace("public class Sender implements Port", "public class Sender implements Port, java.io.Serializable") };
-  const close = async (pointcut: string) => (await createJavaNameBindings(createJavaParser, [PORT, based, advising(pointcut)]).dispatchTargets([{ file: PORT.path, line: 5, name: "close" }]))[0];
+  const close = async (pointcut: string) => withoutCause((await createJavaNameBindings(createJavaParser, [PORT, based, advising(pointcut)]).dispatchTargets([{ file: PORT.path, line: 5, name: "close" }]))[0]!);
   assert.deepEqual(await close("@within(Repository)"), VETO, "a supertype outside the repository may carry an inherited annotation");
   assert.deepEqual(await close("within(other.*)"), { kind: "bodies", bodies: [body(based, 5)] });
   const introduced = java("Hooks.java", ["package app;", "@Aspect class Hooks {", "  @DeclareParents(value = \"other.*\", defaultImpl = Object.class) static Port mixin;", "}"]);
@@ -311,7 +323,7 @@ function aspectSources(replace: (content: string) => string = (content) => conte
 async function createTargets(sources: readonly SourceFile[]): Promise<DispatchTargets> {
   const service = sources.find(({ path }) => path.endsWith("/ProductService.java"))!;
   const [targets] = await createJavaNameBindings(createJavaParser, sources).dispatchTargets([{ file: service.path, line: 4, name: "create" }]);
-  return targets!;
+  return withoutCause(targets!);
 }
 
 test("an advice that cannot replace the body vetoes nothing, whether its pointcut is readable, named or outside the subset; an around advice keeps its veto", async () => {
@@ -328,4 +340,54 @@ test("an advice that cannot replace the body vetoes nothing, whether its pointcu
   assert.deepEqual(await createTargets(advised("Around", "changes()")), VETO, "an unreadable around pointcut vetoes the repository");
   assert.deepEqual(await createTargets(advised("Around", "execution(* app.ProductServiceImpl.create(..))")), VETO, "a readable around pointcut that selects the body vetoes it");
   assert.deepEqual(await createTargets(aspectSources((content) => content.replace("  void audit() {}", "  void audit() {}\n  @Around(\"execution(* other..*.*(..))\") Object wrap() { return null; }"))), RUNS, "an around advice that selects other types leaves the body");
+});
+
+const at = (source: SourceFile, line: number, construct: string) => `${source.path}:${line} ${construct}`;
+
+test("a refusal rooted in a generator names the annotation, the outside supertype or the JDK API that implements at run time", async () => {
+  const mapped = { ...PORT, content: PORT.content.replace("public interface Port {", "@Mapper\npublic interface Port {") };
+  const routed = { ...PORT, content: PORT.content.replace("  void send(String message);", "  @Deprecated @Get(\"/x\") void send(String message);") };
+  assert.deepEqual(await causeOf([SENDER], mapped, 5), [at(mapped, 3, "annotation")], "the owner's annotation");
+  assert.deepEqual(await causeOf([SENDER], routed), [at(routed, 4, "annotation")], "the method's annotation, not the language's own");
+
+  const framework = { ...PORT, content: PORT.content.replace("public interface Port {", "public interface Port extends org.springframework.data.repository.Repository<String, Long> {") };
+  assert.deepEqual(await causeOf([SENDER], framework), [at(framework, 3, "outside-supertype")]);
+
+  const proxy = java("Proxies.java", ["package app;", "", "import java.lang.reflect.Proxy;", "", "class Proxies {", "  Object make() { return Proxy.newProxyInstance(null, null, null); }", "}"]);
+  assert.deepEqual(await causeOf([SENDER, proxy]), [at(proxy, 3, "dynamic-implementation"), at(proxy, 6, "dynamic-implementation")], "the import and the use of the name");
+});
+
+test("a refusal rooted in the hierarchy names the unsettled clause, the unplaced class, the other kind of type or the class with no single body", async () => {
+  const elsewhere = java("other/Stranger.java", ["package app.other;", "", "public class Stranger implements Port {", "  public void send(String message) {}", "  public void close() {}", "}"]);
+  assert.deepEqual(await causeOf([SENDER, elsewhere]), [at(elsewhere, 3, "unsettled-supertype")]);
+
+  const anonymous = java("Anonymous.java", ["package app;", "", "class Anonymous {", "  Port port = new Sender() {", "    public void send(String message) {}", "  };", "}"]);
+  const local = java("Local.java", ["package app;", "", "class Local {", "  void run() {", "    class Inline implements Port { public void send(String m) {} public void close() {} }", "  }", "}"]);
+  assert.deepEqual(await causeOf([SENDER, anonymous]), [at(anonymous, 4, "unplaced-class")]);
+  assert.deepEqual(await causeOf([SENDER, local]), [at(local, 5, "unplaced-class")]);
+
+  const kinds = java("Kinds.java", ["package app;", "", "enum Kinds implements Port {", "  ONE;", "  public void send(String message) {}", "  public void close() {}", "}"]);
+  assert.deepEqual(await causeOf([SENDER, kinds]), [at(kinds, 3, "other-type")]);
+
+  const listed = java("Listed.java", ["package app;", "", "import java.util.ArrayList;", "", "public class Listed extends ArrayList<String> implements Port {", "  public void close() {}", "}"]);
+  assert.deepEqual(await causeOf([SENDER, listed]), [at(listed, 5, "no-single-body")]);
+});
+
+test("a function value that may implement the port is a cause, awaiting the JDK only when it is an argument of a library call and none is declared", async () => {
+  const single = java("Port.java", ["package app;", "", "public interface Port {", "  void send(String message);", "}"]);
+  const sender = java("Sender.java", ["package app;", "", "public class Sender implements Port {", "  public void send(String message) {}", "}"]);
+  const lambda = java("Tasks.java", ["package app;", "", "class Tasks {", "  Object task = java.util.stream.Stream.of(1).map(x -> x);", "  Object other = (java.util.function.Supplier<String>) () -> \"\";", "  var open = (Runnable & java.io.Serializable) () -> {};", "}"]);
+  assert.deepEqual(await causeOf([sender, lambda], single), [at(lambda, 4, FUNCTION_VALUE_AWAITS_JDK)], "a value cast to a library type implements none of the closure");
+  const unsettled = java("Tasks.java", ["package app;", "", "class Tasks {", "  void run() { var task = () -> 1; }", "}"]);
+  assert.deepEqual(await causeOf([sender, unsettled], single), [at(unsettled, 4, "function-value")], "a context no JDK settles");
+});
+
+test("a refusal rooted in an aspect names the around advice that selects the body, or the one the closed subset cannot read", async () => {
+  const advising = (...pointcuts: string[]) => java("Hooks.java", ["package app;", "@Aspect class Hooks {", ...pointcuts.map((pointcut, index) => `  @Around(${JSON.stringify(pointcut)}) Object a${index}() { return null; }`), "}"]);
+  const selects = advising("execution(* other..*.*(..))", "execution(* app.Sender.send(..))");
+  assert.deepEqual(await causeOf([SENDER, selects]), [at(selects, 4, "advice")], "only the advice whose pointcut selects the body");
+  const unreadable = advising("execution(* other..*.*(..))", "bean(sender)");
+  assert.deepEqual(await causeOf([SENDER, unreadable]), [at(unreadable, 4, "advice")], "the advice whose pointcut leaves the closed subset");
+  const introduced = java("Hooks.java", ["package app;", "@Aspect class Hooks {", "  @DeclareParents(value = \"other.*\", defaultImpl = Object.class) static Port mixin;", "}"]);
+  assert.deepEqual(await causeOf([SENDER, introduced]), [at(introduced, 3, "advice")]);
 });

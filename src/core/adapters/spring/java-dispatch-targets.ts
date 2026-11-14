@@ -2,21 +2,23 @@ import type { Node } from "web-tree-sitter";
 import { isUncoveredJvmSource } from "../../domain/languages/path-class.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchSite, DispatchTargets, ImplementingSite, ImportOrigins, OutsideSupertypes } from "../../ports/import-origins.port.ts";
-import type { DispatchUnknownReason } from "../../domain/shared/fact.ts";
+import { placeAt } from "../../domain/impact/impact-cuts.ts";
+import { sortedUnique } from "../../domain/impact/importers-fact.ts";
+import { FUNCTION_VALUE_AWAITS_JDK, type CutCause, type DispatchUnknownReason } from "../../domain/shared/fact.ts";
 import type { LibraryReading } from "../../ports/library-signatures.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, heldJavaProject, withJavaSources, type UnparsedSource } from "./java-project.ts";
 import { methodsByPlace, provesBinding } from "./java-receiver-methods.ts";
 import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf } from "./java-declared-types.ts";
-import { targetsOfFunctionValue, type FunctionTargets, type FunctionValue } from "./java-function-values.ts";
+import { awaitsDeclaredJdk, targetsOfFunctionValue, type FunctionTargets, type FunctionValue, type FunctionValueSources } from "./java-function-values.ts";
 import { createJavaProject, isTypeDeclaration, MEMBERLESS_PLATFORM_INTERFACES, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type ProjectBuild, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: DispatchTargets = { kind: "unknown", reason: "dispatch not proven" };
 const UNKNOWN_OUTSIDE: OutsideSupertypes = { kind: "unknown" };
 /** The class every Java class extends when it writes no superclass (JLS 8.1.4). */
 const ROOT_TYPE = "java.lang.Object";
-const ASPECT = { kind: "unknown", reason: "aspect may replace the body" } as const satisfies DispatchTargets;
+const ASPECT_REASON = "aspect may replace the body" satisfies DispatchUnknownReason;
 /** The one advice kind that receives the join point and decides whether the body runs; the other kinds run beside it (ADR-0091). */
 const BODY_REPLACING_ADVICE = "Around";
 /** Aspect members that make a type implement more than its declarations state. */
@@ -27,8 +29,30 @@ const LANGUAGE_ANNOTATIONS: ReadonlySet<string> = new Set(["Override", "Deprecat
 /** The public methods of `Object` by name and arity, which do not count against a functional interface's one abstract method (JLS 9.8). */
 const OBJECT_METHODS: ReadonlySet<string> = new Set(["equals/1", "hashCode/0", "toString/0"]);
 
+/** A refusal to name the bodies of a call: its reason and the sorted places that blocked the proof, each with the construct standing there. */
+interface Veto {
+  reason: DispatchUnknownReason;
+  cause: readonly string[];
+}
+
+const veto = (reason: DispatchUnknownReason, cause: readonly string[]): Veto => ({ reason, cause: sortedUnique(cause) });
+
+/** A place of `Cut.cause`: the line of a node and the construct that stands there. */
+const causeAt = (file: string, node: Node, cause: CutCause): string => placeAt(file, node.startPosition.row + 1, cause);
+
+/** A type's declaration, at the line of its name. */
+const causeOfType = (type: TypeDecl, cause: CutCause): string => causeAt(type.file.path, type.node.childForFieldName("name") ?? type.node, cause);
+
 /** A class's superclass as the strict reading settles it: a repository type, none written, or one outside the repository or unsettled. */
 export type Superclass = TypeDecl | "none" | "outside";
+
+/** A function value's targets and its place; `awaitsJdk` when its context is a library call that a declared JDK would settle. */
+export interface ReadFunctionValue {
+  targets: FunctionTargets;
+  file: string;
+  line: number;
+  awaitsJdk: boolean;
+}
 
 /** The declared hierarchy of the sources, by the strict reading of every supertype a declaration writes. */
 export interface Hierarchy {
@@ -38,14 +62,14 @@ export interface Hierarchy {
   superclasses: ReadonlyMap<TypeDecl, Superclass>;
   /** Types with a supertype that is not a repository type: a platform or dependency type, or one the reading leaves unsettled. */
   outside: ReadonlySet<TypeDecl>;
-  /** The simple names of supertypes the strict reading leaves unsettled, anywhere in the sources. */
-  unsettled: ReadonlySet<string>;
+  /** The simple names of supertypes the strict reading leaves unsettled, anywhere in the sources, with the clauses that write each. */
+  unsettled: ReadonlyMap<string, readonly string[]>;
   invokedSupertypes: ReadonlyMap<string, readonly TypeDecl[]>;
   unsettledSupertypes: ReadonlyMap<TypeDecl, readonly string[]>;
   /** Anonymous and local classes, which the project does not place: the repository types they extend or implement and the unsettled names. */
   unplaced: readonly { file: JavaFile; node: Node; types: readonly TypeDecl[]; names: readonly string[]; fqns: readonly string[] }[];
   /** What each lambda and method reference of the sources may implement: a functional interface no declaration names (ADR-0044 decision 5). */
-  functionValues(): readonly FunctionTargets[];
+  functionValues(): readonly ReadFunctionValue[];
   /** A method's parameter types as the strict reading settles them; `undefined` when one of them is not settled. */
   signatureOf(method: MethodDecl): Signature | undefined;
 }
@@ -91,8 +115,8 @@ export interface DispatchReading {
 }
 
 interface PreparedDispatch {
-  reason?: NonNullable<Extract<DispatchTargets, { kind: "unknown" }>["reason"]>;
-  advice?: readonly JoinPoints[];
+  veto?: Veto;
+  advice?: readonly Advice[];
   hierarchy?: Hierarchy;
 }
 
@@ -101,8 +125,8 @@ export function dispatchReadingOf(files: readonly JavaFile[], project: JavaProje
   let reading: PreparedDispatch | undefined;
   const read = (): PreparedDispatch => {
     if (reading !== undefined) return reading;
-    const veto = globalVeto(files, project);
-    const held: PreparedDispatch = "reason" in veto ? { reason: veto.reason } : { advice: veto.advice, hierarchy: readHierarchy(files, project, libraries) };
+    const wide = globalVeto(files, project);
+    const held: PreparedDispatch = "reason" in wide ? { veto: wide } : { advice: wide.advice, hierarchy: readHierarchy(files, project, libraries) };
     reading = held;
     return held;
   };
@@ -111,8 +135,7 @@ export function dispatchReadingOf(files: readonly JavaFile[], project: JavaProje
       const results: DispatchTargets[] = sites.map(() => UNKNOWN);
       if (unread() || sites.length === 0) return results;
       const held = read();
-      const reason = held.reason;
-      if (reason !== undefined) return sites.map(() => ({ kind: "unknown", reason }));
+      if (held.veto !== undefined) return sites.map(() => ({ kind: "unknown", ...held.veto }));
       const hierarchy = held.hierarchy!;
       const advice = held.advice!;
       for (const [index, site] of sites.entries()) {
@@ -120,7 +143,8 @@ export function dispatchReadingOf(files: readonly JavaFile[], project: JavaProje
         const method = project.types.flatMap((type) => (type.file.path === site.file ? type.methods : [])).find((candidate) => candidate.name === site.name && !candidate.hasBody && spansLine(candidate.node, site.line));
         if (method === undefined) continue;
         const targets = targetsOf(method, hierarchy);
-        results[index] = targets.kind === "bodies" && advised(method, hierarchy, advice) ? ASPECT : targets;
+        const selecting = targets.kind === "bodies" ? advisedBy(method, hierarchy, advice) : [];
+        results[index] = selecting.length > 0 ? { kind: "unknown", ...veto(ASPECT_REASON, selecting) } : targets;
       }
       return results;
     },
@@ -140,7 +164,7 @@ export interface DispatchCandidate {
  */
 export type DispatchClosure =
   | { kind: "closed"; candidates: readonly DispatchCandidate[] }
-  | { kind: "vetoed"; candidates: readonly DispatchCandidate[]; reason: DispatchUnknownReason };
+  | ({ kind: "vetoed"; candidates: readonly DispatchCandidate[] } & Veto);
 
 /**
  * The closure a call of `method` on a value of `owner` has, as ADR-0044 decision 1 reads it: `closed` when every
@@ -148,35 +172,43 @@ export type DispatchClosure =
  * The candidates are stated apart from the verdict so a reader below the port can name a body a veto hides.
  */
 export function closureOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl = method.owner): DispatchClosure {
-  const veto = vetoOf(method, hierarchy, owner);
-  if (veto !== undefined) return { kind: "vetoed", candidates: candidatesOf(method, hierarchy, owner), reason: veto };
+  const refused = vetoOf(method, hierarchy, owner);
+  if (refused !== undefined) return { kind: "vetoed", candidates: candidatesOf(method, hierarchy, owner), ...refused };
   const closed: DispatchCandidate[] = [];
+  const unproven: TypeDecl[] = [];
   for (const type of [owner, ...belowOf(owner, hierarchy)]) {
     if (type.kind !== "class" || type.isAbstract) continue;
     const body = bodyIn(type, method, hierarchy);
-    if (body === undefined) return { kind: "vetoed", candidates: candidatesOf(method, hierarchy, owner), reason: "dispatch not proven" };
-    closed.push({ method: body, receiver: type });
+    if (body === undefined) unproven.push(type);
+    else closed.push({ method: body, receiver: type });
   }
+  if (unproven.length > 0) return { kind: "vetoed", candidates: candidatesOf(method, hierarchy, owner), ...veto("dispatch not proven", unproven.map((type) => causeOfType(type, "no-single-body"))) };
   return { kind: "closed", candidates: sortCandidates(closed) };
 }
 
-/** Whether a function value may implement one of the functional interfaces: its context leaves a target unsettled, or proves one that is an interface or below one. */
-function functionValueMayImplement(functional: readonly TypeDecl[], hierarchy: Hierarchy): boolean {
-  if (functional.length === 0) return false;
+/** The function values that may implement one of the functional interfaces: their context leaves a target unsettled, or proves one that is an interface or below one. */
+function functionValuesImplementing(functional: readonly TypeDecl[], hierarchy: Hierarchy): readonly ReadFunctionValue[] {
+  if (functional.length === 0) return [];
   const reached = new Set(functional.flatMap((type) => [type, ...belowOf(type, hierarchy)]));
-  return hierarchy.functionValues().some((targets) => targets === "unsettled" || targets.some((target) => target !== "library" && reached.has(target)));
+  return hierarchy.functionValues().filter(({ targets }) => targets === "unsettled" || targets.some((target) => target !== "library" && reached.has(target)));
 }
 
-/** The first veto `targetsOf` applies, in its order; none means every concrete class below the owner may be walked for a body. */
-function vetoOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl): DispatchUnknownReason | undefined {
-  if (isAnnotated(owner.node) || isAnnotated(method.node)) return "generated implementation";
-  if (ancestorsOf(owner, hierarchy).some((type) => hierarchy.outside.has(type))) return "generated implementation";
+/** The first veto `targetsOf` applies, in its order, with the places it rests on; none means every concrete class below the owner may be walked for a body. */
+function vetoOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl): Veto | undefined {
+  const annotations = [...annotationsOfGenerators(owner.node).map((node) => causeAt(owner.file.path, node, "annotation")), ...annotationsOfGenerators(method.node).map((node) => causeAt(method.owner.file.path, node, "annotation"))];
+  if (annotations.length > 0) return veto("generated implementation", annotations);
+  const outside = ancestorsOf(owner, hierarchy).filter((type) => hierarchy.outside.has(type));
+  if (outside.length > 0) return veto("generated implementation", outside.map((type) => causeOfType(type, "outside-supertype")));
   const below = belowOf(owner, hierarchy);
   const names = new Set([owner, ...below].map((type) => type.name));
-  if ([...hierarchy.unsettled].some((name) => names.has(name))) return "dispatch not proven";
-  if (hierarchy.unplaced.some(({ types, names: unsettled }) => types.some((type) => type === owner || below.has(type)) || unsettled.some((name) => names.has(name)))) return "dispatch not proven";
-  if (functionValueMayImplement([owner, ...below].filter((type) => type.kind === "interface" && isFunctional(type, hierarchy)), hierarchy)) return "dispatch not proven";
-  if ([...below].some((type) => type.kind === "other")) return "dispatch not proven";
+  const unsettled = [...hierarchy.unsettled].filter(([name]) => names.has(name)).flatMap(([, clauses]) => clauses);
+  if (unsettled.length > 0) return veto("dispatch not proven", unsettled);
+  const unplaced = hierarchy.unplaced.filter(({ types, names: unsettledNames }) => types.some((type) => type === owner || below.has(type)) || unsettledNames.some((name) => names.has(name)));
+  if (unplaced.length > 0) return veto("dispatch not proven", unplaced.map(({ file, node }) => causeAt(file.path, node, "unplaced-class")));
+  const values = functionValuesImplementing([owner, ...below].filter((type) => type.kind === "interface" && isFunctional(type, hierarchy)), hierarchy);
+  if (values.length > 0) return veto("dispatch not proven", values.map(({ file, line, awaitsJdk }) => placeAt(file, line, awaitsJdk ? FUNCTION_VALUE_AWAITS_JDK : "function-value")));
+  const others = [...below].filter((type) => type.kind === "other");
+  if (others.length > 0) return veto("dispatch not proven", others.map((type) => causeOfType(type, "other-type")));
   return undefined;
 }
 
@@ -251,10 +283,10 @@ export function outsideSupertypesOf(method: MethodDecl, hierarchy: Hierarchy): r
   const owner = method.owner;
   const closure = new Set([owner, ...belowOf(owner, hierarchy)]);
   const names = new Set([...closure].map((type) => type.name));
-  if ([...hierarchy.unsettled].some((name) => names.has(name))) return undefined;
+  if ([...hierarchy.unsettled.keys()].some((name) => names.has(name))) return undefined;
   if ([...closure].some((type) => ancestorsOf(type, hierarchy).some((ancestor) => hierarchy.unsettledSupertypes.has(ancestor)))) return undefined;
   if (hierarchy.unplaced.some(({ types, names: unsettled }) => types.some((type) => closure.has(type)) || unsettled.some((name) => names.has(name)))) return undefined;
-  if (functionValueMayImplement([...closure].filter((type) => type.kind === "interface" && isFunctional(type, hierarchy)), hierarchy)) return undefined;
+  if (functionValuesImplementing([...closure].filter((type) => type.kind === "interface" && isFunctional(type, hierarchy)), hierarchy).length > 0) return undefined;
   const outside = new Set([...closure].flatMap((type) => IMPLICIT_SUPERCLASSES.get(type.node.type) ?? []));
   for (const [fqn, holders] of hierarchy.invokedSupertypes) if (!MEMBERLESS_PLATFORM_INTERFACES.has(fqn) && holders.some((holder) => closure.has(holder))) outside.add(fqn);
   return [...outside].sort();
@@ -263,7 +295,7 @@ export function outsideSupertypesOf(method: MethodDecl, hierarchy: Hierarchy): r
 /** The bodies a call of `method` runs on a value of `owner`, the method's own owner unless a declared type below it states the value. */
 export function targetsOf(method: MethodDecl, hierarchy: Hierarchy, owner: TypeDecl = method.owner): DispatchTargets {
   const closure = closureOf(method, hierarchy, owner);
-  if (closure.kind === "vetoed") return { kind: "unknown", reason: closure.reason };
+  if (closure.kind === "vetoed") return { kind: "unknown", reason: closure.reason, cause: closure.cause };
   return { kind: "bodies", bodies: bodiesOf(closure.candidates) };
 }
 
@@ -438,7 +470,7 @@ export function readHierarchy(files: readonly JavaFile[], project: JavaProject, 
   const supertypes = new Map<TypeDecl, TypeDecl[]>();
   const superclasses = new Map<TypeDecl, Superclass>();
   const outside = new Set<TypeDecl>();
-  const unsettled = new Set<string>();
+  const unsettled = new Map<string, string[]>();
   const unplaced: { file: JavaFile; node: Node; types: TypeDecl[]; names: string[]; fqns: string[] }[] = [];
   const invokedSupertypes = new Map<string, TypeDecl[]>();
   const unsettledSupertypes = new Map<TypeDecl, string[]>();
@@ -453,13 +485,17 @@ export function readHierarchy(files: readonly JavaFile[], project: JavaProject, 
         const superclass = node.type === "class_declaration" ? node.childForFieldName("superclass")?.namedChildren[0] : undefined;
         const types: TypeDecl[] = [];
         const names: string[] = [];
+        const clauses: { name: string; place: string }[] = [];
         const fqns: string[] = [];
         const unresolved: string[] = [];
         for (const supertype of supertypesOf(node)) {
           const resolved = resolve(supertype, file, project, scope, supertype, true);
           const type = resolved?.kind === "repository" ? resolved.type : undefined;
           if (type !== undefined) types.push(type);
-          else if (resolved?.kind !== "platform") names.push(simpleName(supertype));
+          else if (resolved?.kind !== "platform") {
+            names.push(simpleName(supertype));
+            clauses.push({ name: simpleName(supertype), place: causeAt(file.path, supertype, "unsettled-supertype") });
+          }
           if (resolved?.kind === "platform" || resolved?.kind === "library") fqns.push(resolved.fqn);
           else if (resolved === undefined || (resolved.kind === "repository" && type === undefined)) unresolved.push(simpleName(supertype));
           if (declared !== undefined && supertype.id === superclass?.id) superclasses.set(declared, type ?? "outside");
@@ -476,7 +512,7 @@ export function readHierarchy(files: readonly JavaFile[], project: JavaProject, 
           if (!superclasses.has(declared)) superclasses.set(declared, "none");
           for (const type of types) subtypes.set(type, [...(subtypes.get(type) ?? []), declared]);
           supertypes.set(declared, types);
-          for (const name of names) unsettled.add(name);
+          for (const { name, place } of clauses) unsettled.set(name, [...(unsettled.get(name) ?? []), place]);
         }
       }
       for (const child of node.namedChildren) if (child !== null) pending.push(child);
@@ -492,23 +528,27 @@ export function readHierarchy(files: readonly JavaFile[], project: JavaProject, 
     if (!signatures.has(method)) signatures.set(method, readSignature(method, project));
     return signatures.get(method);
   };
-  let read: FunctionTargets[] | undefined;
+  let read: ReadFunctionValue[] | undefined;
   const hierarchy: Hierarchy = {
     subtypes, supertypes, superclasses, outside, unsettled, unplaced, invokedSupertypes, unsettledSupertypes, signatureOf,
-    functionValues: () => (read ??= values.map((value) => targetsOfFunctionValue(value, {
-      project,
-      ...(libraries === undefined ? {} : { libraries }),
-      above: (type) => ancestorsOf(type, hierarchy),
-      ancestors: (type) => { const above = ancestorsOf(type, hierarchy); return above.some((ancestor) => outside.has(ancestor)) ? undefined : above; },
-      functionalMethod: (type) => functionalMethodOf(type, hierarchy),
-    }))),
+    functionValues: () => (read ??= values.map((value) => {
+      const targets = targetsOfFunctionValue(value, sources);
+      return { targets, file: value.file.path, line: value.node.startPosition.row + 1, awaitsJdk: targets === "unsettled" && awaitsDeclaredJdk(value, sources) };
+    })),
+  };
+  const sources: FunctionValueSources = {
+    project,
+    ...(libraries === undefined ? {} : { libraries }),
+    above: (type) => ancestorsOf(type, hierarchy),
+    ancestors: (type) => { const above = ancestorsOf(type, hierarchy); return above.some((ancestor) => outside.has(ancestor)) ? undefined : above; },
+    functionalMethod: (type) => functionalMethodOf(type, hierarchy),
   };
   return hierarchy;
 }
 
-function isAnnotated(declaration: Node): boolean {
-  const modifiers = declaration.namedChildren.find((child) => child?.type === "modifiers");
-  return (modifiers?.namedChildren ?? []).some((child) => (child?.type === "marker_annotation" || child?.type === "annotation") && !LANGUAGE_ANNOTATIONS.has(child.childForFieldName("name")?.text.split(".").at(-1) ?? ""));
+/** The annotations of a declaration other than the language's own, which a generator or a proxy may read to implement it. */
+function annotationsOfGenerators(declaration: Node): Node[] {
+  return annotationsOf(declaration).filter((annotation) => !LANGUAGE_ANNOTATIONS.has(annotation.childForFieldName("name")?.text.split(".").at(-1) ?? ""));
 }
 
 function simpleName(type: Node): string {
@@ -524,24 +564,24 @@ function spansLine(declaration: Node, line: number): boolean {
  * What may run code behind any type: an aspect whose `@Around` advice or introduction the closed pointcut subset does not
  * bound, then a JDK API that implements an interface at run time; otherwise the bounded `@Around` advice of every aspect.
  */
-function globalVeto(files: readonly JavaFile[], project: JavaProject): { reason: NonNullable<Extract<DispatchTargets, { kind: "unknown" }>["reason"]> } | { advice: readonly JoinPoints[] } {
-  let dynamic = false;
-  let unbounded = false;
-  const advice: JoinPoints[] = [];
+function globalVeto(files: readonly JavaFile[], project: JavaProject): Veto | { advice: readonly Advice[] } {
+  const dynamic: string[] = [];
+  const unbounded: string[] = [];
+  const advice: Advice[] = [];
   for (const file of files) {
     const pending: Node[] = [file.root];
     for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
       if (isAspect(node)) {
-        const read = adviceOf(node);
-        if (read === undefined) unbounded = true;
-        else advice.push(...read);
+        const read = adviceOf(node, file);
+        if ("escapes" in read) unbounded.push(read.escapes);
+        else advice.push(...read.advice);
       }
-      if (namesDynamicImplementation(node, file, project)) dynamic = true;
+      if (namesDynamicImplementation(node, file, project)) dynamic.push(causeAt(file.path, node, "dynamic-implementation"));
       for (const child of node.namedChildren) if (child !== null) pending.push(child);
     }
   }
-  if (unbounded) return { reason: ASPECT.reason };
-  return dynamic ? { reason: "generated implementation" } : { advice };
+  if (unbounded.length > 0) return veto(ASPECT_REASON, unbounded);
+  return dynamic.length > 0 ? veto("generated implementation", dynamic) : { advice };
 }
 
 /**
@@ -557,40 +597,48 @@ interface AdvisedCall {
 /** Whether an advice's pointcut may select the execution of a body the call dispatches to. */
 type JoinPoints = (call: AdvisedCall) => boolean;
 
-function advised(method: MethodDecl, hierarchy: Hierarchy, advice: readonly JoinPoints[]): boolean {
-  if (advice.length === 0) return false;
+/** One `@Around` advice: the place of its annotation and its join points. */
+interface Advice {
+  place: string;
+  joinPoints: JoinPoints;
+}
+
+/** The places of the advice whose pointcut may select a body the call dispatches to. */
+function advisedBy(method: MethodDecl, hierarchy: Hierarchy, advice: readonly Advice[]): string[] {
+  if (advice.length === 0) return [];
   const types = new Set([method.owner, ...belowOf(method.owner, hierarchy)]);
   for (let frontier = [...types]; frontier.length > 0; ) {
     frontier = frontier.flatMap((type) => hierarchy.supertypes.get(type) ?? []).filter((above) => !types.has(above));
     for (const above of frontier) types.add(above);
   }
   const call = { method, types: [...types], outside: [...types].some((type) => hierarchy.outside.has(type)) };
-  return advice.some((joinPoints) => joinPoints(call));
+  return advice.filter(({ joinPoints }) => joinPoints(call)).map(({ place }) => place);
 }
 
 /**
  * The join points of each `@Around` advice of the aspect an `@Aspect` annotation marks, the only advice that can replace
  * a body, read from string pointcuts of a closed subset: `within` of a type name pattern or of `@Annotation *`,
- * `@within`, `@annotation` and `execution` with a type name pattern, combined with `&&` and `||`. `undefined` when an
- * `@Around` advice or an introduction escapes that subset.
+ * `@within`, `@annotation` and `execution` with a type name pattern, combined with `&&` and `||`. The place of the first
+ * `@Around` advice or introduction that escapes that subset otherwise, or of the aspect when its body is not read.
  */
-function adviceOf(annotation: Node): JoinPoints[] | undefined {
+function adviceOf(annotation: Node, file: JavaFile): { advice: readonly Advice[] } | { escapes: string } {
   const declaration = annotation.parent?.parent;
   const body = declaration?.type === "class_declaration" ? declaration.childForFieldName("body") : null;
-  if (body === null || body === undefined) return undefined;
-  const advice: JoinPoints[] = [];
+  if (body === null || body === undefined) return { escapes: causeAt(file.path, annotation, "advice") };
+  const advice: Advice[] = [];
   for (const member of body.namedChildren) {
     for (const annotated of annotationsOf(member)) {
       const name = simpleName(annotated.childForFieldName("name") ?? annotated);
-      if (INTRODUCTIONS.has(name)) return undefined;
+      const place = causeAt(file.path, annotated, "advice");
+      if (INTRODUCTIONS.has(name)) return { escapes: place };
       if (name !== BODY_REPLACING_ADVICE) continue;
       const pointcut = pointcutText(annotated);
       const joinPoints = pointcut === undefined ? undefined : parsePointcut(pointcut);
-      if (joinPoints === undefined) return undefined;
-      advice.push(joinPoints);
+      if (joinPoints === undefined) return { escapes: place };
+      advice.push({ place, joinPoints });
     }
   }
-  return advice;
+  return { advice };
 }
 
 function annotationsOf(declaration: Node | null): Node[] {

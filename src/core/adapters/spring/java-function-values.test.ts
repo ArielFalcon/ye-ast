@@ -4,6 +4,7 @@ import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchTargets } from "../../ports/import-origins.port.ts";
+import { withoutCause } from "./java-dispatch.testing.ts";
 
 function java(path: string, lines: readonly string[]): SourceFile {
   return { path: `src/main/java/app/${path}`, content: `${lines.join("\n")}\n` };
@@ -23,7 +24,7 @@ const VETOED: DispatchTargets = { kind: "unknown", reason: "dispatch not proven"
 async function answer(member: string, ...more: readonly SourceFile[]): Promise<DispatchTargets> {
   const use = java("Use.java", ["package app;", "import java.util.List;", "import java.util.function.Supplier;", "class Use {", member, "}"]);
   const [targets] = await createJavaNameBindings(createJavaParser, [PORT, IMPL, HANDLER, FACTORY, SUB, use, ...more]).dispatchTargets([{ file: PORT.path, line: 4, name: "q" }]);
-  return targets!;
+  return withoutCause(targets!);
 }
 
 test("a function value whose repository context proves a type that is not the port or below it releases the one-implementation veto", async () => {

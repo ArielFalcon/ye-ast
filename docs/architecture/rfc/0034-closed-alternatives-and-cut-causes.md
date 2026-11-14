@@ -109,6 +109,12 @@ A fact conditioned on a declared assumption was considered and is not proposed (
 | 4 | `basis` on candidate lists; rule 1 fixtures | `trace:±`, `callers:±` (detail only) |
 | 5 | `cause` for the dispatch sub-reasons and the receiver hierarchy | detail only |
 
+Slice 5 for the dispatch sub-reasons is built: each place is `path:line` followed by the construct standing there
+(`advice`, `annotation`, `outside-supertype`, `dynamic-implementation`, `unsettled-supertype`, `unplaced-class`,
+`function-value`, `function-value-undeclared-jdk`, `other-type`, `no-single-body`). A function value that is an argument of
+a library call while no JDK is declared is `function-value-undeclared-jdk`, and the MCP text then names `--jdk` as the next
+step. The receiver hierarchy and the unread-source sub-reasons of RFC-0032 are not built.
+
 ## Resolved questions (owner, 2026-11-13: "apruebo todas las recomendaciones pendientes")
 
 | # | Question | Decision |

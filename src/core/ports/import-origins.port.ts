@@ -198,7 +198,10 @@ export interface DispatchSite {
  * The method bodies a call to a body-less method may run, each by its file and the 1-based lines from its first token to
  * its name, sorted. `capability-absent`: the language pack of the site's file declares it cannot answer (ADR-0045 decision 12).
  */
-export type DispatchTargets = { kind: "bodies"; bodies: readonly { file: string; start: number; nameLine: number }[] } | { kind: "unknown"; reason?: DispatchUnknownReason | typeof CAPABILITY_ABSENT };
+export type DispatchTargets =
+  | { kind: "bodies"; bodies: readonly { file: string; start: number; nameLine: number }[] }
+  /** `cause`: the places that blocked the proof, each `path:line` and the `CutCause` standing there. */
+  | { kind: "unknown"; reason?: DispatchUnknownReason | typeof CAPABILITY_ABSENT; cause?: readonly string[] };
 
 /** A member call by the place it starts, repository-relative and 1-based with a UTF-16 column, and the member it calls. */
 export interface ReceiverCallSite {

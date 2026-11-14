@@ -37,6 +37,7 @@ interface Cut {
   limit?: number;
   reason: CutReason;                  // ADR-0042 decision 1: why the cut exists, one closed member per emitter situation
   subReason?: CutSubReason;           // why a dispatch was not proven, or "capability-absent"
+  cause?: string[];                   // ADR-0074 decision 7: sorted places that blocked the proof, each "path:line <construct>"
   reach: CutReach;                    // ADR-0042 decision 2: what the cut could hide
 }
 

@@ -6,6 +6,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchTargets } from "../../ports/import-origins.port.ts";
 import type { LibraryReading } from "../../ports/library-signatures.port.ts";
 import { jdkTypes, librariesOf, member, withMember } from "./java-library.testing.ts";
+import { withoutCause } from "./java-dispatch.testing.ts";
 
 function java(path: string, lines: readonly string[]): SourceFile {
   return { path: `src/main/java/app/${path}`, content: `${lines.join("\n")}\n` };
@@ -26,7 +27,7 @@ async function answer(member: string, libraries: LibraryReading | null = librari
   const use = java("Use.java", ["package app;", ...imports, "class Use {", member, "}"]);
   const reading = createJavaNameBindings(createJavaParser, [PORT, IMPL, HANDLER, FACTORY, use, ...more], undefined, undefined, undefined, [], libraries ?? undefined);
   const [targets] = await reading.dispatchTargets([{ file: PORT.path, line: 4, name: "q" }]);
-  return targets!;
+  return withoutCause(targets!);
 }
 
 test("a function value passed to a member of a library class the declared JDK holds releases the veto", async () => {

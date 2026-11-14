@@ -1750,3 +1750,16 @@ test("one call site read through two transport primitives lists one unresolved r
   assert.equal(requests.length, 1);
   assert.deepEqual(requests[0]!.evidence, [{ path: A, line: 9, column: 14 }, { path: A, line: 20 }, { path: A, line: 24 }]);
 });
+
+test("a dispatch cut carries the places the port named as its cause, sorted, and none when the port named none", async () => {
+  const nodes = [SVC, RUN, fakeNode("Port", "interface", B, 1, 3), fakeNode("Port.send", "method", B, 2, 2, "send")];
+  const edges: FakeEdge[] = [...CONTAINS, { from: "Port", to: "Port.send", kind: "contains" }, call("run", "Port.send", 8, 4)];
+  const base = { nodes, edges, sources: [{ path: B, content: "" }], callables: { [B]: [{ name: "send", start: 2, nameLine: 2, body: false, overridable: true }] } };
+  const dispatchCuts = (fact: Fact<TraceValue>) => (fact.status === "partial" ? fact.cuts.filter((cut) => cut.reason === "dispatch") : []);
+
+  const named = dispatchCuts(await factOf({ ...base, dispatch: { send: { kind: "unknown", reason: "dispatch not proven", cause: ["src/Tasks.java:9 function-value", "src/Tasks.java:10 function-value-undeclared-jdk", "src/Tasks.java:9 function-value"] } } }));
+  assert.deepEqual(named.map(({ cause }) => cause), [["src/Tasks.java:10 function-value-undeclared-jdk", "src/Tasks.java:9 function-value"]]);
+  const unnamed = dispatchCuts(await factOf({ ...base, dispatch: { send: { kind: "unknown", reason: "dispatch not proven" } } }));
+  assert.equal(unnamed.length, 1);
+  assert.equal("cause" in unnamed[0]!, false);
+});

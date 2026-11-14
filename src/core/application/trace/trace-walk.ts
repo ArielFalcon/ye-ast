@@ -260,8 +260,8 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
       return answer === undefined || answer.kind === "unknown" || answer.declarations.some((place) => place.file === symbol.file && symbol.startLine <= place.nameLine && place.nameLine <= symbol.endLine);
     });
   };
-  const dispatchCut = (symbol: GraphSymbol, implementations: readonly GraphSymbol[], subReason: CutSubReason): Cut =>
-    callCut(placeAt(symbol.file, symbol.startLine, symbol.name), sortedUnique(implementations.map(candidateOf)), "dispatch", subReason);
+  const dispatchCut = (symbol: GraphSymbol, implementations: readonly GraphSymbol[], subReason: CutSubReason, cause: readonly string[] = []): Cut =>
+    callCut(placeAt(symbol.file, symbol.startLine, symbol.name), sortedUnique(implementations.map(candidateOf)), "dispatch", subReason, cause);
   /** Unresolved heritage may hide a runtime override, even when the binding identifies a declaration. */
   const executionProven = (type: GraphSymbol, member: string): boolean => {
     const lineage = new Set([type.id, ...ancestorsOf(type)]);
@@ -305,7 +305,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     if (!declared.body) {
       const [targets] = await origins.dispatchTargets([{ file: symbol.file, line: symbol.startLine, name: symbol.name }], signal);
       const bodies = targets === undefined ? undefined : placedBodies(targets);
-      if (bodies === undefined || bodies.length === 0) return { cut: dispatchCut(symbol, await implementationsBelow(symbol, owners), (targets?.kind === "unknown" ? targets.reason : undefined) ?? "unproven") };
+      if (bodies === undefined || bodies.length === 0) return { cut: dispatchCut(symbol, await implementationsBelow(symbol, owners), (targets?.kind === "unknown" ? targets.reason : undefined) ?? "unproven", targets?.kind === "unknown" ? targets.cause : undefined) };
       return bodies.length === 1 ? { to: bodies[0]!, alternatives: bodies } : { cut: dispatchCut(symbol, bodies, "several-bodies"), alternatives: bodies };
     }
     if (!declared.overridable) return undefined;
@@ -881,8 +881,8 @@ function pageOrder(children: readonly Child[], plan: PagePlan, cuts: Cut[]): Chi
  * A call the walk cannot follow, at its place in a walked body, with the declarations it may run: a call no rule settles
  * is `receiver-unproven` when it lists candidates and `callee-unknown` when it lists none, unless its situation names another reason.
  */
-function callCut(place: string, candidates: readonly string[], reason: CutReason = candidates.length > 0 ? "receiver-unproven" : "callee-unknown", subReason?: CutSubReason): Cut {
-  return { kind: "unresolved-link", at: [place, ...candidates], reason, ...(subReason === undefined ? {} : { subReason }), reach: { kind: "call-at", place } };
+function callCut(place: string, candidates: readonly string[], reason: CutReason = candidates.length > 0 ? "receiver-unproven" : "callee-unknown", subReason?: CutSubReason, cause: readonly string[] = []): Cut {
+  return { kind: "unresolved-link", at: [place, ...candidates], reason, ...(subReason === undefined ? {} : { subReason }), ...(cause.length === 0 ? {} : { cause: sortedUnique(cause) }), reach: { kind: "call-at", place } };
 }
 
 type Dispatch = { to: GraphSymbol; alternatives: readonly GraphSymbol[]; cut?: undefined } | { to?: undefined; cut: Cut; alternatives?: readonly GraphSymbol[] };

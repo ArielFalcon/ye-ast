@@ -52,6 +52,15 @@ export function targetsOfFunctionValue(value: FunctionValue, sources: FunctionVa
   return targets === UNSETTLED ? UNSETTLED : [...new Set(targets.map((target) => ("library" in target ? "library" : target)))];
 }
 
+/** Whether a function value is an argument of a call on a receiver other than `this` while no JDK is declared for its file: the one context a declared JDK may settle. */
+export function awaitsDeclaredJdk(value: FunctionValue, sources: FunctionValueSources): boolean {
+  let expression = value.node;
+  while (expression.parent?.type === "parenthesized_expression" || expression.parent?.type === "ternary_expression") expression = expression.parent;
+  const call = expression.parent?.type === "argument_list" ? expression.parent.parent : undefined;
+  const object = call?.childForFieldName("object");
+  return call?.type === "method_invocation" && object !== null && object !== undefined && object.type !== "this" && librariesFor(value.file, sources) === undefined;
+}
+
 function targetsIn(expression: Node, file: JavaFile, sources: FunctionValueSources): Targets {
   const parent = expression.parent;
   if (parent === null) return UNSETTLED;

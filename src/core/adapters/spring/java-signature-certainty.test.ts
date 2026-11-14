@@ -3,12 +3,13 @@ import assert from "node:assert/strict";
 import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import { withoutCause } from "./java-dispatch.testing.ts";
 
 const source = (path: string, content: string): SourceFile => ({ path: `${path}.java`, content });
 async function dispatch(parameter: string, imports: string, extra: SourceFile[] = [], implementation = parameter, prefix = "", ownerPrefix = "") {
   const port = source("a/Port", `package a; ${ownerPrefix}\npublic interface Port {\n void send(${parameter} value);\n}`);
   const sender = source("b/Sender", `package b; ${imports}\npublic class Sender ${prefix} implements a.Port {\n public void send(${implementation} value) {}\n}`);
-  return (await createJavaNameBindings(createJavaParser, [port, sender, ...extra]).dispatchTargets([{ file: port.path, line: 3, name: "send" }]))[0];
+  return withoutCause((await createJavaNameBindings(createJavaParser, [port, sender, ...extra]).dispatchTargets([{ file: port.path, line: 3, name: "send" }]))[0]!);
 }
 const BODY = { kind: "bodies", bodies: [{ file: "b/Sender.java", start: 3, nameLine: 3 }] };
 const UNKNOWN = { kind: "unknown", reason: "dispatch not proven" };
@@ -60,7 +61,7 @@ test("type parameters shadow platform and imported types and never prove a concr
   assert.deepEqual(await dispatch("String", "", [], "String", "", ""), BODY);
   const port = source("a/Port", "package a; public interface Port { void send(String s); }");
   const sender = source("b/Sender", "package b; public class Sender<String> implements a.Port { public void send(String s) {} }");
-  assert.deepEqual((await createJavaNameBindings(createJavaParser, [port, sender]).dispatchTargets([{ file: port.path, line: 1, name: "send" }]))[0], UNKNOWN);
+  assert.deepEqual(withoutCause((await createJavaNameBindings(createJavaParser, [port, sender]).dispatchTargets([{ file: port.path, line: 1, name: "send" }]))[0]!), UNKNOWN);
 });
 
 test("conflicting single-type imports never select the last declaration", async () => {
@@ -76,7 +77,7 @@ test("a known on-demand collision stays a cut even when another supplier is unkn
   const result = await createJavaNameBindings(createJavaParser, [port, sender,
     source("left/Value", "package left; public class Value {}"), source("right/Value", "package right; public class Value {}"),
   ]).dispatchTargets([{ file: port.path, line: 2, name: "send" }]);
-  assert.deepEqual(result[0], UNKNOWN);
+  assert.deepEqual(withoutCause(result[0]!), UNKNOWN);
 });
 
 test("qualified type names resolve the qualifier's binding and each member, never its spelling or capitalization", async () => {
@@ -84,10 +85,10 @@ test("qualified type names resolve the qualifier's binding and each member, neve
     source("b/q", "package b; public class q { public static class X {} }")];
   const check = async (portType: string, baseType: string, subType: string, imports: [string, string, string], extra: SourceFile[] = [], members = "") => {
     const port = source("p/Port", `package p; ${imports[0]} public interface Port { void send(${portType} v); }`);
-    return (await createJavaNameBindings(createJavaParser, [...common, ...extra, port,
+    return withoutCause((await createJavaNameBindings(createJavaParser, [...common, ...extra, port,
       source("p/Base", `package p; ${imports[1]} public class Base implements Port { ${members} public void send(${baseType} v) {} }`),
       source("r/Sub", `package r; ${imports[2]} public class Sub extends p.Base { public void send(${subType} v) {} }`),
-    ]).dispatchTargets([{ file: port.path, line: 1, name: "send" }]))[0];
+    ]).dispatchTargets([{ file: port.path, line: 1, name: "send" }]))[0]!);
   };
   const bodies = { kind: "bodies", bodies: [{ file: "p/Base.java", start: 1, nameLine: 1 }, { file: "r/Sub.java", start: 1, nameLine: 1 }] };
 

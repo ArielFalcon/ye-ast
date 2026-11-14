@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { EXIT_CODE } from "../cli/main.ts";
 import { ACC_ABSTRACT, ACC_INTERFACE, ACC_PUBLIC, ACC_STATIC, ACC_SUPER, type ClassSpec } from "../core/adapters/jdk/class-file.testing.ts";
 import { FUNCTION_SPEC, OBJECT_SPEC, TEMURIN_RELEASE, writeJdkHome } from "../core/adapters/jdk/jdk-home.testing.ts";
-import type { Cut } from "../core/domain/shared/fact.ts";
+import { FUNCTION_VALUE_AWAITS_JDK, type Cut } from "../core/domain/shared/fact.ts";
 import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 import { composeCli } from "./compose.ts";
 
@@ -198,7 +198,10 @@ test("a declared JDK that holds none of the types the repository uses leaves the
   assert.deepEqual(httpPaths(found.value), []);
 });
 
-test("a declared JDK that holds nothing the repository uses answers a trace as without it but for the recorded input, and callers is the same with or without library function values", async () => {
+const withoutCause = ({ cuts, ...found }: Omit<Traced, "inputs">) => ({ ...found, cuts: (cuts ?? []).map(({ cause: _cause, ...cut }) => cut) });
+const causeConstructs = (found: Omit<Traced, "inputs">) => (found.cuts ?? []).flatMap((cut) => cut.cause ?? []).map((place) => place.split(" ").at(-1));
+
+test("a declared JDK that holds nothing the repository uses answers a trace as without it but for the recorded input and the construct its cut names as cause, and callers is the same with or without library function values", async () => {
   commit({ ...HEXAGONAL, "src/main/java/shop/Util.java": STREAMS });
   const plain = await trace();
   const { inputs: declaredInputs, ...declared } = await trace("--jdk", await jdkHome([OBJECT_SPEC]));
@@ -207,7 +210,9 @@ test("a declared JDK that holds nothing the repository uses answers a trace as w
   const withValues = await adapterCallers();
   commit({ "src/main/java/shop/Util.java": "package shop;\nclass Util { String first(java.util.List<String> items) { return items.get(0); } }\n" });
 
-  assert.deepEqual(declared, plainRest);
+  assert.deepEqual(withoutCause(declared), withoutCause(plainRest));
+  assert.deepEqual(causeConstructs(plainRest), [FUNCTION_VALUE_AWAITS_JDK], "without a JDK the function value awaits one");
+  assert.deepEqual(causeConstructs(declared), ["function-value"], "with a JDK that does not settle it, the declaration is no longer the next step");
   assert.deepEqual(declaredInputs.buildOutputs?.map(({ kind }) => kind), ["jdk"]);
   assert.equal("buildOutputs" in plainInputs, false);
   assert.deepEqual(await adapterCallers(), withValues);
