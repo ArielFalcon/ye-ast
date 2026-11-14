@@ -4,7 +4,7 @@ import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts"
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { GraphNodeId, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { DeclaredCallable } from "../../ports/declared-member-names.port.ts";
-import type { ImportOrigins, OutsideSupertypes, ReceiverMethod, RootBinding } from "../../ports/import-origins.port.ts";
+import type { AcceptedCounts, ArgumentCount, ImportOrigins, OutsideSupertypes, ReceiverMethod, RootBinding } from "../../ports/import-origins.port.ts";
 import { createCallBinder, type ReceiverSyntax } from "./call-binder.ts";
 import { createCallBindings, type SettledBinding } from "./call-binding.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "./fake-code-graph.testing.ts";
@@ -298,4 +298,56 @@ test("a declaration may run under an outside type unless its pack proves it stat
 
 test("the outside supertypes of a declaration are asked once for the read", async () => {
   assert.equal((await mayRun("java.util.Map", { kind: "types", types: [] }, 3)).asked, 1);
+});
+
+/**
+ * `takesNoCount` for a call `list.get` and the declaration `get` on line 3 of `Api.java`, over a pack that reads `written`
+ * at every call and `accepted` by a declaration's first line; `homonym` adds a second `get` of the file on line 5.
+ * How often each reading was asked, and how many sites it was asked for.
+ */
+async function noCount(written: ArgumentCount, accepted: Readonly<Record<number, AcceptedCounts>>, options: { homonym?: true; times?: number; absent?: true } = {}): Promise<{ excluded: readonly boolean[]; counts: number[]; accepts: number[] }> {
+  const nodes = [fakeNode("Api.get", "method", `${JAVA}/Api.java`, 3, 3, "get"), fakeNode("run", "method", `${JAVA}/Use.java`, 5, 9), ...(options.homonym ? [fakeNode("Api.get2", "method", `${JAVA}/Api.java`, 5, 5, "get")] : [])];
+  const store = fakeCodeGraph(nodes, []);
+  const navigation = createGraphNavigation(store, () => false);
+  const declarations = createDeclarationModel({ store, declarationsIn: async () => [] });
+  const counts: number[] = [];
+  const accepts: number[] = [];
+  const origins = (options.absent ? {} : {
+    argumentCounts: async (sites: readonly unknown[]) => (counts.push(sites.length), sites.map(() => written)),
+    acceptedCounts: async (sites: readonly { start: number }[]) => (accepts.push(sites.length), sites.map(({ start }) => accepted[start] ?? { kind: "unknown" })),
+  }) as unknown as ImportOrigins;
+  const binder = createCallBinder({ store, declarations, navigation, syntaxIn: async () => ({ receiverBindings: new Map(), callees: new Map() }), proofs: async () => ({ fields: [], locals: [] }), importedDeclarations: async () => new Map(), callablesIn: async () => [] });
+  const bindings = createCallBindings({ store, navigation, origins, binder, declarations, importedDeclarations: async () => new Map() });
+  const [declaration] = store.symbolsInFiles([`${JAVA}/Api.java`]);
+  const [body] = store.symbolsInFiles([`${JAVA}/Use.java`]);
+  const call = { body: body!, reference: { from: body!.id, file: `${JAVA}/Use.java`, line: 7, column: 4, name: "list.get", kind: "calls", candidates: [] } };
+  let excluded: readonly boolean[] = [];
+  for (let index = 0; index < (options.times ?? 1); index += 1) excluded = await bindings.takesNoCount([{ call, declaration: declaration! }, { call, declaration: declaration! }]);
+  return { excluded, counts, accepts };
+}
+
+test("a call is no call of a declaration that does not accept the number of arguments it writes, unless either count is unknown (ADR-0084 decision 2)", async () => {
+  const count = (n: number): ArgumentCount => ({ kind: "count", count: n });
+
+  assert.deepEqual((await noCount(count(1), { 3: { kind: "counts", count: 4 } })).excluded, [true, true]);
+  assert.deepEqual((await noCount(count(4), { 3: { kind: "counts", count: 4 } })).excluded, [false, false]);
+  assert.deepEqual((await noCount(count(0), { 3: { kind: "counts", count: 1, upward: true } })).excluded, [true, true]);
+  assert.deepEqual((await noCount(count(1), { 3: { kind: "counts", count: 1, upward: true } })).excluded, [false, false]);
+  assert.deepEqual((await noCount(count(5), { 3: { kind: "counts", count: 1, upward: true } })).excluded, [false, false]);
+  assert.deepEqual((await noCount({ kind: "unknown" }, { 3: { kind: "counts", count: 4 } })).excluded, [false, false]);
+  assert.deepEqual((await noCount(count(1), {})).excluded, [false, false]);
+  assert.deepEqual((await noCount(count(1), { 3: { kind: "counts", count: 4 } }, { absent: true })).excluded, [false, false]);
+});
+
+test("a homonym of the file that shares the declaration's anchor and accepts the count keeps the call", async () => {
+  const count: ArgumentCount = { kind: "count", count: 2 };
+
+  assert.deepEqual((await noCount(count, { 3: { kind: "counts", count: 3 }, 5: { kind: "counts", count: 2 } }, { homonym: true })).excluded, [false, false]);
+  assert.deepEqual((await noCount(count, { 3: { kind: "counts", count: 3 }, 5: { kind: "counts", count: 1 } }, { homonym: true })).excluded, [true, true]);
+});
+
+test("each call site and each declaration is read once for the read, in one batch", async () => {
+  const { counts, accepts } = await noCount({ kind: "count", count: 1 }, { 3: { kind: "counts", count: 4 } }, { homonym: true, times: 3 });
+
+  assert.deepEqual([counts, accepts], [[1], [2]]);
 });

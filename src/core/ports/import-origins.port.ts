@@ -122,6 +122,19 @@ export interface ImportOrigins {
    */
   outsideSupertypes?(sites: readonly ImplementingSite[], signal?: AbortSignal): Promise<readonly OutsideSupertypes[]>;
   /**
+   * One entry per site, in the order received: the number of arguments the one call of the member that starts at the site
+   * writes (ADR-0084 decision 1). `unknown` where the site cannot be placed, several calls of the member start there, the
+   * form writes no argument list (a method reference) or is not a method call, or the reading proves no binding. Absent
+   * where the language pack implements none, which reads as `capability-absent` for every site.
+   */
+  argumentCounts?(sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ArgumentCount[]>;
+  /**
+   * One entry per site, in the order received: the argument counts the one method declared at the site accepts (ADR-0084
+   * decision 1). `unknown` where the method cannot be placed or its parameters are not all stated, or the reading proves
+   * no binding. Absent where the language pack implements none, which reads as `capability-absent` for every site.
+   */
+  acceptedCounts?(sites: readonly ImplementingSite[], signal?: AbortSignal): Promise<readonly AcceptedCounts[]>;
+  /**
    * One entry per site, in the order received: what the chaining call a construction of the class at the site makes
    * without writing it (a Java constructor that writes no `super(...)` or `this(...)`, or the one the language supplies)
    * runs, by the superclass the sources declare: its one placed constructor of no arguments, or the superclass itself
@@ -254,6 +267,15 @@ export type ImplementedDeclarations = { kind: "declarations"; declarations: read
  * `capability-absent`: the language pack of the site's file declares it cannot answer (ADR-0045 decision 12).
  */
 export type OutsideSupertypes = { kind: "types"; types: readonly string[]; root?: string; static?: true } | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT };
+
+/** The number of arguments a call writes. `capability-absent`: the language pack of the site's file declares it cannot answer. */
+export type ArgumentCount = { kind: "count"; count: number } | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT };
+
+/**
+ * The argument counts a declaration accepts: exactly `count`, or `count` and every one above it when `upward` (a last
+ * parameter of variable arity). `capability-absent`: the language pack of the site's file declares it cannot answer.
+ */
+export type AcceptedCounts = { kind: "counts"; count: number; upward?: true } | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT };
 
 /**
  * The method declaration a call names, by its file and the 1-based lines from its first token to its name; `unproven`

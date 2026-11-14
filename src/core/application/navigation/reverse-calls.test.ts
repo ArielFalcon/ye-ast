@@ -21,7 +21,7 @@ interface Written {
  * `into(nodes)` over written calls no record matches, each bound by `bind` (by spelling), with `imports` the local names
  * each file's imports bind and `text` each source's content (by default its calls' spellings).
  */
-function setup(nodes: readonly FakeNode[], edges: readonly FakeEdge[], written: readonly Written[], bind: (call: UnboundCall) => CallBinding, imports: Readonly<Record<string, Readonly<Record<string, string>>>> = {}, text: Readonly<Record<string, string>> = {}, retained?: ReverseCallsDeps["retained"], receiverMethods: readonly ReceiverMethod[] = [], runsUnderOutside: ReadonlySet<string> = new Set()) {
+function setup(nodes: readonly FakeNode[], edges: readonly FakeEdge[], written: readonly Written[], bind: (call: UnboundCall) => CallBinding, imports: Readonly<Record<string, Readonly<Record<string, string>>>> = {}, text: Readonly<Record<string, string>> = {}, retained?: ReverseCallsDeps["retained"], receiverMethods: readonly ReceiverMethod[] = [], runsUnderOutside: ReadonlySet<string> = new Set(), noCount: ReadonlySet<string> = new Set()) {
   const store = fakeCodeGraph(nodes, edges);
   const navigation = createGraphNavigation(store, () => false);
   const read: string[] = [];
@@ -36,17 +36,23 @@ function setup(nodes: readonly FakeNode[], edges: readonly FakeEdge[], written: 
     },
   };
   const bound: string[] = [];
+  const counted: string[] = [];
   const bindings = {
     bindCalls: async (calls: readonly UnboundCall[]) => calls.map((call) => (bound.push(call.reference.name), bind(call))),
     settleDeclared: (): SettledBinding => ({ kind: "unbound", form: "member", candidates: [], attributed: [] }),
     mayRunUnder: async (_dispatch: unknown, declaration: GraphSymbol) => runsUnderOutside.has(declaration.id),
+    takesNoCount: async (pairs: readonly { call: UnboundCall; declaration: GraphSymbol }[]) => pairs.map(({ call, declaration }) => {
+      const pair = `${declaration.id}@${call.reference.line}`;
+      counted.push(pair);
+      return noCount.has(pair);
+    }),
   } as unknown as CallBindings;
   const files = [...new Set(nodes.map(({ file }) => file))];
   const sources = files.map((path) => ({ path, content: text[path] ?? written.filter((call) => nodes.find(({ id }) => id === call.body)?.file === path).map(({ name }) => `${name}();`).join("\n") }));
   const importedDeclarations = async (file: string) => new Map(Object.entries(imports[file] ?? {}).map(([local, id]) => [local, store.symbolsByIds([id as GraphNodeId])[0]!]));
   const reverse = createReverseCalls({ store, navigation, reconciled, bindings, origins: { receiverMethods: async () => receiverMethods }, importedDeclarations, sources, constructs: async () => false, ...(retained === undefined ? {} : { retained }) });
   const symbol = (id: string): GraphSymbol => store.symbolsByIds([id as GraphNodeId])[0]!;
-  return { reverse, symbol, read, bound };
+  return { reverse, symbol, read, bound, counted };
 }
 
 const declaration = (target: GraphSymbol): SettledBinding => ({ kind: "declaration", target, link: "import" });
@@ -194,6 +200,26 @@ test("a reference on a receiver declared outside the repository is settled away 
   const { settled, attributed } = await reverse.into([symbol("Api.get"), symbol("MyMap.get")]);
   assert.deepEqual(settled.map((entry) => `${entry.node.id}:${"away" in entry ? `away ${entry.away.length}` : "via"}`), ["Api.get:away 0"]);
   assert.deepEqual(attributed, []);
+});
+
+test("a reference left open toward a reached declaration is settled away from it when the call writes a count it does not accept; one settled away from it already, or reaching it, is not asked (ADR-0084 decision 2)", async () => {
+  const nodes = [fakeNode("Api.get", "method", "src/Api.java", 2, 4, "get"), fakeNode("Store.get", "method", "src/Store.java", 2, 4, "get"), fakeNode("MyMap.get", "method", "src/MyMap.java", 2, 4, "get"), fakeNode("use", "method", "src/Use.java", 1, 9)];
+  const written: Written[] = [{ body: "use", line: 2, name: "Paths.get" }, { body: "use", line: 3, name: "store.get" }, { body: "use", line: 4, name: "row.get" }, { body: "use", line: 5, name: "x.get" }, { body: "use", line: 6, name: "map.get" }];
+  const { reverse, symbol, counted } = setup(nodes, [], written, (call): CallBinding => {
+    const byLine: Record<number, CallBinding> = {
+      2: { kind: "outside", form: "chain", origin: { kind: "external", module: "java.nio.file" } },
+      3: declaration(symbol("Store.get")),
+      4: { kind: "unbound", form: "member", candidates: [symbol("Api.get")], attributed: [] },
+      5: { kind: "receiver", proof: { link: "none" }, candidates: [], attributed: [symbol("Store.get")] },
+      6: { kind: "receiver", proof: { link: "none" }, outside: true, dispatch: { type: "java.util.Map" }, candidates: [], attributed: [] },
+    };
+    return byLine[call.reference.line]!;
+  }, {}, {}, undefined, [], new Set(["MyMap.get"]), new Set(["Api.get@4", "Api.get@3", "MyMap.get@6", "Store.get@4"]));
+
+  const { settled } = await reverse.into([symbol("Api.get"), symbol("Store.get"), symbol("MyMap.get")]);
+  const shown = settled.map((entry) => `${entry.node.id}@${JSON.parse(entry.occurrence)[1]}:${"away" in entry ? entry.away.map(({ id }) => id).join(",") : `via ${entry.via.id}`}`);
+  assert.deepEqual(shown.toSorted(), ["Api.get@2:", "Api.get@3:", "Api.get@3:Store.get", "Api.get@4:", "Api.get@5:Store.get", "Api.get@6:", "MyMap.get@2:", "MyMap.get@3:Store.get", "MyMap.get@5:Store.get", "MyMap.get@6:", "Store.get@2:", "Store.get@3:via use", "Store.get@4:", "Store.get@5:", "Store.get@6:"]);
+  assert.deepEqual(counted.toSorted(), ["Api.get@3", "Api.get@4", "Api.get@5", "MyMap.get@3", "MyMap.get@4", "MyMap.get@5", "MyMap.get@6", "Store.get@4"]);
 });
 
 test("a call on a receiver declared outside the repository keeps its cut at a declaration only the syntax states", async () => {

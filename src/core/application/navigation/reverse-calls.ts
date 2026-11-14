@@ -33,8 +33,9 @@ export interface AttributedCall {
  * An index reference `into` looked up for a reached declaration whose binding decides whether it may call it (ADR-0079
  * decision 3), by the reference's occurrence key. `via`: the caller, when the compile-time binding is an edge into the
  * declaration. `away`: the declarations the binding names instead, none when it binds outside the repository or to
- * generated code, when the declaration is among the candidates a cut attributes it to, or when the receiver's declared
- * type lies outside the repository and the declaration cannot run under it (decisions 4 and 5).
+ * generated code, when the declaration is among the candidates a cut attributes it to, when the receiver's declared
+ * type lies outside the repository and the declaration cannot run under it (decisions 4 and 5), or when the call writes a
+ * number of arguments the declaration does not accept (ADR-0084 decision 2).
  */
 export type SettledReference = { node: GraphSymbol; occurrence: string } & ({ via: GraphSymbol } | { away: readonly GraphSymbol[] });
 
@@ -271,6 +272,7 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, or
       const edges: FollowedEdge[] = [];
       const attributed: AttributedCall[] = [];
       const settled: SettledReference[] = [];
+      const open: { call: UnboundCall; declaration: GraphSymbol; occurrence: string }[] = [];
       for (const { node, calls } of candidates) {
         const constructed = typeConstructed(node);
         for (const call of calls) {
@@ -286,12 +288,16 @@ export function createReverseCalls({ store, navigation, reconciled, bindings, or
             if (occurrence !== undefined) settled.push({ node, occurrence, away: [] });
           } else if (occurrence !== undefined && binding.kind === "receiver" && binding.dispatch !== undefined) {
             if (!(await bindings.mayRunUnder(binding.dispatch, node, signal))) settled.push({ node, occurrence, away: [] });
+            else open.push({ call, declaration: node, occurrence });
           } else if (occurrence !== undefined) {
             const away = boundAway(read, constructed);
             if (away !== undefined) settled.push({ node, occurrence, away });
+            if (away === undefined || away.length > 0) open.push({ call, declaration: node, occurrence });
           }
         }
       }
+      const excluded = await bindings.takesNoCount(open, signal);
+      for (const [index, { declaration, occurrence }] of open.entries()) if (excluded[index] === true) settled.push({ node: declaration, occurrence, away: [] });
       return { edges, attributed, settled };
     },
   };

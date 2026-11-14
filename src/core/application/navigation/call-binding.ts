@@ -5,7 +5,7 @@ import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import { calleeOf, compactSpelling, ownMemberOf, receiverOf } from "../../domain/shared/call-place.ts";
 import type { CodeGraphReader, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import type { ImportOrigins, OutsideSupertypes, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
+import type { AcceptedCounts, ArgumentCount, ImportOrigins, OutsideSupertypes, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
 import type { CallBinder, CallPlace, ReceiverProof } from "./call-binder.ts";
 import { ownMembersOf, placedBetween, type GraphNavigation } from "./graph-navigation.ts";
 import { indexedDeclaration, type DeclarationModel, type ModelDeclaration } from "./declaration-model.ts";
@@ -101,6 +101,12 @@ export interface CallBindings {
    * while the type is not the language's root type. Asked once per declaration for the read.
    */
   mayRunUnder(dispatch: OutsideDispatch, declaration: GraphSymbol, signal?: AbortSignal): Promise<boolean>;
+  /**
+   * For each pair, whether the call writes a number of arguments that the declaration, and every homonym of its file that
+   * shares its anchor, does not accept (ADR-0084 decision 2); `false` wherever a language pack answers either count
+   * `unknown`. Each site and each declaration is asked once for the read, the fresh ones of a batch in one reading.
+   */
+  takesNoCount(pairs: readonly { call: UnboundCall; declaration: GraphSymbol }[], signal?: AbortSignal): Promise<readonly boolean[]>;
 }
 
 export interface CallBindingsDeps {
@@ -342,6 +348,45 @@ export function createCallBindings({ store, navigation, origins, binder, declara
     return found.kind === "unknown" || (found.static !== true && (found.types.length > 0 || type === found.root));
   }
 
+  const countAt = new Map<string, Promise<ArgumentCount>>();
+  const acceptedBy = new Map<string, Promise<AcceptedCounts>>();
+  const homonyms = new Map<string, readonly GraphSymbol[]>();
+  const UNKNOWN_COUNT = { kind: "unknown" } as const;
+  function homonymsOf(declaration: GraphSymbol): readonly GraphSymbol[] {
+    let found = homonyms.get(declaration.id);
+    if (found === undefined) {
+      const named = store.symbolsInFiles([declaration.file]).filter((symbol) => symbol.name === declaration.name && symbol.id !== declaration.id && symbol.kind !== "file");
+      found = [declaration, ...named];
+      homonyms.set(declaration.id, found);
+    }
+    return found;
+  }
+  /** Asks `read` once for the keys `memo` does not hold yet, in one batch, and keeps each answer by its key. */
+  function askFresh<S, A>(memo: Map<string, Promise<A>>, sites: readonly { key: string; site: S }[], read: (sites: readonly S[]) => Promise<readonly A[]>, unknown: A): void {
+    const fresh = [...new Map(sites.filter(({ key }) => !memo.has(key)).map((entry) => [entry.key, entry.site])).entries()];
+    if (fresh.length === 0) return;
+    const batch = read(fresh.map(([, site]) => site));
+    for (const [index, [key]] of fresh.entries()) memo.set(key, batch.then((answers) => answers[index] ?? unknown));
+  }
+  async function takesNoCount(pairs: readonly { call: UnboundCall; declaration: GraphSymbol }[], signal?: AbortSignal): Promise<readonly boolean[]> {
+    const { argumentCounts, acceptedCounts } = origins;
+    if (argumentCounts === undefined || acceptedCounts === undefined) return pairs.map(() => false);
+    const sites = pairs.map(({ call: { reference } }): ReceiverCallSite | undefined => {
+      const callee = calleeOf(reference.name);
+      return callee.form === "computed" ? undefined : { file: reference.file, line: reference.line, column: reference.column + 1, member: callee.name };
+    });
+    const siteKey = (site: ReceiverCallSite): string => `${site.file}:${site.line}:${site.column}:${site.member}`;
+    askFresh(countAt, sites.flatMap((site) => (site === undefined ? [] : [{ key: siteKey(site), site }])), (asked) => argumentCounts(asked, signal), UNKNOWN_COUNT);
+    askFresh(acceptedBy, pairs.flatMap(({ declaration }) => homonymsOf(declaration)).map((symbol) => ({ key: symbol.id, site: { file: symbol.file, start: symbol.startLine, name: symbol.name } })), (asked) => acceptedCounts(asked, signal), UNKNOWN_COUNT);
+    return Promise.all(pairs.map(async ({ declaration }, index) => {
+      const site = sites[index];
+      const written = site === undefined ? UNKNOWN_COUNT : await countAt.get(siteKey(site))!;
+      if (written.kind === "unknown") return false;
+      const accepted = await Promise.all(homonymsOf(declaration).map((symbol) => acceptedBy.get(symbol.id)!));
+      return accepted.every((counts) => counts.kind === "counts" && (counts.upward === true ? written.count < counts.count : written.count !== counts.count));
+    }));
+  }
+
   return {
     bindCalls,
     settleDeclared,
@@ -349,6 +394,7 @@ export function createCallBindings({ store, navigation, origins, binder, declara
     ofReceiver: proven,
     memberOfReceiver,
     mayRunUnder,
+    takesNoCount,
     async boundCalls(calls, signal) {
       const bound = await bindCalls(calls, signal);
       const pending = bound.flatMap((binding) => (binding.kind === "declared" ? [binding] : []));

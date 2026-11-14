@@ -119,7 +119,8 @@ const nameOnly = (fact: Answer) => (fact.cuts ?? []).filter((cut) => cut.reason 
 /** The places the `name-only` cuts of an answer leave open toward `declaration`, sorted. */
 const openToward = (fact: Answer, declaration: string): readonly string[] =>
   nameOnly(fact).filter((cut) => cut.reach?.declarations?.includes(declaration)).flatMap(({ at: [, ...places] }) => places.map((place) => place.split(" ")[0]!)).sort();
-const EVERY_GET = [`${JAVA}/More.java:7`, ...GET_CALLS];
+/** The calls of `get` that write one argument: `opt.get()` and `node.get()` write none, which no reached `get` accepts (ADR-0084). */
+const EVERY_GET = GET_CALLS.filter((place) => place !== `${JAVA}/Service.java:14`);
 
 test("a call on a receiver declared as a type outside the repository is no caller of a plain class's homonym", async () => {
   const fact = await callers("Api.java:get");

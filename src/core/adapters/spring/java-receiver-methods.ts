@@ -4,7 +4,7 @@ import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts"
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
-import type { ConstructedClassSite, DeclaredSupertype, DeclaredSupertypes, ImplementedDeclarations, ImplementingSite, ImplicitChain, ImportOrigins, MethodPlace, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
+import type { AcceptedCounts, ArgumentCount, ConstructedClassSite, DeclaredSupertype, DeclaredSupertypes, ImplementedDeclarations, ImplementingSite, ImplicitChain, ImportOrigins, MethodPlace, ReceiverCallSite, ReceiverMethod } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import { typeVariableAround } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
@@ -26,6 +26,7 @@ const PROXIED: GeneratedMember = { kind: "proxied" };
 const LOMBOK_CONFIG = /(^|\/)lombok\.config$/;
 const UNKNOWN_DECLARATIONS: ImplementedDeclarations = { kind: "unknown" };
 const UNKNOWN_SUPERTYPES: DeclaredSupertypes = { kind: "unknown" };
+const UNKNOWN_COUNT = { kind: "unknown" } as const satisfies ArgumentCount & AcceptedCounts;
 /** Methods every class inherits from `Object` (JLS 4.3.2): a call of one of these names may resolve to `Object`'s. */
 export const OBJECT_METHODS: ReadonlySet<string> = new Set(["clone", "equals", "finalize", "getClass", "hashCode", "notify", "notifyAll", "toString", "wait"]);
 /** Nodes the grammar places among a call's arguments that are no argument. */
@@ -236,6 +237,69 @@ export function createJavaImplicitChains(parser: () => Promise<JavaParser>, sour
  */
 export function createJavaDeclaredSupertypes(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): NonNullable<ImportOrigins["declaredSupertypes"]> {
   return perPlacedType(parser, sources, paths, hold, build, UNKNOWN_SUPERTYPES, declaredSupertypesOf, "declarations", enumConstantSupertypes);
+}
+
+/**
+ * `ImportOrigins.argumentCounts` and `acceptedCounts` for Java sources (ADR-0084): the arguments the one method invocation
+ * of the member at a call site writes, and the counts the one method of the name at a declaration site accepts (JLS
+ * 15.12.2.1: its parameter count, or that count less one and upward when its last parameter has variable arity). Both are
+ * `unknown` where the strict binding proves nothing (`provesBinding`: a call-rewriting annotation may make a call write a
+ * different argument list than it runs, an unread source may hold the call or the declaration). A declared source
+ * generator adds declarations, never changes a parameter list the sources state nor an argument list a call writes.
+ */
+export function createJavaArgumentCounts(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): Required<Pick<ImportOrigins, "argumentCounts" | "acceptedCounts">> {
+  const unreadJvm = paths.some(isUncoveredJvmSource);
+  /** Per project, its invocations by file and its methods by place, read once for every site asked of it; `unknown` where the reading proves nothing. */
+  const readings = new WeakMap<JavaProject, { files: ReadonlyMap<string, JavaFile>; invocations: Map<string, ReadonlyMap<string, readonly Node[]>>; methods: ReadonlyMap<string, readonly MethodDecl[]> } | "unknown">();
+  const readingOf = (files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject) => {
+    let reading = readings.get(project);
+    if (reading === undefined) {
+      reading = provesBinding(files, project, unparsed, unreadJvm) ? { files: new Map(files.map((file) => [file.path, file])), invocations: new Map(), methods: methodsByPlace(project) } : "unknown";
+      readings.set(project, reading);
+    }
+    return reading;
+  };
+  const read = async <S, A>(sites: readonly S[], answer: (site: S, reading: Exclude<ReturnType<typeof readingOf>, "unknown">) => A): Promise<readonly A[]> => {
+    if (sites.length === 0) return [];
+    const analyze = (files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject): readonly A[] => {
+      const reading = readingOf(files, unparsed, project);
+      return sites.map((site) => (reading === "unknown" ? (UNKNOWN_COUNT as A) : answer(site, reading)));
+    };
+    const parsed = await parser();
+    const held = hold === undefined ? undefined : await heldJavaProject(hold, () => Promise.resolve(parsed), sources, [], build);
+    if (held !== undefined) return analyze(held.files.map(({ file }) => file), held.unparsed, held.project);
+    return withJavaSources(parsed, (parse) => {
+      const { files, unparsed } = parse(sources);
+      return analyze(files, unparsed, createJavaProject(files, build));
+    });
+  };
+  return {
+    argumentCounts: (sites) =>
+      read(sites, (site, reading): ArgumentCount => {
+        const file = reading.files.get(site.file);
+        if (file === undefined) return UNKNOWN_COUNT;
+        let invocations = reading.invocations.get(site.file);
+        if (invocations === undefined) {
+          invocations = invocationsOf(file.root);
+          reading.invocations.set(site.file, invocations);
+        }
+        const found = invocations.get(callKey(site.line, site.column, site.member)) ?? [];
+        return found.length === 1 && found[0]!.type === "method_invocation" ? { kind: "count", count: argumentCount(found[0]!) } : UNKNOWN_COUNT;
+      }),
+    acceptedCounts: (sites) =>
+      read(sites, (site, reading): AcceptedCounts => {
+        const named = reading.methods.get(`${site.file}:${site.start}:${site.name}`) ?? [];
+        return named.length === 1 ? acceptedCountsOf(named[0]!) : UNKNOWN_COUNT;
+      }),
+  };
+}
+
+/** The counts a method accepts, from the parameters its declaration states; `unknown` when one is neither a formal nor a variable-arity parameter. */
+function acceptedCountsOf(method: MethodDecl): AcceptedCounts {
+  const list = method.node.childForFieldName("parameters");
+  const parameters = list === null ? [] : namedChildren(list);
+  if (list === null || parameters.some((parameter) => parameter.type !== "formal_parameter" && parameter.type !== "spread_parameter")) return UNKNOWN_COUNT;
+  return hasVarargs(method) ? { kind: "counts", count: parameters.length - 1, upward: true } : { kind: "counts", count: parameters.length };
 }
 
 /**

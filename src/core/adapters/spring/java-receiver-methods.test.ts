@@ -4,7 +4,7 @@ import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaNameBindings } from "./java-name-bindings.adapter.ts";
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { OutsideSupertypes, ReceiverMethod } from "../../ports/import-origins.port.ts";
+import type { AcceptedCounts, ArgumentCount, OutsideSupertypes, ReceiverMethod } from "../../ports/import-origins.port.ts";
 
 function javaIn(directory: string, path: string, lines: readonly string[]): SourceFile {
   return { path: `src/main/java/${directory}/${path}`, content: `${lines.join("\n")}\n` };
@@ -563,4 +563,55 @@ test("an anonymous class below the owner, an unsettled supertype, a supertype ou
   assert.deepEqual(await outsideOf([API], API, 4, "get", undefined, [generator]), unknown);
   assert.deepEqual(await outsideOf([API], API, 4, "get", KOTLIN([API])), unknown);
   assert.deepEqual(await outsideOf([API], API, 3), unknown);
+});
+
+/** The number of arguments the pack reads at the call `Use.java` writes on line 4 that starts at `start`. */
+async function countAt(sources: readonly SourceFile[], member: string, start: string, paths?: readonly string[]): Promise<ArgumentCount> {
+  const user = sources.find(({ path }) => path.endsWith("/Use.java"))!;
+  const column = user.content.split("\n")[3]!.indexOf(start) + 1;
+  const [count] = await createJavaNameBindings(createJavaParser, sources, paths).argumentCounts!([{ file: user.path, line: 4, column, member }]);
+  return count!;
+}
+
+/** The argument counts the pack reads for the method `name` that starts on `line` of `source`. */
+async function acceptedAt(sources: readonly SourceFile[], source: SourceFile, line: number, name: string, paths?: readonly string[], context: readonly SourceFile[] = []): Promise<AcceptedCounts> {
+  const [counts] = await createJavaNameBindings(createJavaParser, sources, paths, undefined, undefined, context).acceptedCounts!([{ file: source.path, start: line, name }]);
+  return counts!;
+}
+
+const REWRITING = java("Ext.java", ["package app;", "", "@lombok.experimental.ExtensionMethod(Api.class)", "class Ext {}"]);
+
+test("a method invocation writes the number of arguments of its list, comments left out (ADR-0084 decision 1)", async () => {
+  assert.deepEqual(await countAt([use("list.get(0)", [], "java.util.List<String> list")], "get", "list.get"), { kind: "count", count: 1 });
+  assert.deepEqual(await countAt([use("opt.get(/* none */)", [], "java.util.Optional<String> opt")], "get", "opt.get"), { kind: "count", count: 0 });
+  assert.deepEqual(await countAt([use("var made = Lib.make(); made.get(1, 2, 3, 4)", [], "")], "get", "made.get"), { kind: "count", count: 4 });
+});
+
+test("a method reference, a construction, two calls of the member starting at one place, an unplaced site and a call-rewriting annotation read no count", async () => {
+  const unknown: ArgumentCount = { kind: "unknown" };
+
+  assert.deepEqual(await countAt([use("java.util.function.Supplier<String> s = opt::get", [], "java.util.Optional<String> opt")], "get", "opt::get"), unknown);
+  assert.deepEqual(await countAt([use("new Api(\"k\")", [], ""), API], "Api", "new Api"), unknown);
+  assert.deepEqual(await countAt([use("list.get(0).get()", [], "java.util.List<java.util.Optional<String>> list")], "get", "list.get"), unknown);
+  assert.deepEqual(await countAt([use("list.get(0)", [], "java.util.List<String> list")], "get", "(0)"), unknown);
+  assert.deepEqual(await countAt([use("list.get(0)", [], "java.util.List<String> list"), API, REWRITING], "get", "list.get"), unknown);
+});
+
+test("a method accepts the count of its parameters, or one less and upward when its last has variable arity", async () => {
+  const multi = java("Multi.java", ["package app;", "", "public class Multi {", "  public String get(String first, String... rest) { return first; }", "  public String all(String... rest) { return \"\"; }", "}"]);
+
+  assert.deepEqual(await acceptedAt([API], API, 4, "get"), { kind: "counts", count: 1 });
+  assert.deepEqual(await acceptedAt([multi], multi, 4, "get"), { kind: "counts", count: 1, upward: true });
+  assert.deepEqual(await acceptedAt([multi], multi, 5, "all"), { kind: "counts", count: 0, upward: true });
+});
+
+test("an unplaced method, a receiver parameter and a call-rewriting annotation accept no stated count; a declared source generator leaves the stated count", async () => {
+  const receiver = java("Api.java", ["package app;", "", "public class Api {", "  public String get(Api this, String key) { return key; }", "}"]);
+  const generator = { path: "pom.xml", content: "<project><build><plugins><plugin><groupId>org.openapitools</groupId><artifactId>openapi-generator-maven-plugin</artifactId></plugin></plugins></build></project>\n" };
+  const unknown: AcceptedCounts = { kind: "unknown" };
+
+  assert.deepEqual(await acceptedAt([API], API, 3, "get"), unknown);
+  assert.deepEqual(await acceptedAt([receiver], receiver, 4, "get"), unknown);
+  assert.deepEqual(await acceptedAt([API, REWRITING], API, 4, "get"), unknown);
+  assert.deepEqual(await acceptedAt([API], API, 4, "get", undefined, [generator]), { kind: "counts", count: 1 });
 });
