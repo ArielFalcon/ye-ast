@@ -270,7 +270,10 @@ export function createWrittenUses({ store, sources, tokensOf, syntaxOf, origins,
           const source = byPath.get(file);
           if (source === undefined) continue;
           const tokens = await reading(source);
-          if (tokens.status !== "read") continue;
+          if (tokens.status !== "read") {
+            if (tokens.reason === "unparsed") unsettled.push({ node, file, line: 1, name: [...locals].sort().join(",") });
+            continue;
+          }
           sites.push(...sitesIn(node, file, source.content, tokens.tokens, tokens.imports, new Map([...locals].map((local) => [local, undefined])), own, false));
           read.set(node.id, (read.get(node.id) ?? new Set()).add(file));
         }

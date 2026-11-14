@@ -15,8 +15,8 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import type { ConstructedClassSite, DeclaredSupertype, DeclaredSupertypes, DeclaredType, ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { moduleResolverOf, packageOf, rememberedModuleResolver } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
-import { moduleShape, type ModuleShape } from "./module-shape.ts";
-import { hasModifier, isStatic, unwrapped } from "./syntax.ts";
+import { recoveredModuleShape, type ModuleShape } from "./module-shape.ts";
+import { hasModifier, isStatic, readsModuleStatements, unwrapped } from "./syntax.ts";
 import { createExportLookup } from "./declaration-lookup.ts";
 
 /** The names the pinned `typescript` declares, held once for the process rather than rebuilt per query. */
@@ -64,10 +64,10 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
     }
     return tree;
   };
-  /** What each file exports, read once and only when a namespace member asks. */
+  /** What each file exports, read once and only when a namespace member asks; none where the tree does not state every module statement. */
   const moduleShapes = new Map<string, ModuleShape | undefined>();
   function moduleShapeOf(file: string): ModuleShape | undefined {
-    if (!moduleShapes.has(file)) moduleShapes.set(file, texts.has(file) && isTypeScriptSource(file) ? moduleShape(treeOf(file)) : undefined);
+    if (!moduleShapes.has(file)) moduleShapes.set(file, texts.has(file) && isTypeScriptSource(file) && readsModuleStatements(treeOf(file)) ? recoveredModuleShape(treeOf(file)) : undefined);
     return moduleShapes.get(file);
   }
   const resolvedFile = async (from: string, specifier: string): Promise<string | undefined> => {

@@ -39,6 +39,28 @@ export function hasSyntaxErrors(tree: ts.SourceFile): boolean {
   return (tree as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics.length > 0;
 }
 
+const MODULE_KEYWORD = /\b(?:import|export|require)\b/;
+
+/**
+ * Whether the tree states every module statement of the source: it has no syntax error, or each error lies inside a
+ * top-level statement whose text, its own modifiers (`export`, `default`) aside, writes no module keyword, so the
+ * statement is no module statement and recovery swallowed none into it.
+ */
+export function readsModuleStatements(tree: ts.SourceFile): boolean {
+  const writesNoModuleKeyword = (statement: ts.Statement): boolean => {
+    const offset = statement.getStart(tree);
+    let text = statement.getText(tree);
+    for (const modifier of ts.canHaveModifiers(statement) ? (ts.getModifiers(statement) ?? []) : []) {
+      text = text.slice(0, modifier.getStart(tree) - offset) + " ".repeat(modifier.end - modifier.getStart(tree)) + text.slice(modifier.end - offset);
+    }
+    return !MODULE_KEYWORD.test(text);
+  };
+  return (tree as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics.every(({ start }) => {
+    const holding = tree.statements.filter((statement) => start !== undefined && statement.getStart(tree) <= start && start <= statement.end);
+    return holding.length > 0 && holding.every(writesNoModuleKeyword);
+  });
+}
+
 export function lineOf(source: ts.SourceFile, node: ts.Node): number {
   return source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
 }

@@ -104,7 +104,7 @@ test("the outline asks each module reader for the statements of the requested fi
 });
 
 test("a requested source the module reader cannot parse is a no-extractor cut, so its empty imports never read as none", async () => {
-  const { status, file, cuts } = await outlineOf("import { one } from './defs';\nexport function (");
+  const { status, file, cuts } = await outlineOf("import { one } from './defs';\nexport { one as");
   assert.equal(status, "partial");
   assert.deepEqual(file?.imports, []);
   assert.deepEqual(cuts, [{ kind: "no-extractor", at: [USE], reason: "module-unread", reach: { kind: "anything", runtime: "typescript" } }]);
