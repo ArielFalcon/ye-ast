@@ -44,7 +44,10 @@ it below.
    `unproven`, never `unknown`. `unknown` stays the answer where another reader of the binding chain owns the form: a
    receiver that is a name, which the name bindings root at a variable, a repository type or a type outside the
    repository (ADR-0079); a call without a receiver for which the search of the language finds no type (the search of
-   an anonymous class); and a language whose pack declares the capability absent.
+   an anonymous class); and a language whose pack declares the capability absent. The search of a call without a
+   receiver is the language's (JLS 15.12.1): the innermost type around the call that has a member of the name, a
+   superinterface's static method and a supertype's private method being no member (JLS 8.4.8), then the one
+   repository type a single-static-import of the name names (JLS 6.4.1); a call neither settles is `unproven`.
 2. **Calls that share a site and read differently are `unproven`.** A site several calls share whose readings differ
    answers `unproven`; calls that share a site and read alike keep that reading. This amends the second exception of
    ADR-0041 decision 3: the record of `store.getCurrency().getCurrency()` is still kept by the alignment, and the

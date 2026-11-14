@@ -519,31 +519,55 @@ export function createResolver(project: JavaProject, generated = false) {
   };
 
   /**
-   * The type a call written without a receiver (`outward`), or on `this`, searches for its name (JLS 15.12.1): the type of
-   * the project whose body holds it, through lambdas. An anonymous or a local class on the way, which the project does not
-   * hold, is searched by its own declarations and the members of its supertypes: none of the name sends a call without a
-   * receiver to the class around it, and the one supertype that has the name is the type searched. None when such a class
-   * declares the one method of the name its members hold, which the project does not place; `unproven` when it declares
-   * the name beside others, inherits it from several supertypes, or has a supertype whose members the sources do not
-   * settle. The members an enum constant's body inherits are its enum's.
+   * The type a call written without a receiver (`outward`), or on `this`, searches for its name (JLS 15.12.1). On `this`,
+   * the type of the project whose body holds it, through lambdas. Without a receiver, the innermost type around the call
+   * of which a method of the name is a member (`hasMember`); a type of the project whose members the sources do not settle
+   * and that declares none of the name is `unproven`. Past the outermost type, the one type a single-static-import of the
+   * name imports is searched by its name (JLS 6.4.1, 7.5.3), and anything else is `unproven`. An anonymous or a local class
+   * on the way, which the project does not hold, is searched by its own declarations and the members of its supertypes:
+   * none of the name sends a call without a receiver to the class around it, and the one supertype that has the name is
+   * the type searched. None when such a class declares the one method of the name its members hold, which the project
+   * does not place; `unproven` when it declares the name beside others, inherits it from several supertypes, or has a
+   * supertype whose members the sources do not settle. The members an enum constant's body inherits are its enum's.
    */
-  const searchedType = (invocation: Node, file: JavaFile, outward: boolean): TypeDecl | "unproven" | undefined => {
+  const searchedType = (invocation: Node, file: JavaFile, outward: boolean): { type: TypeDecl; typeName: boolean } | "unproven" | undefined => {
     const name = invocation.childForFieldName("name")?.text;
     for (let body = enclosingBody(invocation); body !== undefined; body = enclosingBody(body)) {
       const holder = body.parent;
       if (holder === null) return undefined;
       const held = project.types.find((type) => type.file === file && type.node.id === holder.id);
-      if (held !== undefined) return held;
-      if (holder.type === "enum_constant") return thisType(holder, file, project) ?? "unproven";
+      if (held !== undefined && (!outward || name === undefined || hierarchyOpen(declaredHierarchy(held), []) || hasMember(held, name, invocation))) return { type: held, typeName: false };
+      if (held !== undefined) continue;
+      if (holder.type === "enum_constant") {
+        const constant = thisType(holder, file, project);
+        return constant === undefined ? "unproven" : { type: constant, typeName: false };
+      }
       const supertypes = name === undefined ? undefined : unheldSupertypes(holder, file);
       if (name === undefined || supertypes === undefined) return "unproven";
-      const offering = supertypes.filter((type) => declaredHierarchy(type).types.some((ancestor) => ancestor.methods.some((method) => method.name === name)) || generatedMember(type, project, name, argumentCount(invocation)) !== undefined);
+      const offering = supertypes.filter((type) => hasMember(type, name, invocation));
       const own = declaredMethods(body, name);
       if (own > 0) return own === 1 && offering.length === 0 ? undefined : "unproven";
-      if (offering.length === 1 && supertypes.length === 1) return offering[0];
+      if (offering.length === 1 && supertypes.length === 1) return { type: offering[0]!, typeName: false };
       if (offering.length > 0 || !outward) return "unproven";
     }
-    return undefined;
+    return name === undefined ? undefined : staticallyImported(name, file);
+  };
+
+  /**
+   * Whether a method of the name is a member of the type (JLS 8.4.8): one it declares or inherits, a method of `Object`, or
+   * one a processor generates. A superinterface's static method and a supertype's private method are not inherited.
+   */
+  const hasMember = (type: TypeDecl, name: string, invocation: Node): boolean =>
+    OBJECT_METHODS.has(name) ||
+    declaredHierarchy(type).types.some((ancestor) => ancestor.methods.some((method) => method.name === name && (ancestor === type || !(method.modifiers.includes("private") || (ancestor.kind === "interface" && method.modifiers.includes("static")))))) ||
+    generatedMember(type, project, name, argumentCount(invocation)) !== undefined;
+
+  /** The one repository type the single-static-imports of `name` in the file import it from, searched by its name; `unproven` otherwise. */
+  const staticallyImported = (name: string, file: JavaFile): { type: TypeDecl; typeName: boolean } | "unproven" => {
+    const classes = new Set(file.staticImports.filter(({ member }) => member === name).map(({ className }) => className));
+    const [imported] = classes.size === 1 ? [...classes] : [];
+    const type = imported === undefined ? undefined : project.types.find((candidate) => candidate.fqn === imported);
+    return type !== undefined && (type.kind === "class" || type.kind === "interface") ? { type, typeName: true } : "unproven";
   };
 
   /**
@@ -579,7 +603,7 @@ export function createResolver(project: JavaProject, generated = false) {
     const declared = (type: TypeDecl | undefined, bound = false, typeName = false) => (type === undefined ? undefined : { type, bound, typeName });
     if (object === null || object.type === "this") {
       const searched = searchedType(invocation, source.file, object === null);
-      return searched === "unproven" ? searched : declared(searched);
+      return searched === "unproven" || searched === undefined ? searched : declared(searched.type, false, searched.typeName);
     }
     if (object.type === "method_invocation") {
       const called = methodNamed(object, source);
