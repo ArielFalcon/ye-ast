@@ -167,6 +167,8 @@ export interface JavaProject {
 
 /** Platform interfaces that declare no members, so a type below one inherits no method from it. */
 export const MEMBERLESS_PLATFORM_INTERFACES: ReadonlySet<string> = new Set(["java.io.Serializable", "java.lang.Cloneable", "java.util.RandomAccess", "java.util.EventListener"]);
+/** Platform interfaces that declare methods but no member type, so a type below one inherits no member type from it. */
+const MEMBER_TYPELESS_PLATFORM_INTERFACES: ReadonlySet<string> = new Set(["java.lang.Comparable", "java.util.Comparator"]);
 const PLATFORM_PACKAGES = ["org.springframework.", "java.", "javax.", "jakarta.", "lombok."];
 /** A package starts lowercase, so a qualified name whose first segment does is one. */
 const PACKAGE_SEGMENT = /^[a-z]/;
@@ -493,7 +495,7 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
       if (member !== undefined) return { local: member };
       const written = typeNodeName(creation.childForFieldName("type") ?? creation);
       const instantiated = resolveName(written, { ...scope, at: creation }, strict);
-      const inherited = inheritedThrough([instantiated], head, strict, new Set([scope.file.packageName]), new Set());
+      const inherited = instantiated === undefined && declaresNoMemberTypes(written, scope.file) ? undefined : inheritedThrough([instantiated], head, strict, new Set([scope.file.packageName]), new Set());
       if (inherited !== undefined) return inherited;
     }
     return undefined;
@@ -533,7 +535,7 @@ export function createJavaProject(files: readonly JavaFile[], build: ProjectBuil
 
   function declaresNoMemberTypes(name: string, file: JavaFile): boolean {
     const named = externalNames(name, file, false);
-    return named.length > 0 && named.every((fqn) => (MEMBERLESS_PLATFORM_INTERFACES.has(fqn) || REPOSITORY_TYPES.has(fqn)) && isPlatformName(fqn));
+    return named.length > 0 && named.every((fqn) => (MEMBERLESS_PLATFORM_INTERFACES.has(fqn) || MEMBER_TYPELESS_PLATFORM_INTERFACES.has(fqn) || REPOSITORY_TYPES.has(fqn)) && isPlatformName(fqn));
   }
 
   /** The member type of the name a type whose direct supertypes are `parents` inherits from them (`inheritedMember`). */

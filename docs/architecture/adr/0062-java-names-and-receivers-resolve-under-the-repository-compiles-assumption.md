@@ -28,7 +28,9 @@ than the language requires:
    `PagingAndSortingRepository`, `ListPagingAndSortingRepository`, `JpaRepository`), written by its qualified name and
    not claimed by a package of the repository, declares no member type; with `java.io.Serializable` and the memberless
    platform interfaces it is skipped when member-type inheritance is read. Evidence (ADR-0013): a Spring Data pet-clinic
-   microservice set and a production backend. The list grows only with evidence.
+   microservice set and a production backend. The list grows only with evidence. `java.lang.Comparable` and
+   `java.util.Comparator` declare methods and no member type, so they are skipped there too, for a class and for an
+   anonymous class of one: 12 receivers of the largest Java repository of the corpus were unsettled by them alone.
 3. When a build file declares a source generator of OpenAPI interfaces (the signal the route extractor reads), an
    interface that the sources do not declare and no platform package can supply declares no member type, and its members
    are the API's operations. Names resolved in the implementing class are not unsettled by it, and a call whose
