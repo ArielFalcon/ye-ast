@@ -4,6 +4,7 @@ import type { ImportBinding, ImportDeclarationRange, SourceReading, Token } from
 import { lfLineIndex } from "../../domain/change/source-tokens.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { SourceTokens } from "../../ports/source-tokens.port.ts";
+import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
 import { hasSyntaxErrors } from "./syntax.ts";
 
@@ -38,7 +39,7 @@ export function createTypeScriptTokens(): SourceTokens {
       const imports: ImportDeclarationRange[] = [];
       const importArguments: Span[] = [];
       const collect = (node: ts.Node): void => {
-        if (ts.isImportDeclaration(node) || (ts.isExportDeclaration(node) && node.moduleSpecifier !== undefined)) imports.push({ start: node.getStart(tree), end: node.end, ...bindsOf(node) });
+        if (ts.isImportDeclaration(node) || (ts.isExportDeclaration(node) && node.moduleSpecifier !== undefined)) imports.push({ start: node.getStart(tree), end: node.end, ...bindsOf(node, tree) });
         if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) importArguments.push({ start: node.arguments.pos, end: node.arguments.end });
         ts.forEachChild(node, collect);
       };
@@ -108,13 +109,9 @@ function covers(text: string, spans: readonly Span[]): boolean {
 }
 
 /** The names an import declaration binds; a side-effect import, an empty clause and a re-export bind none a reading can list. */
-function bindsOf(node: ts.Node): { binds: ImportBinding[] } | undefined {
-  if (!ts.isImportDeclaration(node) || node.importClause === undefined || !ts.isStringLiteral(node.moduleSpecifier)) return undefined;
-  const module = node.moduleSpecifier.text;
-  const { name, namedBindings } = node.importClause;
-  const binds: ImportBinding[] = [];
-  if (name !== undefined) binds.push({ name: name.text, source: `${module}#default` });
-  if (namedBindings !== undefined && ts.isNamespaceImport(namedBindings)) binds.push({ name: namedBindings.name.text, source: `${module}#*` });
-  else for (const element of namedBindings?.elements ?? []) binds.push({ name: element.name.text, source: `${module}#${(element.propertyName ?? element.name).text}` });
-  return binds.length === 0 ? undefined : { binds };
+function bindsOf(node: ts.Node, tree: ts.SourceFile): { binds: ImportBinding[] } | undefined {
+  const statement = ts.isImportDeclaration(node) ? moduleStatement(node, tree) : undefined;
+  if (statement?.specifier === undefined || statement.bindings.length === 0) return undefined;
+  const { specifier } = statement;
+  return { binds: statement.bindings.map(({ local, imported }) => ({ name: local ?? imported, source: `${specifier}#${imported}` })) };
 }
