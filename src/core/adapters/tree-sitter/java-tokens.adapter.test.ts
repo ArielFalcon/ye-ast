@@ -76,3 +76,8 @@ test("a lone CR is not a line break for git, so every token stays on its LF line
   const held = await reading(["class A {}\rclass B { int x=1; }"]);
   assert.ok(held.tokens.every((token) => token.start === 1 && token.end === 1));
 });
+
+test("a single-type and a single-static import bind their last name, and a wildcard binds none a reading can list", async () => {
+  const held = await reading(["import a.b.C;", "import static a.D.m;", "import a.e.*;", "import static a.F.*;", "class A {}"]);
+  assert.deepEqual(held.imports.map(({ binds }) => binds), [[{ name: "C", source: "a.b.C" }], [{ name: "m", source: "static a.D.m" }], undefined, undefined]);
+});

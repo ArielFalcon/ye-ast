@@ -12,10 +12,18 @@ export interface Token {
   endOffset: number;
 }
 
+/** A name an import declaration binds in its file, and what it binds it to: a module and an exported name, or a qualified name. */
+export interface ImportBinding {
+  name: string;
+  source: string;
+}
+
 /** An import declaration's syntactic span in the source, as offsets. */
 export interface ImportDeclarationRange {
   start: number;
   end: number;
+  /** The names it binds; absent when it binds none a reading can list (a side-effect import, a wildcard, a re-export). */
+  binds?: readonly ImportBinding[];
 }
 
 /** The token reading of one source, plain data a cache can retain (no tree, no node). */

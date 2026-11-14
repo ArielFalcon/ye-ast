@@ -63,7 +63,8 @@ replaces `head` or `revision` under `trusted` only ([Live head](#live-head-slice
 | Touched line | Seed |
 |---|---|
 | inside a symbol | the innermost symbol whose span holds it |
-| inside a file's symbols but in none (imports, top-level statements) | the file's top-level symbols |
+| inside a file's symbols but in none (top-level statements, a package declaration) | the file's top-level symbols |
+| a hunk made only of import declarations | the declarations whose own lines write a name the file's imports bind differently at the head than at the base, innermost first, basis `lines` ([ADR-0097](../adr/0097-an-import-change-seeds-the-declarations-that-use-the-names-it-binds.md)); the file's top-level symbols when the names cannot be bounded: an import that binds no listable name (side effect, wildcard, re-export), no name changed, no declaration writing one, a use in a top-level statement, imports whose order has meaning moved, a side the tokens stage did not read |
 | in a file with touched lines and no symbol at all | none; a `no-extractor` cut at the file |
 | in a file declaring a Java `record`, which codegraph gives no node and whose methods it places under the package | the symbols the graph holds, as above, and a `no-extractor` cut at the file, found by ye-ast's own Java grammar over the changed and targeted files; a `callers` target it cannot name stays an `unknown-symbol` fault whose detail says the file declares a record |
 | in `templateUrl` or `styleUrl(s)` of a component | that component, read from decorator metadata ([ADR-0014](../adr/0014-angular-and-spring-from-own-extractors.md) decision 2) |

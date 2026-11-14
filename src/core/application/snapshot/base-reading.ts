@@ -185,7 +185,7 @@ async function tokensOfSource(deps: BaseReadingDeps, file: SourceFile, prepared:
   if (holder === undefined) return { status: "unread", reason: "capability-absent" };
   const read = (): Promise<SourceReading> => holder.tokensOf(file);
   const facts = prepared?.facts;
-  return facts === undefined ? read() : facts.ofInputs("tokens", { path: file.path, content: file.content, reading: "v1" }, read);
+  return facts === undefined ? read() : facts.ofInputs("tokens", { path: file.path, content: file.content, reading: "v2" }, read);
 }
 
 function contradictionKey({ record, target }: ContradictedCall): string {

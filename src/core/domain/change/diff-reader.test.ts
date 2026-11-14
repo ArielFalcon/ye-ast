@@ -71,7 +71,7 @@ test("the names removed lines declared are carried, a pure deletion or a replace
       "-}",
     ].join("\n"),
   );
-  assert.deepEqual(changes[0]?.removals, [{ after: 1 }, { after: 16 }]);
+  assert.deepEqual(changes[0]?.removals, [{ after: 1, base: { start: 2, end: 5 } }, { after: 16, base: { start: 20, end: 22 } }]);
   assert.deepEqual(changes[0]?.removedNames, ["gone", "replaced", "Old"]);
   assert.deepEqual(changes[0]?.added, [{ start: 5, end: 5 }]);
 });
@@ -128,7 +128,7 @@ test("a pure addition has no base side and a pure deletion has no head side", ()
     { base: { start: 20, end: 20 }, removedNames: [] },
   ]);
   assert.deepEqual(changes[0]?.added, [{ start: 8, end: 9 }]);
-  assert.deepEqual(changes[0]?.removals, [{ after: 21 }]);
+  assert.deepEqual(changes[0]?.removals, [{ after: 21, base: { start: 20, end: 20 } }]);
 });
 
 test("a deleted file is flagged and has no new side", () => {
@@ -139,7 +139,7 @@ test("a deleted file is flagged and has no new side", () => {
       deleted: true,
       binary: false,
       added: [],
-      removals: [{ after: 0 }],
+      removals: [{ after: 0, base: { start: 1, end: 2 } }],
       removedNames: [],
       hunks: [{ base: { start: 1, end: 2 }, removedNames: [] }],
     },

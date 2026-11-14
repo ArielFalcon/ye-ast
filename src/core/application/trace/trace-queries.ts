@@ -304,7 +304,7 @@ async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file:
 
 async function rangeRoots(changes: readonly FileChange[], sources: readonly SourceFile[], tokens: SourceTokens, snapshot: SnapshotFiles, isRoot: (symbol: GraphSymbol) => boolean, declarations: DeclarationModel): Promise<RootSelection> {
   const ranges = await requestedRanges(changes, sources, tokens, snapshot, declarations);
-  return selectRoots(declarations, ranges.changes, [], NO_COMPONENTS, ranges.uncovered, isRoot, ranges.settled);
+  return selectRoots(declarations, ranges.changes, [], NO_COMPONENTS, ranges.uncovered, isRoot, ranges.settled, ranges.tokens);
 }
 
 /** The steps as the reading plan reads them: a class walked as a construction spans only the lines its own body runs there. */

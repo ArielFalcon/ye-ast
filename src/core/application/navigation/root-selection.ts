@@ -1,5 +1,6 @@
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
+import type { FileTokens } from "../../domain/change/import-seeds.ts";
 import { isSeedable, selectSeeds, topLevelOf, type ComponentRef, type SeedSelection, type SelectedSeed } from "../../domain/change/seeds.ts";
 import { triviaLinesOf } from "../../domain/change/token-lines.ts";
 import { comparePosition, compareText } from "../../domain/shared/code-node.ts";
@@ -61,6 +62,8 @@ export interface RequestedRanges {
   uncovered: RawUnknownEntry[];
   /** The ranges whose every line holds no token: they select nothing and answer successfully (ADR-0043 decision 3). */
   settled: RawUnknownEntry[];
+  /** What the tokens stage read of the head of each file a range kept. */
+  tokens: Map<string, FileTokens>;
 }
 
 /**
@@ -78,9 +81,9 @@ export async function requestedRanges(changes: readonly FileChange[], sources: r
     const top = topLevelOf(symbols);
     if (file === undefined) {
       const absent = snapshot.holds(change.path) ? [] : change.added.map(({ start, end }): RawUnknownEntry => ({ file: change.path, start, end, candidates: [] }));
-      return { change: absent.length === 0 ? change : undefined, uncovered: absent, settled: [] };
+      return { change: absent.length === 0 ? change : undefined, uncovered: absent, settled: [], tokens: [] };
     }
-    if (top.length === 0) return { change, uncovered: [], settled: [] };
+    if (top.length === 0) return { change, uncovered: [], settled: [], tokens: [] };
     const reading = await tokens.tokensOf(file);
     const quiet = reading.status === "read" ? triviaLinesOf(reading, file.content.split("\n").length) : new Set<number>();
     const lastLine = file.content.split("\n").length;
@@ -92,9 +95,10 @@ export async function requestedRanges(changes: readonly FileChange[], sources: r
       change: { ...change, added: ranges.flatMap(({ runs }) => runs) },
       uncovered: entries(ranges.filter(({ runs, start }) => runs.length === 0 && start > lastLine)),
       settled: reading.status === "read" ? entries(ranges.filter(({ runs, start }) => runs.length === 0 && start <= lastLine)) : [],
+      tokens: reading.status === "read" ? [[change.path, { head: reading }] as const] : [],
     };
   }));
-  return { changes: narrowed.flatMap(({ change }) => (change === undefined ? [] : [change])), uncovered: narrowed.flatMap(({ uncovered }) => uncovered), settled: narrowed.flatMap(({ settled }) => settled) };
+  return { changes: narrowed.flatMap(({ change }) => (change === undefined ? [] : [change])), uncovered: narrowed.flatMap(({ uncovered }) => uncovered), settled: narrowed.flatMap(({ settled }) => settled), tokens: new Map(narrowed.flatMap(({ tokens }) => tokens)) };
 }
 
 /** The settled ranges as the answer carries them, sorted by file and position. */
@@ -128,6 +132,7 @@ export async function selectRoots(
   uncovered: readonly RawUnknownEntry[] = [],
   isRoot: (symbol: GraphSymbol) => boolean = isSeedable,
   settled: RawUnknownEntry[] = [],
+  tokens: ReadonlyMap<string, FileTokens> = new Map(),
 ): Promise<RootSelection> {
   const sourceChanges = changes.filter((file) => kindOfChangedFile(file.path) === "source" && !file.deleted).map((file) => file.path);
   const componentFiles = changes.flatMap((file) => (componentsByResource.get(file.path) ?? []).map((component) => component.file));
@@ -136,7 +141,7 @@ export async function selectRoots(
   const missing = [...await missingTargets(declarations, requested, isRoot), ...uncovered];
   if (missing.length > 0) return { seeds: [], syntaxSeeds: [], withoutSymbols: [], removed: [], removalHolders: [], missing, settled };
 
-  const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource, (declaration) => isModelRoot(declaration, isRoot));
+  const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource, (declaration) => isModelRoot(declaration, isRoot), tokens);
   const matched = await Promise.all(requested.map(async (target) => (await declarations.select(target.file, target.symbol)).filter((declaration) => isModelRoot(declaration, isRoot))));
   const requestedSymbols = new Map(matched.flat().map((declaration) => [declaration.id, declaration]));
   const chosen = [...[...requestedSymbols.values()].map((symbol): SelectedSeed<ModelDeclaration> => ({ symbol, basis: "requested" })), ...selection.seeds.filter(({ symbol }) => !requestedSymbols.has(symbol.id))];

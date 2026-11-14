@@ -8,8 +8,9 @@ import { blastRadius, type BlastRadius } from "../../domain/change/blast-radius.
 import { isReadableFile, kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import { selectChange } from "../../domain/change/change-selection.ts";
 import { resourceImpact, resourceOwners } from "../../domain/change/resource-impact.ts";
-import type { FileChange, Hunk, LineRange } from "../../domain/change/diff-reader.ts";
+import type { FileChange, Hunk, LineRange, Removal } from "../../domain/change/diff-reader.ts";
 import { settledOf } from "../../domain/change/hunk-settling.ts";
+import type { FileTokens } from "../../domain/change/import-seeds.ts";
 import type { TokenReading } from "../../domain/change/source-tokens.ts";
 import { triviaLinesOf } from "../../domain/change/token-lines.ts";
 import type { SettledHunkChange } from "../../domain/impact/impact-fact.ts";
@@ -229,7 +230,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const typed = await reading.typed();
           if (typed === "aborted") return ABORTED;
-          const read = await impactOf({ store: reading.store, changes: ranges.changes, requested, componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, modules: namespaceModules(head, headTree, signal), signal });
+          const read = await impactOf({ store: reading.store, changes: ranges.changes, tokens: ranges.tokens, requested, componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, modules: namespaceModules(head, headTree, signal), signal });
           if (signal?.aborted) return ABORTED;
           const settled = settledRangeChanges(ranges.settled);
           const value = settled.length === 0 ? read.value : { ...read.value, settled };
@@ -409,7 +410,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     }
     const changes = selection.files;
     const headTree = head.tree;
-    const { changes: settledChanges, settled } = await settledHunks(readings, changes, headTree.sources, baseTree.sources, head.prepared, input.basePrepared);
+    const { changes: settledChanges, settled, tokens } = await settledHunks(readings, changes, headTree.sources, baseTree.sources, head.prepared, input.basePrepared);
     if (signal?.aborted) return ABORTED;
     const declarations = await deps.angular.read(headTree.sources);
     if (signal?.aborted) return ABORTED;
@@ -493,7 +494,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (signal?.aborted) return ABORTED;
       const typed = await reading.typed();
       if (typed === "aborted") return ABORTED;
-      const read = await impactOf({ store: reading.store, changes: validatedChanges, requested: [], componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, modules: namespaceModules(head, headTree, signal), signal });
+      const read = await impactOf({ store: reading.store, changes: validatedChanges, tokens, requested: [], componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, modules: namespaceModules(head, headTree, signal), signal });
       if (signal?.aborted) return ABORTED;
       const reached = { ...value, ...read.value };
       return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), reached, [...unaccounted([...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts]), ...moduleCuts], impactWalk(changes.map(({ path }) => path), reached)) };
@@ -511,11 +512,12 @@ async function settledHunks(
   baseSources: readonly { path: string; content: string }[],
   headPrepared: PreparedCommit | undefined,
   basePrepared: PreparedCommit | undefined,
-): Promise<{ changes: FileChange[]; settled: SettledHunkChange[] }> {
+): Promise<{ changes: FileChange[]; settled: SettledHunkChange[]; tokens: Map<string, FileTokens> }> {
   const baseByPath = new Map(baseSources.map((source) => [source.path, source]));
   const headByPath = new Map(headSources.map((source) => [source.path, source]));
   const settled: SettledHunkChange[] = [];
   const changes: FileChange[] = [];
+  const tokens = new Map<string, FileTokens>();
   for (const file of files) {
     if (kindOfChangedFile(file.path) !== "source" || file.deleted || file.binary) {
       changes.push(file);
@@ -533,6 +535,7 @@ async function settledHunks(
       changes.push(file);
       continue;
     }
+    tokens.set(file.path, base.status === "read" ? { base, head } : { head });
     const left = new Set<Hunk>();
     for (const hunk of file.hunks) {
       const outcome = settledOf(base, head, hunk);
@@ -549,7 +552,7 @@ async function settledHunks(
     changes.push(settleFile(file, left, head, headSource.content));
   }
   settled.sort((a, b) => compareText(a.file, b.file) || firstLine(a) - firstLine(b));
-  return { changes, settled };
+  return { changes, settled, tokens };
 }
 
 /**
@@ -560,7 +563,7 @@ function settleFile(file: FileChange, left: ReadonlySet<Hunk>, head: TokenReadin
   const quiet = triviaLinesOf(head, content.split("\n").length);
   const removedNames = new Set([...left].flatMap((hunk) => hunk.removedNames));
   const added: LineRange[] = [];
-  const removals: { after: number }[] = [];
+  const removals: Removal[] = [];
   let removal = 0;
   for (const hunk of file.hunks) {
     const place = hunk.head === undefined ? file.removals[removal] : undefined;
@@ -571,7 +574,7 @@ function settleFile(file: FileChange, left: ReadonlySet<Hunk>, head: TokenReadin
       continue;
     }
     const ranges = tokenLinesIn(hunk.head, quiet);
-    if (ranges.length === 0) removals.push({ after: hunk.head.start - 1 });
+    if (ranges.length === 0) removals.push({ after: hunk.head.start - 1, ...(hunk.base === undefined ? {} : { base: hunk.base }) });
     else added.push(...ranges);
   }
   return {
@@ -623,6 +626,8 @@ async function unmodelledIn(deps: ImpactQueriesDeps, headTree: CommitExtraction,
 interface WalkInput {
   store: CodeGraphReader;
   changes: readonly FileChange[];
+  /** What the tokens stage read of the changed sources, which scopes what an import change seeds (ADR-0097). */
+  tokens: ReadonlyMap<string, FileTokens>;
   /** Symbols asked for by name; each seeds every seedable node of the file it names. */
   requested: readonly { file: string; symbol: string }[];
   componentsByResource: ReadonlyMap<string, readonly ComponentRef[]>;
@@ -675,7 +680,7 @@ function unreadTypeReferenceCuts(seeds: readonly SelectedSeed<GraphSymbol>[], re
 
 async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const { store, changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved } = input;
-  const selection = await selectRoots(input.reading.declarations, changes, requested, componentsByResource);
+  const selection = await selectRoots(input.reading.declarations, changes, requested, componentsByResource, [], isSeedable, [], input.tokens);
 
   const { seeds } = selection;
   const implemented = await input.reading.implementedContracts();

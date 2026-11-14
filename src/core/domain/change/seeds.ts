@@ -2,6 +2,7 @@ import { joinsFact, type CodeNode } from "../shared/code-node.ts";
 import type { BlastRadius } from "./blast-radius.ts";
 import { kindOfChangedFile } from "./changed-file.ts";
 import type { LineRange } from "./diff-reader.ts";
+import { importHunksOf, reboundNames, writesAny, writesOutside, type FileTokens } from "./import-seeds.ts";
 
 export type SeedBasis = "lines" | "top-level" | "resource" | "requested";
 
@@ -57,6 +58,7 @@ export function selectSeeds<S extends SeedSymbol>(
   symbolsByFile: ReadonlyMap<string, readonly S[]>,
   componentsByResource: ReadonlyMap<string, readonly ComponentRef[]>,
   isRoot: (symbol: S) => boolean = isSeedable,
+  tokensByFile: ReadonlyMap<string, FileTokens> = new Map(),
 ): SeedSelection<S> {
   const chosen = new Map<S, SeedBasis>();
   const withoutSymbols: string[] = [];
@@ -77,6 +79,9 @@ export function selectSeeds<S extends SeedSymbol>(
     }
     if (kindOfChangedFile(change.path) !== "source") continue;
     const symbols = (symbolsByFile.get(change.path) ?? []).filter(isRoot);
+    const tokens = change.binary ? undefined : tokensByFile.get(change.path);
+    const imports = tokens === undefined ? undefined : importHunksOf(change, tokens);
+    let fileWide = false;
     for (const removal of change.removals) {
       const holder = innermostHolding(symbols, removal.after, removal.after + 1);
       if (holder !== undefined) {
@@ -86,7 +91,10 @@ export function selectSeeds<S extends SeedSymbol>(
       const place: LineRange = { start: removal.after + 1, end: removal.after + 1 };
       const owners = symbols.filter((symbol) => intersects(ownLines(symbol, symbols), [place]));
       if (owners.length > 0) for (const symbol of owners) take(symbol, "lines", true);
-      else for (const symbol of topLevelOf(symbols)) take(symbol, "top-level", true);
+      else if (imports?.removals.has(removal) !== true) {
+        fileWide = true;
+        for (const symbol of topLevelOf(symbols)) take(symbol, "top-level", true);
+      }
     }
     removed.push(...change.removedNames.map((name): RemovedDeclaration => ({ file: change.path, name })));
     const touched = change.binary ? [WHOLE_FILE] : change.added;
@@ -96,9 +104,26 @@ export function selectSeeds<S extends SeedSymbol>(
     }
     for (const symbol of symbols) if (intersects(ownLines(symbol, symbols), touched)) take(symbol, "lines");
     const top = topLevelOf(symbols);
-    if (subtract(touched, top.map(spanOf)).length > 0) for (const symbol of top) take(symbol, "top-level");
+    const outside = subtract(subtract(touched, top.map(spanOf)), imports?.heads ?? []);
+    if (outside.length > 0) {
+      for (const symbol of top) take(symbol, "top-level");
+      continue;
+    }
+    if (tokens === undefined || imports === undefined || fileWide || (imports.heads.length === 0 && imports.removals.size === 0)) continue;
+    const holdsRemoval = imports.heads.length === 0;
+    const users = usersOfReboundNames(symbols, top, tokens, imports.heads);
+    if (users === undefined) for (const symbol of top) take(symbol, "top-level", holdsRemoval);
+    else for (const symbol of users) take(symbol, "lines", holdsRemoval);
   }
   return { seeds: [...chosen].map(([symbol, basis]) => ({ symbol, basis })), withoutSymbols: withoutSymbols.toSorted(), removed, removalHolders: [...holders].filter((symbol) => !targets.has(symbol)) };
+}
+
+/** The declarations whose own lines write a name the imports rebind; `undefined` when the name rule cannot bound the change (ADR-0097). */
+function usersOfReboundNames<S extends SeedSymbol>(symbols: readonly S[], top: readonly S[], tokens: FileTokens, heads: readonly LineRange[]): S[] | undefined {
+  const names = reboundNames(tokens, heads);
+  if (names === undefined || writesOutside(tokens.head, top.map(spanOf), names)) return undefined;
+  const users = symbols.filter((symbol) => writesAny(tokens.head, ownLines(symbol, symbols), names));
+  return users.length === 0 ? undefined : users;
 }
 
 function spanOf(symbol: SeedSymbol): LineRange {

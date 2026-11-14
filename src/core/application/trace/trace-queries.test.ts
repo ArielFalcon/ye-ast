@@ -1,3 +1,4 @@
+import type { TokenReading } from "../../domain/change/source-tokens.ts";
 import { TYPESCRIPT_PROFILE } from "../../domain/languages/profiles.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -67,6 +68,8 @@ interface Options {
   trivia?: Readonly<Record<string, readonly number[]>>;
   /** Runs each time the walk asks for a file's trivia lines. */
   onTrivia?: (path: string) => void;
+  /** Replaces the tokenizer's reading of a source. */
+  reading?: (file: { path: string; content: string }) => TokenReading;
   /** The function values each source's syntax states (arrows, function expressions, lambdas, method references, anonymous class bodies), by path. */
   functionValues?: Readonly<Record<string, readonly SourceSpan[]>>;
   /** The function values a registered combinator takes, by source; none by default. */
@@ -139,7 +142,7 @@ function setup(options: Options) {
       index: async () => (options.indexFails ? { ok: false, fault: { kind: "index-failed", detail: "broken" } } : { ok: true, value: { ...SUMMARY, filesNotIndexed: options.notIndexed ?? [] } }),
       open: () => ({ ok: true, value: store }),
     },
-    tokens: { tokensOf: async (file: { path: string; content: string }) => (options.onTrivia?.(file.path), tokenReading(file, options.trivia ?? {})) },
+    tokens: { tokensOf: async (file: { path: string; content: string }) => (options.onTrivia?.(file.path), options.reading?.(file) ?? tokenReading(file, options.trivia ?? {})) },
     memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { declarations: options.declarations?.[file.path] ?? [], names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: options.callables?.[file.path] ?? [], receiverBindings: options.receiverBindings?.[file.path] ?? [], ...(options.syntaxCalls?.[file.path] === undefined ? {} : { calls: options.syntaxCalls[file.path] }), functionValues: options.functionValues?.[file.path] ?? [] }) },
     importOrigins: () => ({
       replacedRoots: async () => options.replaced ?? written(),
@@ -650,6 +653,17 @@ test("a line range selects the declarations it intersects, never the file's othe
   const fact = await factOf({ nodes, sources: [{ path: B, content }], trivia: { [B]: [4, 8, 10] } }, [{ file: B, start: 3, end: 5 }]);
   assert.deepEqual(valueOf(fact).roots, [{ target: "src/b.ts:3-5", steps: [0, 1] }]);
   assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["f", "g"]);
+});
+
+test("a line range over an import selects the declarations that write what it binds, not the class around them", async () => {
+  const content = ["import { Money } from './money';", "class Order {", "  price() { return new Money(); }", "  count() { return 1; }", "}"].join("\n");
+  const nodes = [fakeNode("Order", "class", B, 2, 5), fakeNode("price", "method", B, 3, 3), fakeNode("count", "method", B, 4, 4)];
+  const reading = (file: { path: string; content: string }): TokenReading => {
+    const tokens = [...file.content.matchAll(/\w+|\S/g)].map((word) => ({ start: file.content.slice(0, word.index).split("\n").length, end: file.content.slice(0, word.index).split("\n").length, text: word[0], startOffset: word.index, endOffset: word.index + word[0].length }));
+    return { ...tokenReading(file, {}), tokens, imports: [{ start: 0, end: content.indexOf("\n"), binds: [{ name: "Money", source: "./money#Money" }] }] };
+  };
+  const fact = await factOf({ nodes, sources: [{ path: B, content }], reading }, [{ file: B, start: 1, end: 1 }]);
+  assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["price"]);
 });
 
 test("a line range wholly past the end of its file is an unknown-symbol fault, and one over trivia settles", async () => {

@@ -2624,6 +2624,53 @@ test("a plain top-level deletion with no trivia seeds the declaration beside it"
   assert.deepEqual(value.seeds.map((seed) => seed.symbol), ["x"]);
 });
 
+/** A word-per-token reading of a Java source whose `import a.B;` lines are import declarations binding `B`, and `import a.*;` binds nothing. */
+function importReading(file: { path: string; content: string }) {
+  const tokens: { start: number; end: number; text: string; startOffset: number; endOffset: number }[] = [];
+  const imports: { start: number; end: number; binds?: { name: string; source: string }[] }[] = [];
+  let offset = 0;
+  file.content.split("\n").forEach((text, index) => {
+    for (const word of text.matchAll(/\w+|\S/g)) tokens.push({ start: index + 1, end: index + 1, text: word[0], startOffset: offset + word.index, endOffset: offset + word.index + word[0].length });
+    const bound = /^import ([\w.]+)\.(\w+);$/.exec(text);
+    if (text.startsWith("import ")) imports.push({ start: offset, end: offset + text.length, ...(bound === null ? {} : { binds: [{ name: bound[2]!, source: `${bound[1]}.${bound[2]}` }] }) });
+    offset += text.length + 1;
+  });
+  return { status: "read" as const, language: "java" as const, tokens, imports, importOrder: "insignificant" as const };
+}
+
+async function addedImport(line: string) {
+  const file = "src/Order.java";
+  const base = ["", "class Order {", "  Money price() { return null; }", "  int count() { return 1; }", "}"].join("\n");
+  const head = [line, ...base.split("\n").slice(1)].join("\n");
+  const nodes = [fakeNode("Order", "class", file, 2, 5), fakeNode("price", "method", file, 3, 3), fakeNode("count", "method", file, 4, 4)];
+  const answer = fact(await setup({
+    changes: { ok: true, value: [change(file, { added: [{ start: 1, end: 1 }] })] },
+    nodes,
+    sources: [{ path: file, content: head }],
+    snapshotSources: { [HEAD]: [{ path: file, content: head }], [FORK]: [{ path: file, content: base }] },
+    exports: listingOf([file]),
+    sourceTokens: { tokensOf: async (source) => importReading(source) },
+  }).ask());
+  return answer.status === "unknown" ? assert.fail("unexpected unknown") : answer.value.seeds.map((seed) => [seed.symbol, seed.basis]);
+}
+
+test("an added import seeds the method that writes its name, not the class around it nor the methods that do not", async () => {
+  assert.deepEqual(await addedImport("import shop.Money;"), [["price", "lines"]]);
+});
+
+test("a requested range over an import seeds the declarations that write what it binds", async () => {
+  const file = "src/Order.java";
+  const content = ["import shop.Money;", "class Order {", "  Money price() { return null; }", "  int count() { return 1; }", "}"].join("\n");
+  const nodes = [fakeNode("Order", "class", file, 2, 5), fakeNode("price", "method", file, 3, 3), fakeNode("count", "method", file, 4, 4)];
+  const { callers } = setup({ nodes, sources: [{ path: file, content }], exports: listingOf([file]), sourceTokens: { tokensOf: async (source) => importReading(source) } });
+  const answer = callersFact(await callers({ targets: [{ file, start: 1, end: 1 }] }));
+  assert.deepEqual(answer.status !== "unknown" && answer.value.seeds.map((seed) => [seed.symbol, seed.basis]), [["price", "lines"]]);
+});
+
+test("an added wildcard import keeps seeding the file's top-level declarations", async () => {
+  assert.deepEqual(await addedImport("import shop.*;"), [["Order", "top-level"]]);
+});
+
 test("ofChange keeps the head parse hold open through Java contract and receiver readings", async () => {
   for (const [liveMode, end] of [[false, "success"], [true, "success"], [false, "throw"], [true, "throw"], [false, "abort"], [true, "abort"]] as const) {
     const path = "src/A.java";

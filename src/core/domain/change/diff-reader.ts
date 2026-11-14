@@ -36,6 +36,8 @@ export interface Hunk {
 export interface Removal {
   /** The new-side line after which the lines vanished; 0 is before the first line. */
   after: number;
+  /** The base-side lines that vanished. */
+  base?: LineRange;
 }
 
 /** A `diff --git` header the reader cannot split into a path. */
@@ -113,7 +115,7 @@ export function createDiffReader(): DiffReader {
         deleted,
         binary,
         added: hunks.flatMap((hunk) => (hunk.head === undefined ? [] : [hunk.head])),
-        removals: hunks.flatMap((hunk) => (hunk.head === undefined ? [{ after: hunk.headStart }] : [])),
+        removals: hunks.flatMap((hunk): Removal[] => (hunk.head === undefined ? [{ after: hunk.headStart, ...(hunk.base === undefined ? {} : { base: hunk.base }) }] : [])),
         removedNames: [...new Set(removedNames)].filter((name) => !addedNames.has(name)),
         hunks: hunks.map((hunk): Hunk => ({ ...(hunk.base === undefined ? {} : { base: hunk.base }), ...(hunk.head === undefined ? {} : { head: hunk.head }), removedNames: [...new Set(hunk.removedNames)].filter((name) => !hunk.addedNames.has(name)) })),
       })),

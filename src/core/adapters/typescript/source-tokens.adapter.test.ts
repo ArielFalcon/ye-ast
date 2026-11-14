@@ -74,3 +74,21 @@ test("U+2028 and U+2029 before an LF do not move a token off its git line, so a 
     assert.deepEqual(settledOf(base, head, { base: { start: 2, end: 2 }, head: { start: 2, end: 2 }, removedNames: [] }), { settled: undefined });
   }
 });
+
+test("an import binds its local names to what they import, and a side-effect import, an empty clause and a re-export bind none a reading can list", async () => {
+  const held = await reading([
+    "import d, { a as b, c } from 'm';",
+    "import * as ns from 'n';",
+    "import 'side';",
+    "import {} from 'e';",
+    "export { x } from 'r';",
+    "export const k = 1;",
+  ]);
+  assert.deepEqual(held.imports.map(({ binds }) => binds), [
+    [{ name: "d", source: "m#default" }, { name: "b", source: "m#a" }, { name: "c", source: "m#c" }],
+    [{ name: "ns", source: "n#*" }],
+    undefined,
+    undefined,
+    undefined,
+  ]);
+});

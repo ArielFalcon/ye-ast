@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { blastRadius } from "./blast-radius.ts";
-import type { FileChange } from "./diff-reader.ts";
+import type { FileChange, Hunk, LineRange } from "./diff-reader.ts";
+import type { FileTokens } from "./import-seeds.ts";
 import { selectSeeds, type ComponentRef, type SeedSymbol } from "./seeds.ts";
+import type { ImportBinding, ImportOrder, TokenReading } from "./source-tokens.ts";
 
 interface TestSymbol extends SeedSymbol {
   id: string;
@@ -156,3 +158,116 @@ test("a deletion in a file that is no source reports no name", () => {
   const readme = change("docs/readme.md", { removals: [{ after: 3 }], removedNames: ["lost"] });
   assert.deepEqual(removedBy([readme], []), []);
 });
+
+interface Line {
+  text: string;
+  binds?: readonly ImportBinding[];
+}
+
+/** A reading of `lines`: one token per word or sign, and every line that starts with `import` an import declaration. */
+function reading(lines: readonly (string | Line)[], importOrder: ImportOrder = "insignificant"): TokenReading {
+  const tokens: TokenReading["tokens"][number][] = [];
+  const imports: TokenReading["imports"][number][] = [];
+  let offset = 0;
+  lines.forEach((line, index) => {
+    const { text, binds } = typeof line === "string" ? { text: line, binds: undefined } : line;
+    for (const word of text.matchAll(/[A-Za-z_$][\w$]*|\S/g)) tokens.push({ start: index + 1, end: index + 1, text: word[0], startOffset: offset + word.index, endOffset: offset + word.index + word[0].length });
+    if (text.startsWith("import")) imports.push({ start: offset, end: offset + text.length, ...(binds === undefined ? {} : { binds }) });
+    offset += text.length + 1;
+  });
+  return { status: "read", language: "java", tokens, imports, importOrder };
+}
+
+const MONEY: Line = { text: "import shop.Money;", binds: [{ name: "Money", source: "shop.Money" }] };
+const FILLER = "x;";
+
+/** Thirty lines for CLASS_WITH_METHODS: `total` (lines 5-10) writes `Money` at line 7, the other lines write nothing of interest. */
+function body(overrides: Record<number, string | Line> = {}): (string | Line)[] {
+  return Array.from({ length: 30 }, (_, index) => overrides[index + 1] ?? (index + 1 === 7 ? "Money m;" : FILLER));
+}
+
+const hunk = (head?: LineRange, base?: LineRange): Hunk => ({ ...(head === undefined ? {} : { head }), ...(base === undefined ? {} : { base }), removedNames: [] });
+
+function runWith(file: FileChange, tokens: FileTokens | undefined, symbols: TestSymbol[] = CLASS_WITH_METHODS) {
+  const selection = selectSeeds(blastRadius("base", [file]), Map.groupBy(symbols, (candidate) => candidate.file), new Map(), undefined, tokens === undefined ? new Map() : new Map([[file.path, tokens]]));
+  return { seeds: selection.seeds.map(({ symbol, basis }) => `${symbol.id}:${basis}`).toSorted(), holders: selection.removalHolders.map((holder) => holder.id) };
+}
+
+const ADDED_IMPORT = change("src/Order.java", { added: [{ start: 1, end: 1 }], hunks: [hunk({ start: 1, end: 1 })] });
+
+test("an added import seeds the method that writes its name and neither the class nor the methods that do not", () => {
+  const tokens = { base: reading(body()), head: reading(body({ 1: MONEY })) };
+  assert.deepEqual(runWith(ADDED_IMPORT, tokens).seeds, ["total:lines"]);
+});
+
+test("a requested range over an import has no base and seeds the declarations that write what the import binds", () => {
+  assert.deepEqual(runWith(ADDED_IMPORT, { head: reading(body({ 1: MONEY })) }).seeds, ["total:lines"]);
+});
+
+test("a removed import reads the base side: the declarations that still write its name seed as a walk start, not as targets", () => {
+  const removal = { after: 0, base: { start: 1, end: 1 } };
+  const removed = change("src/Order.java", { removals: [removal], hunks: [hunk(undefined, { start: 1, end: 1 })] });
+  const selected = runWith(removed, { base: reading(body({ 1: MONEY })), head: reading(body()) });
+  assert.deepEqual(selected, { seeds: ["total:lines"], holders: ["total"] });
+});
+
+test("an import changed beside an edit in another method seeds the users of its name and the edited method", () => {
+  const edited = change("src/Order.java", { added: [{ start: 1, end: 1 }, { start: 13, end: 13 }], hunks: [hunk({ start: 1, end: 1 }), hunk({ start: 13, end: 13 }, { start: 13, end: 13 })] });
+  const tokens = { base: reading(body()), head: reading(body({ 1: MONEY, 13: "y;" })) };
+  assert.deepEqual(runWith(edited, tokens).seeds, ["tax:lines", "total:lines"]);
+});
+
+const ALL_TOP_LEVEL = ["Order:top-level", "helper:top-level"];
+const SYMBOLS = [...CLASS_WITH_METHODS, symbol("helper", "function", 40, 45)];
+const named = (text: string, ...names: string[]): Line => ({ text, binds: names.map((name) => ({ name, source: `shop.${name}` })) });
+const wide = (overrides: Record<number, string | Line>, count = 45): (string | Line)[] => Array.from({ length: count }, (_, index) => overrides[index + 1] ?? (index + 1 === 7 ? "Money m;" : FILLER));
+
+const LATE_SYMBOLS = [symbol("Order", "class", 5, 30), symbol("total", "method", 6, 10), symbol("helper", "function", 40, 45)];
+
+const FAIL_CLOSED: { name: string; file: FileChange; tokens: FileTokens; symbols?: TestSymbol[] }[] = [
+  {
+    name: "an import that binds no name a reading can list (a side-effect import, a wildcard, a re-export) beside one that binds a used name",
+    file: change("src/Order.java", { added: [{ start: 1, end: 2 }], hunks: [hunk({ start: 1, end: 2 })] }),
+    tokens: { base: reading(wide({})), head: reading(wide({ 1: "import shop.*;", 2: MONEY })) },
+  },
+  {
+    name: "a name written by a statement outside every declaration",
+    file: ADDED_IMPORT,
+    tokens: { base: reading(wide({ 47: "register(Money);" }, 47)), head: reading(wide({ 1: MONEY, 47: "register(Money);" }, 47)) },
+  },
+  {
+    name: "an import change that binds no name differently, or whose name no declaration writes",
+    file: change("src/Order.java", { added: [{ start: 1, end: 1 }], hunks: [hunk({ start: 1, end: 1 }, { start: 1, end: 1 })] }),
+    tokens: { base: reading(wide({ 1: MONEY })), head: reading(wide({ 1: { ...MONEY, text: "import  shop.Money ;" } })) },
+  },
+  {
+    name: "a hunk that changes an import and a line that is no import",
+    file: change("src/Order.java", { added: [{ start: 1, end: 2 }], hunks: [hunk({ start: 1, end: 2 })] }),
+    tokens: { base: reading(wide({})), head: reading(wide({ 1: MONEY, 2: "package shop;" })) },
+  },
+  {
+    name: "a removal between declarations that held no import, beside an import that binds a used name",
+    file: change("src/Order.java", { added: [{ start: 1, end: 1 }], removals: [{ after: 35, base: { start: 36, end: 36 } }], hunks: [hunk({ start: 1, end: 1 }), hunk(undefined, { start: 36, end: 36 })] }),
+    tokens: { base: reading(wide({})), head: reading(wide({ 1: MONEY, 36: "" })) },
+  },
+  {
+    name: "a removed import whose base side the tokens stage did not read",
+    file: change("src/Order.java", { removals: [{ after: 0, base: { start: 1, end: 1 } }], hunks: [hunk(undefined, { start: 1, end: 1 })] }),
+    tokens: { head: reading(wide({})) },
+  },
+  {
+    name: "imports whose order carries meaning moved relative to each other",
+    symbols: LATE_SYMBOLS,
+    file: change("src/Order.java", { added: [{ start: 1, end: 3 }], hunks: [hunk({ start: 1, end: 3 }, { start: 1, end: 2 })] }),
+    tokens: {
+      base: reading(wide({ 1: named("import a;", "A"), 2: named("import b;", "B") }), "significant"),
+      head: reading(wide({ 1: named("import b;", "B"), 2: named("import a;", "A"), 3: MONEY }), "significant"),
+    },
+  },
+];
+
+for (const { name, file, tokens, symbols = SYMBOLS } of FAIL_CLOSED) {
+  test(`${name} keeps the seeds of the file's top-level declarations`, () => {
+    assert.deepEqual(runWith(file, tokens, symbols).seeds, ALL_TOP_LEVEL.toSorted());
+  });
+}
