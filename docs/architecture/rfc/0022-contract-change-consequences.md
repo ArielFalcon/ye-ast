@@ -445,9 +445,12 @@ whether it grows.
 accepted and the head does not, absence and `null` included. A written request hypothesis (`target: "request"`) states
 it with its own kinds, normalized into that value set: `required` (absence), `non-nullable` (`null`),
 `{ "values": { "removed": [...] } }` (literals no longer accepted, each in a class the server keeps), and
-`{ "type": class }` (the other present JSON classes; absence and `null` are stated apart). The response kinds are
-refused for a request with `unsupported-change`, since each states what a reader may now receive; contradictory
-combinations are refused as for a response.
+`{ "type": class }` (the other present JSON classes; absence and `null` are stated apart), and
+`{ "renamed": "<name>" }` ([ADR-0102](../adr/0102-a-renamed-request-property-is-a-review-of-every-producer-that-writes-the-old-name.md):
+every present write of the property stops being read, absence is not affected, and the new name is a separate
+`required` hypothesis). The other response kinds are refused for a request with `unsupported-change`, since each states
+what a reader may now receive; contradictory combinations are refused as for a response, and `renamed` contradicts
+every other entry on its property.
 
 **Origins** (the new mechanism). The question is whether some path the producer writes can put a rejected value at the
 property, so the body is followed backward to what builds it, syntax only. A declared type is never an origin. An
@@ -496,7 +499,9 @@ imported from a package or otherwise unresolved is never proven.
 value, with the value, its place, the chain from the call site and the branch conditions it holds under. `admits` when
 every origin of that producer is covered and every wire value it can write lies outside the rejection; it says nothing
 about the rest of the request. `review` otherwise, each frontier an `unknown` finding at its place. An empty origin set
-never admits. The denominator is producer x followed path: a body can be decided at `id` and unknown at `name`.
+never admits. Under `renamed` an exact origin that writes a present value is `review` with the reason `stops-being-read`,
+never `incompatible`: the engine cannot know whether the server rejects or ignores the old name; the finding places
+the write. The denominator is producer x followed path: a body can be decided at `id` and unknown at `name`.
 
 **First slice (P5.1).** Declared request hypotheses (`required`, `non-nullable`, removed literals, `{ "type": class }`)
 over qualified HTTP links; a body located at a `post`, `put` or `patch` of `HttpClient` or of a wrapper (the bodies of
