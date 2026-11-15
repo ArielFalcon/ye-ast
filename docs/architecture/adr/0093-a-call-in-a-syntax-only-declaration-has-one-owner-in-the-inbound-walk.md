@@ -1,7 +1,8 @@
 # ADR-0093: A call written in a syntax-only declaration has one owner in the inbound walk
 
 - Status: Accepted, 2026-11-14, owner; extends [ADR-0049](0049-every-written-callable-is-a-declaration.md); decisions 3 and 5
-  amended 2026-11-14 after the corpus gate of the first delivery
+  amended 2026-11-14 after the corpus gate of the first delivery; decision 3 amended 2026-11-15 after evaluation run
+  `20261114T190541Z-a57733` (findings N2, N3), the owner approving the round: "Si"
 - Decision source: the owner, 2026-11-14, accepting the transversal fix plan of evaluation run `20261114T125655Z-c68fc8`
   (unit U3, cause C3) and its decisions D1 to D8: "Acepto".
 - Related: [ADR-0017](0017-owner-of-a-member-expands-only-whole-type-edges.md),
@@ -40,6 +41,9 @@ says which object-literal members a holder names.
    that opens the whole of what it declares.
    A call whose receiver the base binds to another declaration (the `inject` of a type, a declared type) is a use of that
    declaration and of no member that shares its name, so it is no `receiver-unproven` cut of the member.
+   This holds for a member only the syntax states, bound by a receiver no provider may replace: no declaration of the
+   graph that shares the member's name takes that call as a name-only cut, and an index edge that matched the call to
+   such a declaration is dropped and read as a caller of the member, at the confidence of any caller of a named member.
 4. A syntax-only declaration no holder names hands its dependence to the innermost declaration whose span contains it, at
    the same depth, with basis `contains`, entered as a declaration whose code changed. The container may itself be a
    syntax-only declaration, which decides again by this decision.
