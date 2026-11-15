@@ -776,3 +776,16 @@ test("a summary names every seed up to the listed bound and counts the change or
   assert.match(beyond, /change origins: /);
   assert.ok(!beyond.includes("s0"));
 });
+
+test("the observations of one reached unknown entrypoint say what each stands for, and one that says the same is printed once", () => {
+  const place = [{ path: "Owners.java", line: 61 }];
+  const observe = (raisedBy: string, symbol = "Owners") => ({ status: "unknown" as const, reason: "no-extractor" as const, evidence: place, subject: { candidate: "http-route" as const, symbol, raisedBy } });
+  const reached = { kind: "unknown" as const, handler: { path: "Owners.java", line: 58, symbol: "Owners" }, depth: 0, confidence: 1, seeds: [0], observations: [observe("OwnersApi"), observe("V2Api"), observe("OwnersApi", "Owners.show"), observe("V2Api"), observe("V2Api", "Owners.show")] satisfies [ReturnType<typeof observe>, ...ReturnType<typeof observe>[]] };
+  const lines = renderImpact({ ...fact, value: { ...impact, entrypoints: [reached] } }).split("\n").filter((line) => line.startsWith("    unknown ("));
+  assert.deepEqual(lines, [
+    "    unknown (no-extractor) for http-route Owners (raised by OwnersApi): Owners.java:61",
+    "    unknown (no-extractor) for http-route Owners (raised by V2Api): Owners.java:61",
+    "    unknown (no-extractor) for http-route Owners.show (raised by OwnersApi): Owners.java:61",
+    "    unknown (no-extractor) for http-route Owners.show (raised by V2Api): Owners.java:61",
+  ]);
+});
