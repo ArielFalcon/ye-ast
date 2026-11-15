@@ -14,7 +14,7 @@ import { reachesOtherRepositories } from "../../domain/topology/event-destinatio
 import { hostOf, prefixOf } from "../../domain/topology/link-match.ts";
 import type { HeadReaderDeps, HeldLive } from "../snapshot/head-reading.ts";
 import type { WorkspaceReadOperation } from "./workspace-operation.ts";
-import { callSiteEvidence, gatherUnresolvedCallSites, groupInheritedGaps, statedRequestsOf, unresolvedCallSite, unsettledCallSiteCut, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
+import { callSiteEvidence, gatherUnresolvedCallSites, groupInheritedGaps, statedRequestsOf, undecidedAuthorityTargetsOf, unresolvedCallSite, unsettledCallSiteCut, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
 import { nameCandidates, dependencyClosures, repositoryNameOf, type RepositoryIdentity } from "../../domain/topology/repository-identity.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
@@ -217,9 +217,10 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
           const section: FactBase & { evidence: readonly { path: string; line: number }[] } = { ...(entry.base as FactBase), evidence: sortEvidence(names.flatMap((name) => name.evidence)) };
           const cuts = [...entry.cuts, ...unsettled.map(unsettledCallSiteCut)];
           sections[entry.repository.repo] = withCuts(section, { names, unresolved, ...(inherited.length === 0 ? {} : { inherited }) }, cuts, EVERYTHING);
+          const decided = decidedNameKeys(entry);
           for (const name of names) {
             const served = [...nameCandidates(name, identities, entry.repository.repo), ...(linking.get(nameKey(entry.repository.repo, name)) ?? [])];
-            if (served.length === 0) unserved.push({ ...name, evidence: name.evidence.map((place) => ({ ...place, repo: entry.repository.repo })) });
+            if (served.length === 0 && decided.has(nameKey(entry.repository.repo, name))) unserved.push({ ...name, evidence: name.evidence.map((place) => ({ ...place, repo: entry.repository.repo })) });
             candidates.push(...served);
           }
         }
@@ -288,6 +289,16 @@ function callSiteNames(repo: string, callSites: readonly CallSite[]): OutwardNam
       return [...(host === undefined ? [] : [{ name: host, kind: "http-host" as const, evidence }]), ...(prefix === undefined ? [] : [{ name: prefix, kind: "path-prefix" as const, evidence }])];
     });
   });
+}
+
+/**
+ * The names of a repository that something other than a path after an undecided base states, so that no match can say
+ * nobody serves them (ADR-0101): that base can be a repository of the workspace whose server routes no reader models, and
+ * the join settles nothing for such a call (ADR-0054 decision 6), which stays one unresolved call site.
+ */
+function decidedNameKeys(entry: Pick<Resolved, "repository" | "stated" | "callSites">): Set<string> {
+  const decidedSites = entry.callSites.filter((site) => undecidedAuthorityTargetsOf(site).length === 0);
+  return new Set([...entry.stated, ...callSiteNames(entry.repository.repo, decidedSites)].map((name) => nameKey(entry.repository.repo, name)));
 }
 
 /**

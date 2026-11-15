@@ -572,7 +572,8 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   (amended 2026-11-14, owner decision D4, unit U6). The repositories that serve a destination are those the join
   linked or found ambiguous for it, with basis `event-destination`, never a name compared with an identity. The host and
   the path prefix of an HTTP call the join links are served by the repository the link reaches, so they are never
-  unserved, whatever identity they name. Composed
+  unserved, whatever identity they name; a name whose every statement is a path after an undecided base is never listed
+  as unserved either, since the join settles nothing for it (ADR-0101). Composed
   with `ye_ast_callers` or `ye_ast_impact` over the same snapshots, a link both admit is one `workspace-match` relation
   with one attestation per answer.
 - Slice 2 (frontend call sites): RFC-0007 row A3 "as built" holds the shapes; the reader is the same one the join uses.

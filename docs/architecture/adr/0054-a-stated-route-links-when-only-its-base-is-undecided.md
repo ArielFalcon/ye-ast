@@ -8,6 +8,7 @@
 - Superseded in part by: ADR-0057, decision 1 only (each URL expression that states its route).
 - Related: ADR-0042, ADR-0051, ADR-0052, ADR-0053, RFC-0011
 - Amended by: this decision 6, note of 2026-11-14 (unit U5 of the transversal fix plan)
+- Amended by: [ADR-0101](0101-a-name-stated-only-after-an-undecided-base-is-never-unserved.md), decision 6 for the names such a call states: a name only such calls state is never unserved
 - Superseded in part by: [ADR-0069](0069-a-request-whose-route-is-stated-after-an-undecided-base-is-a-placed-effect.md), decision 4 for the trace only
 
 ## Context
