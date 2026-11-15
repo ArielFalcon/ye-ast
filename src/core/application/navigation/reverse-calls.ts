@@ -7,7 +7,7 @@ import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresol
 import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins } from "../../ports/import-origins.port.ts";
-import { receiverSiteOf, type CallBindings, type SettledBinding, type UnboundCall } from "./call-binding.ts";
+import { receiverSiteOf, syntaxMemberOf, type CallBindings, type SettledBinding, type UnboundCall } from "./call-binding.ts";
 import type { FollowedEdge } from "./edge-targets.ts";
 import type { GraphNavigation } from "./graph-navigation.ts";
 import type { BodyCalls, ReconciledCalls } from "./reconciled-calls.ts";
@@ -94,13 +94,14 @@ interface ReadBinding {
 
 /**
  * What a binding that neither reaches nor is attributed to a declaration names instead: another declaration (not the class
- * whose constructor the declaration is), nothing when it lies outside the repository or in generated code, or the
- * candidates it is attributed among; `undefined` when it proves nothing.
+ * whose constructor the declaration is), nothing when it lies outside the repository, in generated code or in a member only
+ * the syntax states, or the candidates it is attributed among; `undefined` when it proves nothing.
  */
 function boundAway({ binding, generated }: ReadBinding, constructed: GraphSymbol | undefined): readonly GraphSymbol[] | undefined {
   if (generated || binding.kind === "outside" || (binding.kind === "receiver" && binding.outside === true)) return [];
   const target = binding.kind === "declaration" || binding.kind === "receiver" ? binding.target : undefined;
   if (target !== undefined) return target.id === constructed?.id ? undefined : [target];
+  if (syntaxMemberOf(binding) !== undefined) return [];
   return binding.kind !== "declaration" && binding.attributed.length > 0 ? binding.attributed : undefined;
 }
 

@@ -192,6 +192,18 @@ test("an index reference is settled for a reached declaration by what its bindin
   assert.deepEqual(settled.map((entry) => `${entry.node.id}@${JSON.parse(entry.occurrence)[1]}:${"away" in entry ? entry.away.map(({ id }) => id).join(",") : `via ${entry.via.id}`}`), ["Api.get@2:", "Api.get@3:", "Api.get@4:Store.get", "Api.get@6:Store.get"]);
 });
 
+test("a reference whose receiver binds to a member only the syntax states is settled away from every reached declaration of its name, unless a provider may replace the receiver", async () => {
+  const nodes = [fakeNode("Api.get", "method", "src/api.ts", 2, 4, "get"), fakeNode("use", "function", "src/use.ts", 1, 9)];
+  const { reverse, symbol } = setup(nodes, [], [{ body: "use", line: 2, name: "store.get" }, { body: "use", line: 3, name: "store.get" }], (call): CallBinding => {
+    const member = { id: "member", kind: "method", name: "get", qualifiedName: "Store.get", file: "src/store.ts", language: "typescript", startLine: 3, endLine: 3, startColumn: 0, endColumn: 1 } as never;
+    const holds = { kind: "token", name: "Store", line: 1, column: 1 } as const;
+    return { kind: "receiver", proof: { link: "syntax", holds, ...(call.reference.line === 3 ? { replaceable: true } : {}) }, declaration: member, candidates: [], attributed: [] };
+  });
+
+  const { settled } = await reverse.into([symbol("Api.get")]);
+  assert.deepEqual(settled.map((entry) => `${JSON.parse(entry.occurrence)[1]}:${"away" in entry ? entry.away.length : "via"}`), ["2:0"]);
+});
+
 test("a reference on a receiver declared outside the repository is settled away from each reached declaration that cannot run under its type, and left as it is for every other", async () => {
   const nodes = [fakeNode("Api.get", "method", "src/Api.java", 2, 4, "get"), fakeNode("MyMap.get", "method", "src/MyMap.java", 2, 4, "get"), fakeNode("use", "method", "src/Use.java", 1, 9)];
   const dispatch: SettledBinding = { kind: "receiver", proof: { link: "none" }, outside: true, dispatch: { type: "java.util.Map" }, candidates: [], attributed: [] };

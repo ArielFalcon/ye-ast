@@ -312,8 +312,12 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     const overriders = await implementationsBelow(symbol, owners);
     return overriders.length === 0 ? undefined : { cut: dispatchCut(symbol, overriders, "overridable") };
   };
-  /** An edge the reverse families leave for its outside receiver is read by the receiver reading here, which holds it unproven (ADR-0079). */
-  const heldAtReceiver = (verdict: EdgeTarget): EdgeTarget => (verdict.kind === "drop" && verdict.root.kind === "outside-receiver" ? { kind: "keep" } : verdict);
+  /** An edge the reverse families leave for its outside receiver or for a member only the syntax states is read by the receiver reading here, which holds it unproven (ADR-0079, ADR-0093). */
+  const heldAtReceiver = (verdict: EdgeTarget): EdgeTarget => {
+    if (verdict.kind !== "drop") return verdict;
+    if (verdict.root.kind === "outside-receiver") return { kind: "keep" };
+    return verdict.root.kind === "syntax-member" ? { kind: "keep", receiver: verdict.root.receiver, derivation: "name-match" } : verdict;
+  };
   /** The child a call reaches, marked `exact` when the receiver reading states the call is not virtual. */
   const exactly = (child: Child, receiver: ReceiverMethod | undefined): Child => (receiver?.kind === "method" && receiver.exact === true ? { ...child, exact: true } : child);
   /** Whether the call's own source binds its receiver to a function value, which a library member such as `call` runs. */

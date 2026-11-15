@@ -69,6 +69,8 @@ const FILES: Record<string, string> = {
     ");",
     "",
   ].join("\n"),
+  "src/names-page.ts": ["import { inject } from '@angular/core';", "import { SameNameStore } from './same-name-store';", "", "export class NamesPage {", "  private readonly names = inject(SameNameStore);", "  open(id: string) {", "    this.names.getOwnerById(id);", "  }", "}", ""].join("\n"),
+  "src/names-resolver.ts": ["import { inject } from '@angular/core';", "import { SameNameStore } from './same-name-store';", "", "export function resolveOwner(id: string) {", "  const names = inject(SameNameStore);", "  return names.getOwnerById(id);", "}", ""].join("\n"),
   "src/uses-load.ts": ["import { inject } from '@angular/core';", "import { Store } from './store';", "", "export class UsesLoad {", "  readonly store = inject(Store);", "  go() {", "    return this.store.load('a');", "  }", "}", ""].join("\n"),
   "src/uses-other.ts": ["import { inject } from '@angular/core';", "import { Store } from './store';", "", "export class UsesOther {", "  readonly store = inject(Store);", "  go() {", "    return this.store.other();", "  }", "}", ""].join("\n"),
 };
@@ -145,4 +147,14 @@ test("a call the base binds to another declaration is no use of a member that sh
   assert.ok(fact.status === "partial");
   assert.deepEqual(names(fact, "src/same-name-store.ts"), ["SameNameStore", "getOwnerById"]);
   assert.deepEqual(fact.cuts.filter(({ reason, at }) => reason === "receiver-unproven" && at.some((place) => place.startsWith("src/same-name-store.ts"))), []);
+});
+
+test("a call the base binds to a member only the syntax states leaves no name-only cut at a declaration that shares its name, and is a use of that member alone (ADR-0093)", async () => {
+  const fact = await callersOf({ file: "src/owner-service.ts", symbol: "OwnerService.getOwnerById" });
+  assert.ok(fact.status === "partial");
+
+  assert.deepEqual(fact.cuts.filter(({ at }) => at.some((place) => place.startsWith("src/names-page.ts"))), []);
+  assert.deepEqual(names(fact, "src/names-page.ts"), ["NamesPage", "open"]);
+  const resolver = fact.value.symbols.find(({ symbol }) => symbol === "resolveOwner");
+  assert.deepEqual([resolver?.confidence, resolver?.via?.derivation, resolver?.via?.symbol], [1, "proven", "getOwnerById"]);
 });

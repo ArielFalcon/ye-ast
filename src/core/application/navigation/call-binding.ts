@@ -75,6 +75,15 @@ export function outsideDispatchOf(answer: Extract<ReceiverMethod, { kind: "outsi
 /** A binding no read is pending on. */
 export type SettledBinding = Exclude<CallBinding, DeclaredBinding>;
 
+/**
+ * The declaration only the syntax states that a receiver binding names, such as a member of an object literal a constant
+ * holds: no graph declaration stands for it, so the call reaches none of the graph's declarations of its name (ADR-0093
+ * decision 3). None when a provider may replace the receiver.
+ */
+export function syntaxMemberOf(binding: CallBinding): ModelDeclaration | undefined {
+  return binding.kind === "receiver" && binding.target === undefined && binding.declaration !== undefined && !("replaceable" in binding.proof && binding.proof.replaceable) ? binding.declaration : undefined;
+}
+
 /** The receiver-method site a `declared` binding waits on. */
 export function receiverSiteOf({ member, call: { reference } }: DeclaredBinding): ReceiverCallSite {
   return { file: reference.file, line: reference.line, column: reference.column + 1, member };

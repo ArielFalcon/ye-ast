@@ -14,9 +14,9 @@ import type { TypeTarget } from "../../ports/type-bindings.port.ts";
 import { createGraphNavigation, isInside, placedBetween, placedMember } from "./graph-navigation.ts";
 import { declarationAt, importBindings } from "./import-bindings.ts";
 import { provenKey, typedDeclaration } from "./proven-calls.ts";
-import { CALLABLE_KINDS, createCallBindings, type CallBindings, type OutsideDispatch } from "./call-binding.ts";
+import { CALLABLE_KINDS, createCallBindings, syntaxMemberOf, type CallBindings, type OutsideDispatch } from "./call-binding.ts";
 import { bindingKey, createCallBinder, receiverBindingsByPlace, type CallBinder, type ReceiverProofs, type ReceiverSyntax } from "./call-binder.ts";
-import type { DeclarationModel } from "./declaration-model.ts";
+import type { DeclarationModel, ModelDeclaration } from "./declaration-model.ts";
 
 export { SYNTAX_ONLY, type ReceiverProofs } from "./call-binder.ts";
 
@@ -50,6 +50,12 @@ export interface EdgeTargets {
    * `kept` tells whether the edge's own target is among the candidates.
    */
   unprovenInto(nodes: readonly GraphSymbol[], signal?: AbortSignal): Promise<readonly UnprovenCallInto[]>;
+  /**
+   * The kept call edges into graph homonyms of `members` whose receiver the base binds to one of them, each with that
+   * member: calls of a member only the syntax states, which the index matched to a declaration of the same name elsewhere
+   * (ADR-0093 decision 3).
+   */
+  syntaxMemberInto(members: readonly ModelDeclaration[], signal?: AbortSignal): Promise<readonly { member: ModelDeclaration; followed: FollowedEdge }[]>;
   /** Per local name `file`'s imports bind, the declaration the join proves it reaches, when it proves exactly one. */
   importedDeclarations(file: string): Promise<ReadonlyMap<string, GraphSymbol>>;
   /** The binder of member calls' receivers this read's proofs settle; absent without syntax or proofs. */
@@ -110,7 +116,7 @@ export type EdgeTarget =
   | Exclude<EdgeVerdict<GraphSymbol>, { kind: "keep" | "drop" | "redirect" }>
   | { kind: "keep"; receiver?: string; derivation?: ReceiverSettlement; unproven?: UnprovenCall }
   | { kind: "redirect"; to: GraphSymbol; derivation?: "typed"; receiver?: string }
-  | { kind: "drop"; root: ImportOrigin | LexicalRoot | OutsideReceiver };
+  | { kind: "drop"; root: ImportOrigin | LexicalRoot | OutsideReceiver | SyntaxMember };
 
 /**
  * A call whose receiver's declared type is the type outside the repository `type`, under which the edge's target cannot
@@ -148,6 +154,13 @@ export interface UnprovenCallInto {
 export function followsUnproven(verdict: Extract<EdgeTarget, { kind: "keep" }>, target: GraphSymbol): boolean {
   const candidates = verdict.unproven?.candidates;
   return candidates === undefined || candidates.some((candidate) => candidate.id === target.id || (candidate.file === target.file && candidate.name === target.name));
+}
+
+/** A call on a receiver the base binds to a member only the syntax states, under which the edge's target, a graph declaration of the member's name, cannot run (ADR-0093 decision 3). */
+export interface SyntaxMember {
+  kind: "syntax-member";
+  declaration: ModelDeclaration;
+  receiver: string;
 }
 
 /** A root spelled alone that a declaration of its own file's scope binds, and the graph places no declaration of. */
@@ -327,6 +340,8 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
     const place = { file: source.file, line: edge.line!, column: edge.column! + 1 };
     const proof = await settle.receiverOf({ body: source, ...place, member: target.name, receiver });
     const binding = await bind.ofReceiver(proof, target.name, [target], place);
+    const member = syntaxMemberOf(binding);
+    if (member !== undefined) return { kind: "drop", root: { kind: "syntax-member", declaration: member, receiver } };
     if (binding.target !== undefined && binding.target.id !== target.id) return { kind: "redirect", to: binding.target, receiver };
     const offered = binding.candidates.length === 1 && binding.candidates[0]!.id === target.id && binding.attributed.length > 0;
     return { kind: "keep", receiver, derivation: binding.target !== undefined || offered ? "proven" : "name-match" };
@@ -383,6 +398,23 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs, t
         }
       }
       return moved;
+    },
+    async syntaxMemberInto(members, signal) {
+      const homonyms = store.declarationsNamed([...new Set(members.map(({ name }) => name))]);
+      const placed = store.incomingEdges(homonyms.map(({ id }) => id), CALL_EDGE_KINDS).filter(({ line, column }) => line !== null && column !== null);
+      const symbols = new Map(store.symbolsByIds([...new Set(placed.flatMap(({ source, target }) => [source, target]))]).map((symbol) => [symbol.id, symbol]));
+      const found = placed.flatMap((edge): FollowedEdge[] => {
+        const source = symbols.get(edge.source);
+        const target = symbols.get(edge.target);
+        return source === undefined || target === undefined ? [] : [{ edge, source, target }];
+      });
+      const judged = await verdictsOf(found, signal);
+      return found.flatMap((followed, index) => {
+        const verdict = judged[index]!;
+        const root = verdict.kind === "drop" ? verdict.root : undefined;
+        const member = root?.kind === "syntax-member" ? members.find(({ id }) => id === root.declaration.id) : undefined;
+        return member === undefined ? [] : [{ member, followed }];
+      });
     },
     async unprovenInto(nodes, signal) {
       const candidatesOf: { node: GraphSymbol; found: readonly FollowedEdge[] }[] = [];

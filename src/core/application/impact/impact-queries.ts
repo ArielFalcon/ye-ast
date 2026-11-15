@@ -699,7 +699,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   await owners.load(syntaxSeeds.map(({ file }) => file));
   const read = syntaxSeeds.filter((seed) => isNamedMember(seed) || owners.ownerOf(seed) === undefined);
   const syntax: SyntaxReading = { seeds: syntaxSeeds, callers: new Map(), owners, cuts: [], looked: new Set(read.map(({ id }) => id)) };
-  if (reverse !== undefined) await readCallersOf(syntax, reverse, read, input.signal);
+  if (reverse !== undefined) await readCallersOf(syntax, reverse, read, targets, input.signal);
   const origins = input.reading.origins();
   const written = targets === undefined || origins === undefined ? undefined : createWrittenUses({ store, sources: headTree.sources, tokensOf: (file) => input.reading.tokensOf(file), syntaxOf: input.reading.syntaxOf, origins, importedDeclarations: targets.importedDeclarations, modules: input.modules });
   const { inbound, walk, attributed, unsettled, references, unproven, cuts: contradictedCuts } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls, contradictions, syntax, written, origins?.receiverFits);
@@ -814,11 +814,13 @@ interface SyntaxReading {
   looked: Set<string>;
 }
 
-async function readCallersOf(syntax: SyntaxReading, reverse: ReverseCalls, members: readonly ModelDeclaration[], signal?: AbortSignal): Promise<void> {
+async function readCallersOf(syntax: SyntaxReading, reverse: ReverseCalls, members: readonly ModelDeclaration[], targets: EdgeTargets | undefined, signal?: AbortSignal): Promise<void> {
   const read = await reverse.intoDeclarations(members, signal);
+  const indexed = (await targets?.syntaxMemberInto(members, signal)) ?? [];
   for (const { id } of members) syntax.looked.add(id);
   syntax.cuts.push(...read.cuts);
-  for (const call of read.callers) {
+  const calls = [...read.callers, ...indexed.map(({ member, followed: { edge, source } }) => ({ from: source, declaration: member, line: edge.line!, column: edge.column!, kind: edge.kind }))];
+  for (const call of calls) {
     const basis = call.kind === "references" ? "reference" : "call";
     const found = syntax.callers.get(call.declaration.id) ?? [];
     const prior = found.find((edge) => edge.from.id === call.from.id && edge.basis === basis);
@@ -923,7 +925,7 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
     const fitted = receiverFits === undefined ? false : await readFits(receiverFits, walk, inbound);
     const placed = syntax === undefined ? false : await syntax.owners.load(walk.reached.map(({ symbol }) => symbol.file));
     const members = syntax === undefined || reverse === undefined ? [] : walk.reached.flatMap(({ symbol }) => (indexedDeclaration(symbol) === undefined && isNamedMember(symbol as ModelDeclaration) && !syntax.looked.has(symbol.id) ? [symbol as ModelDeclaration] : []));
-    if (syntax !== undefined && reverse !== undefined && members.length > 0) await readCallersOf(syntax, reverse, members, signal);
+    if (syntax !== undefined && reverse !== undefined && members.length > 0) await readCallersOf(syntax, reverse, members, targets, signal);
     const moved = placed || members.length > 0;
     const fresh = inbound.followed().filter(({ edge }) => !checked.has(edgeKey(edge)));
     const reached = [...seeds, ...walk.reached.flatMap(({ symbol }) => indexedDeclaration(symbol) ?? [])].filter((symbol) => !probed.has(symbol.id));
