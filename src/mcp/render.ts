@@ -1329,12 +1329,20 @@ function causeCounts(cause: readonly string[]): string {
     .join(", ");
 }
 
-/** Each unresolved call with every candidate and, where the cut has one, the places of its cause. */
-function tracePlaceLine(place: TracePlace): string {
-  return `    ${place.why}: ${place.file}:${place.line} ${place.spelling}${place.candidates.length === 0 ? "" : ` (${place.candidates.join(", ")})`}${place.cause.length === 0 ? "" : `; cause: ${place.cause.join(", ")}`}`;
+/** A cause of several cuts, by its places, numbered in the order its first cut appears. */
+function sharedCauses(places: readonly TracePlace[]): ReadonlyMap<string, number> {
+  const counts = Map.groupBy(places.filter(({ cause }) => cause.length > 0), ({ cause }) => cause.join(", "));
+  return new Map([...counts].filter(([, sharing]) => sharing.length > 1).map(([cause], index) => [cause, index + 1]));
 }
 
-/** What declares the library signatures that settle a function value passed to a library call (ADR-0063, ADR-0044 decision 5). */
+/** Each unresolved call with every candidate and, where the cut has one, the places of its cause, or the number of the cause several cuts share. */
+function tracePlaceLine(place: TracePlace, shared: ReadonlyMap<string, number>): string {
+  const number = shared.get(place.cause.join(", "));
+  const cause = place.cause.length === 0 ? "" : `; cause: ${number === undefined ? place.cause.join(", ") : `#${number}`}`;
+  return `    ${place.why}: ${place.file}:${place.line} ${place.spelling}${place.candidates.length === 0 ? "" : ` (${place.candidates.join(", ")})`}${cause}`;
+}
+
+/** What declares the library signatures that settle a function value passed to a library call (ADR-0063, ADR-0044 decision 5), named on a cut with one implementation, the one that releases. */
 const JDK_NEXT_STEP = '  next: declare a JDK (--jdk on ye-ast trace or ye-ast mcp) so the function values of undeclared library calls are read; a one-implementation port is followed once none of them may implement it';
 
 /** A candidate without its file: `src/a.ts::Store.get` reads `Store.get`. */
@@ -1380,9 +1388,10 @@ function traceCutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
   const unresolved = cuts.filter((cut) => cut.kind === "unresolved-link").map(tracePlaceOf);
   const lines = cutLines(cuts.filter((cut) => cut.kind !== "unresolved-link"), detail);
   if (unresolved.length === 0) return lines.length === 0 ? [] : [CUTS, ...lines];
-  const places = detail === "details" ? unresolved.map(tracePlaceLine) : [...traceCallGroupLines(unresolved), TRACE_PLACES_OMITTED];
-  const awaitsJdk = cuts.some((cut) => cut.cause?.some((place) => placeOf(place).reason === FUNCTION_VALUE_AWAITS_JDK));
-  return [CUTS, ...lines, `  unresolved-link (${unresolved.length} ${unresolved.length === 1 ? "call" : "calls"}):`, ...places, ...(awaitsJdk ? [JDK_NEXT_STEP] : [])];
+  const shared = sharedCauses(unresolved);
+  const places = detail === "details" ? [...unresolved.map((place) => tracePlaceLine(place, shared)), ...[...shared].map(([cause, number]) => `    cause #${number}: ${cause}`)] : [...traceCallGroupLines(unresolved), TRACE_PLACES_OMITTED];
+  const followable = cuts.some((cut) => cut.at.length === 2 && cut.cause?.some((place) => placeOf(place).reason === FUNCTION_VALUE_AWAITS_JDK));
+  return [CUTS, ...lines, `  unresolved-link (${unresolved.length} ${unresolved.length === 1 ? "call" : "calls"}):`, ...places, ...(followable ? [JDK_NEXT_STEP] : [])];
 }
 
 export function renderTrace(fact: Fact<TraceValue>, detail: ResponseMode = "summary"): string {

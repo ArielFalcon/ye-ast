@@ -99,3 +99,18 @@ test("a trace dispatch cut states the places of its cause, and names the --jdk i
   }
   assert.ok(!renderTrace(trace([DISPATCH]), "details").includes("cause"), "a cut with no cause prints none");
 });
+
+test("details print a cause several trace cuts share once, and the --jdk input is named only where a cut has the one implementation it releases", () => {
+  const places = ["src/Tasks.java:9 function-value-undeclared-jdk", "src/Tasks.java:12 function-value-undeclared-jdk"];
+  const dispatched = (at: string, candidates: readonly string[], cause: readonly string[] = places): Cut => ({ ...call(at, "dispatch", "unproven"), at: [at, ...candidates], cause });
+  const own = dispatched("src/flow.ts:11 other", ["src/a.ts::A.other"], ["src/Jobs.java:4 function-value"]);
+
+  const details = renderTrace(trace([dispatched("src/flow.ts:2 send", ["src/a.ts::A.send"]), dispatched("src/flow.ts:9 recv", ["src/a.ts::A.recv"]), own]), "details").split("\n");
+  assert.equal(details.filter((line) => line.includes("src/Tasks.java:12")).length, 1, details.join("\n"));
+  assert.equal(details.filter((line) => line.endsWith("; cause: #1")).length, 2, details.join("\n"));
+  assert.ok(details.some((line) => line.endsWith("; cause: src/Jobs.java:4 function-value")), "a cause one cut holds stays on its line");
+
+  const several = renderTrace(trace([dispatched("src/flow.ts:2 send", ["src/a.ts::A.send", "src/b.ts::B.send", "src/c.ts::C.send"])]), "details");
+  assert.ok(!several.includes("--jdk"), "no JDK makes three implementations one");
+  assert.ok(renderTrace(trace([dispatched("src/flow.ts:2 send", ["src/a.ts::A.send"])]), "details").includes("--jdk"));
+});
