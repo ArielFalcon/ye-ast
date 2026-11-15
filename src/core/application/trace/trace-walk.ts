@@ -147,6 +147,8 @@ type Child = ({ symbol: GraphSymbol; declaration?: never } | { declaration: Mode
   construction?: true;
   /** A call that is not virtual runs this declaration itself: no dispatch is read below it (ADR-0087 decision 5). */
   exact?: true;
+  /** A call on `this`, bare or on `super`: the receiver of the body that makes it is the one the declaration runs on. */
+  thisCall?: true;
 }
 
 interface Body {
@@ -243,6 +245,21 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     const above = ancestorsOf(type);
     return [...owners].some((owner) => above.has(owner));
   };
+  /** The one type that declares `symbol`; none when it has no owner or several. */
+  const typeOf = (symbol: GraphSymbol): GraphSymbol | undefined => {
+    const owners = navigation.ownersOf(symbol).filter((owner) => TYPE_KINDS.includes(owner.kind));
+    return owners.length === 1 ? owners[0] : undefined;
+  };
+  const inLineage = (type: GraphSymbol, above: GraphSymbol): boolean => above.id === type.id || ancestorsOf(type).has(above.id);
+  /**
+   * The type `this` denotes in a body of `declaring`'s: the receiver the walk entered the body through when `declaring` is
+   * in its lineage, which a call on `this` runs as a value of, and otherwise `declaring` itself.
+   */
+  const receiverIn = (entered: GraphSymbol | undefined, declaring: GraphSymbol | undefined): GraphSymbol | undefined =>
+    entered !== undefined && declaring !== undefined && inLineage(entered, declaring) ? entered : declaring;
+  /** Whether a declaration can run on a value of `receiver` or of a type below it: a type of its lineage or one below it declares it. */
+  const runsFor = (receiver: GraphSymbol, declaration: GraphSymbol): boolean =>
+    navigation.ownersOf(declaration).some((owner) => inLineage(receiver, owner) || isBelow(owner, new Set([receiver.id])));
   /**
    * The methods of the same name that any type below `owners` declares: a re-declaration in an interface counts, since a
    * body or a type below it may still replace the call. One whose language pack proves the supertype methods it implements
@@ -286,6 +303,8 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
    * record's methods as functions of no container, so a proof of the method a call names accepts either kind.
    */
   const placedMethod = ({ file, start, nameLine }: Omit<Extract<ReceiverMethod, { kind: "method" }>, "kind">, kinds: readonly string[] = ["method"]): GraphSymbol | undefined => placedBetween(store, file, start, nameLine, kinds);
+  const declaredOf = async (symbol: GraphSymbol): Promise<DeclaredCallable | undefined> =>
+    (await syntaxIndexOf(symbol.file)).callables.get(symbol.name)?.find(({ start, nameLine }) => start <= symbol.startLine && symbol.startLine <= nameLine);
   /**
    * What dispatch may run instead of the body the walk reads, from the declaration's own syntax: a body-less callable
    * runs whatever implements it, so the sources' declared hierarchy names every body it may run (R7): one is expanded in
@@ -294,23 +313,81 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
    * only when a type below its owner declares its name, listing those declarations. A declaration its syntax does not
    * state is a cut when an interface owns it.
    */
-  const unboundDispatch = async (symbol: GraphSymbol): Promise<Dispatch | undefined> => {
+  const unboundDispatch = async (symbol: GraphSymbol, receiver?: GraphSymbol): Promise<Dispatch | undefined> => {
     if (!CALLABLE_KINDS.includes(symbol.kind)) return undefined;
-    const declared = (await syntaxIndexOf(symbol.file)).callables.get(symbol.name)?.find(({ start, nameLine }) => start <= symbol.startLine && symbol.startLine <= nameLine);
+    const declared = await declaredOf(symbol);
     const owners = navigation.ownersOf(symbol);
+    /** What a value of `receiver` can run among `declarations`; all of them when it can run none of them or the receiver is not known. */
+    const runnable = <T extends GraphSymbol>(declarations: readonly T[], none = false): readonly T[] => {
+      if (receiver === undefined) return declarations;
+      const kept = declarations.filter((declaration) => runsFor(receiver, declaration));
+      return kept.length > 0 || none ? kept : declarations;
+    };
     if (declared === undefined) {
       const interfaces = owners.filter((owner) => owner.kind === "interface");
-      return interfaces.length === 0 ? undefined : { cut: dispatchCut(symbol, await implementationsBelow(symbol, interfaces), "unproven") };
+      return interfaces.length === 0 ? undefined : { cut: dispatchCut(symbol, runnable(await implementationsBelow(symbol, interfaces)), "unproven") };
     }
     if (!declared.body) {
       const [targets] = await origins.dispatchTargets([{ file: symbol.file, line: symbol.startLine, name: symbol.name }], signal);
-      const bodies = targets === undefined ? undefined : placedBodies(targets);
-      if (bodies === undefined || bodies.length === 0) return { cut: dispatchCut(symbol, await implementationsBelow(symbol, owners), (targets?.kind === "unknown" ? targets.reason : undefined) ?? "unproven", targets?.kind === "unknown" ? targets.cause : undefined) };
+      const placed = targets === undefined ? undefined : placedBodies(targets);
+      const bodies = placed === undefined ? undefined : runnable(placed);
+      if (bodies === undefined || bodies.length === 0) return { cut: dispatchCut(symbol, runnable(await implementationsBelow(symbol, owners)), (targets?.kind === "unknown" ? targets.reason : undefined) ?? "unproven", targets?.kind === "unknown" ? targets.cause : undefined) };
       return bodies.length === 1 ? { to: bodies[0]!, alternatives: bodies } : { cut: dispatchCut(symbol, bodies, "several-bodies"), alternatives: bodies };
     }
     if (!declared.overridable) return undefined;
-    const overriders = await implementationsBelow(symbol, owners);
+    const overriders = runnable(await implementationsBelow(symbol, owners), true);
     return overriders.length === 0 ? undefined : { cut: dispatchCut(symbol, overriders, "overridable") };
+  };
+  /** The declarations an `unproven` reading offers, each placed by the index; none when it offers none or one is not placed. */
+  const offeredBy = (reading: ReceiverMethod): { declarations: readonly GraphSymbol[]; open: boolean } | undefined => {
+    if (reading.kind !== "unproven" || reading.candidates === undefined || reading.candidates.length === 0) return undefined;
+    const placed = reading.candidates.map((place) => placedMethod(place, CALLABLE_KINDS));
+    return placed.every((symbol) => symbol !== undefined) ? { declarations: placed, open: reading.open === true } : undefined;
+  };
+  /** Whether the language packs prove `method` overrides or implements `other`. */
+  const overrides = async (method: GraphSymbol, other: GraphSymbol): Promise<boolean> => {
+    const answer = (await input.implemented?.())?.get(method.id);
+    return answer?.kind === "declarations" && answer.declarations.some((place) => place.file === other.file && other.startLine <= place.nameLine && place.nameLine <= other.endLine);
+  };
+  /**
+   * What a call can run among the declarations its reading offers, which are every repository declaration it can run: those
+   * a value of the receiver `this` denotes can run, when the call is on `this`; and, unless an outside type leaves the
+   * hierarchy open, the one body when no other declaration runs instead of it, because it overrides them, they are
+   * abstract methods of a class above it, they sit with it above the receiver's own lineage, or the dispatch of each names
+   * it alone; else the declarations left.
+   */
+  const runsOnly = async (offered: { declarations: readonly GraphSymbol[]; open: boolean } | undefined, receiver: GraphSymbol | undefined): Promise<{ to: GraphSymbol; candidates?: undefined } | { to?: undefined; candidates: readonly GraphSymbol[] } | undefined> => {
+    if (offered === undefined) return undefined;
+    const kept = receiver === undefined ? offered.declarations : offered.declarations.filter((declaration) => runsFor(receiver, declaration));
+    const among = kept.length > 0 ? kept : offered.declarations;
+    if (offered.open) return { candidates: among };
+    const withBody = new Set<GraphNodeId>();
+    for (const declaration of among) if ((await declaredOf(declaration))?.body === true) withBody.add(declaration.id);
+    const only = withBody.size === 1 ? among.find((declaration) => withBody.has(declaration.id))! : undefined;
+    if (only === undefined) return { candidates: among };
+    const replaced = async (other: GraphSymbol): Promise<boolean> => {
+      if (other.id === only.id || (await overrides(only, other))) return true;
+      const declared = await declaredOf(other);
+      if (declared === undefined || declared.body) return false;
+      const [owner, holder] = [typeOf(other), typeOf(only)];
+      if (owner !== undefined && holder !== undefined && isClassKind(owner.kind) && isBelow(holder, new Set([owner.id]))) return true;
+      if (receiver !== undefined && owner !== undefined && holder !== undefined && inLineage(receiver, owner) && inLineage(receiver, holder)) return true;
+      return (await unboundDispatch(other, receiver))?.to?.id === only.id;
+    };
+    for (const other of among) if (!(await replaced(other))) return { candidates: among };
+    return { to: only };
+  };
+  /** The constructors that accept the number of arguments the construction at `site` writes; all of them when either count is unknown. */
+  const acceptingArguments = async (constructors: readonly GraphSymbol[], site: { file: string; line: number; column: number; name: string }): Promise<readonly GraphSymbol[]> => {
+    if (constructors.length < 2 || origins.argumentCounts === undefined || origins.acceptedCounts === undefined) return constructors;
+    const [written] = await origins.argumentCounts([{ file: site.file, line: site.line, column: site.column + 1, member: site.name }], signal);
+    if (written?.kind !== "count") return constructors;
+    const accepted = await origins.acceptedCounts(constructors.map(({ file, startLine, name }) => ({ file, start: startLine, name })), signal);
+    const kept = constructors.filter((_, index) => {
+      const counts = accepted[index];
+      return counts?.kind !== "counts" || (counts.upward === true ? written.count >= counts.count : written.count === counts.count);
+    });
+    return kept.length > 0 ? kept : constructors;
   };
   /** An edge the reverse families leave for its outside receiver or for a member only the syntax states is read by the receiver reading here, which holds it unproven (ADR-0079, ADR-0093). */
   const heldAtReceiver = (verdict: EdgeTarget): EdgeTarget => {
@@ -410,7 +487,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
    * decorator before it nor a member's calls), its field initializers, and, with `implicitSuper`, what its implicit
    * `super()` runs.
    */
-  async function bodyOf(node: GraphSymbol, root: boolean, construction?: { implicitSuper: boolean }): Promise<Body> {
+  async function bodyOf(node: GraphSymbol, root: boolean, construction?: { implicitSuper: boolean }, entered?: GraphSymbol): Promise<Body> {
     const within = (line: number | null): boolean => construction === undefined || (line !== null && node.startLine <= line && line <= node.endLine);
     const values = valueEdgesOf(store, node).filter((edge) => within(edge.line));
     const syntax = await syntaxOf(node.file);
@@ -566,11 +643,12 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
       const name = callee.form === "computed" ? reference.name : callee.name;
       if (binding.kind === "declared") return void typed.push({ reference, name: binding.member, named: [], declared: binding });
       if (binding.kind === "declaration") {
-        if (binding.link === "own-member") return void children.push(childAt(binding.target, reference.line, reference.column, reference.name, "own-member"));
+        if (binding.link === "own-member") return void children.push({ ...childAt(binding.target, reference.line, reference.column, reference.name, "own-member"), thisCall: true });
         if (binding.link === "chain" && isClassKind(binding.target.kind)) return chainedToSupplied(reference);
-        const constructors = reference.kind === "instantiates" && isClassKind(binding.target.kind) ? await constructorsOf(binding.target) : [binding.target];
+        const instantiated = reference.kind === "instantiates" && isClassKind(binding.target.kind);
+        const constructors = instantiated ? await acceptingArguments(await constructorsOf(binding.target), { file: reference.file, line: reference.line, column: reference.column, name: binding.target.name }) : [binding.target];
         if (constructors.length !== 1) return void cuts.push(unresolvedAt(reference, constructors.length > 0 ? constructors : [binding.target], "constructor-unsettled"));
-        return void children.push(childAt(constructors[0]!, reference.line, reference.column, reference.name, "call"));
+        return void children.push({ ...childAt(constructors[0]!, reference.line, reference.column, reference.name, "call"), ...(isThisCall(reference.name) && !instantiated ? { thisCall: true as const } : {}) });
       }
       if (binding.kind === "receiver") return settleReceiver(reference, name, binding.candidates, binding.proof, binding.target, false, () => undefined, binding.declaration);
       if (binding.kind === "outside") {
@@ -667,6 +745,7 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
       ...typed.map(({ reference, name }) => ({ file: reference.file, line: reference.line, column: reference.column + 1, member: name })),
     ];
     const found = receiverSites.length === 0 ? [] : (await origins.receiverMethods(receiverSites, signal)).map(executed);
+    const thisCalls = new Set(((await reconciled.ownedIn(node.file)).get(node.id) ?? []).filter((call) => isThisCall(call.name)).map((call) => `${call.line}:${call.column}`));
     const receivers = new Map(placedCalls.map((followed, index): [FollowedEdge, ReceiverMethod] => [followed, found[index] ?? { kind: "unknown" }]));
     for (const [index, followed] of [...called, ...passed].entries()) {
       if (valueRoots.has(index)) continue;
@@ -682,16 +761,20 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
           continue;
         }
         let reached = proven ?? (verdict.kind === "redirect" ? verdict.to : target);
+        const thisCall = !value && edge.kind !== "instantiates" && edge.line !== null && edge.column !== null && thisCalls.has(`${edge.line}:${edge.column + 1}`);
         if (edge.kind === "instantiates" && isClassKind(reached.kind)) {
-          const constructors = await constructorsOf(reached);
+          const constructors = await acceptingArguments(await constructorsOf(reached), { file: node.file, line: edge.line ?? node.startLine, column: edge.column ?? 0, name: reached.name });
           if (constructors.length !== 1) {
             cuts.push(unresolvedAt({ from: node.id, file: node.file, line: edge.line ?? node.startLine, column: edge.column ?? 0, name: reached.name, kind: "instantiates", candidates: [] }, constructors.length ? constructors : [reached], "constructor-unsettled"));
             continue;
           }
           reached = constructors[0]!;
         }
-        if (receiver !== undefined && receiver.kind !== "unknown" && proven === undefined) cuts.push(callCut(placeAt(node.file, edge.line ?? node.startLine, target.name), sortedUnique([candidateOf(target), ...declarationsNamed(target.name, node.file).map(candidateOf)])));
-        else children.push(value ? childAt(reached, edge.line, edge.column, target.name, "reference", true) : exactly(childAt(reached, edge.line, edge.column, target.name, "call"), receiver));
+        if (receiver !== undefined && receiver.kind !== "unknown" && proven === undefined) {
+          const runs = edge.kind === "instantiates" ? undefined : await runsOnly(offeredBy(receiver), thisCall ? entered : undefined);
+          if (runs?.to !== undefined) children.push(thisMarked(childAt(runs.to, edge.line, edge.column, target.name, "call"), thisCall));
+          else cuts.push(callCut(placeAt(node.file, edge.line ?? node.startLine, target.name), sortedUnique(runs === undefined ? [candidateOf(target), ...declarationsNamed(target.name, node.file).map(candidateOf)] : runs.candidates.map(candidateOf))));
+        } else children.push(value ? childAt(reached, edge.line, edge.column, target.name, "reference", true) : thisMarked(exactly(childAt(reached, edge.line, edge.column, target.name, "call"), receiver), thisCall || (receiver?.kind === "method" && receiver.exact === true)));
       } else if (verdict.root.kind === "local-parameter" || verdict.root.kind === "lexical") {
         cuts.push(callCut(placeAt(node.file, edge.line ?? node.startLine, target.name), sortedUnique(declarationsNamed(target.name, node.file).map(candidateOf))));
       } else {
@@ -708,14 +791,20 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
         if (reference.kind === "instantiates") await suppliedAt(receiver, reference, "call");
         continue;
       }
+      const runs = reference.kind === "instantiates" || receiver === undefined ? undefined : await runsOnly(offeredBy(receiver), isThisCall(reference.name) ? entered : undefined);
+      if (runs !== undefined) {
+        if (runs.to !== undefined) children.push(thisMarked(childAt(runs.to, reference.line, reference.column, reference.name, "call"), isThisCall(reference.name)));
+        else cuts.push(unresolvedAt(reference, runs.candidates));
+        continue;
+      }
       if (declared !== undefined) {
         const settled = bindings.settleDeclared(declared, receiver);
-        if (settled.kind === "declaration" && reference.kind !== "instantiates" && receiver?.kind === "method" && receiver.exact === true) children.push(exactly(childAt(settled.target, reference.line, reference.column, reference.name, "call"), receiver));
+        if (settled.kind === "declaration" && reference.kind !== "instantiates" && receiver?.kind === "method" && receiver.exact === true) children.push(thisMarked(exactly(childAt(settled.target, reference.line, reference.column, reference.name, "call"), receiver), true));
         else await settleBinding(reference, settled, absent);
         continue;
       }
       const method = receiver?.kind === "method" ? placedMethod(receiver, CALLABLE_KINDS) : undefined;
-      if (method !== undefined) children.push(exactly(childAt(method, reference.line, reference.column, reference.name, "call"), receiver));
+      if (method !== undefined) children.push(thisMarked(exactly(childAt(method, reference.line, reference.column, reference.name, "call"), receiver), isThisCall(reference.name) || (receiver?.kind === "method" && receiver.exact === true)));
       else await settleByName(reference, name, named, false, absent);
     }
     const sorted = children.sort((a, b) => compareOccurrence(a.place, b.place));
@@ -757,12 +846,21 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
   const dispatchOwed = new Map<string, { step: WalkedStep; depth: number }>();
   let expansions = 0;
 
+  /** The receivers each declaration's dispatch was read for; `""` stands for any value of its owner. */
+  const dispatchRead = new Map<string, Set<string>>();
+  const noteDispatchRead = (id: string, receiver: GraphSymbol | undefined): void => void dispatchRead.set(id, (dispatchRead.get(id) ?? new Set<string>()).add(receiver?.id ?? ""));
+  const dispatchReadFor = (id: string, receiver: GraphSymbol | undefined): boolean => {
+    const read = dispatchRead.get(id);
+    return read !== undefined && (read.has("") || (receiver !== undefined && (read.has(receiver.id) || [...ancestorsOf(receiver)].some((above) => read.has(above)))));
+  };
+
   /** The dispatch a declaration first expanded without it owes, read on that expansion once a virtual call reaches it. */
-  async function readOwedDispatch(id: string, symbol: GraphSymbol): Promise<void> {
+  async function readOwedDispatch(id: string, symbol: GraphSymbol, receiver: GraphSymbol | undefined): Promise<void> {
     const owed = dispatchOwed.get(id);
     if (owed === undefined) return;
     dispatchOwed.delete(id);
-    const dispatch = await unboundDispatch(symbol);
+    const dispatch = await unboundDispatch(symbol, receiver);
+    noteDispatchRead(id, receiver);
     if (dispatch?.cut !== undefined) {
       cuts.push(dispatch.cut);
       owed.step.unsettled = true;
@@ -771,10 +869,10 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     if (dispatch?.to === undefined) return;
     const walked = stepOf(dispatch.to, { via: "dispatch" });
     owed.step.children.push(walked);
-    await visit(walked, dispatch.to, owed.depth + 1);
+    await visit(walked, dispatch.to, owed.depth + 1, undefined, undefined, receiverIn(receiver, typeOf(dispatch.to)));
   }
 
-  async function visit(step: WalkedStep, node: TraceNode, depth: number, construction?: true, exact?: true): Promise<void> {
+  async function visit(step: WalkedStep, node: TraceNode, depth: number, construction?: true, exact?: true, receiver?: GraphSymbol): Promise<void> {
     if (signal?.aborted) return;
     const symbol = indexedDeclaration(node);
     const declaration = symbol ?? node;
@@ -788,9 +886,12 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     const ownsMembers = symbol !== undefined && (depth === 0 || step.via === "template");
     const page = ownsMembers && pages !== undefined && isClassKind(symbol.kind) && (step.via === "template" || pages.roots.has(symbol.id));
     const owesMembers = ownsMembers && isClassKind(symbol.kind) && (first === undefined || !rootExpansions.has(first));
-    if (first !== undefined && !owesMembers) {
+    /** A body entered through a receiver no earlier expansion covers runs its `this` calls on that receiver: it is expanded again. */
+    const owed = exact === undefined && symbol !== undefined && dispatchOwed.has(declaration.id);
+    const entersUncovered = exact === undefined && symbol !== undefined && !owed && !dispatchReadFor(declaration.id, receiver);
+    if (first !== undefined && !owesMembers && !entersUncovered) {
       step.seen = first;
-      if (exact === undefined && symbol !== undefined) await readOwedDispatch(declaration.id, symbol);
+      if (owed) await readOwedDispatch(declaration.id, symbol!, receiver);
       return;
     }
     if (budget.depth !== undefined && depth >= budget.depth) { stopped.depth.add(anchorOf(declaration)); return; }
@@ -799,7 +900,8 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
     if (first === undefined) expandedAt.set(declaration.id, step);
     if (ownsMembers) rootExpansions.add(step);
     step.expanded = true;
-    const body = symbol === undefined ? await syntaxBody(node as ModelDeclaration) : await bodyOf(symbol, ownsMembers, construction && !ownsMembers ? { implicitSuper: true } : undefined);
+    const entered = symbol !== undefined && CALLABLE_KINDS.includes(symbol.kind) ? receiver ?? typeOf(symbol) : undefined;
+    const body = symbol === undefined ? await syntaxBody(node as ModelDeclaration) : await bodyOf(symbol, ownsMembers, construction && !ownsMembers ? { implicitSuper: true } : undefined, entered);
     if (body.runs !== undefined) constructions.set(step, body.runs);
     if ("bindingConflict" in node && node.bindingConflict) body.cuts.push(callCut(placeAt(node.file, node.startLine, node.name), (node.bindingEvidence ?? []).map(({ path, line, via }) => placeAt(path, line, via ?? node.name))));
     if (page) {
@@ -809,7 +911,8 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
       } else body.children = pageOrder(body.children, plan, body.cuts);
     }
     if (exact !== undefined && symbol !== undefined && first === undefined) dispatchOwed.set(declaration.id, { step, depth });
-    const dispatch = symbol === undefined || exact !== undefined ? undefined : await unboundDispatch(symbol);
+    const dispatch = symbol === undefined || exact !== undefined ? undefined : await unboundDispatch(symbol, receiver);
+    if (symbol !== undefined && exact === undefined) noteDispatchRead(declaration.id, receiver);
     if (dispatch?.cut !== undefined) body.cuts.push(dispatch.cut);
     if (dispatch?.alternatives !== undefined) step.alternatives = dispatch.alternatives.map(declarationOf);
     if (dispatch?.to !== undefined) body.children.push(childAt(dispatch.to, null, null, dispatch.to.name, "dispatch"));
@@ -825,7 +928,8 @@ export async function walkTrace(roots: readonly TraceNode[], input: TraceWalkInp
         ...(child.deferred === undefined ? {} : { deferred: child.deferred }),
       });
       step.children.push(walked);
-      await visit(walked, next, depth + 1, child.construction, child.exact);
+      const childReceiver = child.symbol === undefined ? undefined : child.via === "dispatch" ? receiverIn(receiver, typeOf(child.symbol)) : child.thisCall === true ? receiverIn(entered, typeOf(child.symbol)) : undefined;
+      await visit(walked, next, depth + 1, child.construction, child.exact, childReceiver);
     }
   }
 
@@ -908,6 +1012,16 @@ function memoizedBy<A, K, V>(keyOf: (argument: A) => K, derive: (argument: A) =>
     if (!known.has(key)) known.set(key, derive(argument));
     return known.get(key)!;
   };
+}
+
+/** A call written on `this` or `super`, or without a receiver. */
+function isThisCall(spelling: string): boolean {
+  const [receiver, member, ...rest] = compactSpelling(spelling).split(".");
+  return member === undefined || (rest.length === 0 && (receiver === "this" || receiver === "super"));
+}
+
+function thisMarked(child: Child, thisCall: boolean): Child {
+  return thisCall ? { ...child, thisCall: true } : child;
 }
 
 function rawTypeName(name: string): string {

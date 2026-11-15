@@ -44,7 +44,7 @@ test("a Java receiver is settled by the binding, not by a second rule in the wal
       boundCalls: async () => [], namedDeclarations: () => [siblingMethod],
     },
     uses: { followed: () => [], referencesFrom: () => [] },
-    reconciled: { callsOf: async (node: NonNullable<typeof run>) => ({ edges: [], references: node.id === run!.id ? references : [], contradicted: [], writtenOnly: [], ambiguous: [], deferredOnly: [] }) },
+    reconciled: { callsOf: async (node: NonNullable<typeof run>) => ({ edges: [], references: node.id === run!.id ? references : [], contradicted: [], writtenOnly: [], ambiguous: [], deferredOnly: [] }), ownedIn: async () => new Map() },
     inScope: () => true, memberDeclarations: async () => new Map(),
     syntaxOf: async () => ({ callables: [{ name: "load", start: 4, nameLine: 4, body: true, overridable: false }], functionValueCalls: [] }), budget: {},
   } as unknown as TraceWalkInput;
@@ -76,7 +76,7 @@ test("a written reference is deferred and an unresolved reference remains a cut"
     targets: { verdictsOf: async () => [] },
     bindings: { bindCalls: async (calls: readonly unknown[]) => calls.length === 0 ? [] : [{ kind: "declaration", target, link: "declared-receiver" }, { kind: "unbound", form: "bare", candidates: [target], attributed: [target] }], boundCalls: async () => [], namedDeclarations: () => [] },
     uses: { followed: () => [], referencesFrom: () => [] },
-    reconciled: { callsOf: async (node: typeof run) => ({ edges: [], references: [], contradicted: [], writtenOnly: [], ambiguous: [], deferredOnly: node.id === run.id ? written : [] }) },
+    reconciled: { callsOf: async (node: typeof run) => ({ edges: [], references: [], contradicted: [], writtenOnly: [], ambiguous: [], deferredOnly: node.id === run.id ? written : [] }), ownedIn: async () => new Map() },
     inScope: () => true, memberDeclarations: async () => new Map(), syntaxOf: async () => ({ callables: [], functionValueCalls: [] }), budget: {},
   } as unknown as TraceWalkInput;
   const result = await walkTrace([run], input);
