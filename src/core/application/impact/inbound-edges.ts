@@ -200,14 +200,26 @@ export function createInboundEdges(
 
   /** The classes whose injection or template use of `node` ye-ast read from the sources, only of `kinds` when given. */
   function relatedTo(node: GraphSymbol, kinds?: readonly string[]): InboundEdge[] {
+    const memberEdges = new Set(followedEdgesInto(node).filter(({ edge }) => USAGE_EDGES.includes(edge.kind)).map(({ source }) => source.id));
     return (relationsByTargetFile.get(node.file) ?? [])
       .filter((candidate) => (kinds === undefined || kinds.includes(candidate.kind)) && joinsFact(node, { path: candidate.to.path, line: candidate.to.line, symbol: candidate.to.symbol }))
       .flatMap((candidate) => {
         const from = candidate.kind === "references" ? referenceSource(candidate, node.kind) : declarationAt(candidate.from);
-        return from === undefined || isTestFile(from.file) || !followsRelation({ kind: candidate.kind, sourceKind: from.kind, targetKind: node.kind })
+        return from === undefined || isTestFile(from.file) || !followsRelation({ kind: candidate.kind, sourceKind: from.kind, targetKind: node.kind }) || (candidate.kind === "references" && writtenByMember(candidate, from, memberEdges))
           ? []
           : [{ from, confidence: EDGE_POLICY.relations.confidence, basis: candidate.kind === "references" ? "reference" as const : "relation" as const, derivation: "proven" as const, lines: candidate.at === undefined ? [] : [candidate.at.line] }];
       });
+  }
+
+  /**
+   * Whether a type's written reference sits in a method of that type that is a source of `memberEdges`, the sources the
+   * graph holds an edge to the target for: the dependence is the method's, and the type is reached as its owner, which
+   * follows no one that only holds the type (ADR-0103). A place no method of the type holds an edge for stays the type's.
+   */
+  function writtenByMember(candidate: Relation, from: GraphSymbol, memberEdges: ReadonlySet<GraphNodeId>): boolean {
+    const at = candidate.at;
+    if (at === undefined || !(EDGE_POLICY.ownerKinds as readonly string[]).includes(from.kind)) return false;
+    return methodsOf(from).some((method) => memberEdges.has(method.id) && method.file === at.path && method.startLine <= at.line && at.line <= method.endLine);
   }
 
   /**

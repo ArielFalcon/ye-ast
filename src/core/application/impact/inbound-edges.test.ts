@@ -613,3 +613,32 @@ test("a contract change reaches only the implementation whose declarations name 
   assert.deepEqual(inbound.callersOf(save2!, true).map((edge) => edge.from.id), []);
   assert.deepEqual(inbound.callersOf(save1!, true).map((edge) => [edge.from.id, edge.bridge]), [["implSave", "down"]]);
 });
+
+const SIGNATURE_NODES: FakeNode[] = [
+  fakeNode("Dto", "class", A, 1, 9),
+  fakeNode("Port", "interface", B, 1, 12),
+  fakeNode("Port.save", "method", B, 3, 4, "save"),
+  fakeNode("Holder", "class", "src/Holder.java", 1, 9),
+];
+const SIGNATURE_EDGES: FakeEdge[] = [{ from: "Port", to: "Port.save", kind: "contains" }, { from: "Port.save", to: "Dto", kind: "references", line: 3, confidence: 0.9 }];
+const writes = (owner: string, line: number): Relation => ({ ...relation("references", ref(B, owner, 1), ref(A, "Dto", 1)), at: { path: B, line } });
+
+test("a type reference written inside a member the graph holds an edge for is the member's, so the type is reached as its owner", () => {
+  const s = setup(SIGNATURE_NODES, SIGNATURE_EDGES, [writes("Port", 3)]);
+  assert.deepEqual(s.callers("Dto"), ["Port.save"]);
+});
+
+test("a type reference no member of the type holds an edge for stays a reference of the type", () => {
+  const unedged = setup(SIGNATURE_NODES, [SIGNATURE_EDGES[0]!], [writes("Port", 3)]);
+  assert.deepEqual(unedged.callers("Dto"), ["Port"]);
+  const outside = setup(SIGNATURE_NODES, SIGNATURE_EDGES, [writes("Port", 8)]);
+  assert.deepEqual(outside.callers("Dto"), ["Port", "Port.save"]);
+});
+
+test("whoever only holds a type that a change reached through the signature of one member is not reached", () => {
+  const holder: Relation = { ...relation("references", ref("src/Holder.java", "Holder", 1), ref(B, "Port", 1)), at: { path: "src/Holder.java", line: 4 } };
+  const graph = fakeCodeGraph(SIGNATURE_NODES, SIGNATURE_EDGES);
+  const dto = graph.symbolsByIds(["Dto" as GraphSymbol["id"]]);
+  const walked = walkImpact(dto, createInboundEdges(graph, isTestFile, [writes("Port", 3), holder]));
+  assert.deepEqual(walked.reached.map(({ symbol }) => symbol.id), ["Dto", "Port", "Port.save"]);
+});
