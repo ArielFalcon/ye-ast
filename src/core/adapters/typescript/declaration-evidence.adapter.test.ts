@@ -55,3 +55,12 @@ test("destructured bindings preserve real deletions without making unrelated cal
   }
   assert.deepEqual(check("const { value: save } = input;", "const { value: save } = input;", ["save", "value"]), []);
 });
+
+test("a local variable is no declaration, while a class property is one", () => {
+  assert.deepEqual(check("function load() { const loggedIn = 1; return loggedIn; }", "function load() { return 1; }", ["loggedIn"]), []);
+  assert.deepEqual(check("const run = () => { for (let i = 0; i < 1; i++) {} };", "const run = () => {};", ["i"]), []);
+  assert.deepEqual(check("function load(loggedIn: boolean, { page }: Query) {}", "function load() {}", ["loggedIn", "page"]), []);
+  assert.deepEqual(check("class Home { constructor(private store: Store, query: Query) {} }", "class Home { constructor() {} }", ["store", "query"]), ["store"]);
+  assert.deepEqual(check("class Home { authStore = inject(Store); }", "class Home {}", ["authStore"]), ["authStore"]);
+  assert.deepEqual(check("const limit = 3;", "", ["limit"]), ["limit"]);
+});

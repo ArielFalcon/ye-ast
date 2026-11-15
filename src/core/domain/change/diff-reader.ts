@@ -1,3 +1,4 @@
+import { hasTyping } from "../languages/profiles.ts";
 import { declaredIdentifier } from "./declared-identifiers.ts";
 
 export interface LineRange {
@@ -83,7 +84,7 @@ export function createDiffReader(): DiffReader {
     }
     if (current === undefined) return;
     if (line.startsWith("-") || line.startsWith("+")) {
-      const name = declaredIdentifier(line.slice(1));
+      const name = declaredIdentifier(line.slice(1), hasTyping(current.path, "structural"));
       if (name !== undefined) {
         if (line.startsWith("-")) {
           current.removedNames.push(name);

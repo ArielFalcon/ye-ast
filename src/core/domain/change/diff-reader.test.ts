@@ -197,3 +197,11 @@ test("a name a replaced line declared is removed unless another line of the file
   );
   assert.deepEqual(changes.map((change) => [change.path, change.removedNames]), [["Util.java", ["helper"]], ["Other.java", ["lost"]]]);
 });
+
+test("a removed property that was initialized names itself in a TypeScript file only", () => {
+  const diff = (path: string): string => [`diff --git a/${path} b/${path}`, `--- a/${path}`, `+++ b/${path}`, "@@ -2,2 +1,0 @@", "-  authStore = inject(AuthStore);", "-  count = 5;"].join("\n");
+  const names = (path: string) => read(diff(path))[0]?.removedNames;
+
+  assert.deepEqual(names("src/home.ts"), ["authStore", "count"]);
+  assert.deepEqual(names("src/Home.java"), []);
+});

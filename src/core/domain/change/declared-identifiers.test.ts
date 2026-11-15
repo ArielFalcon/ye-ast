@@ -50,3 +50,17 @@ test("an import, a call, a control statement and an annotation declare nothing",
   ];
   for (const line of lines) assert.equal(declaredIdentifier(line), undefined, line);
 });
+
+test("a property initialized where it is declared names itself in a structural language, and in no other", () => {
+  const lines: Array<[string, string]> = [
+    ["  authStore = inject(AuthStore);", "authStore"],
+    ["  readonly loadOnLogin = effect(() => {", "loadOnLogin"],
+    ["  private store: Store = inject(Store);", "store"],
+    ["  static count = 0;", "count"],
+  ];
+  for (const [line, name] of lines) {
+    assert.equal(declaredIdentifier(line, true), name, line);
+    assert.equal(declaredIdentifier(line), undefined, line);
+  }
+  for (const line of ["  this.store = inject(Store);", "  ready == true;", "  next => 1;", "  ok === 1;"]) assert.equal(declaredIdentifier(line, true), undefined, line);
+});

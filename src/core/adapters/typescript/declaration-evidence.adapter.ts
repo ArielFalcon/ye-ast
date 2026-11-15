@@ -16,6 +16,11 @@ export function createDeclarationEvidenceReader(): DeclarationEvidenceReader {
   } };
 }
 
+/** A variable, binding or parameter a body declares for itself; a parameter property is a member of its class. */
+function isLocal(node: ts.Node): boolean {
+  return ts.isVariableDeclaration(node) || ts.isBindingElement(node) || (ts.isParameter(node) && !ts.isParameterPropertyDeclaration(node, node.parent));
+}
+
 function declarations(path: string, text: string): Map<string, number> | undefined {
   let tree: ts.SourceFile | undefined;
   const result = ts.transpileModule(text, { fileName: path, reportDiagnostics: true, compilerOptions: { noResolve: true, target: ts.ScriptTarget.Latest, module: ts.ModuleKind.Preserve }, transformers: { before: [() => (source) => { tree = source; return source; }] } });
@@ -23,8 +28,8 @@ function declarations(path: string, text: string): Map<string, number> | undefin
   const counts = new Map<string, number>();
   let ambiguous = false;
   const ownerKeys = new Set<string>();
-  const visit = (node: ts.Node, owners: readonly string[]): void => {
-    const named = ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node) || ts.isEnumDeclaration(node) || ts.isModuleDeclaration(node) || ts.isMethodDeclaration(node) || ts.isMethodSignature(node) || ts.isPropertyDeclaration(node) || ts.isPropertySignature(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node) || ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isBindingElement(node) || ts.isFunctionExpression(node) || ts.isClassExpression(node) || ts.isTypeParameterDeclaration(node) || ts.isImportEqualsDeclaration(node);
+  const visit = (node: ts.Node, owners: readonly string[], inBody = false): void => {
+    const named = !(inBody && isLocal(node)) && (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node) || ts.isEnumDeclaration(node) || ts.isModuleDeclaration(node) || ts.isMethodDeclaration(node) || ts.isMethodSignature(node) || ts.isPropertyDeclaration(node) || ts.isPropertySignature(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node) || ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isBindingElement(node) || ts.isFunctionExpression(node) || ts.isClassExpression(node) || ts.isTypeParameterDeclaration(node) || ts.isImportEqualsDeclaration(node));
     let owner = owners;
     if (ts.isConstructorDeclaration(node)) {
       const key = `constructor\0${JSON.stringify(owners)}\0${node.kind}`;
@@ -46,7 +51,7 @@ function declarations(path: string, text: string): Map<string, number> | undefin
       } else if (name !== undefined && !ts.isObjectBindingPattern(name) && !ts.isArrayBindingPattern(name)) ambiguous = true;
     }
     if (ts.isBlock(node) || ts.isObjectLiteralExpression(node) || ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node) || ts.isCatchClause(node) || ts.isCaseBlock(node) || ts.isArrowFunction(node) || (ts.isFunctionExpression(node) && node.name === undefined) || (ts.isClassExpression(node) && node.name === undefined)) owner = [...owners, "<anonymous>"];
-    node.forEachChild((child) => visit(child, owner));
+    node.forEachChild((child) => visit(child, owner, inBody || ts.isFunctionLike(node)));
   };
   visit(tree, []);
   return ambiguous ? undefined : counts;

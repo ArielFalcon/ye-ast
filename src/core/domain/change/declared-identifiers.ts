@@ -8,17 +8,23 @@ const KEYWORD_DECLARATION = new RegExp(`^\\s*${MODIFIERS}(?:function\\*?|class|i
 /** A method or function-like member: modifiers and a return type, or a name followed by a body, before the parameter list. */
 const MEMBER_DECLARATION = new RegExp(`^\\s*(${MODIFIERS})((?:[\\w<>\\[\\],.?]+\\s+)?)${NAME}\\s*\\(`);
 
+/** A property initialized where it is declared, `[modifiers] name [: type] = value`, in the class body of a structural language. */
+const PROPERTY_DECLARATION = new RegExp(`^\\s*${MODIFIERS}${NAME}\\s*(?::[^=]+)?=(?![=>])`);
+
 /**
  * The name a line of source declares, by the simple shapes of TypeScript, JavaScript and Java: keyword declarations
  * (`function`, `class`, `interface`, `enum`, `record`, `type`, `namespace`, `const`, `let`, `var`, after any modifiers)
  * and members written as `[modifiers] [type] name(`. A member with neither modifier nor type must open its body on the
- * line. A type holding a space, such as `Map<String, Foo>`, is not read. An import, an export list, an annotation and a destructuring declare nothing here.
+ * line. A `structural` language's class body also declares a property by `name = value` or `name: type = value`. A type holding a space, such as `Map<String, Foo>`, is not read. An import, an export list, an annotation and a destructuring declare nothing here.
  */
-export function declaredIdentifier(line: string): string | undefined {
+export function declaredIdentifier(line: string, structural = false): string | undefined {
   const keyword = KEYWORD_DECLARATION.exec(line);
   if (keyword !== null) return keyword[1];
   const member = MEMBER_DECLARATION.exec(line);
-  if (member === null) return undefined;
+  if (member === null) {
+    const property = structural ? PROPERTY_DECLARATION.exec(line)?.[1] : undefined;
+    return property === undefined || NOT_A_DECLARATION.has(property) ? undefined : property;
+  }
   const modifiers = member[1]!.trim();
   const type = member[2]!.trim();
   const name = member[3]!;

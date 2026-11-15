@@ -1030,3 +1030,13 @@ test("a bound constant local reaches the one implementation of an overloaded met
   assert.equal(answer.fact.value.symbols.some(({ symbol }) => symbol === "peer"), false);
   assert.equal(answer.fact.status, "complete", JSON.stringify(answer.fact));
 });
+
+test("the removed names of a changed class name its removed properties and no local variable of a removed body", async () => {
+  commit({
+    "src/home.ts": "export class Home {\n  authStore = inject(AuthStore);\n  loadOnLogin = effect(() => {\n    const isLoggedIn = this.authStore.ready();\n    return isLoggedIn;\n  });\n  keep() { return 1; }\n}\n",
+  }, "base");
+  commit({ "src/home.ts": "export class Home {\n  keep() { return 1; }\n}\n" });
+  const answer = await impact("--base", "HEAD~1");
+
+  assert.deepEqual(answer.fact.value.changedPaths?.find(({ path }) => path === "src/home.ts")?.removed, ["authStore", "loadOnLogin"]);
+});
