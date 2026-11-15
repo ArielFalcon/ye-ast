@@ -135,6 +135,15 @@ export interface ImportOrigins {
    */
   acceptedCounts?(sites: readonly ImplementingSite[], signal?: AbortSignal): Promise<readonly AcceptedCounts[]>;
   /**
+   * One entry per site, in the order received: whether the type arguments the receiver of a member call is declared with
+   * rule out a value of the class that declares the implementing method (ADR-0104). `disjoint` only where the receiver is a
+   * declared name of a repository generic type, that class writes the same type in its own `extends` or `implements`
+   * clause, and some argument position holds two types the sources settle as different (type arguments are invariant);
+   * `unknown` for anything else, so a consumer keeps the call. Absent where the language pack implements none, which
+   * reads as `capability-absent` for every site.
+   */
+  receiverFits?(sites: readonly ReceiverFitSite[], signal?: AbortSignal): Promise<readonly ReceiverFit[]>;
+  /**
    * One entry per site, in the order received: what the chaining call a construction of the class at the site makes
    * without writing it (a Java constructor that writes no `super(...)` or `this(...)`, or the one the language supplies)
    * runs, by the superclass the sources declare: its one placed constructor of no arguments, or the superclass itself
@@ -256,6 +265,14 @@ export interface ImplementingSite {
   start: number;
   name: string;
 }
+
+/** A member call and the method whose class a value held by the call's receiver may be an instance of. */
+export interface ReceiverFitSite extends ReceiverCallSite {
+  implementation: ImplementingSite;
+}
+
+/** `capability-absent`: the language pack of the site's file declares it cannot answer (ADR-0045 decision 12). */
+export type ReceiverFit = { kind: "disjoint" } | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT };
 
 /**
  * The supertype methods a method declares it implements, sorted by place. `declarations`, possibly empty, is established

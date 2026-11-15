@@ -114,6 +114,7 @@ export function routedReaders(packs: readonly LanguagePack[]): RoutedReaders {
         outsideSupertypes: (sites, signal) => routed(sites, readers, (reader, asked) => reader.outsideSupertypes?.(asked, signal) ?? Promise.resolve(asked.map(() => ABSENT)), () => UNKNOWN),
         argumentCounts: (sites, signal) => routed(sites, readers, (reader, asked) => reader.argumentCounts?.(asked, signal) ?? Promise.resolve(asked.map(() => ABSENT)), () => UNKNOWN),
         acceptedCounts: (sites, signal) => routed(sites, readers, (reader, asked) => reader.acceptedCounts?.(asked, signal) ?? Promise.resolve(asked.map(() => ABSENT)), () => UNKNOWN),
+        receiverFits: (sites, signal) => routed(sites, readers, (reader, asked) => reader.receiverFits?.(asked, signal) ?? Promise.resolve(asked.map(() => ABSENT)), () => UNKNOWN),
         implicitChains: (sites, signal) => routed(sites, readers, (reader, asked, owner) => unlessAbsent(owner, "implicitChains", asked) ?? reader.implicitChains?.(asked, signal) ?? Promise.resolve(asked.map(() => ABSENT)), () => UNKNOWN),
         declaredSupertypes: (sites, signal) => routed(sites, readers, (reader, asked, owner) => unlessAbsent(owner, "declaredSupertypes", asked) ?? reader.declaredSupertypes?.(asked, signal) ?? Promise.resolve(asked.map(() => ABSENT)), () => UNKNOWN),
         replacedRoots: async (signal) => {

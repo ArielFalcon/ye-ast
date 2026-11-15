@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
-import { createInboundEdges, type InboundEdges } from "./inbound-edges.ts";
+import { createInboundEdges, receiverFitKey, type InboundEdges } from "./inbound-edges.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "../navigation/fake-code-graph.testing.ts";
 import type { ImpactBudget } from "../../domain/impact/impact-fact.ts";
 import { walkImpact } from "./walk.ts";
@@ -457,4 +457,53 @@ test("a declaration a syntax-only seed hands its dependence to follows every row
   const result = walkSyntax(nodes, [{ from: "O", to: "m", kind: "contains" }, call("user", "O")], ["m"], { seeds: [seed], owners: { ownerOf: (declaration) => (declaration.id === seed.id ? container : undefined) } });
   assert.ok(result.reached.some((r) => r.symbol.id === "user"));
   assert.ok(result.wholeDeclarations.has("O" as GraphNodeId));
+});
+
+/** The walk over a store whose call edges are proven different from the implementation they are named with (ADR-0104). */
+function walkWithFits(nodes: FakeNode[], edges: FakeEdge[], seedIds: string[], different: readonly [origin: string, caller: string, callee: string][]) {
+  const graph = fakeCodeGraph(nodes, edges);
+  const disjoint = new Set(different.map(([origin, caller, callee]) => receiverFitKey(origin as GraphNodeId, graph.incomingEdges([callee as GraphNodeId], ["calls"]).find((edge) => edge.source === caller)!)));
+  const seeds = graph.symbolsByIds(seedIds.map((id) => id as GraphNodeId));
+  const ordered = seedIds.map((id) => seeds.find((seed) => seed.id === id) as GraphSymbol);
+  return walkImpact(ordered, createInboundEdges(graph, () => false, [], undefined, undefined, undefined, { dropped: new Set(), into: new Map(), disjoint }));
+}
+
+test("a call into a method reached only by dispatch up from an implementation is dropped when it is proven different from it", () => {
+  const result = walkWithFits(HIERARCHY, HIERARCHY_EDGES, ["Mem.save"], [["Mem.save", "caller", "Repo.save"]]);
+  assert.deepEqual(reachedIds(result), ["Mem", "Mem.save", "Repo", "Repo.save"]);
+  assert.deepEqual(result.restricted.get("Repo.save" as GraphNodeId)?.map((origin) => origin.id), ["Mem.save"]);
+});
+
+test("a call stays unless it is proven different from every implementation that reached the method", () => {
+  const edges = [...HIERARCHY_EDGES, call("both", "Repo.save")];
+  const nodes = [...HIERARCHY, fakeNode("both", "method", "src/Both.java", 3, 3, "both")];
+  assert.ok(reachedIds(walkWithFits(nodes, edges, ["Mem.save", "Db.save"], [["Mem.save", "caller", "Repo.save"]])).includes("caller"));
+  const dropped = reachedIds(walkWithFits(nodes, edges, ["Mem.save", "Db.save"], [["Mem.save", "caller", "Repo.save"], ["Db.save", "caller", "Repo.save"]]));
+  assert.ok(!dropped.includes("caller"));
+  assert.ok(dropped.includes("both"));
+});
+
+test("a method that is a seed keeps every call whatever the implementations bind", () => {
+  const result = walkWithFits(HIERARCHY, HIERARCHY_EDGES, ["Repo.save"], [["Mem.save", "caller", "Repo.save"]]);
+  assert.ok(reachedIds(result).includes("caller"));
+  assert.equal(result.restricted.has("Repo.save" as GraphNodeId), false);
+});
+
+test("a method dispatch reached regains its calls when a call reaches it too, whether the call is found before dispatch, in the same level or a level after", () => {
+  const scenarios: [string, FakeNode[], FakeEdge[]][] = [
+    ["before", [], [call("Repo.save", "seed")]],
+    ["a level after", [fn("y"), fn("x")], [call("y", "seed"), call("x", "y"), call("Repo.save", "x")]],
+    [
+      "in the same level",
+      [fakeNode("Top", "interface", "src/Top.java", 1, 9), fakeNode("Top.m", "method", "src/Top.java", 3, 3, "m"), fakeNode("Mem2", "class", "src/Zed.java", 1, 9), fakeNode("Mem2.m", "method", "src/Zed.java", 3, 3, "m")],
+      [{ from: "Mem2", to: "Top", kind: "implements" }, { from: "Top", to: "Top.m", kind: "contains" }, { from: "Mem2", to: "Mem2.m", kind: "contains" }, call("Mem2.m", "seed"), call("Repo.save", "Top.m")],
+    ],
+  ];
+  for (const [label, more, moreEdges] of scenarios) {
+    const nodes = [...HIERARCHY.filter(({ id }) => ["Repo", "Repo.save", "Mem", "Mem.save", "caller"].includes(id)), fakeNode("seed", "method", "src/Seed.java", 3, 3, "seed"), ...more];
+    const edges: FakeEdge[] = [...HIERARCHY_EDGES.filter(({ from, to }) => !["sibling.use", "Db"].includes(from) && to !== "Db.save"), call("Mem.save", "seed"), ...moreEdges];
+    const result = walkWithFits(nodes, edges, ["seed"], [["Mem.save", "caller", "Repo.save"]]);
+    assert.ok(reachedIds(result).includes("caller"), label);
+    assert.equal(result.restricted.has("Repo.save" as GraphNodeId), false, label);
+  }
 });

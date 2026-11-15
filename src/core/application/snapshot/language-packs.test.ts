@@ -128,6 +128,14 @@ test("a pack whose reader implements no implicit chains answers capability-absen
   assert.deepEqual(await readers.importOrigins(SOURCES).implicitChains!([{ file: JAVA, line: 2, name: "A" }]), [{ kind: "unknown", reason: "capability-absent" }]);
 });
 
+test("a receiver fit is read by the pack that owns the call's file, and a pack whose reader implements none answers capability-absent", async () => {
+  const java = recordingPack(JAVA_PROFILE, []);
+  const readers = routedReaders([{ ...java, origins: (...read) => ({ ...java.origins(...read), receiverFits: async (sites) => sites.map(() => ({ kind: "disjoint" as const })) }) }, recordingPack(TYPESCRIPT_PROFILE, [])]);
+  const site = (file: string) => ({ file, line: 1, column: 1, member: "m", implementation: { file, start: 1, name: "m" } });
+
+  assert.deepEqual(await readers.importOrigins(SOURCES).receiverFits!([site(JAVA), site(TS)]), [{ kind: "disjoint" }, { kind: "unknown", reason: "capability-absent" }]);
+});
+
 test("a path no pack owns is unread no-language, and a pack that declares tokens absent answers capability-absent for its own files", async () => {
   const readers = routedReaders([recordingPack(TYPESCRIPT_PROFILE, [], true), { ...recordingPack(JAVA_PROFILE, []), absent: ["tokens"] }]);
 

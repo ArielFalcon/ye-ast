@@ -9,6 +9,7 @@ import type { ImportOrigins, ResolvedNameSite } from "../../ports/import-origins
 import { createJavaRootBindings } from "./java-root-bindings.ts";
 import { createJavaDeclaredTypes } from "./java-declared-types.ts";
 import { createJavaDispatchTargets, createJavaOutsideSupertypes } from "./java-dispatch-targets.ts";
+import { createJavaReceiverFits } from "./java-receiver-fits.ts";
 import { createJavaArgumentCounts, createJavaDeclaredSupertypes, createJavaImplementedDeclarations, createJavaImplicitChains, createJavaReceiverMethods, provesBinding } from "./java-receiver-methods.ts";
 import { declaredVariablesOnce, declaresAnyVariable, type DeclaredVariables } from "../tree-sitter/java-declared-variables.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
@@ -57,6 +58,7 @@ export function createJavaNameBindings(parser: () => Promise<JavaParser>, source
     implementedDeclarations: createJavaImplementedDeclarations(parser, sources, paths, hold, build),
     outsideSupertypes: createJavaOutsideSupertypes(parser, sources, paths, hold, build),
     ...createJavaArgumentCounts(parser, sources, paths, hold, build),
+    receiverFits: createJavaReceiverFits(parser, sources, paths, hold, build),
     implicitChains: createJavaImplicitChains(parser, sources, paths, hold, build),
     declaredSupertypes: createJavaDeclaredSupertypes(parser, sources, paths, hold, build),
     replacedRoots: async () => ({ paths: [], globalObjects: new Set(), packages: new Set() }),

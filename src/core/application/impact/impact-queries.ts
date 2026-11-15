@@ -56,11 +56,11 @@ import { createHeadReader, preparedLive, withLiveCapture, type FactSpec, type He
 import { readImporters, type BoundInto } from "./importers.ts";
 import { inboundEdgesOf } from "./inbound-origins.ts";
 import type { OriginCalls } from "../navigation/origin-calls.ts";
-import type { EdgeCorrections, InboundEdge, InboundEdges } from "./inbound-edges.ts";
+import { receiverFitKey, type EdgeCorrections, type InboundEdge, type InboundEdges } from "./inbound-edges.ts";
 import { typedReferencesOf, type ReferenceProofs } from "../navigation/reference-origins.ts";
 import { unresolvedReferencesIn } from "../navigation/declaration-uses.ts";
 import { walkImpact, type Walk } from "./walk.ts";
-import type { ImplementedDeclarations, ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
+import type { ImplementedDeclarations, ImportOrigins, ImportOriginsReader, ReceiverFitSite } from "../../ports/import-origins.port.ts";
 import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
 import { edgeKey, followsUnproven, type EdgeTargets, type FollowedEdge, type UnprovenCallInto } from "../navigation/edge-targets.ts";
@@ -702,7 +702,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   if (reverse !== undefined) await readCallersOf(syntax, reverse, read, input.signal);
   const origins = input.reading.origins();
   const written = targets === undefined || origins === undefined ? undefined : createWrittenUses({ store, sources: headTree.sources, tokensOf: (file) => input.reading.tokensOf(file), syntaxOf: input.reading.syntaxOf, origins, importedDeclarations: targets.importedDeclarations, modules: input.modules });
-  const { inbound, walk, attributed, unsettled, references, unproven, cuts: contradictedCuts } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls, contradictions, syntax, written);
+  const { inbound, walk, attributed, unsettled, references, unproven, cuts: contradictedCuts } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal, typedReferences?.edges, targets === undefined ? undefined : input.reading.reverseCalls(targets), originCalls, contradictions, syntax, written, origins?.receiverFits);
 
   const walked = walk.reached.flatMap(({ symbol }) => indexedDeclaration(symbol) ?? []).filter(({ kind }) => !isFileDependent(kind));
   const reachedIds = new Set(walked.map((symbol) => symbol.id));
@@ -836,7 +836,7 @@ async function readCallersOf(syntax: SyntaxReading, reverse: ReverseCalls, membe
  * symbol depends on, the walk runs again, because a bound it frees, or an edge it moves, can read edges no earlier walk
  * read. `attributed` holds the unbound written calls attributed to a symbol it reached.
  */
-async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = [], reverse?: ReverseCalls, originCalls?: OriginCalls, contradictions?: ContradictedCalls, syntax?: SyntaxReading, written?: WrittenUses): Promise<WalkedInside> {
+async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal, typedEdges: readonly FollowedEdge[] = [], reverse?: ReverseCalls, originCalls?: OriginCalls, contradictions?: ContradictedCalls, syntax?: SyntaxReading, written?: WrittenUses, receiverFits?: ImportOrigins["receiverFits"]): Promise<WalkedInside> {
   const attributed: AttributedCall[] = [];
   const unproven: UnprovenCallInto[] = [];
   const unsettled: Omit<HeldUse, "from">[] = [];
@@ -851,6 +851,8 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
   const into = new Map<GraphNodeId, Map<string, FollowedEdge>>();
   const checked = new Set<string>();
   const probed = new Set<GraphNodeId>();
+  const disjoint = new Set<string>();
+  const fitAsked = new Set<string>();
   /** The record an edge would be when the source of its place proves it writes no call (ADR-0041 U6). */
   const contradicts = (followed: FollowedEdge): ContradictedCall | undefined => contradictedByEdge.get(edgeKey(followed.edge));
   /** Drops a contradicted edge's cut once; the edge itself is rejected every time the walk asks for it. */
@@ -880,6 +882,34 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
     moveTo(followed.target, followed);
     settled.set(edgeKey(followed.edge), "typed");
   }
+  /**
+   * Asks the language pack, once per pair, whether the call a method reached only by dispatch up from implementations
+   * reads into it can hold a value of each implementation's class (ADR-0104); whether it proved a pair different.
+   */
+  const readFits = async (ask: NonNullable<ImportOrigins["receiverFits"]>, walk: Walk, inbound: InboundEdges): Promise<boolean> => {
+    const asked: { key: string; site: ReceiverFitSite }[] = [];
+    for (const [contract, origins] of walk.restricted) {
+      const calls = [...inbound.followed().filter(({ target }) => target.id === contract), ...(into.get(contract)?.values() ?? [])].filter(({ edge }) => edge.kind === "calls" && edge.line !== null && edge.column !== null);
+      for (const { edge, source, target } of calls) {
+        for (const origin of origins) {
+          const key = receiverFitKey(origin.id, edge);
+          if (fitAsked.has(key)) continue;
+          fitAsked.add(key);
+          asked.push({ key, site: { file: source.file, line: edge.line!, column: edge.column! + 1, member: target.name, implementation: { file: origin.file, start: origin.startLine, name: origin.name } } });
+        }
+      }
+    }
+    if (asked.length === 0) return false;
+    const answers = await ask(asked.map(({ site }) => site), signal);
+    let grew = false;
+    for (const [index, { key }] of asked.entries()) {
+      if (answers[index]?.kind === "disjoint" && !disjoint.has(key)) {
+        disjoint.add(key);
+        grew = true;
+      }
+    }
+    return grew;
+  };
   const seedIds = new Set(seeds.map(({ id }) => id));
   const done = (inbound: InboundEdges, walk: Walk): WalkedInside => {
     const reachedIds = new Set([...seedIds, ...walk.reached.map(({ symbol }) => symbol.id)]);
@@ -887,19 +917,20 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
     return { inbound, walk, attributed, unsettled, references, unproven: unproven.filter((call) => reachedIds.has(call.node.id) && !listed(call)), cuts: contradictedCallCuts(contradicted) };
   };
   for (;;) {
-    const inbound = build({ dropped, into: new Map([...into].map(([id, edges]) => [id, [...edges.values()]])), settled, written: { read: writtenRead, held: writtenHeld } });
+    const inbound = build({ dropped, into: new Map([...into].map(([id, edges]) => [id, [...edges.values()]])), settled, written: { read: writtenRead, held: writtenHeld }, disjoint });
     const walk = walkImpact(seeds, inbound, budget, syntax);
     if (targets === undefined || signal?.aborted) return done(inbound, walk);
+    const fitted = receiverFits === undefined ? false : await readFits(receiverFits, walk, inbound);
     const placed = syntax === undefined ? false : await syntax.owners.load(walk.reached.map(({ symbol }) => symbol.file));
     const members = syntax === undefined || reverse === undefined ? [] : walk.reached.flatMap(({ symbol }) => (indexedDeclaration(symbol) === undefined && isNamedMember(symbol as ModelDeclaration) && !syntax.looked.has(symbol.id) ? [symbol as ModelDeclaration] : []));
     if (syntax !== undefined && reverse !== undefined && members.length > 0) await readCallersOf(syntax, reverse, members, signal);
     const moved = placed || members.length > 0;
     const fresh = inbound.followed().filter(({ edge }) => !checked.has(edgeKey(edge)));
     const reached = [...seeds, ...walk.reached.flatMap(({ symbol }) => indexedDeclaration(symbol) ?? [])].filter((symbol) => !probed.has(symbol.id));
-    if (fresh.length === 0 && reached.length === 0 && !moved) return done(inbound, walk);
+    if (fresh.length === 0 && reached.length === 0 && !moved && !fitted) return done(inbound, walk);
     for (const { edge } of fresh) checked.add(edgeKey(edge));
     for (const symbol of reached) probed.add(symbol.id);
-    let changed = moved;
+    let changed = moved || fitted;
     await readContradictions(fresh);
     const judged = fresh.filter((followed) => {
       if (contradicts(followed) === undefined) return true;

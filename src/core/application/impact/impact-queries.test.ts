@@ -21,7 +21,7 @@ import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import type { LiveStaleNotice } from "../../ports/live-queries.port.ts";
 import { createImpactQueries, type ImpactQueriesDeps } from "./impact-queries.ts";
-import type { ImportOrigins, ImportOriginsReader, ImportOriginSite, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { ImportOrigins, ImportOriginsReader, ImportOriginSite, ReceiverFitSite, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { SourceTokens } from "../../ports/source-tokens.port.ts";
@@ -757,6 +757,40 @@ test("a reference through a field of known origin is a caller when the field hol
   assert.ok(answer.status === "partial");
   assert.deepEqual(answer.value.symbols.filter((symbol) => symbol.file === CMP_FILE).map((symbol) => symbol.symbol), ["Cmp", "viaSvc", "viaSub"]);
   assert.deepEqual(answer.cuts.find((cut) => cut.kind === "unresolved-link"), { kind: "unresolved-link", at: [CMP_FILE, ...[12, 15, 18, 21, 24, 6, 9].map((line) => `${CMP_FILE}:${line} ${unresolved.find((use) => use.line === line)!.name}`)], reason: "name-only", reach: { kind: "callers-of", declarations: ["src/app/svc.ts::get"] } });
+});
+
+test("callers of an implementation's method drop the calls its language pack proves cannot reach a value of its class, ask each pair once, and keep every other call (ADR-0104)", async () => {
+  const [MAPPER, IMPL, TYPED, RAW] = ["src/Mapper.java", "src/TaxMapper.java", "src/Typed.java", "src/Raw.java"];
+  const nodes = [
+    fakeNode("Mapper", "interface", MAPPER, 1, 5),
+    fakeNode("Mapper.convert", "method", MAPPER, 3, 3, "convert"),
+    fakeNode("TaxMapper", "class", IMPL, 1, 6),
+    fakeNode("TaxMapper.convert", "method", IMPL, 3, 5, "convert"),
+    fakeNode("typed.use", "method", TYPED, 3, 5, "use"),
+    fakeNode("raw.use", "method", RAW, 3, 5, "use"),
+  ];
+  const edges: FakeEdge[] = [
+    { from: "TaxMapper", to: "Mapper", kind: "implements" },
+    { from: "Mapper", to: "Mapper.convert", kind: "contains" },
+    { from: "TaxMapper", to: "TaxMapper.convert", kind: "contains" },
+    { from: "typed.use", to: "Mapper.convert", kind: "calls", line: 4, column: 11, confidence: 0.9 },
+    { from: "raw.use", to: "Mapper.convert", kind: "calls", line: 4, column: 11, confidence: 0.9 },
+  ];
+  const asked: ReceiverFitSite[] = [];
+  const importOrigins: ImportOriginsReader = (...read) => ({
+    ...origins(() => undefined)(...read),
+    receiverFits: async (sites) => {
+      asked.push(...sites);
+      return sites.map(({ file }) => (file === TYPED ? { kind: "disjoint" } : { kind: "unknown" }));
+    },
+  });
+  const sources = [MAPPER, IMPL, TYPED, RAW].map((path) => ({ path, content: "" }));
+  const exports = { [HEAD]: { files: sources.map(({ path }, index) => ({ path, blob: `${index}`, written: true })), skipped: [] } };
+  const { callers } = setup({ nodes, edges, sources, exports, importOrigins });
+  const answer = callersFact(await callers({ targets: [{ file: IMPL, symbol: "convert" }] }));
+  assert.deepEqual(answer.status !== "unknown" && answer.value.symbols.map((symbol) => symbol.symbol).toSorted(), ["Mapper", "TaxMapper", "convert", "convert", "use"]);
+  assert.deepEqual(answer.status !== "unknown" && answer.value.symbols.filter((symbol) => symbol.symbol === "use").map((symbol) => symbol.file), [RAW]);
+  assert.deepEqual(asked.map(({ file, line, column, member, implementation }) => [file, line, column, member, implementation]).toSorted(), [[RAW, 4, 12, "convert", { file: IMPL, start: 3, name: "convert" }], [TYPED, 4, 12, "convert", { file: IMPL, start: 3, name: "convert" }]]);
 });
 
 test("a relation the reader could not place cuts the answer only in a file the walk reached", async () => {

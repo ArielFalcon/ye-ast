@@ -1186,7 +1186,7 @@ function rewritesCalls(root: Node): boolean {
 }
 
 /** Method invocations by their member, `super(...)`/`this(...)` by their keyword and `new T(...)` by `T`'s simple name, at the place each starts. */
-function invocationsOf(root: Node): ReadonlyMap<string, readonly Node[]> {
+export function invocationsOf(root: Node): ReadonlyMap<string, readonly Node[]> {
   const found = new Map<string, Node[]>();
   const pending: Node[] = [root];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {

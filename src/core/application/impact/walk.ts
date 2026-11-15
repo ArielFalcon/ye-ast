@@ -46,6 +46,8 @@ export interface Walk {
   cuts: readonly Cut[];
   /** The symbols whose callers the walk followed. */
   cost: { expansionsUsed: number };
+  /** By method reached only by dispatch up from implementations: those implementations, in position order (ADR-0104). */
+  restricted: ReadonlyMap<GraphNodeId, readonly GraphSymbol[]>;
 }
 
 /** What depends on a reached symbol: an indexed declaration, or a member that a syntax-only declaration is (ADR-0093). */
@@ -71,6 +73,8 @@ interface Rec {
   wholeFrom?: number;
   fanIn: number;
   callers: readonly Dependent[];
+  /** The implementations dispatch up reached this method from, when nothing else has: its callers are those they may receive (ADR-0104). */
+  origins?: Map<GraphNodeId, GraphSymbol>;
 }
 
 interface Link {
@@ -98,8 +102,8 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
   const spent = new Set<Rec>();
   let next: Rec[] = [];
 
-  function enter(symbol: GraphSymbol | ModelDeclaration, depth: number, contractChanged: boolean, into: Rec[], throughMember = false, dispatched = false): Rec {
-    const rec: Rec = { symbol, depth, contractChanged, throughMember, dispatched, fanIn: 0, callers: [] };
+  function enter(symbol: GraphSymbol | ModelDeclaration, depth: number, contractChanged: boolean, into: Rec[], throughMember = false, dispatched = false, origins?: readonly GraphSymbol[]): Rec {
+    const rec: Rec = { symbol, depth, contractChanged, throughMember, dispatched, fanIn: 0, callers: [], ...(origins === undefined ? {} : { origins: new Map(origins.map((origin) => [origin.id, origin])) }) };
     recs.set(symbol.id, rec);
     into.push(rec);
     return rec;
@@ -148,6 +152,18 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
 
   const stopped = { depth: [] as Rec[], hub: [] as Rec[], expansions: [] as Rec[] };
   const expanded = new Set<GraphNodeId>();
+  const processed = new Set<Rec>();
+  /** Adds what a hop carries to the origins of a method; `undefined` carried means another way reaches it, so it keeps every call. Whether its callers grew. */
+  function widen(rec: Rec, carried: readonly GraphSymbol[] | undefined): boolean {
+    if (rec.origins === undefined) return false;
+    if (carried === undefined) {
+      delete rec.origins;
+      return true;
+    }
+    const before = rec.origins.size;
+    for (const origin of carried) rec.origins.set(origin.id, origin);
+    return rec.origins.size > before;
+  }
   for (let depth = 0; level.length > 0; depth++) {
     next = [];
     /** The current level, plus every symbol a dispatch bridge puts there: a hop between an interface and its implementation costs no depth. */
@@ -157,11 +173,12 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
       const rec = queue[index]!;
       if (handled.has(rec)) continue;
       handled.add(rec);
+      processed.add(rec);
       if (isFileDependent(rec.symbol.kind)) continue;
       const indexed = indexedDeclaration(rec.symbol);
       const membersOnly = rec.wholeFrom === undefined ? rec.throughMember : depth < rec.wholeFrom;
       const reach: OwnerReach | undefined = !membersOnly ? undefined : rec.dispatched ? "dispatch" : "member";
-      rec.callers = placed(indexed === undefined ? syntax?.callers.get(rec.symbol.id) ?? [] : inbound.callersOf(indexed, rec.contractChanged, reach));
+      rec.callers = placed(indexed === undefined ? syntax?.callers.get(rec.symbol.id) ?? [] : inbound.callersOf(indexed, rec.contractChanged, reach, rec.origins === undefined ? undefined : [...rec.origins.values()]));
       rec.fanIn = rec.callers.filter((caller) => caller.hasCall ?? caller.basis === "call").length;
       if (budget.depth !== undefined && depth >= budget.depth) stopped.depth.push(rec);
       else if (budget.hubFanIn !== undefined && rec.fanIn > budget.hubFanIn) stopped.hub.push(rec);
@@ -173,14 +190,23 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
           const free = caller.bridge !== undefined;
           const into = free ? queue : next;
           const subtype = membersOnly && caller.basis === "reference";
+          const carried = caller.bridge === "up" && indexed !== undefined ? [...(rec.origins?.values() ?? [indexed])] : undefined;
           let target = recs.get(caller.from.id);
           if (target === undefined) {
-            target = enter(caller.from, free ? depth : depth + 1, false, into, subtype);
+            target = enter(caller.from, free ? depth : depth + 1, false, into, subtype, false, carried);
             enterOwners(target, into, caller.bridge === "up");
-          } else if (target.throughMember && !subtype) {
-            target.throughMember = false;
-            target.wholeFrom = depth + 1;
-            next.push(target);
+          } else {
+            if (target.throughMember && !subtype) {
+              target.throughMember = false;
+              target.wholeFrom = depth + 1;
+              next.push(target);
+            }
+            if (widen(target, carried)) {
+              if (handled.has(target)) {
+                handled.delete(target);
+                queue.push(target);
+              } else if (processed.has(target)) next.push(target);
+            }
           }
           links.push({ from: rec, to: target, confidence: caller.confidence, via: placeOn(rec.symbol, caller) });
         }
@@ -216,6 +242,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
     expanded,
     cuts: [...cutAt("depth", stopped.depth, budget.depth), ...cutAt("hub", stopped.hub, budget.hubFanIn), ...cutAt("caller-budget", stopped.expansions, budget.expansions)],
     cost: { expansionsUsed: spent.size },
+    restricted: new Map([...recs.values()].flatMap((rec) => (rec.origins === undefined ? [] : [[rec.symbol.id as GraphNodeId, [...rec.origins.values()].sort(comparePosition)] as const]))),
   };
 }
 

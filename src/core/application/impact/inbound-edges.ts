@@ -65,9 +65,11 @@ export interface InboundEdges {
    * what its implementations must meet, a reached caller does not, and a path that went up never comes back down to a
    * sibling. `reach` marks the type that declares a reached member: it follows only the whole-type rows of
    * `EDGE_POLICY.ownerThroughMember`, or of `ownerThroughDispatch` when the member was reached by dispatch up from an
-   * implementation, so whoever uses or injects the type does not join through its member.
+   * implementation, so whoever uses or injects the type does not join through its member. `origins` are the
+   * implementations a method was reached from by dispatch up and by nothing else: a call proven different from every one
+   * of them is not a caller (ADR-0104).
    */
-  callersOf(node: GraphSymbol, contractChanged: boolean, reach?: OwnerReach): readonly InboundEdge[];
+  callersOf(node: GraphSymbol, contractChanged: boolean, reach?: OwnerReach, origins?: readonly GraphSymbol[]): readonly InboundEdge[];
   /** The type that declares a method, which a reached method stands for at the same depth; none for any other symbol. */
   ownersOf(node: GraphSymbol): readonly GraphSymbol[];
   /** Candidate-specific settlements, restricted to admitted expansions and reached sources when sets are supplied. */
@@ -94,6 +96,13 @@ export interface EdgeCorrections {
   overloads?: ReadonlyMap<GraphNodeId, GraphNodeId>;
   /** What the sources write of reached declarations the index records no edge for (`WrittenUses`). */
   written?: WrittenUseCorrections;
+  /** By `receiverFitKey`: the calls whose receiver the sources prove cannot hold a value of the implementation's class (ADR-0104). */
+  disjoint?: ReadonlySet<string>;
+}
+
+/** An implementation and a call edge, for naming the pair in `EdgeCorrections.disjoint`; a handle inside one store, never output. */
+export function receiverFitKey(origin: GraphNodeId, edge: GraphEdge): string {
+  return JSON.stringify([origin, edgeKey(edge)]);
 }
 
 /** By node: the files whose uses of it were read from the sources, and the declarations that hold those uses. */
@@ -372,9 +381,10 @@ export function createInboundEdges(
   }
 
   type Gathered = InboundEdge & { provenance?: GraphEdge["provenance"] };
-  function gather(node: GraphSymbol, contractChanged: boolean, reach?: OwnerReach): Gathered[] {
+  function gather(node: GraphSymbol, contractChanged: boolean, reach?: OwnerReach, origins?: readonly GraphSymbol[]): Gathered[] {
     const rows = reach === undefined ? undefined : ownerRows(reach);
-    const followed = followedEdgesInto(node).filter(({ edge, source }) => !isTestFile(source.file) && followsEdge({ kind: edge.kind, sourceKind: source.kind, targetKind: node.kind }));
+    const unreachable = (edge: GraphEdge): boolean => origins !== undefined && origins.every((origin) => corrections.disjoint?.has(receiverFitKey(origin.id, edge)) === true);
+    const followed = followedEdgesInto(node).filter(({ edge, source }) => !isTestFile(source.file) && followsEdge({ kind: edge.kind, sourceKind: source.kind, targetKind: node.kind }) && !(edge.kind === "calls" && unreachable(edge)));
     const into = rows === undefined ? followed : followed.filter(({ edge }) => rows.edges.includes(edge.kind));
     const direct: Gathered[] = into.map(({ edge, source, moved }) => ({
       from: source,
@@ -392,11 +402,11 @@ export function createInboundEdges(
   }
 
   const callersCache = new Map<string, InboundEdge[]>();
-  function callersOf(node: GraphSymbol, contractChanged: boolean, reach?: OwnerReach): InboundEdge[] {
-    const key = `${node.id}:${contractChanged}:${reach ?? "whole"}`;
+  function callersOf(node: GraphSymbol, contractChanged: boolean, reach?: OwnerReach, origins?: readonly GraphSymbol[]): InboundEdge[] {
+    const key = `${node.id}:${contractChanged}:${reach ?? "whole"}:${origins === undefined ? "any" : origins.map(({ id }) => id).toSorted().join(",")}`;
     let callers = callersCache.get(key);
     if (callers === undefined) {
-      callers = strongestPerSymbol(gather(node, contractChanged, reach).map(({ provenance: _, ...edge }) => edge)).sort((a, b) => comparePosition(a.from, b.from));
+      callers = strongestPerSymbol(gather(node, contractChanged, reach, origins).map(({ provenance: _, ...edge }) => edge)).sort((a, b) => comparePosition(a.from, b.from));
       callersCache.set(key, callers);
     }
     return callers;
