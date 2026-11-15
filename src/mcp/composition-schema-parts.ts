@@ -292,7 +292,7 @@ const producerVerdict = z.discriminatedUnion("kind", [
     witness: z.strictObject({ value: z.string(), at: ids.evidence, conditions: z.array(z.strictObject({ expression: z.string(), holds: z.boolean(), at: ids.evidence })) }),
   }),
   z.strictObject({ kind: z.literal("admits") }),
-  z.strictObject({ kind: z.literal("review"), reason: z.enum(["frontier", "approximate", "no-origin"]) }),
+  z.strictObject({ kind: z.literal("review"), reason: z.enum(["frontier", "approximate", "no-origin", "stops-being-read"]) }),
 ]);
 const flowStep = z.enum([
   "http-call", "response-body", "return", "caller", "pipe", "map", "subscribe", "await", "to-signal", "assign", "fallback", "argument", "resource",

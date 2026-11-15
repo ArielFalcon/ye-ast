@@ -93,6 +93,12 @@ test("full keeps every table and all 33 part kinds; graph.sources appears once w
   assert.ok(parsed.graph.reads.some((read) => read.owner.kind === "read" && read.owner.readKind === "trigger"));
 });
 
+test("a producer of a renamed request property that is reviewed as no longer read passes both schemas", () => {
+  const renamed = mutated((copy) => { first(copy, "parts", (part) => part.kind === "consequence-producer").verdict = { kind: "review", reason: "stops-being-read" }; });
+  assert.equal(runtime(renamed), true);
+  assert.equal(ajv(json(renamed)).valid, true);
+});
+
 test("a receipt is not a Fact and carries no graph tables", () => {
   assert.equal(receipt.kind, "composition-receipt");
   for (const forbidden of [{ graph: full.graph }, { status: "complete" }, { value: {} }, { snapshot: { repo: "shop", kind: "sha", sha: "a" } }]) {
