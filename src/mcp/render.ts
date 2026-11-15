@@ -1134,7 +1134,7 @@ function importerFiles(entry: ImportedFile, detail: ResponseMode): { lines: stri
   };
   for (const [label, files] of modules) files?.forEach((path, index) => add(path, label, index));
   entry.users.forEach((path, index) => add(path, modulePaths.has(path) ? "users" : "additional users", index));
-  entry.unresolvedNamers.forEach((path, index) => add(path, "unresolved name matches", index));
+  entry.unresolvedNamers.forEach((path, index) => add(path, memberships.has(path) ? "also unresolved name matches" : "unresolved name matches", index));
   const heading = `    related files (${memberships.size} distinct)`;
   const listing = [...memberships].map(([path, labels]) => {
     const lines = [...new Set(entry.places?.filter((place) => place.file === path).map((place) => place.line) ?? [])].sort((a, b) => a - b);

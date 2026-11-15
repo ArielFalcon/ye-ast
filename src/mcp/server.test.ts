@@ -1551,8 +1551,8 @@ test("importers detail lists each related file once and preserves pending matche
     assert.equal(text.split(path).length - 1, 1, path);
   }
   assert.match(text, /related files \(5 distinct\)/);
-  assert.match(text, /"src\/Shared\.java": importers\[1\], users\[1\], unresolved name matches\[1\]/);
-  assert.match(text, /"src\/UsedPending\.java": additional users\[3\], unresolved name matches\[2\]/);
+  assert.match(text, /"src\/Shared\.java": importers\[1\], users\[1\], also unresolved name matches\[1\]/);
+  assert.match(text, /"src\/UsedPending\.java": additional users\[3\], also unresolved name matches\[2\]/);
   assert.match(text, /"src\/Candidate\.java": unresolved name matches\[0\]/);
   assert.match(text, /not establish additional dependencies/);
   await session.close();

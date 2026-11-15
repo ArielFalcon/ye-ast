@@ -16,8 +16,8 @@ test("details conserve ordered category memberships per target with one path occ
   const fact: Fact<ImportersValue> = { ...base, status: "complete", value };
   const output = renderImporters(fact, "details");
   const first = output.split("  target-a\n")[1]!.split("  target-b\n")[0]!;
-  assert.match(first, /shared": importers\[1\], reexporters\[0\], dynamic importers\[0\], users\[0\], unresolved name matches\[1\]/);
-  assert.match(first, /other": additional users\[1\], unresolved name matches\[0\]/);
+  assert.match(first, /shared": importers\[1\], reexporters\[0\], dynamic importers\[0\], users\[0\], also unresolved name matches\[1\]/);
+  assert.match(first, /other": additional users\[1\], also unresolved name matches\[0\]/);
   assert.match(first, /barrel": reexporters\[1\]/);
   assert.match(first, /unknown": unresolved name matches\[2\]/);
   for (const path of ["shared", "other", "barrel", "unknown"]) assert.equal(first.split(`${JSON.stringify(path)}:`).length - 1, 1);
@@ -35,7 +35,7 @@ test("details reconstruct source arrays including nonadjacent overlaps and unusu
     const path = JSON.parse(row[1]!) as string;
     for (const membership of row[2]!.split(", ")) {
       const match = membership.match(/^(.*?)\[(\d+)\]$/)!;
-      const label = match[1] === "additional users" ? "users" : match[1]!;
+      const label = match[1] === "additional users" ? "users" : match[1] === "also unresolved name matches" ? "unresolved name matches" : match[1]!;
       (rebuilt[label] ??= [])[Number(match[2])] = path;
     }
   }
