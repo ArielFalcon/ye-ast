@@ -77,7 +77,7 @@ cut for each of the 13,891 pairs would mark most answers of the repository, and 
    run the target. Every other change adds a cut. The number of edges each added cut marks is reported at the corpus gate of
    the unit that delivers it, and a unit whose marks the recoveries of decision 2 would remove is not integrated before
    them.
-4. **`trace` is unchanged.** It already cuts a call the reading does not prove.
+4. **`trace` is unchanged.** It already cuts a call the reading does not prove. (Amended by [ADR-0106](0106-a-trace-call-runs-what-its-readings-candidates-leave-on-the-receiver-the-walk-entered-through.md): a trace follows the one body a closed reading leaves.)
 
 ## Not decided here
 
