@@ -280,7 +280,7 @@ test("the grouped summary does not depend on the order the sites arrive in", () 
 const CALLS_FILE = "src/app/orders-client.service.ts";
 const HANDLER_PLACE = { path: "src/main/java/app/OrdersController.java", line: 40, repo: "orders" };
 const callPlace = (line: number) => ({ path: CALLS_FILE, line, repo: "shop-web" });
-const candidateOf = (name: string, lines: readonly number[], extra: readonly object[] = []) => ({ name, repo: "orders", basis: "link", evidence: [...lines.map(callPlace), HANDLER_PLACE, ...extra] });
+const candidateOf = (name: string, lines: readonly number[], extra: readonly object[] = []) => ({ name, repo: "orders", basis: "link", evidence: [...lines.map(callPlace), ...extra] });
 const candidateLineOf = (text: string, name: string) => text.split("\n").find((line) => line.startsWith(`  - ${name} -> orders`)) ?? "";
 
 test("a candidate served through links the answer lists points to them instead of repeating their places", () => {
@@ -304,4 +304,20 @@ test("a candidate whose links the summary only counts carries their count, and d
   assert.ok(summary.includes(String(LISTED_ITEMS + 1)) && !summary.includes(CALLS_FILE), summary);
   const details = candidateLineOf(renderWorkspace({ ...base, status: "complete", value } as never, "details"), "api");
   assert.ok(details.includes(`1-${LISTED_ITEMS + 1}`) && !details.includes(CALLS_FILE), details);
+});
+
+test("the host and the prefix of one base write the same calls: a workspace says those places once, under the first name", () => {
+  const places = (...lines: number[]) => lines.map((line) => ({ path: "src/app/orders-client.service.ts", line }));
+  const names = [
+    { kind: "http-host", name: "http://localhost:9966", evidence: places(7, 9, 11) },
+    { kind: "path-prefix", name: "api", evidence: places(7, 9, 11) },
+    { kind: "path-prefix", name: "other", evidence: places(7, 9) },
+  ];
+  const value = { ...mapValue([]), sections: { "shop-web": { ...base, status: "complete", value: { names, unresolved: [] } } } };
+  for (const detail of ["summary", "details"] as const) {
+    const text = renderWorkspace({ ...base, status: "complete", value } as never, detail);
+    assert.equal(text.split("orders-client.service.ts:11").length - 1, 1, `${detail}: the three places are listed once`);
+    assert.match(text, /- http:\/\/localhost:9966 \(same places as api\)/, detail);
+    assert.match(text, /- other \(src\/app\/orders-client\.service\.ts:7, src\/app\/orders-client\.service\.ts:9\)/, detail);
+  }
 });

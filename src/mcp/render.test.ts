@@ -95,6 +95,17 @@ test("decision evidence and free text sharing keeps each option and policy assoc
   assert.match(text, /three[\s\S]*free text/);
 });
 
+test("an option resting on exactly the places its decision prints says so once, and one resting on other places lists them", async () => {
+  const { renderDecisions } = await import("./render.ts");
+  const place = (line: number) => ({ repo: "shop", path: "src/a-long-repeated-supporting-evidence-location.ts", line });
+  const evidence = [place(7), place(9)];
+  const decisions = [{ id: "membership:name:orders", kind: "membership", subject: "orders", evidence, options: [{ value: "orders", basis: "link", evidence, recommended: false }, { value: "orders-core", basis: "artifact", evidence: [place(11)], recommended: false }], allowsFreeText: false, required: false }];
+  const text = renderDecisions({ ...base, status: "complete", value: { repositories: [], source: "request", decisions } } as never, "details");
+  assert.equal(text.split("evidence-location.ts:7").length - 1, 1);
+  assert.match(text, /- orders \(link, same places as the decision\)/);
+  assert.match(text, /- orders-core \(artifact, shop:src\/a-long-repeated-supporting-evidence-location\.ts:11\)/);
+});
+
 test("repeated free-text policy applies only to decisions that allow it", async () => {
   const { renderDecisions } = await import("./render.ts");
   const decisions = Array.from({ length: 8 }, (_, i) => ({ id: `gateway:${i}`, kind: "gateway", subject: `subject-${i}`, evidence: [], options: [], allowsFreeText: i !== 3, required: i === 0 }));

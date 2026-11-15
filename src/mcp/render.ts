@@ -1553,17 +1553,17 @@ interface PrintedLinks {
 const linkPlaceKey = (repo: string, path: string, line: number): string => JSON.stringify([repo, path, line]);
 
 /**
- * The links a `link` candidate is served through, as positions in each list: those into its repository whose two ends
- * are places of its evidence. `undefined` unless every place of the evidence is an end of one of them, so a place no link
- * accounts for is never dropped.
+ * The links a `link` candidate is served through, as positions in each list: those into its repository that start at a
+ * place of its evidence. `undefined` unless every place of the evidence starts one of them, so a place no link accounts
+ * for is never dropped.
  */
 function servingLinks(candidate: NameCandidate, { across, inside }: PrintedLinks): { across: number[]; inside: number[] } | undefined {
   if (candidate.basis !== "link" || candidate.evidence.length === 0) return undefined;
   const places = new Set(candidate.evidence.map(({ repo, path, line }) => linkPlaceKey(repo, path, line)));
-  const served = (links: readonly Link[]) => links.flatMap((link, index) => link.to.repo === candidate.repo && places.has(linkPlaceKey(link.from.repo, link.from.file, link.from.line)) && places.has(linkPlaceKey(link.to.repo, link.to.handler.path, link.to.handler.line)) ? [index] : []);
+  const served = (links: readonly Link[]) => links.flatMap((link, index) => link.to.repo === candidate.repo && places.has(linkPlaceKey(link.from.repo, link.from.file, link.from.line)) ? [index] : []);
   const through = { across: served(across.links), inside: served(inside.links) };
-  const ends = new Set([...through.across.map((index) => across.links[index]!), ...through.inside.map((index) => inside.links[index]!)].flatMap(({ from, to }) => [linkPlaceKey(from.repo, from.file, from.line), linkPlaceKey(to.repo, to.handler.path, to.handler.line)]));
-  return [...places].every((place) => ends.has(place)) ? through : undefined;
+  const starts = new Set([...through.across.map((index) => across.links[index]!), ...through.inside.map((index) => inside.links[index]!)].map(({ from }) => linkPlaceKey(from.repo, from.file, from.line)));
+  return [...places].every((place) => starts.has(place)) ? through : undefined;
 }
 
 /** Positions as the link lines number them: one-based, runs of consecutive numbers as `first-last`. */
@@ -1620,14 +1620,27 @@ function groupedByRank<T, K extends string>(items: readonly T[], keyOf: (item: T
  * and counts the rest, since a dependency is what the repository consumes and not what it calls. */
 function namesBlock(names: readonly OutwardName[], served: ReadonlySet<string>, detail: ResponseMode, indexed: false | "complete" | "locations" = false): string[] {
   const entries = names.map((name, index) => ({ name, index }));
-  return groupedByRank(entries, (entry) => entry.name.kind, OUTWARD_ORDER).flatMap(([kind, ofKind]) => {
+  const ranked = groupedByRank(entries, (entry) => entry.name.kind, OUTWARD_ORDER);
+  const firstWriting = new Map<string, OutwardName>();
+  for (const { name } of ranked.filter(([kind]) => detail === "details" || kind !== "dependency").flatMap(([, ofKind]) => ofKind)) {
+    const key = canonicalJson(name.evidence);
+    if (name.evidence.length > 0 && !firstWriting.has(key)) firstWriting.set(key, name);
+  }
+  /** The host and the prefix of one base write the same calls: the places are said once, under the first name that writes them. */
+  const placesOrSame = (name: OutwardName): string => {
+    const places = name.evidence.map(evidenceText).join(", ");
+    const first = firstWriting.get(canonicalJson(name.evidence));
+    const same = first === undefined || first === name || indexed === "locations" ? undefined : `same places as ${first.name}`;
+    return same !== undefined && same.length < places.length ? same : places;
+  };
+  return ranked.flatMap(([kind, ofKind]) => {
     const listed = detail === "details" || kind !== "dependency" ? ofKind : ofKind.filter(({ name }) => served.has(name.name));
     const counted = ofKind.length - listed.length;
     const head =
       counted === 0 ? `    ${kind} (${ofKind.length}):`
       : counted === ofKind.length ? `    ${kind} (${ofKind.length}): no repository given serves them; ${categoryRecovery({ details: "lists them", full: "retains all recorded names" })}`
       : `    ${kind} (${ofKind.length}): ${counted} no repository given serves; ${categoryRecovery({ details: "lists them", full: "retains all recorded names" })}`;
-    const line = ({ name, index }: { name: OutwardName; index: number }): string => `      - ${indexed ? `[${index}] ` : ""}${name.name} (${indexed === "complete" ? JSON.stringify(name.evidence) : name.evidence.map(evidenceText).join(", ")})`;
+    const line = ({ name, index }: { name: OutwardName; index: number }): string => `      - ${indexed ? `[${index}] ` : ""}${name.name} (${indexed === "complete" ? JSON.stringify(name.evidence) : placesOrSame(name)})`;
     const listing = [head, ...ofKind.map(line)];
     const summarized = [head, ...listed.map(line)];
     return counted === 0 || size(summarized) <= size(listing) ? summarized : listing;
@@ -1867,8 +1880,13 @@ function repositoryEvidenceText(evidence: RepositoryEvidence): string {
   return `${evidence.repo}:${evidenceText(evidence)}`;
 }
 
-function optionLine(option: DecisionOption): string {
-  const facts = [...(option.basis === undefined ? [] : [option.basis]), ...(option.recommended ? ["recommended"] : []), ...option.evidence.map(repositoryEvidenceText)];
+const SAME_AS_DECISION = "same places as the decision";
+
+/** An option that rests on the places its decision already prints says so instead of printing them again. */
+function optionLine(option: DecisionOption, decision: Decision): string {
+  const places = option.evidence.map(repositoryEvidenceText).join(", ");
+  const said = option.evidence.length > 1 && canonicalJson(option.evidence) === canonicalJson(decision.evidence) && SAME_AS_DECISION.length < places.length ? SAME_AS_DECISION : places;
+  const facts = [...(option.basis === undefined ? [] : [option.basis]), ...(option.recommended ? ["recommended"] : []), ...(said === "" ? [] : [said])];
   return `      - ${option.value}${facts.length === 0 ? "" : ` (${facts.join(", ")})`}`;
 }
 
@@ -1877,7 +1895,7 @@ function decisionLines(decision: Decision): string[] {
   return [
     `    ${decision.subject}`,
     ...(decision.evidence.length === 0 ? [] : [`      evidence: ${decision.evidence.map(repositoryEvidenceText).join(", ")}`]),
-    ...decision.options.map(optionLine),
+    ...decision.options.map((option) => optionLine(option, decision)),
     ...(decision.allowsFreeText ? ["      free text: an answer no fact states is accepted"] : []),
   ];
 }
@@ -1928,7 +1946,7 @@ function decisionsBlock(decisions: readonly Decision[], detail: ResponseMode): s
     const head = counted === 0 ? `  ${kind} (${ofKind.length}):` : `  ${kind} (${ofKind.length}): ${counted} dependency counted (free text only); ${categoryRecovery({ details: "lists them" })}`;
     return [head, ...shown.flatMap((decision) => {
       const reference = shared.get(canonicalJson(decision.evidence));
-      return [`    ${decision.subject}`, ...(decision.evidence.length === 0 ? [] : [reference === undefined ? `      evidence: ${decision.evidence.map(repositoryEvidenceText).join(", ")}` : `      evidence ${reference}`]), ...decision.options.map(optionLine), ...(decision.allowsFreeText ? [shareFreeText ? "      free text allowed" : "      free text: an answer no fact states is accepted"] : [])];
+      return [`    ${decision.subject}`, ...(decision.evidence.length === 0 ? [] : [reference === undefined ? `      evidence: ${decision.evidence.map(repositoryEvidenceText).join(", ")}` : `      evidence ${reference}`]), ...decision.options.map((option) => optionLine(option, decision)), ...(decision.allowsFreeText ? [shareFreeText ? "      free text allowed" : "      free text: an answer no fact states is accepted"] : [])];
     })];
   });
   const compact = [...definitions, ...expanded];
