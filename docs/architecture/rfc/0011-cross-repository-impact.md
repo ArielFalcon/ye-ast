@@ -566,7 +566,7 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   it admits once, sorted by id, with no walk: no `direction`, no `reach`. The call sites it reaches without a link are
   `unlinked`, `unmatched` (no route takes the call and it names no host, or it names a declared service), `ambiguous`
   (several entrypoints at one rung, with the repositories and, for HTTP, the routes) or `could-match` (a run-time value
-  could still route it, row 4), and an ambiguous or could-match one is also a cut of its section, as in the impact. `workspace.gateways` is the gateways in force, declared (`gateway-prefix`) and inferred (`route-overlap`).
+  could still route it, row 4), and an ambiguous or could-match one is also a cut of its section, as in the impact. An HTTP one states the `method` its call site states, decided or not. `workspace.gateways` is the gateways in force, declared (`gateway-prefix`) and inferred (`route-overlap`).
   A published destination is an outward name of kind `destination` when its protocol delivers outside the repository; an
   in-process event is not (nothing another repository can serve), though its link inside the repository is kept
   (amended 2026-11-14, owner decision D4, unit U6). The repositories that serve a destination are those the join

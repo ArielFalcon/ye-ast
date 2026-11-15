@@ -152,6 +152,17 @@ test("a request to an origin the workspace links into, matching no route, is lis
   assert.deepEqual(unlinked.map(({ outcome, name }) => `${outcome} ${name}`), ["unmatched http://localhost:8080/refunds"]);
 });
 
+test("an unlinked HTTP call site states the method its code states, decided or not, and a message states none", () => {
+  const shop = repository("shop", [], [serving("GET", "/orders", "Orders.list")]);
+  const decided = repository("web", [{ ...hosted("web", "http://localhost:8080/refunds"), target: { status: "complete", value: { method: "DELETE", path: "http://localhost:8080/refunds" }, evidence: [] } }, hosted("web", "http://localhost:8080/orders")], []);
+  const undecided = repository("web", [requesting("PATCH", UNDECIDED_BASE, text("/orders-api/orders/close"))], []);
+  const published = repository("web", [publishing("web", { protocol: "nats", destination: "orders.created", role: "publish" })], []);
+  const broker = repository("orders", [], [listening("nats", "orders.*", "Orders.on"), listening("nats", "orders.{}", "Orders.audit")]);
+  const lines = (repositories: WorkspaceRepository[], gateways: { prefix: string; repo: string }[] = []): string[] => joined(repositories, gateways).unlinked.map(({ outcome, transport, method }) => `${outcome} ${transport} ${method ?? "-"}`);
+
+  assert.deepEqual([lines([shop, decided]), lines([shop, undecided], [{ prefix: "orders-api", repo: "shop" }]), lines([published, broker])], [["unmatched http DELETE"], ["unmatched http PATCH"], ["could-match event -"]]);
+});
+
 /** A request that states its path in full, as a client call to a service of the workspace. */
 function calling(path: string, method: HttpRoute["method"] = "GET"): CallSite {
   return { repo: "web", file: "src/app/menus.service.ts", line: 4, symbol: "MenusService.load", transport: "http", target: { status: "complete", value: { method, path }, evidence: [] } };

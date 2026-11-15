@@ -207,7 +207,7 @@ const workspaceLink = z.looseObject({
   transport: z.enum(["http", "event"]), basis: z.string(), confidence: z.number(), profiles: strings.optional(),
 });
 const unlinkedCallSite = z.looseObject({
-  from: workspaceLink.shape.from, transport: z.enum(["http", "event"]), outcome: z.enum(["unmatched", "ambiguous", "could-match"]), name: z.string(), repos: strings.optional(), routes: strings.optional(),
+  from: workspaceLink.shape.from, transport: z.enum(["http", "event"]), method: z.string().optional(), outcome: z.enum(["unmatched", "ambiguous", "could-match"]), name: z.string(), repos: strings.optional(), routes: strings.optional(),
 });
 const workspaceImpact = z.looseObject({
   workspace: workspaceIdentity,

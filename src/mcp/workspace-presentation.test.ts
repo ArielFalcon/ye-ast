@@ -112,6 +112,15 @@ test("a workspace summary keeps the link list within the bound, and lists the ca
   assert.match(summary, /call sites the join reached without a link \(1\):\n  - a:x\.ts:9 h http shared: ambiguous \(b, c\) routes GET \/shared$/m);
 });
 
+test("a workspace names the method of an unlinked call site that states one, and prints none for one that does not", () => {
+  const site = (line: number, method?: string) => ({ from: { repo: "a", file: "x.ts", line, symbol: "h" }, transport: "http", ...(method === undefined ? {} : { method }), outcome: "unmatched", name: `/api/gone/${line}` });
+
+  const summary = renderWorkspace({ ...base, status: "complete", value: mapValue([], [site(9, "DELETE"), site(10)]) } as never, "summary");
+
+  assert.match(summary, /a:x\.ts:9 h http DELETE \/api\/gone\/9: unmatched\n/);
+  assert.match(summary, /a:x\.ts:10 h http \/api\/gone\/10: unmatched$/m);
+});
+
 test("a workspace lists the links inside one repository in their own block, apart from the links between repositories", () => {
   const inside = { ...linkOf(7, "shop-web"), id: "inside" };
   const value = mapValue([linkOf(9)], [], [inside]);

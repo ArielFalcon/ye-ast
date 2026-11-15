@@ -419,6 +419,12 @@ test("a link the workspace map and a workspace callers answer both admit is one 
   assert.deepEqual(naming.filter((line) => line.startsWith("  link ")), []);
 });
 
+test("an unlinked call site that states its HTTP method is rendered with it", () => {
+  const text = renderComposition(resultOf([sourceFixture("workspace")]), "details");
+
+  assert.match(text, /unmatched call site web .+:24 OrdersService\.gone http GET "\/orders\/gone"/);
+});
+
 test("beside a read that declares a subject, summary counts what only enumerating reads hold and keeps what a connection joins", () => {
   const result = resultOf([sourceFixture("entrypoints"), singleTargetCallers()]);
   const text = renderComposition(result, "summary");

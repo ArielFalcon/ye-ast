@@ -287,7 +287,7 @@ export function workspaceValue(): PublicWorkspaceValue {
     internalLinks: [{ id: "link-ws-internal", from: { repo: "web", file: "src/orders.service.ts", line: 30, symbol: "OrdersService.refresh" }, to: { repo: "web", kind: "http-route", name: "GET /orders/refresh", handler: handler("src/OrdersController.ts", "OrdersController.refresh", 8, 10) }, transport: "http", basis: "exact", confidence: 1 }],
     unlinked: [
       { from: { repo: "web", file: "src/orders.service.ts", line: 20, symbol: "OrdersService.shared" }, transport: "http", outcome: "ambiguous", name: "shared", repos: ["billing", "shop"] },
-      { from: { repo: "web", file: "src/orders.service.ts", line: 24, symbol: "OrdersService.gone" }, transport: "http", outcome: "unmatched", name: "/orders/gone" },
+      { from: { repo: "web", file: "src/orders.service.ts", line: 24, symbol: "OrdersService.gone" }, transport: "http", method: "GET", outcome: "unmatched", name: "/orders/gone" },
     ],
   };
 }

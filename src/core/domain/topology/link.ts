@@ -1,5 +1,5 @@
 import type { Entrypoint } from "../entrypoints/entrypoint.ts";
-import type { Handler } from "../entrypoints/http-route.ts";
+import type { Handler, HttpMethod } from "../entrypoints/http-route.ts";
 import type { ParseStrictType } from "../entrypoints/route-parameter.ts";
 import type { ChangedContract } from "../impact/changed-contracts.ts";
 import { compareText } from "../shared/code-node.ts";
@@ -42,6 +42,8 @@ export interface Link {
 export interface UnlinkedCallSite {
   from: Link["from"];
   transport: Link["transport"];
+  /** The HTTP method the call site states, decided or not; absent for a message. */
+  method?: HttpMethod;
   outcome: "unmatched" | "ambiguous" | "could-match";
   /** The path no route took when `unmatched`, or some could when `could-match`; the prefix or destination that matched when `ambiguous`. */
   name: string;

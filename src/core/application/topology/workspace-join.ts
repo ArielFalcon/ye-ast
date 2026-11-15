@@ -1,4 +1,4 @@
-import { callPlaceOf, compareCallPlaces, distinctPlaces, type CallSite, type EventTarget, type PropagatedPlace } from "../../domain/topology/call-site.ts";
+import { callPlaceOf, compareCallPlaces, distinctPlaces, httpTargetOf, type CallSite, type EventTarget, type PropagatedPlace } from "../../domain/topology/call-site.ts";
 import type { JoinedSite } from "../../domain/topology/link-graph.ts";
 import { isInternalLink, type Link, type UnlinkedCallSite } from "../../domain/topology/link.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -70,13 +70,15 @@ export function linkMapOf(joined: readonly JoinedSite[]): { links: Link[]; inter
   for (const { site, joined: answer } of joined) {
     const from = callPlaceOf(site);
     const through = site.propagatedThrough === undefined ? {} : { propagatedThrough: site.propagatedThrough };
+    const method = site.transport === "http" ? (httpTargetOf(site)?.method ?? site.stated?.method) : undefined;
+    const stated = method === undefined ? {} : { method };
     for (const link of answer.links ?? []) {
       const known = links.get(link.id)?.propagatedThrough;
       links.set(link.id, site.propagatedThrough === undefined && known === undefined ? link : { ...link, propagatedThrough: distinctPlaces([...(known ?? []), ...(site.propagatedThrough ?? [])]) });
     }
-    if (answer.ambiguous !== undefined) leave({ from, transport: site.transport, outcome: "ambiguous", name: answer.ambiguous.key, repos: answer.ambiguous.repos, ...(answer.ambiguous.routes === undefined ? {} : { routes: answer.ambiguous.routes }), ...through });
-    else if (answer.undecided !== undefined) leave({ from, transport: site.transport, outcome: "could-match", name: answer.undecided, ...through });
-    else if (answer.unmatched !== undefined) leave({ from, transport: site.transport, outcome: "unmatched", name: answer.unmatched, ...through });
+    if (answer.ambiguous !== undefined) leave({ from, transport: site.transport, ...stated, outcome: "ambiguous", name: answer.ambiguous.key, repos: answer.ambiguous.repos, ...(answer.ambiguous.routes === undefined ? {} : { routes: answer.ambiguous.routes }), ...through });
+    else if (answer.undecided !== undefined) leave({ from, transport: site.transport, ...stated, outcome: "could-match", name: answer.undecided, ...through });
+    else if (answer.unmatched !== undefined) leave({ from, transport: site.transport, ...stated, outcome: "unmatched", name: answer.unmatched, ...through });
   }
   const admitted = [...links.values()].sort((a, b) => compareText(a.id, b.id));
   return {

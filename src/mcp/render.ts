@@ -1438,7 +1438,7 @@ function linkMapLines(links: readonly TraceLinked<Link>[], unlinked: readonly Tr
   const listed = linksListed(links, detail) ? literal : counted;
   return [
     `${label} (${links.length}):`, ...listed,
-    ...(unlinked.length === 0 ? [] : [`call sites the join reached without a link (${unlinked.length}):`, ...unlinked.map(({ from, transport, outcome, name, repos, routes, deferred, issuedAt }) => `  - ${from.repo}:${placeText(from.file, from.line)} ${from.symbol} ${transport} ${name}: ${outcome}${repos === undefined ? "" : ` (${repos.join(", ")})`}${routes === undefined ? "" : ` routes ${routes.join(", ")}`}${deferred === true ? " (runs later, if at all)" : ""}${issuedText(issuedAt)}`)]),
+    ...(unlinked.length === 0 ? [] : [`call sites the join reached without a link (${unlinked.length}):`, ...unlinked.map(({ from, transport, method, outcome, name, repos, routes, deferred, issuedAt }) => `  - ${from.repo}:${placeText(from.file, from.line)} ${from.symbol} ${transport}${method === undefined ? "" : ` ${method}`} ${name}: ${outcome}${repos === undefined ? "" : ` (${repos.join(", ")})`}${routes === undefined ? "" : ` routes ${routes.join(", ")}`}${deferred === true ? " (runs later, if at all)" : ""}${issuedText(issuedAt)}`)]),
   ];
 }
 
