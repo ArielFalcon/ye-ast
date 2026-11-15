@@ -177,7 +177,7 @@ function findingsOfType(type: TypeDecl, project: JavaProject, annotations: Sprin
   if (type.kind !== "class" || type.isAbstract) return found;
   const controller = controllerOf(type, project, annotations, operations);
   if (controller !== undefined) found.push(...routesOf(controller));
-  found.push(...delegateMethodsOf(type, project, annotations, generator));
+  found.push(...delegateMethodsOf(type, project, annotations, generator, (name) => operations.byOperationId.has(name)));
   found.push(...listenersOf(type, project, annotations, isScannedBean(type, annotations)));
   found.push(...registeredJobsOf(type, project));
   return found;
@@ -292,7 +292,7 @@ function routesOf(controller: Controller): Finding<MappedRoute>[] {
   return [
     ...(classLibrary === undefined ? [] : [unknown("no-extractor", [spanOf(type.file.path, classLibrary.node)], subjectOf("http-route", type.qualifiedName, annotationName(classLibrary, annotations)))]),
     ...(contractCoversOverrides(controller, handlers, missing) ? [] : missing.map((gap) => unknown("no-extractor", [spanOf(gap.file.path, gap.node)], subjectOf("http-route", type.qualifiedName, gap.name)))),
-    ...undecided.map((method) => unknownAt(method, { reason: "unresolved", file: method.owner.file, node: method.node })),
+    ...undecided.map((method) => unknownAt(method, { reason: "unresolved", file: method.owner.file, node: method.node }, "http-route")),
     ...served,
   ];
 }
@@ -338,7 +338,7 @@ function findingsOfHandler(controller: Controller, method: MethodDecl): Finding<
   try {
     return readHandler(controller, method);
   } catch {
-    return [unknownAt(method, { reason: "unresolved", file: method.owner.file, node: method.node })];
+    return [unknownAt(method, { reason: "unresolved", file: method.owner.file, node: method.node }, "http-route")];
   }
 }
 
@@ -348,10 +348,10 @@ function readHandler(controller: Controller, method: MethodDecl): Finding<Mapped
     const joined = controller.speculative ? undefined : contractJoin(controller, method);
     if (joined !== undefined) return ["finding" in joined ? joined.finding : joined.ambiguous];
     const gap = controller.speculative ? undefined : unmappedGap(controller, method);
-    return gap === undefined ? [] : [unknownAt(method, gap)];
+    return gap === undefined ? [] : [unknownAt(method, gap, "http-route")];
   }
-  if ("gap" in lookup) return [unknownAt(method, lookup.gap)];
-  if (controller.blocking !== undefined) return [unknownAt(method, controller.blocking)];
+  if ("gap" in lookup) return [unknownAt(method, lookup.gap, "http-route")];
+  if (controller.blocking !== undefined) return [unknownAt(method, controller.blocking, "http-route")];
   const classMapping = controller.classMapping !== undefined && "mapping" in controller.classMapping ? controller.classMapping.mapping : undefined;
   return routesOfHandler(method, lookup.mapping, classMapping, controller.project);
 }

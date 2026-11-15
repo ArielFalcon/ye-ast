@@ -31,9 +31,11 @@ export function projectBuildIn(context: readonly SourceFile[]): ProjectBuild {
  * delegate: generators that split a controller from its logic emit `*Delegate` interfaces that git does not hold, and
  * the controller that calls the component is generated too. Each `@Override` method of a `*Delegate` interface is a
  * handler the sources do not show. When a build file declares a source generator, the interface may carry any name and
- * its methods need no `@Override`: each public method is one.
+ * its methods need no `@Override`: each public method is one. The item stands for an HTTP route only where the sources
+ * give a reason: the `*Delegate` name, or a method named by an operation of a contract the repository holds. An absent
+ * interface under the generator signal alone may be a library's, so the item says what raised it and no kind.
  */
-export function delegateMethodsOf(type: TypeDecl, project: JavaProject, annotations: SpringAnnotations, generator: Evidence | undefined): Finding<MappedRoute>[] {
+export function delegateMethodsOf(type: TypeDecl, project: JavaProject, annotations: SpringAnnotations, generator: Evidence | undefined, isOperation: (name: string) => boolean): Finding<MappedRoute>[] {
   const isComponent = annotationUses(type.node, scopeOf(type)).some((use) => COMPONENTS.has(annotations.keyOf(use) ?? ""));
   const delegate = isComponent
     ? project
@@ -41,7 +43,8 @@ export function delegateMethodsOf(type: TypeDecl, project: JavaProject, annotati
         .gaps.find((gap) => gap.kind === "missing" && gap.isInterface && (generator !== undefined || gap.name.endsWith("Delegate")))
     : undefined;
   if (delegate === undefined) return [];
+  const named = delegate.name.endsWith("Delegate");
   return type.methods
     .filter((method) => method.overrides || (generator !== undefined && method.modifiers.includes("public")))
-    .map((method) => unknownAt(method, { reason: "no-extractor", file: delegate.file, node: delegate.node, raisedBy: delegate.name }, ...(generator === undefined ? [] : [generator])));
+    .map((method) => unknownAt(method, { reason: "no-extractor", file: delegate.file, node: delegate.node, raisedBy: delegate.name }, named || isOperation(method.name) ? "http-route" : undefined, ...(generator === undefined ? [] : [generator])));
 }

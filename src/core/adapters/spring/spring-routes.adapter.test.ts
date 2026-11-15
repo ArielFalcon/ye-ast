@@ -1578,8 +1578,21 @@ test("a build file that declares a source generator makes every public method of
       { path: source.path, line: 4, endLine: 4 },
       { path: "pom.xml", line: 6 },
     ],
-    subject: { candidate: "http-route", symbol: `PetsServiceImpl.${method}`, raisedBy: "PetsApiService" },
+    subject: { symbol: `PetsServiceImpl.${method}`, raisedBy: "PetsApiService" },
   })));
+});
+
+test("under the generator signal an item stands for an HTTP route only when the Delegate name or a contract operation of the repository says so", async () => {
+  const source = app(
+    "PetsServiceImpl",
+    `@Service class PetsServiceImpl implements PetsApiService {\n  public void list() {}\n  public void onEvent() {}\n}\n@Service class PetsDelegateImpl implements PetsApiDelegate {\n  public void onEvent() {}\n}`,
+    SERVICE_IMPORTS + " import com.acme.gen.PetsApiDelegate;",
+  );
+  extractor = contracting([operation("list", "GET", "/pets")]);
+
+  const findings = await extractor.extract([OPENAPI_POM, source]);
+
+  assert.deepEqual(unknowns(findings).map((item) => [item.subject?.symbol, item.subject?.candidate]), [["PetsServiceImpl.list", "http-route"], ["PetsServiceImpl.onEvent", undefined], ["PetsDelegateImpl.onEvent", "http-route"]]);
 });
 
 test("a build file without a source generator leaves the component rule as it was: only Delegate interfaces and @Override methods", async () => {

@@ -20,9 +20,9 @@ export function unknown(reason: UnknownReason, evidence: readonly Evidence[], su
   return { status: "unknown", reason, evidence: distinctEvidence(evidence), ...(subject === undefined ? {} : { subject }) };
 }
 
-/** An unknown item at a route handler and at the constructs that left it undecided. */
-export function unknownAt(method: MethodDecl, gap: Gap, ...also: Evidence[]): Finding<never> {
-  return unknown(gap.reason, [spanOf(method.owner.file.path, method.node), spanOf(gap.file.path, gap.node), ...also], subjectOf("http-route", `${method.owner.qualifiedName}.${method.name}`, gap.raisedBy));
+/** An unknown item at a method and at the constructs that left it undecided, standing for the entrypoint kind the reader has evidence the method may be, if any. */
+export function unknownAt(method: MethodDecl, gap: Gap, candidate: UnknownSubject["candidate"], ...also: Evidence[]): Finding<never> {
+  return unknown(gap.reason, [spanOf(method.owner.file.path, method.node), spanOf(gap.file.path, gap.node), ...also], subjectOf(candidate, `${method.owner.qualifiedName}.${method.name}`, gap.raisedBy));
 }
 
 /** What an unknown item stands for; an absent part is left out, never written as undefined. */

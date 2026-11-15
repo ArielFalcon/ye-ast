@@ -14,7 +14,7 @@ export function foreignEndpointsOf(type: TypeDecl, annotations: SpringAnnotation
     annotationUses(declaration, scopeOf(type)).find((use) => keys.has(annotations.keyOf(use) ?? ""));
   const methods = type.methods.flatMap((method) => {
     const use = markedBy(method.node, FOREIGN_METHOD_ENDPOINTS);
-    return use === undefined ? [] : [unknownAt(method, { reason: "no-extractor", file: type.file, node: use.node, raisedBy: annotationName(use, annotations) })];
+    return use === undefined ? [] : [unknownAt(method, { reason: "no-extractor", file: type.file, node: use.node, raisedBy: annotationName(use, annotations) }, "http-route")];
   });
   if (methods.length > 0) return methods;
   const use = markedBy(type.node, FOREIGN_TYPE_ENDPOINTS);
