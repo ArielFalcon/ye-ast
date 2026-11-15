@@ -445,3 +445,13 @@ test("committed decision helper rejects live choices before reading workspace", 
   }
   assert.deepEqual(asks, []);
 });
+
+test("a name the join linked is a membership question only when a gateway in force, inferred ones included, routes its prefix to that clone", async () => {
+  const value = workspaceValue();
+  const linked = { ...value, workspace: { ...value.workspace, gateways: [{ prefix: "geo-api", repo: "billing", basis: "route-overlap" as const }] }, candidates: [...value.candidates, { name: "geo-api", repo: "billing", basis: "link" as const, evidence: [{ repo: "shop-web", path: "src/app/geo.api.ts", line: 3 }] }, { name: "api", repo: "orders", basis: "link" as const, evidence: [{ repo: "shop-web", path: "src/app/order.api.ts", line: 9 }] }] };
+  const { queries } = setup({ ok: true, value: base(linked) });
+
+  const ids = valueOf(await queries.decisions(REQUEST)).decisions.map((decision) => decision.id).filter((id) => id.startsWith("membership:name:"));
+
+  assert.deepEqual(ids, ["membership:name:geo-api", "membership:name:shared-api"]);
+});

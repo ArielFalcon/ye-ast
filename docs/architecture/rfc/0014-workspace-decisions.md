@@ -87,7 +87,7 @@ The list is closed. Every option comes from a fact with evidence; the engine nev
 
 | Kind | When it exists | Options | Recommendation |
 |---|---|---|---|
-| `membership`, one per name (`membership:name:<name>`) | an outward name has at least one candidate clone | the clones serving that name, each with its basis (`nameCandidates`) | the strongest basis; two at one basis recommend none |
+| `membership`, one per name (`membership:name:<name>`) | an outward name has a candidate clone an identity comparison names, or a gateway in force routes its prefix to one (a name only a link or a delivered event served is the join's fact: ADR-0105) | the clones serving that name, each with its basis (`nameCandidates`) | the strongest basis; two at one basis recommend none |
 | `membership`, one per clone (`membership:clone:<repo>`) | a candidate clone the request passed names nothing | keep it in the workspace, or drop it | none |
 | `repository` | an outward name no clone given serves (`unserved`) | free text: a local path or a URL; "leave it unserved" | none: the engine cannot know where a name lives |
 | `library` | a call-site cut names a library (`via`, `unresolvedCallSite`) | the clones a dependency of the calling repository names, each as a candidate to confirm with both ends as evidence; free text | none: no fact states which clone is the library a FQN names |
@@ -203,7 +203,8 @@ the host's.
   the adapter renders English. The set is sorted by id and identical for the same workspace and candidates.
 - `membership` has two subject spaces, `membership:name:<name>` and `membership:clone:<repo>` (the ids collided in the
   first cut). Both skip the bound repository and every repository the persisted declaration holds: an answered
-  membership is not asked again. The recommendation is the unique strongest basis among the options still asked; two at
+  membership is not asked again. A name only the join served (basis `link` or `event-destination`) is asked only for a
+  prefix a gateway in force routes to that clone (ADR-0105). The recommendation is the unique strongest basis among the options still asked; two at
   the strongest basis recommend none, and a chosen option records its `basis`.
 - `repository` is one free-text decision per unserved name, with every place that writes it. A prefix a declared gateway
   routes was answered by that gateway and is no repository decision. A name written twice with different kinds is

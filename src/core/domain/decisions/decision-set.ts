@@ -28,6 +28,8 @@ export interface DecisionInput {
   candidates: readonly NameCandidate[];
   unserved: readonly RepositoryOutwardName[];
   gateways: readonly GatewayDeclaration[];
+  /** Every prefix the join routed to a repository, declared or inferred: the prefixes a membership question may still tie to a clone. */
+  gatewaysInForce?: readonly GatewayDeclaration[];
   /** The repositories the persisted declaration already holds: an answered membership is not asked again. */
   confirmed?: readonly string[];
   /** What a refresh pinned per repository: the refs it consulted are the revisions a `revision` decision offers. */
@@ -80,12 +82,24 @@ function compareOption(a: DecisionOption, b: DecisionOption): number {
   return compareText(a.value, b.value) || compareText(a.basis ?? "", b.basis ?? "");
 }
 
-/** One decision per outward name a clone the declaration does not hold yet serves: the clones, with the basis that names each one. */
+/**
+ * A candidate the join itself decided: a link or a delivered event stands as the join's fact, not as a comparison a user
+ * confirms. Only a prefix a gateway in force routes to the candidate's clone turns it into a question: the decision ties
+ * the prefix the caller wrote to the clone that serves it.
+ */
+function joinDecided(candidate: NameCandidate, inForce: readonly GatewayDeclaration[]): boolean {
+  return (candidate.basis === "link" || candidate.basis === "event-destination") && !inForce.some((gateway) => gateway.prefix === candidate.name && gateway.repo === candidate.repo);
+}
+
+/**
+ * One decision per outward name a clone the declaration does not hold yet serves: the clones, with the basis that names each one.
+ * A name every candidate of which the join decided is no question; one an identity comparison also names keeps every option.
+ */
 function membershipsByName(input: DecisionInput, confirmed: ReadonlySet<string>): Decision[] {
   return groupsOf(
     input.candidates.filter((candidate) => !confirmed.has(candidate.repo)),
     (candidate) => candidate.name,
-  ).map(([name, candidates]) => {
+  ).filter(([, candidates]) => !candidates.every((candidate) => joinDecided(candidate, input.gatewaysInForce ?? []))).map(([name, candidates]) => {
     const recommended = strongestRepo(candidates);
     return decisionOf({
       kind: "membership",

@@ -435,3 +435,18 @@ test("a prefix a call states after an undecided base is a gateway decision", () 
   assert.deepEqual(options(byId(set).get("gateway:legacy")), ["orders"]);
   assert.deepEqual(byId(set).get("gateway:legacy")?.evidence, [{ path: "webapp/src/app.ts", line: 7, repo: "webapp" }]);
 });
+
+test("a name only the join served opens no membership decision; a gateway in force tying its prefix to that clone keeps it", () => {
+  const served = (name: string, repo: string, basis: NameCandidate["basis"]): NameCandidate => candidate(name, repo, basis);
+  const none = decisionsOf(input({ candidates: [served("api", "orders", "link"), served("orders.created", "orders", "event-destination")] }));
+  assert.deepEqual(ids(none), []);
+
+  const tied = decisionsOf(input({ candidates: [served("orders-api", "orders", "link"), served("billing-api", "billing", "link"), served("misc-api", "orders", "link")], gatewaysInForce: [{ prefix: "orders-api", repo: "orders" }, { prefix: "billing-api", repo: "orders" }, { prefix: "other-api", repo: "orders" }] }));
+  assert.deepEqual(ids(tied), ["membership:name:orders-api"]);
+});
+
+test("a name an identity comparison also names keeps its membership decision, the join-served option included", () => {
+  const set = decisionsOf(input({ candidates: [candidate("orders", "orders-a", "exact-name"), candidate("orders", "orders-b", "link")] }));
+
+  assert.deepEqual(options(byId(set).get("membership:name:orders")), ["orders-a*(exact-name)", "orders-b(link)"]);
+});

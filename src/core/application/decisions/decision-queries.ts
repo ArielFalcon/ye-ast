@@ -74,6 +74,7 @@ async function buildDecisions(read: WorkspaceRead, request: Omit<WorkspacePlanni
     candidates: value.candidates,
     unserved: value.unserved,
     gateways: declaredGateways(value.workspace.gateways),
+    gatewaysInForce: value.workspace.gateways.map(({ prefix, repo }) => ({ prefix, repo })),
     confirmed: persisted.value.repos.map((declaration) => declaration.id ?? directoryNameOf(declaration.path)),
     ...(read.refresh === undefined ? {} : { resolutions: read.refresh.resolution }),
     ...(origins.value.length === 0 ? {} : { origins: origins.value }),

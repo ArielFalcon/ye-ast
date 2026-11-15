@@ -1079,7 +1079,7 @@ test("a published destination is an outward name the repository whose listener t
   assert.deepEqual(value.sections["shop-web"]?.status === "unknown" ? [] : value.sections["shop-web"]?.value.names.map(({ name, kind }) => `${kind} ${name}`), ["destination audit.logged", "destination orders.{}"]);
   assert.deepEqual(value.candidates, [{
     name: "orders.{}", repo: "orders", basis: "event-destination",
-    evidence: [{ path: "src/main/java/app/OrdersListener.java", line: 8, repo: "orders" }, { path: "src/main/java/app/shop-web/Publisher.java", line: 7, repo: "shop-web" }],
+    evidence: [{ path: "src/main/java/app/shop-web/Publisher.java", line: 7, repo: "shop-web" }],
   }]);
   assert.deepEqual(value.unserved.map(({ name }) => name), ["audit.logged"]);
 });
@@ -1107,7 +1107,7 @@ test("the host and prefix of a call the join links are served by the repository 
   assert.deepEqual(value.links.map(({ to }) => `${to.repo} ${to.name}`), ["orders POST /api/orders"]);
   assert.deepEqual(value.unserved.map(({ name, kind }) => `${kind} ${name}`), ["path-prefix charges", "http-host http://billing.example"]);
   assert.deepEqual(value.candidates.map(({ name, repo, basis }) => `${name} ${repo} ${basis}`), ["api orders link", "http://localhost:9966 orders link"]);
-  assert.deepEqual(value.candidates.find(({ name }) => name === "api")?.evidence, [{ path: "src/app/shop-web.api.ts", line: 7, repo: "shop-web" }, { path: ORDERS_HANDLER.path, line: ORDERS_HANDLER.line, repo: "orders" }]);
+  assert.deepEqual(value.candidates.find(({ name }) => name === "api")?.evidence, [{ path: "src/app/shop-web.api.ts", line: 7, repo: "shop-web" }]);
 });
 
 test("a path a call states after an undecided base is an outward name: served by the repository its link lands in, and unmatched under a gateway in force that no route takes", async () => {

@@ -303,9 +303,9 @@ function decidedNameKeys(entry: Pick<Resolved, "repository" | "stated" | "callSi
 
 /**
  * Per calling repository and name, the repositories that serve it as the join decided, in the join's own terms: the one
- * each link lands in (basis `link` for the host and prefix of a request, `event-destination` for a destination), with
- * the call site and the handler as evidence, or each one an ambiguous destination names, with the call site. A link whose
- * ends share a repository names that repository.
+ * each link lands in (basis `link` for the host and prefix of a request, `event-destination` for a destination), or each
+ * one an ambiguous destination names. The evidence is the call site that writes the name; the handler is the `to` of the
+ * link that starts there (ADR-0105). A link whose ends share a repository names that repository.
  */
 function linkCandidates(joined: readonly JoinedSite[]): Map<string, NameCandidate[]> {
   const served = new Map<string, NameCandidate[]>();
@@ -314,7 +314,7 @@ function linkCandidates(joined: readonly JoinedSite[]): Map<string, NameCandidat
     for (const name of callSiteNames(site.repo, [site])) {
       const basis = name.kind === "destination" ? "event-destination" as const : "link" as const;
       const found = answer.links !== undefined
-        ? answer.links.map(({ to }) => ({ name: name.name, repo: to.repo, basis, evidence: sortEvidence([published, { path: to.handler.path, line: to.handler.line, repo: to.repo }]) }))
+        ? answer.links.map(({ to }) => ({ name: name.name, repo: to.repo, basis, evidence: [published] }))
         : name.kind === "destination" ? (answer.ambiguous?.repos ?? []).map((repo) => ({ name: name.name, repo, basis, evidence: [published] })) : [];
       const key = nameKey(site.repo, name);
       served.set(key, gatherCandidates([...(served.get(key) ?? []), ...found]));
