@@ -2,6 +2,7 @@ import { callPlaceOf, compareCallPlaces, distinctPlaces, type CallSite, type Eve
 import type { JoinedSite } from "../../domain/topology/link-graph.ts";
 import { isInternalLink, type Link, type UnlinkedCallSite } from "../../domain/topology/link.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
+import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { inferGateways, inferHosts, matchEventCallSite, matchHttpCallSite, type Gateway, type GatewayDeclaration, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import type { WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 
@@ -54,11 +55,18 @@ export function declaredGateways(gateways: readonly Gateway[]): GatewayDeclarati
 
 /**
  * What a join admitted, once per `Link.id` and sorted by id, the links across repositories apart from those inside one,
- * and the call sites it reached and could not settle, sorted by place.
+ * and the call sites it reached and could not settle, once per call and outcome and sorted by place: a call reached through
+ * several callers gathers the bodies of all, as its link would.
  */
 export function linkMapOf(joined: readonly JoinedSite[]): { links: Link[]; internalLinks: Link[]; unlinked: UnlinkedCallSite[] } {
   const links = new Map<string, Link>();
-  const unlinked: UnlinkedCallSite[] = [];
+  const unlinked = new Map<string, UnlinkedCallSite>();
+  const leave = (item: UnlinkedCallSite): void => {
+    const { propagatedThrough, ...identity } = item;
+    const key = canonicalJson(identity);
+    const known = unlinked.get(key)?.propagatedThrough;
+    unlinked.set(key, propagatedThrough === undefined && known === undefined ? item : { ...item, propagatedThrough: distinctPlaces([...(known ?? []), ...(propagatedThrough ?? [])]) });
+  };
   for (const { site, joined: answer } of joined) {
     const from = callPlaceOf(site);
     const through = site.propagatedThrough === undefined ? {} : { propagatedThrough: site.propagatedThrough };
@@ -66,14 +74,14 @@ export function linkMapOf(joined: readonly JoinedSite[]): { links: Link[]; inter
       const known = links.get(link.id)?.propagatedThrough;
       links.set(link.id, site.propagatedThrough === undefined && known === undefined ? link : { ...link, propagatedThrough: distinctPlaces([...(known ?? []), ...(site.propagatedThrough ?? [])]) });
     }
-    if (answer.ambiguous !== undefined) unlinked.push({ from, transport: site.transport, outcome: "ambiguous", name: answer.ambiguous.key, repos: answer.ambiguous.repos, ...(answer.ambiguous.routes === undefined ? {} : { routes: answer.ambiguous.routes }), ...through });
-    else if (answer.undecided !== undefined) unlinked.push({ from, transport: site.transport, outcome: "could-match", name: answer.undecided, ...through });
-    else if (answer.unmatched !== undefined) unlinked.push({ from, transport: site.transport, outcome: "unmatched", name: answer.unmatched, ...through });
+    if (answer.ambiguous !== undefined) leave({ from, transport: site.transport, outcome: "ambiguous", name: answer.ambiguous.key, repos: answer.ambiguous.repos, ...(answer.ambiguous.routes === undefined ? {} : { routes: answer.ambiguous.routes }), ...through });
+    else if (answer.undecided !== undefined) leave({ from, transport: site.transport, outcome: "could-match", name: answer.undecided, ...through });
+    else if (answer.unmatched !== undefined) leave({ from, transport: site.transport, outcome: "unmatched", name: answer.unmatched, ...through });
   }
   const admitted = [...links.values()].sort((a, b) => compareText(a.id, b.id));
   return {
     links: admitted.filter((link) => !isInternalLink(link)),
     internalLinks: admitted.filter(isInternalLink),
-    unlinked: unlinked.sort((a, b) => compareCallPlaces(a.from, b.from) || compareText(a.name, b.name)),
+    unlinked: [...unlinked.values()].sort((a, b) => compareCallPlaces(a.from, b.from) || compareText(a.name, b.name)),
   };
 }

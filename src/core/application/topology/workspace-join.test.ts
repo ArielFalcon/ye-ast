@@ -201,6 +201,17 @@ test("two propagated sites that make one link carry the bodies of both, once eac
   assert.deepEqual(links.map((link) => link.propagatedThrough), [[earlier, later]]);
 });
 
+test("one unmatched call reached through two callers is one unlinked item that carries the bodies of both, once each and in place order", () => {
+  const site = requesting("PUT", UNDECIDED_BASE, text("/api/missing"));
+  const later = { kind: "body", file: "src/app/b.ts", line: 4, column: 3 } as const;
+  const earlier = { kind: "body", file: "src/app/a.ts", line: 9, column: 1 } as const;
+  const api = repository("api", [], [serving("GET", "/orders", "Orders.list")]);
+
+  const { unlinked } = joined([repository("web", [{ ...site, propagatedThrough: [later] }, { ...site, propagatedThrough: [earlier, later] }], []), api], [{ prefix: "api", repo: "api" }]);
+
+  assert.deepEqual(unlinked.map(({ outcome, name, propagatedThrough }) => ({ outcome, name, propagatedThrough })), [{ outcome: "unmatched", name: "/api/missing", propagatedThrough: [earlier, later] }]);
+});
+
 test("a call to a route of its own repository is an internal link, listed apart from the links across repositories and never unlinked", () => {
   const web = repository("web", [calling("/restaurants/daily-menus"), { ...calling("/profiles/me"), line: 9 }], [serving("GET", "/restaurants/daily-menus", "Menus.get")]);
   const api = repository("api", [], [serving("GET", "/profiles/me", "Profiles.me")]);
