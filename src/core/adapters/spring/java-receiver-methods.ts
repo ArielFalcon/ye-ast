@@ -132,7 +132,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         const named = proves ? resolver.methodOf(invocation, source) : undefined;
         if (named !== undefined && "method" in named) return { ...placedAt(named.method), ...(named.bound ? { bound: true as const } : {}) };
         if (named !== undefined && "generated" in named) return GENERATED;
-        if (named !== undefined) return { kind: "unproven", candidates: named.candidates };
+        if (named !== undefined) return { kind: "unproven", candidates: named.candidates, ...(named.open === true ? { open: true as const } : {}) };
         if (resolver.hasDeclaredReceiver(invocation, source) || resolver.holdsValue(invocation, source.file)) {
           const outside = proves ? resolver.outsideReceiverOf(invocation, source) : undefined;
           return outside === undefined ? UNPROVEN : { kind: "outside", type: outside };
@@ -271,11 +271,11 @@ export function createJavaDeclaredSupertypes(parser: () => Promise<JavaParser>, 
 export function createJavaArgumentCounts(parser: () => Promise<JavaParser>, sources: readonly SourceFile[], paths: readonly string[], hold?: ParseHold, build: ProjectBuild = {}): Required<Pick<ImportOrigins, "argumentCounts" | "acceptedCounts">> {
   const unreadJvm = paths.some(isUncoveredJvmSource);
   /** Per project, its invocations by file and its methods by place, read once for every site asked of it; `unknown` where the reading proves nothing. */
-  const readings = new WeakMap<JavaProject, { files: ReadonlyMap<string, JavaFile>; invocations: Map<string, ReadonlyMap<string, readonly Node[]>>; methods: ReadonlyMap<string, readonly MethodDecl[]> } | "unknown">();
+  const readings = new WeakMap<JavaProject, { files: ReadonlyMap<string, JavaFile>; invocations: Map<string, ReadonlyMap<string, readonly Node[]>>; methods: ReadonlyMap<string, readonly MethodDecl[]>; constructors: ReadonlyMap<string, readonly MethodDecl[]> } | "unknown">();
   const readingOf = (files: readonly JavaFile[], unparsed: readonly UnparsedSource[], project: JavaProject) => {
     let reading = readings.get(project);
     if (reading === undefined) {
-      reading = provesBinding(files, project, unparsed, unreadJvm) ? { files: new Map(files.map((file) => [file.path, file])), invocations: new Map(), methods: methodsByPlace(project) } : "unknown";
+      reading = provesBinding(files, project, unparsed, unreadJvm) ? { files: new Map(files.map((file) => [file.path, file])), invocations: new Map(), methods: methodsByPlace(project), constructors: methodsByPlace(project, "constructors") } : "unknown";
       readings.set(project, reading);
     }
     return reading;
@@ -305,11 +305,12 @@ export function createJavaArgumentCounts(parser: () => Promise<JavaParser>, sour
           reading.invocations.set(site.file, invocations);
         }
         const found = invocations.get(callKey(site.line, site.column, site.member)) ?? [];
-        return found.length === 1 && found[0]!.type === "method_invocation" ? { kind: "count", count: argumentCount(found[0]!) } : UNKNOWN_COUNT;
+        return found.length === 1 && (found[0]!.type === "method_invocation" || found[0]!.type === "object_creation_expression") ? { kind: "count", count: argumentCount(found[0]!) } : UNKNOWN_COUNT;
       }),
     acceptedCounts: (sites) =>
       read(sites, (site, reading): AcceptedCounts => {
-        const named = reading.methods.get(`${site.file}:${site.start}:${site.name}`) ?? [];
+        const key = `${site.file}:${site.start}:${site.name}`;
+        const named = [...(reading.methods.get(key) ?? []), ...(reading.constructors.get(key) ?? [])];
         return named.length === 1 ? acceptedCountsOf(named[0]!) : UNKNOWN_COUNT;
       }),
   };
@@ -429,11 +430,11 @@ function implicitChainOf(type: TypeDecl, project: JavaProject): ImplicitChain {
   return runs.length === 1 ? { kind: "constructor", ...placeOf(runs[0]!) } : UNKNOWN_CHAIN;
 }
 
-/** The methods of a project by file, first line and name, each place with every declaration it names. */
-export function methodsByPlace(project: JavaProject): ReadonlyMap<string, readonly MethodDecl[]> {
+/** The methods, or the constructors, of a project by file, first line and name, each place with every declaration it names. */
+export function methodsByPlace(project: JavaProject, of: "methods" | "constructors" = "methods"): ReadonlyMap<string, readonly MethodDecl[]> {
   const methods = new Map<string, MethodDecl[]>();
   for (const type of project.types) {
-    for (const method of type.methods) {
+    for (const method of type[of]) {
       const key = `${type.file.path}:${placeOf(method).start}:${method.name}`;
       const named = methods.get(key) ?? [];
       named.push(method);
@@ -813,7 +814,7 @@ export function createResolver(project: JavaProject, generated = false) {
    * The one method of the name that the receiver's declared type offers for the call's arguments, or the declarations of
    * the call's arity it cannot single one out of.
    */
-  const methodNamed = (invocation: Node, source: ReceiverSource): { method: MethodDecl; bound: boolean } | { candidates: readonly MethodPlace[] } | { generated: GeneratedMember } | undefined => {
+  const methodNamed = (invocation: Node, source: ReceiverSource): { method: MethodDecl; bound: boolean } | { candidates: readonly MethodPlace[]; open?: true } | { generated: GeneratedMember } | undefined => {
     const held = receiverOf(invocation, source);
     const name = invocation.childForFieldName("name")?.text;
     if (held === undefined || held === "unproven" || name === undefined) return undefined;
@@ -829,7 +830,7 @@ export function createResolver(project: JavaProject, generated = false) {
       const made = generated && !held.bound ? generatedOf(held, name, argumentCount(invocation)) : undefined;
       return made === undefined ? undefined : { generated: made };
     }
-    if ("candidates" in offered) return { candidates: offered.candidates.map(placeOf).sort(byPlace) };
+    if ("candidates" in offered) return { candidates: offered.candidates.map(placeOf).sort(byPlace), ...(offered.open === true ? { open: true as const } : {}) };
     return held.typeName && !offered.method.modifiers.includes("static") ? undefined : { method: offered.method, bound: held.bound };
   };
 
@@ -932,18 +933,18 @@ export function createResolver(project: JavaProject, generated = false) {
    * its own included where only the types below declare the name, and an interface called through its name answers none.
    * A member whose reach is unknown withholds the selection.
    */
-  const memberOf = (type: TypeDecl, name: string, invocation: Node, file: JavaFile, caller: TypeDecl | undefined, typeName = false, virtual = true): { method: MethodDecl } | { candidates: readonly MethodDecl[] } | undefined => {
+  const memberOf = (type: TypeDecl, name: string, invocation: Node, file: JavaFile, caller: TypeDecl | undefined, typeName = false, virtual = true): { method: MethodDecl } | { candidates: readonly MethodDecl[]; open?: true } | undefined => {
     if (OBJECT_METHODS.has(name)) return undefined;
     const above = declaredHierarchy(type);
     const named = above.types.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
     const runnable = (offered: readonly MethodDecl[]) => (virtual && !typeName ? runnableAmong(type, offered, name, argumentCount(invocation)) : { candidates: offered });
     if (hierarchyOpen(above, named)) {
       const selected = openMemberOf(type, above, named, invocation, file, caller, typeName);
-      if (selected !== undefined && ("method" in selected || typeName)) return selected;
+      if (selected !== undefined && ("method" in selected || typeName)) return "method" in selected ? selected : { ...selected, open: true };
       if ((typeName && type.kind !== "class") || !openOnlyOutside(above) || named.some(hasVarargs)) return undefined;
       const offered = offeredAmong(type, named, invocation, file, caller);
       const runs = offered === undefined ? undefined : runnable(offered);
-      return runs === undefined || runs.candidates.length === 0 ? undefined : runs;
+      return runs === undefined || runs.candidates.length === 0 ? undefined : { ...runs, open: true };
     }
     if (named.some(hasVarargs)) return undefined;
     const selected = selectAmong(type, named, invocation, file, caller);
@@ -1117,7 +1118,7 @@ export function createResolver(project: JavaProject, generated = false) {
     if ("outside" in above) return { kind: "outside", type: above.outside, exact: true };
     const offered = memberOf(above.type, name, invocation, file, enclosingType(invocation, file, project), false, false);
     if (offered === undefined) return generated && generatedOf({ type: above.type, typeName: false }, name, argumentCount(invocation)) !== undefined ? GENERATED : UNPROVEN;
-    return "method" in offered ? { ...placedAt(offered.method), exact: true } : { kind: "unproven", candidates: offered.candidates.map(placeOf).sort(byPlace) };
+    return "method" in offered ? { ...placedAt(offered.method), exact: true } : { kind: "unproven", candidates: offered.candidates.map(placeOf).sort(byPlace), ...(offered.open === true ? { open: true as const } : {}) };
   };
 
   return {

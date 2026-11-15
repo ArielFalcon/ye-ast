@@ -124,12 +124,12 @@ export interface ImportOrigins {
   /**
    * One entry per site, in the order received: the number of arguments the one call of the member that starts at the site
    * writes (ADR-0084 decision 1). `unknown` where the site cannot be placed, several calls of the member start there, the
-   * form writes no argument list (a method reference) or is not a method call, or the reading proves no binding. Absent
+   * form writes no argument list (a method reference) or is neither a method call nor a construction, or the reading proves no binding. Absent
    * where the language pack implements none, which reads as `capability-absent` for every site.
    */
   argumentCounts?(sites: readonly ReceiverCallSite[], signal?: AbortSignal): Promise<readonly ArgumentCount[]>;
   /**
-   * One entry per site, in the order received: the argument counts the one method declared at the site accepts (ADR-0084
+   * One entry per site, in the order received: the argument counts the one method or constructor declared at the site accepts (ADR-0084
    * decision 1). `unknown` where the method cannot be placed or its parameters are not all stated, or the reading proves
    * no binding. Absent where the language pack implements none, which reads as `capability-absent` for every site.
    */
@@ -310,11 +310,13 @@ export type ReceiverMethod =
   /**
    * `candidates`: the repository declarations the call can run, the declarations of the called name that the receiver's
    * type and its hierarchy offer at the call's arity, sorted, present only when the reading read that whole hierarchy. A
-   * family attributes the call among them; it never widens them. `repositoryWide`: the reading proves no call of the
+   * family attributes the call among them; it never widens them. `open`: the hierarchy is open through a type outside
+   * the repository, so a member that type declares may be the one the call binds, whatever the candidates are.
+   * `repositoryWide`: the reading proves no call of the
    * repository (a source it does not read, a dynamic implementation, a call-rewriting annotation), so this answer says
    * nothing of this call in particular.
    */
-  | { kind: "unproven"; candidates?: readonly MethodPlace[]; repositoryWide?: true }
+  | { kind: "unproven"; candidates?: readonly MethodPlace[]; open?: true; repositoryWide?: true }
   | { kind: "unknown"; reason?: typeof CAPABILITY_ABSENT }
   /**
    * A member that no source declares and a record or a processor annotation on the receiver's class adds (an accessor, a

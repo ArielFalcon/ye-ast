@@ -98,9 +98,9 @@ test("a platform interface that declares no members leaves the receiver's method
   assert.deepEqual(await select(imported), method(imported, 4));
   assert.deepEqual(await select(entity("implements Cloneable")), method(imported, 3));
   const comparable = entity("implements Comparable<Entity>");
-  assert.deepEqual(await select(comparable), { kind: "unproven", candidates: [place(comparable, 3)] });
+  assert.deepEqual(await select(comparable), { kind: "unproven", candidates: [place(comparable, 3)], open: true });
   const vendor = entity("implements Serializable", ["import com.vendor.Serializable;"]);
-  assert.deepEqual(await select(vendor), { kind: "unproven", candidates: [place(vendor, 4)] });
+  assert.deepEqual(await select(vendor), { kind: "unproven", candidates: [place(vendor, 4)], open: true });
 });
 
 test("an interface a declared generator emits and the sources do not hold leaves the implementing class's own, private and typed receivers selectable, and nothing it could declare", async () => {
@@ -116,12 +116,12 @@ test("an interface a declared generator emits and the sources do not hold leaves
   assert.deepEqual(await select(typed, "save"), method(STORE, 4));
   assert.deepEqual(await select(helped, "helper"), method(helped, 5));
   assert.deepEqual(await select(typed, "save", false), { kind: "unproven" });
-  assert.deepEqual(await select(helped, "helper", false), { kind: "unproven", candidates: [place(helped, 5)] });
+  assert.deepEqual(await select(helped, "helper", false), { kind: "unproven", candidates: [place(helped, 5)], open: true });
   assert.notEqual((await select(implementing("getRequest()"), "getRequest")).kind, "method");
   const alsoStore = implementing("save(\"x\")", "implements Api, Store", ["  public void save(String value) {}"]);
-  assert.deepEqual(await select(alsoStore, "save"), { kind: "unproven", candidates: [place(STORE, 4), place(alsoStore, 5)] });
+  assert.deepEqual(await select(alsoStore, "save"), { kind: "unproven", candidates: [place(STORE, 4), place(alsoStore, 5)], open: true });
   assert.deepEqual(await select({ ...typed, content: typed.content.replace("implements Api", "extends Api") }, "save"), { kind: "unproven" });
-  assert.deepEqual(await select({ ...helped, content: helped.content.replace("implements Api", "extends Api") }, "helper"), { kind: "unproven", candidates: [place(helped, 5)] });
+  assert.deepEqual(await select({ ...helped, content: helped.content.replace("implements Api", "extends Api") }, "helper"), { kind: "unproven", candidates: [place(helped, 5)], open: true });
   assert.deepEqual(await select({ ...typed, content: typed.content.replace("implements Api", "implements org.springframework.context.ApplicationListener<Object>") }, "save"), { kind: "unproven" });
 });
 
@@ -196,7 +196,7 @@ test("an unread supertype withholds declaration selection; runtime replacements 
   const call = use("plain.save(\"x\")", [], "Plain plain");
 
   assert.deepEqual(await methodAt([plain, elsewhere, call]), method(plain, 4));
-  assert.deepEqual(await methodAt([framework, call]), { kind: "unproven", candidates: [place(framework, 4)] });
+  assert.deepEqual(await methodAt([framework, call]), { kind: "unproven", candidates: [place(framework, 4)], open: true });
   assert.deepEqual(await methodAt([plain, anonymous, call]), method(plain, 4));
   assert.deepEqual(await methodAt([plain, aspect, call]), method(plain, 4));
 });
@@ -447,7 +447,7 @@ test("a repository member stays unproven among the declarations of its arity whe
   for (const [label, imports, header, members, call, lines] of cases) {
     const member = call.slice(call.indexOf(".") + 1, call.indexOf("("));
     const sources = orders(imports, header, members);
-    assert.deepEqual(await repositoryCall(call, sources, member), { kind: "unproven", candidates: lines.map((line) => place(sources[1]!, line)) }, label);
+    assert.deepEqual(await repositoryCall(call, sources, member), { kind: "unproven", candidates: lines.map((line) => place(sources[1]!, line)), open: true }, label);
   }
 });
 
@@ -457,8 +457,8 @@ test("a repository member is generated only for an interface receiver the declar
   const sources = orders([REPOSITORY_IMPORT], header, members);
   const unproven = { kind: "unproven" };
   const klass = [sources[0]!, java("Orders.java", ["package app;", REPOSITORY_IMPORT, "abstract class Orders implements JpaRepository<Order, Long> {", "  abstract Order findByCode(String code);", "}"])];
-  assert.deepEqual(await repositoryCall("orders.findByCode(text)", klass, "findByCode"), { kind: "unproven", candidates: [place(klass[1]!, 4)] });
-  assert.deepEqual(await methodAt([...sources, use("repository.findByCode(text)", [], "R repository, String text")].map((source) => source.path.endsWith("/Use.java") ? { ...source, content: source.content.replace("void run(", "<R extends Orders> void run(") } : source), "findByCode"), { kind: "unproven", candidates: [place(sources[1]!, 4)] });
+  assert.deepEqual(await repositoryCall("orders.findByCode(text)", klass, "findByCode"), { kind: "unproven", candidates: [place(klass[1]!, 4)], open: true });
+  assert.deepEqual(await methodAt([...sources, use("repository.findByCode(text)", [], "R repository, String text")].map((source) => source.path.endsWith("/Use.java") ? { ...source, content: source.content.replace("void run(", "<R extends Orders> void run(") } : source), "findByCode"), { kind: "unproven", candidates: [place(sources[1]!, 4)], open: true });
   assert.deepEqual(await repositoryCall("Orders.findByCode(text)", sources, "findByCode"), unproven);
 });
 
@@ -468,12 +468,12 @@ test("a repository that also extends the specification executor keeps its member
   assert.deepEqual(await repositoryCall("orders.findByCode(text)", executor("jpa.repository.JpaSpecificationExecutor"), "findByCode"), { kind: "generated" });
   assert.deepEqual(await repositoryCall("orders.findAll(null)", executor("jpa.repository.JpaSpecificationExecutor"), "findAll"), { kind: "generated" });
   const example = executor("repository.query.QueryByExampleExecutor");
-  assert.deepEqual(await repositoryCall("orders.findByCode(text)", example, "findByCode"), { kind: "unproven", candidates: [place(example[1]!, 5)] });
+  assert.deepEqual(await repositoryCall("orders.findByCode(text)", example, "findByCode"), { kind: "unproven", candidates: [place(example[1]!, 5)], open: true });
 });
 
 test("a wildcard import of a package outside the vocabulary leaves the repository parent open", async () => {
   const sources = orders(["import org.springframework.data.repository.query.*;"], "extends JpaRepository<Order, Long>", ["  Order findByCode(String code);"]);
-  assert.deepEqual(await repositoryCall("orders.findByCode(text)", sources, "findByCode"), { kind: "unproven", candidates: [place(sources[1]!, 4)] });
+  assert.deepEqual(await repositoryCall("orders.findByCode(text)", sources, "findByCode"), { kind: "unproven", candidates: [place(sources[1]!, 4)], open: true });
 });
 
 test("the implicit super() of a class names nothing outside the repository, and is unknown where the superclass is ambiguous or the reading proves no binding", async () => {
@@ -610,14 +610,21 @@ test("a method invocation writes the number of arguments of its list, comments l
   assert.deepEqual(await countAt([use("var made = Lib.make(); made.get(1, 2, 3, 4)", [], "")], "get", "made.get"), { kind: "count", count: 4 });
 });
 
-test("a method reference, a construction, two calls of the member starting at one place, an unplaced site and a call-rewriting annotation read no count", async () => {
+test("a method reference, two calls of the member starting at one place, an unplaced site and a call-rewriting annotation read no count", async () => {
   const unknown: ArgumentCount = { kind: "unknown" };
 
   assert.deepEqual(await countAt([use("java.util.function.Supplier<String> s = opt::get", [], "java.util.Optional<String> opt")], "get", "opt::get"), unknown);
-  assert.deepEqual(await countAt([use("new Api(\"k\")", [], ""), API], "Api", "new Api"), unknown);
   assert.deepEqual(await countAt([use("list.get(0).get()", [], "java.util.List<java.util.Optional<String>> list")], "get", "list.get"), unknown);
   assert.deepEqual(await countAt([use("list.get(0)", [], "java.util.List<String> list")], "get", "(0)"), unknown);
   assert.deepEqual(await countAt([use("list.get(0)", [], "java.util.List<String> list"), API, REWRITING], "get", "list.get"), unknown);
+});
+
+test("a construction writes the number of arguments of its list, and a constructor accepts the count of its parameters", async () => {
+  const made = java("Made.java", ["package app;", "", "public class Made {", "  public Made() {}", "  public Made(String code, String... rest) {}", "}"]);
+
+  assert.deepEqual(await countAt([use("new Made(\"k\")", [], ""), made], "Made", "new Made"), { kind: "count", count: 1 });
+  assert.deepEqual(await acceptedAt([made], made, 4, "Made"), { kind: "counts", count: 0 });
+  assert.deepEqual(await acceptedAt([made], made, 5, "Made"), { kind: "counts", count: 1, upward: true });
 });
 
 test("a method accepts the count of its parameters, or one less and upward when its last has variable arity", async () => {
@@ -645,7 +652,7 @@ test("a class whose hierarchy only types outside the repository leave open names
   const unrelated = java("Unrelated.java", ["package app;", "", "class Unrelated {", "  void setCode(String code) {}", "}"]);
   const call = use("problem.setCode(\"x\")", [], "Problem problem");
 
-  assert.deepEqual(await methodAt([problem, detailed, unrelated, call], "setCode"), { kind: "unproven", candidates: [place(detailed, 4), place(problem, 4)] });
+  assert.deepEqual(await methodAt([problem, detailed, unrelated, call], "setCode"), { kind: "unproven", candidates: [place(detailed, 4), place(problem, 4)], open: true });
 });
 
 test("a closed hierarchy whose selection settles none names the declarations of the call's arity at, above and below the receiver's type, and none where a class below is not placed", async () => {
@@ -669,7 +676,7 @@ test("an open hierarchy names no declarations where one may stand outside the re
 
   assert.deepEqual(await methodAt([problem, anonymous, call], "setCode"), { kind: "unproven" });
   assert.deepEqual(await methodAt([ambiguous, first, second, call], "setCode"), { kind: "unproven" });
-  assert.deepEqual(await methodAt([problem, first, second, below, call], "setCode"), { kind: "unproven", candidates: [place(problem, 4)] });
+  assert.deepEqual(await methodAt([problem, first, second, below, call], "setCode"), { kind: "unproven", candidates: [place(problem, 4)], open: true });
 });
 
 test("a call on a concrete class of a closed hierarchy names the one concrete method of the name and arity its class chain declares where every other one is abstract, and the declarations of the arity otherwise", async () => {
@@ -705,7 +712,7 @@ test("an interface whose hierarchy only types outside the repository leave open 
     reference: java("Refs.java", ["package app;", "", "class Refs {", "  Object ref(Other other) { java.util.function.BiFunction<Long, String, String> made = other::getById; return made; }", "}"]),
   };
 
-  assert.deepEqual(await methodAt([custom, items, stored, other, call], "getById"), { kind: "unproven", candidates: [place(custom, 4), place(stored, 4)] });
+  assert.deepEqual(await methodAt([custom, items, stored, other, call], "getById"), { kind: "unproven", candidates: [place(custom, 4), place(stored, 4)], open: true });
   for (const [condition, added] of Object.entries(withholding)) {
     const replacing = [added].flat();
     const sources = [custom, items, stored, other, call].filter(({ path }) => !replacing.some((source) => source.path === path));
@@ -726,7 +733,7 @@ test("a receiver whose hierarchy only one type outside the repository leaves ope
   const course = java("Course.java", ["package app;", "", "class Course extends com.lib.Entity {}"]);
 
   assert.deepEqual(await methodAt([courses, port, call], "findById"), { kind: "outside", type: "com.lib.Outside" });
-  assert.deepEqual(await methodAt([courses, port, stored, call], "findById"), { kind: "unproven", candidates: [place(stored, 4)] });
+  assert.deepEqual(await methodAt([courses, port, stored, call], "findById"), { kind: "unproven", candidates: [place(stored, 4)], open: true });
   assert.deepEqual(await methodAt([courses, port, anonymous, call], "findById"), { kind: "unproven" });
   assert.deepEqual(await methodAt([unsettled, first, second, port, call], "findById"), { kind: "unproven" });
   assert.deepEqual(await methodAt([twice, port, call], "findById"), { kind: "unproven" });
