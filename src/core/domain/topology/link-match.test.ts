@@ -4,7 +4,7 @@ import type { Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { CallSite, EventTarget, HttpTarget } from "../../domain/topology/call-site.ts";
 import type { RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
-import { excludedFrom, inferGateways, inferHosts, matchCallSite, matchDeclaredOperation, matchEventCallSite, matchHttpCallSite, prefixOf } from "../../domain/topology/link-match.ts";
+import { excludedFrom, inferGateways, inferHosts, matchCallSite, matchDeclaredOperation, matchEventCallSite, matchHttpCallSite, prefixOf, similarRoutes } from "../../domain/topology/link-match.ts";
 
 function route(method: HttpRoute["method"], path: string, handler = { path: "src/main/java/app/Orders.java", symbol: "Orders.orders", line: 10 }, basePath = {}): HttpRoute {
   return { kind: "http-route", name: `${method} ${path}`, method, path, handler, basePath: { status: "complete", value: { default: basePath, profiles: {} }, evidence: [] } };
@@ -286,6 +286,16 @@ test("a destination one repository consumes with two listeners is one link per l
     consumedBy(call, [listener("kafka", "orders.created"), listener("kafka", "orders.created", { ...CONSUMER, symbol: "OrdersListener.audit", line: 20 })]),
     "event-destination 1 event -> orders listener kafka orders.created at OrdersListener.on | event-destination 1 event -> orders listener kafka orders.created at OrdersListener.audit",
   );
+});
+
+test("the routes an unserved operation could mean take its verb and either end with its path, or differ from it in the names of path variables only", () => {
+  const target = (path: string, method: HttpTarget["method"] = "GET"): HttpTarget => ({ method, path });
+  const served = [route("GET", "/petclinic/api/owners/{ownerId}"), route("GET", "/owners/{id}/pets"), route("GET", "/owners/{ownerId}"), route("POST", "/owners/{ownerId}"), route("GET", "/vets/{id}")];
+  const names = (declared: HttpTarget) => similarRoutes(declared, repositories(served)).map((found) => found.name);
+
+  assert.deepEqual(names(target("/owners/{id}")), ["GET /owners/{ownerId}", "GET /petclinic/api/owners/{ownerId}"]);
+  assert.deepEqual(names(target("/owners/{id}", "DELETE")), []);
+  assert.deepEqual(names(target("/owners/{id}/visits")), []);
 });
 
 test("an operation a contract declares lands on the route that serves it by an equal path or by the base path its configuration adds, and on two repositories it is ambiguous", () => {

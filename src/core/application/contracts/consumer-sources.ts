@@ -12,7 +12,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import { callPlaceOf, callSiteReach, compareCallPlaces, httpTargetOf, type CallSiteReadOptions, type PlacedCallSite, type PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { Link } from "../../domain/topology/link.ts";
-import { excludedFrom, inferHosts, matchDeclaredOperation, matchHttpCallSite, routesEndingWith, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
+import { excludedFrom, inferHosts, matchDeclaredOperation, matchHttpCallSite, similarRoutes, type Gateway, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import type { AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
 import { buildOutputCuts, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
@@ -284,7 +284,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
               value: {
                 links: join.links,
                 serving: join.serving.get(operation) ?? [],
-                similar: join.serving.has(operation) ? [] : routesEndingWith({ method: hypothesis.method, path: hypothesis.path }, entrypointsOfWorkspace()).map((route) => route.name),
+                similar: join.serving.has(operation) ? [] : similarRoutes({ method: hypothesis.method, path: hypothesis.path }, entrypointsOfWorkspace()).map((route) => route.name),
                 cutsAfterWalk: cuts,
                 unresolvedCalls: join.unresolvedCalls,
                 ambiguousCalls: join.ambiguousCalls.filter((call) => call.reaching.has(operation)).map(({ from, repos }) => ({ from, repos })),

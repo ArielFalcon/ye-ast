@@ -287,13 +287,14 @@ function atRung(rung: Rung, call: CallTemplate, method: HttpTarget["method"], re
 export type DeclaredOperationMatch = { repo: string; route: HttpRoute } | { ambiguous: readonly string[] };
 
 /**
- * The routes of the repositories given that take the target's verb and whose path ends with the target's, or the other way
- * round, by the rule of the suffix rung: the spelling under which an operation written with fewer or more leading
- * segments is served. One entry per route name, sorted.
+ * The routes of the repositories given that take the target's verb and whose path ends with the target's, or the other
+ * way round, by the rule of the suffix rung, or that state the target's path with other names for its variables: the
+ * spellings under which an operation a contract declares is served though no route is named as it is. One entry per
+ * route name, sorted.
  */
-export function routesEndingWith(target: HttpTarget, repositories: readonly RepositoryEntrypoints[]): HttpRoute[] {
+export function similarRoutes(target: HttpTarget, repositories: readonly RepositoryEntrypoints[]): HttpRoute[] {
   const call = callTemplate(target);
-  const taken = repositories.flatMap(httpRoutes).filter((route) => accepts(route, target.method) && suffixUnify(call, routeSegments(route.path)).outcome === "matches");
+  const taken = repositories.flatMap(httpRoutes).filter((route) => accepts(route, target.method) && (suffixUnify(call, routeSegments(route.path)).outcome === "matches" || unify(call.segments, routeSegments(route.path)).outcome === "matches"));
   return [...new Map(taken.map((route) => [route.name, route])).values()].sort((a, b) => compareText(a.name, b.name));
 }
 
