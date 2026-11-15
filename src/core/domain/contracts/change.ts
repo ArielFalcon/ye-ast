@@ -185,10 +185,15 @@ function entryOf(item: ChangeEntryInput): ChangeEntry | undefined {
   if (key === "values") return valuesOf(item.values);
   if (key === "meaning") return typeof item.meaning === "string" && item.meaning.trim() !== "" ? { meaning: item.meaning } : undefined;
   if (key !== "renamed" && key !== "wrapped") return undefined;
-  const written = item[key];
+  const written = propertyNameOf(item[key]);
+  return written === undefined ? undefined : key === "renamed" ? { renamed: written } : { wrapped: written };
+}
+
+/** A written property name: one property of an object, never a path nor an element. */
+export function propertyNameOf(written: unknown): string | undefined {
   if (typeof written !== "string") return undefined;
   const name = parseAccessPath(written);
-  return name?.length === 1 && name[0] !== ELEMENT ? (key === "renamed" ? { renamed: written } : { wrapped: written }) : undefined;
+  return name?.length === 1 && name[0] !== ELEMENT ? written : undefined;
 }
 
 const LITERAL_ORDER = ["boolean", "number", "string"];

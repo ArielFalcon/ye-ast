@@ -41,7 +41,7 @@ export interface ProducerConsequence {
   verdict: ProducerVerdict;
   /** The property the verdict is about, as the hypothesis wrote it. */
   path: string;
-  /** From the HTTP call to the witness an `incompatible` verdict names; the call alone otherwise. */
+  /** From the HTTP call to the first write of a rejected value, when the producer writes one; the call alone otherwise. */
   chain: readonly LocatedHop[];
 }
 

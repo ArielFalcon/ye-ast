@@ -48,9 +48,23 @@ test("entries combine in a fixed order, each once, and a single entry is echoed 
 });
 
 test("the response kinds are refused for a request, since each states what a reader may now receive", () => {
-  for (const change of ["nullable", "optional", "removed", { renamed: "x" }, { wrapped: "x" }, { meaning: "units" }, { values: { added: ["a"] } }] as ChangeInput[]) assert.equal(refusal(change), "unsupported-change");
+  for (const change of ["nullable", "optional", "removed", { wrapped: "x" }, { meaning: "units" }, { values: { added: ["a"] } }] as ChangeInput[]) assert.equal(refusal(change), "unsupported-change");
   assert.equal(refusal([]), "unsupported-change");
   assert.equal(refusal({ values: { removed: [] } }), "unsupported-change");
+});
+
+test("a rename rejects every present value at the old name, null included, and never absence", () => {
+  const { rejected, entries } = parsed({ renamed: "fullName" });
+  assert.deepEqual(rejected.literals, { boolean: "every", number: "every", string: "every" });
+  assert.equal(rejected.array && rejected.object && rejected.null, true);
+  assert.equal(rejected.absent, false);
+  assert.deepEqual(entries, [{ renamed: "fullName" }]);
+  assert.deepEqual(writtenRequestChange(parsed({ renamed: "fullName" })), { renamed: "fullName" });
+});
+
+test("a rename names one property, and states no other entry on the same property", () => {
+  for (const renamed of ["a.b", "[]", "", 3, undefined]) assert.equal(refusal({ renamed } as ChangeInput), "unsupported-change");
+  for (const other of ["required", "non-nullable", { type: "string" }, { values: { removed: ["a"] } }] as ChangeInput[]) assert.equal(refusal([{ renamed: "x" }, other] as ChangeInput), "contradictory-change");
 });
 
 test("entries no value can satisfy together are contradictions", () => {

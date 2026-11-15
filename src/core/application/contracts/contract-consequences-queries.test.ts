@@ -958,6 +958,22 @@ test("the answer echoes the normalized request hypothesis and the old acceptance
   assert.equal(fact.value.oldContract, "accepts-the-rejected");
 });
 
+test("a renamed request property puts every producer that writes the old name to review, with the write placed, and never calls it incompatible", async () => {
+  const first = literalOrigin("Bob", 11, { hops: [{ step: "caller", evidence: { path: "src/page.ts", line: 4 } }] });
+  const { reader } = readerFor({ 10: [literalOrigin("Ada", 12), first], 20: [{ kind: "exact", value: { kind: "absent" }, at: { path: SERVICE, line: 21 }, hops: [], conditions: [] }] });
+
+  const fact = await requestSetup({ links: [postLink(20), postLink(10)], reader, property: "name", change: { renamed: "fullName" } }).ask();
+
+  assert.deepEqual(producers(fact), ["review@10", "admits@20"]);
+  const [producer] = fact.value.findings;
+  assert.ok(producer?.status === "complete");
+  assert.deepEqual(producer.value.verdict, { kind: "review", reason: "stops-being-read" });
+  assert.deepEqual(producer.evidence.map((place) => place.line), [10, 11]);
+  assert.deepEqual(producer.value.chain.map((hop) => [hop.step, hop.evidence.line]), [["http-call", 10], ["caller", 4]]);
+  assert.deepEqual(fact.value.hypothesis, { method: "POST", path: "/vets", target: "request", property: "name", change: { renamed: "fullName" } });
+  assert.equal(fact.value.oldContract, "accepts-the-rejected");
+});
+
 test("a producer with no origin is never admitted, and neither is one that has an origin it cannot follow", async () => {
   const { reader } = readerFor({ 10: [], 20: [literalOrigin("ok", 21), frontierOrigin("call-result", 22)] });
 

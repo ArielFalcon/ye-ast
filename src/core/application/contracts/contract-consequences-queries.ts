@@ -5,7 +5,7 @@ import { writtenChange } from "../../domain/contracts/change.ts";
 import { carrierKey, siteFile, siteLine, type Carrier, type CarrierSite, type FlowFrontier, type FlowNext, type FlowResult, type Hop } from "../../domain/contracts/consumer-flow.ts";
 import { formatHypothesis, parseHypothesis, type Hypothesis, type RequestHypothesis, type ResponseHypothesis } from "../../domain/contracts/hypothesis.ts";
 import { writtenRequestChange } from "../../domain/contracts/request-change.ts";
-import { decideProducer, type Origin, type SettledOrigin } from "../../domain/contracts/request-origin.ts";
+import { decideProducer, firstRejectedWrite, type Origin, type SettledOrigin } from "../../domain/contracts/request-origin.ts";
 import { decideUse } from "../../domain/contracts/verdict.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -375,8 +375,9 @@ async function producerOf(session: ConsumerSession, link: Link, hypothesis: Requ
     if (origin.kind === "parameter") work.push(...(await resolveParameter(session, reader!, repo, origin, through)));
     else settled.push(origin);
   }
-  const verdict = decideProducer(settled, hypothesis.change.rejected);
-  const witness = verdict.kind === "incompatible" ? verdict.witness : undefined;
+  const { rejected, unread } = hypothesis.change;
+  const verdict = decideProducer(settled, rejected, unread);
+  const witness = firstRejectedWrite(settled, rejected);
   const decided: ConsequenceFinding<ProducerConsequence> = {
     status: "complete",
     evidence: [located({ path: from.file, line: from.line }, repo), ...(witness === undefined ? [] : [located(witness.at, repo)])],

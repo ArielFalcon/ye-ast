@@ -1,27 +1,29 @@
 import { canonicalJson } from "../shared/canonical-json.ts";
 import type { Result } from "../shared/result.ts";
-import { compareValues, holdsClass, literalsOf, TYPE_KINDS, type ChangeEntryInput, type ChangeInput, type ChangeRefusal, type ValueClass } from "./change.ts";
+import { compareValues, holdsClass, literalsOf, propertyNameOf, TYPE_KINDS, type ChangeEntryInput, type ChangeInput, type ChangeRefusal, type ValueClass } from "./change.ts";
 import { LITERAL_CLASSES, type ClassValues, type LiteralClass, type ValueSet } from "./payload-shape.ts";
 import type { Literal } from "./use-operation.ts";
 
-/** One thing a server stops accepting at a request property. */
-export type RequestEntry = "required" | "non-nullable" | { type: ValueClass } | { values: { removed: readonly Literal[] } };
+/** One thing a server stops accepting at a request property; a rename is every present value, which the server stops reading. */
+export type RequestEntry = "required" | "non-nullable" | { type: ValueClass } | { values: { removed: readonly Literal[] } } | { renamed: string };
 
 /** A request change normalized once per hypothesis: what the server no longer accepts, as the value set a producer must not write. */
 export interface RequestChange {
   /** Each entry once, in a fixed order. */
   entries: readonly RequestEntry[];
   rejected: ValueSet;
+  /** The server stops reading the property rather than refusing a value of it: a write is no proof that the request fails. */
+  unread: boolean;
   /** What the old contract accepted, when it is read from a contract rather than assumed to accept every rejected value. */
   oldAcceptance?: ValueSet;
 }
 
-const ORDER = ["required", "non-nullable", "type", "values"] as const;
+const ORDER = ["required", "non-nullable", "type", "values", "renamed"] as const;
 
 /** Each entry a request hypothesis takes, as a caller writes it: a name, or an object with that key. */
-export const REQUEST_ENTRY_FORMS: readonly string[] = ORDER.map((kind) => (kind === "type" || kind === "values" ? `{${kind}}` : kind));
+export const REQUEST_ENTRY_FORMS: readonly string[] = ORDER.map((kind) => (kind === "required" || kind === "non-nullable" ? kind : `{${kind}}`));
 
-const kindOf = (entry: RequestEntry): (typeof ORDER)[number] => (typeof entry === "string" ? entry : "type" in entry ? "type" : "values");
+const kindOf = (entry: RequestEntry): (typeof ORDER)[number] => (typeof entry === "string" ? entry : "type" in entry ? "type" : "renamed" in entry ? "renamed" : "values");
 
 /** What a request hypothesis states is the server's rejection; the response kinds state what a reader may now receive and are refused. */
 export function parseRequestChange(input: ChangeInput): Result<RequestChange, ChangeRefusal> {
@@ -35,7 +37,7 @@ export function parseRequestChange(input: ChangeInput): Result<RequestChange, Ch
   if (entries.length === 0) return refuse("unsupported-change", input);
   if (contradicts(entries)) return refuse("contradictory-change", input);
   entries.sort((a, b) => ORDER.indexOf(kindOf(a)) - ORDER.indexOf(kindOf(b)));
-  return { ok: true, value: { entries, rejected: rejectionOf(entries) } };
+  return { ok: true, value: { entries, rejected: rejectionOf(entries), unread: entries.some((entry) => kindOf(entry) === "renamed") } };
 }
 
 /**
@@ -74,6 +76,10 @@ function entryOf(item: ChangeInput): RequestEntry | undefined {
   const object = item as Readonly<Record<string, unknown>>;
   const keys = Object.keys(object);
   if (keys.length !== 1) return undefined;
+  if (keys[0] === "renamed") {
+    const name = propertyNameOf(object.renamed);
+    return name === undefined ? undefined : { renamed: name };
+  }
   if (keys[0] === "type") return TYPE_KINDS.find((kind) => kind === object.type) === undefined ? undefined : { type: object.type as ValueClass };
   if (keys[0] !== "values") return undefined;
   const lists = object.values;
@@ -82,8 +88,9 @@ function entryOf(item: ChangeInput): RequestEntry | undefined {
   return removed === undefined || removed.length === 0 ? undefined : { values: { removed } };
 }
 
-/** Two types, two lists of literals, or a literal in a class a type already rejects: entries no server can state together. */
+/** A rename beside any other entry, two types, two lists of literals, or a literal in a class a type already rejects: entries no server can state together. */
 function contradicts(entries: readonly RequestEntry[]): boolean {
+  if (entries.length > 1 && entries.some((entry) => kindOf(entry) === "renamed")) return true;
   const types = entries.filter((entry) => typeof entry === "object" && "type" in entry);
   const lists = entries.filter((entry) => typeof entry === "object" && "values" in entry);
   if (types.length > 1 || lists.length > 1) return true;
@@ -93,6 +100,7 @@ function contradicts(entries: readonly RequestEntry[]): boolean {
 }
 
 function rejectionOf(entries: readonly RequestEntry[]): ValueSet {
+  if (entries.some((entry) => kindOf(entry) === "renamed")) return { literals: { boolean: "every", number: "every", string: "every" }, array: true, object: true, null: true, absent: false };
   const type = entries.find((entry) => typeof entry === "object" && "type" in entry)?.type;
   const removed = entries.find((entry) => typeof entry === "object" && "values" in entry)?.values.removed ?? [];
   const literals = Object.fromEntries(LITERAL_CLASSES.map((valueClass): [LiteralClass, ClassValues] => [valueClass, type === undefined || type === valueClass ? removed.filter((literal) => typeof literal === valueClass) : "every"])) as Record<LiteralClass, ClassValues>;

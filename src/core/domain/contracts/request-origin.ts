@@ -59,16 +59,22 @@ export type SettledOrigin = Exclude<Origin, { kind: "parameter" }>;
 export type ProducerVerdict =
   | { kind: "incompatible"; witness: { value: string; at: Evidence; hops: readonly Hop[]; conditions: readonly BranchCondition[] } }
   | { kind: "admits" }
-  | { kind: "review"; reason: "frontier" | "approximate" | "no-origin" };
+  | { kind: "review"; reason: "frontier" | "approximate" | "no-origin" | "stops-being-read" };
+
+/** The first origin, in source order, that proves the producer writes a rejected value. */
+export function firstRejectedWrite(origins: readonly SettledOrigin[], rejected: ValueSet): Extract<SettledOrigin, { kind: "exact" }> | undefined {
+  const writes = origins.filter((origin): origin is Extract<SettledOrigin, { kind: "exact" }> => origin.kind === "exact" && isRejected(origin.value, rejected));
+  return writes.sort((a, b) => compareText(a.at.path, b.at.path) || a.at.line - b.at.line)[0];
+}
 
 /**
- * The verdict of one producer: a proven origin writing a rejected value is `incompatible` whatever else is unknown; it
+ * The verdict of one producer: a proven origin writing a rejected value is `incompatible` whatever else is unknown, or,
+ * when the server only stops reading the property (`unread`), `review` since the write does not prove a failure; it
  * `admits` only when every origin is known and none can be rejected; an empty set of origins never admits.
  */
-export function decideProducer(origins: readonly SettledOrigin[], rejected: ValueSet): ProducerVerdict {
-  const writes = origins.filter((origin): origin is Extract<SettledOrigin, { kind: "exact" }> => origin.kind === "exact" && isRejected(origin.value, rejected));
-  const [witness] = writes.sort((a, b) => compareText(a.at.path, b.at.path) || a.at.line - b.at.line);
-  if (witness !== undefined) return { kind: "incompatible", witness: { value: formatOriginValue(witness.value), at: witness.at, hops: witness.hops, conditions: witness.conditions } };
+export function decideProducer(origins: readonly SettledOrigin[], rejected: ValueSet, unread = false): ProducerVerdict {
+  const witness = firstRejectedWrite(origins, rejected);
+  if (witness !== undefined) return unread ? { kind: "review", reason: "stops-being-read" } : { kind: "incompatible", witness: { value: formatOriginValue(witness.value), at: witness.at, hops: witness.hops, conditions: witness.conditions } };
   if (origins.length === 0) return { kind: "review", reason: "no-origin" };
   if (origins.some((origin) => origin.kind === "frontier")) return { kind: "review", reason: "frontier" };
   if (origins.some((origin) => origin.kind === "approximate" && holdsClass(rejected, origin.class))) return { kind: "review", reason: "approximate" };
