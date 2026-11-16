@@ -19,12 +19,12 @@ import { isSeedable, type ComponentRef, type SelectedSeed } from "../../domain/c
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { EDGE_POLICY, isFileDependent, isJavaTypeKind } from "../../domain/impact/edge-policy.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
-import { attributedCallCuts, contradictedCallCuts, declarationAnchor, declarationUseKey, fileCut, nameOnlyCallCuts, removedDeclarationCuts, unheldCut, unplacedSupertypeCuts, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation, type UnresolvedUse } from "../../domain/impact/impact-cuts.ts";
+import { attributedCallCuts, contradictedCallCuts, declarationAnchor, declarationUseKey, fileCut, nameOnlyCallCuts, reassignableCuts, reassignedPlaces, removedDeclarationCuts, unheldCut, unplacedSupertypeCuts, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, unresolvedSpecifierCuts, type UnreadRelation, type UnresolvedUse } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
 import { impactFact, impactWalk, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
 import type { Relation } from "../../domain/relations/relation.ts";
-import type { ExternalMemberUseOrigin, MemberUseOrigin } from "../../domain/relations/member-use.ts";
+import type { ExternalMemberUseOrigin, MemberUseOrigin, ReassignedMemberUseOrigin } from "../../domain/relations/member-use.ts";
 import { isExtractorConfiguration } from "../../domain/languages/configuration.ts";
 import { isAngularTemplate, isJsonModuleResource, isTypeCheckerInput, isTypeScriptFile, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
@@ -220,7 +220,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
             const unmodelled = await unmodelledIn(deps, headTree, unknown.map(({ file }) => file));
             return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}${unmodelledNote(unknown, unmodelled)}`, entries: missing } };
           }
-          const { relations: found, fields, locals, memberUses, externalUses, cuts: relationCuts = [], unresolved: unresolvedRelations = [] } = await reading.relations();
+          const { relations: found, fields, locals, memberUses, externalUses, reassignedUses, cuts: relationCuts = [], unresolved: unresolvedRelations = [] } = await reading.relations();
           if (signal?.aborted) return ABORTED;
           const loads = await deps.dynamicLoads.extract(headTree.sources);
           if (signal?.aborted) return ABORTED;
@@ -231,7 +231,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const typed = await reading.typed();
           if (typed === "aborted") return ABORTED;
-          const read = await impactOf({ store: reading.store, changes: ranges.changes, tokens: ranges.tokens, requested, componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, modules: namespaceModules(head, headTree, signal), signal });
+          const read = await impactOf({ store: reading.store, changes: ranges.changes, tokens: ranges.tokens, requested, componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, reassignedUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, modules: namespaceModules(head, headTree, signal), signal });
           if (signal?.aborted) return ABORTED;
           const settled = settledRangeChanges(ranges.settled);
           const value = settled.length === 0 ? read.value : { ...read.value, settled };
@@ -472,7 +472,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const { store, summary } = index;
     try {
       const reading = await readingOf(head, index, head.base(content).snapshot, request);
-      const { relations: found, fields, locals, memberUses, externalUses, cuts: relationCuts = [], unresolved: unresolvedRelations = [] } = await reading.relations();
+      const { relations: found, fields, locals, memberUses, externalUses, reassignedUses, cuts: relationCuts = [], unresolved: unresolvedRelations = [] } = await reading.relations();
       if (signal?.aborted) return ABORTED;
       const loads = await deps.dynamicLoads.extract(headTree.sources);
       if (signal?.aborted) return ABORTED;
@@ -496,7 +496,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (signal?.aborted) return ABORTED;
       const typed = await reading.typed();
       if (typed === "aborted") return ABORTED;
-      const read = await impactOf({ store: reading.store, changes: validatedChanges, tokens, requested: [], componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, modules: namespaceModules(head, headTree, signal), signal });
+      const read = await impactOf({ store: reading.store, changes: validatedChanges, tokens, requested: [], componentsByResource, found, relationCuts, unresolvedRelations, fields, locals, memberUses, externalUses, reassignedUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, reading, typed: typed.typed, modules: namespaceModules(head, headTree, signal), signal });
       if (signal?.aborted) return ABORTED;
       const reached = { ...value, changedPaths: inventoryOf(validatedChanges), ...read.value };
       return { ok: true, value: impactFact(withOutputs(head.base(content, true), typed.outputs), reached, [...unaccounted([...fixed, ...typed.inputsLeftOut, ...buildOutputCuts(typed.buildOutputs), ...read.cuts]), ...moduleCuts], impactWalk(changes.map(({ path }) => path), reached)) };
@@ -642,6 +642,7 @@ interface WalkInput {
   locals: readonly LocalOrigin[];
   memberUses: readonly MemberUseOrigin[] | undefined;
   externalUses: readonly ExternalMemberUseOrigin[] | undefined;
+  reassignedUses: readonly ReassignedMemberUseOrigin[] | undefined;
   /** Every dynamic load the reader found in the head's sources. */
   loads: readonly DynamicLoad[];
   headTree: CommitExtraction;
@@ -681,7 +682,7 @@ function unreadTypeReferenceCuts(seeds: readonly SelectedSeed<GraphSymbol>[], re
 }
 
 async function impactOf(input: WalkInput): Promise<ImpactRead> {
-  const { store, changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, loads, headTree, summary, unresolved } = input;
+  const { store, changes, requested, componentsByResource, found, fields, locals, memberUses, externalUses, reassignedUses, loads, headTree, summary, unresolved } = input;
   const selection = await selectRoots(input.reading.declarations, changes, requested, componentsByResource, [], isSeedable, [], input.tokens);
 
   const { seeds } = selection;
@@ -710,7 +711,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const knownPlaces = new Set([...(input.proofs?.external ?? []), ...(typedReferences?.settled ?? [])]);
   const unread = found.flatMap((finding): UnreadRelation[] => (finding.status === "unknown" ? finding.evidence.slice(0, 1).map(({ path, line }) => ({ path, line, reason: finding.reason })) : []));
 
-  const cuts: Cut[] = [
+  const cuts: Cut[] = reassignableCuts([
     ...syntax.cuts,
     ...(reverse === undefined ? syntaxRootCuts(selection.syntaxSeeds) : []),
     ...walk.cuts,
@@ -731,7 +732,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
     ...summary.filesNotIndexed.map((file) => fileCut("no-extractor", file, "not-indexed")),
     ...selection.withoutSymbols.map((file) => fileCut("no-extractor", file, "no-symbols")),
     ...input.unmodelled.map((file) => fileCut("no-extractor", file, "unmodelled")),
-  ];
+  ], reassignedPlaces(reassignedUses ?? []));
   const value: ImpactRead["value"] = {
     cost: walk.cost,
     testDependents: "excluded",

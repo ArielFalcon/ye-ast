@@ -152,7 +152,7 @@ export const CUT_REASONS = [
   ...EXPORT_SKIP_REASONS, "unwritten",
   "language", "template-uncovered", "not-source", "not-indexed", "no-symbols", "unmodelled", "module-unread", "contract-unread",
   "live-tree", "inputs-unreadable", "version-mismatch", "outputs-unreadable", "checker-failed", "jdk-unreadable", "jdk-older-than-build", "release-not-held", "link-outside",
-  "hidden-caller", "dynamic-load", "name-only", "specifier", "removed-declaration", "relation-unread", "use-unproven",
+  "hidden-caller", "dynamic-load", "name-only", "reassignable", "specifier", "removed-declaration", "relation-unread", "use-unproven",
   "receiver-unproven", "callee-unknown", "constructor-unsettled", "contradicted", "unowned", "dispatch", "function-value",
   "page-unplanned", "handler-unplaced", "effect-unplaced", "request-possible",
   "dependency-unresolved", "join-unsettled", "operation-unserved",
@@ -170,7 +170,7 @@ export const FUNCTION_VALUE_AWAITS_JDK = "function-value-undeclared-jdk";
 /** What stands at a place of `Cut.cause`: the construct whose reading left a dispatch proof open. */
 export const CUT_CAUSES = [
   "advice", "annotation", "outside-supertype", "dynamic-implementation", "unsettled-supertype", "unplaced-class",
-  "function-value", FUNCTION_VALUE_AWAITS_JDK, "other-type", "no-single-body",
+  "function-value", FUNCTION_VALUE_AWAITS_JDK, "other-type", "no-single-body", "reassignment",
 ] as const;
 export type CutCause = (typeof CUT_CAUSES)[number];
 

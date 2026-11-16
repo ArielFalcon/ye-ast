@@ -39,7 +39,7 @@ async function extractRelations(deps: AngularRelationsDeps, files: readonly Sour
     return done;
   };
   const templateEffects = (component: Extract<AngularClass, { kind: "component" }>): TemplateEffects => templateRead(component).effects;
-  const { classes, findings, fields, locals, memberUses, externalUses } = await deps.metadata.read(files, { ...options, templateEffects });
+  const { classes, findings, fields, locals, memberUses, externalUses, reassignedUses } = await deps.metadata.read(files, { ...options, templateEffects });
   const { units, findings: unitFindings } = templateUnitsOf(classes, contents);
   const usage = deps.templates.read(units);
   const usesOf = new Map(usage.uses.map(({ component, uses }) => [classKey(component), uses]));
@@ -48,7 +48,7 @@ async function extractRelations(deps: AngularRelationsDeps, files: readonly Sour
     const { effects, unreadable, lines } = templateRead(candidate);
     return [{ component: candidate.ref, ...(lines === undefined ? {} : { lines }), handlers: effects.handlers, eventCalls: effects.eventCalls, ...(effects.renderHandlers?.length ? { renderHandlers: effects.renderHandlers } : {}), ...(effects.renderCalls?.length ? { renderCalls: effects.renderCalls } : {}), uses: usesOf.get(classKey(candidate.ref)) ?? [], ...(unreadable === undefined ? {} : { unreadable }) }];
   });
-  return { relations: sortFindings([...findings, ...unitFindings, ...usage.relations]), fields, locals, ...(memberUses === undefined ? {} : { memberUses }), ...(externalUses === undefined ? {} : { externalUses }), templates };
+  return { relations: sortFindings([...findings, ...unitFindings, ...usage.relations]), fields, locals, ...(memberUses === undefined ? {} : { memberUses }), ...(externalUses === undefined ? {} : { externalUses }), ...(reassignedUses === undefined ? {} : { reassignedUses }), templates };
 }
 
 const NO_EFFECTS: TemplateEffects = { calls: [], handlers: [], eventCalls: [], writes: [], passed: [] };

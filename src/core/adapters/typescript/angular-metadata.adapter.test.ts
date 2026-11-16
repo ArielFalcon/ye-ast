@@ -303,7 +303,7 @@ test("member evidence requires complete source without changing existing origins
   const old = await reader.read(files);
   const no = await reader.read(files, { memberProofs: { completeSource: false } });
   const yes = await reader.read(files, { memberProofs: { completeSource: true } });
-  assert.deepEqual(no, { ...old, memberUses: [], externalUses: [] });
+  assert.deepEqual(no, { ...old, memberUses: [], externalUses: [], reassignedUses: [] });
   assert.deepEqual(yes.fields, old.fields);
   assert.equal(yes.memberUses?.length, 1);
 });
@@ -327,6 +327,35 @@ test("only unique own concrete instance methods can be proved", async () => {
 test("an overload set proves the member at its one implementation", async () => {
   const meta = await memberProofs(OWNER, "export class Store {\n  write(x: string): void;\n  write(x?: string) {}\n}");
   assert.deepEqual(meta.memberUses?.map(({ member }) => member), [{ path: "src/store.ts", symbol: "write", line: 3 }]);
+});
+
+test("a unique own instance property proves its member at the property, whatever its initializer holds, unless it is static, decorated or declared twice", async () => {
+  for (const target of ["export class Store {\n  write = () => {};\n}", "export class Store {\n  write = helper;\n}"]) {
+    const proved = await memberProofs(OWNER, target);
+    assert.deepEqual(proved.memberUses?.map(({ member }) => member), [{ path: "src/store.ts", symbol: "write", line: 2 }], target);
+    assert.deepEqual(proved.reassignedUses, [], target);
+  }
+  for (const target of [
+    "export class Store { static write = () => {}; }",
+    "export class Store { @replace write = () => {}; }",
+    "export class Store { write = () => {}; write = () => {}; }",
+  ]) assert.deepEqual((await memberProofs(OWNER, target)).memberUses, [], target);
+});
+
+test("a property a write may have replaced is no proof: its call is a reassigned use at the places that write it, and a method never is", async () => {
+  const store = "export class Store {\n  write = () => {};\n  reset() { this.write = () => {}; }\n}";
+  const elsewhere = { "src/writer.ts": "export function replace(target: any) {\n  target.write = () => {};\n}" };
+  const cases: [string, string, Record<string, string>, { path: string; line: number }[]][] = [
+    ["a write on an object the syntax does not place", "export class Store {\n  write = () => {};\n}", elsewhere, [{ path: "src/writer.ts", line: 2 }]],
+    ["a write through this in the class itself", store, {}, [{ path: "src/store.ts", line: 3 }]],
+  ];
+  for (const [label, target, extra, writes] of cases) {
+    const meta = await memberProofs(OWNER, target, extra);
+    assert.deepEqual(meta.memberUses, [], label);
+    assert.deepEqual(meta.reassignedUses?.map(({ member, writes: at }) => ({ member, writes: at })), [{ member: { path: "src/store.ts", symbol: "write", line: 2 }, writes }], label);
+  }
+  const method = await memberProofs(OWNER, "export class Store {\n  write() {}\n}", elsewhere);
+  assert.deepEqual([method.memberUses, method.reassignedUses], [[], []]);
 });
 
 test("optional or computed receiver and member calls cannot prove a member", async () => {

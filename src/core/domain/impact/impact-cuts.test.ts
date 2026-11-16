@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { declarationUseKey, referenceKey, removedDeclarationCuts, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
+import { declarationUseKey, reassignableCuts, reassignedPlaces, referenceKey, removedDeclarationCuts, unreadRelationCuts, unreadTypeReferenceCut, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
+import type { Cut } from "../shared/fact.ts";
 
 const SAVE: WalkedDeclaration = { file: "src/Repo.java", name: "save", kind: "method", qualifiedName: "Repo::save" };
 
@@ -327,4 +328,19 @@ test("a supertype reference names a declaration by the name it writes without ty
   assert.deepEqual(unresolvedLinkCuts([generic], walked, []).map(({ at, reason }) => [reason, ...at]), [["name-only", "src/shop/Kept.java", "src/shop/Kept.java:3 Repo<Map<String, Long>>"]]);
   assert.deepEqual(unresolvedLinkCuts([{ ...generic, kind: "references" }], walked, []), []);
   assert.deepEqual(removedDeclarationCuts([generic], [{ file: "src/shop/Repo.java", name: "Repo" }]).map(({ at }) => at), [["src/shop/Repo.java::Repo", "src/shop/Kept.java:3"]]);
+});
+
+test("a name-only cut moves only the places of a reassigned property's calls to a reassignable cut at the same reach, caused by where it may be written", () => {
+  const reach = { kind: "callers-of", declarations: ["src/a.ts::save"] } as const;
+  const nameOnly: Cut = { kind: "unresolved-link", at: ["src/page.ts", "src/page.ts:3 this.api.save", "src/page.ts:7 this.api.\nsave", "src/page.ts:9 other.save"], reason: "name-only", reach };
+  const reassigned = reassignedPlaces([
+    { member: { path: "src/a.ts", symbol: "save", line: 2 }, reference: { file: "src/page.ts", line: 3, column: 4, name: "this.api.save", kind: "calls" }, writes: [{ path: "src/w.ts", line: 8 }, { path: "src/v.ts", line: 1 }] },
+    { member: { path: "src/a.ts", symbol: "save", line: 2 }, reference: { file: "src/page.ts", line: 7, column: 4, name: "this.api.save", kind: "calls" }, writes: [] },
+  ]);
+
+  assert.deepEqual(reassignableCuts([nameOnly], reassigned), [
+    { ...nameOnly, at: ["src/page.ts", "src/page.ts:9 other.save"] },
+    { ...nameOnly, at: ["src/page.ts", "src/page.ts:3 this.api.save", "src/page.ts:7 this.api.\nsave"], reason: "reassignable", cause: ["src/v.ts:1 reassignment", "src/w.ts:8 reassignment"] },
+  ]);
+  assert.deepEqual(reassignableCuts([{ ...nameOnly, reason: "hidden-caller" }], reassigned), [{ ...nameOnly, reason: "hidden-caller" }]);
 });

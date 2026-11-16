@@ -1,4 +1,4 @@
-import type { ExternalMemberUseOrigin, MemberUseOrigin, MemberProofContext } from "../domain/relations/member-use.ts";
+import type { ExternalMemberUseOrigin, MemberUseOrigin, MemberProofContext, ReassignedMemberUseOrigin } from "../domain/relations/member-use.ts";
 import type { AngularClass } from "../domain/relations/angular-class.ts";
 import type { FieldOrigin, LocalOrigin } from "../domain/relations/field-origin.ts";
 import type { Relation } from "../domain/relations/relation.ts";
@@ -19,6 +19,8 @@ export interface AngularMetadata {
   memberUses?: readonly MemberUseOrigin[];
   /** Present with `memberUses`: the proven calls through a field that holds a type from outside the repository. */
   externalUses?: readonly ExternalMemberUseOrigin[];
+  /** Present with `memberUses`: the calls of a property that a write may have replaced. */
+  reassignedUses?: readonly ReassignedMemberUseOrigin[];
 }
 
 export interface AngularMetadataReadOptions {

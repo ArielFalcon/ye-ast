@@ -32,3 +32,13 @@ export interface ExternalMemberUseOrigin {
   holds: string;
   reference: ReferenceSite & { name: string; kind: "calls" };
 }
+
+/**
+ * A call through a field to a property of the class it holds, where code the reader places or cannot place may have
+ * replaced the property: no proof. `writes` are the places that may have replaced it; none when nothing places them.
+ */
+export interface ReassignedMemberUseOrigin {
+  member: SymbolRef;
+  reference: ReferenceSite & { name: string; kind: "calls" };
+  writes: readonly { path: string; line: number }[];
+}

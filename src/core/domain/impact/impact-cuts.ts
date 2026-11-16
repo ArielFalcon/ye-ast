@@ -2,7 +2,8 @@ import type { RemovedDeclaration } from "../change/seeds.ts";
 import { CALL_EDGE_KINDS } from "./call-kinds.ts";
 import { fileReach, mayRunDeclarationOf, sharesRuntime } from "../languages/call-targets.ts";
 import { JAVA_PROFILE, profileOf } from "../languages/profiles.ts";
-import { nameTail, withoutTypeArguments } from "../shared/call-place.ts";
+import { compactSpelling, nameTail, withoutTypeArguments } from "../shared/call-place.ts";
+import type { ReassignedMemberUseOrigin } from "../relations/member-use.ts";
 import { compareText } from "../shared/code-node.ts";
 import { CAPABILITY_ABSENT, type Cut, type CutReach, type CutReason } from "../shared/fact.ts";
 
@@ -118,6 +119,40 @@ export function nameOnlyCallCuts(calls: readonly { declaration: { file: string; 
   return [...Map.groupBy(calls, ({ place }) => place.file)]
     .toSorted(([a], [b]) => compareText(a, b))
     .map(([file, here]) => unresolvedLinkAt(file, new Set(here.map(({ place }) => placeAt(place.file, place.line, place.name))), "name-only", callersOf(here.map(({ declaration }) => declarationAnchor(declaration.file, declaration.name)))));
+}
+
+/** By the place a call is written, the places that may have replaced the property it calls (ADR-0108), each `path:line` and its cause. */
+export function reassignedPlaces(uses: readonly ReassignedMemberUseOrigin[]): ReadonlyMap<string, readonly string[]> {
+  const byPlace = new Map<string, string[]>();
+  for (const { reference, writes } of uses) {
+    const key = placeAt(reference.file, reference.line, compactSpelling(reference.name));
+    byPlace.set(key, [...(byPlace.get(key) ?? []), ...writes.map(({ path, line }) => placeAt(path, line, "reassignment"))]);
+  }
+  return byPlace;
+}
+
+/**
+ * A `name-only` cut at calls of a property a write may have replaced is a `reassignable` cut instead (ADR-0108): the
+ * property's own declaration proves nothing about the value those calls run, and the cause names where it may have changed.
+ */
+export function reassignableCuts(cuts: readonly Cut[], reassigned: ReadonlyMap<string, readonly string[]>): Cut[] {
+  if (reassigned.size === 0) return [...cuts];
+  return cuts.flatMap((cut): Cut[] => {
+    if (cut.kind !== "unresolved-link" || cut.reason !== "name-only") return [cut];
+    const [anchor = "", ...places] = cut.at;
+    const split = Map.groupBy(places, (place) => reassigned.has(spelledPlace(place)));
+    const moved = split.get(true) ?? [];
+    if (moved.length === 0) return [cut];
+    const cause = [...new Set(moved.flatMap((place) => reassigned.get(spelledPlace(place)) ?? []))].sort(compareText);
+    const kept = split.get(false) ?? [];
+    return [...(kept.length === 0 ? [] : [{ ...cut, at: [anchor, ...kept] }]), { ...cut, at: [anchor, ...moved], reason: "reassignable", ...(cause.length === 0 ? {} : { cause }) }];
+  });
+}
+
+/** A cut place with the call's spelling compacted, as `reassignedPlaces` keys it. */
+function spelledPlace(place: string): string {
+  const [, at, spelling] = /^(\S+:\d+) ([\s\S]*)$/.exec(place) ?? [];
+  return at === undefined || spelling === undefined ? place : `${at} ${compactSpelling(spelling)}`;
 }
 
 /**

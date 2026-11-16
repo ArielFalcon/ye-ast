@@ -140,8 +140,9 @@ test("a call through a field initialized with a package type leaves no name-only
   assert.equal(status, "complete");
 });
 
-test("a call that binds to an unreached property member keeps its cut while the language pack cannot prove the reached method does not override it", async () => {
-  const { cuts } = await callersOf("ts", "src/app/page.ts", "isOnline");
+test("a call through an injected field to a property that no write reaches is proven at that property and leaves no cut", async () => {
+  const { status, value } = await callersOf("ts", "src/app/status.service.ts", "isOnline");
 
-  assert.deepEqual(nameOnly(cuts).map(({ at }) => at), [["src/app/helper.ts", "src/app/helper.ts:9 this.status.isOnline"]]);
+  assert.equal(status, "complete");
+  assert.ok(dependents(value, "src/app/helper.ts").includes("online"), JSON.stringify(value.symbols));
 });

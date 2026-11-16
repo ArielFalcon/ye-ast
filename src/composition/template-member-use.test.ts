@@ -130,9 +130,10 @@ for (const [control, component] of [
   });
 }
 
-test("no reach is claimed through a callable field of the receiver", async () => {
+test("a template call of a callable property of the receiver reaches the component at that property", async () => {
   const value = await callersOf("src/app/callable.api.ts", "archive");
-  assert.ok(!callerNames(value).includes("CallablePage"), JSON.stringify(value.symbols));
+  const page = value.symbols.find((symbol) => symbol.symbol === "CallablePage");
+  assert.deepEqual(page?.via, { file: "src/app/callable.api.ts", symbol: "archive", lines: [4], basis: "call", derivation: "proven" });
 });
 
 test("a template call of an overloaded member reaches its one implementation", async () => {

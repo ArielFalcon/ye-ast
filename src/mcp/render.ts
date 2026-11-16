@@ -146,6 +146,12 @@ function placeReasons(cut: Cut): string[] {
   return [...reasons].sort(compareText);
 }
 
+/** Where the property a `reassignable` cut's calls run may have been replaced, from its cause. */
+function reassignedAt(cuts: readonly Cut[]): string {
+  const places = new Set(cuts.flatMap((cut) => (cut.reason === "reassignable" ? (cut.cause ?? []).map((place) => `${placeOf(place).file}:${placeOf(place).line}`) : [])));
+  return places.size === 0 ? "" : `; may have been reassigned at ${[...places].sort(compareText).join(", ")}`;
+}
+
 /** The declarations an unresolved reference could not be settled to, under the file that holds them, each with the files
  * its references sit in. A file that leads a cut of its own names the references it holds, and a declaration whose places
  * are exactly those of another points at it instead of printing them a second time. */
@@ -923,7 +929,7 @@ function impactCuts(cuts: readonly Cut[], detail: ResponseMode): string[] {
         const reasons = anchor.includes("::") ? [] : [...new Set(records.flatMap(placeReasons))].sort(compareText);
         const limits = [...new Set(records.flatMap((cut) => cut.limit === undefined ? [] : [cut.limit]))].toSorted((a, b) => a - b);
         const why = [...new Set(records.map(cutReasonText))].sort(compareText).join(", ");
-        return `      ${name}: ${records.length} ${records.length === 1 ? "cut" : "cuts"} (${why}), ${places} reference ${places === 1 ? "place" : "places"}${limits.length === 0 ? "" : `; limits ${limits.join(", ")}`}${reasons.length === 0 ? "" : `; ${reasons.join(", ")}`}`;
+        return `      ${name}: ${records.length} ${records.length === 1 ? "cut" : "cuts"} (${why}), ${places} reference ${places === 1 ? "place" : "places"}${limits.length === 0 ? "" : `; limits ${limits.join(", ")}`}${reasons.length === 0 ? "" : `; ${reasons.join(", ")}`}${reassignedAt(records)}`;
       }),
     ])];
   }), ...referencePlacesNote(cuts)];
@@ -965,7 +971,7 @@ function impactCutLayout(cuts: readonly Cut[], detail: ResponseMode, owner: CutO
       if (previous?.kind !== cut.kind || previous.at[0] !== cut.at[0]) shared.push(`    anchor ${JSON.stringify(cut.at[0])}:`);
       const places = Math.max(0, cut.at.length - 1);
       const reasons = placeReasons(cut);
-      shared.push(`      ${coordinate}; ${cutReasonText(cut)}; ${places} reference ${places === 1 ? "place" : "places"}${cut.limit === undefined ? "" : `; limit ${cut.limit}`}${reasons.length === 0 ? "" : `; spellings ${JSON.stringify(reasons)}`}`);
+      shared.push(`      ${coordinate}; ${cutReasonText(cut)}; ${places} reference ${places === 1 ? "place" : "places"}${cut.limit === undefined ? "" : `; limit ${cut.limit}`}${reasons.length === 0 ? "" : `; spellings ${JSON.stringify(reasons)}`}${reassignedAt([cut])}`);
     } else {
       shared.push(`    ${coordinate}; ${cutRowLabel(cut) === cut.kind ? "" : `${cutReasonText(cut)}; `}${cutPlaces(cut)}${cut.limit === undefined ? "" : ` (limit ${cut.limit})`}`);
     }
@@ -1660,7 +1666,7 @@ function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: Respo
 }
 
 /**
- * The names written only after an undecided base that no repository serves (ADR-0107): not unserved and no decision, so a
+ * The names written only after an undecided base that no repository serves (ADR-0108): not unserved and no decision, so a
  * summary counts each name's places, details lists them, and names that share the same places say them once.
  */
 function undecidedBaseBlock(names: readonly RepositoryOutwardName[] | undefined, detail: ResponseMode): string[] {

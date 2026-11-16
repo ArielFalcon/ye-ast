@@ -256,6 +256,14 @@ test("impact detail localizes cut anchors and limits while counting their refere
   assert.match(detail, /mode: "full"/);
 });
 
+test("impact detail says where the property a reassignable cut's calls run may have been replaced, in both layouts", () => {
+  const reassignable: Cut = { kind: "unresolved-link", at: ["page.ts", "page.ts:16 this.wallet.balance"], reason: "reassignable", cause: ["overdraft.ts:2 reassignment", "wallet.ts:9 reassignment"], reach: { kind: "anything" } };
+  const detail = renderImpact({ ...base, status: "partial", value: impact, cuts: [reassignable] }, "details");
+  assert.match(detail, /\(reassignable\)[^\n]*; may have been reassigned at overdraft\.ts:2, wallet\.ts:9/);
+  const many: Cut[] = Array.from({ length: 12 }, (_, line) => ({ ...reassignable, at: [`page-${line}.ts`, `page-${line}.ts:1 this.wallet.balance`] }));
+  assert.match(renderImpact({ ...base, status: "partial", value: impact, cuts: many as [Cut, ...Cut[]] }, "details"), /cutIndex 0; reassignable;[^\n]*; may have been reassigned at overdraft\.ts:2, wallet\.ts:9/);
+});
+
 test("summary counts omitted origin associations per entrypoint rather than counting the seed inventory", () => {
   const value: ImpactValue = {
     ...impact,

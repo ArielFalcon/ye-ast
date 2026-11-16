@@ -52,7 +52,8 @@ export interface RawField {
   via: "inject" | "new";
 }
 
-export interface RawInstanceMethod { className: string; classLine: number; name: string; line: number }
+/** The one instance member of its name a class declares: a method with its body, or a property. */
+export interface RawInstanceMember { className: string; classLine: number; name: string; line: number; property: boolean }
 export interface RawFieldCall { owner: { name: string; line: number }; field: string; member: string; line: number; column: number }
 export interface RawLocalCall { owner: { name: string; line: number }; local: string; member: string; offset: number; line: number; column: number }
 /**
@@ -77,7 +78,7 @@ export type RawPassed = { field: { owner: { name: string; line: number }; field:
 /** `base` is the extended class as written: a platform class the file neither declares nor imports, or none when the heritage expression names no class (`extends mixin(Base)`). */
 export interface RawSubclass { name?: string; line: number; base?: RawReference | "platform"; members: Set<string> }
 export interface RawMemberEvidence {
-  methods: RawInstanceMethod[];
+  members: RawInstanceMember[];
   calls: RawFieldCall[];
   localCalls: RawLocalCall[];
   reads: Map<string, number>;
@@ -131,7 +132,7 @@ export async function coreExternalOf(shape: Pick<RawRouteFile, "imports">, isExt
 export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteFile, "imports">, proveMembers = false, coreExternal = true): RawAngularFile {
   const line = (node: ts.Node): number => lineOf(sf, node);
   const declarations = declarationCounts(sf);
-  const result: RawAngularFile = { classes: [], memberEvidence: proveMembers ? readMemberEvidence(sf, declarations, shape) : { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), writes: [], subclasses: [], passed: [], hidden: new Set(), qualified: [], escapedMutator: false, unknownBinding: false, unknownProvider: false }, injections: [], fields: [], substituted: [], arrays: new Map() };
+  const result: RawAngularFile = { classes: [], memberEvidence: proveMembers ? readMemberEvidence(sf, declarations, shape) : { members: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), writes: [], subclasses: [], passed: [], hidden: new Set(), qualified: [], escapedMutator: false, unknownBinding: false, unknownProvider: false }, injections: [], fields: [], substituted: [], arrays: new Map() };
 
   const names: FileNames = { imports: shape.imports, declared: declarations };
   const coreName = (expression: ts.Expression): string | undefined => (coreExternal ? angularCoreExport(expression, names) : undefined);
@@ -388,7 +389,7 @@ const MUTATORS: Readonly<Record<string, Readonly<Record<string, number | "keys" 
 };
 
 function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>, shape: Pick<RawRouteFile, "imports">): RawMemberEvidence {
-  const result: RawMemberEvidence = { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), writes: [], subclasses: [], passed: [], hidden: new Set(), qualified: [], escapedMutator: false, unknownBinding: false, unknownProvider: false };
+  const result: RawMemberEvidence = { members: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), writes: [], subclasses: [], passed: [], hidden: new Set(), qualified: [], escapedMutator: false, unknownBinding: false, unknownProvider: false };
   const redeclared = new Set<string>();
   const escapedOwners = result.escapedClasses;
   const lineAt = (node: ts.Node): number => lineOf(sf, node);
@@ -628,9 +629,9 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
         if (members.length > 1) redeclared.add(key(node, name));
         if (cannotProveMembers) continue;
         const implementations = members.filter((one): one is ts.MethodDeclaration => ts.isMethodDeclaration(one) && one.body !== undefined);
-        const member = implementations.length === 1 && members.every(ts.isMethodDeclaration) ? implementations[0] : undefined;
+        const member = implementations.length === 1 && members.every(ts.isMethodDeclaration) ? implementations[0] : members.length === 1 && ts.isPropertyDeclaration(members[0]!) ? members[0] : undefined;
         if (member === undefined || members.some((one) => isStatic(one) || (ts.canHaveDecorators(one) && (ts.getDecorators(one)?.length ?? 0) > 0))) continue;
-        result.methods.push({ className: owner, classLine, name, line: lineAt(member.name) });
+        result.members.push({ className: owner, classLine, name, line: lineAt(member.name), property: ts.isPropertyDeclaration(member) });
       }
     }
     if (isPrototypeAccess(node) && !((ts.isPropertyAccessExpression(node.parent) || ts.isElementAccessExpression(node.parent)) && node.parent.expression === node)) {

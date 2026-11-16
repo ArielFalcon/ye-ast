@@ -2,7 +2,7 @@ import type { UnresolvedUse } from "../../domain/impact/impact-cuts.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import type { LanguageRelationsReader } from "../../ports/language-pack.port.ts";
 import type { ParseHold } from "../../ports/parse-holds.port.ts";
-import type { ExternalMemberUseOrigin, MemberUseOrigin, MemberProofContext } from "../../domain/relations/member-use.ts";
+import type { ExternalMemberUseOrigin, MemberUseOrigin, MemberProofContext, ReassignedMemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
 import type { LanguageProfile } from "../../domain/languages/profiles.ts";
@@ -37,6 +37,7 @@ export interface RelationExtraction {
   locals: readonly LocalOrigin[];
   memberUses?: readonly MemberUseOrigin[];
   externalUses?: readonly ExternalMemberUseOrigin[];
+  reassignedUses?: readonly ReassignedMemberUseOrigin[];
   /** Per component, in class order: the calls its template's render expressions and event bindings make, or where its template cannot be read. */
   templates?: readonly ComponentTemplate[];
 }
