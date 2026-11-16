@@ -209,6 +209,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
         const sections: Record<string, Fact<WorkspaceSection>> = Object.create(null);
         const candidates: NameCandidate[] = [];
         const unserved: RepositoryOutwardName[] = [];
+        const undecidedBase: RepositoryOutwardName[] = [];
         for (const entry of resolved) {
           const names = gatherNames(entry.names);
           const undecided = entry.callSites.filter((site) => site.target.status === "unknown");
@@ -220,7 +221,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
           const decided = decidedNameKeys(entry);
           for (const name of names) {
             const served = [...nameCandidates(name, identities, entry.repository.repo), ...(linking.get(nameKey(entry.repository.repo, name)) ?? [])];
-            if (served.length === 0 && decided.has(nameKey(entry.repository.repo, name))) unserved.push({ ...name, evidence: name.evidence.map((place) => ({ ...place, repo: entry.repository.repo })) });
+            if (served.length === 0) (decided.has(nameKey(entry.repository.repo, name)) ? unserved : undecidedBase).push({ ...name, evidence: name.evidence.map((place) => ({ ...place, repo: entry.repository.repo })) });
             candidates.push(...served);
           }
         }
@@ -236,6 +237,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
           sections: Object.fromEntries(Object.entries(sections).sort(([a], [b]) => compareText(a, b))),
           candidates: gatherCandidates(candidates),
           unserved: gatherNames(unserved),
+          ...(undecidedBase.length === 0 ? {} : { undecidedBase: gatherNames(undecidedBase) }),
           ...linkMapOf(join.joined),
           repositories,
         };
@@ -294,7 +296,8 @@ function callSiteNames(repo: string, callSites: readonly CallSite[]): OutwardNam
 /**
  * The names of a repository that something other than a path after an undecided base states, so that no match can say
  * nobody serves them (ADR-0101): that base can be a repository of the workspace whose server routes no reader models, and
- * the join settles nothing for such a call (ADR-0054 decision 6), which stays one unresolved call site.
+ * the join settles nothing for such a call (ADR-0054 decision 6), which stays one unresolved call site. A name outside
+ * this set that no repository serves is listed apart as one whose base is undecided (ADR-0107).
  */
 function decidedNameKeys(entry: Pick<Resolved, "repository" | "stated" | "callSites">): Set<string> {
   const decidedSites = entry.callSites.filter((site) => undecidedAuthorityTargetsOf(site).length === 0);

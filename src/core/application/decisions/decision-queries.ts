@@ -82,7 +82,7 @@ async function buildDecisions(read: WorkspaceRead, request: Omit<WorkspacePlanni
   const decisions = decisionsOf(input).decisions;
   const declared = { confirmed: (input.confirmed ?? []).toSorted(compareText), origins: origins.value, resolutions: read.refresh?.resolution ?? [] };
   const base = compositeBase(baseOf(fact), [{ kind: "workspace", fact: provenanceOf(fact) }], declared, (text) => digest.of(text));
-  const answer = decisionFact({ ...fact, ...base }, { decisions, repositories: value.repositorySnapshots, source: value.workspace.source });
+  const answer = decisionFact({ ...fact, ...base }, { decisions, repositories: value.repositorySnapshots, source: value.workspace.source, ...(value.undecidedBase === undefined ? {} : { undecidedBase: value.undecidedBase }) });
   return { ok: true, value: { fact: answer, ...(read.refresh === undefined ? {} : { refresh: read.refresh }), ...(read.repositoryRoots === undefined ? {} : { repositoryRoots: read.repositoryRoots }) } };
 }
 

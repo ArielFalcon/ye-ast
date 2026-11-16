@@ -1,6 +1,7 @@
 import type { Decision } from "../domain/decisions/decision.ts";
 import type { SnapshotRef } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
+import type { RepositoryOutwardName } from "../domain/topology/outward-name.ts";
 import type { WorkspaceFault, WorkspaceSource } from "./workspace-repos.port.ts";
 import type { FactRead, WorkspaceRequest } from "./workspace-queries.port.ts";
 
@@ -13,6 +14,8 @@ export interface DecisionValue {
   repositories: readonly { repo: string; snapshot: SnapshotRef }[];
   /** Where the repositories this set was derived from came from; `none` says it read the bound repository alone. */
   source: WorkspaceSource;
+  /** The names the workspace read states only after an undecided base and no repository serves: no decision asks about them (ADR-0107); absent when there is none. */
+  undecidedBase?: readonly RepositoryOutwardName[];
 }
 
 /**

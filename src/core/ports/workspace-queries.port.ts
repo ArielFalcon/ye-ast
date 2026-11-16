@@ -24,6 +24,8 @@ export interface WorkspaceValue {
   candidates: readonly NameCandidate[];
   /** The names no repository given serves: the agent's next step. */
   unserved: readonly RepositoryOutwardName[];
+  /** The names no repository given serves whose every statement is a path written after an undecided base, with the places that write them; absent when there is none (ADR-0107). */
+  undecidedBase?: readonly RepositoryOutwardName[];
   /** Every link the join admitted between the repositories read, once per `Link.id`, sorted by id. */
   links: readonly Link[];
   /** Every link whose two ends share a repository, kept apart from `links` (ADR-0076 decision 4), once per `Link.id`, sorted by id. */

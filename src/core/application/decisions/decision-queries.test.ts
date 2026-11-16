@@ -122,6 +122,17 @@ function decisionOf(value: DecisionValue, id: string): Decision {
   return found;
 }
 
+test("a name the workspace stated only after an undecided base raises no decision and is carried beside the decisions (ADR-0107)", async () => {
+  const undecided = [{ name: "auth", kind: "path-prefix" as const, evidence: [{ repo: "shop-web", path: "src/app/auth.api.ts", line: 3 }] }];
+  const { queries } = setup({ ok: true, value: base({ ...workspaceValue(), undecidedBase: undecided }) });
+
+  const value = valueOf(await queries.decisions(REQUEST));
+
+  assert.ok(!value.decisions.some((decision) => decision.subject.includes("auth")));
+  assert.deepEqual(value.undecidedBase, undecided);
+  assert.equal(valueOf(await setup({ ok: true, value: base(workspaceValue()) }).queries.decisions(REQUEST)).undecidedBase, undefined);
+});
+
 test("each gap the workspace read states becomes one decision, in the domain's order", async () => {
   const { queries } = setup({ ok: true, value: base(workspaceValue()) });
 

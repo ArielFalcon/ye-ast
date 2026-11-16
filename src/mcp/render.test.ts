@@ -95,6 +95,19 @@ test("decision evidence and free text sharing keeps each option and policy assoc
   assert.match(text, /three[\s\S]*free text/);
 });
 
+test("a decisions answer prints the names whose base is undecided beside its decisions and raises none for them (ADR-0107)", async () => {
+  const { renderDecisions } = await import("./render.ts");
+  const undecidedBase = [{ kind: "path-prefix", name: "auth", evidence: [{ repo: "shop", path: "src/app/auth.api.ts", line: 3 }, { repo: "shop", path: "src/app/auth.api.ts", line: 4 }] }];
+  const value = { repositories: [], source: "request", decisions: [], undecidedBase };
+
+  const summary = renderDecisions({ ...base, status: "complete", value } as never, "summary");
+  assert.match(summary, /decisions \(0\):/);
+  assert.match(summary, /names whose base is undecided \(1\):/);
+  assert.match(summary, /^ {2}- path-prefix auth \(2 places in shop\)$/m);
+  assert.match(renderDecisions({ ...base, status: "complete", value } as never, "details"), /^ {2}- path-prefix auth \(shop:src\/app\/auth\.api\.ts:3, shop:src\/app\/auth\.api\.ts:4\)$/m);
+  assert.doesNotMatch(renderDecisions({ ...base, status: "complete", value: { ...value, undecidedBase: undefined } } as never, "summary"), /undecided/);
+});
+
 test("an option resting on exactly the places its decision prints says so once, and one resting on other places lists them", async () => {
   const { renderDecisions } = await import("./render.ts");
   const place = (line: number) => ({ repo: "shop", path: "src/a-long-repeated-supporting-evidence-location.ts", line });

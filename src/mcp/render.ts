@@ -1659,6 +1659,28 @@ function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: Respo
   return size(summarized) <= size(listing) ? summarized : listing;
 }
 
+/**
+ * The names written only after an undecided base that no repository serves (ADR-0107): not unserved and no decision, so a
+ * summary counts each name's places, details lists them, and names that share the same places say them once.
+ */
+function undecidedBaseBlock(names: readonly RepositoryOutwardName[] | undefined, detail: ResponseMode): string[] {
+  if (names === undefined || names.length === 0) return [];
+  const head = `names whose base is undecided (${names.length}): written only after an undecided base, so none is called unserved and none is a decision${detail === "details" ? "" : `; ${categoryRecovery({ details: "lists the places" })}`}`;
+  const firstWriting = new Map<number, RepositoryOutwardName>();
+  const lines = shareExactContext(names, (name) => name.evidence).rows.map(({ value: name, contextIndex }) => {
+    const label = `  - ${name.kind} ${name.name}`;
+    if (detail !== "details") {
+      const repos = [...new Set(name.evidence.map(({ repo }) => repo))];
+      return `${label} (${name.evidence.length} ${name.evidence.length === 1 ? "place" : "places"} in ${repos.join(", ")})`;
+    }
+    const places = name.evidence.map(repositoryEvidenceText).join(", ");
+    const first = firstWriting.get(contextIndex);
+    if (first === undefined) firstWriting.set(contextIndex, name);
+    return `${label} (${first === undefined ? places : preferShorterText(places, `same places as ${first.name}`)})`;
+  });
+  return [head, ...lines];
+}
+
 const REQUEST_SITE_GUIDE = "A wrapper request is sited at the call supplying its parameters; the stated request names the path written in code. For a suffix-only match, inspect the gateway prefix or server configuration that would declare the full path.";
 
 /** The unresolved call sites under the file that holds them, sorted, each with the request it writes when the code states it. */
@@ -1793,7 +1815,7 @@ function unresolvedBlock(value: Omit<WorkspaceValue, "repositories">, detail: Re
 }
 
 export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>, detail: ResponseMode = "summary"): string {
-  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Match value.sections by repository and check each section status, reason and cuts; value.repositorySnapshots identifies each revision. Inspect value.candidates by name and repo for basis and evidence, value.unserved for unmatched names, value.links for the links between repositories, value.internalLinks for those inside one repository and value.unlinked for the call sites without one. " + REQUEST_SITE_GUIDE;
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Match value.sections by repository and check each section status, reason and cuts; value.repositorySnapshots identifies each revision. Inspect value.candidates by name and repo for basis and evidence, value.unserved for unmatched names, value.undecidedBase for the names written only after an undecided base, value.links for the links between repositories, value.internalLinks for those inside one repository and value.unlinked for the call sites without one. " + REQUEST_SITE_GUIDE;
   const lines = headerLines(fact, fact.status === "unknown" ? {} : {
     undecided: Object.values(fact.value.sections).reduce((total, section) => total + (section.status === "unknown" ? 0 : undecidedCount(section.value)), 0),
     unknownSection: unknownSectionIn(fact.value.sections),
@@ -1862,6 +1884,7 @@ export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>
     if (size(permutation) < size(best)) best = permutation;
   }
   lines.push(...best);
+  lines.push(...undecidedBaseBlock(value.undecidedBase, detail));
   if (value.unserved.length > 0) lines.push(DECISIONS_HINT);
   lines.push(...linkMapLines(value.links, value.unlinked, detail));
   if (value.internalLinks.length > 0) lines.push(...linkMapLines(value.internalLinks, [], detail, "links inside one repository"));
@@ -1954,13 +1977,14 @@ function decisionsBlock(decisions: readonly Decision[], detail: ResponseMode): s
 }
 
 export function renderDecisions(fact: Fact<DecisionValue>, detail: ResponseMode = "summary"): string {
-  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.decisions by kind and subject; inspect evidence, options[].basis and options[].recommended. Match evidence repositories to value.repositories snapshots.";
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.decisions by kind and subject; inspect evidence, options[].basis and options[].recommended; value.undecidedBase lists the names written only after an undecided base, which raise no decision. Match evidence repositories to value.repositories snapshots.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
   lines.push(counted("repositories", value.repositories.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
   lines.push(sourceLine(value.source, "repos"));
   lines.push(`decisions (${value.decisions.length}):`, ...decisionsBlock(value.decisions, detail));
+  lines.push(...undecidedBaseBlock(value.undecidedBase, detail));
   lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");
 }

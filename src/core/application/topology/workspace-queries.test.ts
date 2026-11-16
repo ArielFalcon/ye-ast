@@ -1134,6 +1134,16 @@ test("a name stated only after an undecided base is never unserved, since the jo
   assert.deepEqual(section?.status === "unknown" ? [] : section?.value.unresolved.map(({ line }) => line), [3, 5]);
 });
 
+test("a name stated only after an undecided base and served by no repository is listed in its own group with the places that write it; one a link serves or a decided statement states is not (ADR-0107)", async () => {
+  const repositories: Repositories = { "/work/shop-web": { files: {} }, "/work/orders": { files: {}, entrypoints: [postRoute("/orders")] } };
+  const queries = setup(repositories, sitesOf({ "shop-web": [afterUndecidedBase("shop-web", "/auth/token", 3), afterUndecidedBase("shop-web", "/auth/refresh", 4), afterUndecidedBase("shop-web", "/geo/provinces", 5), postSite("shop-web", "/geo/cities", 8), afterUndecidedBase("shop-web", "/orders", 9)] }));
+
+  const value = valueOf(await queries.outwardNames(LINKED));
+
+  assert.deepEqual((value.undecidedBase ?? []).map(({ kind, name, evidence }) => `${kind} ${name} ${evidence.map(({ repo, line }) => `${repo}:${line}`).join(",")}`), ["path-prefix auth shop-web:3,shop-web:4"]);
+  assert.deepEqual(value.unserved.map(({ name }) => name), ["geo"]);
+});
+
 test("a call to a route of its own repository is an internal link: its host and prefix are served by that repository, never unserved", async () => {
   const repositories: Repositories = { "/work/orders": { files: {}, entrypoints: [postRoute("/api/orders")] } };
   const queries = setup(repositories, sitesOf({ orders: [postSite("orders", "http://localhost:9966/api/orders")] }));

@@ -321,3 +321,27 @@ test("the host and the prefix of one base write the same calls: a workspace says
     assert.match(text, /- other \(src\/app\/orders-client\.service\.ts:7, src\/app\/orders-client\.service\.ts:9\)/, detail);
   }
 });
+
+test("names whose base is undecided print once as their own group: a summary counts each one's places, details lists them and says shared places once; none is called unserved", () => {
+  const place = (line: number) => ({ repo: "shop-web", path: "src/app/address.api.ts", line });
+  const undecidedBase = [
+    { kind: "path-prefix", name: "auth", evidence: [place(3), place(4)] },
+    { kind: "path-prefix", name: "name-geo-api", evidence: [place(26)] },
+    { kind: "path-prefix", name: "protocol", evidence: [place(26)] },
+  ];
+  const render = (detail: "summary" | "details", names: unknown) => renderWorkspace({ ...base, status: "complete", value: { ...mapValue([]), ...(names === undefined ? {} : { undecidedBase: names }) } } as never, detail);
+
+  const summary = render("summary", undecidedBase);
+  assert.match(summary, /names whose base is undecided \(3\):/);
+  assert.match(summary, /^ {2}- path-prefix auth \(2 places in shop-web\)$/m);
+  assert.match(summary, /^ {2}- path-prefix name-geo-api \(1 place in shop-web\)$/m);
+  assert.doesNotMatch(summary, /address\.api\.ts/);
+  assert.match(summary, /no local repository serves \(0\)/);
+
+  const details = render("details", undecidedBase);
+  assert.match(details, /^ {2}- path-prefix auth \(shop-web:src\/app\/address\.api\.ts:3, shop-web:src\/app\/address\.api\.ts:4\)$/m);
+  assert.equal(details.split("address.api.ts:26").length - 1, 1, "the places two names share are said once");
+  assert.match(details, /^ {2}- path-prefix protocol \(same places as name-geo-api\)$/m);
+
+  assert.doesNotMatch(render("summary", undefined), /names whose base is undecided/);
+});
